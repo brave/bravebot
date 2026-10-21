@@ -137,6 +137,9 @@ Every path that does not end in a save leaves the line untouched: quitting witho
 that failed, an editor that was killed. One trailing newline is dropped, one only. The file holds
 your own words, is readable by nobody else, and does not outlive the edit.
 
+The same editor opens from a write prompt, on the proposed contents, with **e**
+([details](../security/permissions.md#changing-a-write-before-approving-it)).
+
 Which editor opens: `$VISUAL`, then `$EDITOR`, then the first of `vim`, `vi`, `emacs`, `nano` that is
 installed. That fallback list is the same on every platform. A name is looked for under every spelling
 your `PATH` may hold it under, so an editor installed as `vim.exe` on Windows is still found by

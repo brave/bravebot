@@ -2159,6 +2159,47 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(Labelled::new(text, replied))
     }
 
+    /// Take the body a person saved from their editor, in place of the one a write proposed.
+    ///
+    /// The person wrote the text at their own keyboard, so it is trusted, which is the footing a
+    /// typed answer has in [`Policy::record_answers`]. It is public because it goes into their own
+    /// workspace, as the proposal it replaces was already going to.
+    ///
+    /// **Refuses unless the proposal was trusted and public already.** A body that carried
+    /// untrusted ancestry is not made trusted by somebody editing it, since what they kept of it is
+    /// still bytes nobody who wrote them can be asked about. A body that is still private has not
+    /// been released into the workspace, and this does not release it. Saving over a proposal that
+    /// was trusted and public raises nothing; the refusal is what keeps a proposal that came out of
+    /// quarantine from being promoted this way. A write from a quarantined reference is never
+    /// offered an edit, and this is the second place that says so.
+    ///
+    /// The edited text is never given back to the planner, and nothing here reads it.
+    pub fn adopt_edited_body(
+        &mut self,
+        tool: &str,
+        proposed: &Labelled<String>,
+        saved: String,
+    ) -> Gated<Labelled<String>> {
+        let was = proposed.label();
+        if !was.is_trusted() || !was.is_public() {
+            return Err(self.deny(
+                "answer",
+                Principle::IntegrityGate,
+                format!(
+                    "'{tool}' proposed a body labelled {was}; a person who edits it keeps some of \
+                     what they cannot vouch for or release, so the edited body cannot be trusted \
+                     and public either"
+                ),
+            ));
+        }
+        let edited = Label::trusted_public();
+        self.allow(
+            "answer",
+            format!("{tool}: the person edited the proposed body, recorded {edited}"),
+        );
+        Ok(Labelled::new(saved, edited))
+    }
+
     /// Label input piped into the process on stdin.
     ///
     /// Always `(U,priv)`. Nothing vouched for what a pipe carries: `gh pr diff` and
@@ -19358,6 +19399,55 @@ five
                 )
                 .expect("a trusted series may be answered");
             assert_eq!(answer.label(), Label::trusted_public());
+        }
+
+        /// WRITE-7: the text a person saves from their editor over a proposed write is trusted,
+        /// because a person wrote it, and public, because it goes into their workspace as the
+        /// proposal it replaces was already going to.
+        #[test]
+        fn an_edited_body_is_trusted_and_public() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let proposed =
+                policy.label_model_output("write_file", "what the planner wrote".to_string());
+            assert_eq!(
+                proposed.label(),
+                Label::trusted_public(),
+                "the fixture's proposal"
+            );
+
+            let edited = policy
+                .adopt_edited_body("write_file", &proposed, "what the person kept".to_string())
+                .expect("a trusted, public proposal may be edited");
+            assert_eq!(edited.label(), Label::trusted_public());
+        }
+
+        /// WRITE-7: nobody who edits an untrusted proposal can vouch for what they kept of it, so
+        /// saving one does not make it trusted, and one that is still private has not been released
+        /// into the workspace, so saving over it does not release it. Without the refusal a body
+        /// written after the planner met untrusted content is promoted by an editor round trip.
+        #[test]
+        fn a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it() {
+            for (context, held) in [
+                (Integrity::Untrusted, Confidentiality::Public),
+                (Integrity::Untrusted, Confidentiality::Private),
+                (Integrity::Trusted, Confidentiality::Private),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = open_policy(&mut sink).resuming(context).holding(held);
+                let proposed =
+                    policy.label_model_output("write_file", "bytes nobody released".to_string());
+                assert_ne!(
+                    proposed.label(),
+                    Label::trusted_public(),
+                    "the fixture's proposal"
+                );
+
+                let denial = policy
+                    .adopt_edited_body("write_file", &proposed, "the same bytes".to_string())
+                    .expect_err("a proposal that was not trusted and public stays as it was");
+                assert_eq!(denial.principle, Principle::IntegrityGate);
+            }
         }
 
         /// A planner shown private content writes private questions. They go to the person's own

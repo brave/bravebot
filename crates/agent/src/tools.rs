@@ -2459,18 +2459,30 @@ pub fn refused_without_running<S: Sink, R: Reporter>(
 /// write a reference instead; it carries no finding, so nothing about what was found is in a
 /// model's context. The person's half is the findings, each said as a kind, a location, a
 /// fingerprint and a masked preview, which is the whole of what a finding may hold.
-fn credential_refusal(path: &str, scanned: &Scanned) -> Produced {
+fn credential_refusal(path: &str, scanned: &Scanned, after_an_edit: bool) -> Produced {
     let found: Vec<String> = scanned
         .refused()
         .iter()
         .map(|finding| finding.describe())
         .collect();
-    Produced::refused_with_a_note(
+    // Where the body is the text the person saved from their editor (WRITE-7), the planner is
+    // told the contents the user changed are the reason and is not told to put a reference in the
+    // file, since the text that would hold the value is not its own.
+    let told = if after_an_edit {
+        format!(
+            "refused: the contents the user changed for {path} would put a credential in the \
+             tree, so nothing was written. Do not write {path} again; tell the user what the \
+             file was for and let them decide what to do about the value."
+        )
+    } else {
         format!(
             "refused: writing {path} would put a credential in the tree, so nothing was \
              written. {}",
             do_this_instead(scanned.only_the_value)
-        ),
+        )
+    };
+    Produced::refused_with_a_note(
+        told,
         format!(
             "refused, a credential would have landed here: {}",
             found.join("; ")
@@ -4504,6 +4516,18 @@ struct Body {
     planner_written: bool,
 }
 
+/// Whether a write prompt may offer the person their editor on the body (WRITE-7): only the
+/// planner's own text, written in a context that is trusted, and already released into the
+/// workspace, which is what makes it public.
+///
+/// Decided from which argument supplied the body and from the body's label, never from what it
+/// says. A body out of a quarantined reference is the case the edit is not offered for, since the
+/// text a person saved from it would still be made of bytes nobody read, and the body of a planner
+/// that has met untrusted content is the same case one step removed.
+fn offers_an_edit(planner_written: bool, label: bravebot_core::label::Label) -> bool {
+    planner_written && label.is_trusted() && label.is_public()
+}
+
 /// Put `given` in the file `landing` names: the scan, the question, the grant and the write, which
 /// are the same whatever the body came from.
 ///
@@ -4535,7 +4559,6 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         written_since_checkout,
         planner_written,
     } = given;
-    let body_label = body.label();
 
     // What the file holds now, carried rather than read: the bytes of a file nobody vouched for
     // are untrusted content, and a driver holding them as a bare `String` is what LABEL-4 stops.
@@ -4563,7 +4586,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // copy kept for the review: that one is untrusted whatever the map says, so converting on it
     // would convert nothing anywhere. A file nobody vouched for still converts nothing, and the
     // driver never sees what ending it used.
-    let body = if replaces && planner_written {
+    let mut body = if replaces && planner_written {
         crate::workspace::in_the_replaced_files_format(policy, "write_file", &pre_image, body)
     } else {
         body
@@ -4590,108 +4613,159 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         );
     }
 
-    // What this would leave in the tree, before it is put to anybody and before a byte of it is
-    // written. Asked here rather than after the write so that a refused value never lands: a file
-    // deleted afterwards has still held the secret, and whatever was watching the directory has
-    // still seen it. Asked before the approval prompt for a smaller reason: a person should not be
-    // shown a diff to approve that is going to be refused whatever they answer.
-    //
-    // The pre-image goes to the scan labelled as the trust map holds the path, and the scan reads
-    // it through the trusted-content gate: prior bytes a sibling effect left untrusted are
-    // refused there, so they cannot excuse a credential in this body.
-    let scanned = policy.scan_a_write(
-        "write_file",
-        &shown_path,
-        replaces.then_some(&pre_image),
-        &body,
-    );
-    // And written down, which is the other half of where a finding goes: a line drawn while
-    // nobody was looking is gone when the turn ends, and the scan exists to tell a person what is
-    // in their own tree (CRED-19). Written before the refusal below and before anybody is asked,
-    // because a refusal, an approval and a decline are equally findings.
-    tools.recording().record(workspace.root(), &scanned.all());
-    if !scanned.refused().is_empty() {
-        return credential_refusal(&shown_path, &scanned);
-    }
+    // Whether the prompt may offer the person their editor on this body (WRITE-7).
+    let may_edit = offers_an_edit(planner_written, body.label());
+    // Whether the body now is text the person saved from their editor, which the planner is told
+    // and the question is put again for.
+    let mut edited_by_person = false;
 
-    // A guess goes to the person rather than deciding by itself, and asking is the only way to put
-    // it to them, so a body the scan has doubts about is a body somebody looks at even where the
-    // path's own rule would not have asked.
-    let mut to_approve = describe_all(&scanned.to_approve());
-    // Unless the person already answered for this file, for the session or past it.
-    let standing = StandingAnswer::read(
-        policy,
-        workspace,
-        tools.recording(),
-        "write_file",
-        &proposed_path,
-        &mut to_approve,
-    );
+    let (scanned, reviewed) = loop {
+        let body_label = body.label();
 
-    // What the write would change, compared inside the kernel and released once. The question
-    // below is drawn from it and so is the line the person is told afterwards, which is the
-    // same comparison and so is made once.
-    let reviewed = review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
-
-    if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
-        || always_ask
-        || tools.permission_mode.writes_are_always_asked()
-        || !to_approve.is_empty()
-    {
-        // Released for display only, and inside the branch because there is no screen on the
-        // other one: the reviewer reads this before approving, and nothing after the write
-        // reads it, so releasing it where nobody is asked would put a declassification in the
-        // trail with no audience for it. A display release cannot feed an effect.
-        let shown = {
-            let proof = policy.authorise_display_release("proposed write");
-            body.clone().declassify(&proof)
-        };
-        // The file this replaces, released for the same screen and for the same reason: the
-        // reviewer sees what they are about to lose, and nothing else reads it. Nothing is
-        // released where there is no file to replace.
+        // What this would leave in the tree, before it is put to anybody and before a byte of it is
+        // written. Asked here rather than after the write so that a refused value never lands: a
+        // file deleted afterwards has still held the secret, and whatever was watching the
+        // directory has still seen it. Asked before the approval prompt for a smaller reason: a
+        // person should not be shown a diff to approve that is going to be refused whatever they
+        // answer.
         //
-        // A file that is there but is not text is released too, empty, because whether the peek
-        // found anything is a question about the file's own bytes and this is the one place that
-        // may not ask it. What the reviewer is shown of such a file is as empty as what is
-        // released, so the trail and the screen say the same thing.
-        let existing = replaces.then(|| {
-            let proof = policy.authorise_display_release("the file a write replaces");
-            existing.declassify(&proof)
-        });
-        let request = WriteRequest {
-            written_since_checkout,
-            intent,
-            existing,
-            path: proposed_path.clone(),
-            contents: shown,
-            diff: reviewed.diff.clone(),
-            // The reviewer is the only one who will read this. Say what they are reading.
-            untrusted: !body_label.is_trusted(),
-            remark,
-            credentials: to_approve,
-            protected: write_is_protected(workspace, &proposed_path),
-            may_always: standing.may_always,
-            record: standing.record.clone(),
-        };
-
-        // Read as the question is put, because a person can change the mode while they decide it,
-        // and the trail must not credit the new mode with an answer they gave.
-        let mode = tools.permission_mode.get();
-        let answer = confirmer.confirm_write(&request);
-        policy.record_answer(
-            mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
-                .then(|| mode.name()),
+        // The pre-image goes to the scan labelled as the trust map holds the path, and the scan
+        // reads it through the trusted-content gate: prior bytes a sibling effect left untrusted
+        // are refused there, so they cannot excuse a credential in this body.
+        //
+        // A body the person saved from their editor goes through it as well, for the same reason:
+        // what lands is what was scanned, whoever wrote it.
+        let scanned = policy.scan_a_write(
+            "write_file",
+            &shown_path,
+            replaces.then_some(&pre_image),
+            &body,
         );
-        keep_the_note(policy, "write_file", answer.approved(), answer.note());
-        if !answer.approved() {
-            policy.refuse_unapproved_write(call);
-            return credential_aware_rejection(&shown_path, &scanned, answer.note().is_some());
+        // And written down, which is the other half of where a finding goes: a line drawn while
+        // nobody was looking is gone when the turn ends, and the scan exists to tell a person what
+        // is in their own tree (CRED-19). Written before the refusal below and before anybody is
+        // asked, because a refusal, an approval and a decline are equally findings.
+        //
+        // A later round writes down only what the person's text brought: the values the file
+        // already held were recorded with the first body's findings, and writing them again would
+        // list each of them once per edit.
+        let found: Vec<_> = if edited_by_person {
+            scanned.authored.iter().collect()
+        } else {
+            scanned.all()
+        };
+        tools.recording().record(workspace.root(), &found);
+        if !scanned.refused().is_empty() {
+            return credential_refusal(&shown_path, &scanned, edited_by_person);
         }
-        standing.keep(policy, answer);
-    }
+
+        // A guess goes to the person rather than deciding by itself, and asking is the only way to
+        // put it to them, so a body the scan has doubts about is a body somebody looks at even
+        // where the path's own rule would not have asked.
+        let mut to_approve = describe_all(&scanned.to_approve());
+        // Unless the person already answered for this file, for the session or past it.
+        let standing = StandingAnswer::read(
+            policy,
+            workspace,
+            tools.recording(),
+            "write_file",
+            &proposed_path,
+            &mut to_approve,
+        );
+
+        // What the write would change, compared inside the kernel and released once. The question
+        // below is drawn from it and so is the line the person is told afterwards, which is the
+        // same comparison and so is made once.
+        let reviewed = review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
+
+        // A body the person edited is put again whatever the path's own rule says: they asked to
+        // see the write before it happened, and the diff is of text the question has not shown
+        // yet. A permission mode that answers writes unasked answers this one as it answers any
+        // other, and still leaves a write that would create a credential, or land in a protected
+        // path, to the person.
+        if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
+            || always_ask
+            || tools.permission_mode.writes_are_always_asked()
+            || !to_approve.is_empty()
+            || edited_by_person
+        {
+            // Released for display only, and inside the branch because there is no screen on the
+            // other one: the reviewer reads this before approving, and nothing after the write
+            // reads it, so releasing it where nobody is asked would put a declassification in the
+            // trail with no audience for it. A display release cannot feed an effect.
+            let shown = {
+                let proof = policy.authorise_display_release("proposed write");
+                body.clone().declassify(&proof)
+            };
+            // The file this replaces, released for the same screen and for the same reason: the
+            // reviewer sees what they are about to lose, and nothing else reads it. Nothing is
+            // released where there is no file to replace.
+            //
+            // A file that is there but is not text is released too, empty, because whether the peek
+            // found anything is a question about the file's own bytes and this is the one place
+            // that may not ask it. What the reviewer is shown of such a file is as empty as what is
+            // released, so the trail and the screen say the same thing.
+            let existing = replaces.then(|| {
+                let proof = policy.authorise_display_release("the file a write replaces");
+                existing.clone().declassify(&proof)
+            });
+            let request = WriteRequest {
+                written_since_checkout,
+                intent,
+                existing,
+                path: proposed_path.clone(),
+                contents: shown,
+                diff: reviewed.diff.clone(),
+                // The reviewer is the only one who will read this. Say what they are reading.
+                untrusted: !body_label.is_trusted(),
+                remark: remark.clone(),
+                credentials: to_approve,
+                protected: write_is_protected(workspace, &proposed_path),
+                may_always: standing.may_always,
+                record: standing.record.clone(),
+                may_edit,
+            };
+
+            // Read as the question is put, because a person can change the mode while they decide
+            // it, and the trail must not credit the new mode with an answer they gave.
+            let mode = tools.permission_mode.get();
+            let answer = confirmer.confirm_write(&request);
+            // The body the person saved is not an answer to this question: it replaces what the
+            // question was about, and the write is put to them again with the new diff. Taken only
+            // where the prompt offered it, so an edit sent where none was drawn is a refusal below,
+            // whatever else the answer says.
+            if let Some(saved) = answer.edited() {
+                // The kernel refuses a proposal that was not trusted as well, so a front end that
+                // sends an edit for one reaches the refusal below however it got there.
+                if may_edit
+                    && let Ok(adopted) =
+                        policy.adopt_edited_body("write_file", &body, saved.to_string())
+                {
+                    body = adopted;
+                    edited_by_person = true;
+                    continue;
+                }
+                policy.refuse_unapproved_write(call);
+                return credential_aware_rejection(&shown_path, &scanned, false);
+            }
+            policy.record_answer(
+                mode.answers_a_write_unasked(!request.credentials.is_empty(), request.protected)
+                    .then(|| mode.name()),
+            );
+            keep_the_note(policy, "write_file", answer.approved(), answer.note());
+            if !answer.approved() {
+                policy.refuse_unapproved_write(call);
+                return credential_aware_rejection(&shown_path, &scanned, answer.note().is_some());
+            }
+            standing.keep(policy, answer);
+        }
+        break (scanned, reviewed);
+    };
+    // Read once the loop is done, since an edit replaced the body and its label with the person's.
+    let body_label = body.label();
 
     // The approval is the path's authority rather than a relabelling of it, and it is bound to
-    // this exact value.
+    // this exact value. Issued for the path the question named, which an edit does not change.
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
     match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
@@ -4730,9 +4804,18 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 ),
             };
             let done = match checked {
-                Some(said) if done.ends_with('.') => format!("{done} {said}"),
-                Some(said) => format!("{done}. {said}"),
+                Some(said) => followed_by(done, &said),
                 None => done,
+            };
+            // That the person changed the body, and nothing about what it holds now (WRITE-7).
+            let done = if edited_by_person {
+                followed_by(
+                    done,
+                    "The user changed the contents before they were written, so the file may \
+                     differ from what you gave.",
+                )
+            } else {
+                done
             };
             confirmed(done, carried_note(note, &scanned))
                 .with_changes(changes)
@@ -4740,6 +4823,15 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 .having_changed_a_file()
         }
         Err(e) => write_refused(policy, tools, "write_file", destination, &e, &shown_path),
+    }
+}
+
+/// `done` with `sentence` after it, as one more sentence of a result.
+fn followed_by(done: String, sentence: &str) -> String {
+    if done.ends_with('.') {
+        format!("{done} {sentence}")
+    } else {
+        format!("{done}. {sentence}")
     }
 }
 
@@ -5353,7 +5445,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // And written down where a whole-file write's findings are, for the same reason (CRED-19).
     recording.record(workspace.root(), &scanned.all());
     if !scanned.refused().is_empty() {
-        return credential_refusal(&shown_path, &scanned);
+        return credential_refusal(&shown_path, &scanned, false);
     }
 
     // As in a whole-file write: a guess is put to a person rather than deciding on its own, and
@@ -5398,6 +5490,7 @@ fn edit_file<S: Sink, C: Confirmer>(
             protected: write_is_protected(workspace, &proposed_path),
             may_always: standing.may_always,
             record: standing.record.clone(),
+            may_edit: false,
         };
 
         let answer = confirmer.confirm_write(&request);
@@ -9023,6 +9116,7 @@ fn download_url<S: Sink, C: Confirmer>(
         credentials: Vec::new(),
         may_always: false,
         record: None,
+        may_edit: false,
     };
     let mode = tools.permission_mode.get();
     let answer = confirmer.confirm_write(&request);
@@ -11559,6 +11653,30 @@ fn read_git<S: Sink, C: Confirmer>(
 
 #[cfg(test)]
 mod tests {
+    /// WRITE-7: the editor is offered for the planner's own text in a trusted context and for
+    /// nothing else. A body from a quarantined reference is never offered one, whatever its label
+    /// says, and neither is text a planner wrote after it had met untrusted content: the person's
+    /// saved text would carry what they kept of it, and trusting it would promote it.
+    #[test]
+    fn an_edit_is_offered_only_for_the_planners_own_text_in_a_trusted_context() {
+        use bravebot_core::label::Label;
+        assert!(offers_an_edit(true, Label::trusted_public()));
+        assert!(
+            !offers_an_edit(true, Label::trusted_private()),
+            "text not yet released into the workspace was offered an edit"
+        );
+        assert!(
+            !offers_an_edit(false, Label::trusted_public()),
+            "a body from a reference was offered an edit"
+        );
+        assert!(
+            !offers_an_edit(true, Label::untrusted_public()),
+            "text written in an untrusted context was offered an edit"
+        );
+        assert!(!offers_an_edit(true, Label::untrusted_private()));
+        assert!(!offers_an_edit(false, Label::untrusted_public()));
+    }
+
     #[test]
     fn a_failed_line_is_never_reported_as_not_run() {
         use crate::exec::ExecError;

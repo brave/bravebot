@@ -181,3 +181,29 @@ pub(super) fn show_transcript(
     }
     Ok(())
 }
+
+/// Hand the terminal to the user's editor on the body of a write that is waiting for an answer, and
+/// take back what they saved.
+///
+/// The terminal is given up and taken back the way it is for a prompt, and for the same reason: an
+/// editor needs the screen. `mouse` is whether capture was on, read by the caller because the
+/// session cannot be borrowed while the prompt that called this is open. What comes back is text
+/// for the write prompt to put to the person again, so a failure is returned as the sentence the
+/// prompt says, rather than noted on a transcript the prompt is drawn over.
+pub(super) fn edit_body(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    mouse: bool,
+    body: &str,
+    path: &str,
+) -> Result<String, String> {
+    hand_back_terminal(terminal.backend_mut()).map_err(|error| error.to_string())?;
+    // A cursor that cannot be shown does not stop the editor from running.
+    let _ = terminal.show_cursor();
+
+    let edited = crate::editor::edit_body(body, &crate::editor::scratch_extension(path));
+
+    take_over_terminal(terminal.backend_mut(), mouse).map_err(|error| error.to_string())?;
+    terminal.clear().map_err(|error| error.to_string())?;
+
+    edited.map_err(|failure| failure.to_string())
+}

@@ -1230,6 +1230,7 @@ mod tests {
             credentials: vec!["API_KEY on line 31".to_string()],
             may_always: false,
             record: None,
+            may_edit: false,
         };
         let changes = request.diff.condensed(2);
         assert!(
@@ -1598,6 +1599,7 @@ mod tests {
                     credentials: Vec::new(),
                     may_always: false,
                     record: None,
+                    may_edit: false,
                 },
             )
         };

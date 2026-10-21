@@ -112,6 +112,20 @@ stand for a lasting answer (`a`, `r`, `f`, `m`, `e` and a number) open no field.
 arrived together with other keys, as a paste does, opens or sends nothing. The trust question, the
 desktop window, a session in lines and a one-shot run offer no field.
 
+## Changing a write before approving it
+
+At the write prompt in the terminal, **e** opens the proposed contents in your editor, the one
+`$VISUAL` or `$EDITOR` names, as Ctrl-G does for the prompt box. When you save and quit, the write is
+put to you again as a diff of what you saved, and nothing is written until you answer that question.
+Quitting without saving, or saving what was there, leaves the question where it was, and an editor
+that would not start is said above it.
+
+Only a write whose contents the agent wrote itself offers it. A file made from quarantined content
+does not, since what you kept of it would still be bytes nobody read. What you save is scanned for
+credentials as the agent's own text is, and a credential in it refuses the write. The agent is told
+that you changed the contents and not what they say, and it reads the file to find out. The desktop
+application and `--plain` do not offer it.
+
 ## Vouching for a command
 
 The run prompt is the one place a standing permission is offered, and it offers two of them with

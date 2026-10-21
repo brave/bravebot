@@ -55883,6 +55883,7 @@ fn a_standing_answer_the_prompt_did_not_offer_grants_nothing() {
             remember: true,
             record: true,
             note: None,
+            edited: None,
         },
         bravebot_agent::confirm::WriteDecision::reject(),
     ]);
@@ -69520,5 +69521,433 @@ fn a_delegate_started_after_a_read_carries_the_rule_and_leaves_the_telling_to_th
     assert_eq!(
         said,
         [".bravebot/rules/rust.md was added to the instructions: src/lib.rs matches its paths"]
+    );
+}
+
+/// What a person saved from their editor at a write prompt, as the confirmer answers it.
+fn editing_to(text: &str) -> bravebot_agent::confirm::WriteDecision {
+    bravebot_agent::confirm::WriteDecision::edit(text.to_string())
+}
+
+/// The trail of a turn whose `calls` are each put to `person`, with every file asked about.
+fn the_trail_of_a_writing_turn(
+    scratch: &Scratch,
+    person: &mut RemembersWrites,
+    calls: Vec<String>,
+) -> RecordingSink {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = calls;
+    replies.push(reply_with("understood"));
+    let (endpoint, _received) = serve_sequence(replies);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write the file").with_permissions(rules(&[], &["Edit(**)"], &[])),
+        person,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    sink
+}
+
+/// How many write endorsements the trail records as issued, not counting the line that records
+/// each one being consumed by its write.
+fn write_endorsements(sink: &RecordingSink) -> usize {
+    sink.events()
+        .iter()
+        .filter(|event| match event {
+            Event::GatePassed {
+                gate: "grant",
+                detail,
+            } => detail.starts_with("endorsed file_write"),
+            _ => false,
+        })
+        .count()
+}
+
+/// WRITE-7: what lands is the text the person saved, and the write is put to them again with a
+/// diff of that text, not of the planner's. The planner is told the person changed the contents
+/// and none of what they wrote.
+///
+/// The planner's text is one line and the person's is three, so a driver that writes its own body
+/// after an edit, or draws the second question from the first body's diff, shows a different
+/// file or a different count from the one saved.
+#[test]
+fn an_edited_write_lands_as_the_person_saved_it_after_being_asked_again() {
+    let scratch = Scratch::new("write-edited");
+    let saved = "alpha edited line\nbeta edited line\ngamma edited line\n";
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        editing_to(saved),
+        bravebot_agent::confirm::WriteDecision::approve(),
+    ]);
+    let told = a_turn_writing_as(
+        &scratch,
+        None,
+        None,
+        &["Edit(**)"],
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+        vec![writing("out.txt", "planner text\n")],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("out.txt")).unwrap(),
+        saved,
+        "the file does not hold the text the person saved"
+    );
+    assert_eq!(person.asked.len(), 2, "the edited text was not put again");
+    assert!(
+        person.asked[0].may_edit,
+        "the planner's own contents were not offered an edit"
+    );
+    assert_eq!(person.asked[0].contents, "planner text\n");
+    assert_eq!(person.asked[0].diff.added(), 1);
+    assert_eq!(person.asked[1].contents, saved);
+    assert_eq!(
+        person.asked[1].diff.added(),
+        3,
+        "the second question was drawn from the first body"
+    );
+    assert!(told.contains("created out.txt"), "{told}");
+    assert!(
+        told.contains("The user changed the contents before they were written"),
+        "the planner was not told the person changed the body: {told}"
+    );
+    assert!(
+        !told.contains("edited line"),
+        "what the person wrote reached the planner: {told}"
+    );
+}
+
+/// WRITE-7: saving an edit is not approving the write. A person who then declines leaves nothing on
+/// disk, so a driver that takes the edit for a yes writes the file the person never agreed to.
+#[test]
+fn declining_after_an_edit_writes_nothing() {
+    let scratch = Scratch::new("write-edited-declined");
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        editing_to("the person's text\n"),
+        bravebot_agent::confirm::WriteDecision::reject(),
+    ]);
+    let told = a_turn_writing_as(
+        &scratch,
+        None,
+        None,
+        &["Edit(**)"],
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+        vec![writing("out.txt", "planner text\n")],
+    );
+
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "an edit was taken as consent to the write"
+    );
+    assert_eq!(person.asked.len(), 2);
+    assert!(told.contains("did not approve writing out.txt"), "{told}");
+    assert!(!told.contains("the person's text"), "{told}");
+
+    let other = Scratch::new("write-edited-declined-trail");
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        editing_to("the person's text\n"),
+        bravebot_agent::confirm::WriteDecision::reject(),
+    ]);
+    let sink = the_trail_of_a_writing_turn(&other, &mut person, vec![writing("out.txt", "x\n")]);
+    assert_eq!(
+        write_endorsements(&sink),
+        0,
+        "a write the person declined after editing it was endorsed"
+    );
+}
+
+/// WRITE-7, WRITE-3: the approval that follows an edit is for the path the question named. The
+/// next write, to another path, is asked about as it would have been, so an edit does not leave a
+/// standing permission behind.
+#[test]
+fn the_approval_after_an_edit_covers_only_the_path_it_was_asked_about() {
+    let scratch = Scratch::new("write-edited-path");
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        editing_to("approved after an edit\n"),
+        bravebot_agent::confirm::WriteDecision::approve(),
+        bravebot_agent::confirm::WriteDecision::reject(),
+    ]);
+    a_turn_writing_as(
+        &scratch,
+        None,
+        None,
+        &["Edit(**)"],
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+        vec![
+            writing("first.txt", "planner text\n"),
+            writing("second.txt", "planner text\n"),
+        ],
+    );
+
+    let asked: Vec<&str> = person.asked.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(asked, ["first.txt", "first.txt", "second.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("first.txt")).unwrap(),
+        "approved after an edit\n"
+    );
+    assert!(
+        !scratch.path.join("second.txt").exists(),
+        "an edit on one path approved a write to another"
+    );
+
+    // One endorsement for the one write that was approved, issued once the edited text was.
+    let other = Scratch::new("write-edited-path-trail");
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        editing_to("approved after an edit\n"),
+        bravebot_agent::confirm::WriteDecision::approve(),
+    ]);
+    let sink = the_trail_of_a_writing_turn(&other, &mut person, vec![writing("only.txt", "x\n")]);
+    assert_eq!(
+        write_endorsements(&sink),
+        1,
+        "the edit round and the approval each minted an endorsement"
+    );
+}
+
+/// WRITE-7: the write is put again for the saved text even where nothing would have asked about it.
+/// The first question is asked because the planner's body looks like it holds a secret, and the
+/// person's edit takes that away, so neither the path's rule nor the scan has a reason to ask a
+/// second time. They still asked to see the write after changing it.
+#[test]
+fn an_edit_that_clears_what_made_the_prompt_ask_is_still_put_again() {
+    let scratch = Scratch::new("write-edited-clears-the-question");
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        editing_to("nothing secret in this one\n"),
+        bravebot_agent::confirm::WriteDecision::reject(),
+    ]);
+    a_turn_writing_as(
+        &scratch,
+        None,
+        None,
+        &[],
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+        vec![writing("master.key", &format!("{GENERATED_SECRET}\n"))],
+    );
+
+    assert_eq!(
+        person.asked.len(),
+        2,
+        "text the person changed was written without being put to them"
+    );
+    assert!(
+        !person.asked[0].credentials.is_empty(),
+        "the first question was not about a secret, so this test does not isolate the second"
+    );
+    assert!(person.asked[1].credentials.is_empty());
+    assert_eq!(person.asked[1].contents, "nothing secret in this one\n");
+    assert!(
+        !scratch.path.join("master.key").exists(),
+        "a write the person declined was made"
+    );
+}
+
+/// WRITE-7: a person may change the body again. The write is put to them after each saved text,
+/// each question is drawn from the text before it, and what lands is the last one saved.
+#[test]
+fn a_second_edit_replaces_the_first_and_the_last_text_saved_is_what_lands() {
+    let scratch = Scratch::new("write-edited-twice");
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        editing_to("first edit\n"),
+        editing_to("second edit\nwith two lines\n"),
+        bravebot_agent::confirm::WriteDecision::approve(),
+    ]);
+    a_turn_writing_as(
+        &scratch,
+        None,
+        None,
+        &["Edit(**)"],
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+        vec![writing("out.txt", "planner text\n")],
+    );
+
+    let shown: Vec<&str> = person.asked.iter().map(|r| r.contents.as_str()).collect();
+    assert_eq!(
+        shown,
+        [
+            "planner text\n",
+            "first edit\n",
+            "second edit\nwith two lines\n"
+        ]
+    );
+    assert!(
+        person.asked.iter().all(|request| request.may_edit),
+        "a text the person saved was not offered an edit again"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("out.txt")).unwrap(),
+        "second edit\nwith two lines\n"
+    );
+}
+
+/// WRITE-7: a mode that answers writes unasked answers the saved text as it answers any other
+/// write, so accepting edits writes it without a second question, and still puts to the person a
+/// write that would create a credential, which is why the first question was drawn.
+#[test]
+fn accepting_edits_answers_the_saved_text_as_it_answers_any_other_write() {
+    let scratch = Scratch::new("write-edited-accepting");
+    let mut person = RemembersWrites::pressing_in_turn(&[editing_to("nothing secret in this\n")]);
+    let told = a_turn_writing_as(
+        &scratch,
+        None,
+        None,
+        &[],
+        bravebot_agent::PermissionMode::AcceptEdits,
+        &mut person,
+        vec![writing("master.key", &format!("{GENERATED_SECRET}\n"))],
+    );
+
+    assert_eq!(
+        person.asked.len(),
+        1,
+        "the mode did not answer the saved text, or the credential was not put to the person"
+    );
+    assert!(!person.asked[0].credentials.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("master.key")).unwrap(),
+        "nothing secret in this\n"
+    );
+    assert!(
+        told.contains("The user changed the contents before they were written"),
+        "{told}"
+    );
+}
+
+/// WRITE-7, CRED-19: a value the file already held is written down once however many times the body
+/// is edited, since the record lists what the machine has held and each round carries the same
+/// value along. Each round after the first writes only what the person's text brought.
+#[test]
+fn a_value_the_file_already_held_is_written_down_once_however_often_it_is_edited() {
+    let scratch = Scratch::new("write-edited-findings");
+    let home = Scratch::new("write-edited-findings-home");
+    let held = format!("aws_access_key_id = {DECLARED_KEY}\n");
+    std::fs::write(scratch.path.join("settings.ini"), &held).unwrap();
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        editing_to(&format!("{held}region = eu-west-1\n")),
+        editing_to(&format!("{held}region = eu-west-2\n")),
+        bravebot_agent::confirm::WriteDecision::reject(),
+    ]);
+    a_turn_writing_as(
+        &scratch,
+        Some(&home.path),
+        Some("a-session"),
+        &["Edit(**)"],
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+        vec![writing(
+            "settings.ini",
+            &format!("{held}region = us-east-1\n"),
+        )],
+    );
+
+    assert_eq!(person.asked.len(), 3, "the fixture did not edit twice");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let recorded = bravebot_agent::findings::Store::new(&home.path, workspace.root()).recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "the value the file already held was written down once per round: {recorded:?}"
+    );
+}
+
+/// WRITE-7, CRED-8: a credential the person's edit adds is refused like one the planner wrote, and
+/// the question is not put a second time over it. The planner is told the write was refused for the
+/// contents the user changed, and not what the value was.
+///
+/// The planner's own text holds nothing, so only a scan of the edited text can find it.
+#[test]
+fn a_credential_added_in_an_edit_is_refused() {
+    let scratch = Scratch::new("write-edited-credential");
+    let mut person = RemembersWrites::pressing_in_turn(&[
+        editing_to(&format!("aws_access_key_id = {DECLARED_KEY}\n")),
+        bravebot_agent::confirm::WriteDecision::approve(),
+    ]);
+    let told = a_turn_writing_as(
+        &scratch,
+        None,
+        None,
+        &["Edit(**)"],
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+        vec![writing("settings.ini", "aws_access_key_id = placeholder\n")],
+    );
+
+    assert!(
+        !scratch.path.join("settings.ini").exists(),
+        "a credential the person's edit added was written"
+    );
+    assert_eq!(
+        person.asked.len(),
+        1,
+        "the refused text was put to the person"
+    );
+    assert!(
+        told.contains("refused: the contents the user changed for settings.ini"),
+        "{told}"
+    );
+    assert!(
+        !told.contains(DECLARED_KEY),
+        "the value reached the planner: {told}"
+    );
+    assert!(
+        !told.contains("Put a reference to the value in the file instead"),
+        "the planner was told to put a reference in text the person wrote: {told}"
+    );
+}
+
+/// WRITE-7: a body that came out of a quarantined reference is not offered an edit, and an edit
+/// sent for one anyway writes nothing: the person's text would still be made of bytes nobody read.
+///
+/// The body here is untrusted as well, so its label keeps it out by itself. That the argument it
+/// came from does so too is what the unit test of the offer rule in `tools.rs` holds.
+#[test]
+fn a_write_from_a_reference_is_not_offered_an_edit_and_one_sent_anyway_writes_nothing() {
+    let scratch = Scratch::new("write-edited-reference");
+    std::fs::write(scratch.path.join("game.js"), "const SPEED = 100;\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"halve the speed"}"#,
+        ),
+        processor_reply("const SPEED = 50;"),
+        tool_request(
+            "write_file",
+            r#"{"path_ref":"ref:1","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut sink = RecordingSink::new();
+    let mut person = RemembersWrites::pressing(editing_to("const SPEED = 1;\n"));
+
+    turns::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("halve the speed"),
+        &mut person,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(person.asked.len(), 1, "a refused edit was put again");
+    assert!(
+        !person.asked[0].may_edit,
+        "a body from a reference was offered an edit"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("game.js")).unwrap(),
+        "const SPEED = 100;\n",
+        "an edit where none was offered changed the file"
     );
 }

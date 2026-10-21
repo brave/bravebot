@@ -187,6 +187,7 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             },
         )["remark"]["label"]
             .clone()
@@ -623,6 +624,7 @@ fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
         credentials: Vec::new(),
         may_always: false,
         record: None,
+        may_edit: false,
     };
     assert_eq!(
         wire::write_request(1, &request(true))["writtenSinceCheckout"],
@@ -656,6 +658,7 @@ fn a_write_and_a_credential_read_carry_the_name_spelled_for_a_person() {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             },
         )
     };
@@ -698,6 +701,7 @@ fn a_write_request_says_what_happens_to_the_line_endings() {
         credentials: Vec::new(),
         may_always: false,
         record: None,
+        may_edit: false,
     };
     assert_eq!(
         wire::write_request(1, &request("a\r\nb\r\n", "a\r\nc\r\n"))["lineEndings"],
@@ -729,6 +733,7 @@ fn a_write_request_sends_the_diff_and_never_the_body() {
         credentials: Vec::new(),
         may_always: false,
         record: None,
+        may_edit: false,
     };
 
     let value = wire::write_request(3, &request);
@@ -767,6 +772,7 @@ fn a_created_file_says_nothing_would_be_lost() {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         },
     );
     assert_eq!(value["existing"], json!(false));
@@ -808,6 +814,7 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             credentials: vec![found.to_string()],
             may_always: false,
             record: None,
+            may_edit: false,
         },
     );
     assert_eq!(
@@ -831,6 +838,7 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         },
     );
     assert_eq!(quiet["credentials"], json!([]), "an empty list, not absent");
@@ -1458,6 +1466,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         },
     );
     assert_eq!(write["remark"]["lines"], 9);

@@ -3531,6 +3531,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
         let run = bravebot_agent::confirm::RunRequest::from_pipeline(
             &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
@@ -3642,6 +3643,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
         let vouch = VouchRequest {
             path: "notes.md".to_string(),

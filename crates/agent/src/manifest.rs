@@ -1842,6 +1842,7 @@ fn write<S: Sink, C: Confirmer>(
             protected: crate::tools::write_is_protected(workspace, &path),
             may_always: standing.may_always,
             record: standing.record.clone(),
+            may_edit: false,
         };
         // Read as the question is put, exactly as a turn's write reads it.
         let mode = permission_mode.get();

@@ -1753,6 +1753,7 @@ write-remember-where = it is written down here, and deleting the line is the way
 write-yes = write it
 write-always = always this session
 write-remember = remember it
+write-edit-first = edit it first
 write-no = leave it alone
 
 
@@ -2518,8 +2519,8 @@ editor-none-configured = no editor found: set $VISUAL or $EDITOR to the one you 
 editor-scratch-unusable = the file to edit could not be used: { $problem }
 editor-named-but-missing =
     '{ $command }' was not found, and $VISUAL or $EDITOR names it, so nothing else was tried
-editor-exited-badly = { $editor } exited with status { $code }, so the line is unchanged
-editor-was-stopped = { $editor } was stopped before it finished, so the line is unchanged
+editor-exited-badly = { $editor } exited with status { $code }, so what you had is unchanged
+editor-was-stopped = { $editor } was stopped before it finished, so what you had is unchanged
 editor-would-not-start = { $editor } would not start: { $problem }
 
 
