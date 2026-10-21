@@ -2057,6 +2057,16 @@ mod tests {
                 vec![
                     flight.clone(),
                     add(
+                        "start:flight.departs start:flight.arrives end:flight.arrives",
+                        "start_zone:Europe/London end_zone:Europe/Paris",
+                    ),
+                ],
+                "given or taken twice",
+            ),
+            (
+                vec![
+                    flight.clone(),
+                    add(
                         "start:flight.departs",
                         "start_zone:Europe/London end_zone:Europe/Paris",
                     ),
