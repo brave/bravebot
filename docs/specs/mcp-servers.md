@@ -1016,6 +1016,14 @@ The home these rows keep out is the person's profile directory, and not the stat
 it that bravebot keeps its own files in. It is compared with its links followed, as the rows are,
 so a home reached through a link is kept out as well.
 
+**What a server may write is not searched for programs.** Each directory the policy a server is
+launched under lets it write, its declared directory and its own home among them, is left out of
+the lookup of the programs bravebot starts itself, as a stage's rows are
+([SANDBOX-30](sandboxing.md#SANDBOX-30)). A server is code we did not write, and a program it
+writes there would start with the person's access, which the confinement withholds from the server.
+The rows are recorded as the server is launched, and a server that is only described records none.
+The lookup of a server's program by name ([SERVERS-5](#SERVERS-5)) reads the same record.
+
 **A server is given no directory inside a git repository.** git runs the commands a repository's
 configuration and hooks name, unconfined, the next time anybody runs git there, and a relative
 `core.hooksPath` makes files of the work tree into hooks, so a server that may write a repository
@@ -1100,6 +1108,9 @@ the server is not started either, and the line says why.
 `verified-by: bravebot_agent::servers::a_declared_directory_holding_a_repository_is_refused`
 `verified-by: bravebot_cli::mcp::add_declares_no_directory_inside_a_repository`
 `verified-by: bravebot_sandbox::macos::a_write_row_does_not_reach_a_git_directory_beneath_it`
+`verified-by: bravebot_agent::servers::a_directory_a_started_server_may_write_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::servers::describing_a_server_keeps_nothing_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::servers::a_server_directory_that_is_not_text_is_kept_out_as_it_is_and_not_as_its_lookalike`
 
 <a id="SERVERS-11"></a>
 ### SERVERS-11: a remote server is an egress destination, and its host is approved as one

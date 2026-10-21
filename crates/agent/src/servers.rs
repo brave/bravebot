@@ -1853,6 +1853,7 @@ fn start_under(
                 };
                 let (policy, effective, note) = nameable(&alias, policy, &granted);
                 notes.extend(note);
+                keep_out_what_it_may_write(&policy);
                 let variables = proxied
                     .into_iter()
                     .fold(at_home(variables, &own), |held, (name, value)| {
@@ -2298,6 +2299,20 @@ fn nameable(
     });
     let view = EffectivePolicy::of(&resolved.policy, resolved.omitted);
     (resolved.policy, view, note)
+}
+
+/// Leave every directory `policy` lets a server write out of the search for the programs bravebot
+/// starts itself (SANDBOX-30).
+///
+/// A server is code bravebot did not write, so a file it writes in its home or its declared
+/// directory is not one bravebot may start. The record lasts for the process, as a stage's does,
+/// because a server that has stopped has not taken its files with it. It is made from the policy
+/// the server is launched under, once the rows the backend cannot name are dropped, and before
+/// the launch, so it holds what the server can write and is complete before it runs.
+fn keep_out_what_it_may_write(policy: &SandboxPolicy) {
+    for row in &policy.writable {
+        bravebot_sandbox::programs::keep_out(&row.path);
+    }
 }
 
 /// [`confinement`] on this machine: its platform's base, and the person's own profile directory as
@@ -4446,6 +4461,201 @@ done
         assert_eq!(std::fs::read_dir(&state).expect("state").count(), 0);
         drop(started);
         assert!(!own.exists(), "{} outlived its server", own.display());
+    }
+
+    /// The name of the program [`planting_server`] writes, which no installation holds, so a lookup
+    /// that finds it has found the server's file.
+    #[cfg(unix)]
+    const PLANTED: &str = "bravebot-server-planted-probe";
+
+    /// Writes an executable named [`PLANTED`] in the directory it starts in and in its own home,
+    /// then answers its handshake, so both files are on disk once it has started.
+    #[cfg(unix)]
+    fn planting_server() -> String {
+        let (_, answering) = HOME_WRITING_SERVER
+            .split_once("while ")
+            .expect("the server answers in a loop");
+        format!(
+            r#"#!/bin/sh
+for place in . "$HOME"; do
+  printf '#!/bin/sh\n' > "$place/{PLANTED}" || exit 1
+  chmod 755 "$place/{PLANTED}" || exit 1
+done
+while {answering}"#
+        )
+    }
+
+    /// SANDBOX-30: a directory a started server may write is kept out of the search for the
+    /// programs bravebot starts itself, so a file the server wrote there is never one of them. The
+    /// clipboard probe a focus event runs starts what that search finds with the person's access,
+    /// which the server's confinement withholds.
+    ///
+    /// The server writes into the directory it starts in and into its own home. Each is looked up
+    /// as a `PATH` entry on its own, so a launch that records one and not the other fails, then
+    /// both ahead of the entry holding the installed program, which is the one that must be found.
+    /// The directory the server may only read is searched still: a launch that left out every row
+    /// of its policy would leave out `/usr/bin` with it.
+    ///
+    /// The record is one for the whole process and other tests add to it, one of them `/`, which
+    /// leaves out every directory. A lookup against all of it would find nothing whatever this
+    /// launch recorded, so the rows are the ones under this test's own directory, and the record
+    /// is read for them directly as well.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_a_started_server_may_write_is_kept_out_of_the_search_for_programs() {
+        let root = scratch("cli-servers-kept-out-of-the-search");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let program = installed(&root.join("bin"), "weather-mcp");
+        std::fs::write(&program, planting_server()).expect("write the server");
+        // Outside `root`, which the program's `bin` directory brings as a read row.
+        let elsewhere = scratch("cli-servers-kept-out-elsewhere");
+        let genuine = installed(&elsewhere, PLANTED);
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let plan = Plan::Stdio {
+            program: program.clone(),
+            arguments: Vec::new(),
+            variables: Variables::new(),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: Some(work.clone()),
+            declared: digested(&["weather-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+        };
+        let mut notes = Vec::new();
+
+        let started = start(
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(started.len(), 1, "the server did not start: {notes:?}");
+        let own = mcp::server_home(&state, &digested(&["weather-mcp"]));
+        for place in [&work, &own] {
+            assert!(
+                place.join(PLANTED).is_file(),
+                "the server wrote nothing in {}, so this is not the case under test",
+                place.display()
+            );
+        }
+        let recorded: Vec<PathBuf> = bravebot_sandbox::programs::registered()
+            .into_iter()
+            .filter(|row| row.starts_with(&root))
+            .collect();
+        for place in [&work, &own] {
+            assert!(
+                recorded.contains(place),
+                "{} was not kept out of the search for programs",
+                place.display()
+            );
+        }
+        let look_up = |entries: &[&Path]| {
+            let path = std::env::join_paths(entries).expect("a PATH");
+            bravebot_sandbox::programs::find_in(OsStr::new(PLANTED), &path, &recorded)
+        };
+        assert_eq!(
+            look_up(&[&elsewhere]),
+            Some(genuine.clone()),
+            "the lookup does not find a program in a directory nothing has left out"
+        );
+        assert_eq!(look_up(&[&work]), None, "a file in its directory was found");
+        assert_eq!(look_up(&[&own]), None, "a file in its home was found");
+        assert_eq!(
+            look_up(&[&work, &own, &elsewhere]),
+            Some(genuine),
+            "the installed program was not the one found"
+        );
+        assert_eq!(
+            bravebot_sandbox::programs::find_in(
+                OsStr::new("weather-mcp"),
+                root.join("bin").as_os_str(),
+                &recorded
+            ),
+            Some(program),
+            "a directory the server may only read was left out"
+        );
+    }
+
+    /// SANDBOX-30: a server that is only described, for the question put to the person or a view of
+    /// its policy, has not run, so its rows keep nothing out of the search for programs. The
+    /// regression it rejects: the policy builder recording its rows as though the server had been
+    /// started. It is asked of the builder itself and of `unreached`, which builds the policy to
+    /// say which files a declaration has to be granted a read of.
+    #[test]
+    fn describing_a_server_keeps_nothing_out_of_the_search_for_programs() {
+        let root = scratch("cli-servers-described-only");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let program = installed(&root.join("bin"), "weather-mcp");
+        let Some(policy) =
+            confinement_here(&program, &[], &[], Some(work.as_path()), &root.join("own"))
+        else {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        };
+        assert!(
+            policy.writable.iter().any(|row| row.path == work),
+            "the policy does not grant {}, so this is not the case under test",
+            work.display()
+        );
+        let other = root.join("other");
+        std::fs::create_dir_all(&other).expect("other");
+        let declaration = Declaration::stdio(
+            words(&["weather-mcp"]),
+            vec!["PATH".to_string()],
+            Some(other.display().to_string()),
+        )
+        .expect("declaration");
+
+        unreached(&declaration, vec![root.join("file")], &|_| None);
+
+        let recorded = bravebot_sandbox::programs::registered();
+        for described in [&work, &other] {
+            assert!(
+                !recorded.contains(described),
+                "{} was kept out by describing the server",
+                described.display()
+            );
+        }
+    }
+
+    /// PATH-003 for the record a launch makes: a declared directory whose name is not text is kept
+    /// out under the bytes it has, and the directory named by the replacement-character rendering
+    /// of those bytes is not, as it would be if the record were made from a lossy rendering. The
+    /// names are built in memory, so this runs where the volume cannot hold the first one.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_directory_that_is_not_text_is_kept_out_as_it_is_and_not_as_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = scratch("cli-servers-kept-out-bytes");
+        let invalid = root.join(OsStr::from_bytes(b"work-\xff"));
+        let lookalike = root.join("work-\u{FFFD}");
+
+        keep_out_what_it_may_write(&SandboxPolicy::strict().allow_write(invalid.clone()));
+
+        let recorded = bravebot_sandbox::programs::registered();
+        assert!(
+            recorded.contains(&invalid),
+            "the directory whose name is not text was not kept out"
+        );
+        assert!(
+            !recorded.contains(&lookalike),
+            "the directory named by its lossy rendering was kept out"
+        );
     }
 
     /// A server at a port of its own answering each request with `answer`, and every body it was
