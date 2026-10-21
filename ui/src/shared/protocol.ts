@@ -524,6 +524,8 @@ export interface FetchRequest {
   request: number
   url: string
   host: string
+  /** The host the fetch was approved for, set where `host` is one a redirect led it to. */
+  redirectedFrom?: string | null
   ambient?: Ambient[]
   summary: string
 }

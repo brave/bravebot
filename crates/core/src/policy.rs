@@ -481,6 +481,12 @@ pub struct Policy<'sink, S: Sink> {
     /// two go through one gate and are not the same act: only the first is something a turn asked
     /// for, and only the first is what a `WebFetch` rule is about.
     fetching: Option<String>,
+    /// The host a hop of the fetch in flight was refused for going to, until
+    /// [`Policy::take_fetch_hop`] hands it to whoever asks the person. A server's own bytes.
+    fetch_hop: Option<String>,
+    /// A host other than `fetching` that a person approved this one fetch to be redirected to,
+    /// while it is in flight. Set by [`Policy::before_fetch_via`], cleared with `fetching`.
+    fetching_via: Option<String>,
     /// The host and port a declared MCP server is at, while a request to it is in flight.
     ///
     /// Set by [`Policy::before_server_request`] and cleared by
@@ -622,6 +628,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             vouch_asked: std::collections::BTreeSet::new(),
             exposed: crate::credentials::Exposed::new(),
             fetching: None,
+            fetch_hop: None,
+            fetching_via: None,
             calling_server: None,
             calling_socket: None,
             server_hop: None,
@@ -771,7 +779,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // names it, which is a person having written that host down in advance.
             if redirected
                 && ruling != crate::permissions::Decision::Ruled(crate::permissions::Ruling::Allow)
+                && self.fetching_via.as_deref() != Some(host.as_str())
             {
+                // Kept for the prompt and nothing else: see `take_fetch_hop`.
+                self.fetch_hop = Some(host.clone());
                 return Err(self.deny(
                     "network",
                     Principle::IntegrityGate,
@@ -889,6 +900,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         // What the egress gate checks each hop against, until the call reports back.
         self.fetching = Some(crate::url::host_of(url).unwrap_or_default());
+        self.fetch_hop = None;
+        self.fetching_via = None;
 
         let label = Capability::WebFetch.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
@@ -910,6 +923,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// egress being checked against a host that one call was approved for.
     pub fn fetch_finished(&mut self) {
         self.fetching = None;
+        self.fetching_via = None;
+    }
+
+    /// The host the last fetch's redirect was refused for going to, if it was.
+    ///
+    /// Taken rather than read, so one refusal is asked about once. `(U,pub)`: the host came out of
+    /// a `Location` header and is the server's own bytes, so it may be drawn for a person and
+    /// decides nothing until one of them says it may be fetched from (FETCH-4). A host a `deny`
+    /// rule covers is never kept: that refusal is final and there is nothing to ask.
+    pub fn take_fetch_hop(&mut self) -> Option<Labelled<String>> {
+        self.fetch_hop
+            .take()
+            .map(|host| Labelled::new(host, Label::untrusted_public()))
+    }
+
+    /// Record that a person approved this exact host as the place a fetch was redirected to.
+    ///
+    /// Only a person mints this, and it is single-use and bound to the host, as
+    /// [`Policy::endorse_fetch`] is bound to a URL (FETCH-3).
+    pub fn endorse_fetch_hop(&mut self, host: &str) {
+        self.issue_grant("fetch_url", "hop", host.to_string());
+    }
+
+    /// [`Policy::before_fetch`] for a fetch that a person has also approved being redirected to
+    /// `hop`, which the egress gate then lets that one request follow. Nothing is remembered: the
+    /// next fetch starts confined to its own host again.
+    pub fn before_fetch_via(&mut self, url: &str, hop: &str) -> Gated<Label> {
+        self.consume_grant("fetch_url", "hop", hop)?;
+        let label = self.before_fetch(url)?;
+        self.fetching_via = Some(hop.to_string());
+        Ok(label)
     }
 
     /// Whether a `fetch_url` call is between [`Policy::before_fetch`] and
@@ -1294,6 +1338,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             vouch_asked: self.vouch_asked.clone(),
             exposed: self.exposed.clone(),
             fetching: self.fetching.clone(),
+            fetch_hop: self.fetch_hop.clone(),
+            fetching_via: self.fetching_via.clone(),
             calling_server: self.calling_server.clone(),
             calling_socket: self.calling_socket.clone(),
             server_hop: self.server_hop.clone(),
@@ -12356,6 +12402,106 @@ five
                 .before_network("https://elsewhere.test/landed")
                 .is_err(),
             "a fetch approved for one host followed a redirect to another"
+        );
+    }
+
+    /// FETCH-4: the host a hop was refused for is kept for the prompt, as the server's own bytes,
+    /// and handed out once. A hop a `deny` rule refuses is final and leaves nothing to ask, and a
+    /// fetch that stayed on its host leaves nothing either.
+    #[test]
+    fn a_hop_refused_for_leaving_the_host_is_kept_untrusted_for_the_prompt() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:denied.test)"],
+            &[],
+            &[],
+        ));
+
+        let start = "https://example.com/start";
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the fetch was allowed");
+        policy.before_network("https://example.com/moved").unwrap();
+        assert!(policy.take_fetch_hop().is_none());
+
+        policy
+            .before_network("https://denied.test/landed")
+            .expect_err("a denied host was followed");
+        assert!(
+            policy.take_fetch_hop().is_none(),
+            "a denied host was kept to ask about"
+        );
+
+        policy
+            .before_network("https://elsewhere.test/landed")
+            .expect_err("a redirect off the approved host was allowed");
+        let hop = policy.take_fetch_hop().expect("the refused hop");
+        assert_eq!(hop.label(), Label::untrusted_public());
+        assert!(
+            policy.take_fetch_hop().is_none(),
+            "one refusal was handed out twice"
+        );
+
+        // A refusal does not outlive the fetch it belonged to.
+        policy
+            .before_network("https://elsewhere.test/landed")
+            .expect_err("still confined");
+        policy.fetch_finished();
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the next fetch");
+        assert!(policy.take_fetch_hop().is_none());
+    }
+
+    /// FETCH-4: an approval of a host a redirect led to is for that host, that fetch and that one
+    /// time. It does not carry to a different host, to the next fetch, or to a hop with no
+    /// approval behind it, and a `deny` rule still wins over it.
+    #[test]
+    fn an_approved_hop_is_for_that_host_and_that_fetch_alone() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:denied.test)"],
+            &[],
+            &[],
+        ));
+        let start = "https://example.com/start";
+
+        // Not minted by a person: the gate refuses, and the fetch cannot be made to follow it.
+        policy.endorse_fetch(start);
+        policy
+            .before_fetch_via(start, "elsewhere.test")
+            .expect_err("a hop was approved that nobody approved");
+
+        policy.endorse_fetch(start);
+        policy.endorse_fetch_hop("elsewhere.test");
+        policy
+            .before_fetch_via(start, "elsewhere.test")
+            .expect("the approved hop");
+        assert!(policy.before_network("https://example.com/moved").is_ok());
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_ok(),
+            "the host a person approved was refused"
+        );
+        assert!(
+            policy
+                .before_network("https://another.test/landed")
+                .is_err(),
+            "an approval for one host let the fetch go to another"
+        );
+        assert!(
+            policy.before_network("https://denied.test/landed").is_err(),
+            "an approval overrode a deny rule"
+        );
+        policy.fetch_finished();
+
+        // Gone with the fetch: the next one starts confined to its own host again.
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the next fetch");
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_err(),
+            "an approval was remembered for the next fetch"
         );
     }
 

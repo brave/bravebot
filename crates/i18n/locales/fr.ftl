@@ -1840,6 +1840,7 @@ vet-always-covers =
 fetch-title = récupérer ceci ?
 fetch-verb = Récupérer
 fetch-host = communication avec { $host }
+fetch-redirected = redirigé depuis { $from }, l'hôte pour lequel cette récupération a été approuvée
 fetch-authority-metadata =
     il s'agit du service de métadonnées de cette machine : il ne demande rien à qui le
     joint et répond avec les identifiants du rôle sous lequel elle tourne.

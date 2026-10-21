@@ -291,8 +291,20 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
 ///
 /// The host is its own row because that is what the answer is about: a URL is easy to misread, and
 /// `https://example.com@evil.test/` names one site and reaches another.
-pub fn fetch_lines(host: &str, url: &str, metadata_service: bool) -> Vec<String> {
-    let mut lines = vec![t!(fetch_host, host = printable(host)), printable(url)];
+///
+/// `redirected_from` is the host the person approved, where `host` is the one a redirect led to: the
+/// row after the host says so, so the question is read as a hop and not as a fresh fetch (FETCH-4).
+pub fn fetch_lines(
+    host: &str,
+    url: &str,
+    metadata_service: bool,
+    redirected_from: Option<&str>,
+) -> Vec<String> {
+    let mut lines = vec![t!(fetch_host, host = printable(host))];
+    if let Some(from) = redirected_from {
+        lines.push(t!(fetch_redirected, from = printable(from)));
+    }
+    lines.push(printable(url));
     // What the host is, where it is this machine's own metadata service. That service asks
     // nothing of whoever opens the socket and answers with the credentials of the role, so
     // the address alone does not say what the request reaches.
@@ -663,6 +675,34 @@ pub fn manifest_lines(task: &str, steps: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FETCH-4: the plain prompt for a host a redirect led to says it was one, right after the host,
+    /// and the prompt for a fetch that was not redirected has no such row.
+    #[test]
+    fn the_fetch_lines_say_where_a_redirect_was_approved_for() {
+        let hop = fetch_lines(
+            "cdn.example.net",
+            "https://docs.example.com/x",
+            false,
+            Some("docs.example.com"),
+        );
+        assert!(hop[0].contains("cdn.example.net"), "{hop:?}");
+        assert!(
+            hop[1].contains("redirected from docs.example.com"),
+            "{hop:?}"
+        );
+        let plain = fetch_lines(
+            "docs.example.com",
+            "https://docs.example.com/x",
+            false,
+            None,
+        );
+        assert!(
+            plain.iter().all(|line| !line.contains("redirected")),
+            "{plain:?}"
+        );
+        assert_eq!(hop.len(), plain.len() + 1);
+    }
 
     /// PROMPT-1, PROMPT-2: the plain prompt names the file so a blank name is visible, and says
     /// the rule a yes writes, which the file's own name does not.

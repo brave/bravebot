@@ -8324,6 +8324,7 @@ mod tests {
         crate::remote_confirm::ToMain::Fetch(bravebot_agent::confirm::FetchRequest {
             url: "https://example.test/".into(),
             host: "example.test".into(),
+            redirected_from: None,
         })
     }
 

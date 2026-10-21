@@ -1480,6 +1480,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             &request.host,
             &request.url,
             request.ambient_authority().is_some(),
+            request.redirected_from.as_deref(),
         );
         self.about(Held::Fetch);
         self.ask(&lines, t!(fetch_title))
@@ -3534,6 +3535,7 @@ mod tests {
                 asking.confirm_fetch(&FetchRequest {
                     url: "https://example.com/a".to_string(),
                     host: "example.com".to_string(),
+                    redirected_from: None,
                 });
             }),
             held(Held::Fetch)

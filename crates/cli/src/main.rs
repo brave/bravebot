@@ -3985,6 +3985,7 @@ mod tests {
         unattended.confirm_fetch(&bravebot_agent::confirm::FetchRequest {
             url: "https://example.invalid/a".to_string(),
             host: "example.invalid".to_string(),
+            redirected_from: None,
         });
         let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
         assert_eq!(gates, ["manifest_plan", "web_fetch"]);
@@ -4034,6 +4035,7 @@ mod tests {
         unattended.confirm_fetch(&bravebot_agent::confirm::FetchRequest {
             url: "https://example.invalid/a".to_string(),
             host: "example.invalid".to_string(),
+            redirected_from: None,
         });
         unattended.confirm_run(&run);
         unattended.confirm_manifest(&a_plan());

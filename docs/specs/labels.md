@@ -24,7 +24,7 @@ guards:
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 120
+      - crates/core/src/policy.rs: 121
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 3
@@ -41,7 +41,7 @@ guards:
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 37
+      - crates/agent/src/tools.rs: 38
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
@@ -141,7 +141,7 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 39
+      - crates/agent/src/tools.rs: 40
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7

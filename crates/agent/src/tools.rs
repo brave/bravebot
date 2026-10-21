@@ -8946,6 +8946,7 @@ fn fetch_not_approved<S: Sink, C: Confirmer>(
     let request = crate::confirm::FetchRequest {
         url: url.to_string(),
         host: host.to_string(),
+        redirected_from: None,
     };
     if confirmer.confirm_fetch(&request) != Decision::Reject {
         return None;
@@ -9012,13 +9013,25 @@ fn fetch_url<S: Sink, C: Confirmer>(
     // of the page a processor will read. Nothing of the planner's or of a server's reaches it, and
     // every hop of the chain re-sends it, because the egress crate re-sends the whole request.
     let request = bravebot_net::Request::get(&url).header("accept", FETCH_ACCEPT);
-    let fetched = tools
-        .chat
-        .egress
-        .fetch_watching(policy, request, label, Some(tools.cancel));
+    let mut fetched =
+        tools
+            .chat
+            .egress
+            .fetch_watching(policy, request.clone(), label, Some(tools.cancel));
     // Before anything returns, so a failure does not leave the rest of the turn's egress being
     // checked against the host this one call was approved for.
     policy.fetch_finished();
+
+    // A hop the gate stopped for leaving the approved host is put to the person (FETCH-4). A no
+    // leaves `fetched` the refusal it was, and a yes sends the one request again with that host
+    // allowed for it alone.
+    if fetched.is_err()
+        && let Some(hop) = policy.take_fetch_hop()
+        && let Some(followed) =
+            fetch_followed_to(policy, tools, confirmer, &url, &host, &hop, request)
+    {
+        fetched = followed;
+    }
 
     match fetched {
         Ok(response) => {
@@ -9055,6 +9068,51 @@ fn fetch_url<S: Sink, C: Confirmer>(
         // which is the one thing of a server's that could otherwise reach this sentence.
         Err(error) => Produced::problem(format!("error: fetching {url} failed: {error}")),
     }
+}
+
+/// Put a host a fetch was redirected to to the person, and on a yes send the request again with
+/// that host allowed for it alone (FETCH-4). `None` for a no, which leaves the refusal the gate gave.
+///
+/// The host is a server's own bytes, so it is drawn and decides nothing until the person says the
+/// fetch may go there: the answer is bound to the host as it was drawn, spent once, and gone when
+/// the request reports back. Nothing about the answer reaches the planner, whose sentence is the
+/// same on both (FETCH-6).
+fn fetch_followed_to<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    url: &str,
+    approved: &str,
+    hop: &Labelled<String>,
+    request: bravebot_net::Request,
+) -> Option<Result<bravebot_net::Response, bravebot_net::EgressError>> {
+    let shown = policy.render_in_place("fetch_url", hop, |host| host);
+    let host = {
+        let proof = policy.authorise_display_release("where a fetch was redirected to");
+        shown.declassify(&proof)
+    };
+    let question = crate::confirm::FetchRequest {
+        url: url.to_string(),
+        host: host.clone(),
+        redirected_from: Some(approved.to_string()),
+    };
+    if confirmer.confirm_fetch(&question) == Decision::Reject {
+        policy.refuse_unapproved_fetch("fetch_url");
+        return None;
+    }
+
+    policy.endorse_fetch(url);
+    policy.endorse_fetch_hop(&host);
+    let label = policy.before_fetch_via(url, &host).ok()?;
+    if let Some(spent) = bravebot_core::ambient::at_host(&host) {
+        policy.record_ambient(&[spent]);
+    }
+    let followed = tools
+        .chat
+        .egress
+        .fetch_watching(policy, request, label, Some(tools.cancel));
+    policy.fetch_finished();
+    Some(followed)
 }
 
 /// How long a download may run from the moment the reply begins.

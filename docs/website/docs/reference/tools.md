@@ -851,7 +851,10 @@ which is naming a host rather than answering a question about one page. See
 
 **A redirect may not leave the approved host.** Every hop goes through the same gate, and a hop
 elsewhere is refused unless a rule allows that host too, since the end of a redirect chain is
-somewhere nobody was shown. That check applies only while a fetch is in flight: reaching the model
+somewhere nobody was shown. Before it is reported as refused, you are asked about the host the
+redirect named, drawn as a redirect from the host you approved. A yes sends that one fetch again
+with that host allowed for it alone and remembers nothing, and a no gives the refusal. Bypass mode
+does not answer it, and a `deny` rule refuses without asking. That check applies only while a fetch is in flight: reaching the model
 endpoint is this program operating rather than something a turn asked for, so a rule about a website
 cannot stop bravebot talking to its own backend.
 
