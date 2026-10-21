@@ -269,6 +269,7 @@ pub const AWKWARD_NAMES: &[(&str, &str)] = &[
     ("-a.md", "leading dash"),
     ("*.md", "glob"),
     ("a\\b.md", "backslash"),
+    ("a.md\\", "trailing backslash"),
     ("a:b.md", "colon"),
     (" ", "one space"),
     ("\t", "one tab"),

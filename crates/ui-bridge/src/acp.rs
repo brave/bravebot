@@ -1048,7 +1048,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             format!(
                 "{} {}",
                 data["intent"].as_str().unwrap_or("write"),
-                text("path")
+                bravebot_agent::confirm::shown_name(text("path"))
             ),
             "edit",
             write_text(data),
@@ -1078,7 +1078,10 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             .join("\n"),
         ),
         "vouch" => (
-            format!("trust {}", text("path")),
+            format!(
+                "trust {}",
+                bravebot_agent::confirm::shown_name(text("path"))
+            ),
             "read",
             bravebot_approval::vouch_lines(
                 text("path"),
@@ -1095,7 +1098,10 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             bravebot_approval::manifest_lines(text("task"), &strings(&data["steps"])).join("\n"),
         ),
         "exposure" => (
-            format!("read {}, which holds a credential", text("path")),
+            format!(
+                "read {}, which holds a credential",
+                bravebot_agent::confirm::shown_name(text("path"))
+            ),
             "read",
             bravebot_approval::exposure_lines(text("path"), &strings(&data["credentials"]))
                 .join("\n"),
@@ -1247,6 +1253,54 @@ mod tests {
         let data = crate::wire::write_request(7, &request);
         assert_eq!(write_text(&data), expected);
         assert!(expected.contains("\u{241b}[2J") && !expected.contains('\u{1b}'));
+    }
+
+    /// PROMPT-1: the editor reads a file the line writes and a directory it is confined to as the
+    /// terminal draws them, so a name that would draw as nothing, or as another name, is quoted
+    /// and spelled and `note.md ` is not read as `note.md`.
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage};
+        let drawn = |written: &str, directory: &str| {
+            let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+            let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+            run.plan.writes = vec![written.into()];
+            run.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory.into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_text(&crate::wire::run_request(1, &run)).expect("text")
+        };
+        let drawn_lines = |written: &str, directory: &str| -> Vec<String> {
+            drawn(written, directory)
+                .lines()
+                .map(str::to_string)
+                .collect()
+        };
+        let plain = drawn_lines("note.md", "/work");
+        assert!(plain.contains(&"  note.md".to_string()), "{plain:?}");
+        assert!(plain.contains(&"  /work".to_string()), "{plain:?}");
+        for (name, spelled) in [
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+            ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ] {
+            for lines in [drawn_lines(name, "/work"), drawn_lines("note.md", name)] {
+                assert!(
+                    lines.contains(&format!("  {spelled}")),
+                    "{name:?}: {lines:?}"
+                );
+                assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
+            }
+        }
     }
 
     /// Run, fetch, server, call and move read to the editor as `bravebot_approval` words them from
@@ -1520,6 +1574,76 @@ mod tests {
             }
         }
         assert!(describe("something-new", &json!({"summary": "do it"})).is_none());
+    }
+
+    /// PROMPT-1: an editor is shown a question's title and body as words. The title names the file
+    /// for a write, a vouch and a credential read, and a name that would draw as nothing, or as
+    /// another name, is spelled in it, as it is in the terminal.
+    #[test]
+    fn the_title_of_a_question_about_a_file_spells_a_name_that_would_draw_as_another() {
+        use bravebot_agent::confirm::{ExposureRequest, Intent, VouchRequest, WriteRequest};
+        let write = |path: &str| {
+            crate::wire::write_request(
+                1,
+                &WriteRequest {
+                    written_since_checkout: false,
+                    path: path.into(),
+                    contents: "a\n".into(),
+                    existing: None,
+                    diff: bravebot_agent::diff::Diff::compute("", "a\n"),
+                    intent: Intent::Create,
+                    untrusted: false,
+                    remark: None,
+                    protected: false,
+                    credentials: Vec::new(),
+                    may_always: false,
+                    record: None,
+                },
+            )
+        };
+        let vouch = |path: &str| {
+            crate::wire::vouch_request(
+                2,
+                &VouchRequest {
+                    path: path.into(),
+                    rule: format!("/work/{path}"),
+                    preview: "a".into(),
+                    label: "(U,priv)".into(),
+                    truncated: false,
+                    verdict: bravebot_core::vetting::Verdict::Safe,
+                    reason: None,
+                    reason_label: None,
+                },
+            )
+        };
+        let exposure = |path: &str| {
+            crate::wire::exposure_request(
+                3,
+                &ExposureRequest {
+                    path: path.into(),
+                    credentials: vec!["an API key at line 1".into()],
+                },
+            )
+        };
+        let titled = |stem: &str, data: Value| shown(stem, data).0;
+        assert_eq!(titled("confirm", write("note.md")), "create note.md");
+        assert_eq!(
+            titled("confirm", write("note.md ")),
+            "create \"note.md\u{2423}\""
+        );
+        assert_eq!(titled("vouch", vouch("note.md")), "trust note.md");
+        assert_eq!(
+            titled("vouch", vouch("note.md ")),
+            "trust \"note.md\u{2423}\""
+        );
+        assert_eq!(
+            titled("exposure", exposure("note.md")),
+            "read note.md, which holds a credential"
+        );
+        assert_eq!(
+            titled("exposure", exposure("note.md ")),
+            "read \"note.md\u{2423}\", which holds a credential"
+        );
     }
 
     #[test]

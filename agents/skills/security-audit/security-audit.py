@@ -11,6 +11,10 @@ of places rather than from an instruction to go and look at things.
 Stdout is `{"work_dir": ..., "manifest": ...}`. The mechanical report goes to stderr, because those
 findings are already decided and a reader should see them before any lane runs.
 
+A run that has lanes also writes `tracker.txt` in the work directory: the titles of the issues labelled
+`security`, read with `gh issue list`, for the lanes to compare a candidate with before they report it.
+`--tracker FILE` supplies them instead, and a `--mechanical-only` run never asks.
+
 The mechanical half checks what a tool can check and the specs do not yet: that the two documents
 naming the admitted exceptions agree on how many there are, that every crate keeping a network
 client of its own is one the egress register admits and no comment claims a dependency a manifest
@@ -42,6 +46,7 @@ import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
 import tomllib
+import unicodedata
 from itertools import zip_longest
 from pathlib import Path
 
@@ -379,7 +384,71 @@ LANES = (
     "supply-chain",
     "shown-before-answered",
     "approval-binding",
+    "identity",
+    "checkout-controls",
+    "output-sinks",
+    "tooling",
 )
+
+# The calls that turn a name into a thing, or ask what a name is: the places a decision made on a
+# spelling and a use of the thing by that spelling can be separated by a stage or a clone.
+IDENTITY_CALLS = re.compile(
+    r"\b(?:canonicalize|hard_links|read_link|symlink_metadata)\b|\bPathFd::new\b"
+)
+# Where a session's rows are put together. A row granted here is a path the sandbox then holds a
+# stage to, so each one is a name something decided was safe.
+CONFINEMENT = Path("crates/agent/src/confine.rs")
+CONFINEMENT_ROWS = re.compile(
+    r"\b(?:allow_read|allow_write|allow_write_listed|allow_loopback)\(|\.grant\("
+    r"|\b(?:egress_through|socket_path)\b"
+)
+
+# What a checkout's own files can reach, which is the settings layers and the clauses that say which
+# layers answer for which name.
+LAYERED_CALLS = re.compile(r"\b(?:layered_since|unread_keys|rule_texts)\b")
+SETTINGS_FILE = Path("crates/config/src/settings.rs")
+SETTINGS_STRUCT = re.compile(r"^pub struct Settings\s*\{")
+SETTINGS_FIELD = re.compile(r"^\s{4}([a-z_][a-z0-9_]*)\s*:")
+SETTINGS_NAMES = re.compile(r"^\s*pub fn names\(&self\)")
+SETTINGS_RECORDS = ("_ignored", "_unreadable", "_misshapen", "_unread", "_by")
+LAYER_CLAUSES = ("BACKEND-24", "BACKEND-33")
+
+# Where text lands on a person's terminal, in a window or in a file another program reads. A macro
+# whose arguments are all literals cannot carry anything somebody else chose, so only the others are
+# listed.
+OUTPUT_MACROS = ("println", "eprintln", "print", "eprint", "writeln", "write")
+OUTPUT_CRATES = ("crates/cli/", "crates/tui/", "crates/approval/")
+OUTPUT_START = re.compile(
+    r"\b(" + "|".join(OUTPUT_MACROS) + r")!\s*\(|\bt!\s*\(|\.say\("
+)
+WINDOW_SINKS = re.compile(r"<pre\b|\binnerHTML\b|\bdangerouslySetInnerHTML\b")
+WINDOW_COMPONENT = re.compile(r"^(?:export\s+)?(?:default\s+)?(?:function|const)\s+([A-Za-z_]\w*)")
+WINDOW_SOURCE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs")
+WINDOW_ROOT = Path("ui/src")
+FORMAT_HOLE = re.compile(r"(?<!\{)\{(?!\{)[^{}]*\}")
+
+# What a maintainer's own tools run: the scripts the skills and the checks are, the hooks git runs
+# on a commit, and the Makefile lines that decide which of them git is told to use.
+TOOL_FILES = ("agents/*.py", "agents/skills/*/*.py", "contrib/*.py", "contrib/*.sh", ".githooks/*")
+TOOL_DEFINITIONS = ("agents/agents/*.md", "agents/skills/*/SKILL.md", "agents/settings.json")
+STARTS_A_PROCESS = re.compile(
+    r"\bsubprocess\.(?:run|Popen|check_output|check_call|call)\b|\bos\.(?:system|popen|exec\w*)\b"
+    r"|\bshell\s*=\s*True\b|^\s*from\s+(?:subprocess|os)\s+import\b"
+    r"|\bimport\s+(?:subprocess|os)\s+as\b"
+)
+MAKE_RECIPE_GIT = re.compile(r"\bgit\b[^#\n]*\bconfig\b|\bgit\s+-c\b|\bhooksPath\b")
+MAKE_TARGET = re.compile(r"^([A-Za-z0-9_.-]+)\s*:(?!=)")
+PYTHON_DEF = re.compile(r"^(\s*)(?:async\s+)?def\s+(\w+)")
+
+# The tracker the lanes compare a candidate with before they report it. The security issues are the
+# ones a lane would otherwise spend its run rediscovering.
+TRACKER_REPO = "brave/bravebot"
+TRACKER_FILE = "tracker.txt"
+TRACKER_LIMIT = 1000
+TRACKER_TIMEOUT = 60
+# Control, format, surrogate, private-use and unassigned characters: a title is written into a file
+# a model reads, and none of these shows on a screen.
+INVISIBLE = {"Cc", "Cf", "Cs", "Co", "Cn"}
 
 # The spec whose `governs` list is the terminal's prompts, and the function each of them asks with.
 PROMPT_SPEC = "PROMPT"
@@ -387,6 +456,21 @@ ASKS = re.compile(r"^\s*pub(?:\([^)]*\))?\s+fn (ask(?:_\w+)?)\s*[<(]")
 # A desktop card is the `case` arm of the transcript's entry switch that draws one of these.
 CARD_CASE = re.compile(r"^\s*case '([\w-]+)':")
 CARD_DRAWS = re.compile(r"<(?:DecisionCard|YesOrNo|ThreeAnswers)\b")
+
+# The questions the line interface, the editor protocol and the background host put with a layout of
+# their own, by the file and the functions in it that write a question's lines, put it or replay it.
+OTHER_PROMPTS = {
+    Path("crates/cli/src/plain.rs"): re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?fn (confirm_\w+|ask_\w+|ask|put)\b"
+    ),
+    Path("crates/approval/src/lib.rs"): re.compile(r"^\s*pub fn (\w+_lines)\b"),
+    Path("crates/ui-bridge/src/acp.rs"): re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?fn (ask|pictured)\b"
+    ),
+    Path("crates/cli/src/host.rs"): re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?fn (emit|attach)\b"
+    ),
+}
 
 # The register of answers kept past the effect they were given for: a table in one clause of the
 # prompting spec, and a front matter list saying which row each question and remembered set lands in.
@@ -3000,6 +3084,18 @@ def prompt_sites(sources, specs):
     return found
 
 
+def other_prompt_sites(sources):
+    """Each function in the line interface, the editor protocol and the background host that writes a
+    question's lines, puts the question or replays what was written."""
+    found = []
+    for path, pattern in OTHER_PROMPTS.items():
+        for number, raw in code_lines(sources.get(path) or []):
+            named = pattern.match(raw)
+            if named:
+                found.append({"path": str(path), "line": number, "function": named.group(1)})
+    return found
+
+
 def declared_members(sources, declaration):
     """The names declared at the margin of one trait or struct, or `None` where it is not found.
 
@@ -3493,12 +3589,432 @@ def check_changes_under_a_yes(specs, sources):
         )
 
 
+def is_test_path(path):
+    """Whether a source file is a test, a test helper or a fixture, by where it sits and what it is
+    called, so a lane's start list holds the code that ships."""
+    text = str(path)
+    return (
+        "/tests/" in text
+        or "/test-support/" in text
+        or Path(text).name in {"tests.rs", "test_support.rs", "testutil.rs"}
+        or text.endswith(("_test.rs", "_tests.rs"))
+    )
+
+
+def test_only_lines(lines):
+    """The numbers of the lines a `#[cfg(test)]` covers, whatever it is attached to.
+
+    `test_regions` reads the next `{` after the attribute as the item's, which is right for a module
+    and wrong for a field, a `use` or a statement: the attribute then covers the next block in the
+    file, and every site in it drops out of a list. Here a module, function, impl or trait runs to
+    its closing brace, and anything else to the end of its own statement or field.
+    """
+    covered = set()
+    lines = mechanics.strip_comments(lines)
+    block = re.compile(r"\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+|async\s+|const\s+)*(?:mod|fn|impl|trait)\b")
+    index = 0
+    while index < len(lines):
+        if not lines[index].strip().startswith(("#[cfg(test)]", "#[cfg(all(test")):
+            index += 1
+            continue
+        start = index
+        item = index + 1
+        while item < len(lines) and lines[item].strip().startswith("#["):
+            item += 1
+        if item >= len(lines):
+            break
+        braced = bool(block.match(lines[item]))
+        depth, opened, end = 0, False, item
+        for end in range(item, len(lines)):
+            text = lines[end]
+            # Braces in a string or a character literal are not the item's.
+            code = CHAR_LITERAL.sub("", STRING_LITERAL.sub("", text))
+            depth += code.count("{") - code.count("}")
+            opened = opened or "{" in code
+            stripped = text.rstrip()
+            if opened and depth <= 0:
+                break
+            if not opened and stripped.endswith(";" if braced else (";", ",")):
+                break
+        covered.update(range(start + 1, end + 2))
+        index = end + 1
+    return covered
+
+
+def code_lines(lines):
+    """`(number, text)` for each line of a Rust file that is neither comment nor test-only, with the
+    comments blanked as `strip_comments` does."""
+    inside = test_only_lines(lines)
+    for number, raw in enumerate(mechanics.strip_comments(lines), start=1):
+        if number not in inside:
+            yield number, raw
+
+
+def site_at(path, lines, number, raw, **more):
+    return {
+        "path": str(path),
+        "line": number,
+        "text": raw.strip()[:200],
+        "function": enclosing(lines, number),
+        **more,
+    }
+
+
+def identity_sites(sources):
+    """Every call outside the tests that turns a name into a thing or asks what a name is."""
+    return [
+        site_at(path, lines, number, raw)
+        for path, lines in sources.items()
+        if not is_test_path(path)
+        for number, raw in code_lines(lines)
+        if IDENTITY_CALLS.search(raw)
+    ]
+
+
+def confinement_rows(sources):
+    """Each line of the file that assembles a session's sandbox rows which grants a row or names the
+    proxy's socket."""
+    lines = sources.get(CONFINEMENT)
+    return [
+        site_at(CONFINEMENT, lines, number, raw)
+        for number, raw in code_lines(lines or [])
+        if CONFINEMENT_ROWS.search(raw)
+    ]
+
+
+def layered_sites(sources):
+    """Where the settings layers are merged, the unread keys and the permission texts are read, and
+    where the names a file set are listed."""
+    found = []
+    for path, lines in sources.items():
+        if is_test_path(path):
+            continue
+        for number, raw in code_lines(lines):
+            if LAYERED_CALLS.search(raw) or (
+                path == SETTINGS_FILE and SETTINGS_NAMES.match(raw)
+            ):
+                found.append(site_at(path, lines, number, raw))
+    return found
+
+
+def settings_fields(sources):
+    """The fields of `Settings` that hold what a settings file set, read from the declaration.
+
+    The ones that record what was ignored, unreadable or misshapen, and which file said what, are
+    left out: they say what happened to a value and are not one a file can set.
+    """
+    lines = sources.get(SETTINGS_FILE)
+    inside, fields = False, []
+    for raw in lines or []:
+        if not inside:
+            inside = bool(SETTINGS_STRUCT.match(raw))
+            continue
+        if raw.startswith("}"):
+            break
+        named = SETTINGS_FIELD.match(raw)
+        if named and not named.group(1).endswith(SETTINGS_RECORDS) and named.group(1) not in (
+            "layers",
+            "contested",
+            "unread",
+            "misshapen",
+        ):
+            fields.append(named.group(1))
+    return fields
+
+
+def clause_lines(specs, ids):
+    """Where the named clauses are, as `docs/specs/x.md:12 ID: title`."""
+    return [
+        f"{spec.rel}:{clause.line} {clause.id}: {clause.title}"
+        for spec in specs
+        for clause in spec.clauses
+        if clause.id in ids and not clause.withdrawn
+    ]
+
+
+def call_arguments(lines, index, start):
+    """The arguments of the call whose opening parenthesis is `lines[index][start]`, each as the text
+    written, or `None` where the call does not close within `CALL_LINES` lines.
+
+    Strings and character literals are skipped over, so a comma or a bracket inside a format string
+    divides nothing.
+    """
+    depth = 0
+    arguments, current = [], []
+    in_string = escaped = False
+    row, column = index, start
+    while row < min(len(lines), index + CALL_LINES):
+        text = lines[row]
+        while column < len(text):
+            char = text[column]
+            if in_string:
+                current.append(char)
+                column += 1
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            literal = CHAR_LITERAL.match(text, column) if char == "'" else None
+            if literal:
+                current.append(literal.group(0))
+                column = literal.end()
+                continue
+            column += 1
+            if char == '"':
+                in_string = True
+            elif char in "([{":
+                depth += 1
+                if depth == 1:
+                    continue
+            elif char in ")]}":
+                depth -= 1
+                if depth == 0:
+                    arguments.append("".join(current).strip())
+                    return [one for one in arguments if one]
+            elif char == "," and depth == 1:
+                arguments.append("".join(current).strip())
+                current = []
+                continue
+            current.append(char)
+        current.append("\n")
+        row, column = row + 1, 0
+    return None
+
+
+def is_literal(argument):
+    """Whether an argument is one string literal with nothing to fill in."""
+    return STRING_LITERAL.fullmatch(argument) is not None and not FORMAT_HOLE.search(argument)
+
+
+def carries_a_value(kind, arguments):
+    """Whether a macro call or a `say` can write something its source text does not spell out.
+
+    A call that never closes in view is listed, since leaving one out is the mistake a list exists to
+    avoid.
+    """
+    if arguments is None:
+        return True
+    if kind in ("write", "writeln"):
+        arguments = arguments[1:]
+    if kind == "t":
+        # The first argument names the message. What follows is `name = value`, and a value that is
+        # not a literal is somebody's text.
+        return any(
+            not is_literal(argument.partition("=")[2].strip()) for argument in arguments[1:]
+        )
+    if kind == "say":
+        return not (
+            arguments and (is_literal(arguments[0]) or re.fullmatch(r"&?t!\(\w+\)", arguments[0]))
+        )
+    return len(arguments) > 1 or any(not is_literal(one) for one in arguments)
+
+
+def output_sites(sources):
+    """Every `println!`-family macro, `t!` and `say` call in the crates that talk to a person whose
+    arguments are not all literals, one entry per line with the kinds found on it."""
+    found = {}
+    for path, lines in sources.items():
+        if is_test_path(path) or not str(path).startswith(OUTPUT_CRATES):
+            continue
+        written = mechanics.strip_comments(lines)
+        for number, raw in code_lines(lines):
+            for start in OUTPUT_START.finditer(raw):
+                kind = start.group(1) or ("say" if raw[start.start()] == "." else "t")
+                arguments = call_arguments(written, number - 1, raw.index("(", start.start()))
+                if carries_a_value(kind, arguments):
+                    site = found.setdefault(
+                        (str(path), number), site_at(path, lines, number, raw, kinds=[])
+                    )
+                    if kind not in site["kinds"]:
+                        site["kinds"].append(kind)
+    return [found[key] for key in sorted(found)]
+
+
+def window_sinks():
+    """Where the desktop window's source puts text into the page as markup or preformatted text."""
+    found = []
+    for path in sorted(WINDOW_ROOT.rglob("*")):
+        if (
+            path.suffix not in WINDOW_SOURCE_SUFFIXES
+            or "node_modules" in path.parts
+            or ".test." in path.name
+        ):
+            continue
+        lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+        component = "(top level)"
+        for number, raw in enumerate(lines, start=1):
+            named = WINDOW_COMPONENT.match(raw)
+            if named:
+                component = named.group(1)
+            if WINDOW_SINKS.search(raw) and not raw.lstrip().startswith(("*", "//", "/*")):
+                found.append(
+                    {
+                        "path": str(path),
+                        "line": number,
+                        "text": raw.strip()[:200],
+                        "function": component,
+                    }
+                )
+    return found
+
+
+def tool_files():
+    """The scripts and hooks a maintainer's tools run, as paths from the repository root."""
+    return sorted(
+        {
+            str(path)
+            for pattern in TOOL_FILES
+            for path in Path().glob(pattern)
+            if path.is_file()
+        }
+    )
+
+
+def tool_definitions():
+    """The files that tell a tool what it may run: the agent and skill definitions and the settings."""
+    return sorted(
+        {
+            str(path)
+            for pattern in TOOL_DEFINITIONS
+            for path in Path().glob(pattern)
+            if path.is_file()
+        }
+    )
+
+
+def process_starts(files):
+    """The places the scripts start a process, with the function each is in."""
+    found = []
+    for name in files:
+        if not name.endswith(".py"):
+            continue
+        lines = Path(name).read_text(encoding="utf-8", errors="replace").split("\n")
+        for number, raw in enumerate(lines, start=1):
+            if STARTS_A_PROCESS.search(raw) and not raw.lstrip().startswith("#"):
+                found.append(
+                    {
+                        "path": name,
+                        "line": number,
+                        "text": raw.strip()[:200],
+                        "function": python_function(lines, number),
+                    }
+                )
+    return found
+
+
+def python_function(lines, number):
+    """The `def` a line of Python is inside, by walking back to the nearest one at a smaller indent."""
+    indent = len(lines[number - 1]) - len(lines[number - 1].lstrip())
+    for index in range(number - 2, -1, -1):
+        raw = lines[index]
+        named = PYTHON_DEF.match(raw)
+        if named and len(named.group(1)) < indent:
+            return named.group(2)
+    return "(top level)"
+
+
+def make_recipes():
+    """The Makefile's recipe lines that set git configuration, with the target each belongs to."""
+    path = Path("Makefile")
+    if not path.is_file():
+        return []
+    found, target = [], None
+    held, first = "", 0
+    for number, raw in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
+        if held:
+            held += " " + raw.strip()
+        elif raw.startswith("\t"):
+            held, first = raw, number
+        named = None if held else MAKE_TARGET.match(raw)
+        if named:
+            target = named.group(1)
+        if held and not held.endswith("\\"):
+            # A recipe line written over several lines is one command, read from its first line.
+            if MAKE_RECIPE_GIT.search(held):
+                found.append(
+                    {"path": "Makefile", "line": first, "text": held.strip()[:200], "function": target}
+                )
+            held = ""
+        elif held:
+            held = held[:-1].rstrip()
+    return found
+
+
+def plain(text, limit=200):
+    """One line of visible text: no control or invisible characters, runs of spaces collapsed, cut at
+    `limit`. A title is somebody else's text, and a lane reads the file it goes into."""
+    kept = "".join(
+        " " if one.isspace() else one
+        for one in text
+        if one.isspace() or unicodedata.category(one) not in INVISIBLE
+    )
+    return " ".join(kept.split())[:limit]
+
+
+def tracker_entries(repo, since=None):
+    """The security issues the tracker holds, as `(number, state, title)`, or why they could not be read.
+
+    Read only. Nothing in this skill posts, and a run that cannot reach the tracker still audits: the
+    verifiers search it themselves.
+    """
+    if since is not None:
+        try:
+            listed = json.loads(Path(since).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as problem:
+            return [], f"{since} could not be read: {problem}"
+    else:
+        try:
+            done = subprocess.run(  # nosemgrep: gitlab.bandit.B603
+                [
+                    "gh", "issue", "list", "--repo", repo, "--label", "security",
+                    "--state", "all", "--limit", str(TRACKER_LIMIT),
+                    "--json", "number,title,state",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=TRACKER_TIMEOUT,
+            )
+        except (OSError, subprocess.SubprocessError) as problem:
+            return [], f"gh could not be run: {problem}"
+        if done.returncode != 0:
+            return [], f"gh exited {done.returncode}: {plain(done.stderr, 300)}"
+        try:
+            listed = json.loads(done.stdout)
+        except ValueError as problem:
+            return [], f"gh printed no list: {problem}"
+    entries = []
+    for one in listed if isinstance(listed, list) else []:
+        if isinstance(one, dict) and isinstance(one.get("number"), int):
+            state, title = plain(str(one.get("state", ""))).lower(), plain(str(one.get("title", "")))
+            entries.append((one["number"], state, title))
+    return sorted(entries), None
+
+
+def write_tracker(work_dir, entries, problem):
+    """The tracker's titles as one file for the lanes to compare a candidate with."""
+    path = work_dir / TRACKER_FILE
+    if problem:
+        body = f"(the tracker could not be read: {problem})\n"
+    else:
+        body = "".join(f"#{number} {state}: {title}\n" for number, state, title in entries)
+        body = body or "(the tracker holds no security issue)\n"
+        if len(entries) >= TRACKER_LIMIT:
+            body = f"(only the newest {TRACKER_LIMIT} security issues were listed, so older ones are missing)\n" + body
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
 def surface(sources, specs):
     """Everything the lanes are given, gathered once."""
     construction = []
     for constructor in CONSTRUCTORS:
         construction.extend(sites_for(constructor, sources))
     governed = {path for spec in specs for path in spec.governs}
+    tools = tool_files()
     label_touching = sorted(
         {
             site["path"]
@@ -3526,11 +4042,47 @@ def surface(sources, specs):
         ),
         "prompt_files": prompt_files(specs),
         "prompts": prompt_sites(sources, specs),
+        "other_prompts": other_prompt_sites(sources),
+        "identity": identity_sites(sources),
+        "confinement_rows": confinement_rows(sources),
+        "layered": layered_sites(sources),
+        "settings_fields": settings_fields(sources),
+        "layer_clauses": clause_lines(specs, LAYER_CLAUSES),
+        "outputs": output_sites(sources),
+        "window_sinks": window_sinks(),
+        "tool_files": tools,
+        "tool_definitions": tool_definitions(),
+        "process_starts": process_starts(tools),
+        "make_recipes": make_recipes(),
     }
 
 
 def as_paths(paths):
     return "\n".join(f"- `{one}`" for one in paths) or "- (none)"
+
+
+def as_files(sites, limit=80):
+    """Sites as one line per file, the busiest first, with the functions to open.
+
+    A list cut after sixty sites is the first few files in the alphabet, which is not where the
+    sites are. A count per file says where to read, and `surface.json` has every site.
+    """
+    by_file = {}
+    for site in sites:
+        by_file.setdefault(site["path"], []).append(site)
+    ranked = sorted(by_file.items(), key=lambda item: (-len(item[1]), item[0]))
+    lines = []
+    for path, group in ranked[:limit]:
+        functions = list(dict.fromkeys(f"`{site['function']}`" for site in group))
+        shown = ", ".join(functions[:6])
+        more = f" and {len(functions) - 6} more" if len(functions) > 6 else ""
+        count = f"{len(group)} site" + ("" if len(group) == 1 else "s")
+        lines.append(f"- `{path}`: {count}, in {shown}{more}")
+    if len(ranked) > limit:
+        lines.append(
+            f"- ... and {len(ranked) - limit} more files; `surface.json` lists every site"
+        )
+    return "\n".join(lines) or "- (none)"
 
 
 def as_list(sites, limit=60):
@@ -3556,7 +4108,7 @@ def read_prompt(name):
     )
 
 
-def build_lane(name, found, specs, results_file, surface_file=None):
+def build_lane(name, found, specs, results_file, surface_file=None, tracker_file=None):
     """One lane's instructions, with the places it starts from filled in."""
     interesting = [
         site
@@ -3600,18 +4152,34 @@ def build_lane(name, found, specs, results_file, surface_file=None):
         "second_client": as_paths(found["second_client"]),
         "prompt_files": as_paths(found["prompt_files"]),
         "prompt_sites": as_list(found["prompts"]),
+        "other_prompt_sites": as_list(found["other_prompts"]),
         "register_rows": "\n".join("| " + " | ".join(cells) + " |" for cells in drawn)
         or "- (none)",
         "kept_in": "\n".join(f"- `{one}`" for one in entries) or "- (none)",
+        "tracker_file": str(tracker_file) if tracker_file else "(not written)",
+        "identity_count": len(found["identity"]),
+        "identity_files": as_files(found["identity"]),
+        "confinement_rows": as_list(found["confinement_rows"]),
+        "layer_clauses": "\n".join(f"- `{one}`" for one in found["layer_clauses"]) or "- (none)",
+        "layered_sites": as_list(found["layered"]),
+        "settings_fields": ", ".join(f"`{one}`" for one in found["settings_fields"]) or "(none)",
+        "output_count": len(found["outputs"]),
+        "output_files": as_files(found["outputs"]),
+        "window_sinks": as_list(found["window_sinks"]),
+        "tool_files": as_paths(found["tool_files"]),
+        "tool_definitions": as_paths(found["tool_definitions"]),
+        "process_starts": as_files(found["process_starts"]),
+        "make_recipes": as_list(found["make_recipes"]),
     }
     return read_prompt(name).format(**filling)
 
 
-def changed_lanes(base, specs):
+def changed_lanes(base, specs, found=None):
     """The lanes worth running for what a branch touched.
 
     A branch that edits no Rust still wants the two documentation lanes, and one that touches
-    `policy.rs` wants everything.
+    `policy.rs` wants everything. `found` is the surface, so the identity lane runs for a file that
+    makes a decision on a name, and for any Rust file where there is no surface to ask.
     """
     touched = set(mechanics.changed_files(base))
     if not touched:
@@ -3635,6 +4203,20 @@ def changed_lanes(base, specs):
         lanes.add("shown-before-answered")
     if touches_kept_answers(touched, specs):
         lanes.add("approval-binding")
+    if rust and (
+        found is None
+        or rust & ({site["path"] for site in found["identity"]} | {str(CONFINEMENT)})
+    ):
+        lanes.add("identity")
+    if any(
+        one.startswith("crates/config/") or one in ("docs/specs/backends.md", str(SETTINGS_FILE))
+        for one in touched
+    ):
+        lanes.add("checkout-controls")
+    if any(one.startswith(OUTPUT_CRATES + (str(WINDOW_ROOT) + "/",)) for one in touched):
+        lanes.add("output-sinks")
+    if any(one.startswith(("agents/", "contrib/", ".githooks/")) or one == "Makefile" for one in touched):
+        lanes.add("tooling")
     return sorted(lanes) or list(LANES)
 
 
@@ -3795,6 +4377,13 @@ def main():
     parser.add_argument("--changed", metavar="BASE", default=None, help="lanes for a branch's diff")
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
+        "--tracker",
+        metavar="FILE",
+        default=None,
+        help="read the security issues from this file, the JSON `gh issue list --json "
+        "number,title,state` prints, instead of asking GitHub",
+    )
+    parser.add_argument(
         "--stop-hook",
         action="store_true",
         help="answer Claude Code's Stop event: check a branch touching the paths that keep answers",
@@ -3817,13 +4406,15 @@ def main():
     if unknown:
         print(f"no such lane: {', '.join(unknown)}", file=sys.stderr)
         return 2
-    chosen = args.lanes or (changed_lanes(args.changed, specs) if args.changed else list(LANES))
+    found = surface(sources, specs)
+    chosen = args.lanes or (
+        changed_lanes(args.changed, specs, found) if args.changed else list(LANES)
+    )
     if args.mechanical_only:
         chosen = []
 
     work_dir = Path(args.work_dir or tempfile.mkdtemp(prefix="security-audit-"))
     work_dir.mkdir(parents=True, exist_ok=True)
-    found = surface(sources, specs)
 
     # The surface is every site in the tree and it is already baked into the lane prompts, but a lane
     # prompt lists at most ninety of anything: past that it is a wall nobody reads and the lane spends
@@ -3831,12 +4422,25 @@ def main():
     surface_file = work_dir / "surface.json"
     surface_file.write_text(json.dumps(found, indent=2), encoding="utf-8")
 
+    # The tracker is read once, and only for a run that has lanes to give it to: `make check-security`
+    # runs the mechanical half in CI and has no use for the network.
+    tracker_file, tracker_line = None, None
+    if chosen:
+        entries, problem = tracker_entries(TRACKER_REPO, args.tracker)
+        tracker_file = write_tracker(work_dir, entries, problem)
+        tracker_line = (
+            f"the tracker could not be read, so the lanes compare with nothing: {problem}"
+            if problem
+            else f"{len(entries)} security issues written to {tracker_file} for the lanes"
+        )
+
     lanes = []
     for name in chosen:
         results_file = work_dir / f"{name}_results.json"
         prompt_file = work_dir / f"{name}_prompt.md"
         prompt_file.write_text(
-            build_lane(name, found, specs, results_file, surface_file), encoding="utf-8"
+            build_lane(name, found, specs, results_file, surface_file, tracker_file),
+            encoding="utf-8",
         )
         lanes.append(
             {
@@ -3857,7 +4461,8 @@ def main():
         "progress_lines": [
             f"{len(found['construction'])} construction sites, "
             f"{len(found['releases'])} releases, {len(lanes)} lanes",
-        ],
+        ]
+        + ([tracker_line] if tracker_line else []),
     }
     manifest_path = workdir.write_manifest(work_dir, manifest)
 

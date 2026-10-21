@@ -3776,6 +3776,25 @@ where
                 }
                 continue;
             }
+            // The planner has answered with tasks still open in the list the panel keeps. The
+            // answer goes into the conversation as it does above, and the planner is asked once
+            // for the list to be brought up to date, so the answer and the panel agree when the
+            // turn ends. A turn the person stopped as the answer arrived is not asked anything
+            // further, since the next request would end it as stopped and lose the answer. Nor is
+            // a reply the ceiling stopped, which is the turn's answer as it stands.
+            if completion.cut_off.is_none()
+                && !cancel.is_cancelled()
+                && let Some(open) =
+                    round_steps::open_tasks_to_ask_about(policy, conversation, &state.offered)
+            {
+                narrate_between_calls(policy, reporter, &completion.content);
+                record_answer(policy, conversation, &completion.content)?;
+                round_steps::ask_about_open_tasks(conversation, &mut state.reminded, open);
+                // The line a person typed as the answer arrived is meant for the turn they are
+                // watching, and the request this goes on to make is its next round.
+                take_interjections(task, confirmer, policy, conversation, reporter);
+                continue;
+            }
             break completion;
         }
 
@@ -4682,7 +4701,7 @@ where
                     if shown_window && let Some(window) = output.window.take() {
                         conversation.shown_read(window);
                     }
-                    if shown_window && output.task_list {
+                    if shown_window && output.task_list.is_some() {
                         conversation.task_list_shown();
                     }
                 }
@@ -4691,6 +4710,13 @@ where
                     Composed::ToolResult,
                     result_from,
                 ),
+            }
+            // How many tasks the list leaves open, whichever way the result went into the
+            // conversation. Kept only where the planner was shown the list: a list it was not shown
+            // is still the panel's, and the count of the one before it no longer describes that.
+            if let Some(open) = output.task_list.take() {
+                conversation
+                    .open_tasks_counted(shown_window.then_some(open), state.reminded.open_tasks);
             }
             if let Some(cancelled) = cancellation {
                 attach_vetted_pictures(policy, conversation, &mut attached);
@@ -6369,6 +6395,46 @@ mod tests {
             )),
             "{:?}",
             reporter.narration
+        );
+    }
+
+    /// TURN-12. A reply cut off in its prose is the turn's answer as it stands, so a list with tasks
+    /// still open is not asked about: the turn ends there, as it does for a list with none.
+    #[test]
+    fn a_reply_cut_off_in_its_prose_is_not_asked_about_open_tasks() {
+        use bravebot_aichat::CutOff;
+        use ceiling::*;
+        let (outcome, _, bodies, _) = turn(
+            "ceiling-stop-with-open-tasks",
+            vec![
+                said(
+                    "",
+                    &[(
+                        "todo_write",
+                        r#"{"todos":[{"content":"write it","status":"in_progress"}]}"#,
+                    )],
+                    None,
+                ),
+                said(
+                    "The three causes are first, the",
+                    &[],
+                    Some(CutOff {
+                        ceiling: CEILING,
+                        call: None,
+                        thought: false,
+                    }),
+                ),
+                said("never asked for", &[], None),
+            ],
+        );
+        assert_eq!(
+            outcome.unwrap().reply_for_display(),
+            "The three causes are first, the"
+        );
+        assert_eq!(
+            bodies.len(),
+            2,
+            "a reply the ceiling stopped was asked about the list: {bodies:#?}"
         );
     }
 

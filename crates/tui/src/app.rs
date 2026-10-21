@@ -1654,7 +1654,7 @@ fn opened_scratch(session: &mut Session, workspace: &mut Workspace) -> Option<Se
             None
         }
     };
-    workspace.open_scratch(scratch.as_ref().map(|held| held.path().to_path_buf()));
+    workspace.open_scratch(scratch.as_ref().and_then(SessionScratch::directory));
     bravebot_session::sessions::sweep_unlisted_checkouts(workspace);
     scratch
 }
@@ -6818,26 +6818,30 @@ mod tests {
     fn a_bedrock_model_a_block_named_is_shown_under_that_name() {
         use bravebot_config::bedrock::{Bedrock, Entry};
 
-        let models = bedrock_models(&Bedrock::from_provider(
-            "us-west-2".to_string(),
-            Some("sso".to_string()),
-            vec![
-                Entry {
-                    tier: None,
-                    id: "arn:aws:bedrock:us-west-2:1:application-inference-profile/abc".to_string(),
-                    name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
-                    context_window: Some(1_050_000),
-                    output_limit: Some(32_000),
-                },
-                Entry {
-                    tier: None,
-                    id: "openai.gpt-5.6-sol".to_string(),
-                    name: None,
-                    context_window: None,
-                    output_limit: None,
-                },
-            ],
-        ));
+        let models = bedrock_models(
+            &Bedrock::from_provider(
+                "us-west-2".to_string(),
+                Some("sso".to_string()),
+                vec![
+                    Entry {
+                        tier: None,
+                        id: "arn:aws:bedrock:us-west-2:1:application-inference-profile/abc"
+                            .to_string(),
+                        name: Some("GPT-5.6 Sol (Bedrock)".to_string()),
+                        context_window: Some(1_050_000),
+                        output_limit: Some(32_000),
+                    },
+                    Entry {
+                        tier: None,
+                        id: "openai.gpt-5.6-sol".to_string(),
+                        name: None,
+                        context_window: None,
+                        output_limit: None,
+                    },
+                ],
+            )
+            .expect("a valid region"),
+        );
 
         assert_eq!(models[0].display_name, "GPT-5.6 Sol (Bedrock)");
         assert_eq!(

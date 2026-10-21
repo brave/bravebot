@@ -6956,6 +6956,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("approval", detail);
     }
 
+    /// Record that a `run` line was put to the confirmer and not approved, so it did not start
+    /// (TRACE-1, SANDBOX-29).
+    ///
+    /// A no, Ctrl-C at the prompt and nobody being there to ask all reach here as the same answer,
+    /// and the entry says only that the answer was not a yes. The text is fixed and names nothing
+    /// the line or a program produced.
+    pub fn refuse_unapproved_run(&mut self) {
+        let _ = self.deny(
+            "approval",
+            Principle::Capability,
+            "run: the line was not approved and did not run".to_string(),
+        );
+    }
+
     /// Record that a person moved a waited-for command to the background, and which job it became.
     ///
     /// A decision only a person can make: the planner cannot press the key and is told afterwards.
@@ -7390,6 +7404,34 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "run.{argument}: the request was refused and the line did not run: {}",
                 causes.join("; ")
             ),
+        );
+    }
+
+    /// Record that a write was put to the person and not approved, so nothing was written
+    /// (TRACE-1).
+    ///
+    /// The planner is told the user did not approve it, so without this the trail holds the
+    /// question and nothing about its answer, and the turn reads as clean. A no, a Ctrl-C and a
+    /// question nobody could be asked are one answer to the policy, so the sentence says only that
+    /// the write was not approved. `call` is the tool, or a plan's step and its tool. The sentence
+    /// is fixed text and names nothing the call carried (TRACE-2).
+    pub fn refuse_unapproved_write(&mut self, call: &str) {
+        self.refuse_unapproved(call, "write", "written");
+    }
+
+    /// Record that a fetch was put to the person and not approved, so nothing was fetched
+    /// (TRACE-1). The arguments and the reasons are those of [`Policy::refuse_unapproved_write`].
+    pub fn refuse_unapproved_fetch(&mut self, call: &str) {
+        self.refuse_unapproved(call, "fetch", "fetched");
+    }
+
+    /// The one sentence either of the two says, from words of this file's own, so no caller can put
+    /// anything a call carried into the trail (TRACE-2).
+    fn refuse_unapproved(&mut self, call: &str, asked: &'static str, undone: &'static str) {
+        let _ = self.deny(
+            "approval",
+            Principle::Capability,
+            format!("{call}: the {asked} was not approved, so nothing was {undone}"),
         );
     }
 
@@ -18002,6 +18044,57 @@ five
                         Principle::Confinement,
                         "run.scopes: the request was refused and the line did not run: this \
                          platform has no sandbox to confine runs with"
+                    ),
+                ]
+            );
+        }
+
+        /// TRACE-1: a write or a fetch put to the person and not approved is a refusal under
+        /// `approval`, naming the tool or a plan's step and its tool, in fixed words that carry
+        /// nothing the call held (TRACE-2), and the turn does not end as clean. The regression it
+        /// rejects is a no that leaves the question in the trail and nothing about its answer,
+        /// which is how a turn whose work was not done reads as clean.
+        #[test]
+        fn a_write_or_a_fetch_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_write("edit_file");
+            turn.refuse_unapproved_fetch("download_url");
+            turn.refuse_unapproved_write("step 2: write_file");
+            assert!(
+                !turn.finish(),
+                "a turn with an unapproved write ended clean"
+            );
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "edit_file: the write was not approved, so nothing was written"
+                    ),
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "download_url: the fetch was not approved, so nothing was fetched"
+                    ),
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "step 2: write_file: the write was not approved, so nothing was written"
                     ),
                 ]
             );

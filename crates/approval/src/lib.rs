@@ -212,7 +212,7 @@ pub struct RunStep {
 pub struct Confinement {
     /// The sentence that introduces the directories.
     pub heading: String,
-    /// The directories every stage reads and writes.
+    /// The directories every stage reads and writes. Drawn through `shown_name`, as the writes are.
     pub directories: Vec<String>,
     /// What else the turn confines, in the order the agent gave it.
     pub sentences: Vec<String>,
@@ -224,7 +224,8 @@ pub struct Run<'a> {
     pub summary: &'a str,
     /// Every step, in order.
     pub steps: &'a [RunStep],
-    /// The paths the plan says it writes.
+    /// The paths the plan says it writes. Each is drawn through `shown_name`, so a path that would
+    /// draw as nothing or as another is spelled.
     pub writes: &'a [String],
     /// What the stages are confined to, or `None` where the turn does not confine them.
     pub confinement: Option<&'a Confinement>,
@@ -253,7 +254,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
     if !run.writes.is_empty() {
         lines.push(t!(run_writes).to_string());
         for path in run.writes {
-            lines.push(format!("  {}", printable(path)));
+            lines.push(format!("  {}", bravebot_agent::confirm::shown_name(path)));
         }
     }
     // Said every time, because it is the thing a person is likeliest to assume otherwise: what the
@@ -262,7 +263,10 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
         Some(confined) => {
             lines.push(confined.heading.clone());
             for directory in &confined.directories {
-                lines.push(format!("  {}", printable(directory)));
+                lines.push(format!(
+                    "  {}",
+                    bravebot_agent::confirm::shown_name(directory)
+                ));
             }
             lines.extend(confined.sentences.iter().cloned());
         }
@@ -405,12 +409,12 @@ pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<S
 /// The findings in a file the planner asked to read, and nothing of the file.
 ///
 /// Each line is already a kind, a place and a mask, so there is no content here to picture or to
-/// put behind a margin. `printable` is still applied, since a control character reaching a terminal
-/// from any direction is a cursor somewhere else, and the path in a finding is a path the planner
-/// may have spelled.
+/// put behind a margin. `printable` is still applied to a finding, since a control character
+/// reaching a terminal from any direction is a cursor somewhere else, and the path is drawn through
+/// `shown_name`, which spells a name that would draw as nothing or as another name.
 pub fn exposure_lines(path: &str, findings: &[String]) -> Vec<String> {
     let mut lines = vec![
-        printable(path),
+        bravebot_agent::confirm::shown_name(path),
         t!(expose_explained).to_string(),
         t!(expose_found).to_string(),
     ];
@@ -718,6 +722,21 @@ mod tests {
         }
     }
 
+    /// PROMPT-1: the credential-read lines name the file so a name that would draw as nothing, or as
+    /// another name, is spelled, and a plain name reads as it did.
+    #[test]
+    fn the_exposure_lines_spell_a_name_that_would_draw_as_another() {
+        let findings = ["an API key at line 1".to_string()];
+        assert_eq!(exposure_lines("note.md", &findings)[0], "note.md");
+        for (name, spelled) in [
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+        ] {
+            assert_eq!(exposure_lines(name, &findings)[0], spelled, "{name:?}");
+        }
+    }
+
     /// MSG-3: a message is shown whole behind the margin, however long, with its control characters
     /// pictured. A yes sends every byte of it into another planner's context, so a row counted and
     /// left out would be approved unread.
@@ -784,6 +803,60 @@ mod tests {
             "it reaches the container daemon",
         ] {
             assert!(text.contains(part), "`{part}` missing from {text}");
+        }
+    }
+
+    /// PROMPT-1: the files a line writes and the directories it is confined to are drawn with a
+    /// name that would draw as nothing, or as another name, quoted and spelled, so a yes to
+    /// `note.md ` cannot be read as one to `note.md`. A plain name reads as it did.
+    #[test]
+    fn a_run_spells_a_written_file_and_a_directory_that_would_draw_as_another() {
+        let steps = [RunStep {
+            written: "tee".to_string(),
+            binary: "/usr/bin/tee".to_string(),
+        }];
+        let drawn = |write: &str, directory: &str| {
+            let confinement = Confinement {
+                heading: "confined to".to_string(),
+                directories: vec![directory.to_string()],
+                sentences: Vec::new(),
+            };
+            run_lines(&Run {
+                summary: "write it",
+                steps: &steps,
+                writes: &[write.to_string()],
+                confinement: Some(&confinement),
+                ambient: &[],
+                releases_private: false,
+            })
+        };
+        let plain = drawn("note.md", "/work");
+        assert!(plain.contains(&"  note.md".to_string()), "{plain:?}");
+        assert!(plain.contains(&"  /work".to_string()), "{plain:?}");
+        for (name, spelled) in [
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+            ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ] {
+            let written = drawn(name, "/work");
+            assert!(
+                written.contains(&format!("  {spelled}")),
+                "{name:?}: {written:?}"
+            );
+            assert!(
+                !written.contains(&format!("  {name}")),
+                "{name:?}: {written:?}"
+            );
+            let confined = drawn("note.md", name);
+            assert!(
+                confined.contains(&format!("  {spelled}")),
+                "{name:?}: {confined:?}"
+            );
+            assert!(
+                !confined.contains(&format!("  {name}")),
+                "{name:?}: {confined:?}"
+            );
         }
     }
 

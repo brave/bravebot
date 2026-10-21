@@ -186,11 +186,11 @@ impl WriteRequest {
         match self.intent {
             Intent::Create => {
                 let lines = self.diff.added();
-                format!("create {} ({lines} lines)", self.path)
+                format!("create {} ({lines} lines)", shown_name(&self.path))
             }
             _ => format!(
                 "{verb} {} (+{} -{})",
-                self.path,
+                shown_name(&self.path),
                 self.diff.added(),
                 self.diff.removed()
             ),
@@ -1106,6 +1106,15 @@ pub fn shown_name(name: &str) -> String {
     out
 }
 
+/// [`shown_name`] over a path held as one, for the prompts and lists that draw a path rather than
+/// a name the planner wrote.
+///
+/// The conversion is for display and decides nothing: the path stays a `Path` everywhere a grant
+/// or a rule is made from it.
+pub fn shown_path(path: &std::path::Path) -> String {
+    shown_name(&path.to_string_lossy())
+}
+
 /// A quarantined file the model would like to read.
 ///
 /// Offered at the moment a read is refused, so the trust question is put where it matters rather
@@ -1179,7 +1188,7 @@ impl ExposureRequest {
     pub fn summary(&self) -> String {
         format!(
             "let the model read {}, which holds {}",
-            self.path,
+            shown_name(&self.path),
             tally(self.credentials.len(), "credential", "credentials")
         )
     }
@@ -2918,6 +2927,7 @@ mod tests {
             ("a\u{e0041}b", "\"a\\u{e0041}b\""),
             ("a\u{fe0f}b", "\"a\\u{fe0f}b\""),
             ("a\u{3164}b", "\"a\\u{3164}b\""),
+            ("a\u{34f}b", "\"a\\u{34f}b\""),
             ("a\u{1b}b", "\"a\u{241b}b\""),
             ("a\u{7f}b", "\"a\u{2421}b\""),
             ("a\u{85}b", "\"a\\u{85}b\""),
@@ -2926,6 +2936,67 @@ mod tests {
             assert_eq!(shown_name(name), shown, "{name:?}");
         }
         assert_ne!(shown_name("note.md "), shown_name("note.md"));
+    }
+
+    /// PROMPT-1: the one-line description of a write and of a credential read names the file the
+    /// way a prompt does. The question in lines and a window's accessible text draw the description
+    /// and nothing else, so a name that would draw as another name is spelled in it.
+    #[test]
+    fn a_description_of_a_write_or_a_credential_read_spells_the_name() {
+        for (intent, plain, spelled) in [
+            (
+                Intent::Create,
+                "create note.md (1 lines)",
+                "create \"note.md\u{2423}\" (1 lines)",
+            ),
+            (
+                Intent::Overwrite,
+                "overwrite note.md (+1 -0)",
+                "overwrite \"note.md\u{2423}\" (+1 -0)",
+            ),
+            (
+                Intent::Edit,
+                "edit note.md (+1 -0)",
+                "edit \"note.md\u{2423}\" (+1 -0)",
+            ),
+        ] {
+            let write = |path: &str| WriteRequest {
+                path: path.to_string(),
+                intent,
+                ..a_write()
+            };
+            assert_eq!(write("note.md").summary(), plain);
+            assert_eq!(write("note.md ").summary(), spelled);
+        }
+        let exposure = |path: &str| ExposureRequest {
+            path: path.to_string(),
+            credentials: vec!["an API key at line 1".to_string()],
+        };
+        assert_eq!(
+            exposure("note.md").summary(),
+            "let the model read note.md, which holds 1 credential"
+        );
+        assert_eq!(
+            exposure("a\u{202e}b").summary(),
+            "let the model read \"a\\u{202e}b\", which holds 1 credential"
+        );
+    }
+
+    /// PROMPT-1: a path is spelled as a name is, whole.
+    #[test]
+    fn a_path_is_shown_as_the_name_it_spells() {
+        assert_eq!(
+            shown_path(std::path::Path::new("/opt/include")),
+            "/opt/include"
+        );
+        assert_eq!(
+            shown_path(std::path::Path::new("/opt/include ")),
+            "\"/opt/include\u{2423}\""
+        );
+        assert_eq!(
+            shown_path(std::path::Path::new("/opt/in\u{202e}clude")),
+            "\"/opt/in\\u{202e}clude\""
+        );
     }
 
     /// PROMPT-12: a note is one line, cut to a length, and nothing where there is nothing in it.

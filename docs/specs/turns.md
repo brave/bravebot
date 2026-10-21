@@ -28,7 +28,8 @@ a later failure or stop. What happens when the model's reply says nothing at all
 into its output ceiling. What a session does when it has spent as many tokens as the person said
 it may. What a turn does when the planner asks for the same call three times running. How the reads of one
 round are run when the planner asks for several together. What the note under a finished turn says
-about refusals.
+about refusals. What a turn that answers with tasks still open in the planner's list does about
+them.
 
 ## Clauses
 
@@ -544,3 +545,82 @@ used, so nothing untrusted a tool returned reaches the decision ([LABEL-8](label
 `verified-by: bravebot_agent::turn::a_refusal_a_later_call_to_the_same_tool_got_past_is_not_left_standing`
 `verified-by: bravebot_agent::turn::a_refusal_no_later_call_to_its_tool_got_past_stays_standing`
 `verified-by: bravebot_tui::app::a_refusal_a_later_call_got_past_is_not_drawn_and_one_left_standing_is_counted_and_named`
+
+<a id="TURN-12"></a>
+### TURN-12: a turn that answers with tasks still open asks about the list once
+
+Where `todo_write` is offered, the latest accepted list leaves at least one task pending or in
+progress, and the planner answers without calling a tool, the driver puts that answer into the
+conversation and says how many tasks are open. It asks for the whole list again, with a task marked
+completed where it is done and cancelled where it was dropped, and says that where work remains the
+tasks stay open and the answer says what is left. The turn carries on with its tools and ends on
+the planner's next answer, whatever the list says then. The line is a count and nothing about the
+tasks.
+
+**The list is the one the panel keeps.** The plan stays after the turn that wrote it
+([PANEL-10](info-panel.md#PANEL-10)), so the question is about the session's last accepted list
+whichever turn wrote it, and a turn that wrote none is asked about the one before. A list the
+planner was not shown, as in a session that has met something untrusted, ends the question about
+the list before it, because the count of that one no longer describes the panel's. The count is
+kept for a list whichever way its result went back to the planner. Pending and in progress are open,
+finished and dropped are not, and a status the driver does not recognise reads as pending
+([TODO-2](tools/todo-write.md#TODO-2)).
+
+**Asked once for each list.** A list the planner writes after the question, in the turn that put
+it, is its answer to the question and is not asked about, whatever it holds. A planner that
+answers with the list as it was, or sends it again with a task still open, is not asked again, in
+that turn or in the turns after it. A list written in a later turn is a new list. A task may be open
+for a reason the driver cannot read, such as a question the planner put to the person, and a request
+spent each turn on a list nothing in that turn touched would be the cost of asking every time. The
+count is read once, whether or not it leads to the question, so a list with nothing open is not read
+again at the end of every turn after it.
+
+**Conditional in its wording, not in its firing.** The driver cannot tell a list the planner
+finished from one it left open on purpose, and must not try. It knows how many tasks are open, and
+the planner knows whether that is wrong, as with [TURN-3](#TURN-3). The line also asks the planner
+to give its answer again in full, since the answer after the list is the one shown as the reply and
+the first is drawn between the calls.
+
+**Read only where the list is trusted.** Whether to ask is a decision. The kernel counts the open
+tasks where it can read the statuses and labels the count as the list is labelled, and the driver
+reads it through `Policy::read_trusted_content` ([LABEL-6](labels.md#LABEL-6)), which refuses a
+count that is not trusted. In a session that has met something untrusted the list is labelled
+untrusted and the planner is shown none of it, so no count is kept and the turn ends on the answer.
+No task's text reaches the planner through this line.
+
+**Not asked where it cannot be acted on.** A turn that is not offered `todo_write`, such as one
+addressed to a definition that leaves it out, cannot send a list, and the question waits for a turn
+that can. A turn whose next request offers no tools ([TURN-1](#TURN-1)) ends on the answer it has.
+A reply the output ceiling stopped in its prose is the turn's answer as it stands
+([TURN-7](#TURN-7)). A turn the person stopped as the answer arrived is not asked anything further,
+since the next request would end it as stopped.
+
+**What the person typed.** A line the person typed as the answer arrived is put in front of the
+planner with the question, as the line typed while a delegate runs is put in front of the round after
+its report.
+
+**Known costs.** The count is not written to the session record, so a session resumed with a list
+still open is not asked about it, though the panel shows that plan
+([PANEL-10](info-panel.md#PANEL-10)). The first turn that answers ends on its answer, and the
+question comes only for a list written after the resume, as [COMPACT-16](compaction.md#COMPACT-16)
+carries a list forward only from the next `todo_write`.
+
+`verified-by: bravebot_agent::turn::a_turn_that_answers_with_tasks_still_open_is_asked_to_bring_the_list_up_to_date`
+`verified-by: bravebot_agent::turn::a_turn_asks_about_open_tasks_once_however_the_planner_answers`
+`verified-by: bravebot_agent::turn::a_planner_that_answers_the_question_with_another_open_list_is_not_asked_again`
+`verified-by: bravebot_agent::turn::a_list_with_every_task_completed_or_cancelled_is_not_asked_about`
+`verified-by: bravebot_agent::turn::a_list_left_open_by_an_earlier_turn_is_asked_about_when_a_later_turn_answers`
+`verified-by: bravebot_agent::turn::a_list_the_planner_was_asked_about_is_not_asked_about_by_the_next_turn`
+`verified-by: bravebot_agent::turn::a_list_written_after_the_planner_was_asked_is_asked_about_afresh`
+`verified-by: bravebot_agent::turn::a_list_the_planner_sends_again_when_asked_is_not_asked_about_by_the_next_turn`
+`verified-by: bravebot_agent::turn::a_list_the_planner_was_not_shown_ends_the_question_about_the_list_before_it`
+`verified-by: bravebot_agent::turn::a_list_written_in_a_round_with_no_call_ids_is_asked_about`
+`verified-by: bravebot_agent::turn::a_line_typed_as_the_planner_answers_reaches_it_with_the_question_about_the_list`
+`verified-by: bravebot_agent::turn::a_reply_cut_off_in_its_prose_is_not_asked_about_open_tasks`
+`verified-by: bravebot_agent::turn::a_session_that_has_met_something_untrusted_is_not_asked_about_the_list`
+`verified-by: bravebot_agent::turn::a_turn_not_offered_the_task_list_tool_is_not_asked_about_the_list`
+`verified-by: bravebot_agent::turn::a_turn_stopped_as_it_answers_is_not_asked_about_open_tasks`
+`verified-by: bravebot_agent::tools::an_accepted_list_carries_the_count_of_its_open_tasks_at_its_own_label`
+`verified-by: bravebot_agent::tools::the_count_of_open_tasks_in_an_untrusted_list_is_refused_to_the_driver`
+`verified-by: bravebot_agent::tools::a_refused_call_carries_no_count_of_open_tasks`
+`verified-by: bravebot_core::todo::a_task_is_open_unless_it_is_finished_or_dropped`

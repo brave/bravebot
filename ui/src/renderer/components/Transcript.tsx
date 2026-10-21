@@ -1955,10 +1955,10 @@ function Card({
         <DecisionCard
           className={`confirm ${request.untrusted ? 'untrusted' : ''}`}
           answerable={answerable}
-          subject={request.path}
+          subject={request.shownPath}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this write' : 'You refused this write' }}
           head={<CardHead icon="edit-box" intent={INTENT_WORD[request.intent]} deciding
-            subject={<code className="path" data-tooltip={request.path}>{request.path}</code>}
+            subject={<code className="path" data-tooltip={request.shownPath}>{request.shownPath}</code>}
             counts={<span className="counts" aria-label={`${stats.added} added, ${stats.removed} removed`}><span className="stat added">+{stats.added}</span><span className="stat removed">−{stats.removed}</span></span>}
             trust={request.untrusted && <Label mode="loud" color="yellow" className="trust-label"><Icon name="warning-triangle-filled" slot="icon-before" />Untrusted source</Label>} />}
           actions={<>
@@ -2004,7 +2004,7 @@ function Card({
             <pre>{request.remark.preview.join('\n')}</pre>
             <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
           </div>}
-          <Diff changes={request.changes} path={request.path} untrusted={request.untrusted} deciding />
+          <Diff changes={request.changes} path={request.path} shownPath={request.shownPath} untrusted={request.untrusted} deciding />
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown above.</p>
           </Collapse>
@@ -2060,7 +2060,7 @@ function Card({
               binary rather than the word. */}
           {request.plan && <p className="permission-scope" data-deciding="all"><strong>Execution plan:</strong> <code>{request.plan}</code></p>}
           {request.stdin && <p className="permission-scope" data-deciding="all"><strong>Standard input:</strong> <code>{request.stdin}</code></p>}
-          {!!request.writes?.length && <div className="permission-scope" data-deciding="all"><strong>Files created or modified:</strong><ul>{request.writes.map(path => <li key={path}><code>{path}</code></li>)}</ul></div>}
+          {!!request.shownWrites?.length && <div className="permission-scope" data-deciding="all"><strong>Files created or modified:</strong><ul>{request.shownWrites.map((path, index) => <li key={index}><code>{path}</code></li>)}</ul></div>}
           <ol className="stages" data-deciding="all">
             {request.stages.map((stage, index) => (
               <li key={index}>
@@ -2079,7 +2079,7 @@ function Card({
           {request.confinement && (
             <div className="permission-scope" data-test="confinement" data-deciding="all">
               <p>{request.confinement.heading}</p>
-              {!!request.confinement.directories.length && <ul>{request.confinement.directories.map((directory) => <li key={directory}><code>{directory}</code></li>)}</ul>}
+              {!!request.confinement.shownDirectories.length && <ul>{request.confinement.shownDirectories.map((directory, index) => <li key={index}><code>{directory}</code></li>)}</ul>}
               {request.confinement.sentences.map((sentence, index) => <p key={index}>{sentence}</p>)}
             </div>
           )}
@@ -2378,7 +2378,7 @@ function Card({
         <div className="confirm exposure">
           <div className="confirm-head" data-deciding="all">
             <span className="intent">send file</span>
-            <code className="path">{request.path}</code>
+            <code className="path">{request.shownPath}</code>
             <span className="counts">
               {found} finding{found === 1 ? '' : 's'}
             </span>
@@ -2820,7 +2820,7 @@ function Card({
         <DecisionCard
           className="confirm vouch"
           answerable={answerable}
-          subject={request.path}
+          subject={request.shownPath}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You vouched for this path' : 'You left it confined' }}
           head={<CardHead icon="shield-done" intent="Vouch for" deciding
             subject={<code className="path">{request.shownPath}</code>}

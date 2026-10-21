@@ -225,7 +225,8 @@ impl Bedrock {
     /// The switch alone is not enough. Without a region there is nothing to sign for and no host to
     /// send to, so a block that sets the switch and stops is treated as not configured: falling
     /// back to the aichat backend leaves a working agent, whereas guessing a region produces
-    /// requests that fail somewhere far from the mistake.
+    /// requests that fail somewhere far from the mistake. A value that is not spelled as a region
+    /// (`is_region`) is no region.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Option<Self> {
         let enabled = lookup(env_var::USE_BEDROCK)
             .map(|value| value.trim() == "1")
@@ -234,7 +235,7 @@ impl Bedrock {
             return None;
         }
 
-        let region = trimmed(lookup(env_var::AWS_REGION))?;
+        let region = trimmed(lookup(env_var::AWS_REGION)).filter(|region| is_region(region))?;
         let profile = trimmed(lookup(env_var::AWS_PROFILE));
 
         let models = Tier::ALL
@@ -283,14 +284,21 @@ impl Bedrock {
     /// The same account and the same transport; what differs is where the list came from and that
     /// nothing in it is a tier. Kept here rather than beside the block because a request needs a
     /// region to sign for and a profile to resolve, which is exactly what this holds.
-    pub fn from_provider(region: String, profile: Option<String>, models: Vec<Entry>) -> Self {
-        Self {
+    ///
+    /// `None` where `region` is not spelled as one (`is_region`): the host is built from it, so
+    /// an account is never held with a region the host would not survive.
+    pub fn from_provider(
+        region: String,
+        profile: Option<String>,
+        models: Vec<Entry>,
+    ) -> Option<Self> {
+        is_region(&region).then_some(Self {
             region,
             profile,
             models,
             output_budget: None,
             cache_ttl: None,
-        }
+        })
     }
 
     /// The same account with an exported reply ceiling applied to every model it reaches.
@@ -372,6 +380,20 @@ impl Bedrock {
     }
 }
 
+/// Whether `region` is spelled the way AWS spells one: lowercase letters, digits and `-`, starting
+/// with a letter or a digit.
+///
+/// The region is written into the name of the host a request is signed for and sent to, so every
+/// other character is refused: `/`, `@`, `?`, `#`, `:` and `.` each end that name or add to it, and
+/// the host would then be one the value chose. A Google location is held to the same characters
+/// ([BACKEND-49](../../../docs/specs/backends.md#BACKEND-49)).
+fn is_region(region: &str) -> bool {
+    region.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && region
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// A value with surrounding space removed, or `None` when nothing is left.
 ///
 /// A blank is absence: a placeholder settings file leaves values empty, and reading `""` as a
@@ -403,6 +425,7 @@ fn encode_path_segment(segment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::REGIONS_THAT_WOULD_MOVE_THE_REQUEST;
 
     fn configured(pairs: &[(&str, &str)]) -> Option<Bedrock> {
         let owned: Vec<(String, String)> = pairs
@@ -467,6 +490,70 @@ mod tests {
             configured(&[(env_var::USE_BEDROCK, "1"), (env_var::AWS_REGION, "   ")]),
             None
         );
+    }
+
+    /// The region is written into the host a request is sent to and the signature is bound to that
+    /// host, so a value that ends the host name early or moves it would send the person's signed
+    /// headers wherever a settings file said. Refusing it is the only answer that cannot send them
+    /// anywhere, and falling back to the working backend is what a block with no region gets.
+    #[test]
+    fn a_region_that_would_move_the_request_configures_nothing() {
+        for &region in REGIONS_THAT_WOULD_MOVE_THE_REQUEST {
+            assert_eq!(
+                configured(&[
+                    (env_var::USE_BEDROCK, "1"),
+                    (env_var::AWS_REGION, region),
+                    (env_var::BEDROCK_SONNET_MODEL, "sonnet-arn"),
+                ]),
+                None,
+                "region {region:?} was accepted"
+            );
+        }
+    }
+
+    /// An account a `provider` block names is checked by the rule the tier variables are, since the
+    /// block is the other route to a host built from a region.
+    #[test]
+    fn a_provider_account_whose_region_would_move_the_request_is_not_built() {
+        for &region in REGIONS_THAT_WOULD_MOVE_THE_REQUEST {
+            assert_eq!(
+                Bedrock::from_provider(region.to_string(), None, Vec::new()),
+                None,
+                "region {region:?} was accepted"
+            );
+        }
+    }
+
+    /// Every spelling AWS gives a region is accepted, so a check tightened past the rule does not
+    /// quietly configure nothing for a real account. Space around the value is not part of it.
+    #[test]
+    fn a_region_holding_only_the_characters_aws_uses_is_accepted() {
+        for region in [
+            "us-east-1",
+            "eu-central-1",
+            "ap-southeast-2",
+            "us-gov-west-1",
+            "il-central-1",
+        ] {
+            let bedrock = configured(&[(env_var::USE_BEDROCK, "1"), (env_var::AWS_REGION, region)])
+                .expect("configured");
+            assert_eq!(bedrock.region, region);
+            assert_eq!(
+                bedrock.host(),
+                format!("bedrock-runtime.{region}.amazonaws.com")
+            );
+            assert_eq!(
+                Bedrock::from_provider(region.to_string(), None, Vec::new())
+                    .map(|account| account.region),
+                Some(region.to_string())
+            );
+        }
+        let padded = configured(&[
+            (env_var::USE_BEDROCK, "1"),
+            (env_var::AWS_REGION, "  eu-west-1\n"),
+        ])
+        .expect("configured");
+        assert_eq!(padded.region, "eu-west-1");
     }
 
     /// A profile is optional: a machine with instance credentials or a bare access key has none,

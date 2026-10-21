@@ -89,13 +89,20 @@ stake is still shown rather than summarised: the file at that path is a copy of 
 one step away, and [VET-4](tools/vet-content.md#VET-4) says why it is not the path they were read
 from.
 
-The vouch prompt draws the name it asks about through one function, `shown_name`, which every front
-end that names a path uses. A name that is empty, is only whitespace, has whitespace at either end,
-or holds a character that draws as nothing (a zero-width character, a bidirectional control, a tag
-character, a variation selector, a no-break space) is drawn quoted with each such character spelled,
-so it cannot read as another name. Under the name the prompt draws the rule a yes writes, the full
-path the trust map will hold it under ([TRUST-8](trust-map.md#TRUST-8)), so a rule wider than the
-name reads as wider. The rule is shown and nothing branches on it.
+These prompts draw the path they ask about through one function, `shown_name`, which every front end
+uses: the write, overwrite and edit prompts, the credential-read prompt, the prompt about a path
+programs may reach, the questions about a directory, the names a checkout's removal would delete,
+the vouch prompt, and the files a run would write and the directories it is confined to. The
+terminal's trust questions draw the file a yes is kept in and the file each proposed rule came from
+the same way, and so does the question in lines for the file a yes is kept in. A name that is empty,
+is only whitespace, has whitespace at either end, or holds a character that draws as nothing (a
+zero-width character, a bidirectional control, a tag character, a variation selector, a no-break
+space) is drawn quoted with each such character spelled, so it cannot read as another name. Any
+other name is drawn as it is. The one-line description a front end draws in place of the prompt,
+such as the question in lines and an editor's title, names the path the same way. Under the vouch
+prompt's name the prompt draws the rule a yes writes, the full path the trust map will hold it under
+([TRUST-8](trust-map.md#TRUST-8)), so a rule wider than the name reads as wider. The rule is shown
+and nothing branches on it.
 
 Every prompt a check was run for shows what it said, and the three are drawn out of one row builder
 rather than three, so a prompt cannot carry a verdict and forget to say what it was. Which prompts
@@ -117,6 +124,23 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
 `verified-by: bravebot_tui::confirm::the_vouch_prompt_marks_an_unreadable_name_and_says_the_rule`
+`verified-by: bravebot_tui::confirm::the_write_prompt_marks_an_unreadable_name`
+`verified-by: bravebot_tui::confirm::the_exposure_prompt_marks_an_unreadable_name`
+`verified-by: bravebot_tui::confirm::the_path_prompt_marks_an_unreadable_name`
+`verified-by: bravebot_tui::trust_prompt::the_directory_questions_mark_a_name_that_would_draw_as_another`
+`verified-by: bravebot_tui::confirm::the_remove_checkout_question_marks_a_name_that_would_draw_as_another`
+`verified-by: bravebot_tui::confirm::the_run_prompt_marks_an_unreadable_written_file_and_directory`
+`verified-by: bravebot_tui::trust_prompt::the_trust_rows_name_a_file_with_a_name_that_would_draw_as_another`
+`verified-by: bravebot_approval::lib::a_run_spells_a_written_file_and_a_directory_that_would_draw_as_another`
+`verified-by: bravebot_cli::plain::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
+`verified-by: bravebot_cli::plain::the_question_in_lines_spells_the_file_a_yes_is_kept_in`
+`verified-by: bravebot_ui_bridge::acp::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
+`verified-by: bravebot_ui_bridge::wire::a_run_request_carries_the_written_files_and_directories_spelled_for_a_person`
+`verified-by: bravebot_agent::confirm::a_description_of_a_write_or_a_credential_read_spells_the_name`
+`verified-by: bravebot_cli::plain::a_question_in_lines_spells_a_name_that_would_draw_as_another`
+`verified-by: bravebot_ui_bridge::acp::the_title_of_a_question_about_a_file_spells_a_name_that_would_draw_as_another`
+`verified-by: bravebot_ui_bridge::wire::a_write_and_a_credential_read_carry_the_name_spelled_for_a_person`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the write, credential-read, vouch and run cards through react-dom and asserts each draws the name the agent spelled and not the name as written, and make check-ui runs it)`
 `verified-by: bravebot_agent::confirm::a_name_that_draws_as_nothing_is_shown_as_what_it_is`
 `verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person`
 `verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`

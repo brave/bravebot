@@ -1068,7 +1068,7 @@ fn opening_trust<R: BufRead, W: Write>(
     // asked to answer it. That includes what a yes keeps and where.
     let keeping = keeping(root);
     let mut lines = vec![
-        root.display().to_string(),
+        bravebot_agent::confirm::shown_path(root),
         t!(trust_directory_explained).to_string(),
         t!(trust_directory_regardless).to_string(),
         t!(trust_directory_confined_lines).to_string(),
@@ -1078,7 +1078,7 @@ fn opening_trust<R: BufRead, W: Write>(
             t!(trust_directory_remember_explained).to_string(),
             t!(trust_directory_remember_exact).to_string(),
             t!(cli_plain_trust_remember_where).to_string(),
-            store.path().display().to_string(),
+            bravebot_agent::confirm::shown_path(store.path()),
         ]),
         None => lines.push(t!(trust_directory_not_remembered).to_string()),
     }
@@ -1548,7 +1548,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
     /// The path as the person will see it granted, the planner's reason under it, and what a yes
     /// does not do.
     fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {
-        let shown_path = shown(&request.path.display().to_string());
+        let shown_path = bravebot_agent::confirm::shown_path(&request.path);
         let lines = [
             match request.write {
                 true => t!(path_writes, path = shown_path.as_str()).to_string(),
@@ -2327,6 +2327,45 @@ mod tests {
         (trust, said)
     }
 
+    /// PROMPT-1: the question in lines draws the file a yes is kept in with a name that would draw
+    /// as nothing, or as another name, quoted and spelled, so the file a person reads is the file
+    /// that is written. A state directory with an ordinary name is drawn as it is.
+    #[test]
+    fn the_question_in_lines_spells_the_file_a_yes_is_kept_in() {
+        let scratch = Remembering::new("plain-kept-row-name");
+        let odd = scratch.base.join("sta\u{202e}te");
+        std::fs::create_dir_all(&odd).expect("create the state directory");
+        let odd = odd.canonicalize().expect("canonical state directory");
+        let asked = |home: &std::path::Path| {
+            opening_keeping_in(
+                "n\n",
+                &scratch.root,
+                |_| None,
+                |root| bravebot_agent::trusted::record_for(Some(home), None, root),
+            )
+            .1
+        };
+        let record = |home: &std::path::Path| {
+            bravebot_agent::trusted::Store::new(home, &scratch.root)
+                .path()
+                .to_path_buf()
+        };
+
+        let plain = asked(&scratch.home);
+        let plain_row = record(&scratch.home).display().to_string();
+        assert!(plain.contains(&plain_row), "{plain}");
+        assert!(!plain.contains(&format!("\"{plain_row}")), "{plain}");
+
+        let drawn = asked(&odd);
+        let spelled = bravebot_agent::confirm::shown_path(&record(&odd));
+        assert!(
+            spelled.starts_with('"') && spelled.contains("\\u{202e}"),
+            "{spelled}"
+        );
+        assert!(drawn.contains(&spelled), "{drawn}");
+        assert!(!drawn.contains('\u{202e}'), "{drawn}");
+    }
+
     /// The startup question with this input, the record found where a session here finds it.
     fn opening_with_a_record(
         answer: &str,
@@ -2692,6 +2731,88 @@ mod tests {
         );
     }
 
+    /// The names a question in lines has to draw as what they are, with the form a person is shown.
+    const UNSEEN_NAMES: [(&str, &str); 4] = [
+        (" ", "\"\u{2423}\""),
+        ("note.md ", "\"note.md\u{2423}\""),
+        ("a\u{202e}b", "\"a\\u{202e}b\""),
+        ("a\u{200b}b", "\"a\\u{200b}b\""),
+    ];
+
+    /// PROMPT-1: the question for a write, a credential read, a path and a directory draws a name
+    /// that would draw as nothing, or as another name, quoted and spelled, so a yes to `note.md `
+    /// cannot be read as one to `note.md`.
+    #[test]
+    fn a_question_in_lines_spells_a_name_that_would_draw_as_another() {
+        let write = |path: &str| {
+            change(&WriteRequest {
+                written_since_checkout: false,
+                path: path.to_string(),
+                contents: "a\n".to_string(),
+                existing: None,
+                diff: bravebot_agent::diff::Diff::compute("", "a\n"),
+                intent: bravebot_agent::confirm::Intent::Create,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+            })
+            .join("\n")
+        };
+        let asking = || {
+            Prompting::new(
+                std::io::BufReader::new(std::io::Cursor::new(b"n\n".to_vec())),
+                Vec::new(),
+            )
+        };
+        let exposure = |path: &str| {
+            let mut asking = asking();
+            asking.confirm_exposing_read(&ExposureRequest {
+                path: path.to_string(),
+                credentials: vec!["an API key at line 1".to_string()],
+            });
+            String::from_utf8(asking.output).expect("text")
+        };
+        let granted = |path: &str| {
+            let mut asking = asking();
+            asking.confirm_path(&bravebot_agent::confirm::PathRequest {
+                path: std::path::PathBuf::from(format!("/opt/{path}")),
+                write: true,
+                why: "the build".to_string(),
+            });
+            String::from_utf8(asking.output).expect("text")
+        };
+        let directory = |path: &str| {
+            let mut asking = asking();
+            opening_trust(
+                &mut asking,
+                PermissionMode::Ask,
+                std::path::Path::new(&format!("/work/{path}")),
+                |_| None,
+                |_| None,
+                "",
+            );
+            String::from_utf8(asking.output).expect("text")
+        };
+        // `before` is what the quotation holds ahead of the name where the name ends a longer path.
+        let check = |kind: &str, put: &dyn Fn(&str) -> String, before: &str| {
+            let plain = put("note.md");
+            assert!(plain.contains("note.md"), "{kind}: {plain}");
+            for (name, spelled) in UNSEEN_NAMES {
+                let drawn = put(name);
+                assert_ne!(drawn, plain, "{kind} {name:?}");
+                let spelled = format!("\"{before}{}", &spelled[1..]);
+                assert!(drawn.contains(&spelled), "{kind} {name:?}\n{drawn}");
+            }
+        };
+        check("write", &write, "");
+        check("exposure", &exposure, "");
+        check("path", &granted, "/opt/");
+        check("directory", &directory, "/work/");
+    }
+
     /// CHECKOUT-14. The question for a file brought back from a checkout says the session wrote the
     /// path in the working directory since, and one for any other write does not.
     #[test]
@@ -2815,6 +2936,45 @@ mod tests {
             !lines.contains(t!(run_spends_authority)),
             "a line reaching no ambient authority was said to spend one: {lines}"
         );
+    }
+
+    /// PROMPT-1: the plain question for a run spells a file the line writes and a directory it is
+    /// confined to when the name would draw as nothing, or as another name, so a yes to `note.md `
+    /// cannot be read as one to `note.md`.
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another() {
+        let drawn =
+            |written: &str, directory: &str| {
+                let pipeline = bravebot_core::command::Pipeline::new(vec![
+                    bravebot_core::command::Stage::new("tee", Vec::new()),
+                ]);
+                let mut request =
+                    RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".to_string()], "/work");
+                request.plan.writes = vec![written.into()];
+                request.confined = Some(bravebot_agent::Confined {
+                    reads_the_machine: false,
+                    directories: vec![directory.into()],
+                    network: bravebot_sandbox::network::Network::Open,
+                    filesystem: Default::default(),
+                    requested: Vec::new(),
+                    requested_reaches: Vec::new(),
+                    carried: Vec::new(),
+                    writes_git_directories: false,
+                });
+                program(&request)
+            };
+        let plain = drawn("note.md", "/work");
+        assert!(plain.contains(&"  note.md".to_string()), "{plain:?}");
+        assert!(plain.contains(&"  /work".to_string()), "{plain:?}");
+        for (name, spelled) in UNSEEN_NAMES {
+            for lines in [drawn(name, "/work"), drawn("note.md", name)] {
+                assert!(
+                    lines.contains(&format!("  {spelled}")),
+                    "{name:?}: {lines:?}"
+                );
+                assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
+            }
+        }
     }
 
     /// The plain question tells the same two stories as the panel: a run the turn confines is

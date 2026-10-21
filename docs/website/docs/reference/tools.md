@@ -601,10 +601,11 @@ prefers this to rewriting a whole body.
 one pair fails, the agent is told which and the file is not changed. You are asked once, about one
 diff of the combined result.
 
-The result gives the agent back the changed lines with three lines either side. Those lines are
-scanned for credentials as a file read is. If they hold what looks like a credential and you have not
-agreed to the agent being shown that file, you are asked, and one answer covers the file for edits
-and reads alike. A no leaves the edit in place and the lines out of the result.
+The result gives the agent back each changed region with three lines either side, fewer where many
+regions would make the result long, and says how many unchanged lines lie between two regions. Those
+lines are scanned for credentials as a file read is. If they hold what looks like a credential and
+you have not agreed to the agent being shown that file, you are asked, and one answer covers the file
+for edits and reads alike. A no leaves the edit in place and the lines out of the result.
 
 Where a language server for the file's language is already running, the result also says how many
 errors it found and on which lines, and how many warnings, as a `write_file` result does
@@ -1124,6 +1125,14 @@ Records the task list for what the planner is doing.
 The whole list every time: it replaces the previous one. There is no routing here, because nothing is
 touched. An unrecognised status reads as outstanding work. A task marked `cancelled` is struck
 through and counted apart from the finished ones.
+
+A turn whose last list still has a task pending or in progress when the planner answers is not
+ended there. The planner is told how many tasks are open, and nothing about them, and is asked to
+send the list again with each task marked completed or cancelled. Where work remains it leaves the
+tasks open and says in its answer what is left. This happens once for each list: a list the planner
+sends in answer to the question is not asked about, in that turn or in a later one. A list the
+planner wrote in a session that has read something untrusted is not counted. A reply that stopped at
+the output limit ends the turn as it stands.
 
 ## `schedule_next`
 

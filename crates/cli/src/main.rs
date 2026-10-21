@@ -2113,8 +2113,9 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
                 .then(|| model_not_served(&asked, comparable, &outcome.model))
                 .flatten();
 
-            // An effect nobody could approve was refused as surely as one a rule refused, and the
-            // tool that answered it never told the policy (CLI-6).
+            // An effect nobody could approve was refused as surely as one a rule refused. The
+            // policy records some of them, and a delegate's stay in its own policy, so the status
+            // reads what the confirmer kept (CLI-6).
             let ending = ending_of_a_turn(
                 outcome.clean && declined.is_empty(),
                 named_on_the_command_line,
@@ -3533,6 +3534,57 @@ mod tests {
         let mut answered = OneShot::new(&b"y\n"[..], &mut shown, true);
         answered.confirm_manifest(&a_plan());
         assert!(answered.declined().is_empty());
+    }
+
+    /// CLI-6, CLI-12, TRACE-1: a write or a fetch nobody could be asked about ends the run on the
+    /// refused status and is listed once. The policy records both in the trail, so the confirmer
+    /// keeps its own record of each for the status alone: a delegate's policy holds its refusals
+    /// apart from the turn's, and this confirmer is shared with it. A plan and a `run` are not
+    /// told to the policy and are listed from here. The regressions it rejects are an entry that
+    /// is dropped, which a delegate's unapproved write needs to end the run on the refused
+    /// status, a write or a fetch listed again beside the trail's, and a plan or a run marked as
+    /// already in the trail, which lists it nowhere.
+    #[test]
+    fn a_write_and_a_fetch_nobody_could_be_asked_about_count_for_the_status_and_are_listed_once() {
+        let write = WriteRequest {
+            written_since_checkout: false,
+            path: "notes.md".to_string(),
+            contents: "text".to_string(),
+            existing: None,
+            diff: bravebot_agent::diff::Diff::compute("", "text"),
+            intent: bravebot_agent::Intent::Create,
+            untrusted: false,
+            remark: None,
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+        };
+        let run = bravebot_agent::confirm::RunRequest::from_pipeline(
+            &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+                "git",
+                vec!["log".into()],
+            )]),
+            &["/usr/bin/git".into()],
+            "/tmp/project",
+        );
+        let mut shown = Vec::new();
+        let mut unattended = OneShot::new(&b"y\n"[..], &mut shown, false);
+        unattended.confirm_write(&write);
+        unattended.confirm_fetch(&bravebot_agent::confirm::FetchRequest {
+            url: "https://example.invalid/a".to_string(),
+            host: "example.invalid".to_string(),
+        });
+        unattended.confirm_run(&run);
+        unattended.confirm_manifest(&a_plan());
+
+        let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
+        assert_eq!(gates, ["file_write", "web_fetch", "run", "manifest_plan"]);
+        let listed: Vec<_> = with_declined(Vec::new(), unattended.declined())
+            .iter()
+            .map(|refusal| refusal.gate)
+            .collect();
+        assert_eq!(listed, ["run", "manifest_plan"]);
     }
 
     /// A pipe or a redirected stderr is nobody, and then a plan is refused like every other
