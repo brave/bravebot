@@ -6739,7 +6739,7 @@ mod tests {
 
         let finished = typed_with_prompts("/mcp__weather__summarise_diff ");
         assert!(
-            input_row(&finished, 90).ends_with("file=<value> [depth=<value>]"),
+            input_row(&finished, 90).ends_with("file=<value> style=<value> [depth=<value>]"),
             "{}",
             input_row(&finished, 90)
         );

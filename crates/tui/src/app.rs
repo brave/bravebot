@@ -19874,12 +19874,15 @@ mod tests {
         };
         assert_eq!(
             row.source,
-            crate::skills::Origin::Server("weather".to_string())
+            crate::skills::Origin::Server {
+                alias: "weather".to_string(),
+                required: vec!["file".to_string(), "style".to_string()],
+            }
         );
         assert_eq!(row.description, "Summarise the staged diff.");
         assert_eq!(
             row.argument_hint.as_deref(),
-            Some("file=<value> [depth=<value>]")
+            Some("file=<value> style=<value> [depth=<value>]")
         );
     }
 
@@ -19899,14 +19902,20 @@ mod tests {
         assert_eq!(skill_names(&skills), ["review-pr"]);
     }
 
-    /// Taking a row writes the word and a space and sends nothing, as a skill's does, and Enter on
-    /// the whole word sends the line as it is typed.
+    /// Taking a row writes the word and each argument the prompt cannot run without as `name=`, so
+    /// the person gives values and does not retype names the row drew, and sends nothing. An
+    /// optional argument is left for the person to add, and Enter on the whole word sends the line
+    /// as it is typed.
     #[test]
-    fn taking_a_prompt_row_writes_its_word_and_sends_nothing() {
+    fn taking_a_prompt_row_writes_its_word_and_required_argument_names_and_sends_nothing() {
         let mut session = Session::new("none");
         type_with_prompts(&mut session, "/mcp__weather__su");
         assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
-        assert_eq!(session.input(), "/mcp__weather__summarise_diff ");
+        assert_eq!(
+            session.input(),
+            "/mcp__weather__summarise_diff file= style="
+        );
+        assert_eq!(session.caret(), session.input().len());
 
         let mut session = Session::new("none");
         type_with_prompts(&mut session, "/mcp__weather__su");
@@ -19915,7 +19924,10 @@ mod tests {
             Action::Redraw,
             "Enter on half a word completes it"
         );
-        assert_eq!(session.input(), "/mcp__weather__summarise_diff ");
+        assert_eq!(
+            session.input(),
+            "/mcp__weather__summarise_diff file= style="
+        );
 
         let mut session = Session::new("none");
         type_with_prompts(&mut session, "/mcp__weather__summarise_diff");

@@ -453,8 +453,9 @@ pub(crate) mod tests {
                         "name": "summarise_diff",
                         "description": "Summarise the staged diff.",
                         "arguments": [
-                            {"name": "file", "required": true},
                             {"name": "depth"},
+                            {"name": "file", "required": true},
+                            {"name": "style", "required": true},
                         ],
                     }]}),
                     _ => serde_json::json!({}),

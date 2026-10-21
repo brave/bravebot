@@ -1263,8 +1263,11 @@ The prompts of the servers a session reached are rows of the list a slash opens,
 from and what the server said about the prompt, and once the word is typed in full the box draws
 what it takes after the caret, each required argument as `name=<value>` and each optional one in
 brackets. A row is offered, and the word drawn as recognised (CMD-10), only where it begins the
-line, since that is the one place a line runs it. Taking a row writes the word and a space and
-nothing else. No row is offered while work runs, in shell mode, or for a server turned off.
+line, since that is the one place a line runs it. Taking a row writes the word and each argument
+the prompt cannot run without as a space and `name=`, so the person gives values and retypes no
+name the row drew, and nothing else: an optional argument is left to be added, and a prompt that
+needs none gets the word and a space. No row is offered while work runs, in shell mode, or for a
+server turned off.
 
 A line whose first word is `/mcp__<alias>__<word>`, where the alias is one of a server this session
 reached and the word is one a tool may be named, runs that prompt. What follows the word is its
@@ -1280,7 +1283,8 @@ other sentence (CMD-2).
 The line is sent as the prompt it is, and the turn it starts fetches the prompt, which
 [mcp.md](mcp.md) says how to label. Nothing in the line is compared with what a server listed: the alias is
 compared with the servers the person declared, and the word and the arguments are the person's own
-and are the whole of the request. Only a line the person wrote runs a prompt. A line this program
+and are the whole of the request. A name a taken row wrote is a word of the line like any other,
+so a line reads the same whether it was typed or taken. Only a line the person wrote runs a prompt. A line this program
 composed to carry a goal on does not, and a prompt file whose text would run a prompt of a server
 this session reached is refused as one opening with a command is (CMD-17). A line that reaches a
 turn without parsing, as a `/loop`'s prompt can, is sent as the sentence it is and the person is
@@ -1295,7 +1299,8 @@ word into a dispatch that decides something.
 
 `verified-by: bravebot_tui::app::a_servers_prompt_is_offered_at_the_start_of_a_line`
 `verified-by: bravebot_tui::app::a_servers_prompt_is_not_offered_after_other_words`
-`verified-by: bravebot_tui::app::taking_a_prompt_row_writes_its_word_and_sends_nothing`
+`verified-by: bravebot_tui::app::taking_a_prompt_row_writes_its_word_and_required_argument_names_and_sends_nothing`
+`verified-by: bravebot_tui::skills::taking_a_row_writes_the_names_of_the_arguments_a_prompt_cannot_run_without`
 `verified-by: bravebot_tui::app::a_line_running_a_prompt_with_words_that_are_not_arguments_is_said_and_not_sent`
 `verified-by: bravebot_tui::app::a_line_running_a_prompt_with_words_that_are_not_arguments_is_not_queued`
 `verified-by: bravebot_tui::app::a_line_the_person_wrote_carries_its_prompt_to_the_turn`
@@ -1353,5 +1358,8 @@ word into a dispatch that decides something.
   are rarely nested this way.
 - **A prompt takes named arguments only (CMD-26).** `/mcp__weather__forecast Paris` is refused
   rather than read as the first argument, because reading a value as an argument's means taking
-  that argument's name from the server's listing, and nothing here decides from what a server
-  listed. The row shows the names to type.
+  that argument's name from the server's listing when the line is read, and nothing here decides
+  from what a server listed. Taking the row writes each required name as `name=`, so only values
+  are typed, and a line typed out by hand names its arguments. Once a name is written the line
+  holds more than the word, so the box draws no hint for the optional arguments; the row showed
+  them.

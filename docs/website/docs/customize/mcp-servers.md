@@ -476,8 +476,9 @@ A server that has prompts offers them in the list a slash opens, among the skill
 ```
 
 Once the name is typed in full, the box shows what the prompt takes: `number=<value> [focus=<value>]`,
-where an argument in brackets is optional. Type the arguments after the name as `name=value`, with a
-value that holds spaces in double quotes:
+where an argument in brackets is optional. Taking the row from the list writes the name of each
+argument that is not optional, as `number=`, for you to give a value. Type the arguments after the
+name as `name=value`, with a value that holds spaces in double quotes:
 
 ```
 /mcp__github__review_pr number=456 focus="error handling"
@@ -762,7 +763,8 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
   request.
 - **A prompt takes named arguments only.** `/mcp__weather__forecast Paris` is refused, since taking
   the first argument's name from the server's list would make a word it sent decide what your line
-  means. The row shows the names to type.
+  means. Taking the row writes the names of the arguments that are not optional, so you type their
+  values, and the row shows the optional ones.
 - **The desktop application and `--plain` do not offer a server's prompts.** Only the terminal
   client's box lists them and runs them.
 - **A checkout cannot bring its own server.** A project that needs one says so in its README, and

@@ -343,7 +343,8 @@ impl Session {
     ///
     /// None adds a trailing space where there is more to type: a command expecting an argument
     /// gets one, and so do a skill and a file, while a directory does not, so the path can be
-    /// typed onwards into it.
+    /// typed onwards into it. A server's prompt gets the names of its required arguments instead,
+    /// each as `name=` with the caret after the last, so the person gives values and types no name.
     pub fn accept_completion(&mut self) {
         match self.offered() {
             Offered::Slash { .. } => {
@@ -360,7 +361,7 @@ impl Session {
                         return;
                     }
                     let kept = self.input[..start].to_string();
-                    self.put_in_the_box(format!("{kept}/{} ", skill.name));
+                    self.put_in_the_box(format!("{kept}{}", skill.taken_as()));
                 } else {
                     return;
                 }

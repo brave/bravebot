@@ -1394,9 +1394,10 @@ the `/pr` command. See
 ## Prompts of an MCP server
 
 A prompt a started [MCP server](../customize/mcp-servers.md#running-a-servers-prompts) offers is a
-row after a slash, `/mcp__<alias>__<name>`, beside the skills and only at the start of a line. Type
-its arguments after it as `name=value` pairs, and Enter sends the line as a prompt, which fetches
-the server's text. The text reaches the model as a reference and never as words, and a prompt is
+row after a slash, `/mcp__<alias>__<name>`, beside the skills and only at the start of a line. Taking
+the row writes the names of the arguments that are not optional, as `name=`, and you type the values
+and any optional ones as `name=value` pairs. Enter sends the line as a prompt, which fetches the
+server's text. The text reaches the model as a reference and never as words, and a prompt is
 never a command.
 
 ## Prompt files
