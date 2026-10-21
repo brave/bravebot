@@ -30,6 +30,7 @@ guards:
   - symbol: find_in
     sites:
       - crates/agent/src/confine.rs: 1
+      - crates/agent/src/servers.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 1
       - crates/sandbox/src/programs.rs: 19
@@ -3264,16 +3265,20 @@ file. A new spawn that looks a name up through
 `PATH` is added to the list above, in the same change, or resolved first.
 
 - **Those directories are the session's.** Each directory the session was opened on, added, or
-  moved to, its scratch directory, the system temporary directory, and every row a stage's policy
-  grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it. A row that came with the
+  moved to, its scratch directory, the system temporary directory, every row a stage's policy
+  grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it, and every row the policy a
+  local MCP server is launched under grants writes in, its declared directory and its own home
+  among them ([SERVERS-10](mcp-servers.md#SERVERS-10)). A row that came with the
   whole machine ([SANDBOX-28](#SANDBOX-28), under bypass) counts only where the account itself
   owns or can write the program, or a directory from the `PATH` entry up to the row, so `/usr/bin`
   stays searched. Ownership counts as well as the write permission because a stage creates files as
   the account and can set their modes, so a program it wrote and made read-only, with the
   directories above it, is still one it wrote. A directory is added to the
-  set when it is opened or first granted to a stage, and not when a prompt describes the stage, and
-  is never removed from it, because closing a directory does not remove a file already written
-  there.
+  set when it is opened, first granted to a stage, or granted to a server as it is launched, and
+  not when a prompt describes the stage or the server, and is never removed from it, because
+  closing a directory does not remove a file already written there. A server's rows are recorded
+  from the policy it is launched under, after the rows its backend cannot name are dropped and
+  before the launch.
 - **A command that opens no session leaves out the directory it ran in.** `doctor --push-identity`
   and `doctor --sandbox-check` are new processes, which know of no directory a stage wrote in an
   earlier session. Each leaves out the directory it ran in and the checkout holding it, the nearest
@@ -3404,6 +3409,14 @@ directory a stage may write does. A program in directories the account neither o
 such as `/usr/bin` on a system where root owns it, is found. Where the account owns the whole tree a
 program is in, as when bravebot runs as root, none is found under a row of that tree.
 
+A directory a person declares for a local MCP server is left out from the launch on, as a whole, so
+a program they keep in it or below it, and every program under a home directory declared as one,
+reads as not installed to every lookup above, and the next clipboard tool is tried. The lookup of a
+server's own program by name ([SERVERS-5](mcp-servers.md#SERVERS-5)) reads the same record, so a
+program named by a bare name that lies in a directory a started server may write is found by the
+launch that records the directory and not by a later resolution in the same process, such as a
+reconnect. A program named by an absolute path is not judged by any lookup and starts as before.
+
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
 `verified-by: bravebot_sandbox::programs::a_program_is_found_when_no_writable_directory_is_involved`
@@ -3452,6 +3465,9 @@ program is in, as when bravebot runs as root, none is found under a row of that 
 `verified-by: bravebot_connector::lib::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
+`verified-by: bravebot_agent::servers::a_directory_a_started_server_may_write_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::servers::describing_a_server_keeps_nothing_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::servers::a_server_directory_that_is_not_text_is_kept_out_as_it_is_and_not_as_its_lookalike`
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
 `verified-by: bravebot_tui::caffeinate::a_program_the_inhibitor_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::editor::an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started`
