@@ -351,6 +351,13 @@ pub struct Conversation {
     /// planner again costs one sentence, and never telling it because a stale record said it
     /// already knew costs a skill nobody can find.
     skills_overview_said: bool,
+    /// Whether the person has already been told, this session, that a skill's description is
+    /// long enough to warn about (SKILL-18).
+    ///
+    /// Not part of a [`Snapshot`], for the reason `skills_overview_said` is not: said once per
+    /// session rather than once per turn, so a session with nothing to say about it at first
+    /// still says it once a long description appears, and never repeats it after that.
+    long_descriptions_said: bool,
 }
 
 /// A window of a file as `read_file` showed it, for telling a repeat of the same read from a new one.
@@ -440,6 +447,7 @@ impl Conversation {
             opening_end: None,
             masked_before: 0,
             skills_overview_said: false,
+            long_descriptions_said: false,
         }
     }
 
@@ -750,6 +758,16 @@ impl Conversation {
     /// Record that it has, so a later turn of the same session does not say it again.
     pub fn skill_overview_was_said(&mut self) {
         self.skills_overview_said = true;
+    }
+
+    /// Whether `long_descriptions_said` is set.
+    pub fn long_descriptions_said(&self) -> bool {
+        self.long_descriptions_said
+    }
+
+    /// Record that it has, so a later turn of the same session does not say it again.
+    pub fn long_descriptions_were_said(&mut self) {
+        self.long_descriptions_said = true;
     }
 
     /// Where compaction would cut, or `None` when there is nothing worth summarising.
@@ -1375,6 +1393,7 @@ impl Conversation {
             opening_end: None,
             masked_before: 0,
             skills_overview_said: false,
+            long_descriptions_said: false,
         }
     }
 

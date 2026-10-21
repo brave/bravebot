@@ -19983,6 +19983,86 @@ fn a_long_description_is_said_as_a_count_and_never_cut() {
     );
 }
 
+/// SKILL-18: the count of long descriptions is said once per session rather than once per turn,
+/// the way SKILL-19 says the overview is: a second turn of the same session is not warned again
+/// about a description a first turn already said was long.
+#[test]
+fn a_long_description_warning_is_said_once_per_session_not_once_per_turn() {
+    let scratch = Scratch::new("skills-long-description-once-per-session");
+    let long = format!("when the task is {} ZEBRA-TAIL", "y".repeat(1_100));
+    let dir = scratch.path.join(".bravebot/skills/verbose");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: verbose\ndescription: {long}\n---\n\nTHE-BODY\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("first answer"),
+        reply_with("second answer"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let first = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("first task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the first turn finishes");
+
+    let second = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("second task"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+
+    let _first_request = received.recv().expect("first request");
+    let _second_request = received.recv().expect("second request");
+
+    assert!(
+        first
+            .notices
+            .iter()
+            .any(|notice| notice.contains("1 skill") && notice.contains("not shortened")),
+        "the first turn of the session did not warn about the long description: {:?}",
+        first.notices
+    );
+    assert!(
+        !second
+            .notices
+            .iter()
+            .any(|notice| notice.contains("not shortened")),
+        "the second turn of the same session warned about the long description again: {:?}",
+        second.notices
+    );
+}
+
 /// The system prompt belongs to the build, not to the conversation. Storing it would give a
 /// session a second copy of every standing instruction on its second turn, and an nth on its nth.
 #[test]

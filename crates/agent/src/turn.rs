@@ -2862,14 +2862,17 @@ where
         None => catalogue,
     };
 
-    // Said once, before the preamble is built, rather than per call to `load_skill` or
-    // `search_skills`: a count of how many descriptions are long is one fact about the turn,
-    // not one about each later call (SKILL-18).
-    let long_descriptions = catalogue.long_descriptions();
-    if long_descriptions > 0 {
-        notices.push(crate::skills::Notice::descriptions_are_long(
-            long_descriptions,
-        ));
+    // Said once per session rather than once per turn, the way the overview of what the default
+    // listing leaves out is (SKILL-19): a long description does not change turn to turn, so a
+    // person told about it once has nothing new to learn from hearing it again.
+    if !conversation.long_descriptions_said() {
+        let long_descriptions = catalogue.long_descriptions();
+        if long_descriptions > 0 {
+            notices.push(crate::skills::Notice::descriptions_are_long(
+                long_descriptions,
+            ));
+            conversation.long_descriptions_were_said();
+        }
     }
 
     // Nothing is started here: LSP-8 starts a server on the first question that needs one, and

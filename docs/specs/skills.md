@@ -392,7 +392,9 @@ a short, deliberate list, so the whole of it is listed directly rather than held
 
 No description is ever cut, wherever one reaches the planner: not in the default listing, not in
 a `search_skills` result. One past 1,024 characters is said as a count instead, never cut and
-never named, per [SKILL-6](#SKILL-6).
+never named, per [SKILL-6](#SKILL-6). The count is said to the person once per session rather than
+once per turn, the way [SKILL-19](#SKILL-19) says the overview is: a long description does not
+change turn to turn, so there is nothing a second telling would add.
 
 **Why.** The name and description of every skill in a directory going into every request leaves a
 directory of fifty verbose skills less room for the task than the task needs, and the body each
@@ -407,6 +409,7 @@ worth a count rather than a guess at which half was safe to drop.
 `verified-by: bravebot_agent::skills::search_matches_every_word_case_insensitively_and_caps_the_result`
 `verified-by: bravebot_agent::turn::a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is_asked`
 `verified-by: bravebot_agent::turn::a_long_description_is_said_as_a_count_and_never_cut`
+`verified-by: bravebot_agent::turn::a_long_description_warning_is_said_once_per_session_not_once_per_turn`
 `verified-by: bravebot_agent::turn::an_addressed_turn_is_offered_only_the_skills_its_definition_names`
 `verified-by: bravebot_agent::preamble::the_skills_section_points_at_search_skills_only_where_more_could_be_found`
 
