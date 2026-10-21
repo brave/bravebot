@@ -1165,6 +1165,50 @@ fn a_write_lands_where_the_plan_said_and_carries_what_it_never_read() {
     );
 }
 
+/// FILES-1: a write step of a manifest that changed a file carries the counts and the file it
+/// landed on, as a `write_file` call of a turn does.
+#[test]
+fn a_write_step_carries_its_counts_and_the_file_it_landed_on() {
+    let scratch = Scratch::new("write-step-counted");
+    std::fs::write(scratch.path.join("in.md"), "raw text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md", "from_slot": "loud"}},
+        ])),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("shout in.md"),
+        skipping_permissions!(),
+        &mut reporter,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the run");
+
+    let counted: Vec<_> = reporter
+        .finished
+        .iter()
+        .filter_map(|call| call.written.as_ref())
+        .collect();
+    assert_eq!(counted.len(), 1, "{:?}", reporter.finished);
+    assert_eq!((counted[0].added, counted[0].removed), (1, 1));
+    assert!(counted[0].landed.ends_with("in.md"), "{:?}", counted[0]);
+}
+
 /// A page a plan reads goes into a slot that a later step writes. Latin-1 text decoded for the
 /// planner has U+FFFD where a byte was, so writing it would put a replacement character in a copy
 /// of the file that the file never held. The page is read as the file's own UTF-8 or the step

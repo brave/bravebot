@@ -8709,6 +8709,108 @@ fn what_a_write_added_and_removed_is_counted_inside_the_kernel_before_it_is_rele
     );
 }
 
+/// Runs `rounds` of tool calls against `scratch` with every question approved, and returns what the
+/// reporter saw finish.
+fn finished_calls_of(
+    scratch: &Scratch,
+    rounds: Vec<String>,
+) -> Vec<bravebot_agent::report::Activity> {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = rounds;
+    replies.push(reply_with("done"));
+    let (endpoint, _received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("write files"),
+        &mut RecordingConfirmer::approving(),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+    reporter.finished
+}
+
+/// FILES-1: a `write_file` call that changed a file carries the counts and the file it landed on,
+/// a call whose body is what the file already held carries none, and two names for one file land on
+/// the same value while two files in different directories do not.
+#[test]
+fn a_write_file_call_carries_its_counts_and_the_file_it_landed_on() {
+    let scratch = Scratch::new("write-file-landed");
+    std::fs::create_dir(scratch.path.join("sub")).unwrap();
+    std::fs::write(scratch.path.join("a.txt"), "x\n").unwrap();
+    std::fs::write(scratch.path.join("sub").join("a.txt"), "x\n").unwrap();
+    std::fs::write(scratch.path.join("keep.txt"), "same\n").unwrap();
+
+    let finished = finished_calls_of(
+        &scratch,
+        vec![
+            two_tool_requests(
+                ("write_file", r#"{"path":"a.txt","contents":"y\n"}"#),
+                ("write_file", r#"{"path":"sub/a.txt","contents":"w\n"}"#),
+            ),
+            two_tool_requests(
+                ("write_file", r#"{"path":"./a.txt","contents":"z\n"}"#),
+                ("write_file", r#"{"path":"keep.txt","contents":"same\n"}"#),
+            ),
+        ],
+    );
+
+    assert_eq!(finished.len(), 4, "{finished:?}");
+    let landed = |call: &bravebot_agent::report::Activity| {
+        call.written
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} carried no counts", call.target))
+            .landed
+            .clone()
+    };
+    let written = finished[0].written.as_ref().expect("a changed file");
+    assert_eq!((written.added, written.removed), (1, 1));
+    assert!(landed(&finished[0]).ends_with("a.txt"));
+    assert_eq!(
+        landed(&finished[0]),
+        landed(&finished[2]),
+        "two names for one file landed on different values"
+    );
+    assert_ne!(
+        landed(&finished[0]),
+        landed(&finished[1]),
+        "two files named a.txt in different directories landed on the same value"
+    );
+    assert_eq!(
+        finished[3].written, None,
+        "a write that left every line as it was carried counts"
+    );
+}
+
+/// FILES-1: a new file is a change whatever it holds, so a `write_file` call that created an empty
+/// one carries its counts.
+#[test]
+fn a_write_file_call_that_created_a_file_carries_its_counts() {
+    let scratch = Scratch::new("write-file-created");
+    let finished = finished_calls_of(
+        &scratch,
+        vec![two_tool_requests(
+            ("write_file", r#"{"path":"new.txt","contents":"1\n2\n"}"#),
+            ("write_file", r#"{"path":"empty.txt","contents":""}"#),
+        )],
+    );
+
+    assert_eq!(finished.len(), 2, "{finished:?}");
+    let new = finished[0].written.as_ref().expect("a created file");
+    assert_eq!((new.added, new.removed), (2, 0));
+    let empty = finished[1].written.as_ref().expect("a created empty file");
+    assert_eq!((empty.added, empty.removed), (0, 0));
+    assert!(empty.landed.ends_with("empty.txt"));
+}
+
 /// An approved edit replaces only the passage it named, leaving the rest of the file alone.
 #[test]
 fn an_approved_edit_changes_only_the_matched_passage() {
@@ -57826,6 +57928,48 @@ fn an_edit_does_not_show_the_planner_a_credential_beside_the_change_unless_the_p
         told.contains("the lines around the change were not shown to the planner"),
         "the person was not told what was held back: {told}"
     );
+}
+
+/// FILES-1: an edit whose surrounding lines were held back from the planner was still made, so its
+/// call carries the counts and the file it landed on.
+#[test]
+fn an_edit_whose_lines_were_held_back_still_carries_its_counts() {
+    let scratch = Scratch::new("credential-edit-excerpt-counted");
+    std::fs::write(scratch.path.join(".env"), ENV_BESIDE_A_CREDENTIAL).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "edit_file",
+            r#"{"path":".env","old_text":"DEBUG=true","new_text":"DEBUG=false"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut sink = RecordingSink::new();
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("turn debugging off"),
+        &mut RemembersExposures::default(),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let edit = reporter.finished.first().expect("the edit was summarised");
+    assert!(
+        edit.note
+            .as_deref()
+            .is_some_and(|note| note.contains("not shown to the planner")),
+        "the lines were not held back: {:?}",
+        edit.note
+    );
+    let written = edit.written.as_ref().expect("the edit carried no counts");
+    assert_eq!((written.added, written.removed), (1, 1));
+    assert!(written.landed.ends_with(".env"), "{written:?}");
 }
 
 /// The other direction of the same gate. A gate that dropped the lines whatever the person said

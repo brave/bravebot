@@ -46,7 +46,7 @@ pub struct Edit {
 /// A file the session wrote, with each edit to it in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct File {
-    /// The path as the call row draws it.
+    /// The path as the call row of the first write to the file draws it.
     pub path: String,
     /// Every edit, oldest first.
     pub edits: Vec<Edit>,
@@ -98,10 +98,10 @@ pub fn collect<'a>(transcript: impl IntoIterator<Item = &'a Entry>) -> Vec<File>
             numbers: written.numbers.clone(),
             untrusted: activity.untrusted,
         };
-        match at.get(activity.target.as_str()) {
+        match at.get(written.landed.as_str()) {
             Some(&index) => files[index].edits.push(edit),
             None => {
-                at.insert(&activity.target, files.len());
+                at.insert(&written.landed, files.len());
                 files.push(File {
                     path: activity.target.clone(),
                     edits: vec![edit],
@@ -118,8 +118,8 @@ pub fn collect<'a>(transcript: impl IntoIterator<Item = &'a Entry>) -> Vec<File>
 pub fn totals<'a>(transcript: impl IntoIterator<Item = &'a Entry>) -> (usize, usize, usize) {
     let mut paths: HashSet<&str> = HashSet::new();
     let (mut added, mut removed) = (0, 0);
-    for (_, activity, written) in calls(transcript) {
-        paths.insert(&activity.target);
+    for (_, _, written) in calls(transcript) {
+        paths.insert(&written.landed);
         added += written.added;
         removed += written.removed;
     }
@@ -470,6 +470,7 @@ mod tests {
             .of_tool("edit_file")
             .with_changes(diff.condensed(3))
             .with_written(Some(Written {
+                landed: path.to_string(),
                 added: diff.added(),
                 removed: diff.removed(),
                 numbers: diff.condensed_numbers(3),
@@ -600,6 +601,36 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2]
         );
+    }
+
+    /// FILES-1: rows are keyed on the file a call landed on and not on the text of its row, so two
+    /// files drawn under one name stay two, and two names for one file are one row.
+    #[test]
+    fn rows_are_keyed_on_the_file_a_call_landed_on() {
+        let landing = |mut call: Activity, landed: &str| {
+            let written = call.written.as_mut().expect("a write carries counts");
+            written.landed = landed.to_string();
+            call
+        };
+        let mut session = Session::new("none");
+        prompt(&mut session, "go");
+        wrote(
+            &mut session,
+            landing(write("a.rs", "x\n", "y\n"), "/work/one/a.rs"),
+        );
+        wrote(
+            &mut session,
+            landing(write("a.rs", "x\n", "y\n"), "/work/two/a.rs"),
+        );
+        wrote(
+            &mut session,
+            landing(write("./a.rs", "p\n", "q\n"), "/work/one/a.rs"),
+        );
+        let files = session.written_files();
+        assert_eq!(files.len(), 2, "{files:#?}");
+        assert_eq!(files[0].edits.len(), 2);
+        assert_eq!(files[1].edits.len(), 1);
+        assert_eq!(session.written_totals().0, 2);
     }
 
     /// FILES-1: one call that changed several places of a file is one edit, drawn under one header.

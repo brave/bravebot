@@ -37,13 +37,26 @@ produced changes to draw. A rewind does not account for those changes either
 file written again keeps its row.
 
 The driver marks the call, as it marks one that failed: the finished call carries the counts of
-FILES-2 only when the write changed a file, and the state lists the calls that carry them. Nothing
-is decided from the call's text.
+FILES-2 only when the write changed a file, and the state lists the calls that carry them. A
+`write_file` call or write step whose body leaves every line of an existing file as it was changed
+nothing and carries none, and a call that created a file always carries them, whatever the file
+holds. Nothing is decided from the call's text.
+
+The call also carries the file it landed on, as the workspace resolves the name. Rows, and the file
+count in the Files section, are keyed on that and not on the text of the call row, so two files that
+the row draws under one name stay two rows. Names the workspace resolves to one file (`a.rs` and
+`./a.rs`) are one row, drawn under the name of the first call
+that wrote it. The resolved name is a key only and is never drawn.
 
 `verified-by: bravebot_tui::files_mode::a_file_is_listed_once_a_write_call_has_changed_it`
 `verified-by: bravebot_tui::files_mode::a_refused_failed_or_running_write_lists_nothing`
 `verified-by: bravebot_tui::files_mode::a_second_write_keeps_the_files_row_and_adds_an_edit`
 `verified-by: bravebot_tui::files_mode::several_passages_of_one_edit_call_are_one_edit`
+`verified-by: bravebot_tui::files_mode::rows_are_keyed_on_the_file_a_call_landed_on`
+`verified-by: bravebot_agent::turn::a_write_file_call_carries_its_counts_and_the_file_it_landed_on`
+`verified-by: bravebot_agent::turn::a_write_file_call_that_created_a_file_carries_its_counts`
+`verified-by: bravebot_agent::turn::an_edit_whose_lines_were_held_back_still_carries_its_counts`
+`verified-by: bravebot_agent::manifest::a_write_step_carries_its_counts_and_the_file_it_landed_on`
 
 <a id="FILES-2"></a>
 ### FILES-2: counts and line numbers are made with the diff

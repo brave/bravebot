@@ -1818,8 +1818,16 @@ fn write<S: Sink, C: Confirmer>(
     );
     // What the step would change, compared inside the kernel and released once, exactly as a
     // turn's write does it.
-    let reviewed =
-        crate::tools::review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
+    let landed = crate::tools::landing_of(workspace, &path);
+    let reviewed = crate::tools::review_a_write(
+        policy,
+        "write_file",
+        intent,
+        &replaced,
+        &body,
+        replaced_age,
+        &landed,
+    );
 
     if crate::tools::write_needs_approval(policy, workspace, &path, body_label, Destination::Named)
         || !to_approve.is_empty()
@@ -1884,7 +1892,7 @@ fn write<S: Sink, C: Confirmer>(
     Ok(Done {
         note: crate::tools::carried_note(note, &scanned),
         changes,
-        written: Some(written),
+        written,
         ..Done::default()
     })
 }

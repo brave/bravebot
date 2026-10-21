@@ -1468,8 +1468,8 @@ impl Produced {
         self
     }
 
-    fn with_written(mut self, written: crate::report::Written) -> Self {
-        self.written = Some(written);
+    fn with_written(mut self, written: Option<crate::report::Written>) -> Self {
+        self.written = written;
         self
     }
 
@@ -1878,8 +1878,9 @@ pub(crate) struct Reviewed {
     pub note: String,
     /// The hunks, condensed to what is worth the room in a transcript.
     pub changes: Vec<crate::diff::Change>,
-    /// What the diff counted and where its rows stand, made with it.
-    pub written: crate::report::Written,
+    /// What the diff counted and where its rows stand, made with it. `None` for a write of a file
+    /// that already existed and that left every line as it was.
+    pub written: Option<crate::report::Written>,
     /// The whole comparison, for the prompt a person approves from.
     pub diff: Diff,
 }
@@ -1900,15 +1901,20 @@ pub(crate) fn review_a_write<S: Sink>(
     existing: &Labelled<String>,
     body: &Labelled<String>,
     replaced_age: Option<std::time::Duration>,
+    landed: &str,
 ) -> Reviewed {
     let reviewed = policy.render_pair_in_place(tool, existing, body, |existing, written| {
         let diff = Diff::compute(&existing, &written);
         let (note, changes) = change_report(intent, &diff, replaced_age);
-        let written = crate::report::Written {
-            added: diff.added(),
-            removed: diff.removed(),
-            numbers: diff.condensed_numbers(DIFF_CONTEXT),
-        };
+        // A new file is a change whatever it holds. A file that was there and has every line it
+        // had is not, so its call carries no counts and nothing lists it (FILES-1).
+        let written =
+            (intent == Intent::Create || !diff.is_empty()).then(|| crate::report::Written {
+                landed: landed.to_string(),
+                added: diff.added(),
+                removed: diff.removed(),
+                numbers: diff.condensed_numbers(DIFF_CONTEXT),
+            });
         Reviewed {
             note,
             changes,
@@ -1918,6 +1924,16 @@ pub(crate) fn review_a_write<S: Sink>(
     });
     let proof = policy.authorise_display_release("what a write would change");
     reviewed.declassify(&proof)
+}
+
+/// The file a write lands on, as the workspace resolves it, for the key a screen lists written
+/// files under (FILES-1). The name as given where it cannot be resolved, which a write refuses
+/// before it reaches here. Routing only: it is carried beside the display text and drawn nowhere.
+pub(crate) fn landing_of(workspace: &Workspace, proposed_path: &str) -> String {
+    workspace.resolve(proposed_path).map_or_else(
+        |_| proposed_path.to_string(),
+        |landed| landed.to_string_lossy().into_owned(),
+    )
 }
 
 /// What a write did, for the person watching: a line saying how much changed, and the hunks
@@ -4693,7 +4709,16 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
         // What the write would change, compared inside the kernel and released once. The question
         // below is drawn from it and so is the line the person is told afterwards, which is the
         // same comparison and so is made once.
-        let reviewed = review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
+        let landed = landing_of(workspace, &proposed_path);
+        let reviewed = review_a_write(
+            policy,
+            "write_file",
+            intent,
+            &replaced,
+            &body,
+            replaced_age,
+            &landed,
+        );
 
         // A body the person edited is put again whatever the path's own rule says: they asked to
         // see the write before it happened, and the diff is of text the question has not shown
@@ -5486,7 +5511,16 @@ fn edit_file<S: Sink, C: Confirmer>(
     // The same comparison the question is drawn from and the line afterwards states, made once
     // and inside the kernel. The pre-image is the labelled value the read produced rather than
     // the copy released to locate the passage in.
-    let reviewed = review_a_write(policy, "edit_file", Intent::Edit, &source, &body, None);
+    let landed = landing_of(workspace, &proposed_path);
+    let reviewed = review_a_write(
+        policy,
+        "edit_file",
+        Intent::Edit,
+        &source,
+        &body,
+        None,
+        &landed,
+    );
 
     if write_needs_approval(policy, workspace, &proposed_path, body_label, destination)
         || nobody_to_ask
