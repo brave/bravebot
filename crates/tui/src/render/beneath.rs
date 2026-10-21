@@ -5,6 +5,7 @@ use bravebot_i18n::t;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::command_table::{held_back_by, named, runs_while_working};
 use crate::keybindings::Keybindings;
 use crate::state::{Bound, Session, Status};
 use crate::theme;
@@ -162,7 +163,15 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
             0
         };
         let left = (width as usize).saturating_sub(used + offered);
-        let bound = format!(
+        // A command that would have been carried out as it was typed, but for a line waiting ahead
+        // of it, names that line (CMD-8). One that waits for the turn on its own account does not,
+        // since the lines ahead of it are not why.
+        let after = (goes == Bound::CarriedOut && runs_while_working(&waiting.prompt))
+            .then(|| held_back_by(session, at, &waiting.prompt))
+            .flatten();
+        // Where the line goes, in the words that name what it waits behind where there are any and
+        // room for them, and in the plain words where there is not.
+        let plain = format!(
             "  {}",
             match goes {
                 Bound::IntoThisTurn => t!(queued_into_this_turn),
@@ -172,7 +181,17 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
                 Bound::Run => t!(queued_run),
             }
         );
-        if wrap::display_width(&bound) <= left {
+        let with_name = after.map(|(ahead, line)| {
+            format!(
+                "  {}",
+                t!(queued_carried_out_after, line = named(ahead, line))
+            )
+        });
+        if let Some(bound) = with_name
+            .into_iter()
+            .chain([plain])
+            .find(|bound| wrap::display_width(bound) <= left)
+        {
             mark.push(Span::styled(bound, dim()));
         }
         if offer {

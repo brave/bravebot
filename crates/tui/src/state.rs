@@ -3272,6 +3272,16 @@ impl Session {
         self.queue_line(Waiting::Command)
     }
 
+    /// The lines waiting ahead of position `at`, as they were typed and in that order, with where
+    /// each is going. `at` is a line's own position, or the length of the queue for one about to join it.
+    pub fn queued_ahead(&self, at: usize) -> impl Iterator<Item = (Bound, &str)> {
+        self.queued
+            .iter()
+            .take(at)
+            .enumerate()
+            .map(|(position, line)| (self.where_it_goes(position), line.prompt.as_str()))
+    }
+
     /// The commands waiting for the turn to end, as they were typed and in that order.
     pub fn commands_waiting(&self) -> impl Iterator<Item = &str> {
         self.queued

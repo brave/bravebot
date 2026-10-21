@@ -288,24 +288,36 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 | touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
-A command that reads or ends something goes ahead of every line already waiting, and a line behind
+A command that reads or ends something, or that changes only how the screen is drawn or what the
+box edits in (`/theme` and `/config`), goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
-were typed. A command that changes something, `/rename`, `/note`, `/issue`, `/pr`, `/forget-trust`,
-`/sandbox`, `/model`, `/theme`, `/effort`, `/config`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
-behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
-session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
-`/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
-rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
+were typed. A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
+`/forget-trust`, `/sandbox`, `/model`, `/effort`, `/advisor` or `/style`, is carried out as it is
+typed unless a line waiting ahead of it could change what it acts on, and otherwise waits behind
+that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
+session `/clear` leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd`
+leaves, and `/effort` ahead of a waiting prompt would change the level that prompt was typed under.
+A waiting `/sandbox` line in any form sets the mode the next turn is built with and nothing else
+([SANDBOX-22](sandboxing.md#SANDBOX-22)), so it holds back no command but another `/sandbox`:
+`/note` typed behind a waiting `/sandbox off` is carried out as it is typed, and `/sandbox strict`
+typed behind it waits, since the mode typed last is the one the person means to end in. Every other
+waiting line holds these commands back, whether it is a command, a prompt or a command line. A
+command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
 
 A command that waits is taken off the box and joins the lines waiting for the turn to end, exactly
 as a prompt does: the box clears, the history remembers it, and it is drawn under the box marked as
 waiting. It says why it waits, in a line held under the turn as a command's answer is: it acts on
-what the turn holds or starts a turn of its own, or it waits behind the lines typed before it so that it lands where
-it was typed, or, for `/sandbox off`, it asks first and the turn has the screen until it ends. What it waits for is different. It is never offered to the turn in flight, so nothing about
+what the turn holds or starts a turn of its own, or it waits behind a line typed before it so that it lands where
+it was typed, or, for `/sandbox off`, it asks first and the turn has the screen until it ends. A command that waits behind a line
+names the first line waiting that holds it back: a command as it was typed, such as `/clear`, and
+`the prompt before it` or `the shell line before it` where that line is not a command. Its mark
+under the box says the same in place of `carried out after this`, as `after /clear`, where the
+row has the width for it, and is left as it was for a command that waits for the turn on its own
+account, since the lines ahead of that one are not why. What it waits for is different. It is never offered to the turn in flight, so nothing about
 it reaches the planner, and when the queue reaches it, it is carried out rather than sent. The queue
 is drained in the order the lines were typed, so a command behind a prompt waits for that prompt's
 turn.
@@ -446,6 +458,15 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`
 `verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_command_that_changes_something_waits_behind_what_was_typed_first`
+`verified-by: bravebot_tui::app::a_note_typed_behind_a_waiting_sandbox_off_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::every_settings_command_but_sandbox_is_carried_out_behind_a_waiting_sandbox_off`
+`verified-by: bravebot_tui::app::a_sandbox_mode_typed_behind_a_waiting_sandbox_off_waits_behind_it`
+`verified-by: bravebot_tui::app::a_theme_or_config_typed_behind_a_waiting_line_is_carried_out_when_typed`
+`verified-by: bravebot_tui::render::a_command_waiting_behind_a_line_names_that_line_on_its_mark`
+`verified-by: bravebot_tui::render::a_command_that_waits_for_the_turn_does_not_name_the_line_ahead_of_it`
+`verified-by: bravebot_tui::render::a_command_does_not_name_a_line_typed_after_it`
+`verified-by: bravebot_tui::render::a_mark_with_no_room_for_the_line_it_waits_behind_says_where_the_line_goes`
+`verified-by: bravebot_tui::app::a_command_names_the_first_waiting_line_that_holds_it_back`
 `verified-by: bravebot_tui::app::export_typed_mid_turn_writes_the_transcript_as_it_stands`
 `verified-by: bravebot_tui::app::export_typed_mid_turn_refuses_a_path_outside_the_working_directory`
 `verified-by: bravebot_tui::app::every_command_carried_out_mid_turn_answers_in_the_transcript`

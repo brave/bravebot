@@ -2319,8 +2319,8 @@ command-when-either = direct/en file
 
 # Dit sous le tour quand une commande rejoint la file. Le tour tient la conversation, l'espace de travail, le terminal et le réseau.
 command-waits-for-the-turn = La commande { $command } attend la fin du tour : elle agit sur ce que le tour tient ou lance un tour.
-# Une commande exécutée dès qu'elle est tapée quand rien n'attend devant elle.
-command-waits-behind-the-queue = La commande { $command } attend la fin du tour, derrière les lignes tapées avant elle.
+# Une commande exécutée dès qu'elle est tapée, sauf si une ligne qui attend devant elle pourrait changer ce sur quoi elle agit. $line est cette ligne : une commande telle qu'elle a été tapée, ou ce qu'est la ligne quand ce n'est pas une commande.
+command-waits-behind = La commande { $command } attend la fin du tour, derrière { $line }.
 # `/sandbox off`, qui demande avant de changer quoi que ce soit.
 command-waits-to-ask = La commande { $command } attend la fin du tour : passer à off demande d'abord, et le tour a l'écran.
 
@@ -2789,6 +2789,9 @@ queued-its-own-turn = un nouveau tour ensuite
 queued-into-the-next-turn = dans le tour suivant
 queued-carried-out = exécutée après ceci
 queued-run = lancée dans votre shell
+queued-carried-out-after = après { $line }
+queued-a-prompt = l'invite précédente
+queued-a-shell-line = la ligne de shell précédente
 
 
 ## Coller, déposer et joindre
