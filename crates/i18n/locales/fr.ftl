@@ -311,6 +311,7 @@ cli-output-schema-not-with-a-manifest = --output-schema est incompatible avec --
 cli-max-rounds-needs-a-count = --max-rounds demande un nombre entier de 1 à { $most }
 cli-max-tokens-needs-a-count = --max-tokens demande un nombre entier de jetons, 1 ou plus
 cli-limit-not-with-a-manifest = { $flag } est incompatible avec --mode manifest, qui planifie tout le déroulement d'abord et ne fait aucun cycle d'appels d'outils
+cli-limit-not-with-a-goal = { $flag } est incompatible avec --goal, qui renvoie le travail pour des tours supplémentaires et compterait la limite à nouveau dans chacun
 cli-output-schema-not-served = --output-schema est incompatible avec { $model }, auquel on ne peut pas demander une réponse conforme à un schéma
 cli-output-schema-unreadable = impossible de lire le schéma de sortie { $path } : { $problem }
 cli-output-schema-not-json = le schéma de sortie { $path } n'est pas du JSON

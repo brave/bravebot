@@ -1619,16 +1619,33 @@ fn input_lines_conflict(
 /// Refused by name rather than taken and ignored: a script that capped a run and was given one
 /// with no cap would pay for the cost it asked to bound.
 fn limit_not_with_a_manifest(mode: Mode, limits: RunLimits) -> Option<String> {
-    let flag = match limits {
+    let flag = limit_flag(limits)?;
+    (mode == Mode::Manifest).then(|| t!(cli_limit_not_with_a_manifest, flag = flag))
+}
+
+/// The sentence that refuses a run limit given with `--goal`, whose rounds are each a turn that
+/// counts a limit from nothing, so a limit would bound each round and not the run (CLI-36).
+/// `None` for a run with no goal, and for a run given no limit.
+///
+/// Refused by name for the reason a manifest run is: a script that capped a run would be given one
+/// that spends the cap in every round, up to eleven times over.
+fn limit_not_with_a_goal(has_goal: bool, limits: RunLimits) -> Option<String> {
+    let flag = limit_flag(limits)?;
+    has_goal.then(|| t!(cli_limit_not_with_a_goal, flag = flag))
+}
+
+/// The flag that gave the run a limit, `--max-rounds` before `--max-tokens` where it gave both
+/// (CLI-36). `None` for a run given none.
+fn limit_flag(limits: RunLimits) -> Option<&'static str> {
+    match limits {
         RunLimits {
             rounds: Some(_), ..
-        } => "--max-rounds",
+        } => Some("--max-rounds"),
         RunLimits {
             tokens: Some(_), ..
-        } => "--max-tokens",
-        _ => return None,
-    };
-    (mode == Mode::Manifest).then(|| t!(cli_limit_not_with_a_manifest, flag = flag))
+        } => Some("--max-tokens"),
+        _ => None,
+    }
 }
 
 /// Whether a one-shot puts its plan to somebody: only where both ends of the conversation are a
@@ -1805,7 +1822,9 @@ fn prepare_the_run(
     ) {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
     }
-    if let Some(conflict) = limit_not_with_a_manifest(mode, limits) {
+    if let Some(conflict) = limit_not_with_a_manifest(mode, limits)
+        .or_else(|| limit_not_with_a_goal(goal.is_some(), limits))
+    {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
     }
     // Read and vetted before anything is sent, so a schema outside what is checked is a refused
@@ -5429,6 +5448,37 @@ mod tests {
             limit_not_with_a_manifest(Mode::Manifest, RunLimits::default()),
             None
         );
+    }
+
+    /// A goal run sends the work back as further turns, and each counts a limit from nothing, so a
+    /// limit given with `--goal` would bound each round and let the run spend it eleven times over.
+    /// It is refused by name, as it is for a manifest run. A run with no goal is never refused, and
+    /// neither is a goal run given no limit.
+    #[test]
+    fn a_goal_run_refuses_the_limit_flags_by_name() {
+        let both = RunLimits {
+            rounds: Some(3),
+            tokens: Some(100),
+        };
+        let rounds = RunLimits {
+            rounds: Some(3),
+            tokens: None,
+        };
+        let tokens = RunLimits {
+            rounds: None,
+            tokens: Some(100),
+        };
+
+        let refused = limit_not_with_a_goal(true, rounds).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+        assert!(refused.contains("--goal"), "{refused}");
+        let refused = limit_not_with_a_goal(true, tokens).expect("refused");
+        assert!(refused.contains("--max-tokens"), "{refused}");
+        let refused = limit_not_with_a_goal(true, both).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+
+        assert_eq!(limit_not_with_a_goal(false, both), None);
+        assert_eq!(limit_not_with_a_goal(true, RunLimits::default()), None);
     }
 
     /// Either flag may lead the line, as the other task flags do: `bravebot --max-rounds 3 "task"`

@@ -334,6 +334,7 @@ cli-output-schema-not-with-a-manifest = --output-schema cannot be used with --mo
 cli-max-rounds-needs-a-count = --max-rounds requires a whole number from 1 to { $most }
 cli-max-tokens-needs-a-count = --max-tokens requires a whole number of tokens, 1 or more
 cli-limit-not-with-a-manifest = { $flag } cannot be used with --mode manifest, which plans the whole run first and makes no rounds of tool calls
+cli-limit-not-with-a-goal = { $flag } cannot be used with --goal, which sends the work back for further rounds and would count the limit afresh in each of them
 cli-output-schema-not-served = --output-schema cannot be used with { $model }, which cannot be asked for a reply that matches a schema
 cli-output-schema-unreadable = cannot read the output schema { $path }: { $problem }
 cli-output-schema-not-json = the output schema { $path } is not JSON

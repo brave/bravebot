@@ -528,7 +528,8 @@ the verdict and its reason.
 
 The run is written down as one session, so `--resume` carries the whole conversation, and the
 condition is not carried with it. The flag is refused with status 2 before anything is sent when no
-condition follows it, when it is blank or is the next flag, and with `--mode manifest`. A
+condition follows it, when it is blank or is the next flag, and with `--mode manifest`,
+`--max-rounds` or `--max-tokens`. A
 [`summaryModel`](../customize/configuration.md#summarymodel) that cannot be used for the judge is
 refused with status 3 before the first round.
 
@@ -567,8 +568,10 @@ Each takes a whole number written in digits, 1 or more. `--max-rounds` is below 
 every one-shot run carries, which has the agent answer with what it has and exits 0. Either flag
 is refused with status 2, before anything is sent, when its value is anything else, and when
 [`--mode manifest`](#--mode-turnmanifest) is given, since a manifest run plans the whole run first
-and makes no rounds of tool calls. There is no limit in money, because bravebot holds no price
-table. A session has the [`limit`](../customize/configuration.md#limit) setting and
+and makes no rounds of tool calls, and when [`--goal`](#--goal-condition) is given, since each round
+of a goal run counts a limit from nothing and the run would spend it in every round. There is no
+limit in money, because bravebot holds no price table. A session has the
+[`limit`](../customize/configuration.md#limit) setting and
 [`/limit`](commands.md#limit-amount--off) instead.
 
 ## `--json-stream`

@@ -16392,6 +16392,38 @@ fn a_manifest_run_refuses_a_limit_and_sends_nothing() {
     assert_eq!(gateway.asked.try_iter().count(), 0, "a request went out");
 }
 
+/// CLI-36: a goal run sends the work back as further turns and each counts a limit from nothing, so
+/// both flags are refused by name with the argument status and nothing is sent. Taken, a limit would
+/// bound each round and a script that capped the run would be given eleven times the cap.
+#[test]
+fn a_goal_run_refuses_a_limit_and_sends_nothing() {
+    let gateway = a_gateway_that_lists_until(10);
+    let scratch = Scratch::new("cli-running-limit-goal").with_settings(&settings_for(&gateway));
+
+    for flag in [["--max-rounds", "3"], ["--max-tokens", "1000"]] {
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            AT_A_GATEWAY,
+            &[
+                flag[0],
+                flag[1],
+                "--goal",
+                A_CONDITION,
+                "-p",
+                "keep looking",
+            ],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{flag:?}: {stderr}");
+        assert!(stderr.contains("BB1002: "), "{flag:?}: {stderr}");
+        assert!(stderr.contains(flag[0]), "{flag:?}: {stderr}");
+        assert!(stderr.contains("--goal"), "{flag:?}: {stderr}");
+        assert!(stdout.is_empty(), "{flag:?}: {stdout}");
+    }
+    assert_eq!(gateway.asked.try_iter().count(), 0, "a request went out");
+}
+
 /// TURN-2: a session in lines passes no bound, because a person is watching it.
 ///
 /// The same model, asking past the same number of rounds: here the turn ends on the model's own

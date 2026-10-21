@@ -1916,7 +1916,8 @@ The condition is recorded nowhere else, so `--resume` carries that conversation 
 
 The flag is refused with the status for an argument (CLI-6) before anything is sent when no
 condition follows it, when the condition is blank or is the next flag, with `--mode manifest`, which
-is planned once and has no conversation to send the work back into, and where a background session
+is planned once and has no conversation to send the work back into, with `--max-rounds` or
+`--max-tokens`, which count from nothing in each round (CLI-36), and where a background session
 is started, whose words after `--bg` are all its prompt. A model for the judge
 that cannot be used, because `summaryModel` names one that needs a sign-in this machine has not
 made or that the machine-level layer excludes ([COMPACT-15](compaction.md#COMPACT-15)), is refused
@@ -2281,9 +2282,10 @@ left. Status 8 is given only to a run that was cut short.
 
 Each value is a whole number written in digits, 1 or more. A value that is not, a flag with no
 value, a `--max-rounds` of 200 or more, which is the bound a one-shot run carries
-([TURN-2](turns.md#TURN-2)), and either flag given with `--mode manifest` are refused with status 2
-before anything is sent, and the refusal names the flag. A flag given twice takes the last value. A session's own limit is the
-`limit` setting and `/limit` ([TURN-8](turns.md#TURN-8)).
+([TURN-2](turns.md#TURN-2)), and either flag given with `--mode manifest` or `--goal` are refused
+with status 2 before anything is sent, and the refusal names the flag. A flag given twice takes the
+last value. A session's own limit is the `limit` setting and `/limit`
+([TURN-8](turns.md#TURN-8)).
 
 **Why.** A CI job that runs the agent cannot say how much it is willing to spend. The only bound is
 a constant of 200 rounds, and the run that reaches it answers with what it has and exits 0
@@ -2302,12 +2304,18 @@ A manifest run plans the whole run first and makes no rounds of tool calls, so a
 to stop before. Both flags are refused there, as `--output-schema` is, since the script would
 believe it had a limit that nothing enforces.
 
+A goal run (CLI-35) is a turn for each round, and each turn counts rounds of tool calls and tokens
+from nothing. A limit given with it would bound each round, and the run could spend it in the first
+round and in each of the ten that follow. Both flags are refused there for the reason a manifest
+run refuses them: the script would believe it had capped the run.
+
 **Known costs.** A limit in tokens is passed by the request that reached it, as the session limit is
 ([TURN-8](turns.md#TURN-8)), so it bounds what the run sends next and not what it has spent. It is
 counted from the usage the backend reports, so a backend that reports none never stops a run at it.
 A delegate still running when the run ends is waited for, and what it spends is in the result. No
 limit in money is offered, because the tree holds no price table. A run that ends on a limit writes
-no session record, so `--resume` cannot carry it on.
+no session record, so `--resume` cannot carry it on. No limit applies across the rounds of a
+`--goal` run. The flags are refused with it, and the rounds of CLI-35 are what bound its spend.
 
 `verified-by: bravebot_cli::running::a_run_asking_for_a_round_past_max_rounds_ends_on_status_eight`
 `verified-by: bravebot_cli::running::a_run_stopped_at_max_rounds_writes_nothing_to_stdout`
@@ -2316,11 +2324,13 @@ no session record, so `--resume` cannot carry it on.
 `verified-by: bravebot_cli::running::an_answer_that_passes_max_tokens_is_still_written`
 `verified-by: bravebot_cli::running::a_limit_that_names_no_count_is_refused_before_anything_is_sent`
 `verified-by: bravebot_cli::running::a_manifest_run_refuses_a_limit_and_sends_nothing`
+`verified-by: bravebot_cli::running::a_goal_run_refuses_a_limit_and_sends_nothing`
 `verified-by: bravebot_cli::main::the_limit_flags_name_the_most_rounds_and_tokens_a_run_may_spend`
 `verified-by: bravebot_cli::main::a_rounds_limit_has_to_be_below_the_built_in_bound`
 `verified-by: bravebot_cli::running::a_run_asking_for_a_round_past_the_largest_max_rounds_ends_on_status_eight`
 `verified-by: bravebot_cli::main::a_limit_flag_that_is_not_a_whole_number_of_one_or_more_is_refused`
 `verified-by: bravebot_cli::main::the_last_value_given_for_a_limit_is_the_one_in_force`
 `verified-by: bravebot_cli::main::a_manifest_run_refuses_the_limit_flags_by_name`
+`verified-by: bravebot_cli::main::a_goal_run_refuses_the_limit_flags_by_name`
 `verified-by: bravebot_cli::main::a_limit_flag_may_lead_the_line_like_the_other_task_flags`
 `verified-by: bravebot_cli::exit::a_run_stopped_at_its_limit_is_told_apart_from_a_failure`
