@@ -426,7 +426,7 @@ impl Streamed<'_> {
                 }
                 Ok(Some(Labelled::new(buffer, self.label)))
             }
-            Err(e) => Err(body_failure(&self.requested, e)),
+            Err(e) => Err(body_failure(&self.requested, &e)),
         }
     }
 
@@ -713,11 +713,12 @@ impl Egress {
         label: Label,
         cancel: Option<&Cancel>,
     ) -> Result<Response, EgressError> {
-        // Never stoppable: the body is read to its end below, where no token is looked at.
+        // Never stoppable: the body is read to its end below, and a stop pressed meanwhile is not
+        // acted on.
         let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel, false)?;
         // The URL the caller asked for, not the one the body is arriving from: a redirect chain
         // ends somewhere a server chose, and this failure is reported to whoever asked.
-        let (body, truncated) = read_capped(reader).map_err(|e| body_failure(&request.url, e))?;
+        let (body, truncated) = read_capped(reader).map_err(|e| body_failure(&request.url, &e))?;
 
         Ok(Response {
             status,
@@ -767,6 +768,10 @@ impl Egress {
     /// header, so each of the errors it can build names a place the caller never asked about.
     /// Rewriting them here rather than at each construction is what keeps that true: a new arm in
     /// there cannot forget a discipline it does not have to apply.
+    ///
+    /// A body that fails while it is read is reported from here too, by the reader this hands back,
+    /// so a request that got past the status is written to the diagnostic log however its body is
+    /// then read.
     #[allow(clippy::type_complexity)]
     fn fetch_checked<S: Sink>(
         &self,
@@ -782,9 +787,19 @@ impl Egress {
             outcome => outcome,
         };
         if let Err(error) = &outcome {
-            log_failure(&request.url, error, started.elapsed());
+            log_failure(&request.url, error, None, started.elapsed());
         }
-        outcome
+        outcome.map(|(status, content_type, reader)| {
+            let reader: Box<dyn std::io::Read + Send> = Box::new(LoggedBody {
+                reader,
+                url: request.url.clone(),
+                status,
+                started,
+                cancel: cancel.cloned(),
+                written: false,
+            });
+            (status, content_type, reader)
+        })
     }
 
     /// Whether a connection to `url` would end on this machine: its host is one, and no proxy
@@ -1065,8 +1080,13 @@ fn within<B>(
 /// Writes a failed request to the diagnostic log: the host asked, what kind of failure, the status
 /// where there was one, and how long it took. The URL is the caller's, never a redirect target, and
 /// only its host is kept; the failure's own text can carry what a server said, so it is not.
-fn log_failure(url: &str, error: &EgressError, elapsed: Duration) {
-    if let Some(fields) = failure_fields(url, error, elapsed) {
+///
+/// `replied` is the status a reply began with, for a failure that came after it began.
+fn log_failure(url: &str, error: &EgressError, replied: Option<u16>, elapsed: Duration) {
+    if let Some(mut fields) = failure_fields(url, error, elapsed) {
+        if let Some(status) = replied {
+            fields.push(("status", bravebot_diag::Field::num(status)));
+        }
         bravebot_diag::error("net.fetch", &fields);
     }
 }
@@ -1123,7 +1143,7 @@ fn is_transient_call(error: &ureq::Error) -> bool {
 /// ureq names the reply's own deadline, [`Timeouts::reply`] or the bound its request stated, as
 /// the wait for the response, which it keeps counting from the headers while the body arrives. Any
 /// other failure, the gap bound among them, is the connection's.
-fn body_failure(url: &str, error: std::io::Error) -> EgressError {
+fn body_failure(url: &str, error: &std::io::Error) -> EgressError {
     let cause = error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<ureq::Error>());
@@ -1138,9 +1158,56 @@ fn body_failure(url: &str, error: std::io::Error) -> EgressError {
     EgressError::Transport {
         url: url.to_string(),
         detail: cause
-            .map_or_else(|| io_failure(&error), call_failure)
+            .map_or_else(|| io_failure(error), call_failure)
             .to_string(),
-        transient: is_transient_io(&error),
+        transient: is_transient_io(error),
+    }
+}
+
+/// A reply's body reader that writes a failed read to the diagnostic log as it fails.
+///
+/// The request that owns the body got past `fetch_checked` on a 2xx status, so nothing there saw
+/// what became of the rest of it. Writing the failure here covers a body read whole and one read
+/// in pieces without either having to remember to, and the kind written is the one the caller is
+/// told because both come from [`body_failure`].
+struct LoggedBody {
+    reader: Box<dyn std::io::Read + Send>,
+    /// The URL the caller asked for, which is not necessarily the one the body is arriving from.
+    url: String,
+    /// The status the reply began with, which the failure names.
+    status: u16,
+    /// When the request began, which the failure is timed from.
+    started: std::time::Instant,
+    /// The caller's token. A read that ends after a person stopped the request is a stop, whatever
+    /// ended it, and DIAG-7 does not count a stopped request as a failure.
+    cancel: Option<Cancel>,
+    /// Whether the failure is written already, so a caller that reads again after it adds no line.
+    written: bool,
+}
+
+impl std::io::Read for LoggedBody {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        // An interrupted read is repeated, as `Read` says to, so it is never where a body failed
+        // and the caller is never told it was.
+        let read = loop {
+            match self.reader.read(buffer) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                read => break read,
+            }
+        };
+        if let Err(error) = &read
+            && !self.written
+            && !self.cancel.as_ref().is_some_and(Cancel::is_cancelled)
+        {
+            self.written = true;
+            log_failure(
+                &self.url,
+                &body_failure(&self.url, error),
+                Some(self.status),
+                self.started.elapsed(),
+            );
+        }
+        read
     }
 }
 
@@ -1305,6 +1372,9 @@ fn read_capped(mut reader: Box<dyn std::io::Read>) -> Result<(Vec<u8>, bool), st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Serialises the tests that read the process-wide diagnostic log.
+    static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// The one way out is built from the shared transport, so the certificate authorities and the
     /// proxy a machine states reach the gated path rather than only whichever client happened to
@@ -1488,7 +1558,7 @@ mod tests {
             assert!(said.contains(wording), "{error:?} was worded as {said}");
         }
 
-        let body = body_failure("https://example.com/", tls_as_io());
+        let body = body_failure("https://example.com/", &tls_as_io());
         assert!(
             !body.to_string().contains(sentinel),
             "a body failure carried the I/O error's message: {body}"
@@ -1645,6 +1715,8 @@ mod tests {
     fn a_failed_request_is_logged_as_host_status_and_kind_only() {
         use std::io::{BufRead, BufReader, Write};
 
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback");
         let port = listener.local_addr().expect("addr").port();
         std::thread::spawn(move || {
@@ -1708,6 +1780,103 @@ mod tests {
         for leaked in ["hunter2", "private", "token", "SERVERBODY", "Unavailable"] {
             assert!(!log.contains(leaked), "{leaked} reached the log: {log}");
         }
+    }
+
+    /// An interrupted read is repeated and the body goes on, so it is not where the body failed
+    /// and the caller is not told it was. A body that does fail is written once, however often it
+    /// is read afterwards, since the request failed once.
+    #[test]
+    fn a_read_that_is_repeated_is_not_written_as_a_body_that_failed() {
+        use std::io::Read;
+
+        /// Interrupted once, then holds `"ok"`, then fails with `error` on every read after it.
+        struct Flaky {
+            interrupted: bool,
+            sent: bool,
+            error: std::io::ErrorKind,
+        }
+        impl Read for Flaky {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if !std::mem::replace(&mut self.interrupted, true) {
+                    return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+                }
+                if !std::mem::replace(&mut self.sent, true) {
+                    buffer[..2].copy_from_slice(b"ok");
+                    return Ok(2);
+                }
+                Err(std::io::Error::from(self.error))
+            }
+        }
+
+        /// Points the log nowhere again when an assertion panics.
+        struct Unconfigure;
+        impl Drop for Unconfigure {
+            fn drop(&mut self) {
+                bravebot_diag::configure(bravebot_diag::Level::Error, None);
+            }
+        }
+
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        bravebot_diag::configure(bravebot_diag::Level::Error, Some(tmp.path().to_path_buf()));
+        let unconfigure = Unconfigure;
+        let mut body = LoggedBody {
+            reader: Box::new(Flaky {
+                interrupted: false,
+                sent: false,
+                error: std::io::ErrorKind::ConnectionReset,
+            }),
+            url: "http://repeated.example/page".into(),
+            status: 200,
+            started: std::time::Instant::now(),
+            cancel: None,
+            written: false,
+        };
+
+        let mut buffer = [0u8; 8];
+        let first = body
+            .read(&mut buffer)
+            .expect("the interrupted read is repeated");
+        assert_eq!(&buffer[..first], b"ok");
+        // Other tests in this binary fail requests while the log is configured, so only the lines
+        // naming this body's host are this test's.
+        let written = || -> Vec<String> {
+            let lines = std::fs::read_dir(tmp.path().join(bravebot_diag::DIRECTORY))
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .flat_map(|e| {
+                            std::fs::read_to_string(e.path())
+                                .unwrap_or_default()
+                                .lines()
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            lines
+                .into_iter()
+                .filter(|line| line.contains("host=repeated.example"))
+                .collect()
+        };
+        assert!(
+            written().is_empty(),
+            "a repeated read was written: {:?}",
+            written()
+        );
+
+        assert!(body.read(&mut buffer).is_err());
+        assert!(body.read(&mut buffer).is_err());
+        let lines = written();
+        drop(unconfigure);
+
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains("ERROR net.fetch host=repeated.example kind=transport")
+                && lines[0].contains("status=200"),
+            "{lines:?}"
+        );
     }
 
     #[test]
