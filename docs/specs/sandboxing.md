@@ -37,7 +37,8 @@ guards:
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
     sites:
-      - crates/sandbox/src/programs.rs: 8
+      - crates/sandbox/src/programs.rs: 11
+      - crates/tui/src/clipboard.rs: 4
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -2976,7 +2977,7 @@ mode widens a sandbox mode ([SANDBOX-22](#SANDBOX-22)).
 
 **What it costs.** A program that writes anywhere the account can reaches more than the session's
 directories, including a unix socket under such a row on macOS, where a network-outbound row
-follows a write row. A program directory the account can write, such as a Homebrew prefix, is
+follows a write row. A program directory the account owns or can write, such as a Homebrew prefix, is
 left out of the places bravebot finds its own helpers ([SANDBOX-30](#SANDBOX-30)) once a stage's
 policy holds it, and stays left out for the life of the process, after the permission mode
 changes. The rows are read from the directories as they are when a stage's policy is built, so a
@@ -3266,7 +3267,10 @@ file. A new spawn that looks a name up through
   moved to, its scratch directory, the system temporary directory, and every row a stage's policy
   grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it. A row that came with the
   whole machine ([SANDBOX-28](#SANDBOX-28), under bypass) counts only where the account itself
-  can write the directory or the program, so `/usr/bin` stays searched. A directory is added to the
+  owns or can write the program, or a directory from the `PATH` entry up to the row, so `/usr/bin`
+  stays searched. Ownership counts as well as the write permission because a stage creates files as
+  the account and can set their modes, so a program it wrote and made read-only, with the
+  directories above it, is still one it wrote. A directory is added to the
   set when it is opened or first granted to a stage, and not when a prompt describes the stage, and
   is never removed from it, because closing a directory does not remove a file already written
   there.
@@ -3394,6 +3398,12 @@ because the file index is not in the standard library, so only names are compare
 path is resolved as far as it exists. A recorded directory that does not exist has no identity, so
 another spelling of it is compared by name only until it exists.
 
+Under bypass a program the account owns is left out of the lookup whatever its mode, so a person's
+own read-only program under a row such as `~/.cargo/bin` reads as not installed, as one in a
+directory a stage may write does. A program in directories the account neither owns nor can write,
+such as `/usr/bin` on a system where root owns it, is found. Where the account owns the whole tree a
+program is in, as when bravebot runs as root, none is found under a row of that tree.
+
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
 `verified-by: bravebot_sandbox::programs::a_program_is_found_when_no_writable_directory_is_involved`
@@ -3405,10 +3415,13 @@ another spelling of it is compared by name only until it exists.
 `verified-by: bravebot_sandbox::programs::a_path_entry_that_links_into_a_writable_directory_is_not_searched`
 `verified-by: bravebot_sandbox::programs::a_sibling_directory_sharing_a_name_prefix_is_not_writable`
 `verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_can_write_is_not_found`
-`verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_cannot_write_is_still_found`
+`verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_neither_owns_nor_can_write_is_still_found`
+`verified-by: bravebot_sandbox::programs::a_program_the_account_made_read_only_in_a_held_row_is_not_found`
+`verified-by: bravebot_sandbox::programs::an_entry_reached_through_a_directory_the_account_owns_is_not_searched`
+`verified-by: bravebot_agent::confine::a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started`
 `verified-by: bravebot_sandbox::programs::a_registered_directory_is_kept_out_of_the_search`
 `verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_leaves_out_a_row_held_where_the_account_can_write`
-`verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_still_finds_a_program_in_a_held_row_the_account_cannot_write`
+`verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_leaves_out_a_read_only_program_the_account_owns_in_a_held_row`
 `verified-by: bravebot_sandbox::programs::an_absolute_path_is_the_callers_own_choice`
 `verified-by: bravebot_sandbox::programs::start_removes_the_names_it_is_given_and_no_others`
 `verified-by: bravebot_sandbox::programs::start_hands_a_program_only_the_names_it_is_given`
@@ -3454,6 +3467,8 @@ another spelling of it is compared by name only until it exists.
 `verified-by: bravebot_tui::clipboard::a_copy_tool_installed_outside_every_writable_directory_is_started`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_installed_outside_every_writable_directory_is_read`
+`verified-by: bravebot_tui::clipboard::a_copy_tool_the_account_made_read_only_in_a_held_row_is_not_started`
+`verified-by: bravebot_tui::clipboard::a_paste_tool_the_account_made_read_only_in_a_held_row_is_not_started`
 `verified-by: bravebot_tui::clipboard::the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write`
 `verified-by: bravebot_tui::clipboard::a_copy_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`

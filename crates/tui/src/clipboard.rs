@@ -431,6 +431,48 @@ mod tests {
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    /// Makes each path read-only, and writable again when dropped, so a failed assertion leaves a
+    /// scratch directory that can still be removed.
+    #[cfg(unix)]
+    struct ReadOnly(Vec<PathBuf>);
+
+    #[cfg(unix)]
+    impl ReadOnly {
+        fn new(paths: &[PathBuf]) -> Self {
+            for path in paths {
+                set_mode(path, 0o555);
+            }
+            Self(paths.to_vec())
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ReadOnly {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                set_mode(path, 0o755);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn set_mode(path: &std::path::Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+
+    /// Makes `directory` and every directory under it writable again, so a run that was killed
+    /// while a tree was read-only leaves none the next run cannot remove.
+    #[cfg(unix)]
+    fn reopen(directory: &std::path::Path) {
+        set_mode(directory, 0o755);
+        for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                reopen(&entry.path());
+            }
+        }
+    }
+
     /// A clipboard tool is started with the session's access to the person's clipboard and
     /// nothing confining it, so a file a confined stage wrote under the tool's name must never be
     /// the one that runs. The system's own `true` would also succeed, so a lookup that ignored the
@@ -530,6 +572,62 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&system);
         assert_eq!(read, Some(b"installed\n".to_vec()));
+    }
+
+    /// A clipboard tool that a stage given the whole machine wrote, then made read-only with the
+    /// directories above it, is still one the account owns, and the account can set its mode back.
+    /// The lookup leaves it out as it does a writable one, so the copy never starts it. The system's
+    /// own `true` would also succeed, so a lookup that fell back to the bare name copies and fails
+    /// this.
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_tool_the_account_made_read_only_in_a_held_row_is_not_started() {
+        use bravebot_sandbox::programs::find_in_with;
+        let row = crate::testutil::scratch_dir("clipboard-copy-read-only");
+        reopen(&row);
+        let _ = std::fs::remove_dir_all(&row);
+        let bin = row.join("held").join("bin");
+        let marker = row.join("started");
+        script(&bin, "true", &format!("touch '{}'", marker.display()));
+        let path = std::env::join_paths([&bin]).unwrap();
+        let restore = ReadOnly::new(&[bin.join("true"), bin.clone(), row.join("held")]);
+
+        let copied = pipe_into_found_by(
+            |p| find_in_with(p, &path, &[], std::slice::from_ref(&row)),
+            "true",
+            &[],
+            "hello",
+        );
+
+        let started = marker.exists();
+        drop(restore);
+        let _ = std::fs::remove_dir_all(&row);
+        assert!(!started, "the read-only tool was started");
+        assert!(!copied);
+    }
+
+    /// The same for reading the clipboard, which starts its tool through [`run_bytes_found_by`].
+    #[cfg(unix)]
+    #[test]
+    fn a_paste_tool_the_account_made_read_only_in_a_held_row_is_not_started() {
+        use bravebot_sandbox::programs::find_in_with;
+        let row = crate::testutil::scratch_dir("clipboard-paste-read-only");
+        reopen(&row);
+        let _ = std::fs::remove_dir_all(&row);
+        let bin = row.join("held").join("bin");
+        script(&bin, "uname", "echo planted");
+        let path = std::env::join_paths([&bin]).unwrap();
+        let restore = ReadOnly::new(&[bin.join("uname"), bin.clone(), row.join("held")]);
+
+        let read = run_bytes_found_by(
+            |p| find_in_with(p, &path, &[], std::slice::from_ref(&row)),
+            "uname",
+            &[],
+        );
+
+        drop(restore);
+        let _ = std::fs::remove_dir_all(&row);
+        assert_eq!(read, None);
     }
 
     /// `copy` and every read of the clipboard reach a tool through [`pipe_into`] and
