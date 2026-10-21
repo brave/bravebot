@@ -2873,6 +2873,34 @@ mod preserved_history {
         assert_eq!(reopened.timing_total().stalled_ms, 6);
     }
 
+    /// No turn is running in a session that was just resumed, so the rows of its plan that were
+    /// left open are drawn as work nobody is doing, as they are after a turn that ended in this
+    /// session.
+    #[test]
+    fn a_resumed_session_draws_the_plan_it_was_left_with_as_left_open() {
+        let scratch = Scratch::new("history-plan-left-open");
+        let (session, conversation) = fixture();
+        let reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        let open = reopened.plan()[0].content.clone();
+        assert!(
+            !reopened.a_turn_is_running(),
+            "the resumed session is in a turn"
+        );
+
+        let drawn = bravebot_tui::panel::lines(&reopened, bravebot_tui::panel::WIDTH, 30);
+        let row = drawn
+            .iter()
+            .find(|line| line.to_string().contains(&open))
+            .unwrap_or_else(|| panic!("no panel row holds {open}"));
+        assert_eq!(
+            row.spans[0].content, " □ ",
+            "{open} was left open and is not drawn as a hollow mark"
+        );
+    }
+
     /// Returning an unstarted prompt to the editor must not create a cancelled transcript entry.
     #[test]
     fn reopening_does_not_restore_an_unsent_prompt() {
