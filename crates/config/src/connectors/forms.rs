@@ -84,17 +84,16 @@ fn positive_integer(value: &str) -> bool {
     value.len() <= 10 && !value.starts_with('0') && value.chars().all(|c| c.is_ascii_digit())
 }
 
-// branch: at most 100; segments of [A-Za-z0-9._-], none empty, "." or ".."; not starting with "-";
-// no segment ending in ".lock" and not ending in "."; not "HEAD"; no "..", "@{" or segment starting with "."; not starting
-// with "refs/", "heads/", "tags/" or "remotes/", which git reads as another ref.
+// branch: at most 100; segments of [A-Za-z0-9._-], none empty, "." or ".."; not starting with "-"
+// or ending in "."; not "HEAD"; no ".."; no segment starting with "." or ending in ".lock"; not
+// starting with "refs/", "heads/", "tags/" or "remotes/", which git reads as another ref. The
+// characters allowed keep out "@{" and every other character git refuses in a ref.
 fn branch(value: &str) -> bool {
     value.len() <= 100
         && !value.starts_with('-')
-        && !value.ends_with(".lock")
         && !value.ends_with('.')
         && value != "HEAD"
         && !value.contains("..")
-        && !value.contains("@{")
         && !value
             .split('/')
             .any(|segment| segment.starts_with('.') || segment.ends_with(".lock"))
@@ -345,6 +344,8 @@ mod tests {
             "a@-evil.com",
             "a@evil..com",
             "a@evil.com,b@x.com",
+            "a@evil-.com",
+            &format!("a@{}.com", "e".repeat(64)),
             "me",
         ] {
             assert!(check("address", bad).is_err(), "{bad} passed");
@@ -375,6 +376,7 @@ mod tests {
             "/Europe/London",
             "Europe London",
             "Europe/London?x=1",
+            "Europe/_London",
         ] {
             assert!(check("time-zone", bad).is_err(), "{bad} passed");
         }
@@ -385,7 +387,7 @@ mod tests {
         for good in ["Ali", "O'Brien", "Jean-Luc", "Zoë"] {
             assert!(check("personal-name", good).is_ok(), "{good} refused");
         }
-        for bad in ["Ali Shahin", "x1", "a<b", "", &"a".repeat(51)] {
+        for bad in ["Ali Shahin", "x1", "a<b", "", "--", &"a".repeat(51)] {
             assert!(check("personal-name", bad).is_err(), "{bad} passed");
         }
         assert!(check("e164", "+447700900123").is_ok());
@@ -395,6 +397,7 @@ mod tests {
             "+44 7700",
             "+12345",
             "+1234567890123456",
+            "+4477009001a3",
         ] {
             assert!(check("e164", bad).is_err(), "{bad} passed");
         }
@@ -409,7 +412,14 @@ mod tests {
         assert!(check("country-code", "GB").is_ok());
         assert!(check("country-code", "gb").is_err() && check("country-code", "GBR").is_err());
         assert!(check("date-dmy", "20/11/2026").is_ok());
-        for bad in ["2026-11-20", "31/11/2026", "20/11/26", "20-11-2026"] {
+        for bad in [
+            "2026-11-20",
+            "31/11/2026",
+            "20/11/26",
+            "20-11-2026",
+            "20x11/2026",
+            "20/11x2026",
+        ] {
             assert!(check("date-dmy", bad).is_err(), "{bad}");
         }
     }
@@ -441,6 +451,11 @@ mod tests {
             "26-10-09",
             "2026/10/09",
             "2026-10-9",
+            "2026x10-09",
+            "2026-10x09",
+            "+026-10-09",
+            "2026-+1-09",
+            "2026-10-+9",
         ] {
             assert!(check("date", bad).is_err(), "{bad} passed");
         }
@@ -461,6 +476,12 @@ mod tests {
             "2026-02-30T10:00:00Z",
             "2026-10-09Taé12345",
             "2026-10-09T10:00:00+01:0é",
+            "2026-10-09T10x00:00Z",
+            "2026-10-09T10:60:00Z",
+            "2026-10-09T10:00x00Z",
+            "2026-10-09T10:00:+5Z",
+            "2026-10-09T10:00:60Z",
+            "2026-10-09T10:00:00+25:00",
         ] {
             assert!(check("datetime", bad).is_err(), "{bad} passed");
         }
