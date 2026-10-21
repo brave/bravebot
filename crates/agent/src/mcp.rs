@@ -95,7 +95,8 @@ impl Reached {
         self
     }
 
-    /// What the server offered as prompts.
+    /// What the server offered as prompts, which is for a person's screen and never the planner's
+    /// (MCP-10).
     pub fn prompts(&self) -> &PromptListing {
         &self.prompts
     }
