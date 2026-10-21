@@ -502,8 +502,15 @@ fn main() -> ExitCode {
     let _ = bravebot_sandbox::crash::disable_core_dumps();
 
     // Before anything is printed, and exactly once: every later lookup reads what this settled
-    // on. Nothing else in the tree consults the environment about a language.
-    bravebot_i18n::init_from_environment();
+    // on. Nothing else in the tree consults the environment about a language. What the person
+    // said is read here with it, ahead of the command line, since the first sentence the program
+    // says can be the refusal of a flag.
+    let picked = bravebot_session::store::load_language();
+    let written = bravebot_config::Settings::written_language();
+    bravebot_i18n::init_from_environment(bravebot_i18n::Said {
+        picked: picked.as_deref(),
+        written: written.as_deref(),
+    });
 
     // The process's own argv, parsed below into the documented flags. There is no other
     // way for a command line tool to learn what it was asked to do.

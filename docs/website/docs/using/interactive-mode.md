@@ -317,7 +317,7 @@ comes off the box and is drawn under it like anything else waiting, but it is no
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
 has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/copy`, `/export`, `/loop`
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
-that sets one, which wait. `/theme` and `/config` are too, whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
+that sets one, which wait. `/theme`, `/config` and `/language` are too, whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model` and `/effort` are too unless a line waiting ahead of them could change what they act on, a
 waiting `/clear` for `/rename`, say, and then they wait behind that line and the mark under the box names it. A waiting `/sandbox off` holds none of
 them back. The four that open a list draw it over the turn. What they answer goes into the

@@ -320,11 +320,11 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
-A command that reads or ends something, or that changes only how the screen is drawn or what the
-box edits in (`/theme` and `/config`), goes ahead of every line already waiting, and a line behind
+A command that reads or ends something, or that changes only how the screen is drawn, what the
+box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
@@ -407,6 +407,9 @@ does not read:
 - **`/theme` and `/effort`.** A theme changes only how the screen is drawn. A turn is sent with the
   level in force when it begins and does not read it again, so a level set mid-turn is the next
   turn's.
+- **`/language`.** It saves the language the interface is read in from the next start, and the
+  catalog is chosen once, so nothing the turn holds or the screen draws changes
+  ([LOCALE-8](localization.md#LOCALE-8)).
 - **`/config`.** It picks the style the box edits in. The turn does not read it. The keys that stop
   the turn do, so with vi's style chosen Escape reaches the turn only once the box has no use for
   it ([INPUT-24](terminal-input.md#INPUT-24)).
@@ -497,6 +500,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::every_settings_command_but_sandbox_is_carried_out_behind_a_waiting_sandbox_off`
 `verified-by: bravebot_tui::app::a_sandbox_mode_typed_behind_a_waiting_sandbox_off_waits_behind_it`
 `verified-by: bravebot_tui::app::a_theme_or_config_typed_behind_a_waiting_line_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_language_typed_behind_a_waiting_line_is_carried_out_when_typed`
 `verified-by: bravebot_tui::render::a_command_waiting_behind_a_line_names_that_line_on_its_mark`
 `verified-by: bravebot_tui::render::a_command_that_waits_for_the_turn_does_not_name_the_line_ahead_of_it`
 `verified-by: bravebot_tui::render::a_command_does_not_name_a_line_typed_after_it`
@@ -508,6 +512,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
 `verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
 `verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_language_named_mid_turn_is_saved_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own`
 `verified-by: bravebot_tui::app::the_sandbox_report_is_given_mid_turn`
 `verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_waits_and_says_why`

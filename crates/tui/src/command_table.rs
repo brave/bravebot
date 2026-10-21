@@ -35,6 +35,10 @@ pub(crate) const LIMIT_OFF: &str = "off";
 /// The line that opens the panel of preferences about the interface itself.
 pub(crate) const CONFIG_COMMAND: &str = "/config";
 
+/// The line that says which language the interface is in, saves a choice for the next start, or
+/// gives the choice back to the settings file and the environment (LOCALE-8).
+pub(crate) const LANGUAGE_COMMAND: &str = "/language";
+
 /// The line that opens another directory, taking the path to open as its argument.
 pub(crate) const ADD_DIR_COMMAND: &str = "/add-dir";
 
@@ -327,7 +331,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 48] {
+pub fn commands() -> [Command; 49] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -412,6 +416,12 @@ pub fn commands() -> [Command; 48] {
             argument: "[name | off]",
             description: t!(command_style),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: LANGUAGE_COMMAND,
+            argument: "[tag | auto]",
+            description: t!(command_language),
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: COMPACT_COMMAND,

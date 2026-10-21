@@ -538,6 +538,10 @@ doctor-settings-agent-ignored =
 doctor-settings-style-ignored =
     style dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-language-ignored =
+    language dans { $path } n'est pas appliqué : il n'est lu que depuis ~/.bravebot/settings.json
+doctor-settings-language-unmatched =
+    language { $language } dans ~/.bravebot/settings.json ne désigne aucun catalogue, il choisit donc { $reference } ; les catalogues sont { $available }
 doctor-settings-references-ignored =
     references dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -2271,6 +2275,7 @@ command-effort = Choisir l'effort de réflexion avant de répondre
 command-advisor = Nommer le modèle que le planificateur peut consulter, dire lequel, ou abandonner le choix
 command-style = Choisir la manière dont le planificateur répond : lister les styles, en choisir un, ou effacer le choix
 command-config = Choisir le mode d'édition de la zone de saisie
+command-language = Choisir la langue de l'interface au prochain démarrage, ou abandonner le choix
 command-add-dir = Ouvrir un autre répertoire et l'approuver pour cette session, ou en fermer un
 command-reach = Retenir un répertoire ou un identifiant pour une commande, ou les lister et les retirer
 command-sandbox = Afficher le mode du bac à sable, ou le changer dès le prochain tour
@@ -2475,6 +2480,12 @@ session-editing-vi = édition à la manière de vi ; échap pour les commandes, 
 session-editing-ordinary = édition avec les flèches et les raccourcis readline
 session-effort-set = réflexion à { $effort }
 session-effort-unset = réflexion laissée au service
+session-language-in-use = l'interface est en { $language } ; catalogues : { $available } ; /language <tag> enregistre un choix pour le prochain démarrage et /language auto l'abandonne
+session-language-saved = choix enregistré : { $language }
+session-language-set = l'interface sera en { $language } à partir du prochain démarrage, sauf si BRAVEBOT_LOCALE est définie, car elle répond en premier
+session-language-auto = l'interface suivra le fichier de réglages et l'environnement à partir du prochain démarrage
+session-language-not-saved = cette session ne peut pas conserver de choix, la langue reste donc inchangée
+session-no-such-language = aucun catalogue pour { $language } ; les catalogues sont { $available }
 session-no-such-effort = aucun niveau d'effort nommé { $effort } ; essayez /effort pour la liste
 session-effort-not-read = ce modèle ne lit aucun niveau d'effort ; les requêtes n'en portent pas
 session-advisor-set = le planificateur peut consulter { $model } dès le prochain tour, ce qui dépense les jetons de ce modèle
