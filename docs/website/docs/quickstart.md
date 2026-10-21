@@ -144,7 +144,9 @@ Every way this can fail is silence: no network, a registry that will not answer,
 unexpected shape. A registry that cannot be reached today does not withdraw a version it announced
 earlier, so the notice keeps showing until the registry answers with something else. A version that is not three numbers is never announced either, release candidates
 included. An [incognito session](using/sessions.md#a-session-that-leaves-nothing-behind) still
-reads an answer an ordinary session left, and neither records one nor asks.
+reads an answer an ordinary session left, and neither records one nor asks. A launch that cannot
+write the record of its last check, because there is no home directory or the state directory is not
+writable, does not ask the registry at all.
 
 ## Uninstall
 
@@ -244,8 +246,10 @@ A `run` prompt shows the compiled plan: every step, the binary each resolved to,
 every file the line would write. A step whose name reached its binary through a link, such as a
 virtualenv's `python`, shows the link and then the binary, as `link -> binary`. The prompt also says
 what the command is confined to, which is the directories the session was opened on and what each
-program in the line brings beyond them, such as the credentials a `git push` needs. On Windows,
-where nothing confines a program, it says the command is not sandboxed instead:
+program in the line brings beyond them, such as the credentials a `git push` needs. On Linux and
+Windows, when a program in the line other than git can write more than the temporary directory, the
+heading also warns that it can write a repository's hooks and configuration, which git runs later
+with no sandbox. Where the command runs with no sandbox, the prompt says it is not sandboxed instead:
 
 ```
   y run it    a always    n don't    ctrl-c stop the turn

@@ -117,7 +117,14 @@ impl Proxy {
         let decisions = Arc::new(Mutex::new(Log::default()));
         let shared = Arc::new(config);
         #[cfg(target_os = "linux")]
-        let socket = UnixSocket::bind(&stop, &shared, &decisions);
+        let socket = {
+            // The socket is made in a directory of its own under one of these, created fresh and
+            // private to this account. Creating it fails where anything is already at the path,
+            // so nothing another user planted is followed.
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
+            let parents = socket_parents(std::env::var_os("XDG_RUNTIME_DIR"), std::env::temp_dir());
+            UnixSocket::bind(&parents, &stop, &shared, &decisions)
+        };
         let accept = {
             let (stop, decisions) = (stop.clone(), decisions.clone());
             thread::Builder::new()
@@ -186,14 +193,8 @@ impl Drop for Proxy {
         // A blocked `accept` only returns for a connection, so make one.
         let _ = TcpStream::connect_timeout(&self.addr, Duration::from_secs(1));
         #[cfg(target_os = "linux")]
-        if let Some(mut socket) = self.socket.take() {
-            // The same wake-up for the other listener.
-            let _ = UnixStream::connect(&socket.path);
-            if let Some(accept) = socket.accept.take() {
-                let _ = accept.join();
-            }
-            let _ = std::fs::remove_file(&socket.path);
-            let _ = std::fs::remove_dir(&socket.directory);
+        if let Some(socket) = self.socket.take() {
+            socket.close();
         }
         if let Some(accept) = self.accept.take() {
             let _ = accept.join();
@@ -252,11 +253,55 @@ fn accept_on<S: Peer>(
     }
 }
 
+/// The directories a proxy's socket may be made under, in the order they are tried: the
+/// account's runtime directory, then the temporary directory.
+///
+/// A stage's write rows include the temporary directory and not the runtime directory, so a
+/// socket under the temporary one is a name the stage can unlink and replace, and a socket under
+/// the runtime one is not. A runtime directory that is the temporary directory or inside it is
+/// no different from it, and is left out, as is one that is not an absolute path. Where the
+/// account has no runtime directory, or it cannot be written, the temporary directory is used,
+/// and the forwarder's check of the listener it reaches ([`crate::netns`]) is what holds.
+#[cfg(target_os = "linux")]
+fn socket_parents(runtime: Option<std::ffi::OsString>, temporary: PathBuf) -> Vec<PathBuf> {
+    let resolved = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let inside_temporary = |path: &Path| resolved(path).starts_with(resolved(&temporary));
+    let runtime = runtime
+        .map(PathBuf::from)
+        .filter(|runtime| runtime.is_absolute() && !inside_temporary(runtime));
+    runtime.into_iter().chain([temporary]).collect()
+}
+
 #[cfg(target_os = "linux")]
 impl UnixSocket {
-    /// Binds a socket in a new directory under the temporary one, or `None` where that cannot be
-    /// done, such as a temporary directory whose path is too long for a socket address.
+    /// Binds a socket in a new directory under the first of `parents` where that can be done, or
+    /// `None` where it can be done under none of them, such as a directory whose path is too long
+    /// for a socket address.
     fn bind(
+        parents: &[PathBuf],
+        stop: &Arc<AtomicBool>,
+        config: &Arc<ProxyConfig>,
+        decisions: &Arc<Mutex<Log>>,
+    ) -> Option<Self> {
+        parents
+            .iter()
+            .find_map(|parent| Self::bind_under(parent, stop, config, decisions))
+    }
+
+    /// Wakes the thread accepting on the socket, waits for it, and removes the socket and its
+    /// directory. The caller has set the flag that thread reads.
+    fn close(mut self) {
+        // A blocked `accept` only returns for a connection, so make one.
+        let _ = UnixStream::connect(&self.path);
+        if let Some(accept) = self.accept.take() {
+            let _ = accept.join();
+        }
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir(&self.directory);
+    }
+
+    fn bind_under(
+        parent: &Path,
         stop: &Arc<AtomicBool>,
         config: &Arc<ProxyConfig>,
         decisions: &Arc<Mutex<Log>>,
@@ -264,8 +309,7 @@ impl UnixSocket {
         static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         // The directory is created fresh and private to this account, and creating it fails where
         // anything is already at the path, so nothing another user planted is followed.
-        // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let directory = std::env::temp_dir().join(format!(
+        let directory = parent.join(format!(
             "bravebot-proxy-{}-{}",
             std::process::id(),
             COUNT.fetch_add(1, Ordering::SeqCst)
@@ -550,6 +594,106 @@ mod tests {
             "the directory outlived the proxy"
         );
     }
+
+    /// A proxy's socket is made under the account's runtime directory where it has one, and under
+    /// the temporary directory where it has none, has a relative one, has one that is the
+    /// temporary directory or inside it, or has one that cannot be written.
+    ///
+    /// The regression it rejects: a socket under the temporary directory whatever the account has.
+    /// That directory is a write row of every stage, so a stage could unlink the socket and put
+    /// a link in its place, and the runtime directory is in no stage's rows unless the person
+    /// names it. A runtime directory inside the temporary one, reached by a link as well as by
+    /// name, is that same write row. The other regression is a socket made under the runtime
+    /// directory or nowhere, which leaves a session whose runtime directory cannot be written
+    /// without a proxy for any stage.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_socket_is_made_under_the_runtime_directory_and_the_temporary_one_is_the_fallback() {
+        use crate::testutil::a_directory_for_sockets;
+
+        let runtime = a_directory_for_sockets(&[]);
+        let temporary = a_directory_for_sockets(&["inside"]);
+        let linked = runtime.join("linked");
+        std::os::unix::fs::symlink(temporary.join("inside"), &linked).expect("a link");
+
+        assert_eq!(
+            socket_parents(Some(runtime.clone().into()), temporary.clone()),
+            vec![runtime.clone(), temporary.clone()]
+        );
+        for (runtime, why) in [
+            (None, "no runtime directory"),
+            (
+                Some("relative/run".into()),
+                "a path that depends on the cwd",
+            ),
+            (
+                Some(temporary.clone().into()),
+                "the temporary directory itself",
+            ),
+            (
+                Some(temporary.join("inside").into()),
+                "a directory inside it",
+            ),
+            (Some(linked.into()), "a link to a directory inside it"),
+        ] {
+            assert_eq!(
+                socket_parents(runtime, temporary.clone()),
+                vec![temporary.clone()],
+                "{why}"
+            );
+        }
+
+        let made_under = |parents: &[PathBuf]| {
+            let stop = Arc::new(AtomicBool::new(false));
+            let config = Arc::new(ProxyConfig::new(HostList::default()));
+            let decisions = Arc::new(Mutex::new(Log::default()));
+            let socket = UnixSocket::bind(parents, &stop, &config, &decisions).expect("a socket");
+            let path = socket.path.clone();
+            stop.store(true, Ordering::SeqCst);
+            socket.close();
+            path
+        };
+        let preferred = made_under(&[runtime.clone(), temporary.clone()]);
+        let fallen_back = made_under(&[runtime.join("missing"), temporary.clone()]);
+        let _ = std::fs::remove_dir_all(&runtime);
+        let _ = std::fs::remove_dir_all(&temporary);
+
+        assert!(preferred.starts_with(&runtime), "{preferred:?}");
+        assert!(fallen_back.starts_with(&temporary), "{fallen_back:?}");
+    }
+
+    /// A runtime directory is compared with the temporary directory by the bytes of their names. A
+    /// directory whose name is the replacement-character rendering of the temporary directory's
+    /// name, which is not UTF-8, is another directory and is kept, and a directory inside the
+    /// temporary one is left out whatever its name is spelled with.
+    ///
+    /// The regression it rejects: a comparison through a lossy rendering, which reads the two
+    /// names as one and so drops a runtime directory a stage has no write row over, and which
+    /// would take one directory for the other wherever the names differ only in the bytes that
+    /// rendering replaces. The names are built in memory, so nothing here needs a file system that
+    /// can hold them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_runtime_directory_is_told_from_the_temporary_one_by_the_bytes_of_its_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let temporary = PathBuf::from(OsStr::from_bytes(b"/bb-no-such-dir/tmp-\xff"));
+        let lookalike = PathBuf::from("/bb-no-such-dir/tmp-\u{FFFD}");
+        let inside = temporary.join(OsStr::from_bytes(b"run-\xff"));
+
+        assert_eq!(
+            socket_parents(Some(lookalike.clone().into()), temporary.clone()),
+            vec![lookalike, temporary.clone()],
+            "the lookalike was taken for the temporary directory"
+        );
+        assert_eq!(
+            socket_parents(Some(inside.into()), temporary.clone()),
+            vec![temporary],
+            "a directory inside a temporary directory whose name is not UTF-8 was kept"
+        );
+    }
+
     use std::io::BufRead;
 
     /// A server that echoes what its first connection sends.

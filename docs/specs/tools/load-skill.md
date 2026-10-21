@@ -11,9 +11,10 @@ documented-by:
 
 ## Scope
 
-Fetching the body of a skill named in the system prompt. `name` is routing; there are no content
-arguments. The result is the skill's text, followed by the files kept beside it where it keeps any. Where skills come from and what they are trusted for is
-[skills.md](../skills.md).
+Fetching the body of a skill named in the system prompt or returned by
+[`search_skills`](search-skills.md). `name` is routing; there are no content arguments. The result
+is the skill's text, followed by the files kept beside it where it keeps any. Where skills come
+from and what they are trusted for is [skills.md](../skills.md).
 
 ## Clauses
 
@@ -40,10 +41,11 @@ prefix, a case-insensitive comparison or a nearest match.
 <a id="LOAD-3"></a>
 ### LOAD-3: a body reaches the context only when it is asked for
 
-The system prompt advertises names and descriptions and holds no bodies, which is what keeps a
-directory of long skills from crowding out the task.
+Neither the system prompt's listing nor a `search_skills` result holds a body, only a name and a
+description ([SKILL-2](../skills.md#SKILL-2)), which is what keeps a directory of long skills from
+crowding out the task.
 
-`verified-by: bravebot_agent::turn::a_skill_body_stays_out_of_the_context_until_it_is_asked_for`
+`verified-by: bravebot_agent::turn::a_skill_body_stays_out_of_the_context_until_search_finds_it_and_load_skill_is_asked`
 `verified-by: bravebot_agent::skills::what_the_prompt_advertises_holds_no_bodies`
 
 <a id="LOAD-4"></a>

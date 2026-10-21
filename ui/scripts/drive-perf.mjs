@@ -152,7 +152,7 @@ try {
 
   // Three decision cards, left pending: a confirm with a diff, a run, and a question.
   const emit = (event, data) => app.evaluate((_, v) => globalThis.perf.emit(v.event, v.data), { event, data })
-  await emit('confirm.request', { request: 1, path: 'src/store.ts', intent: 'edit', untrusted: false, existing: true, added: 2, removed: 1, exact: true, changes: [
+  await emit('confirm.request', { request: 1, path: 'src/store.ts', shownPath: 'src/store.ts', intent: 'edit', untrusted: false, existing: true, added: 2, removed: 1, exact: true, changes: [
     { kind: 'kept', text: 'export class Store {' }, { kind: 'removed', text: '  private lock = new Mutex()' }, { kind: 'added', text: '  private readLock = new RwLock()' }, { kind: 'added', text: '  private writeLock = new Mutex()' }, { kind: 'kept', text: '}' },
   ] })
   await emit('run.request', { request: 2, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, releasesPrivate: false, ambient: [], vouches: [], summary: 'Run the store tests' })

@@ -39,6 +39,29 @@ pub(crate) struct OneShot<R: Read, W: Write> {
     refusing: bravebot_agent::Unattended,
     /// What to call just before the plan is put to the person (HOOK-2).
     alert: Option<bravebot_agent::PromptAlert>,
+    /// The effects that went unapproved because nobody was there to approve them, in order.
+    ///
+    /// Kept here, at the one place that knows the answer was a refusal for want of anybody to ask,
+    /// so the run can end on the status that says a gate refused something (CLI-6). A question the
+    /// tool answers with a problem for the planner without telling the policy leaves the run's own
+    /// clean flag true, and this is then the only record of it. A write, a fetch or a call to a
+    /// server's tool is told to the policy, so it is kept for the status alone
+    /// (`Declined::in_the_trail`).
+    declined: Vec<Declined>,
+}
+
+/// One question a one-shot run could not put to anybody, and so answered no.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Declined {
+    /// The gate the question belongs to, named as a result object names a refusal's.
+    pub(crate) gate: &'static str,
+    /// Why, as a sentence a script can print.
+    pub(crate) reason: &'static str,
+    /// Whether the audit trail already holds this refusal, which the policy recorded when the tool
+    /// answered the planner. It still ends the run on the refused status, since a delegate's
+    /// policy keeps its own refusals and this confirmer is shared, and a result object lists it
+    /// once, from the trail.
+    pub(crate) in_the_trail: bool,
 }
 
 impl<R: Read, W: Write> OneShot<R, W> {
@@ -49,7 +72,13 @@ impl<R: Read, W: Write> OneShot<R, W> {
             attended,
             refusing: bravebot_agent::Unattended,
             alert: None,
+            declined: Vec::new(),
         }
+    }
+
+    /// What was refused for want of anybody to ask, in the order it was asked.
+    pub(crate) fn declined(&self) -> &[Declined] {
+        &self.declined
     }
 
     /// Write the question out, then read the answer back.
@@ -105,23 +134,48 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
 
     /// The one question this confirmer may answer yes to, and only where somebody is there.
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {
-        if !self.attended {
-            return self.refusing.confirm_manifest(request);
+        let decision = if self.attended {
+            if let Some(alert) = &self.alert {
+                alert();
+            }
+            // A question that could not be written is a plan nobody saw, so it is declined rather
+            // than taken as unanswered and waved through.
+            self.put_the_plan(request).unwrap_or(Decision::Reject)
+        } else {
+            self.refusing.confirm_manifest(request)
+        };
+        if decision == Decision::Reject {
+            self.declined.push(Declined {
+                gate: "manifest_plan",
+                reason: "the plan was not approved",
+                in_the_trail: false,
+            });
         }
-        if let Some(alert) = &self.alert {
-            alert();
-        }
-        // A question that could not be written is a plan nobody saw, so it is declined rather than
-        // taken as unanswered and waved through.
-        self.put_the_plan(request).unwrap_or(Decision::Reject)
+        decision
     }
 
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
-        self.refusing.confirm_write(request)
+        let decision = self.refusing.confirm_write(request);
+        if !decision.approved() {
+            self.declined.push(Declined {
+                gate: "file_write",
+                reason: "the write was not approved, and nobody was there to approve it",
+                in_the_trail: true,
+            });
+        }
+        decision
     }
 
     fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
-        self.refusing.confirm_run(request)
+        let decision = self.refusing.confirm_run(request);
+        if !decision.approved() {
+            self.declined.push(Declined {
+                gate: "run",
+                reason: "the program was not approved, and nobody was there to approve it",
+                in_the_trail: false,
+            });
+        }
+        decision
     }
 
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
@@ -133,7 +187,15 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
     }
 
     fn confirm_fetch(&mut self, request: &FetchRequest) -> Decision {
-        self.refusing.confirm_fetch(request)
+        let decision = self.refusing.confirm_fetch(request);
+        if decision == Decision::Reject {
+            self.declined.push(Declined {
+                gate: "web_fetch",
+                reason: "the fetch was not approved, and nobody was there to approve it",
+                in_the_trail: true,
+            });
+        }
+        decision
     }
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
@@ -162,7 +224,15 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         &mut self,
         request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
-        self.refusing.confirm_mcp_call(request)
+        let decision = self.refusing.confirm_mcp_call(request);
+        if decision.decision == Decision::Reject {
+            self.declined.push(Declined {
+                gate: "mcp_call",
+                reason: "the call was not approved, and nobody was there to approve it",
+                in_the_trail: true,
+            });
+        }
+        decision
     }
 
     fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {

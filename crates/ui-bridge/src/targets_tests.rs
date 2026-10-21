@@ -60,6 +60,7 @@ fn session_running(target: u64) -> Session {
             pending: Arc::new(Mutex::new(None)),
             target,
             finished: Arc::clone(&finished),
+            interjections: None,
         }),
         watches: Arc::clone(&watches),
         ..Open::opened(

@@ -100,7 +100,8 @@ the three clauses standing in the way is about a run nobody is watching. That is
 A definition supplies four things to the run a person addresses: the prompt, the narrowing, the
 model, and the skills it names ([DELEGATE-23](delegation.md#DELEGATE-23)).
 [MEMORY-4](definition-memory.md#MEMORY-4) adds a fifth: where the memory it keeps is, which the run
-reads itself. It supplies nothing else, and in particular it does not
+reads itself. A `spawns:` line ([DELEGATE-30](delegation.md#DELEGATE-30)) holds the run to the
+delegates it names, as it holds a delegate. It supplies nothing else, and in particular it does not
 make the run a delegate. The person is at the keyboard, so the run holds the screen, the confirmer,
 the task list and the way to ask a question, exactly as any turn of theirs does.
 

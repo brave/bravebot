@@ -3,7 +3,13 @@ id: VIEW
 title: The transcript
 status: normative
 governs:
+  - crates/tui/src/avatar.rs
+  - crates/tui/src/blocks.rs
+  - crates/tui/src/colour_codes.rs
   - crates/tui/src/indicator.rs
+  - crates/tui/src/logo.rs
+  - crates/tui/src/notify.rs
+  - crates/tui/src/preview.rs
   - crates/tui/src/reasoning.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/watching.rs
@@ -95,6 +101,8 @@ named in it can be a filename read out of a quarantined listing.
 Every control character is replaced with a visible glyph on the way to the screen, in the heading
 as well as the content. Replaced rather than dropped, since a character silently removed is one the
 user cannot tell was ever in the file.
+[VIEW-30](#VIEW-30) is the one exception: a complete colour code in output drawn for reading is
+taken out and counted.
 
 `verified-by: bravebot_tui::marking::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_tui::marking::a_neutralised_escape_is_still_visible`
@@ -323,6 +331,8 @@ it did spend is counted against the session all the same.
 `verified-by: bravebot_tui::render::a_session_that_has_not_run_a_turn_reports_nothing`
 `verified-by: bravebot_tui::state::a_completed_turn_is_reported_with_what_it_cost`
 `verified-by: bravebot_tui::state::a_failed_turn_is_reported_as_failed`
+`verified-by: bravebot_tui::state::a_completed_turn_is_reported_with_how_long_it_took`
+`verified-by: bravebot_tui::render::only_a_finished_turns_row_carries_its_cost_and_duration`
 `verified-by: bravebot_tui::state::starting_another_turn_forgets_the_last_one`
 `verified-by: bravebot_tui::state::a_session_that_has_not_run_a_turn_reports_none_finished`
 `verified-by: bravebot_tui::state::clearing_a_session_forgets_the_turn_that_finished`
@@ -758,3 +768,175 @@ holds no bytes of what the rows contain and the rule is kept ([SCROLL-5](scrolle
 
 `verified-by: bravebot_tui::render::a_held_view_says_how_many_rows_arrived_below_and_the_key_back`
 `verified-by: bravebot_tui::render::a_held_view_on_a_narrow_terminal_drops_the_cue_and_keeps_the_mode`
+`verified-by: bravebot_tui::render::the_held_cue_is_drawn_dim`
+
+
+<a id="VIEW-28"></a>
+### VIEW-28: block art is drawn from cell backgrounds in a terminal that leaves gaps between rows
+
+The wordmark and the face beside it on the opening screen are drawn in `█`, `▀` and `▄`. Where
+`TERM_PROGRAM` is `Apple_Terminal`, each cell is drawn from its background instead, so that no row
+of the art is cut by a stripe:
+
+- A full block is a space on the colour, or a space in reverse video where the colour is the
+  terminal's own ink.
+- An upper half block is a lower half block in reverse video.
+- A cell with two colours is a lower half block in the lower colour on a background of the upper
+  one.
+- A lower half block, the shadow and a blank cell are drawn as they were.
+
+Each cell shows the same colours in both forms. Every other terminal is drawn the block characters.
+
+**Why.** Apple's Terminal draws block characters from the font, in a band that starts a few pixels
+below the top of the cell. Stacked rows of `█` are separated by a stripe of the window's background,
+and a half block over a background colour shows that colour in the stripe, which makes the face look
+striped. A cell's background fills the whole cell and a lower half block is flush with the bottom of
+it, so a cell drawn from those two has no stripe. The size of the band depends on the font and the
+line spacing, which this program cannot read, so the choice is made by terminal and not by
+measuring.
+
+Other terminals keep the characters because reverse video fills the half it empties with the
+terminal's opaque background colour, which shows against a window the person made translucent.
+Inside tmux `TERM_PROGRAM` names tmux, so the characters are drawn there.
+
+Reverse video adds no colour, so `NO_COLOR` ([VIEW-20](#VIEW-20)) holds: the wordmark under it is
+drawn in the terminal's own ink.
+
+`verified-by: bravebot_tui::blocks::a_painted_cell_shows_the_same_two_halves_as_the_block_it_replaces`
+`verified-by: bravebot_tui::blocks::a_painted_cell_is_a_space_or_a_lower_half_block`
+`verified-by: bravebot_tui::blocks::the_terminals_own_ink_is_painted_by_reversing_the_cell`
+`verified-by: bravebot_tui::avatar::a_face_drawn_from_backgrounds_is_the_same_picture`
+`verified-by: bravebot_tui::logo::a_mark_drawn_from_backgrounds_is_the_same_picture`
+`verified-by: bravebot_tui::lib::only_the_name_apple_terminal_sets_is_apple_terminal`
+
+
+<a id="VIEW-29"></a>
+### VIEW-29: Apple's Terminal is not sent the Kitty graphics query
+
+At start-up the interface asks the terminal which graphics protocol it draws
+([VET-4](tools/vet-content.md#VET-4)). Where `TERM_PROGRAM` is `Apple_Terminal`, the question for the
+Kitty protocol is left out of that exchange and the rest of it is sent. Every other terminal is asked
+as before.
+
+**Why.** The Kitty question is an application program command. Apple's Terminal does not understand
+it and prints its text, `Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA`, at the top of the screen. That terminal
+draws no protocol the question could find, so leaving it out loses no picture.
+
+`verified-by: bravebot_tui::preview::apple_terminal_is_not_sent_the_kitty_query_and_other_terminals_are`
+`verified-by: bravebot_tui::lib::only_the_name_apple_terminal_sets_is_apple_terminal`
+
+
+<a id="VIEW-30"></a>
+### VIEW-30: the colour codes in output are counted and not drawn
+
+A program that colours its output writes a code before and after each coloured word. In output
+drawn for a person to read, the complete colour codes are taken out of the text, and a row under
+the text says how many there were, such as `14 colour codes not drawn`. That row has the same margin
+as the rows above it. Output with no colour code says nothing about them.
+
+A colour code is `ESC [`, up to 64 characters from `0-9`, `;` and `:`, and `m`. Every other escape
+sequence and control character is replaced with a visible glyph as [VIEW-3](#VIEW-3) says. That
+includes a cursor movement, an erase, a window title, a sequence with another parameter or final
+byte, one cut short by the end of the line, and a run of parameters longer than 64. The colour codes
+are taken out first and the replacement runs after, so an escape that is left, or that two halves
+of another code are joined to leave when a code between them is taken out, is replaced like any
+other, and the terminal is sent no escape.
+
+It applies to the output of a command typed in shell mode, whether the command is still running
+([SHELL-7](shell-mode.md#SHELL-7)) or has ended, to the preview in a quarantined block, to the lines
+drawn under a call the planner read, and to the quarantined block a one-shot run writes to stderr.
+Everything else draws every byte. That includes a block's heading, where the origin can be a
+filename, a path or a name wherever one is drawn, the hunks of a write, and every prompt that asks a
+person to approve text: a write, a command's output, a read, a message, a server and its tools. A
+yes on those releases the text or acts on it, and a code that sets the colour of text to the colour
+of its background is the kind of thing the person is deciding about.
+
+**Why.** The replacement of VIEW-3 pictures the escape and leaves the rest of the code as ordinary
+text, so a CI log that colours every token draws as `␛[0m␛[36m├␛[0m` and is hard to read. A colour
+code only sets colours. VIEW-3 replaces control characters so that content cannot move the cursor,
+erase the margin or ask the terminal something, and a colour code with its escape taken out does
+none of those. VIEW-3 replaces a control character and does not drop it so that the person can tell
+it was there, and the count gives the person the same for colour codes.
+
+`verified-by: bravebot_tui::colour_codes::the_codes_of_a_coloured_line_are_taken_out_and_counted`
+`verified-by: bravebot_tui::colour_codes::every_spelling_of_a_colour_code_is_taken_out_whole`
+`verified-by: bravebot_tui::colour_codes::a_sequence_that_is_not_a_colour_code_is_left_in_place`
+`verified-by: bravebot_tui::colour_codes::a_run_of_parameters_longer_than_a_colour_has_is_left_in_place`
+`verified-by: bravebot_tui::colour_codes::taking_a_code_out_can_join_two_halves_and_leaves_their_escape_for_printable`
+`verified-by: bravebot_tui::colour_codes::codes_beside_wide_characters_are_taken_out_cleanly`
+`verified-by: bravebot_tui::colour_codes::nothing_is_said_where_nothing_was_taken_out`
+`verified-by: bravebot_tui::marking::colour_codes_in_a_preview_are_counted_and_not_drawn`
+`verified-by: bravebot_tui::marking::only_colour_codes_are_left_out_of_a_preview`
+`verified-by: bravebot_tui::marking::a_code_joined_by_taking_another_out_is_still_drawn_as_pictures`
+`verified-by: bravebot_tui::marking::a_colour_code_in_the_origin_is_drawn_in_full`
+`verified-by: bravebot_tui::marking::a_preview_without_colour_codes_says_nothing_about_them`
+`verified-by: bravebot_tui::shell_mode::coloured_output_is_drawn_without_its_codes_and_they_are_counted`
+`verified-by: bravebot_tui::shell_mode::output_keeps_every_other_escape_beside_the_codes_it_leaves_out`
+`verified-by: bravebot_tui::shell_mode::output_without_colour_codes_says_nothing_about_them`
+`verified-by: bravebot_tui::shell_mode::running_output_cannot_draw_its_own_escapes`
+`verified-by: bravebot_tui::shell_mode::a_colour_code_split_between_two_pieces_is_counted_once_it_is_whole`
+`verified-by: bravebot_tui::render::a_glimpse_counts_its_colour_codes_and_does_not_draw_them`
+`verified-by: bravebot_tui::render::a_glimpse_line_is_measured_without_its_colour_codes`
+`verified-by: bravebot_tui::render::a_glimpse_from_the_end_counts_its_colour_codes_last`
+`verified-by: bravebot_tui::render::a_glimpse_without_colour_codes_says_nothing_about_them`
+`verified-by: bravebot_tui::confirm::the_output_prompt_draws_a_colour_code_in_full`
+`verified-by: bravebot_approval::lib::a_colour_code_in_output_awaiting_a_yes_is_written_in_full`
+`verified-by: bravebot_cli::progress::colour_codes_in_a_block_are_counted_and_not_drawn`
+`verified-by: bravebot_cli::progress::only_colour_codes_are_left_out_of_a_block`
+`verified-by: bravebot_cli::progress::a_block_without_colour_codes_says_nothing_about_them`
+
+
+<a id="VIEW-31"></a>
+### VIEW-31: a turn that ends or a question that opens is noticed by a terminal that was left
+
+When the terminal has reported being left and a turn or a command goes from working to ready, or a
+question a turn puts to the person opens (an approval of any kind, or a question from the planner),
+the interface writes one notice to the terminal. A turn that ends with a question still open is
+noticed as ended. The `notificationMethod` setting chooses the notice: `osc9` writes an OSC 9
+sequence, `bel` writes the bell, `off` writes nothing, and `auto`, which is also what any other word
+or no word means, writes OSC 9 where `TERM_PROGRAM` names iTerm.app, WezTerm or ghostty and the bell
+elsewhere. The `notificationCondition` setting `always` writes the notice whether or not the terminal
+was left, and any other word or none writes it only after the terminal reported being left. A terminal
+that reports no focus changes is taken to be in front of the person, so under that default it is
+never written to. A report is taken as the event is read, by whichever prompt or loop reads it, so
+one that arrives while a question is open counts. A state the interface is still in is noticed once,
+not on every frame.
+
+The text is fixed per kind, a message from the catalog that takes no argument (`bravebot: turn finished` and `bravebot: waiting for an answer` in English). It never
+carries a command, a path, a file name, a prompt or any part of a reply, so no byte a turn produced reaches
+the escape sequence. The decision reads the interface's own state, the focus report and the settings. It
+adds no moment to the hooks ([HOOK-2](hooks.md#HOOK-2)), and it is the terminal interface's alone.
+
+**Why.** A person who starts a long turn and switches windows learns that it stopped on a question only by
+looking again. A hook can run a command for either moment ([HOOK-2](hooks.md#HOOK-2)), but the person has
+to write it, and the notice needs no setup.
+
+`verified-by: bravebot_tui::notify::a_turn_that_ends_with_the_terminal_left_is_noticed_once`
+`verified-by: bravebot_tui::notify::a_question_that_opens_with_the_terminal_left_is_noticed_once`
+`verified-by: bravebot_tui::notify::a_focused_terminal_is_noticed_only_where_the_condition_is_always`
+`verified-by: bravebot_tui::notify::a_turn_that_ends_while_a_question_is_open_is_noticed`
+`verified-by: bravebot_tui::notify::off_writes_nothing`
+`verified-by: bravebot_tui::notify::only_a_turn_ending_or_a_question_opening_is_noticed`
+`verified-by: bravebot_tui::notify::auto_chooses_osc9_only_for_a_terminal_known_to_read_it`
+`verified-by: bravebot_tui::notify::a_word_that_names_nothing_is_the_default`
+`verified-by: bravebot_tui::notify::each_method_word_asks_for_its_own_method`
+`verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
+`verified-by: bravebot_tui::notify::the_text_of_each_notice_is_fixed_and_carries_no_control_character_of_its_own`
+`verified-by: bravebot_config::settings::a_settings_file_names_how_and_when_the_terminal_is_notified`
+
+
+## Known costs
+
+- **The trust question asked when the interface opens is not noticed.** The terminal has not reported
+  being left when it is drawn, and the person who started the program is looking at it, so
+  [VIEW-31](#VIEW-31) writes nothing for it under any `notificationCondition`. A question put to a
+  person outside a turn is not noticed either, which is the boundary `prompt-shown` has in
+  [hooks.md](hooks.md).
+- **`auto` knows a terminal by `TERM_PROGRAM`, which is not always the terminal.** Inside tmux it
+  names tmux and over ssh it is often unset, so `auto` writes the bell there although the terminal
+  in front may read OSC 9. `notificationMethod` set to `osc9` asks for it by name, and whether the
+  sequence reaches the terminal is up to what sits between.
+- **A terminal that reports no focus changes is never written to under the default condition.** A
+  person whose terminal sends none is taken to be looking, so one who walks away learns nothing
+  unless `notificationCondition` is `always`, which writes the notice to a person who is looking
+  as well.

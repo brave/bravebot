@@ -22,6 +22,8 @@ governs:
   - crates/tui/src/keybindings.rs
   - crates/config/src/settings.rs
   - crates/tui/src/command_table.rs
+  - crates/ui-bridge/src/running.rs
+  - ui/src/renderer/interjecting.ts
 documented-by:
   - docs/website/docs/using/interactive-mode.md
   - docs/website/docs/using/vi-mode.md
@@ -47,6 +49,7 @@ transcript, and the box stays beneath the list.
 
 `verified-by: bravebot_tui::render::the_input_box_grows_with_the_text`
 `verified-by: bravebot_tui::render::the_input_box_stops_growing_at_the_cap`
+`verified-by: bravebot_tui::render::the_input_box_holds_ten_rows_of_text_and_no_more`
 `verified-by: bravebot_tui::render::a_very_long_input_scrolls_to_the_cursor`
 `verified-by: bravebot_tui::render::the_box_grows_mid_turn_too`
 `verified-by: bravebot_tui::render::a_long_list_leaves_room_for_the_box_and_the_transcript`
@@ -1036,6 +1039,12 @@ and readline from disagreeing about what was last taken.
   modifier the chord arrives as Enter and only queues the line (INPUT-5). The offer beside the queue,
   which is where somebody reaches for it, is left off there; the list is drawn from one table for
   every terminal, as it is for Shift-Enter.
+- **Where the pointer's movement is reported, moving it between the two presses of Ctrl-C withdraws
+  the offer to leave.** A movement is a mouse report, and a mouse report withdraws the offer
+  ([INPUT-4](#INPUT-4)), so the second press offers again and a third leaves. That is the terminals
+  asked for a pointer shape ([PANEL-6](info-panel.md#PANEL-6)); elsewhere only the wheel and a click
+  withdraw it. A movement is not exempted, because the offer would then stand through input another
+  program can write, which is what withdrawing it is for.
 
 <a id="INPUT-19"></a>
 ### INPUT-19: Ctrl-R searches every prompt sent, and what is chosen goes into the box
@@ -1334,6 +1343,7 @@ vi gives `m` no key, and a box that waited for one would swallow the instruction
 `verified-by: bravebot_tui::list_picker::escape_and_ctrl_c_cancel`
 `verified-by: bravebot_tui::list_picker::the_arrows_and_vis_own_keys_walk_the_list`
 `verified-by: bravebot_tui::list_picker::enter_takes_the_row_under_the_cursor`
+`verified-by: bravebot_tui::app::a_style_chosen_in_the_config_panel_is_kept_and_said_in_the_transcript`
 `verified-by: bravebot_tui::config_prompt::every_row_says_what_it_means`
 
 <a id="INPUT-24"></a>
@@ -2219,8 +2229,10 @@ screen of its own, so what was in the terminal beforehand is untouched and is ba
 afterwards. A session in lines ([cli.md](cli.md)) takes none of what follows, and this
 clause is about the one that draws. With that screen the
 session asks for mouse reporting, narrowed to the buttons, the wheel and motion while a button is
-held; bracketed paste; focus reporting; and, only where the terminal says it understands the
-request, disambiguated keys.
+held, except in a terminal that draws the pointer shape it is asked for
+([PANEL-6](info-panel.md#PANEL-6)), which is told of motion with no button held as well; bracketed
+paste; focus reporting; and, only where the terminal says it understands the request,
+disambiguated keys.
 
 Every one of those is given back when the session ends, including when it ends by failing rather
 than by being left, and again around each handover of the terminal to another program: the editor
@@ -2230,7 +2242,9 @@ found, and the same set is taken again on the way back.
 **Why.** Each mode is asked for because something here cannot work without it. The wheel scrolls
 the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
 a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
-nothing here reads. Bracketed paste is what stops a pasted prompt sending itself, since without it
+nothing here reads. The exception is a terminal that draws the pointer shape on request: where the
+pointer is over the info panel's border is what the shape follows, so that terminal is not narrowed
+and no other is. Bracketed paste is what stops a pasted prompt sending itself, since without it
 the newline most clipboards carry arrives as Enter; it is also the only thing that says a paste came
 off a clipboard at all, so where a terminal does not send those markers a paste arrives as bare keys
 and nothing downstream can tell it from what a program wrote. Focus reporting is what makes the
@@ -2250,6 +2264,7 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
 `verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
 `verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`
+`verified-by: bravebot_tui::app::a_terminal_that_draws_the_pointer_shape_reports_every_movement`
 
 <a id="INPUT-34"></a>
 ### INPUT-34: what arrived together is not two presses
@@ -2589,7 +2604,9 @@ It is made once per turn, without the box waiting for it.
 
 What comes back is offered only if it holds 2 to 12 words, fewer than 100 characters and one line.
 The driver counts and nothing else: it does not read what the words say, and an answer outside the
-counts is not offered, rather than being cut to something the model did not write. An offer is
+counts is not offered, rather than being cut to something the model did not write. Nothing is
+offered where the answer is one the planner could not have held, which is an exchange that has met
+something untrusted, as a handoff brief is not (see [sessions.md](sessions.md)). An offer is
 drawn dimmed in the box where the invitation is, and only while the box is empty and the session
 idle.
 
@@ -2619,6 +2636,7 @@ nobody asked for on each turn is the cost this setting exists to let a person ch
 `verified-by: bravebot_tui::app::a_suggestion_is_offered_only_to_an_idle_empty_box_with_the_setting_on`
 `verified-by: bravebot_tui::app::a_suggestion_is_asked_for_only_after_a_turn_that_answered`
 `verified-by: bravebot_tui::app::a_suggestions_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::app::a_suggestion_from_an_exchange_that_met_something_untrusted_is_not_offered`
 `verified-by: bravebot_tui::app::an_answered_request_is_charged_recorded_and_offered`
 `verified-by: bravebot_tui::app::an_answer_that_is_not_usable_is_still_charged_and_recorded`
 `verified-by: bravebot_tui::app::a_request_not_yet_answered_is_waited_on`
@@ -2722,3 +2740,50 @@ with something else may stand between it and the screen.
 `verified-by: bravebot_mentions::lib::a_settled_directory_is_not_read_again_while_it_is_unchanged`
 `verified-by: bravebot_mentions::lib::a_changed_or_recently_touched_directory_is_read_afresh`
 `verified-by: bravebot_tui::references::the_callers_of_one_key_press_share_one_reading_of_the_directory`
+
+<a id="INPUT-46"></a>
+### INPUT-46: the desktop window sends Enter into the turn that is running, and queues only when asked
+
+Enter in the message box while a turn runs sends the line into that turn, as [INPUT-10](#INPUT-10)
+says for the terminal: the planner reads it at the turn's next round boundary, after the round's
+calls have run, as the person's own words and under the routing the turn began with. The window
+sends it with `turn.interject`, which takes the session, the words and optionally the target of the
+turn it is for. The bridge answers `{ "accepted": true }` when the turn is running, is not being
+stopped and asks between rounds, and `false` otherwise. A plan run asks nothing between rounds, so
+it never accepts one.
+
+The window draws the line under the box as sent to this turn. It is in the transcript only once the
+bridge sends `turn.interjected`, at the moment the planner is given it, and lines are read in the
+order they were sent. A line the bridge does not accept, and a line still unread when the turn
+ends, becomes a turn of its own and goes at once, ahead of anything queued, even when a Stop has
+paused the queue. A turn that failed for any other reason leaves the line in the queue it paused.
+
+Alt+Enter, or **Queue for after**, holds the line for after the turn instead. That queue is the one
+Stop pauses and **Resume** releases, and each message in it starts a turn of its own with the files
+it names.
+
+**What it carries is words.** A dropped file resolves to its name and a pasted picture to a
+sentence saying it cannot be shown, as in [DROP-8](dropping.md#DROP-8). The window sends the line as
+written with `files`, each a marker and a name, and `pictures`, each a marker, and the bridge puts
+them into words with the same Rust functions the terminal does (`bravebot_filetype::markers`), so
+the two front ends give the planner the same line. The main process forwards the session, the
+target, the line and those names and markers of a `turn.interject` and nothing else, so no path,
+file or picture reaches the running turn through it. A message with a file chosen by the attach button, and any
+message sent while the bot's memory update runs, is queued instead.
+
+**Why.** A correction such as "no, the other one" that is held until the turn ends arrives after
+the work it was meant to prevent, and stopping the turn to deliver it sooner also pauses the queue.
+Enter is the key a person presses to say something to the agent, and the terminal already gives it
+this meaning.
+
+`verified-by: bravebot_ui_bridge::interjecting::a_line_typed_while_a_round_runs_is_in_the_next_request`
+`verified-by: bravebot_ui_bridge::interjecting::a_turn_that_is_stopping_or_over_does_not_take_a_line`
+`verified-by: bravebot_ui_bridge::interjecting::a_blank_line_and_an_unknown_session_are_refused`
+`verified-by: bravebot_ui_bridge::interjecting::markers_in_a_line_become_a_name_and_a_sentence_in_the_bridge`
+`verified-by: bravebot_ui_bridge::interjecting::a_malformed_marker_list_is_refused`
+`verified-by: bravebot_ui_bridge::interjecting::a_plan_run_does_not_take_a_line`
+`verified-by: bravebot_filetype::markers::a_picture_becomes_a_sentence_naming_its_marker_and_the_reason`
+`verified-by: bravebot_filetype::markers::a_dropped_file_becomes_its_name_and_text_around_it_is_kept`
+`verified-by: bravebot_ui_bridge::interjection_tests::work_that_asks_nothing_between_rounds_takes_no_line`
+`verified-by: bravebot_ui_bridge::interjection_tests::lines_are_read_in_the_order_they_were_typed`
+`verified-by: by-construction (the renderer and the main process are not crates this workspace compiles, so ui/scripts/interjecting.test.mjs drives the window's own event reducer with the bridge's events: a line is in the transcript only after turn.interjected and in the order it was sent, a line unread when the turn is done or stopped goes on past a paused queue, one left by a failed turn waits, a refused line returns to the head of the queue, the window names its markers and writes no words, a paperclip file or the memory update queues the line, and turn.interject forwards only its line and the names of its markers; make check-ui runs the test)`

@@ -51,6 +51,9 @@ pub enum Action {
     Advisor(String),
     /// Say which output style is in force, take one by name, or clear the pick. Empty says.
     Style(String),
+    /// Say which language the interface is in, choose one for the next start, or give the choice
+    /// back. Empty says.
+    Language(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.
@@ -80,6 +83,10 @@ pub enum Action {
     ),
     /// Recap the session so far, over a copy of the conversation, in the way an aside is answered.
     Recap,
+    /// Draft a commit message from changes and put it in the box. Needs the workspace, the trust
+    /// map and the network, which the loop owns, and gives the conversation nothing and takes
+    /// nothing from it.
+    CommitMessage(crate::commit_message_command::Asked),
     /// Plan this task in full and then walk it. Needs the workspace, the trust map and the
     /// network, which the loop owns, and gives the conversation nothing back.
     ///
@@ -1550,6 +1557,7 @@ fn queued(session: &mut Session, key: KeyEvent) -> Action {
 /// away, so the drag that would have highlighted a line arrives here instead, and answering it
 /// is the only way a user gets to copy anything.
 pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
+    session.note_pointer(mouse.row, mouse.column);
     match mouse.kind {
         // While the scroller is open the wheel is one of its keys, so it stops at the first row
         // and the last the way every other movement in that mode does. It takes no count, so it
@@ -1573,8 +1581,44 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.scroll_down(session.wheel_rows());
             Action::Redraw
         }
+        // The border between the transcript and the panel is the panel's handle, and a press on
+        // it starts neither a selection nor a copy (PANEL-6).
+        MouseEventKind::Down(MouseButton::Left)
+            if session.begin_panel_drag(mouse.row, mouse.column) =>
+        {
+            Action::Redraw
+        }
+        MouseEventKind::Drag(MouseButton::Left) if session.dragging_panel() => {
+            session.drag_panel_to(mouse.column);
+            Action::Redraw
+        }
+        MouseEventKind::Up(MouseButton::Left) if session.dragging_panel() => {
+            session.end_panel_drag();
+            Action::Redraw
+        }
+        // Shift-click moves the loose end of the selection held, when the press is in the pane
+        // it belongs to. Where it is not, or nothing is held, it is a press like any other.
+        MouseEventKind::Down(MouseButton::Left)
+            if mouse.modifiers.contains(KeyModifiers::SHIFT)
+                && session.selection_holds(mouse.row, mouse.column) =>
+        {
+            session.last_click = None;
+            session.extend_selection(mouse.row, mouse.column);
+            Action::Redraw
+        }
         MouseEventKind::Down(MouseButton::Left) => {
-            session.begin_selection(mouse.row, mouse.column);
+            let (click, count) = crate::select::count_click(
+                session.last_click,
+                std::time::Instant::now(),
+                mouse.row,
+                mouse.column,
+            );
+            session.last_click = Some(click);
+            session.begin_selection_by(
+                mouse.row,
+                mouse.column,
+                crate::select::Unit::of_click(count),
+            );
             Action::Redraw
         }
         MouseEventKind::Drag(MouseButton::Left) => {

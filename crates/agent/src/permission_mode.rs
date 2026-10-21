@@ -170,8 +170,9 @@ impl PermissionMode {
                 "\n\nPlan mode. The user is deciding what to do, so writing is refused while it \
                  lasts however they would have answered: do not call write or edit, and do not \
                  offer to. Read the code, run what you need to understand it, and answer with what \
-                 you would do and why. When the plan is settled they will leave this mode and ask \
-                 you to carry it out.",
+                 you would do and why. When the plan is settled, call propose_plan with it if that \
+                 tool is offered to you, so they can approve it and choose how the work \
+                 continues; otherwise they will leave this mode and ask you to carry it out.",
             ),
             Self::Ask | Self::AcceptEdits | Self::Bypass => None,
         }
@@ -1068,6 +1069,7 @@ mod tests {
             command: "cat notes.txt".to_string(),
             output: "a line".to_string(),
             lines: 1,
+            hidden: 0,
             reference: "ref:1".to_string(),
             verdict,
             reason: None,
@@ -1082,6 +1084,7 @@ mod tests {
             expects: "the release notes".to_string(),
             content: "a line".to_string(),
             lines: 1,
+            hidden: 0,
             verdict,
             reason: None,
             picture: None,
@@ -1093,6 +1096,7 @@ mod tests {
     fn a_vouch(verdict: Verdict) -> VouchRequest {
         VouchRequest {
             path: "notes.txt".to_string(),
+            rule: "notes.txt".to_string(),
             preview: "a line".to_string(),
             truncated: false,
             verdict,

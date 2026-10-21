@@ -5,6 +5,7 @@
 //! keep a session a window is using from being deleted under it.
 
 #![allow(dead_code)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};

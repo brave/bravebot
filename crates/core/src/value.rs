@@ -25,6 +25,58 @@ use std::fmt;
 /// Intentionally missing: `Deref`, `PartialEq`, `Display`, and any infallible
 /// accessor. Adding one would let untrusted content influence control flow, which
 /// is the exact failure this type exists to prevent.
+///
+/// Constructing one, cloning it and printing it is ordinary, which is what makes each refusal
+/// below a refusal of the capability rather than of the name:
+///
+/// ```
+/// use bravebot_core::{Label, Labelled};
+/// let a = Labelled::new(String::new(), Label::untrusted_public());
+/// let b = a.clone();
+/// assert!(format!("{b:?}").starts_with("Labelled("));
+/// ```
+///
+/// Comparing two does not compile, so a branch on quarantined bytes has nothing to ask:
+///
+/// ```compile_fail
+/// use bravebot_core::{Label, Labelled};
+/// let a = Labelled::new(String::new(), Label::untrusted_public());
+/// let b = a.clone();
+/// let _ = a == b;
+/// ```
+///
+/// Nor does hashing one, which would answer the same question through a table lookup:
+///
+/// ```compile_fail
+/// use bravebot_core::{Label, Labelled};
+/// use std::hash::{DefaultHasher, Hash, Hasher};
+/// let a = Labelled::new(String::new(), Label::untrusted_public());
+/// a.hash(&mut DefaultHasher::new());
+/// ```
+///
+/// Nor formatting one with `Display`:
+///
+/// ```compile_fail
+/// use bravebot_core::{Label, Labelled};
+/// let a = Labelled::new(String::new(), Label::untrusted_public());
+/// let _ = format!("{a}");
+/// ```
+///
+/// Nor dereferencing one:
+///
+/// ```compile_fail
+/// use bravebot_core::{Label, Labelled};
+/// let a = Labelled::new(String::new(), Label::untrusted_public());
+/// let _: &String = &*a;
+/// ```
+///
+/// Nor borrowing the content through `AsRef`:
+///
+/// ```compile_fail
+/// use bravebot_core::{Label, Labelled};
+/// let a = Labelled::new(String::new(), Label::untrusted_public());
+/// let _: &str = a.as_ref();
+/// ```
 #[derive(Clone)]
 pub struct Labelled<T> {
     value: T,

@@ -58,6 +58,14 @@ const UNDO_DEPTH: usize = 1000;
 /// ask about.
 const GIVE_WAY_AFTER: Duration = Duration::from_secs(10);
 
+/// How many of the last lines a running command printed are kept to draw, and how many bytes of them.
+///
+/// A frame draws all of what is kept, and a command can print without end, or print one line that
+/// never ends. The end is what a person watching a command wants to see, and the whole of it is
+/// drawn when the command ends.
+pub const COMMAND_LINES: usize = 200;
+pub const COMMAND_BYTES: usize = 32 * 1024;
+
 /// How many rows one mouse wheel event moves the view by where nothing says otherwise.
 ///
 /// Three is what a terminal's own scrollback moves for a notch, so the transcript moves the way the
@@ -392,35 +400,17 @@ pub struct AttachedImage {
     pub bytes: Vec<u8>,
 }
 
-impl AttachedImage {
-    /// What stands in the line where the picture cannot travel with it.
-    ///
-    /// Not from the catalog, and deliberately: the planner reads this, so it is part of what the
-    /// model is given rather than something a person is being told. Same reasoning as the marker
-    /// in [`Session::attach`], and the catalog says so at the top of itself.
-    ///
-    /// Why it cannot travel is the caller's to say, because a picture misses a turn already running
-    /// for one reason and a command for another, and the one thing this must not do is guess.
-    fn in_words(&self, why: &str) -> String {
-        format!(
-            "({} was pasted here, but it cannot be shown to you: {why}. Ask for it again if you \
-             need to see it.)",
-            self.marker
-        )
-    }
-}
-
 /// A line with every marker in it standing for one of `carried` replaced by what it says instead.
 ///
 /// One place, because a picture misses a request for more than one reason and the sentence that
 /// takes its place reads the same however it was missed. `why` is the reason, which is the caller's:
-/// see [`AttachedImage::in_words`].
+/// see [`bravebot_filetype::markers::picture_in_words`].
 fn put_back_to_words(line: &str, carried: &[AttachedImage], why: &str) -> String {
-    let mut settled = line.to_string();
-    for picture in carried {
-        settled = settled.replace(&picture.marker, &picture.in_words(why));
-    }
-    settled
+    bravebot_filetype::markers::put_back_to_words(
+        line,
+        carried.iter().map(|picture| picture.marker.as_str()),
+        why,
+    )
 }
 
 /// A line with every marker in it standing for one of `dropped` replaced by that file's name.
@@ -433,11 +423,12 @@ fn put_back_to_words(line: &str, carried: &[AttachedImage], why: &str) -> String
 /// Unlike a picture there is no sentence to write, because the name is the honest answer rather than
 /// a report that the honest answer is missing.
 fn put_back_to_names(line: &str, dropped: &[Attached]) -> String {
-    let mut settled = line.to_string();
-    for file in dropped {
-        settled = settled.replace(&file.marker, &file.name);
-    }
-    settled
+    bravebot_filetype::markers::put_back_to_names(
+        line,
+        dropped
+            .iter()
+            .map(|file| (file.marker.as_str(), file.name.as_str())),
+    )
 }
 
 /// The same command with the text files it named put back to their names.
@@ -642,6 +633,8 @@ pub struct Session {
     /// and nothing the program can measure says which. Held on the session because the wheel is
     /// answered against it on every event.
     wheel_rows: u16,
+    /// Whether the mouse is captured, from `tui.mouse`. On unless the settings turned it off.
+    mouse: bool,
     /// Which vi mode the box is in, where vi is the style.
     ///
     /// Every session opens in INSERT, where a typed character is a typed character. Opening in NORMAL
@@ -739,6 +732,13 @@ pub struct Session {
     pub show_trail: bool,
     /// Whether the person has the info panel open, which the frame then draws only where it fits.
     panel: bool,
+    /// The width the person has dragged the info panel to, which the frame clamps to the terminal
+    /// it is drawn on without changing this.
+    panel_width: u16,
+    /// Whether a drag that began on the panel's border is still held (PANEL-6).
+    panel_drag: bool,
+    /// Where the last mouse report put the pointer, as a row and a column.
+    pointer: Option<(u16, u16)>,
     /// Whether `/caffeinate` is on, and the hold it keeps while work is pending.
     pub(crate) caffeinate: crate::caffeinate::KeepAwake,
     /// When a recap is owed to a person who has been away (CMD-20).
@@ -946,6 +946,8 @@ pub struct Session {
     /// Kept after the button comes up, so a user can see what they copied rather than watching
     /// it vanish at the moment it is taken.
     pub selection: Option<crate::select::Selection>,
+    /// The last press of the left button, which says whether the next one is a double click.
+    pub last_click: Option<crate::select::Click>,
     /// How much the last copy took, until the next click or the next prompt.
     pub copied: Option<usize>,
     /// What the turn that just finished cost, until the next one starts.
@@ -974,6 +976,14 @@ pub struct Session {
     /// press is what reads it. Cleared by any key that is not itself an interrupt, so a person who
     /// went off and did something else is asked again rather than leaving on one press later.
     pub offered_to_leave: bool,
+    /// Whether the turn in flight began on a line the person typed that is only `exit` or `quit`
+    /// (CMD-2).
+    ///
+    /// Those words leave in other terminal agents and are a prompt here, so the row under the box
+    /// says the line went to the model and which keys stop the turn and leave. Set from the person's
+    /// own line by the two calls that take one from the box or the queue, and cleared by every turn
+    /// that begins, so the next one is judged on its own. Read only while the turn runs.
+    pub leave_word_sent: bool,
     /// Whether the key being answered arrived on its own rather than in a run with others.
     ///
     /// Set from the reader before each key is dispatched, and `true` on a session nobody has read
@@ -1154,6 +1164,16 @@ pub struct Session {
     /// Held as it arrived. What is drawn from it is [`Session::reply_so_far`], since a model
     /// that has nowhere else to put its working writes it in here.
     streaming: String,
+    /// What the command running right now has printed, as far as it has got and as far back as is
+    /// kept (SHELL-7).
+    ///
+    /// Apart from the transcript for the reason `streaming` is: it is drawn at the tail and replaced
+    /// by the entry the command's result makes, so the handover draws nothing twice. The end of it
+    /// only, since a command can print without end and every frame draws what is held. Held as it
+    /// arrived, and drawn through the same step as the entry that replaces it.
+    command_output: String,
+    /// How many lines of what the command printed came before the first of `command_output`.
+    command_earlier: usize,
     /// Where in the transcript the commands carried out during the turn in flight put what they
     /// said, oldest first.
     ///
@@ -1178,10 +1198,10 @@ pub struct Session {
     /// Answers the user has already given this session, keyed by the question.
     ///
     /// A repeated question is answered from here rather than put to them again, since a planner
-    /// that loops back over the same decision should not make the user restate it. Kept in the
-    /// interface rather than the kernel: it is a convenience for the person, not a rule about
-    /// labels, and the key is trusted text by the time it reaches here.
-    pub answers: Vec<(String, bravebot_core::ask::Answer)>,
+    /// that loops back over the same decision should not make the user restate it. The memo is the
+    /// one every front end keeps; which session it belongs to is this interface's to say, and
+    /// the key is trusted text by the time it reaches here.
+    pub answers: bravebot_core::ask::AnswerMemo,
     /// Pictures pasted into the line being typed, each with the text standing in for it.
     ///
     /// The marker is the handle. A paste writes `[Image #1]` where the caret was and the picture
@@ -1358,6 +1378,7 @@ impl Session {
             vetting: false,
             bindings: crate::keybindings::Keybindings::default(),
             wheel_rows: WHEEL_ROWS,
+            mouse: true,
             mode: crate::vim::Mode::default(),
             half_typed: None,
             count: None,
@@ -1377,6 +1398,9 @@ impl Session {
             status: Status::Idle,
             show_trail: false,
             panel: false,
+            panel_width: crate::panel::WIDTH,
+            panel_drag: false,
+            pointer: None,
             caffeinate: Default::default(),
             away: Default::default(),
             prompt_files: None,
@@ -1428,11 +1452,13 @@ impl Session {
             cached_prompt_tokens: None,
             history: crate::history::History::new(),
             selection: None,
+            last_click: None,
             copied: None,
             finished: None,
             cleared_by_interrupt: false,
             expandable_lines: 0,
             offered_to_leave: false,
+            leave_word_sent: false,
             key_arrived_alone: true,
             image_on_clipboard: false,
             written: 0,
@@ -1463,10 +1489,12 @@ impl Session {
             pending: crate::remote_confirm::Interjections::new(),
             held: std::collections::VecDeque::new(),
             streaming: String::new(),
+            command_output: String::new(),
+            command_earlier: 0,
             said_while_working: Vec::new(),
             composing: None,
             attributed_to: None,
-            answers: Vec::new(),
+            answers: bravebot_core::ask::AnswerMemo::default(),
             pasted: Vec::new(),
             previews: Vec::new(),
             sent_pasted: Vec::new(),
@@ -1745,7 +1773,7 @@ impl Session {
         self.recall.clear();
         // ASK-8: kept, a question in the new conversation would be answered from the one that was
         // thrown away, and the person asked nothing.
-        self.answers.clear();
+        self.answers.forget();
         self.turn_places.clear();
         self.unplaced_todos.clear();
         self.hunks_listed = None;
@@ -2417,6 +2445,19 @@ impl Session {
         self.copied = None;
     }
 
+    /// Begin a selection that takes in the whole word or row under the press, as a double or
+    /// triple click does.
+    pub fn begin_selection_by(&mut self, row: u16, column: u16, unit: crate::select::Unit) {
+        self.begin_selection(row, column);
+        self.selection = self.selection.map(|selection| selection.by(unit));
+    }
+
+    /// Whether a press at `row` and `column` lands in the pane the selection held belongs to.
+    pub fn selection_holds(&self, row: u16, column: u16) -> bool {
+        self.selection
+            .is_some_and(|selection| selection.holds(row, column))
+    }
+
     /// Follow the pointer with the loose end of the selection.
     pub fn extend_selection(&mut self, row: u16, column: u16) {
         if let Some(selection) = &mut self.selection {
@@ -2953,6 +2994,30 @@ impl Session {
         self.handoff = true;
     }
 
+    /// Put the commit message `/commit-message` drafted in the box for the person to read, edit and
+    /// send (CMD-23).
+    ///
+    /// A line already in the box is kept as the draft Up brings back, so a draft arriving after the
+    /// person started typing something else costs them nothing. The text goes in after the leading
+    /// words the driver wrote, and with what a terminal draws as nothing taken out, as a paste's is
+    /// (PASTE-10): the draft was written about files nobody may have vouched for. Enter on it is an
+    /// ordinary press, so nothing here sends and nothing here runs.
+    pub fn propose_commit_message(&mut self, message: &str) {
+        if self.status != Status::Idle {
+            return;
+        }
+        let (message, removed) = crate::invisible::without_invisible(&normalised(message));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
+        if !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(crate::commit_message_command::box_text(&message));
+        self.shell = false;
+    }
+
     /// Whether Enter on the box starts a new session from it.
     pub fn handoff_pending(&self) -> bool {
         self.handoff && !self.input.trim().is_empty()
@@ -3102,13 +3167,102 @@ impl Session {
     pub fn begin_command(&mut self) {
         self.status = Status::Running;
         self.started = Some(Instant::now());
+        self.command_output.clear();
+        self.command_earlier = 0;
         self.back_to_the_tail();
     }
 
     /// Note that it finished, whatever came of it.
+    ///
+    /// What it printed so far goes with it. What the command's result releases is drawn by
+    /// [`Session::printed`] in its place, and a command that released nothing leaves nothing of it.
     pub fn finish_command(&mut self) {
         self.status = Status::Idle;
         self.started = None;
+        self.command_output.clear();
+        self.command_earlier = 0;
+    }
+
+    /// Note that it ended because it was stopped or ran out of time, and keep what it had printed.
+    ///
+    /// The rows become an entry, since a person stops a command from what it has printed and would
+    /// lose the reason with them. The entry is for the screen alone: the command released nothing,
+    /// so nothing of it is recorded in the conversation (SHELL-7). Where the rows held only the end
+    /// of it, the entry begins with the line saying how many came before. Whether anything was
+    /// kept, so the caller can say it was not sent.
+    pub fn finish_stopped_command(&mut self) -> bool {
+        let kept = self
+            .command_so_far()
+            .map(|(text, earlier)| (text.trim_end().to_string(), earlier))
+            .filter(|(text, _)| !text.is_empty());
+        self.finish_command();
+        let Some((text, earlier)) = kept else {
+            return false;
+        };
+        let text = match earlier {
+            0 => text,
+            count => format!("{}\n{text}", t!(transcript_earlier_lines, count = count)),
+        };
+        self.transcript.push(Entry::output(text));
+        self.back_to_the_tail();
+        true
+    }
+
+    /// Add what the running command has printed since the last frame to what is drawn of it.
+    ///
+    /// The view does not move for it, as it does not for [`Session::streaming`]: a chunk lands
+    /// several times a second for as long as the command prints, and putting the view back for each
+    /// would leave nobody able to scroll back while it runs. A view at the tail follows what
+    /// arrives, since `scroll` is 0 there.
+    ///
+    /// Only the end is kept, [`COMMAND_LINES`] lines and [`COMMAND_BYTES`] bytes of it, a last line
+    /// with no newline yet being one of the lines. The lines before it are counted so the drawing
+    /// can say so. The released text that replaces it when the command ends is whole.
+    ///
+    /// Looked at from the end, and a piece that fills what is kept alone is cut before anything is
+    /// looked at in it: this runs between frames, and a command that prints faster than they are
+    /// drawn hands it a great deal at once.
+    pub fn command_printing(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let mut text = text;
+        if text.len() > COMMAND_BYTES {
+            let mut from = text.len() - COMMAND_BYTES;
+            while !text.is_char_boundary(from) {
+                from += 1;
+            }
+            self.command_earlier +=
+                self.command_output.matches('\n').count() + text[..from].matches('\n').count();
+            self.command_output.clear();
+            text = &text[from..];
+        }
+        self.command_output.push_str(text);
+
+        let newlines_kept = match self.command_output.ends_with('\n') {
+            true => COMMAND_LINES,
+            false => COMMAND_LINES - 1,
+        };
+        let mut cut = self
+            .command_output
+            .rmatch_indices('\n')
+            .nth(newlines_kept)
+            .map_or(0, |(at, _)| at + 1);
+        let over = (self.command_output.len() - cut).saturating_sub(COMMAND_BYTES);
+        if over > 0 {
+            cut += over;
+            while !self.command_output.is_char_boundary(cut) {
+                cut += 1;
+            }
+        }
+        self.command_earlier += self.command_output[..cut].matches('\n').count();
+        self.command_output.drain(..cut);
+    }
+
+    /// What the running command has printed, and how many lines came before it, or `None` while it
+    /// has printed nothing.
+    pub fn command_so_far(&self) -> Option<(&str, usize)> {
+        (!self.command_output.is_empty()).then_some((&self.command_output, self.command_earlier))
     }
 
     /// Show what a command printed, or that it printed nothing.
@@ -3157,7 +3311,11 @@ impl Session {
         // nowhere. Pictures settle the same way and at the same moment, since a marker rubbed out
         // means the same thing whether the thing behind it was dropped or pasted.
         let taken = self.take_line(&typed);
-        Some(self.begin_turn(prompt, taken, vec![recall]))
+        let begun = self.begin_turn(prompt, taken, vec![recall]);
+        // Read from the line as the box held it, which the person typed, and it decides only whether
+        // the row under the box says the word went to the model (CMD-2).
+        self.leave_word_sent = crate::command_table::is_a_lone_leave_word(&typed);
+        Some(begun)
     }
 
     /// Take the current line as a command to carry out now.
@@ -3241,6 +3399,16 @@ impl Session {
     /// anywhere, and nothing about it is in the conversation while it waits.
     pub fn queue_command(&mut self) -> bool {
         self.queue_line(Waiting::Command)
+    }
+
+    /// The lines waiting ahead of position `at`, as they were typed and in that order, with where
+    /// each is going. `at` is a line's own position, or the length of the queue for one about to join it.
+    pub fn queued_ahead(&self, at: usize) -> impl Iterator<Item = (Bound, &str)> {
+        self.queued
+            .iter()
+            .take(at)
+            .enumerate()
+            .map(|(position, line)| (self.where_it_goes(position), line.prompt.as_str()))
     }
 
     /// The commands waiting for the turn to end, as they were typed and in that order.
@@ -3510,7 +3678,14 @@ impl Session {
                 self.pending.push(copy);
             }
         }
-        Some(self.begin_turn(prompts.join("\n"), (attached, pasted), recall))
+        // A line sent together with others is no longer a lone word, so only one prompt can be.
+        let lone = matches!(
+            prompts.as_slice(),
+            [only] if crate::command_table::is_a_lone_leave_word(only)
+        );
+        let begun = self.begin_turn(prompts.join("\n"), (attached, pasted), recall);
+        self.leave_word_sent = lone;
+        Some(begun)
     }
 
     /// Take the command waiting longest, if the session is free to carry one out.
@@ -4217,6 +4392,10 @@ impl Session {
         self.hunks_listed = None;
         self.prompt_at = None;
         self.said_while_working.clear();
+        // Set again by the call that took a line from the box, after this returns. A tick, a watch,
+        // a goal sending the work back and a command's own prompt are not a lone word the person
+        // typed, so the mark left by the last turn must not describe them.
+        self.leave_word_sent = false;
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
         self.turn_places
@@ -4568,22 +4747,6 @@ impl Session {
         }
         self.said.push(message.clone());
         self.note(message);
-    }
-
-    /// What the user said last time this exact question was asked, if they were asked it.
-    pub fn recall_answer(&self, key: &str) -> Option<bravebot_core::ask::Answer> {
-        self.answers
-            .iter()
-            .find(|(asked, _)| asked == key)
-            .map(|(_, answer)| answer.clone())
-    }
-
-    /// Remember an answer, replacing any earlier one for the same question.
-    pub fn remember_answer(&mut self, key: String, answer: bravebot_core::ask::Answer) {
-        match self.answers.iter_mut().find(|(asked, _)| *asked == key) {
-            Some(slot) => slot.1 = answer,
-            None => self.answers.push((key, answer)),
-        }
     }
 
     pub fn toggle_trail(&mut self) {
@@ -7513,64 +7676,32 @@ mod tests {
         assert_eq!(session.top_row(), 120, "the view stopped at the old end");
     }
 
-    /// A question nobody has been asked has no answer to recall, which is what makes the memo
-    /// safe to consult for every question in a series.
-    #[test]
-    fn a_question_never_asked_has_no_remembered_answer() {
-        let session = Session::new(".");
-        assert_eq!(session.recall_answer("pick one: Cache: Which?"), None);
-    }
-
-    /// The key is the whole question, so two that differ anywhere are two questions and the
-    /// second is put to the person rather than answered with the first one's reply.
-    #[test]
-    fn a_different_question_is_not_answered_from_an_earlier_one() {
-        let mut session = Session::new(".");
-        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
-        assert_eq!(session.recall_answer("pick one: Branch: Which?"), None);
-    }
-
-    /// Answering again replaces rather than accumulates, or the memo would grow a second entry
-    /// for the same question and recall would keep returning the stale one.
-    #[test]
-    fn answering_the_same_question_again_replaces_what_was_remembered() {
-        let mut session = Session::new(".");
-        session.remember_answer("q".into(), Answer::Chosen(vec![0]));
-        session.remember_answer("q".into(), Answer::Chosen(vec![1]));
-        assert_eq!(session.answers.len(), 1);
-        assert_eq!(session.recall_answer("q"), Some(Answer::Chosen(vec![1])));
-    }
-
     /// ASK-8: an answer is remembered for the session, and `/clear` begins another. A question the
     /// new conversation puts is asked, not answered from the one that was thrown away.
     #[test]
     fn clearing_the_conversation_forgets_the_answers_to_the_planners_questions() {
         let mut session = Session::new(".");
-        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
-        session.remember_answer("skip: Branch: Which?".into(), Answer::Declined);
+        session
+            .answers
+            .remember("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
+        session
+            .answers
+            .remember("skip: Branch: Which?".into(), Answer::Declined);
 
         session.clear();
 
         assert_eq!(
-            session.recall_answer("pick one: Cache: Which?"),
+            session.answers.recall("pick one: Cache: Which?"),
             None,
             "a chosen answer outlived /clear"
         );
         assert_eq!(
-            session.recall_answer("skip: Branch: Which?"),
+            session.answers.recall("skip: Branch: Which?"),
             None,
             "a declined question outlived /clear"
         );
     }
 
-    /// A decline is an answer, so it is remembered as one. Treating it as absence would put a
-    /// question the person deliberately passed over back in front of them.
-    #[test]
-    fn a_skipped_question_is_remembered_as_skipped() {
-        let mut session = Session::new(".");
-        session.remember_answer("q".into(), Answer::Declined);
-        assert_eq!(session.recall_answer("q"), Some(Answer::Declined));
-    }
     use bravebot_core::label::Label;
 
     fn session() -> Session {
@@ -8660,6 +8791,24 @@ mod tests {
         assert_eq!(finished.turn, 1);
         assert_eq!(finished.tokens, 4_200);
         assert!(!finished.failed());
+    }
+
+    /// VIEW-13: the row says how long the turn took, so the figure is the session's clock at the
+    /// turn's end and not a placeholder.
+    #[test]
+    fn a_completed_turn_is_reported_with_how_long_it_took() {
+        let mut s = Session::new("none");
+        s.set_input("do the thing".to_string());
+        s.submit();
+        s.started = Some(Instant::now() - Duration::from_secs(75));
+        s.complete("done", Vec::new(), 4_200);
+
+        let finished = s.finished.expect("a finished turn");
+        assert!(
+            finished.took >= Duration::from_secs(75),
+            "the turn's duration was lost: {:?}",
+            finished.took
+        );
     }
 
     /// A tick beside a turn that did not finish would be the wrong thing to say about it.
@@ -9843,6 +9992,117 @@ mod tests {
             s.loop_tick().is_some(),
             "a due tick was never sent once the session was free"
         );
+    }
+
+    /// CMD-2. Only a line that is the word and nothing else is told it went to the model as a prompt:
+    /// in any case and with spaces around it, since `Exit ` means what `exit` does, and not a
+    /// question about leaving, which a note saying the word was a prompt would misdescribe. A mark
+    /// taken from a line that merely contains the word shows the note on ordinary prompts.
+    #[test]
+    fn a_turn_begun_on_a_lone_leave_word_is_marked_and_one_on_any_other_line_is_not() {
+        for line in ["exit", "quit", "Exit", "QUIT", "  exit  ", "qUiT "] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line.trim()));
+            assert!(s.leave_word_sent, "{line:?} began a turn with no mark");
+        }
+        for line in [
+            "exit now",
+            "how do I exit",
+            "exits",
+            "quit?",
+            "exit quit",
+            "e xit",
+        ] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line));
+            assert!(!s.leave_word_sent, "{line:?} began a turn with a mark");
+        }
+    }
+
+    /// The mark belongs to the turn the word began, so the prompt after it is judged on its own. Left
+    /// set, the row would go on saying a prompt that is no leave word went to the model as one.
+    #[test]
+    fn the_prompt_after_a_marked_turn_does_not_inherit_the_mark() {
+        let mut s = session();
+        for c in "exit".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert!(s.leave_word_sent, "the word was not marked");
+        s.complete("done", Vec::new(), 0);
+
+        for c in "list the files".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+
+        assert!(!s.leave_word_sent, "the next prompt inherited the mark");
+    }
+
+    /// A tick starts a turn on a prompt nobody typed in the box. The mark from the turn before is
+    /// not about it, and nothing a person typed sets one for it.
+    #[test]
+    fn a_turn_that_begins_without_a_line_from_the_box_takes_down_the_mark() {
+        let mut s = session();
+        s.looping = Some(a_loop_that_is_due());
+        for c in "exit".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert!(s.leave_word_sent, "the word was not marked");
+        s.complete("done", Vec::new(), 0);
+
+        assert!(s.loop_tick().is_some(), "the due tick was not sent");
+
+        assert!(!s.leave_word_sent, "the tick's turn kept the word's mark");
+    }
+
+    /// A word typed while a turn runs is queued and sent when that turn ends, with nobody pressing
+    /// Enter for it, and the person who typed `quit` is owed the same note as one who sent it at
+    /// rest. It is not owed one while the turn it waits behind is the one running.
+    #[test]
+    fn a_lone_leave_word_that_waited_in_the_queue_is_marked_when_its_turn_begins() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["quit"]);
+        assert!(
+            !s.leave_word_sent,
+            "the running turn took the mark of a waiting line"
+        );
+        s.complete("done", Vec::new(), 0);
+
+        assert_eq!(s.send_queued().as_deref(), Some("quit"));
+
+        assert!(
+            s.leave_word_sent,
+            "the queued word began a turn with no mark"
+        );
+    }
+
+    /// Hurried prompts go as one turn, one to a line, so two leave words sent together are a line
+    /// that holds more than the word and a note about one word would misdescribe it. A single hurried
+    /// word is still the word.
+    #[test]
+    fn leave_words_hurried_together_are_not_marked_and_one_hurried_alone_is() {
+        for (lines, marked) in [(&["quit", "exit"][..], false), (&["quit"][..], true)] {
+            let mut s = session();
+            s.type_char('a');
+            s.submit().expect("submitted");
+            queue_lines(&mut s, lines);
+            assert!(s.hurry(), "there was a turn to stop and something waiting");
+            stop(&mut s, "a");
+
+            s.send_queued().expect("the hurried prompts were not sent");
+
+            assert_eq!(s.leave_word_sent, marked, "{lines:?}");
+        }
     }
 
     fn caffeinated() -> Session {

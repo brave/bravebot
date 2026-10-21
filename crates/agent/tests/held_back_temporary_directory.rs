@@ -69,8 +69,9 @@ fn the_settled_setting_holds_the_temporary_directory_back_from_run_and_is_told_t
         "a line wrote the temporary directory the person held back: {outside}"
     );
 
-    let said = bravebot_agent::confine::stated_to_the_planner(true, SandboxMode::WorkspaceWrite)
-        .expect("a statement");
+    let said =
+        bravebot_agent::confine::stated_to_the_planner(true, SandboxMode::WorkspaceWrite, true)
+            .expect("a statement");
     assert!(
         said.contains("holds the temporary directory back"),
         "{said}"

@@ -24,6 +24,10 @@ pub fn in_isolated_profile() -> bool {
         .prefix("test-")
         .tempdir_in(profiles)
         .unwrap();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a test runs its own executable again, `std::env::current_exe()`"
+    )]
     // Test-only re-execution stays at the same privileges and makes no trust decision.
     // nosemgrep: rust.lang.security.current-exe.current-exe
     let mut child = std::process::Command::new(std::env::current_exe().unwrap());

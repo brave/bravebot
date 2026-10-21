@@ -227,6 +227,9 @@ repository, and sets no long-lived npm credential. Every package it publishes ca
 for that run. No dependency of this repository is installed or run in a job that holds the grant:
 the grant is declared on the jobs that publish rather than for the whole workflow, and the
 lockfile lint and the checks of the release are jobs of their own that hold only `contents: read`.
+Each of those jobs names the GitHub environment `npm-publish`, which has a required reviewer who is
+not the person who dispatched, so a dispatch of any ref waits for a second person before a token
+exists.
 
 **Why.** A token in GitHub secrets is a credential that publishes if it leaks, and it outlives
 the run that needed it. OIDC binds the publish to this file on this repository, so a different
@@ -236,9 +239,14 @@ boundary it has: a dependency installed or run in the publishing job could mint 
 publish a tarball with this repository's provenance on it, while under `contents: read` the
 identical compromise reaches a green check and nothing else. The wrapper depends on nothing but
 the platform packages this workflow publishes, so the job that lints holds the lower grant to keep that true of whatever is added. The trusted publisher on npmjs.com keys on the repository and the workflow filename rather
-than a job name, so which job publishes is this repository's to choose.
+than a job name, so which job publishes is this repository's to choose. `workflow_dispatch` runs the
+file at the ref it is dispatched on and the record does not check the ref, so a person with write
+access could push a branch holding a copy of this file without its refusals and dispatch that. The
+dispatcher writes that copy, so nothing inside the file can stop it; the environment's reviewer is a
+setting of the repository, which a copy cannot remove, and npm compares the environment claim once a
+job declares one.
 
-`verified-by: by-construction (the platform and wrapper publish jobs grant id-token: write, set no NPM_TOKEN or NODE_AUTH_TOKEN, and call npm publish --access public --provenance; make check-security faults a step that installs or runs an npm dependency in a job holding the grant)`
+`verified-by: by-construction (the platform and wrapper publish jobs grant id-token: write, set no NPM_TOKEN or NODE_AUTH_TOKEN, and call npm publish --access public --provenance; make check-security faults a step that installs or runs an npm dependency in a job holding the grant, and faults a job holding the grant that names no environment:, which pins the key and not the environment's reviewer)`
 
 <a id="RELEASE-12"></a>
 ### RELEASE-12: the published wrapper depends on its platform packages alone, and the pnpm lockfiles are committed and linted
@@ -521,6 +529,16 @@ download rather than writing a package for a version nobody can fetch.
 - **A second Jenkins run of RELEASE for the same version fails.** `gh release create` does not
   replace an existing release, so a retry after a successful publish, or after a hand-made
   release of the same tag, stops before upload.
+
+- **The `npm-publish` environment's reviewer is configured on GitHub, not here.** `make
+  check-security` faults a job holding `id-token: write` with no `environment:` key, and that is all
+  a checkout can read. Whether the environment exists, has a required reviewer who is not the
+  dispatcher, and is named on each of the seven trusted-publisher records is recorded in
+  [branch-protection.md](../development/branch-protection.md#the-npm-publish-environment). An
+  environment with no reviewer, or a record that omits it, passes every check here and leaves a
+  dispatch of a branch's copy of the workflow unheld. A deployment rule limited to `v*` tags would
+  narrow that and does not replace the reviewer, since the tag ruleset refuses an update or a
+  deletion and not the creation of a tag.
 
 - **The trusted publisher is configured on npmjs.com, not here.** OIDC will refuse until that
   record names this repository and `publish-npm.yml` exactly. A mismatch looks like a 404 from

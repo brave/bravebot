@@ -113,7 +113,13 @@ impl Repository {
     }
 
     /// One file's change, in the form `git diff` prints it.
-    fn patch(&self, out: &mut Out<'_>, path: &str, old: Side, new: Side) -> Result<(), Declined> {
+    pub(super) fn patch(
+        &self,
+        out: &mut Out<'_>,
+        path: &str,
+        old: Side,
+        new: Side,
+    ) -> Result<(), Declined> {
         out.shown.push(path.to_owned());
         out.text.line(&format!("diff --git a/{path} b/{path}"));
         let zero = "0".repeat(ABBREV);
@@ -324,7 +330,7 @@ fn hunks(out: &mut Out<'_>, path: &str, diff: &Diff) {
 
 /// Which kinds a diff can compare line by line; a change between two of these is a delete and an
 /// add, as git prints a type change.
-fn family(kind: EntryKind) -> u8 {
+pub(super) fn family(kind: EntryKind) -> u8 {
     match kind {
         EntryKind::Blob | EntryKind::BlobExecutable => 0,
         EntryKind::Link => 1,

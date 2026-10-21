@@ -803,16 +803,40 @@ fn table(
         ),
         Tool::function(
             "load_skill",
-            "Read one of the skills listed for you. A skill is instructions the user wrote for a              kind of task. Load one before doing that kind of work, and follow what it says.              Only the names you were listed exist; there is no path to give and nothing else to              browse.",
+            "Read one of the skills listed for you, or one search_skills found. A skill is \
+             instructions the user wrote for a kind of task. Load one before doing that kind of \
+             work, and follow what it says. Only a name you were listed or that search_skills \
+             returned exists; there is no path to give.",
             json!({
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "The name of a skill exactly as it was listed for you,                                         e.g. commit-style."
+                        "description": "The name of a skill exactly as it was listed for you \
+                                        or as search_skills returned it, e.g. commit-style."
                     }
                 },
                 "required": ["name"]
+            }),
+        ),
+        Tool::function(
+            "search_skills",
+            "Find a skill by a word or phrase, among skills of the user's own and the \
+             project's own that are not listed for you up front. Matches a skill whose name or \
+             description holds every word of the query, and returns each match's name and \
+             description in full. Load a match with load_skill before doing the kind of work it \
+             names.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "One or more words. A skill matches only where every \
+                                        word is in its name or its description, so a longer \
+                                        query narrows the search rather than widening it."
+                    }
+                },
+                "required": ["query"]
             }),
         ),
         Tool::function(
@@ -1080,7 +1104,11 @@ fn table(
              \
              Use wait_seconds to wait for the job rather than asking it again and again. Without \
              it a wait costs a whole turn per look: you call, are told nothing has happened, and \
-             answer only to be asked the same question. It is still a wait inside this turn, so it \
+             answer only to be asked the same question. A wait ends at the job's next output, so a \
+             job that prints a line every second ends it every second. When what you need is the \
+             end of the job and not its output as it arrives, add until_exit: true, which waits for \
+             the job to end or for wait_seconds to run out and returns what it printed since \
+             your last look in one answer. It is still a wait inside this turn, so it \
              cannot tell you about anything that happens after the turn ends, and the account of the \
              job's start says whether it is killed then or kept.",
             json!({
@@ -1105,7 +1133,21 @@ fn table(
                                         thing you are waiting for happens early. Between 1 and \
                                         600. A value outside that is refused rather than \
                                         adjusted, so the wait you get is the wait you asked for. \
-                                        Omit it to look and answer straight away."
+                                        Omit it to look and answer straight away. With \
+                                        until_exit it returns only when the job ends or at the \
+                                        bound."
+                    },
+                    "until_exit": {
+                        "type": "boolean",
+                        "description": "Wait for the job to end rather than for its output. \
+                                        Needs wait_seconds, which is then the longest to wait, \
+                                        and cannot be given with kill. \
+                                        The job printing does not end the wait, so one call \
+                                        covers a build that prints a line per step, and what \
+                                        comes back is what it printed since your last look, in \
+                                        one answer. If the job is still running at the bound, \
+                                        you are told so. Defaults to false, which returns at \
+                                        the job's next output."
                     }
                 },
                 "required": ["job"]
@@ -1250,12 +1292,17 @@ fn table(
                              last commit to work in, so that delegates writing at the same time \
                              do not edit or build in one working tree. Changes not yet committed \
                              are not in it, and what it changes stays there until it is brought \
-                             back. Not for a \"reader\", and not for a delegate that is already \
-                             in one. A definition may ask for one itself, and its delegates are \
-                             then started as if this were set. {}",
+                             back. \"checkout_with_changes\" is the same, and also copies into it \
+                             the changes your working directory has now: the files you wrote and \
+                             the ones git status lists as changed. Use it for a delegate that has \
+                             to check or build what you have written and not the last commit. \
+                             Which files were carried, and which were not, is in the answer. Not \
+                             for a \"reader\", and not for a delegate that is already in one. A \
+                             definition may ask for one itself, and its delegates are then \
+                             started as if \"checkout\" were set. {}",
                             checkouts_share_refs(running)
                         ),
-                        "enum": ["checkout"]
+                        "enum": ["checkout", "checkout_with_changes"]
                     },
                     "mcp_servers": {
                         "type": "array",
@@ -1634,6 +1681,36 @@ pub fn offer_advisor(tools: &mut Vec<Tool>) {
     tools.push(advisor);
 }
 
+/// Add `propose_plan` to a planner's list, for a turn that begins in plan mode.
+///
+/// Built here rather than in the table because only plan mode has a plan to approve, and a
+/// description naming a tool that is not on the list sends the planner to a name that is not
+/// there. A delegate is built from the table and so is never offered it.
+pub fn offer_propose_plan(tools: &mut Vec<Tool>) {
+    let mut propose = Tool::function(
+        "propose_plan",
+        "Present the finished plan to the user and ask them to approve it. Call it once the plan \
+         is settled, instead of ending your reply with the plan. The user chooses whether to \
+         carry it out with edits accepted, to carry it out asking before each edit, or to keep \
+         planning; the answer comes back as the result, and on approval plan mode has ended for \
+         the rest of the turn so you can begin the work. If they keep planning, revise from what \
+         they said. It is refused where nobody can be asked.",
+        json!({
+            "type": "object",
+            "properties": {
+                "plan": {
+                    "type": "string",
+                    "description": "The whole plan, written so the user can approve it as it \
+                                    stands: the steps, the files each touches, and why."
+                }
+            },
+            "required": ["plan"]
+        }),
+    );
+    ask_why(&mut propose);
+    tools.push(propose);
+}
+
 /// Add `message_session` to a planner's list, for a background session that can reach the others.
 ///
 /// Built here rather than in the table because no other session is offered it, and a description
@@ -1709,12 +1786,18 @@ pub fn offer_tool_loader(tools: &mut Vec<Tool>, names: &[String]) {
 /// Appended to the table's description rather than a parameter of it, so the many callers that
 /// build a table for another reason are untouched. Nothing where the list does not offer `run` or
 /// the turn does not confine, since a planner is not told of a boundary its programs do not have.
+///
+/// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call,
+/// so the description names them only where it would.
 pub fn state_confinement(
     tools: &mut [Tool],
     confine_runs: bool,
     sandbox: bravebot_sandbox::SandboxMode,
+    requests_offered: bool,
 ) {
-    let Some(stated) = crate::confine::stated_to_the_planner(confine_runs, sandbox) else {
+    let Some(stated) =
+        crate::confine::stated_to_the_planner(confine_runs, sandbox, requests_offered)
+    else {
         return;
     };
     if let Some(run) = tools.iter_mut().find(|tool| tool.function.name == "run") {
@@ -1814,7 +1897,8 @@ fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definiti
             let apart = match definition.asks_for_checkout() {
                 true => {
                     " Its delegates work in a checkout of the last commit, which holds no change \
-                     not yet committed."
+                     not yet committed unless the call sets isolation to \
+                     \"checkout_with_changes\"."
                 }
                 false => "",
             };

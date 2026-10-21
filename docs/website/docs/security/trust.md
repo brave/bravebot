@@ -83,8 +83,10 @@ a name that would be read as a path inside the project, where your answer at sta
 Windows that is every path there is, so opening a directory by name is unavailable there for now.
 
 **Case is folded only on a volume that folds it.** Where `Docs` and `docs` open the same file, a rule
-about one decides the other, in both directions, and where two rules differ only in case the less
-trusting one decides. Trusting `docs` does not undo a distrust recorded for `Docs`. Where the working
+about one decides the other, in both directions, and where rules disagree about the spellings the least
+trusting one decides: untrusted over undecided over trusted, whichever sorts first. Trusting `docs`
+does not undo a distrust recorded for `Docs`. A decision about one spelling replaces only that
+spelling's rule, since some volumes can hold `claß.md` and `class.md` apart. Where the working
 directory's volume keeps the spellings apart, or cannot be asked, a rule about `Docs` decides nothing
 about `docs`.
 
@@ -233,6 +235,18 @@ one-shot run can reach the directory and vouches for nothing in it, since the ge
 trusted half is a person typing the path in a session where they have already answered for the
 directory they are working in, and a run nobody is watching has answered nothing.
 
+**A refusal for a path outside the project says what to open.** When a file tool is given an absolute
+path outside the project and every directory you opened, the refusal tells the model to ask you to
+open the directory the file is in with `/add-dir` or `--add-dir`. If the path names a directory, that
+directory is the one to open. A name nothing is at yet is offered through the directory it is in, as
+a file is. Only a read is also told the file can be dropped on the window, and a read of a directory
+is not, since a directory cannot be dropped. The refusal names [`request_path`](../reference/tools.md#request_path)
+only where the session would accept that request, so under the sandbox mode `off` and in a workspace
+you have not trusted it names `/add-dir` alone. An absolute path that lands inside the project is
+refused with "is inside the workspace, and a path there is named relative to the workspace root",
+and no directory is offered, since opening one would change nothing. A refused write is not pointed
+at an unconfined `run` line in that case.
+
 ## Moving the working directory
 
 ```
@@ -264,6 +278,10 @@ No rule extends reach. Reading, writing, editing, listing and searching are conf
 directory and to whatever has been opened beside it, the [directory the session was
 given](#a-directory-of-the-sessions-own) among them. `..` and absolute paths outside those are refused
 rather than resolved, in an added directory exactly as in the project, and a symlink leaving one is
+refused. A path with `..` in it is allowed only where it lands in a directory that is already open
+(`../worktree/file.rs` beside the project, for example), and it is then treated as the absolute
+path it lands on, so rules, trust and the audit trail see that one spelling. A `..` that goes
+through a symlink, lands back inside the project or lands on a name that is not valid UTF-8 is
 refused. A relative path always means the project, never a directory opened beside it.
 
 Confinement is about where an operation lands rather than how its path is spelled, so it holds for a

@@ -6,12 +6,15 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import {
+  BLOCKED_SITES_KEY,
   DEFAULT_RESULTS,
   MAX_RESULTS,
   OPEN_TIMEOUT_MS,
   PAGE_TEXT_LIMIT,
   SETTINGS_KEY,
+  TOOLS,
   handle,
+  saveBlockedSites,
 } from "../tools.js";
 
 // A fake browser: open tabs, history, bookmarks, stored settings, and the text
@@ -32,6 +35,8 @@ function browser({
   stored = tabsOn,
 } = {}) {
   const calls = [];
+  // A copy, so a test that saves settings does not change the next test's.
+  const store = { ...stored };
   const listeners = { onCommitted: new Set(), onErrorOccurred: new Set() };
   let nextTabId = 100;
   const currentTabs = new Map(tabs.map((tab) => [tab.id, tab]));
@@ -41,7 +46,11 @@ function browser({
       local: {
         async get(key) {
           calls.push(["storage.get", key]);
-          return key in stored ? { [key]: stored[key] } : {};
+          return key in store ? { [key]: store[key] } : {};
+        },
+        async set(items) {
+          calls.push(["storage.set", items]);
+          Object.assign(store, items);
         },
       },
     },
@@ -1007,4 +1016,539 @@ test("open_tab refuses a URL that is not HTTP or HTTPS without opening a tab", a
   );
   assert.equal(missing.error.code, -32602);
   assert.ok(!reached(chrome, "tabs.create"));
+});
+
+// The blocked sites a person wrote in the options page, with every tool they
+// could be read, listed or searched through turned on.
+const everythingOn = {
+  [SETTINGS_KEY]: {
+    list_tabs: true,
+    list_frames: true,
+    read_page: true,
+    search_history: true,
+    search_bookmarks: true,
+    open_tab: true,
+  },
+};
+
+const bank = "https://bank.example";
+
+function blocking(sites, settings = everythingOn) {
+  return { ...settings, [BLOCKED_SITES_KEY]: sites };
+}
+
+// A refusal for a blocked site is the same words whatever was asked about, and
+// holds no part of the URL, since the failure goes back to the session.
+const BLOCKED_MESSAGE =
+  "that site is in the blocked sites list in the BraveBot extension's options";
+
+// A site is blocked by its origin as written. Every spelling of a URL at that
+// origin is covered, and a URL that only resembles the origin is not: a
+// matcher on the host, a suffix or a substring would block or pass the wrong
+// rows of this table.
+test("a blocked site covers every URL at its origin and no other", async () => {
+  const at = [
+    `${bank}/`,
+    `${bank}/login?next=%2Faccount#top`,
+    "HTTPS://BANK.EXAMPLE:443/path",
+    "https://user:secret@bank.example/",
+    "blob:https://bank.example/7d1c",
+    "view-source:https://bank.example/",
+    "VIEW-SOURCE:https://bank.example/",
+  ];
+  const apart = [
+    "https://www.bank.example/",
+    "http://bank.example/",
+    "https://bank.example:8443/",
+    "https://notbank.example/",
+    "https://bank.example.evil.test/",
+    "https://evil.test/?to=https://bank.example",
+    "https://evil.test/https://bank.example/",
+    "about:blank",
+    "chrome://settings/",
+    "",
+  ];
+  const rows = [...at, ...apart].map((url, index) => ({
+    id: index + 1,
+    windowId: 1,
+    title: `tab ${index}`,
+    url,
+  }));
+  const reply = await handle(
+    { id: 1, method: "list_tabs" },
+    browser({ tabs: rows, stored: blocking([bank]) }),
+  );
+  assert.deepEqual(
+    reply.result.map((tab) => tab.url),
+    apart,
+  );
+});
+
+// A tab that has not committed has no URL, and its title is the address it is
+// loading. A tab on its way out of a blocked site or into one is left out too.
+test("list_tabs leaves out a tab loading a blocked site", async () => {
+  const rows = [
+    {
+      id: 1,
+      windowId: 1,
+      title: "bank.example/login",
+      url: "",
+      pendingUrl: `${bank}/login`,
+    },
+    {
+      id: 2,
+      windowId: 1,
+      title: "Bank",
+      url: `${bank}/`,
+      pendingUrl: "https://news.example/",
+    },
+    { id: 3, windowId: 1, title: "News", url: "https://news.example/" },
+    {
+      id: 4,
+      windowId: 1,
+      title: "news.example",
+      url: "",
+      pendingUrl: "https://news.example/",
+    },
+  ];
+  const reply = await handle(
+    { id: 1, method: "list_tabs" },
+    browser({ tabs: rows, stored: blocking([bank]) }),
+  );
+  assert.deepEqual(
+    reply.result.map((tab) => tab.id),
+    [3, 4],
+  );
+  assert.ok(!JSON.stringify(reply).includes("bank"));
+});
+
+// The call is refused before a tab is looked for, so the refusal says nothing
+// of whether the person has the site open, and it names the list and not the
+// page. A frame at a blocked site is refused the same way inside a tab that
+// is not blocked.
+test("list_frames and read_page refuse a blocked site, naming the list", async () => {
+  const open = [
+    { id: 1, windowId: 1, title: "Bank", url: `${bank}/account` },
+    { id: 2, windowId: 1, title: "News", url: "https://news.example/" },
+  ];
+  const messages = new Set();
+  for (const [method, params] of [
+    ["list_frames", { url: `${bank}/account` }],
+    ["read_page", { url: `${bank}/account` }],
+    ["list_frames", { url: `${bank}/not-open` }],
+    ["read_page", { url: `${bank}/not-open` }],
+    [
+      "read_page",
+      { url: "https://news.example/", frame_url: `${bank}/widget` },
+    ],
+    [
+      "read_page",
+      { url: `${bank}/account`, frame_url: "https://ads.example/" },
+    ],
+  ]) {
+    const chrome = browser({
+      tabs: open,
+      frames: {
+        2: [
+          { frameId: 0, documentId: "top", url: "https://news.example/" },
+          { frameId: 5, documentId: "bank", url: `${bank}/widget` },
+          { frameId: 6, documentId: "ads", url: "https://ads.example/" },
+        ],
+      },
+      pages: { 1: { title: "Bank", text: "balance" } },
+      stored: blocking([bank]),
+    });
+    const reply = await handle({ id: 1, method, params }, chrome);
+    messages.add(reply.error?.message);
+    const asked = `${method} ${JSON.stringify(params)}`;
+    assert.ok(!JSON.stringify(reply).includes("bank"), asked);
+    for (const api of [
+      "tabs.query",
+      "webNavigation.getAllFrames",
+      "scripting.executeScript",
+    ]) {
+      assert.ok(!reached(chrome, api), `${method} ${api}`);
+    }
+  }
+  assert.deepEqual([...messages], [BLOCKED_MESSAGE]);
+});
+
+// A frame at a blocked site inside a tab that is not blocked is left out of
+// the list and cannot be read, while the tab and its other frames still can.
+test("a frame at a blocked site is left out and unreadable in an open tab", async () => {
+  const chrome = browser({
+    tabs,
+    frames: {
+      1: [
+        { frameId: 0, documentId: "top", url: "https://brave.com/" },
+        { frameId: 5, documentId: "bank", url: `${bank}/widget` },
+        { frameId: 6, documentId: "ads", url: "https://ads.example/" },
+      ],
+    },
+    pages: {
+      "1:0": { title: "Brave", text: "home" },
+      "1:5": { title: "Bank", text: "balance" },
+      "1:6": { title: "Ads", text: "buy now" },
+    },
+    stored: blocking([bank]),
+  });
+  const listed = await handle(
+    { id: 1, method: "list_frames", params: { url: "https://brave.com/" } },
+    chrome,
+  );
+  assert.deepEqual(listed.result, [
+    { url: "https://brave.com/", top: true },
+    { url: "https://ads.example/", top: false },
+  ]);
+  const ads = await handle(
+    {
+      id: 2,
+      method: "read_page",
+      params: { url: "https://brave.com/", frame_url: "https://ads.example/" },
+    },
+    chrome,
+  );
+  assert.equal(ads.result.text, "buy now");
+  const top = await handle(
+    { id: 3, method: "read_page", params: { url: "https://brave.com/" } },
+    chrome,
+  );
+  assert.equal(top.result.text, "home");
+  assert.ok(!JSON.stringify([listed, ads, top]).includes("balance"));
+});
+
+// The newest matches can all be at the blocked site. A search that asked the
+// browser for no more than it returns would come back empty then, which reads
+// as no history matching.
+test("search_history leaves out a blocked site and fills the result from the rest", async () => {
+  const history = [
+    ...Array.from({ length: 30 }, (_, index) => ({
+      title: `Bank ${index}`,
+      url: `${bank}/statement/${index}`,
+      lastVisitTime: 2_000_000 - index,
+    })),
+    ...Array.from({ length: 8 }, (_, index) => ({
+      title: `News ${index}`,
+      url: `https://news.example/${index}`,
+      lastVisitTime: 1_000_000 - index,
+    })),
+  ];
+  const chrome = browser({ history, stored: blocking([bank]) });
+  const reply = await handle(
+    {
+      id: 1,
+      method: "search_history",
+      params: { query: "a", max_results: 5 },
+    },
+    chrome,
+  );
+  assert.deepEqual(
+    reply.result.map((item) => item.url),
+    [0, 1, 2, 3, 4].map((index) => `https://news.example/${index}`),
+  );
+  assert.ok(!JSON.stringify(reply).includes("bank"));
+});
+
+// Bookmarks are not searched in a window of their own: the blocked ones are
+// dropped before the count is applied, so the first of them do not use it up.
+test("search_bookmarks leaves out a blocked site before it counts the result", async () => {
+  const bookmarks = [
+    { id: "folder", title: "Work" },
+    ...Array.from({ length: 5 }, (_, index) => ({
+      id: `b${index}`,
+      title: `Bank ${index}`,
+      url: `${bank}/${index}`,
+    })),
+    ...Array.from({ length: 5 }, (_, index) => ({
+      id: `n${index}`,
+      title: `News ${index}`,
+      url: `https://news.example/${index}`,
+    })),
+  ];
+  const reply = await handle(
+    {
+      id: 1,
+      method: "search_bookmarks",
+      params: { query: "a", max_results: 3 },
+    },
+    browser({ bookmarks, stored: blocking([bank]) }),
+  );
+  assert.deepEqual(
+    reply.result.map((bookmark) => bookmark.url),
+    [0, 1, 2].map((index) => `https://news.example/${index}`),
+  );
+});
+
+// open_tab sends the person's cookies to a site, so it does not open a blocked
+// one, and it closes a tab that commits at one after a redirect from a site
+// that is not blocked. Neither failure names where the tab went.
+test("open_tab does not open a blocked site and closes a tab that reaches one", async () => {
+  const refused = browser({ stored: blocking([bank]) });
+  const reply = await handle(
+    { id: 1, method: "open_tab", params: { url: `${bank}/login` } },
+    refused,
+  );
+  assert.equal(reply.error.message, BLOCKED_MESSAGE);
+  assert.ok(!reached(refused, "tabs.create"));
+
+  const asked = "http://bank.example/";
+  const landed = `${bank}/secret-path`;
+  const redirected = browser({
+    opening: { [asked]: { kind: "committed", url: landed } },
+    stored: blocking([bank]),
+  });
+  const closed = await handle(
+    { id: 2, method: "open_tab", params: { url: asked } },
+    redirected,
+  );
+  assert.equal(closed.error.message, BLOCKED_MESSAGE);
+  assert.deepEqual(
+    redirected.calls.filter(([name]) => name === "tabs.remove"),
+    [["tabs.remove", 100]],
+  );
+});
+
+// A list that cannot be read is not an empty list. Each tool that reaches a
+// site fails and touches no browser API, and the platform check, which reaches
+// none, still answers.
+test("an unreadable blocked list refuses every tool that reaches a site", async () => {
+  for (const unreadable of [bank, { 0: bank }, [bank, 7], [null], 7, false]) {
+    for (const [method, params, api] of [
+      ["list_tabs", {}, "tabs.query"],
+      ["list_frames", { url: tabs[0].url }, "webNavigation.getAllFrames"],
+      ["read_page", { url: tabs[0].url }, "scripting.executeScript"],
+      ["search_history", { query: "a" }, "history.search"],
+      ["search_bookmarks", { query: "a" }, "bookmarks.search"],
+      ["open_tab", { url: tabs[0].url }, "tabs.create"],
+    ]) {
+      const chrome = browser({ tabs, stored: blocking(unreadable) });
+      const reply = await handle({ id: 1, method, params }, chrome);
+      assert.match(reply.error?.message, /cannot be read/, method);
+      assert.ok(!reached(chrome, api), `${method} ${api}`);
+      assert.ok(!reached(chrome, "tabs.query"), method);
+    }
+    const chrome = browser({ stored: blocking(unreadable) });
+    const check = await handle({ id: 1, method: "get_platform_info" }, chrome);
+    assert.ok("result" in check);
+  }
+});
+
+// What a person writes becomes origins: a path is dropped, case and a default
+// port are normalised the way the browser does, and a site named twice is kept
+// once. A line that is not an HTTP or HTTPS address of a host is returned. The
+// URL parser takes a wildcard or a comma in a host, and a site saved under one
+// would match nothing and leave open the site it was meant to cover.
+test("what is written in the options page becomes a list of origins", async () => {
+  const saved = await saveBlockedSites(
+    browser(),
+    [
+      "https://Mail.Example.com/inbox?x=1",
+      "",
+      "  http://intranet:8080  ",
+      "https://mail.example.com:443/",
+      "http://[::1]:3000/",
+      "",
+    ].join("\r\n"),
+  );
+  assert.deepEqual(saved, {
+    sites: [
+      "https://mail.example.com",
+      "http://intranet:8080",
+      "http://[::1]:3000",
+    ],
+    rejected: [],
+  });
+
+  for (const line of [
+    "bank.example",
+    "ftp://files.example",
+    "javascript:alert(1)",
+    "view-source:https://bank.example",
+    "https://*.bank.example",
+    "https://a.example,https://b.example",
+    "https://",
+    "https://bank..example",
+    "https://bank example",
+    "https://a.example/, https://b.example/",
+    "https://a.example/ https://b.example/",
+    "https://a.example/;https://b.example/",
+    "https://a.example/,https://b.example/",
+    "https://a.example\thttps://b.example",
+  ]) {
+    const { rejected } = await saveBlockedSites(browser(), line);
+    assert.deepEqual(rejected, [line], line);
+  }
+  assert.deepEqual(await saveBlockedSites(browser(), ""), {
+    sites: [],
+    rejected: [],
+  });
+});
+
+// What the options page saves is what the tools read: a save blocks the site
+// in the next call, a line that is not an address stops the save and leaves the
+// list that was saved before in force, and an emptied list blocks nothing again.
+test("a saved list blocks the next call and a rejected save changes nothing", async () => {
+  const chrome = browser({
+    tabs: [
+      { id: 1, windowId: 1, title: "Bank", url: `${bank}/` },
+      { id: 2, windowId: 1, title: "News", url: "https://news.example/" },
+    ],
+  });
+  const urls = async () =>
+    (await handle({ id: 1, method: "list_tabs" }, chrome)).result.map(
+      (tab) => tab.url,
+    );
+  assert.deepEqual(await urls(), [`${bank}/`, "https://news.example/"]);
+
+  await saveBlockedSites(chrome, `${bank}/login\n`);
+  assert.deepEqual(await urls(), ["https://news.example/"]);
+
+  // The line for the bank lost its scheme, which would drop the bank if the
+  // others were saved.
+  const refused = await saveBlockedSites(chrome, "bank.example\n");
+  assert.deepEqual(refused.rejected, ["bank.example"]);
+  assert.deepEqual(await urls(), ["https://news.example/"]);
+  assert.equal(
+    chrome.calls.filter(([name]) => name === "storage.set").length,
+    1,
+  );
+
+  await saveBlockedSites(chrome, "");
+  assert.deepEqual(await urls(), [`${bank}/`, "https://news.example/"]);
+});
+
+// What a blocked frame embeds is part of what its site shows. A frame inside
+// one is left out of the list and is not found by a read, as if it were not
+// there, while a frame beside it is still listed.
+test("a frame inside a blocked frame is left out and not found", async () => {
+  const pixel = "https://analytics.example/pixel?acct=12345";
+  const chrome = browser({
+    tabs,
+    frames: {
+      1: [
+        {
+          frameId: 0,
+          parentFrameId: -1,
+          documentId: "top",
+          url: "https://brave.com/",
+        },
+        {
+          frameId: 5,
+          parentFrameId: 0,
+          documentId: "bank",
+          url: `${bank}/widget`,
+        },
+        { frameId: 6, parentFrameId: 5, documentId: "deep", url: pixel },
+        {
+          frameId: 7,
+          parentFrameId: 6,
+          documentId: "deeper",
+          url: "https://cdn.example/",
+        },
+        {
+          frameId: 8,
+          parentFrameId: 0,
+          documentId: "ads",
+          url: "https://ads.example/",
+        },
+      ],
+    },
+    pages: {
+      "1:6": { title: "Pixel", text: "acct 12345" },
+      "1:8": { title: "Ads", text: "buy" },
+    },
+    stored: blocking([bank]),
+  });
+  const listed = await handle(
+    { id: 1, method: "list_frames", params: { url: "https://brave.com/" } },
+    chrome,
+  );
+  assert.deepEqual(listed.result, [
+    { url: "https://brave.com/", top: true },
+    { url: "https://ads.example/", top: false },
+  ]);
+  assert.ok(!JSON.stringify(listed).includes("analytics"));
+
+  for (const frame_url of [pixel, "https://cdn.example/"]) {
+    const read = await handle(
+      {
+        id: 2,
+        method: "read_page",
+        params: { url: "https://brave.com/", frame_url },
+      },
+      chrome,
+    );
+    assert.match(
+      read.error.message,
+      /no frame in https:\/\/brave\.com\/ is at/,
+    );
+    assert.ok(!("result" in read), frame_url);
+  }
+  assert.ok(!reached(chrome, "scripting.executeScript"));
+
+  const ads = await handle(
+    {
+      id: 3,
+      method: "read_page",
+      params: { url: "https://brave.com/", frame_url: "https://ads.example/" },
+    },
+    chrome,
+  );
+  assert.equal(ads.result.text, "buy");
+});
+
+// Each tool decides for itself whether to read the list, so a tool added later
+// is open to a blocked site until its author adds a row here. Every tool but
+// the platform check, which reaches nothing of the person's, is called with a
+// blocked site open in a tab, in history and in bookmarks, and has to return
+// nothing of it and reach no tab, frame or script.
+const callsNamingTheBank = {
+  list_tabs: {},
+  list_frames: { url: `${bank}/account` },
+  read_page: { url: `${bank}/account` },
+  search_history: { query: "a" },
+  search_bookmarks: { query: "a" },
+  open_tab: { url: `${bank}/login` },
+};
+
+test("no tool returns or reaches a blocked site", async () => {
+  for (const method of Object.keys(TOOLS)) {
+    if (method === "get_platform_info") {
+      continue;
+    }
+    const params = callsNamingTheBank[method];
+    assert.ok(params, `${method} has no row naming a blocked site`);
+    const chrome = browser({
+      tabs: [{ id: 1, windowId: 1, title: "Bank", url: `${bank}/account` }],
+      frames: {
+        1: [
+          {
+            frameId: 0,
+            parentFrameId: -1,
+            documentId: "top",
+            url: `${bank}/account`,
+          },
+        ],
+      },
+      pages: { 1: { title: "Bank", text: "balance" } },
+      history: [{ title: "Bank", url: `${bank}/account` }],
+      bookmarks: [{ id: "b", title: "Bank", url: `${bank}/account` }],
+      opening: {
+        [`${bank}/login`]: { kind: "committed", url: `${bank}/login` },
+      },
+      stored: blocking([bank]),
+    });
+    const reply = await handle({ id: 1, method, params }, chrome);
+    assert.ok(
+      !JSON.stringify(reply.result ?? "").toLowerCase().includes("bank"),
+      method,
+    );
+    for (const api of [
+      "tabs.create",
+      "webNavigation.getAllFrames",
+      "scripting.executeScript",
+    ]) {
+      assert.ok(!reached(chrome, api), `${method} reached ${api}`);
+    }
+  }
 });

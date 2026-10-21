@@ -184,6 +184,18 @@ pub fn run(
         SandboxMode::Off => t!(session_sandbox_set_off).to_string(),
         mode => t!(session_sandbox_set, mode = mode.name()).to_string(),
     });
+    // A job keeps the profile it started under, so a move to `read-only` leaves each running one
+    // writing where it did. The names are the driver's own (`job:1`), never a job's output.
+    let running = session.running_job_names();
+    if moved == SandboxMode::ReadOnly && !running.is_empty() {
+        session.note(
+            t!(
+                session_sandbox_jobs_keep_their_mode,
+                jobs = running.join(", ")
+            )
+            .to_string(),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -244,6 +256,52 @@ mod tests {
             never_asked,
         );
         assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
+    }
+
+    /// SANDBOX-22: a move to `read-only` names each background job still running, which keeps the
+    /// mode it started under, and says `/jobs stop` ends it. The regression it rejects is a reply
+    /// that says nothing of a job still writing the project, or that names a job that has ended.
+    #[test]
+    fn a_move_to_read_only_names_the_jobs_that_keep_the_earlier_mode() {
+        let start = |session: &mut Session, name: &str| {
+            session.job(bravebot_agent::report::JobEvent::Started {
+                name: name.to_string(),
+                line: "while true; do date >> log.txt; done".to_string(),
+                moved_after: None,
+                stop: bravebot_core::cancel::JobStop::new(),
+            });
+        };
+        let mut session = Session::new("kernel-enforced");
+        run(&mut session, "read-only", &Managed::default(), never_asked);
+        assert!(
+            !last_note(&session).contains("/jobs stop"),
+            "{}",
+            last_note(&session)
+        );
+
+        let mut session = Session::new("kernel-enforced");
+        start(&mut session, "job:1");
+        start(&mut session, "job:2");
+        session.job(bravebot_agent::report::JobEvent::Ended {
+            name: "job:2".to_string(),
+            outcome: bravebot_agent::report::Outcome::Succeeded,
+        });
+        run(&mut session, "read-only", &Managed::default(), never_asked);
+        let note = last_note(&session);
+        assert!(
+            note.contains("job:1") && note.contains("/jobs stop"),
+            "{note}"
+        );
+        assert!(!note.contains("job:2"), "{note}");
+
+        let mut session = Session::new("kernel-enforced");
+        start(&mut session, "job:1");
+        run(&mut session, "strict", &Managed::default(), never_asked);
+        assert!(
+            !last_note(&session).contains("job:1"),
+            "{}",
+            last_note(&session)
+        );
     }
 
     /// SANDBOX-22, COMPAT-001: `/sandbox standard`, the earlier word for `workspace-write`, still

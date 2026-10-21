@@ -846,3 +846,34 @@ fn a_launch_whose_stamp_cannot_be_written_does_not_ask() {
         );
     });
 }
+
+/// The width the border was dragged to outlives the session, and a file that is no width leaves
+/// the panel at 36 columns rather than at whatever it made of the text.
+#[test]
+fn the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36() {
+    use ratatui::layout::Rect;
+    with_temp_home("panel-width", || {
+        let wide = bravebot_tui::state::Laid {
+            columns: 120,
+            panes: vec![(bravebot_tui::select::Pane::Panel, Rect::new(84, 0, 36, 20))],
+            ..bravebot_tui::state::Laid::default()
+        };
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_panel();
+        assert_eq!(session.panel_columns(120), 36, "started with a width");
+        session.note_layout(wide);
+        assert!(session.begin_panel_drag(3, 84));
+        session.drag_panel_to(70);
+        session.end_panel_drag();
+
+        let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+        next.adopt_panel();
+        assert_eq!(next.panel_columns(120), 50, "the width was not read back");
+
+        let file = store::directory().expect("a home").join("panel-width");
+        std::fs::write(&file, "wide\n").expect("write the width");
+        let mut corrupt = bravebot_tui::state::Session::new("test").with_stored_history();
+        corrupt.adopt_panel();
+        assert_eq!(corrupt.panel_columns(120), 36, "a corrupt width was used");
+    });
+}

@@ -17,6 +17,10 @@
 //! See `docs/phase-0-rpc-protocol.md` for the protocol these calls project onto.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 pub mod acp;
 pub mod allowlist;

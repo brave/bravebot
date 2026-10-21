@@ -934,6 +934,63 @@ fn a_plan_refused_by_plan_mode_is_recorded_as_a_refusal() {
     );
 }
 
+/// MODE-3, MODE-8: plan mode chosen after the plan was approved refuses the write the plan
+/// carried into a path no prompt would have been raised for.
+///
+/// The confirmer approves every write it is asked about, so a write that lands is the mode not
+/// being read at the step, and nobody being asked is the refusal coming before the prompt.
+#[test]
+fn plan_mode_chosen_while_the_run_walks_refuses_a_later_write() {
+    let scratch = Scratch::new("plan-mode-chosen-midrun");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_WRITE", "args": {"path": "out.md", "contents": "a body the plan carried"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+    let mut person = RecordsEveryQuestion {
+        chooses_after_approving: Some((live.clone(), bravebot_agent::PermissionMode::Plan)),
+        ..RecordsEveryQuestion::default()
+    };
+
+    let _ = manifest::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write a summary").with_permission_mode(live),
+        &mut person,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        !scratch.path.join("out.md").exists(),
+        "a write landed after the person chose plan mode"
+    );
+    assert!(
+        person.writes.is_empty(),
+        "plan mode was left to a prompt instead of refusing the write"
+    );
+    assert!(
+        sink.blocked().any(|event| matches!(
+            event,
+            Event::GateBlocked {
+                gate: "permission_mode",
+                ..
+            }
+        )),
+        "the refusal was not recorded: {:?}",
+        sink.events()
+    );
+}
+
 /// The other half of the same clause: the mode refuses writes and nothing else, so a plan that
 /// reads and answers is a plan plan mode has no business stopping. Refusing every run would make
 /// the mode mean "no manifest runs", which is not what it says.
@@ -1414,6 +1471,41 @@ fn a_planned_answer_cannot_be_written_to_a_file_it_is_not_about() {
     );
 }
 
+/// Where a path is bytes, `in.md ` is not `in.md`, so an answer about one is not for the other, and
+/// a plan that sends it to the second is refused like one that sends it to any other file.
+#[cfg(unix)]
+#[test]
+fn a_planned_answer_cannot_be_written_to_a_name_that_differs_by_trailing_whitespace() {
+    let scratch = Scratch::new("write-spaced");
+    let original = "raw text";
+    std::fs::write(scratch.path.join("in.md"), original).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "in.md", "out_slot": "raw"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["raw"], "instruction": "shout", "out_slot": "loud"}},
+            {"capability": "FILE_WRITE", "args": {"path": "in.md ", "from_slot": "loud"}},
+        ])),
+        processor_reply("RAW TEXT"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let failure = run(&config, &workspace, "shout in.md", &mut sink).expect_err("must refuse");
+    assert!(
+        failure
+            .to_string()
+            .contains("cannot be written anywhere else"),
+        "unhelpful message: {failure}"
+    );
+    assert!(
+        !scratch.path.join("in.md ").exists(),
+        "an answer about one file was written to a file named with trailing whitespace"
+    );
+}
+
 /// A value that declares itself: AWS's own documentation key, which is the provider's prefix over
 /// the provider's alphabet at the provider's length. A refusal needs a declared kind, because a
 /// value merely inferred from its name goes to whoever is watching instead, and an unattended run
@@ -1669,6 +1761,9 @@ struct RecordsEveryQuestion {
     always: bool,
     /// Words typed beside a write's answer, where a test needs the front end to have sent some.
     note: Option<&'static str>,
+    /// Chooses this mode on the session's handle as it approves the plan, the way a person
+    /// pressing the mode key while the run walks does.
+    chooses_after_approving: Option<(bravebot_agent::LiveMode, bravebot_agent::PermissionMode)>,
 }
 
 impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
@@ -1676,6 +1771,9 @@ impl bravebot_agent::confirm::Confirmer for RecordsEveryQuestion {
         &mut self,
         _request: &bravebot_agent::confirm::ManifestRequest,
     ) -> bravebot_agent::Decision {
+        if let Some((live, mode)) = &self.chooses_after_approving {
+            live.set(*mode);
+        }
         bravebot_agent::Decision::Approve
     }
 
@@ -2063,6 +2161,72 @@ fn approving_a_plan_is_not_approving_its_writes() {
     assert!(
         !scratch.path.join("notes.md").exists(),
         "the file was written without anyone seeing it"
+    );
+}
+
+/// TRACE-1: a planned write the person does not approve is a refusal in the trail, under the step
+/// and its tool, and the error the run stops on is not the only record of it. The first step's
+/// write is let through unasked by the vouched tree and leaves no refusal, and the second is named
+/// as the second, which is how the plan numbers it.
+#[test]
+fn a_planned_write_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    let scratch = Scratch::new("planned-write-refused-recorded");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_WRITE", "args": {"path": "notes.md", "contents": "plain\n"}},
+            {"capability": "FILE_WRITE", "args": {"path": "master.key", "contents": format!("{GENERATED_SECRET}\n")}},
+        ])),
+    ]);
+    let mut trust = TrustStore::new("/work");
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+
+    let failure = manifest::run(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("write both files"),
+        &mut ApprovesThePlanOnly,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("a write nobody approved must stop the run");
+
+    assert!(
+        failure
+            .to_string()
+            .contains("did not approve writing master.key"),
+        "got: {failure}"
+    );
+    let refused: Vec<String> = sink
+        .blocked()
+        .filter_map(|event| match event {
+            Event::GateBlocked {
+                gate: "approval",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refused,
+        ["step 2: write_file: the write was not approved, so nothing was written"],
+        "the refused write was not recorded once, under its step: {:?}",
+        sink.events()
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("notes.md")).ok(),
+        Some("plain\n".to_string()),
+        "the vouched write did not land, so the second was not the second step"
+    );
+    assert!(
+        !scratch.path.join("master.key").exists(),
+        "a planned run created a credential nobody approved"
     );
 }
 

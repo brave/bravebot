@@ -64,7 +64,39 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 | `--tool-timeout <seconds>` | how long a call may take, from 1 to 3600; 120 where it is not given. A call that takes longer fails and the planner is told it timed out; a local server is then stopped |
 | `-- <program> [args...]` | a program on this machine; `--stdio --` means the same |
 | `--http <url>` | a service at this url; takes neither `-e` nor `--dir` |
+| `--bearer-env <name>` | with `--http`: send `Authorization: Bearer` followed by the value of this variable in your environment |
+| `--header-env <header>=<name>...` | with `--http`: send this header with the value of that variable in your environment; repeatable |
+| `--tools <list>` | offer only these tools of the server; names separated by commas, or by spaces up to the next flag. `--tools=a,b` also works |
+| `--exclude-tools <list>` | never offer these tools, written the same way |
 | `-s <scope>` | which settings file [asks for the server](#asking-for-one-from-a-checkout) once you approve it: `local`, the default, `project` or `user`; it may come before the alias |
+
+### Choosing which tools are offered
+
+`--tools` and `--exclude-tools` work for a program and for a service. A name is a bare word such as
+`get_forecast`, which matches that tool on this server, or `alias:tool` such as
+`weather:get_forecast`. A name that is not a tool name is refused, and so is an empty list.
+
+```sh
+bravebot mcp add weather --exclude-tools check_service_status -- npx -y @dangahagan/weather-mcp@latest
+```
+
+A tool on the `--exclude-tools` list is withheld, and so is a tool missing from a non-empty
+`--tools` list. When both name a tool, the exclusion wins. A withheld tool is not offered to the
+model and cannot be called, and the model is told there is no such tool. In `mcp.json` the lists are
+the keys `tools` and `exclude_tools`; a value that is not a list of tool names is refused.
+
+### Headers for a service
+
+A hosted service often wants a token. `--bearer-env GITHUB_PERSONAL_ACCESS_TOKEN` sends
+`Authorization: Bearer` and the value of that variable. `--header-env X-Api-Key=SERVICE_KEY` sends
+the header `X-Api-Key` with the value of `SERVICE_KEY`. Both read the variable from your own
+environment each time the server starts, so the value is never written to `mcp.json` or to a
+settings file, and no question, `get` or `list` shows it. They show the header and variable names
+instead, as `Authorization: Bearer $GITHUB_PERSONAL_ACCESS_TOKEN`.
+
+The headers go only to requests for the scheme, host and port you declared. A redirect to any other
+socket drops them, and is put to you as [a server that moved](#what-a-server-can-reach). Both flags
+are refused on a program server, and so is a value written out in the command.
 
 ### A server gets only the variables you give it
 
@@ -108,6 +140,8 @@ declared weather in /Users/you/.bravebot/mcp.json
   Use this MCP server? [y/N]
 ```
 
+A declaration with tool lists also shows `tools: a, b` and `exclude tools: c`.
+
 `y` approves it and [asks for it](#asking-for-one-from-a-checkout) in the file `-s` names, so a
 session in this directory starts it. Anything else, a blank line included, leaves it declared, not
 approved and asked for nowhere, unless that file asks for it already: then `add` says so, since the
@@ -133,7 +167,8 @@ session starts it as before. Typed during a turn, the command waits for the turn
 ### An approval is of what you were shown
 
 What you approve is the **digest**: a hash of the transport, the program and every argument, the
-url, the variable names and the directory. The alias is not part of it. It is written, one per
+url, the variable names, the header and header-variable names, the tool lists and the directory.
+A declaration with no tool lists digests as it did before. The alias is not part of it. It is written, one per
 line with the alias you approved it as beside it, to `~/.bravebot/mcp-approved`. The alias is kept
 so a session can say a declaration changed since you approved it; it approves nothing.
 
@@ -279,6 +314,9 @@ first turn you ask for, the session puts each server's list to you, whole:
 │  1 Yes, offer them    2 No, continue without them    ctrl-c stop the turn  ↑↓ 51 more │
 ╰───────────────────────────────────────────────────────────────────────────────────────╯
 ```
+
+Where the server's allow or deny list withheld tools, the heading says so: "one tool was withheld by
+the server's allow or deny list", or "N tools were withheld by the server's allow or deny list".
 
 Each tool is `alias:tool`, then its arguments, then every row of what the server says about it
 behind the `┃` margin, none of it cut: a yes puts exactly this text in front of the model, and
@@ -429,8 +467,10 @@ the list, and records nothing: a later run without it asks each question again.
 
 ## What a server can reach
 
-A program server is started confined, and on a platform with no confinement for one, which is
-Windows today, it is not started. It gets:
+A program server is started confined, and on a platform with no confinement for one it is not
+started. On Windows the confinement is a container, and a program named without an extension, such
+as `npx`, is looked for as `.com` and `.exe` first, so `npx` starts as `npx.exe`. `.bat` and `.cmd`
+files are not started. It gets:
 
 - the values you stored with `-e NAME=value`, and the variables you named with `-e NAME`, read from
   your environment as it starts, and no others;
@@ -445,7 +485,12 @@ Windows today, it is not started. It gets:
   if you gave none. A directory inside a git repository is refused, since git runs the commands a
   repository's configuration and hooks name, and a server that may write them may run code
   unconfined the next time you run git there. On macOS the server cannot write a `.git` anywhere;
-- the network by IP address, and the machine's own system directories. A local socket, such as
+- the network by IP address, unless the session closes the network or limits it to a list of hosts.
+  Where the sandbox network is closed (the `read-only` mode, for one), the server gets no network at
+  all, a runner's fetch of its own package included. Where `sandbox.network.allowedHosts` is set, the
+  server is held to the proxy that applies the list, plus the registry hosts of its toolchain. A
+  platform that can apply neither does not start the server, and the note names the setting. The
+  server also gets the machine's own system directories. A local socket, such as
   the one the Docker daemon listens on, is reached only in a directory the server may write, so a
   server that runs `docker` does not reach the daemon. On Linux that needs a kernel with Landlock
   ABI version 9, and an older one leaves every socket reachable;
@@ -453,7 +498,9 @@ Windows today, it is not started. It gets:
   not what a file holds or what a directory lists.
 
 It does not get your home directory, other than a `PATH` entry inside it such as `~/.local/bin` and
-the installation its program came from, and it does not get the workspace unless `--dir` names it. A program named without a path is looked for
+the installation its program came from, and it does not get the workspace unless `--dir` names it.
+Where the platform cannot grant a path that is not on disk, the server is started without it and the
+session names the server and each path left out. A program named without a path is looked for
 only in the `PATH` you gave: without `-e PATH` it is not found, and the session says to name it
 or give the program's full path.
 
@@ -505,6 +552,31 @@ each list:
 Before the first turn a list reads `its tools are put to you before the next turn plans`, and a list
 you said no to reads `no tool offered, as you answered`. It says `none` where it started none. A requested server that was not started is not on the line;
 why is said once, as the session opens.
+
+A server that runs on your machine has a `Server policy` heading at the end of the report, with what
+its confinement allows it: the network, whether it may start subprocesses, where it starts and one
+line for each path it may read or write. It is what to check a refusal from inside the server
+against:
+
+```
+  Server policy  weather
+  egress         any address
+  subprocesses   allowed
+  starts in      /Users/you/work
+  .git           not written under a write row
+  read           /usr/lib
+  read           /usr/bin
+  read, write    /dev/null
+  read, write    /var/folders/v6/0scctxs13mb3nbg5y3t46w4r0000gn/T
+  read, write    /Users/you/.bravebot/mcp-home/31e1d0473746eba39a0e9e04e1105ef23298573af672413c346738fadf234f4f
+  read           /Users/you/servers/weather
+  read, write    /Users/you/work
+```
+
+On Linux the `.git` line is absent, and the base lists the system directories of that platform.
+`left out` heads the paths that were wanted for the server and are not on disk, on a platform that
+grants no path that is not, with the reason beside it. A server reached over HTTP runs no process
+here and has no such lines.
 
 ## Seeing what is declared
 
@@ -643,8 +715,10 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
   or runner that clones one into its home or the temporary directory fails, and no server can be
   given a git repository to work on.
 - **If your home directory is a git work tree, every directory in it is refused as a server's.**
-- **No local server starts on Windows yet.** There is no confinement for one there, so the session
-  says so and goes on without it.
+- **A Windows server's grants change the filesystem.** A grant for the server's home, its directory
+  and the directories its program is found in changes the access list of each, so a run that ends
+  without cleanup leaves the entries behind. A server there may also start a subprocess, since the
+  container has no way to deny one.
 - **The desktop application starts no server yet.** Only the terminal client acts on a checkout's
   request.
 - **A checkout cannot bring its own server.** A project that needs one says so in its README, and

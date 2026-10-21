@@ -613,6 +613,10 @@ doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-style-ignored =
     style in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-language-ignored =
+    language in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
+doctor-settings-language-unmatched =
+    language { $language } in ~/.bravebot/settings.json names no catalog, so it chooses { $reference }; the catalogs are { $available }
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-attribution-ignored =
@@ -1673,11 +1677,15 @@ input-history-search = { $chord } to search
 input-history-scope = { $chord } this project
 resume-heading = Resume session
 resume-search-placeholder = Search titles and what was said… (since:7d for recent)
-resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session
+resume-keys = ↑↓ to choose  ·  Enter to resume  ·  Del to delete  ·  type to search  ·  Esc for a new session
 resume-from-pr = for pull request { $pull_request }
 resume-handed-off = from { $id }
-resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc to stay in this session
+resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  Del to delete  ·  type to search  ·  Esc to stay here
 resume-nothing-matches = nothing matches that
+resume-delete-question = Delete "{ $title }"? y deletes it, any other key keeps it
+resume-delete-held = that session is running in the background; stop it before deleting it
+resume-delete-done = deleted
+resume-delete-failed = could not delete that session
 resume-manifest-run = that was a manifest run, which cannot be continued; start a new session
 
 
@@ -1944,6 +1952,18 @@ check-unsafe = the check says this looks like an attempt to give instructions
 check-inconclusive = the check did not complete, so nothing has looked at this
 
 
+## Characters in a prompt's text that draw as nothing
+
+# Said above text a person is deciding about, where some of it draws as nothing: a zero-width
+# character, a bidirectional control, a variation selector or a tag character. The text below
+# writes each one out, so the sentence says what those tokens are and that the model reads the
+# characters themselves.
+hidden-characters = { $count ->
+    [one] 1 character in this text draws as nothing. It is written out below as ‹U+XXXX›, and a tag character also as the letter it stands for. The model reads it as it is.
+   *[other] { $count } characters in this text draw as nothing. Each is written out below as ‹U+XXXX›, and a tag character also as the letter it stands for. The model reads them as they are.
+    }
+
+
 ## Letting the model read what a command printed
 
 output-title = let the model read this?
@@ -2089,6 +2109,7 @@ vouch-verb = Trust
 vouch-explained =
     the model cannot read this file, so it is working blind on it. Vouching lets it read
     this file for the rest of this session, here and in every later read.
+vouch-rule = a yes trusts { $rule } and everything beneath it
 vouch-nothing = (nothing of this file can be shown)
 vouch-yes = trust it
 vouch-no = leave it quarantined
@@ -2197,6 +2218,29 @@ status-mcp-servers-tools =
        *[other] { $alias }: { $count } tools offered to the model
     }
 status-mcp-servers-declined = { $alias }: no tool offered, as you answered
+# The heading of what one started local server's confinement grants, then a line each for the
+# network, subprocesses and where it starts, and one for each path its backend was handed. Each
+# path's label is what the server may do at it.
+status-server-policy = Server policy
+status-server-policy-egress = egress
+status-server-policy-egress-closed = none
+status-server-policy-egress-loopback = this machine only
+status-server-policy-egress-open = any address
+status-server-policy-egress-hosts = only through the allowed-hosts proxy
+status-server-policy-subprocesses = subprocesses
+status-server-policy-subprocesses-allowed = allowed
+status-server-policy-subprocesses-refused = refused
+status-server-policy-starts-in = starts in
+# macOS refuses a write to a .git beneath a write row, so a row labelled write does not reach one.
+status-server-policy-git = .git
+status-server-policy-git-held-back = not written under a write row
+status-server-policy-read = read
+status-server-policy-write = write
+status-server-policy-read-write = read, write
+# The paths that were wanted and are not rows, because this platform grants no path that is not on
+# disk and these are not. The paths follow, one to a line.
+status-server-policy-left-out = left out
+status-server-policy-left-out-reason = not on disk, and this platform grants no path that is not
 status-loop = Loop
 status-loop-every = every { $every }
 status-loop-self-paced = paced by each turn
@@ -2421,6 +2465,10 @@ tokens-millions = { $millions }M
 # disappearing, and an announcement made by something vanishing is one nobody reads.
 turn-done = turn { $turn } done
 turn-failed = turn { $turn } failed
+# The text of the terminal notice written when a turn ended or a question is waiting while the
+# terminal was left. Fixed: it never carries a command, a path or any part of a reply.
+notice-turn-finished = bravebot: turn finished
+notice-waiting = bravebot: waiting for an answer
 # Said of a turn the person stopped themselves, which is neither of the above.
 turn-cancelled = turn { $turn } cancelled
 
@@ -2484,6 +2532,12 @@ transcript-more-lines = { $count ->
 transcript-earlier-lines = { $count ->
     [one] … { $count } earlier line
    *[other] … { $count } earlier lines
+    }
+# Said under output a program coloured: how many colour codes were taken out of the text and not
+# drawn, so that a person can still tell they were there.
+colour-codes-not-drawn = { $count ->
+    [one] { $count } colour code not drawn
+   *[other] { $count } colour codes not drawn
     }
 transcript-unchanged = { $count ->
     [one] … { $count } unchanged line
@@ -2654,6 +2708,7 @@ command-effort = Choose how hard to think before answering
 command-advisor = Name the model the planner may consult, say which it may, or drop the choice
 command-style = Choose how the planner answers: list the styles, pick one, or clear the pick
 command-config = Choose how the input box edits text
+command-language = Choose the interface language for the next start, or drop the choice
 command-add-dir = Open another directory and trust it for this session, or close one
 command-reach = Remember a directory or credential for a command, or list and remove them
 command-sandbox = Show the sandbox mode, or change it from the next turn
@@ -2662,6 +2717,7 @@ command-rename = Call this conversation something else
 command-note = Note something on this session's record, without putting it in the conversation
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
 command-handoff = Start a new session from a brief you can edit, written for the next goal
+command-commit-message = Draft a commit message from the staged changes into the box, for you to edit
 command-resume = Pick up another session of this directory, by id or from a list
 command-background = Hand this session to a background process and leave it running
 command-issue = Say which issue this session is for, show it, or clear it
@@ -2706,8 +2762,8 @@ command-when-either = now/queued
 
 # Said under the turn when a command joins the queue. The turn holds the conversation, the workspace, the terminal and the network.
 command-waits-for-the-turn = { $command } waits for the turn to end: it acts on what the turn holds or starts a turn.
-# A command that is carried out as typed when nothing is waiting ahead of it.
-command-waits-behind-the-queue = { $command } waits for the turn to end, behind the lines typed before it.
+# A command that is carried out as typed unless a line waiting ahead of it could change what it acts on. $line is that line: a command as it was typed, or what the line is where it is not a command.
+command-waits-behind = { $command } waits for the turn to end, behind { $line }.
 # `/sandbox off`, which asks before it changes anything.
 command-waits-to-ask = { $command } waits for the turn to end: moving to off asks first, and the turn has the screen.
 
@@ -2934,6 +2990,12 @@ session-effort-set = thinking at { $effort }
 session-effort-unset = thinking as the service decides
 session-no-such-effort = no effort level named { $effort }; try /effort for the list
 session-effort-not-read = this model reads no effort level, so requests carry none
+session-language-in-use = the interface is in { $language }; catalogs: { $available }; /language <tag> saves a choice for the next start and /language auto drops it
+session-language-saved = saved choice: { $language }
+session-language-set = the interface will be in { $language } from the next start, unless BRAVEBOT_LOCALE is set, which answers first
+session-language-auto = the interface will follow the settings file and the environment from the next start
+session-language-not-saved = this session cannot keep a choice, so the language is unchanged
+session-no-such-language = no catalog for { $language }; the catalogs are { $available }
 session-advisor-set = the planner may consult { $model } from the next turn, which spends that model's tokens
 session-advisor-in-force = the planner may consult { $model }
 session-advisor-none = no advisor; try /advisor followed by a model name
@@ -3033,6 +3095,7 @@ session-model-substituted =
 session-error = error: { $problem }
 session-no-output = no output
 shell-kept-private = typed with !!, so this output was not sent to the model
+shell-stopped-not-sent = what it printed before it stopped was not sent to the model
 
 ## Why a turn failed
 
@@ -3282,6 +3345,13 @@ queued-into-the-next-turn = into the next turn
 queued-carried-out = carried out after this
 # A command line: run by the person's own shell, whose output then reaches the model.
 queued-run = run in your shell
+# A command that would have been carried out as typed, but for a line waiting ahead of it. $line is
+# that line, from the two messages below where it is not a command. Same width limit as above.
+queued-carried-out-after = after { $line }
+# What a waiting prompt is called where a command is said to wait behind it.
+queued-a-prompt = the prompt before it
+# What a waiting command line is called where a command is said to wait behind it.
+queued-a-shell-line = the shell line before it
 
 ## Pasting, dropping and attaching
 
@@ -3299,6 +3369,12 @@ return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
 leave-not-pressed =
     that arrived with other keys, so it was not a press: press it again to leave
+# Said under the box while the turn runs that the bare word exit or quit began, which other terminal
+# agents leave on and which here is a prompt for the model. A turn is running, so the first way out
+# it names is the one that stops it. Drawn at the right of the hint row, where the parts of the line
+# are fitted to the room it leaves: kept short enough that any one permission mode name still fits
+# beside it on a row eighty columns wide.
+leave-word-sent = Sent as a prompt; ctrl-c stops it, /exit leaves
 prompt-file-unreadable =
     /{ $name } is a prompt file that could not be read as text, so the line was not sent: { $path }
 prompt-file-too-large =
@@ -3358,6 +3434,14 @@ handoff-ready = the brief is in the box. Edit it, then Enter starts a new sessio
 handoff-untrusted = the brief was not offered: this conversation has met something untrusted, so the new session would not be starting from what the planner could have held
 handoff-failed = the brief could not be written: { $problem }
 handoff-stopped = the brief was stopped
+commit-message-usage = /commit-message takes --staged or --range <a>..<b>, then any words about the format you want
+commit-message-nothing = there is nothing to draft a message for: the changes named show no file
+commit-message-credential = the changes hold what looks like a credential, so no part of them was sent to a model
+commit-message-none-written = the model did not mark where the message begins, so there is no draft
+commit-message-ready = the draft is in the box. Edit it, then Enter sends it to the planner as your prompt, or Esc drops it. The planner has not seen the diff
+commit-message-partial = the changes were longer than one read takes, so the draft describes the part that was read
+commit-message-failed = the commit message could not be drafted: { $problem }
+commit-message-stopped = the commit message was stopped
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are
@@ -3458,6 +3542,7 @@ verb-todo-write = Plan
 # remember which of the verbs meant that.
 verb-spawn-processor = Isolated processor
 verb-load-skill = Skill
+verb-search-skills = Find skill
 verb-load-tool = Load
 verb-ask-user = Ask
 verb-request-path = Reach
@@ -3471,6 +3556,7 @@ verb-spawn-agent = Delegate
 verb-schedule-next = Schedule
 verb-watch-file = Watch
 verb-advisor = Advise
+verb-propose-plan = Plan
 verb-message-session = Message
 verb-mcp-call = MCP
 verb-unknown = Tool
@@ -3532,6 +3618,14 @@ delegate-servers-not-found =
     { $count ->
         [one] { $definition } names an MCP server this session did not reach, so its delegate runs without it: { $servers }
        *[other] { $definition } names MCP servers this session did not reach, so its delegate runs without them: { $servers }
+    }
+# A definition's spawns line named delegates this session did not resolve. The definition is its
+# file's path and the names are that file's own words, joined with a comma, both from a vouched-for
+# file.
+delegate-spawns-not-found =
+    { $count ->
+        [one] { $definition } names a delegate this session did not resolve, so its delegate may not start it: { $names }
+       *[other] { $definition } names delegates this session did not resolve, so its delegate may not start them: { $names }
     }
 # A definition's mcpServers line declared a server inline rather than naming one, so its delegate
 # calls no MCP server. The definition is its file's path. Nothing from the line is shown, since an
@@ -3624,6 +3718,15 @@ home-skills-reached-through-the-workspace =
         [one] 1 skill in ~/.bravebot/skills was not loaded: the way to its file goes through a directory this session can write to
        *[other] { $count } skills in ~/.bravebot/skills were not loaded: the way to their files goes through a directory this session can write to
     }
+# The person's own ~/.bravebot/AGENTS.md when it was not read, because the way to the file goes
+# through the working directory or a directory opened beside it, where a turn can write.
+home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md was not read: the way to it goes through a directory this session can write to
+# Definitions in the person's own ~/.bravebot/agents that were not loaded, for the same reason.
+home-definitions-reached-through-the-workspace =
+    { $count ->
+        [one] 1 delegate definition in ~/.bravebot/agents was not loaded: the way to its file goes through a directory this session can write to
+       *[other] { $count } delegate definitions in ~/.bravebot/agents were not loaded: the way to their files goes through a directory this session can write to
+    }
 # An entry of "references" in the person's settings that was not offered. The alias is the name they
 # gave it. One message per reason: the alias cannot be used, the entry names a repository, which
 # is not fetched, the entry names no directory, and a directory that could not be opened.
@@ -3643,6 +3746,36 @@ import-not-loaded = { $import } was not imported: it is outside this project, ca
 source-is-large = { $source } is { $bytes } bytes, and every request this session sends carries it
 # Said once for the turn, about every instructions file together rather than any one of them.
 sources-large-together = standing instructions are { $bytes } bytes in all, past { $limit }, and every request this session sends carries them
+# A rule file, kept in .bravebot/rules or ~/.bravebot/rules, that was added to the instructions
+# because a file the session used matches one of its paths. The rule is its place and stays as it
+# is; the file is the name the planner or the person typed, drawn so that no character in it is
+# hidden.
+rule-loaded = { $rule } was added to the instructions: { $file } matches its paths
+# The project's rule files that were not read, because the directory is not trusted. A count and
+# no name: a name in a directory nobody vouched for is not shown.
+rules-directory-not-trusted =
+    { $count ->
+        [one] 1 rule file in .bravebot/rules was not loaded: this directory is not trusted
+       *[other] { $count } rule files in .bravebot/rules were not loaded: this directory is not trusted
+    }
+# Files in a rules directory (.bravebot/rules or ~/.bravebot/rules) that are not rules, because their
+# names are not text and so cannot be compared or shown. The directory stays as it is.
+rule-names-not-text =
+    { $count ->
+        [one] 1 file in { $directory } was not read as a rule: its name is not text
+       *[other] { $count } files in { $directory } were not read as rules: their names are not text
+    }
+# A rule file that opens a frontmatter block and never closes it, or a paths list with a [ and no
+# closing ], or a paths value that is not a list of globs. Left out rather than read as text for
+# every turn, since the file meant to limit itself to some paths and they cannot be read.
+rule-frontmatter-unreadable = { $rule } was not loaded: its frontmatter or its paths could not be read, so a --- or ] may be missing, or paths is not a list
+# Rule files in the person's own ~/.bravebot/rules that were not loaded, because the way to the file
+# goes through the working directory or a directory opened beside it, where a turn can write.
+home-rules-reached-through-the-workspace =
+    { $count ->
+        [one] 1 rule file in ~/.bravebot/rules was not loaded: the way to it goes through a directory this session can write to
+       *[other] { $count } rule files in ~/.bravebot/rules were not loaded: the way to them goes through a directory this session can write to
+    }
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }
@@ -3792,6 +3925,7 @@ session-sandbox-kept = The sandbox mode stays { $mode }.
 session-sandbox-set = The sandbox mode is { $mode } from the next turn, for the rest of this session.
 session-sandbox-turn-keeps-its-mode = The turn running now, and every program it starts, keeps the mode it began with.
 session-sandbox-set-off = The sandbox mode is off from the next turn, for the rest of this session: programs `run` starts have no profile.
+session-sandbox-jobs-keep-their-mode = Background jobs still running keep the mode they started under and can still write the project: { $jobs }. /jobs stop <name> ends one.
 session-sandbox-refused-mode =
     /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may
     read and write no more than that. { $looser }
@@ -3819,3 +3953,11 @@ doctor-push-unanswered = { $host } gave no answer for this key
 doctor-push-chosen = Chosen
 doctor-push-chosen-by = git.identities names this key for the owner
 doctor-push-chosen-at-prompt = you chose this key for the owner at a run prompt; /reach keys in the terminal client lists and forgets it
+
+## The prompt that offers a finished plan in plan mode
+agent-plan-approval-header = Plan
+agent-plan-approval-accept-edits = Yes, accept edits
+agent-plan-approval-accept-edits-detail = Leave plan mode and carry the plan out. Writes go through unasked; commands are still asked about.
+agent-plan-approval-ask = Yes, ask before each edit
+agent-plan-approval-ask-detail = Leave plan mode and carry the plan out, asking before every write and command.
+agent-plan-approval-keep-planning = No, keep planning

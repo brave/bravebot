@@ -145,7 +145,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
     </SettingsGroup>
     <SettingsGroup title="Hooks" note={dirty ? 'Unsaved changes' : undefined}>
       <section className="settings-block"><h3>Your hooks</h3>
-        <p>Hooks are shared with the terminal client. Run your own programs at specific moments. These commands run with your account’s permissions in the project directory. They cannot approve or block the agent.</p>
+        <p>Hooks are shared with the terminal client. Run your own programs at specific moments. These commands run with your account’s permissions in the directory the turn works in, which is a new checkout for Checkout made. They cannot approve or block the agent.</p>
         {document && <div className="settings-box">
           <p className="settings-path">{document.path}</p>
           {document.entire && hooks.length === 0 && <p>No hooks configured.</p>}
@@ -162,6 +162,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
             <leo-option value="tool-finished">Tool finishes</leo-option>
             <leo-option value="turn-finished">Turn ends</leo-option>
             <leo-option value="prompt-shown">Question waiting</leo-option>
+            <leo-option value="checkout-made">Checkout made</leo-option>
           </Dropdown>
           {(hook.on === 'tool-finished' || hook.tool !== null) &&
             <Input value={hook.tool ?? ''} placeholder="All tools" disabled={busy || !editable}

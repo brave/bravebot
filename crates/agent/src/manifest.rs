@@ -1698,6 +1698,19 @@ fn write<S: Sink, C: Confirmer>(
     index: usize,
     step: &Step,
 ) -> Result<Done, String> {
+    // The mode is read again here, because the person can choose plan mode while the run walks and
+    // the plan was checked once, before it was put to them (MODE-3, MODE-8). Before the scan and
+    // before any prompt: a body the plan carried into a vouched path raises no prompt for a mode
+    // to refuse, so this is the only place the refusal can be made.
+    let mode = permission_mode.get();
+    if mode.refuses_writes() {
+        policy.refuse_write_in_mode(&format!("step {}: write_file", index + 1), mode.name());
+        return Err(
+            "plan mode refuses a write, so nothing was written. Leave plan mode and ask again."
+                .to_string(),
+        );
+    }
+
     let path = locked(policy, index, "path")?;
 
     // What a processor said about the body, where a processor produced it. Filled below, from the
@@ -1838,6 +1851,7 @@ fn write<S: Sink, C: Confirmer>(
                 .then(|| mode.name()),
         );
         if !answer.approved() {
+            policy.refuse_unapproved_write(&format!("step {}: write_file", index + 1));
             return Err(format!("the user did not approve writing {path}"));
         }
         standing.keep(policy, answer);

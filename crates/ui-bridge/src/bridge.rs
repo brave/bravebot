@@ -240,6 +240,7 @@ impl Bridge {
             "drops.classify" => crate::attached::classified(request),
             "pastes.check" => crate::attached::paste_check(request),
             "turn.cancel" => self.cancel_turn(request),
+            "turn.interject" => self.interject_turn(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
                 self.poll_watches();
@@ -1195,6 +1196,7 @@ impl Bridge {
             answers: answers_rx,
             finished,
             target,
+            interjections,
         } = Running::start();
 
         let emitter = self.emitter.clone();
@@ -1256,6 +1258,7 @@ impl Bridge {
                 answerers,
                 answers: answers_rx,
                 finished,
+                interjections,
             });
         });
 
@@ -1340,13 +1343,17 @@ impl Bridge {
             .unwrap_or(1);
 
         let crate::running::Started {
-            running,
+            mut running,
             cancel,
             pending,
             answers: answers_rx,
             finished,
             target,
+            interjections: _,
         } = Running::start();
+        // A run plans before anything is read and asks nothing between rounds, so a line typed
+        // into it would be taken by nobody.
+        running.interjections = None;
 
         self.emitter.send(Event::new(
             "manifest.started",
@@ -1522,6 +1529,51 @@ impl Bridge {
             "trust": { "rules": rules_json(&state.answers.trust) },
             "rewind": rewind_json(state, &project),
         }))
+    }
+
+    /// Hand the turn in flight a line the person typed while it runs (INPUT-10).
+    ///
+    /// The turn reads it at its next round boundary, after the round's calls have run, as the
+    /// person's own words and under the routing it began with. Returns at once with whether the
+    /// line was taken in: `false` means there is no turn to read it, or none that will, so the
+    /// caller makes a turn of it. A line accepted by a turn that then ends without another round is
+    /// not read, and the absence of `turn.interjected` for it is how a front end learns that.
+    ///
+    /// Text only. A turn that is running fixed the shape of its context before it read anything, so
+    /// a marker in the line becomes the dropped file's name or a sentence about the pasted picture
+    /// here (DROP-8), through the same words the terminal uses, and nothing here reads a file.
+    fn interject_turn(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let prompt = request.string("prompt")?;
+        if prompt.trim().is_empty() {
+            return Err(Failure::bad_request(
+                "an interjection needs something to say",
+            ));
+        }
+        let prompt = crate::attached::in_words(request, &prompt)?;
+        if self.emitter.has_view(&handle) {
+            return Err(Failure::bad_request(
+                "session view version 1 does not support interjections",
+            ));
+        }
+        let expected = match request.params.get("target") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .ok_or_else(|| Failure::bad_request("`target` must be a number"))?,
+            ),
+        };
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let accepted = open
+            .running
+            .as_ref()
+            .filter(|running| expected.is_none_or(|target| running.target == target))
+            .is_some_and(|running| running.interject(prompt));
+        Ok(json!({ "accepted": accepted }))
     }
 
     /// Ask the turn to stop.
@@ -1788,7 +1840,7 @@ impl Bridge {
             }
         }
         Ok(json!({
-            "paths": rules_json(&state.answers.trust),
+            "paths": listed_rules(&state.answers.trust),
             "commands": state.answers.programs.iter().map(|command| json!({"program": command.program, "startedAs": command.started_as, "args": command.args, "display": command.display()})).collect::<Vec<_>>(),
             // Read now rather than when the session opened: the record belongs to every session
             // begun in the directory, and another may have kept or withdrawn the answer since.
@@ -2108,12 +2160,7 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
     let (directories, scratch) = open
         .state
         .lock()
-        .map(|s| {
-            (
-                s.directories.clone(),
-                s.scratch.path().map(Path::to_path_buf),
-            )
-        })
+        .map(|s| (s.directories.clone(), s.scratch.directory()))
         .unwrap_or((Vec::new(), None));
     workspace.open_scratch(scratch);
     for directory in &directories {
@@ -2203,6 +2250,7 @@ struct Work {
     answerers: Answerers,
     answers: mpsc::Receiver<crate::turn::Reply>,
     finished: Arc<std::sync::atomic::AtomicBool>,
+    interjections: crate::running::Interjections,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -2309,6 +2357,7 @@ fn work(work: Work) {
         answerers,
         answers,
         finished,
+        interjections,
     } = work;
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
@@ -2331,7 +2380,9 @@ fn work(work: Work) {
         Arc::clone(&state.question_ids),
         cancel.clone(),
     )
-    .answerable_by(answerers);
+    .answerable_by(answerers)
+    .remembering(Arc::clone(&state.question_answers))
+    .taking_interjections(interjections);
 
     // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
     // Here rather than when the session opened, so that the questions about them come after the
@@ -2428,7 +2479,7 @@ fn work(work: Work) {
     // which no mode a window can choose answers: only bypassing does (SERVERS-13), and a window
     // cannot reach it. The screening value is the task's, so the confirmer and the tools that fill
     // in a verdict read the same answer.
-    let mut confirmer = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
+    let mut confining = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
     let began_at = std::time::Instant::now();
     let completed = agent_turn::resume(
@@ -2437,7 +2488,7 @@ fn work(work: Work) {
         &workspace,
         &task,
         &mut state.conversation,
-        &mut confirmer,
+        &mut confining,
         &mut reporter,
         &mut sink,
         trust,
@@ -2518,6 +2569,9 @@ fn work(work: Work) {
             let archived = save(&project, &mut state, turn, sink.trail());
 
             let rules = rules_json(&state.answers.trust);
+            // What the turn said, then each question it did not put because the person had
+            // already answered it.
+            let notices = [outcome.notices.as_slice(), confirmer.reused()].concat();
 
             Event::new(
                 "turn.done",
@@ -2533,7 +2587,7 @@ fn work(work: Work) {
                     "tokens": outcome.tokens,
                     "outputTokens": outcome.output_tokens,
                     "contextTokens": outcome.context_tokens,
-                    "notices": outcome.notices,
+                    "notices": notices,
                     "trust": { "rules": rules },
                     // The session's durable name, which is real from here and was not before:
                     // `save` above is what wrote the record, and until a record exists there is
@@ -2571,6 +2625,7 @@ fn work(work: Work) {
             );
             let _ = save(&project, &mut state, turn, sink.trail());
 
+            let notices = [reporter.notices(), confirmer.reused()].concat();
             let chosen = task.model.as_deref().unwrap_or(&config.default_model);
             let mut data = failure_fields(&error, &config, chosen);
             merge(
@@ -2581,7 +2636,7 @@ fn work(work: Work) {
                     // What the turn said about itself before it failed, as `turn.done` carries for a
                     // turn that answered. There is no outcome here to take them from, and a hook
                     // that could not be started is the person's own to hear about (HOOK-7).
-                    "notices": reporter.notices(),
+                    "notices": notices,
                     // As on `turn.done`. A turn that failed still said what it was asked, so the
                     // prompt is in the conversation and is still a place a fork can be cut at.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
@@ -2851,6 +2906,22 @@ pub(crate) fn rules_json(trust: &TrustStore) -> Vec<Value> {
                 None => "undecided",
             };
             json!({ "path": path, "integrity": integrity })
+        })
+        .collect()
+}
+
+/// [`rules_json`] for the permissions list, each name also spelled for a person.
+///
+/// The name as held is what a revoke is made with, so it stays as it is and the spelling goes
+/// beside it. The root is the empty name and a window words it itself.
+fn listed_rules(trust: &TrustStore) -> Vec<Value> {
+    rules_json(trust)
+        .into_iter()
+        .map(|mut rule| {
+            let shown =
+                bravebot_agent::confirm::shown_name(rule["path"].as_str().unwrap_or_default());
+            rule["shownPath"] = json!(shown);
+            rule
         })
         .collect()
 }
@@ -3365,6 +3436,47 @@ mod permissions_tests {
         );
     }
 
+    /// PROMPT-1: the list sends each rule's name spelled beside the name as held. The name as held
+    /// is what a revoke is made with, so it is sent unchanged, and it is how a window tells the
+    /// root, so a blank name is not drawn as the root's empty row.
+    #[test]
+    fn the_permissions_list_sends_each_rule_spelled_beside_the_name_it_holds() {
+        let mut trust = TrustStore::new("/work");
+        trust.trust(".");
+        trust.distrust(" ");
+        trust.distrust("note.md ");
+        trust.distrust("a\u{202e}b");
+        trust.distrust("note.md");
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened(
+            "/work".into(),
+            State::fresh(trust),
+            true,
+            None,
+            false,
+        ));
+        let list = Request::parse(
+            &json!({"id": 1, "method": "permissions.list", "params": {"session": handle}})
+                .to_string(),
+        )
+        .unwrap();
+        let listed = bridge.dispatch(&list).unwrap();
+        let shown_for = |held: &str| {
+            listed["paths"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|rule| rule["path"] == json!(held))
+                .unwrap_or_else(|| panic!("{held:?} is not listed: {listed}"))["shownPath"]
+                .clone()
+        };
+        assert_eq!(shown_for(""), json!("\"\""));
+        assert_eq!(shown_for("note.md"), json!("note.md"));
+        assert_eq!(shown_for(" "), json!("\"\u{2423}\""));
+        assert_eq!(shown_for("note.md "), json!("\"note.md\u{2423}\""));
+        assert_eq!(shown_for("a\u{202e}b"), json!("\"a\\u{202e}b\""));
+    }
+
     #[test]
     fn an_undecided_boundary_is_visible_but_cannot_be_revoked() {
         let mut trust = TrustStore::new("/work");
@@ -3387,8 +3499,8 @@ mod permissions_tests {
         assert_eq!(
             before["paths"],
             json!([
-                {"path": "vendor", "integrity": "untrusted"},
-                {"path": "vendor/ours", "integrity": "undecided"}
+                {"path": "vendor", "shownPath": "vendor", "integrity": "untrusted"},
+                {"path": "vendor/ours", "shownPath": "vendor/ours", "integrity": "undecided"}
             ])
         );
         let revoke = Request::parse(
@@ -3634,6 +3746,7 @@ mod watch_tests {
             pending: Arc::new(Mutex::new(None)),
             target: 1,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            interjections: None,
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let handle = bridge.mint(Open {
@@ -3713,6 +3826,10 @@ mod closing_tests;
 #[cfg(test)]
 #[path = "targets_tests.rs"]
 mod targets_tests;
+
+#[cfg(test)]
+#[path = "interjection_tests.rs"]
+mod interjection_tests;
 
 #[cfg(test)]
 #[path = "../tests/retention/worker.rs"]

@@ -1,6 +1,7 @@
 //! A confined stage must not recover its parent's exec-time environment.
 #![cfg(target_os = "macos")]
 #![forbid(unsafe_code)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use bravebot_sandbox::{
     Environment, Sandbox, Stream, Streams, macos::SeatbeltSandbox, policy::SandboxPolicy,

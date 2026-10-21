@@ -1,6 +1,6 @@
 {
   "name": "bravebot-ui",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "A macOS and Linux desktop interface to bravebot",
   "license": "MPL-2.0",
   "private": true,
@@ -76,7 +76,7 @@
     "esbuild": "^0.25.12",
     "playwright-core": "^1.62.1",
     "typescript": "^5.7.2",
-    "vite": "^7.3.6"
+    "vite": "^7.3.7"
   },
   "dependencies": {
     "@brave/leo": "github:brave/leo#3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d",

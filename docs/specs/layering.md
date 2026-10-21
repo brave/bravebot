@@ -72,8 +72,8 @@ a violation wherever it sits.
 **Why.** The dependency graph makes `core` look like the safe place to put things, and it is not.
 The kernel is where decisions derived from content are *taken*, not where they become allowed.
 
-`verified-by: by-construction (a labelled value exposes no accessor for its contents, so reading one takes either a witness the policy layer alone mints or a conversion that refuses anything not already trusted and public, and labels.md pins that witness's use file by file across both crates, so a decision moved into the kernel moves a pinned count rather than escaping one; the one thing a labelled value answers without a witness is how many bytes it holds, which is a number labels.md already shows the planner)`
-`verified-by: by-construction (the one class of untrusted bytes the kernel holds outside a labelled value is the address a slot carries, which is a bare string, so every accessor returning one takes a witness minted only inside the policy module, bar the single gate that releases the sentence for the screen asking about the slot, and labels.md pins their uses file by file as well; a decision on a slot's address relocated into another module of bravebot-core either does not compile or moves that one gate's pinned count, and one relocated into the policy module moves a pinned count)`
+`verified-by: by-construction (a labelled value exposes no accessor for its contents, so reading one takes either a witness the policy layer alone mints or a conversion that refuses anything not already trusted and public, and labels.md pins that witness's use file by file across both crates, and check-spec fails on a use written in a form the count cannot read, so a release of the bytes added in the kernel moves a pinned count rather than escaping one, while a decision taken from bytes an already counted release produced, inside a function that holds one, moves none and is found by reading the diff as reviewing-for-the-rule.md describes; the one thing a labelled value answers without a witness is how many bytes it holds, which is a number labels.md already shows the planner)`
+`verified-by: by-construction (the one class of untrusted bytes the kernel holds outside a labelled value is the address a slot carries, which is a bare string, so every accessor returning one takes a witness minted only inside the policy module, bar the single gate that releases the sentence for the screen asking about the slot, and labels.md pins their uses file by file as well; a decision on a slot's address relocated into another module of bravebot-core either does not compile or moves that one gate's pinned count, and one relocated into the policy module moves a pinned count only where it adds a use of a witness, since the counts pin releases and not the decisions taken from what they released)`
 
 <a id="LAYER-3"></a>
 ### LAYER-3: presentation crates display untrusted content on purpose
@@ -81,13 +81,19 @@ The kernel is where decisions derived from content are *taken*, not where they b
 `bravebot-tui` and `bravebot-cli` show quarantined content to the person watching. A terminal is
 not a context, and an agent that will not say which file it is working on has protected nobody.
 Everything shown is marked with a margin the renderer draws, and has its control characters
-replaced, so the content cannot draw its own.
+replaced, so the content cannot draw its own. A complete colour code in output drawn for reading is
+taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 
 `verified-by: bravebot_tui::marking::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_tui::render::quarantined_content_is_shown_and_marked_on_every_line`
 `verified-by: bravebot_cli::progress::quarantined_content_is_shown_and_marked_on_every_line`
 `verified-by: bravebot_cli::progress::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_cli::layering::every_presentation_crate_is_named_by_the_clause_that_marks_content`
+`verified-by: bravebot_cli::progress::a_dropped_rule_and_the_file_it_was_written_in_are_described_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_checkouts_rule_as_pictures`
+`verified-by: bravebot_cli::running::permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictures`
+`verified-by: bravebot_cli::running::a_session_in_lines_draws_a_checkouts_settings_as_pictures_before_the_startup_question`
 
 <a id="LAYER-4"></a>
 ### LAYER-4: a crate root says what it does about unsafe

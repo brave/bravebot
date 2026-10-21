@@ -5,6 +5,7 @@
 //! and the exec, and a test reading that entry then sees a process that is not there.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use bravebot_session::jobs::{Job, Mode, Roster, State, Stopped};
 use std::os::unix::process::CommandExt;

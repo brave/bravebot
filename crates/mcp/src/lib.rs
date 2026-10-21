@@ -115,6 +115,25 @@ pub(crate) fn named(error: McpError, tool: &str) -> McpError {
     }
 }
 
+/// Writes how a handshake step ended to the diagnostic log: that it did, or which kind of failure.
+/// Never the server's name or anything it sent, since both are text someone else chose.
+pub(crate) fn log_step<T>(step: &'static str, outcome: &McpResult<T>) {
+    match outcome {
+        Ok(_) => bravebot_diag::info(step, &[("outcome", bravebot_diag::Field::word("ok"))]),
+        Err(error) => {
+            let kind = match error {
+                McpError::Confinement(_) => "confinement",
+                McpError::Denied(_) => "denied",
+                McpError::Transport(_) => "transport",
+                McpError::Server { .. } => "server",
+                McpError::ToolFailed { .. } => "tool_failed",
+                McpError::TimedOut { .. } => "timed_out",
+            };
+            bravebot_diag::error(step, &[("kind", bravebot_diag::Field::word(kind))]);
+        }
+    }
+}
+
 /// A reply that would not parse, reported as what was being read and how the parser classified it.
 ///
 /// The parser's own message is not in it. `serde_json::Error`'s `Display` interpolates the value it

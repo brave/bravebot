@@ -636,7 +636,7 @@ fn plan_rows(request: &RunRequest) -> Vec<Line<'static>> {
         )));
         for path in &request.plan.writes {
             lines.push(Line::from(Span::styled(
-                format!("       {}", path.display()),
+                format!("       {}", bravebot_agent::confirm::shown_path(path)),
                 Style::default()
                     .fg(theme::text())
                     .add_modifier(Modifier::BOLD),
@@ -679,7 +679,7 @@ fn effect_rows(request: &RunRequest, width: usize) -> Vec<Line<'static>> {
             ));
             for directory in &confined.directories {
                 lines.push(Line::from(Span::styled(
-                    format!("       {}", directory.display()),
+                    format!("       {}", bravebot_agent::confirm::shown_path(directory)),
                     Style::default()
                         .fg(theme::text())
                         .add_modifier(Modifier::BOLD),

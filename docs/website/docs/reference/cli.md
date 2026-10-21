@@ -47,14 +47,14 @@ Usage:
 | `bravebot "<task>"` | run one task and print the reply |
 | `bravebot --resume`, `-r` | choose a session in this directory to pick up |
 | `bravebot --resume <id>` | resume that session by id |
-| `bravebot --from-pr <number or url>` | choose among the sessions linked to that pull request |
+| `bravebot --from-pr <number or url>` | choose among the sessions linked to that pull request. The picker opens and says nothing matches when no session is linked, even in a directory with no sessions at all; Esc starts an ordinary session |
 | `bravebot --continue`, `-c` | pick up the most recent session in this directory |
 | `bravebot -p "<task>" --resume <id>` | run the task as one more turn of that session, without opening it ([below](#continuing-a-session-from-a-one-shot-run)) |
 | `bravebot -p "<task>" --continue` | the same, for the most recent session in this directory |
 | `bravebot --fork <id>`, `-f` | copy a session into one of its own and open that, to try a second approach |
 | `bravebot doctor` | report configuration and confinement, changing nothing |
 | `bravebot doctor --sandbox-check` | run `git`, `cargo`, `npm` and the other everyday programs under the sandbox and report which work |
-| `bravebot doctor --push-identity [<host>/<owner>]` | print each ssh public key's fingerprint and the GitHub login that key pushes as |
+| `bravebot doctor --push-identity [<host>/<owner>]` | print each ssh public key's fingerprint and the GitHub login that key pushes as. A key you chose for the owner at a run prompt is marked as chosen; `/reach keys` in the terminal client lists it and forgets it |
 | `bravebot bug-report` | write a text file to attach to a bug report ([below](#bug-report)) |
 | `bravebot update` | print the command that updates this copy, and run nothing ([below](#update)) |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
@@ -63,6 +63,11 @@ Usage:
 | `bravebot auth status [leo\|bedrock\|gateway [id]]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
+| `bravebot --bg "<prompt>"` | start a session that runs in the background and keeps going after the terminal closes ([Sessions](../using/sessions.md#sessions-in-the-background)) |
+| `bravebot sessions` | list the background sessions of every project, grouped by state when run in a terminal ([Sessions](../using/sessions.md#sessions-in-the-background)) |
+| `bravebot attach <id>` | draw a background session as a foreground one, and answer what it holds |
+| `bravebot reply <id> "<text>"` | send a background session its next prompt |
+| `bravebot sessions stop <id>` | stop a background session and keep its record |
 | `bravebot sessions import claude-code` | copy Claude Code's sessions for this directory in as words to read ([Sessions](../using/sessions.md#importing-sessions-from-claude-code)) |
 | `bravebot sessions search [workspace:<dir>] [since:<n>h\|d\|w] <text>` | print the ids and titles of past sessions that said it ([Sessions](../using/sessions.md#picking-one-back-up)) |
 | `bravebot sessions list [--json] [--limit <n>]` | print the sessions recorded for this directory, newest first ([Sessions](../using/sessions.md#picking-one-back-up)) |
@@ -95,7 +100,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--output-schema <path>` | hold the reply to the JSON Schema in this file, or end on status 6 ([below](#--output-schema-path)) |
 | `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
-| `--sandbox <mode>` | how far the programs the agent runs may reach: `strict`, `read-only` (which also stops the agent's file tools writing), `workspace-write` or `off`. Without it the mode is `workspace-write` ([`sandbox.mode`](../security/security.md)) |
+| `--sandbox <mode>` | how far the programs the agent runs may reach: `strict`, `read-only` (which also stops the agent's file tools writing), `workspace-write` or `off`. Without it the mode is `workspace-write` ([`sandbox.mode`](../security/security.md)). Where a machine-level file pins `sandbox.mode`, a mode that reads more of the machine, writes more or both is refused, and the refusal says which and names the pinned mode to run with |
 | `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
 | `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
@@ -507,6 +512,10 @@ you vouched for in the session still count. The commands you vouched for do not,
 record for the next time you resume it interactively. Content a run could not show the planner, such
 as piped input, stays a reference, and the follow-up is told the reference names nothing now.
 
+The turn adds a rewind point behind the record's own, so `/undo` in the session you resume next
+takes back only that turn, its files included. A program the turn ran is shown as something the
+undo cannot put back.
+
 Given with no task, `--resume` and `--continue` open the session as they always have.
 
 Both are refused with the argument status before anything is sent when the id names no session in
@@ -531,9 +540,11 @@ one-shot run.
 The prompt is one argument, so quote it; its line breaks are kept. Characters a terminal draws as
 nothing are removed from it, as from a paste, and the session says how many. `-i` goes first, and
 the flags that combine with every way of starting go anywhere around it, as they do with a bare
-`bravebot`. Only `--model <name>` and `--effort <level>` may follow the prompt: they apply to this
-session and are not recorded, so the next session opens on the model and level it would have
-without them, and `/model` and `/effort` change them once the session is open as they always do.
+`bravebot`. Only `--model <name>` and `--effort <level>` may follow the prompt, in either order. They
+apply to this session only and are recorded nowhere, so the next session opens on the model and level
+it would have without them. A blank name or a word that is no level is refused with the argument
+status, and a model that nothing serves ends the start before the screen opens, as it does for a
+one-shot run. `/model` and `/effort` change them once the session is open as they always do.
 `--file` and the other options for a task belong to a one-shot run and are refused here rather
 than ignored.
 
@@ -689,7 +700,8 @@ Answers "what will this actually use", and changes nothing. It reports:
 - the model in force, and whether it was chosen or defaulted;
 - where the state directory is, or that there is none, and the diagnostic logs in it;
 - what a TLS handshake is validated against, and what a request is routed through;
-- the confinement available on this platform;
+- the confinement available on this platform, and the sandbox mode in force with where it came from.
+  A `--sandbox` flag given to `doctor` counts, and one a managed file refuses is named;
 - the state of any imported subscription.
 
 ```sh
@@ -705,6 +717,22 @@ program that is not installed is reported as skipped, by name, and does not fail
 non-zero when a workflow fails or a refused row gets through. When `gh` holds a login in your own
 home, it also checks that `gh` can still read that login under the sandbox, and the fix for a failure
 names `sandbox.filesystem.allowRead`. It takes no further argument.
+
+```sh
+bravebot doctor --push-identity [<host>/<owner>]
+```
+
+Asks the host which account each ssh public key pushes as: the keys at ssh's default names and the
+ones an `IdentityFile` line in `~/.ssh/config` names. Each key is tried alone, so the answer is for
+that key. The report gives its fingerprint and the login the host names, or says that no account has
+the key or that the host did not answer. The login is compared with the owner you gave, or with the
+owner in the address of `origin` in the directory you ran it in. The host is `github.com` where
+neither names another. It runs only when you ask, because a hardware key waits for a touch, and it
+gives each key 60 seconds. `ssh-keygen`, `ssh` and `git` are found only in `PATH` entries that
+lie outside the directory you ran it in and the checkout holding it, so a program planted there is
+reported as absent rather than run, and they start without Brave Bot's own credentials
+([Security](../security/security.md)). More than one argument, or one that is not `<host>/<owner>`, is refused
+with exit status 2.
 
 **No value from a settings file is ever printed.** Where a credential decides whether a backend
 works, what is reported is that one was found, because a settings file holds credentials on some
@@ -765,13 +793,17 @@ and the id can be left off when only one is stored. In an incognito session the 
 ```text
 $ bravebot auth status
 leo: signed in: production subscription imported, 12 of 30 credentials unspent
-bedrock: not signed in: no AWS account is configured for Bedrock: ...
+bedrock: not signed in: the AWS session has lapsed: run `bravebot auth login bedrock`
 gateway openrouter: signed in: stored by bravebot auth login gateway (never printed)
 ```
 
 A line says signed in, not signed in (signing in fixes it), or unusable (it does not: a stored
 subscription for another Brave channel, an unreadable file, a missing `aws`), with the reason and
-what to run. Only counts and fixed sentences are printed, never a credential. With no way named it
+what to run. Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
+is one of four fixed sentences: the AWS session has lapsed, the AWS CLI has no profile by the name
+you set, the AWS CLI is not installed, or the AWS CLI answered with something that is not a
+credential. What the AWS CLI itself printed is never copied, because it can name accounts and roles.
+With no way named it
 exits 0 if any sign-in is usable. With a way named it exits 0 only if every sign-in under it is
 usable. Otherwise it prints a `BB1001` line and exits 1, or exits 3 when the configuration could not
 be read. `auth status import` is refused, since an import keeps no sign-in.
@@ -799,8 +831,8 @@ each. It takes no arguments, needs a terminal to ask on, and refuses in an incog
 ## `mcp`
 
 ```sh
-bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--stdio] -- <program> [args...]
-bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] --http <url>
+bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--tools <list>] [--exclude-tools <list>] [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--tools <list>] [--exclude-tools <list>] [--bearer-env <name>] [--header-env <header>=<name>...] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
 bravebot mcp approve <alias>
@@ -846,6 +878,9 @@ decision: ask
 rule: Bash(git commit *)
 file: /work/app/.bravebot/settings.json
 ```
+
+When the deciding rule was written with a [`reason`](../customize/configuration.md#permissions), a
+`reason: ...` line follows `file:`.
 
 When no rule matches, it says so and the ordinary approval gates decide. An `allow` rule from a
 checkout's settings is not in force until you grant it at the question a session asks, so it is
@@ -965,6 +1000,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/theme [name]` | Choose which theme paints the interface |
 | `/effort [low \| medium \| high \| xhigh \| max]` | Choose how hard to think before answering |
 | `/config` | Choose how the input box edits text |
+| `/language [tag \| auto]` | Choose the interface language for the next start, or drop the choice |
 | `/add-dir <path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd <path>` | Work in another directory from now on, and trust it for this session |
 | `/rename <name>` | Call this conversation something else |

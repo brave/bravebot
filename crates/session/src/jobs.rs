@@ -633,7 +633,8 @@ impl Roster {
     /// Stop the process for `id` and record that it was stopped (BG-11).
     ///
     /// The process group is sent the terminate signal, which takes the programs a turn started
-    /// with it, and then the kill signal if the lock has not been released after `grace`. The
+    /// that are in it, and then the kill signal if the lock has not been released after `grace`.
+    /// A stage of `run` leads a process group of its own and is not in it (RUN-11). The
     /// entry is rewritten as stopped only once nothing holds the lock, so a process cannot write
     /// over it on its way out.
     ///
@@ -724,7 +725,8 @@ pub enum Stopped {
 /// Make this process the leader of a session and process group of its own, with no terminal.
 ///
 /// What lets it outlive the terminal it was started from, and what lets [`Roster::stop`] reach
-/// everything it started with one signal.
+/// what it started with one signal. A stage of `run` is not among that, since it leads a process
+/// group of its own (RUN-11).
 pub fn leave_the_terminal() {
     #[cfg(unix)]
     let _ = rustix::process::setsid();

@@ -57,14 +57,10 @@ resolves a redirect's `Location` against the URL it came from. Ask what happens 
 allowlist is re-applied to the resolved URL, and what is sent in the second request. A request a
 person approved to one host, in plaintext to another, is a `high`.
 
-**Python that reads a file somebody else wrote.** `contrib/` and `agents/skills/` run on a
-maintainer's machine over paths from a work directory. A deserialiser that can construct arbitrary
-objects is the shape to look for, and so is a path from a manifest joined onto a directory without
-being checked to stay inside it.
-
 ### What is not this lane
 
-An out of date dependency with no advisory against it. A licence question. A version bump. Anything
+The scripts under `agents/` and `contrib/`, the hooks and the `Makefile` targets that set git
+configuration, which are the tooling lane's. An out of date dependency with no advisory against it. A licence question. A version bump. Anything
 `make check-deps` already reports, which is red in CI on the branch that caused it. And any finding
 whose whole content is that a third party could in principle be compromised: name the step, the
 permission and what it reaches, or do not file it.

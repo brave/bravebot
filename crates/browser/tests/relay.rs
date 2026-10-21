@@ -4,6 +4,7 @@
 
 #![cfg(unix)]
 #![forbid(unsafe_code)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use bravebot_browser::framing;
 use bravebot_browser::host::{SECRET_TIMEOUT, WAITING_LIMIT};

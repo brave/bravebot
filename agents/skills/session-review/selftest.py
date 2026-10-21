@@ -223,6 +223,43 @@ class Work(unittest.TestCase):
         quiet(sr.draft, self.args())
         self.assertEqual(json.loads((self.work / "drafts.json").read_text()), [])
 
+    def give_notes(self, sid, notes, from_note):
+        manifest = sr.pa.manifest_of(self.work)
+        for entry in manifest["sessions"]:
+            if entry["id"] == sid:
+                entry.update(notes=notes, from_note=from_note)
+        (self.work / "manifest.json").write_text(json.dumps(manifest))
+
+    def test_a_session_with_a_new_note_and_no_summary_is_left_undecided_for_the_next_run(self):
+        self.give_notes("a", 2, 1)
+        self.give_notes("b", 1, 1)
+        self.analysis("a", [], summary="")
+        self.analysis("b", [], summary="")
+        self.assertEqual(self.states()["a"], "pending")
+        self.assertEqual(sr.outcomes(self.work)[1]["a"]["reason"], "the summary says nothing about the new notes")
+        self.assertEqual(self.states()["b"], [])
+        self.analysis("a", [], summary="The second note was only a remark, so nothing was reported.")
+        self.assertEqual(self.states()["a"], [])
+
+    def test_the_draft_prints_the_summary_of_each_session_with_a_new_note_and_of_no_other(self):
+        self.give_notes("a", 2, 1)
+        self.give_notes("b", 1, 1)
+        self.analysis("a", [], summary="Note 2 named a slow step the trail does not show, so it was not reported.")
+        self.analysis("b", [], summary="Nothing new.")
+        self.analysis("c", [], summary="No notes here.")
+        code, out = quiet(sr.draft, self.args())
+        self.assertIn("notes  a  Note 2 named a slow step the trail does not show, so it was not reported.", out)
+        self.assertNotIn("Nothing new.", out)
+        self.assertNotIn("No notes here.", out)
+
+    def test_a_long_summary_of_several_notes_is_printed_whole(self):
+        self.give_notes("a", 3, 0)
+        summary = " ".join(f"Note {n} was not reported because the trail does not show it." for n in (1, 2, 3, 4, 5, 6, 7))
+        self.assertGreater(len(summary), 240)
+        self.analysis("a", [], summary=summary)
+        code, out = quiet(sr.draft, self.args())
+        self.assertIn(summary, out)
+
     def test_a_verifier_is_given_the_claim_and_the_session_and_nothing_else_the_template_lacks(self):
         self.analysis("a", [PROBLEM])
         (self.work / "sessions" / "a.json").write_text("{}")
@@ -475,6 +512,14 @@ class Prompts(unittest.TestCase):
             text = (HERE / name).read_text()
             self.assertIn("{{notes_file}}", text, name)
             self.assertIn("copy nothing", text, name)
+
+    def test_the_analyzer_is_told_to_decide_about_every_new_note_in_its_summary(self):
+        text = (HERE / "analyze.md").read_text()
+        self.assertIn("A note is never passed over.", text)
+        self.assertIn("then one sentence per new note saying what it was about and what was decided about it", text)
+        skill = (HERE / "SKILL.md").read_text()
+        self.assertIn("A note is never passed over.", skill)
+        self.assertIn("for every session with a new note, one line per note", skill)
 
 
 if __name__ == "__main__":

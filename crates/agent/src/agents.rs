@@ -186,6 +186,12 @@ fn read_definition(text: &str, origin: &str) -> Read {
         definition = definition.with_servers(if declares_servers { Vec::new() } else { names });
     }
 
+    // The delegates it may start, read as `tools:` is (DELEGATE-30). An empty line names none, and
+    // its delegate starts none, for the reason an empty `tools:` line leaves one no tool.
+    if let Some(spawns) = declared.get("spawns") {
+        definition = definition.with_spawns(names_in(spawns));
+    }
+
     // Refused rather than left at the kind's own, because its author believes the number is in
     // force. Zero goes with the rest: the bound is checked after a round, so it would be one.
     if let Some(written) = declared
@@ -438,7 +444,7 @@ const FOLDS_TO_A_COLON: [char; 5] = [
     '\u{ff1a}', // FULLWIDTH COLON
 ];
 
-/// The names a `tools:`, a `skills:` or an `mcpServers:` value lists.
+/// The names a `tools:`, a `skills:`, a `spawns:` or an `mcpServers:` value lists.
 ///
 /// A comma and a space both separate, so a YAML scalar (`read_file, list_files`) and a YAML
 /// sequence (`- read_file` on its own line) both arrive here as something this splits the same
@@ -505,7 +511,13 @@ pub fn discover<S: Sink>(
     }
 
     if let Some(home) = home {
-        discover_home(policy, &home.join(AGENTS), &mut definitions, &mut notices);
+        discover_home(
+            policy,
+            workspace,
+            &home.join(AGENTS),
+            &mut definitions,
+            &mut notices,
+        );
     }
     discover_workspace(policy, workspace, &mut definitions, &mut notices);
     notices.extend(rounds_held_to_their_kind(&definitions));
@@ -612,8 +624,14 @@ pub fn not_vouched_for(workspace: &Workspace, trust: &bravebot_core::trust::Trus
 }
 
 /// Definitions from `~/.bravebot/agents`, labelled from where they sit.
+///
+/// A file whose path goes through the workspace is not read from here, because a turn can write
+/// it (DELEGATE-20, SKILL-3). It is the project's, and `discover_workspace` reads it through the
+/// trust map where `~/.bravebot/agents` is the project's definition directory. Those passed over
+/// are counted, except in that case, where `discover_workspace` has said what it did with each.
 fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
     root: &Path,
     definitions: &mut Definitions,
     notices: &mut Vec<Notice>,
@@ -622,7 +640,12 @@ fn discover_home<S: Sink>(
         return;
     }
 
+    let mut passed_over = 0;
     for file in definition_files(root) {
+        if crate::skills::goes_through_the_workspace(workspace, &root.join(&file)) {
+            passed_over += 1;
+            continue;
+        }
         let origin = format!("~/.bravebot/{AGENTS}/{file}");
 
         let Ok(text) = std::fs::read_to_string(root.join(&file)) else {
@@ -642,6 +665,15 @@ fn discover_home<S: Sink>(
             definitions,
             notices,
         );
+    }
+    // The project's own pass has said what it did with each file where it reads this directory.
+    let read_as_the_projects =
+        crate::skills::same_directory(root, &workspace.root().join(WORKSPACE_AGENTS));
+    if passed_over > 0 && !read_as_the_projects {
+        notices.push(Notice::from_message(t!(
+            home_definitions_reached_through_the_workspace,
+            count = passed_over
+        )));
     }
 }
 
@@ -952,6 +984,34 @@ pub fn servers_not_found(definitions: &Definitions, reached: &[String]) -> Vec<N
         .collect()
 }
 
+/// What to tell whoever wrote a definition whose `spawns:` line names a delegate this session did
+/// not resolve (DELEGATE-30).
+///
+/// Such a name selects nothing, as a `skills:` name nothing found does, and silence would leave a
+/// misspelt name reading as a delegate the definition may start.
+pub fn spawns_not_found(definitions: &Definitions) -> Vec<Notice> {
+    definitions
+        .iter()
+        .filter_map(|definition| {
+            let mut missing: Vec<&str> = Vec::new();
+            for name in definition.spawns()? {
+                if definitions.get(name).is_none() && !missing.contains(&name.as_str()) {
+                    missing.push(name);
+                }
+            }
+            if missing.is_empty() {
+                return None;
+            }
+            Some(Notice::from_message(t!(
+                delegate_spawns_not_found,
+                definition = definition.origin(),
+                count = missing.len(),
+                names = missing.join(", ")
+            )))
+        })
+        .collect()
+}
+
 /// A count of definitions, and the verb that agrees with it.
 fn counted(n: usize) -> (String, &'static str) {
     if n == 1 {
@@ -968,18 +1028,32 @@ fn counted(n: usize) -> (String, &'static str) {
 /// filesystem would vary by machine, which would make which of two definitions is live vary with
 /// it.
 fn definition_files(root: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
+    markdown_files(root).0
+}
 
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| name.ends_with(".md"))
-        .collect();
+/// The `.md` files directly in `root`, in name order, and how many more there are whose names are
+/// not text.
+///
+/// A name that is not UTF-8 is never turned into one that is: the file under the lossy spelling is
+/// another file, or none. It is counted so that a caller can say so (PATH-002).
+pub(crate) fn markdown_files(root: &Path) -> (Vec<String>, usize) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return (Vec::new(), 0);
+    };
+    let mut names = Vec::new();
+    let mut not_text = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.as_encoded_bytes().ends_with(b".md") || !entry.path().is_file() {
+            continue;
+        }
+        match name.into_string() {
+            Ok(name) => names.push(name),
+            Err(_) => not_text += 1,
+        }
+    }
     names.sort();
-    names
+    (names, not_text)
 }
 
 /// What a definition made for a desktop bot came to.
@@ -1595,6 +1669,45 @@ mod tests {
         );
         assert_eq!(skills_of("skills:\n"), Some(Vec::new()));
         assert_eq!(skills_of(""), None);
+    }
+
+    /// DELEGATE-30. `spawns:` is read as `tools:` is, and an empty line is a list of none, which
+    /// is not the same as no line.
+    #[test]
+    fn a_definition_reads_the_delegates_it_may_start() {
+        let spawns_of = |line: &str| {
+            definition_of(&format!(
+                "---\nname: coordinator\ndescription: coordinates\nkind: worker\n{line}---\n\nbody\n"
+            ))
+            .spawns()
+            .map(<[String]>::to_vec)
+        };
+        let both = Some(vec!["reader".to_string(), "checker".to_string()]);
+
+        assert_eq!(spawns_of("spawns: reader, checker\n"), both);
+        assert_eq!(spawns_of("spawns:\n  - reader\n  - checker\n"), both);
+        assert_eq!(spawns_of("spawns:\n"), Some(Vec::new()));
+        assert_eq!(spawns_of(""), None);
+    }
+
+    /// DELEGATE-30. A name no definition resolved is said, naming the file, once.
+    #[test]
+    fn a_spawns_name_nothing_resolved_is_said_once() {
+        let mut definitions = Definitions::default();
+        definitions.insert(definition_of(
+            "---\nname: coordinator\ndescription: coordinates\nkind: worker\nspawns: reader, \
+             reviwer, reviwer\n---\n\nbody\n",
+        ));
+        let said: Vec<String> = spawns_not_found(&definitions)
+            .into_iter()
+            .map(|notice| notice.message)
+            .collect();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("reviwer") && !said[0].contains("reviwer,"),
+            "{said:?}"
+        );
+        assert!(!said[0].contains("reader"), "{said:?}");
     }
 
     /// One misspelt name written twice is one name nothing found, so it is said once and in the

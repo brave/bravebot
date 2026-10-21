@@ -8,7 +8,9 @@ name: Publish npm
 # none.
 #
 # On npmjs.com, the trusted publisher of every one of the seven packages must name this file
-# exactly: publish-npm.yml
+# exactly: publish-npm.yml, and the GitHub environment npm-publish. That environment has a required
+# reviewer who is not the dispatcher (docs/development/branch-protection.md), and it is what holds a
+# dispatch of another ref's copy of this file: the dispatcher writes that copy, so nothing in it can.
 on:
   workflow_dispatch:
     inputs:
@@ -196,6 +198,7 @@ jobs:
     needs: release
     if: github.repository == 'brave/bravebot'
     runs-on: ${{ matrix.runner }}
+    environment: npm-publish
     permissions:
       contents: read
       id-token: write
@@ -256,6 +259,7 @@ jobs:
     needs: platform
     if: github.repository == 'brave/bravebot'
     runs-on: ubuntu-latest
+    environment: npm-publish
     permissions:
       contents: read
       id-token: write

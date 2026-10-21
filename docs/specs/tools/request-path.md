@@ -90,10 +90,18 @@ Under the sandbox mode `off` there is no profile to add to, and a workspace that
 `read-only` a request to write is refused and a request to read is accepted
 ([SANDBOX-22](../sandboxing.md#SANDBOX-22)), so the mode that answers every question does not hand
 back the writes the mode withholds. The result says the request is not accepted, and nobody is
-asked.
+asked. A session that accepts no request does not point the planner at the route: the `run`
+description and the sentence after a failed step name neither `request_path` nor `run`'s `scopes`
+argument there ([SANDBOX-19](../sandboxing.md#SANDBOX-19)). The mode that answers every question
+does not give the programs of such a session the rows a request would have added either: a write
+beside the session's directories is refused by the operating system, and the sentence, the trail and
+`/status` say nothing of a reach through `request_path`
+([SANDBOX-28](../sandboxing.md#SANDBOX-28)).
 
 `verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
+`verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
+`verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
 
 <a id="PATHREQ-6"></a>
 ### PATHREQ-6: a delegate has no such tool
@@ -138,9 +146,10 @@ refusal names `/add-dir` alone. A skill that depends on the exception says the s
 branch on the mode.
 
 The same mode needs no request for programs either, under the sandbox mode `workspace-write` on macOS and
-Linux: the lead session's stages are given at the start what a request for writing would be
-granted ([SANDBOX-28](../sandboxing.md#SANDBOX-28)), so a `run` is not refused before the planner
-asks. The file tools are not given that reach, and the request is still how they are.
+Linux, in a workspace the person has trusted: the lead session's stages are given at the start what a
+request for writing would be granted ([SANDBOX-28](../sandboxing.md#SANDBOX-28)), so a `run` is not
+refused before the planner asks. The file tools are not given that reach, and the request is still
+how they are.
 
 **Why.** The text a planner chose is the only thing that decides the path, which is the reason a
 person's yes does not vouch for it. In bypass the person has already declared that nothing a session

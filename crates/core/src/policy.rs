@@ -446,6 +446,11 @@ pub struct Policy<'sink, S: Sink> {
     /// Whether this run's definition named its tools and left `spawn_agent` out, which refuses
     /// every delegate it asks for wherever it sits.
     named_out_delegating: bool,
+    /// The names this run's definition, and every one above it, allowed it to start, where any
+    /// named some (DELEGATE-30). The set a turn resolves is narrowed to these wherever it is
+    /// installed, and a delegate it starts carries them on, so a child cannot start what the file
+    /// of an ancestor left out.
+    spawns: Option<Vec<String>>,
     /// The limits on the files this run may write, where its definition or one above it wrote a
     /// `writes:` line (DELEGATE-28). A path has to be inside every one; none is no limit.
     write_limits: Vec<crate::permissions::Permissions>,
@@ -609,6 +614,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // tree from its spec with `within`.
             at: None,
             named_out_delegating: false,
+            spawns: None,
             write_limits: Vec::new(),
             spawned: 0,
             tree: crate::delegate::Tree::default(),
@@ -1268,6 +1274,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             delegates: self.delegates.clone(),
             at: self.at,
             named_out_delegating: self.named_out_delegating,
+            spawns: self.spawns.clone(),
             write_limits: self.write_limits.clone(),
             spawned: self.spawned,
             tree: self.tree.clone(),
@@ -1349,6 +1356,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// gives.
     fn integrity_in_force(&self, path: &str) -> Option<Integrity> {
         let path = &*self.keyed(path);
+        // A key that climbs is not read as text: the map keeps `..` as written and a confined path
+        // never reaches it with one, so an ancestor walk would find the rule of a directory the
+        // name only passes through and miss the one of the directory it lands in.
+        if std::path::Path::new(path)
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Some(Integrity::Untrusted);
+        }
         // Provenance, not the map: the user's own skill directory is trusted for being the user's
         // own (SKILL-3), and the map is keyed by workspace-relative paths and has nothing to say
         // about it (TRUST-11).
@@ -1525,8 +1541,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Taken by reference because the set is resolved from files, and resolving them takes this
     /// policy: the read of each one passes the same gates every other read does, so there is no
     /// point before the policy exists at which the caller could hand a set to a constructor.
+    ///
+    /// A run whose definition, or an ancestor's, named the delegates it may start is installed
+    /// only those of the set that the list names, so the comparison a name meets and the kinds the
+    /// planner is told of are both the intersection (DELEGATE-30).
     pub fn install_delegates(&mut self, delegates: crate::delegate::Definitions) {
-        self.delegates = delegates;
+        self.delegates = match &self.spawns {
+            Some(only) => delegates.only(only),
+            None => delegates,
+        };
     }
 
     /// The kinds of delegate a name may select.
@@ -1543,12 +1566,36 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn within(mut self, spec: &crate::delegate::DelegateSpec) -> Self {
         self.at = Some(spec.id());
         self.named_out_delegating = spec.named_out_delegating();
+        self.spawns = spec.spawns().map(<[String]>::to_vec);
         self.write_limits = spec.write_limits().to_vec();
         self.tree = spec.tree().clone();
         self.hold(
             spec.holds(),
             "the context that wrote this delegate's task held private content",
         );
+        self
+    }
+
+    /// Hold the tree of delegates this turn starts to `bound` running at once, where the settings
+    /// named a figure, and to [`DEFAULT_MAX_RUNNING_DELEGATES`] where they named none
+    /// (DELEGATE-7).
+    ///
+    /// The caller reads the figure out of a person's settings, and nothing a delegate or the
+    /// planner reads or writes reaches it. A bound of zero is none, since a turn that may have no
+    /// delegate running is one that cannot delegate, which a run's tools say. It is the tree of a
+    /// turn's own run: a run that is a delegate ([`Policy::within`]) draws on the tree its spec
+    /// carries, so this changes nothing for it, whichever of the two is called first, and a
+    /// delegate cannot give itself a tree with a bound of its own choosing by calling it.
+    ///
+    /// [`DEFAULT_MAX_RUNNING_DELEGATES`]: crate::delegate::DEFAULT_MAX_RUNNING_DELEGATES
+    pub fn with_delegate_bound(mut self, bound: Option<u32>) -> Self {
+        if self.at.is_none() {
+            self.tree = crate::delegate::Tree::bounded(
+                bound
+                    .filter(|bound| *bound > 0)
+                    .unwrap_or(crate::delegate::DEFAULT_MAX_RUNNING_DELEGATES),
+            );
+        }
         self
     }
 
@@ -3587,14 +3634,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The number is minted here, beneath this run's own, and spent only by a delegate that is
     /// approved. A refusal takes none, so the number says which of the run's delegates it was
     /// and not how many requests the run made. Two bounds are this call's to keep: a run at
-    /// [`MAX_DEPTH`] spawns nothing, and a tree holding [`MAX_DELEGATES`] takes no more,
-    /// whichever run in it asks. A run whose definition named its tools without `spawn_agent`
-    /// spawns nothing either, wherever it sits. Only a delegate that passed everything else
-    /// takes a place in the tree, and the trail records what it was delegated without only once
-    /// it has one.
+    /// [`MAX_DEPTH`] spawns nothing, and a tree already holding as many delegates as its bound
+    /// ([`Policy::with_delegate_bound`]) takes no more, whichever run in it asks. A run whose
+    /// definition named its tools without `spawn_agent` spawns nothing either, wherever it sits.
+    /// Only a delegate that passed everything else takes a place in the tree, and the trail
+    /// records what it was delegated without only once it has one.
+    ///
+    /// The place is held by the spec this returns and goes back when the spec does, once the
+    /// delegate's run has ended or where the caller drops the spec without starting one. A caller
+    /// that wants a delegate to count against the tree keeps the spec for as long as it runs.
     ///
     /// [`MAX_DEPTH`]: crate::delegate::MAX_DEPTH
-    /// [`MAX_DELEGATES`]: crate::delegate::MAX_DELEGATES
     pub fn before_delegate(
         &mut self,
         kind: &Labelled<String>,
@@ -3711,6 +3761,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let proof = Declassification::authorise("a delegate kind the planner named");
         let name = kind.clone().declassify(&proof);
         let Some(selected) = self.delegates.get(&name).cloned() else {
+            if self.delegates.is_empty() {
+                return Err(self.deny(
+                    "delegate",
+                    Principle::Capability,
+                    "this run's definition names no delegate it may start; do the work yourself \
+                     or say in the report what is left"
+                        .to_string(),
+                ));
+            }
             return Err(self.deny(
                 "delegate",
                 Principle::Capability,
@@ -3755,17 +3814,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             }
         };
 
-        if !self.tree.claim() {
+        let Some(place) = self.tree.claim() else {
             return Err(self.deny(
                 "delegate",
                 Principle::Capability,
                 format!(
-                    "this turn has already started {} delegates, which is as many as one \
-                     turn may; do the work yourself or say what is left",
-                    crate::delegate::MAX_DELEGATES
+                    "this turn already has {} delegates running, which is as many as one turn \
+                     may have at once; do the work yourself or say what is left",
+                    self.tree.bound()
                 ),
             ));
-        }
+        };
 
         // Spent only here, with the place in the tree, so a request refused above takes neither
         // and the next delegate this run starts is numbered as the one after the last that did.
@@ -3926,17 +3985,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             );
         }
 
-        let spec = crate::delegate::DelegateSpec::new(
-            id,
-            &selected,
-            task,
-            held,
-            rounds,
-            self.tree.clone(),
-        )
-        .holding(self.holds)
-        .limited_to(limits)
-        .budgeted_to(asked);
+        let spec = crate::delegate::DelegateSpec::new(id, &selected, task, held, rounds, place)
+            .holding(self.holds)
+            .limited_to(limits)
+            .budgeted_to(asked)
+            .spawning_within(self.spawns.as_deref());
 
         let beneath = if spec.may_delegate() {
             "and a place in this turn's tree of delegates"
@@ -3974,10 +4027,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Take back a delegate [`Policy::before_delegate`] approved and the caller then did not
     /// start, because something it checks afterwards refused it.
     ///
-    /// The place under the ceiling and the number go back, so only a delegate that started is
-    /// counted ([DELEGATE-7](../../../docs/specs/delegation.md#DELEGATE-7)) and the next one is
-    /// numbered as the one after the last that did. Only the delegate this run approved last can
-    /// be taken back, which is the only one a caller holds: it asks for one at a time.
+    /// The place under the ceiling and the number go back, so only a delegate that started
+    /// holds a place ([DELEGATE-7](../../../docs/specs/delegation.md#DELEGATE-7)) and the next
+    /// one is numbered as the one after the last that did. The place goes back with the spec,
+    /// which this takes and drops. Only the delegate this run approved last can be taken back,
+    /// which is the only one a caller holds: it asks for one at a time.
     ///
     /// The refusal is recorded as one (TRACE-1), with its fixed `cause`, the directory a person
     /// opened where that was the cause, and how many of the call's `unstarted` delegates this
@@ -3990,7 +4044,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ) {
         debug_assert_eq!(self.spawned, spec.id().position());
         self.spawned = self.spawned.saturating_sub(1);
-        self.tree.release();
         let named = match cause.directory() {
             Some(dir) => format!(" ('{dir}')"),
             None => String::new(),
@@ -4124,6 +4177,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         };
 
+        // The addressed definition's own list, so the turn it now runs starts the delegates the
+        // file names and the ones those start are held to it (DELEGATE-30).
+        if let Some(only) = selected.spawns() {
+            self.delegates = self.delegates.only(only);
+            self.spawns = Some(only.to_vec());
+        }
+
         let wanted = selected.capabilities();
         let held = selected.held_out_of(&self.capabilities);
         let given_up: Vec<String> = self
@@ -4181,6 +4241,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
         self.capabilities = held;
 
+        // A turn with no delegate left to start is offered no way to start one, as a delegate in
+        // the same state is, so `spawn_agent` is not kept and its `kind` is never an empty
+        // enumeration (DELEGATE-30).
+        let may_delegate = !self.delegates.is_empty();
         let named = selected.tools();
         let kept: Vec<String> = offered
             .iter()
@@ -4188,6 +4252,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 crate::delegate::gating_capability(tool)
                     .is_none_or(|needs| self.capabilities.contains(&needs))
                     && named.is_none_or(|named| named.iter().any(|written| written == *tool))
+                    && (may_delegate || **tool != "spawn_agent")
             })
             .map(|tool| tool.to_string())
             .collect();
@@ -6891,6 +6956,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("approval", detail);
     }
 
+    /// Record that a `run` line was put to the confirmer and not approved, so it did not start
+    /// (TRACE-1, SANDBOX-29).
+    ///
+    /// A no, Ctrl-C at the prompt and nobody being there to ask all reach here as the same answer,
+    /// and the entry says only that the answer was not a yes. The text is fixed and names nothing
+    /// the line or a program produced.
+    pub fn refuse_unapproved_run(&mut self) {
+        let _ = self.deny(
+            "approval",
+            Principle::Capability,
+            "run: the line was not approved and did not run".to_string(),
+        );
+    }
+
     /// Record that a person moved a waited-for command to the background, and which job it became.
     ///
     /// A decision only a person can make: the planner cannot press the key and is told afterwards.
@@ -6962,7 +7041,30 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// it was given: a vouched-for `sed` over a fetched page prints the page. So neither an
     /// assertion about a program nor a proof about its option surface reaches `(T,priv)` for a line
     /// fed content nobody vouched for, and the untrusted road is the only way out of that case.
+    ///
+    /// A line the planner asked to lend scopes or to start with no sandbox is labelled by
+    /// [`Policy::before_plan_requesting`] instead.
     pub fn before_plan(&mut self, plan: &crate::command::Plan) -> Gated<Label> {
+        self.label_a_run(plan, false)
+    }
+
+    /// [`Policy::before_plan`] for a line the planner asked to lend credential scopes
+    /// ([SANDBOX-26]) or to start with no sandbox ([SANDBOX-29]).
+    ///
+    /// The output is `(U,priv)` and the `provenance` entry says so, whatever else covers the line.
+    /// A vouched entry and a proof from the audited table are about the programs as they run without
+    /// what the request adds, a credential in reach or no profile at all, so neither says anything
+    /// about what they print with it. Neither road is taken, and the entry names the label the
+    /// planner is given ([TRACE-1]).
+    ///
+    /// [SANDBOX-26]: ../../../docs/specs/sandboxing.md
+    /// [SANDBOX-29]: ../../../docs/specs/sandboxing.md
+    /// [TRACE-1]: ../../../docs/specs/trace.md
+    pub fn before_plan_requesting(&mut self, plan: &crate::command::Plan) -> Gated<Label> {
+        self.label_a_run(plan, true)
+    }
+
+    fn label_a_run(&mut self, plan: &crate::command::Plan, requesting: bool) -> Gated<Label> {
         self.before_capability(Capability::ShellExec)?;
 
         if plan.steps().is_empty() {
@@ -6983,11 +7085,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // The proof road first, and only where it reaches a trusted answer: an audited call that
         // read an untrusted path proves its output untrusted, and a person who vouched for that
         // same command asserted something stronger about it.
-        let proven = self
-            .read_proven_label(plan)
-            .filter(|label| label.is_trusted());
+        let proven = match requesting {
+            true => None,
+            false => self
+                .read_proven_label(plan)
+                .filter(|label| label.is_trusted()),
+        };
 
-        let (label, why) = if let Some(label) = proven {
+        let (label, why) = if requesting {
+            (
+                opaque,
+                "the line asked for `scopes` or `unconfined`, and neither a vouch nor an audited \
+                 call makes what it prints trusted",
+            )
+        } else if let Some(label) = proven {
             (
                 label,
                 "every step is an audited call whose output is a function of paths the user \
@@ -7293,6 +7404,47 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "run.{argument}: the request was refused and the line did not run: {}",
                 causes.join("; ")
             ),
+        );
+    }
+
+    /// Record that a write was put to the person and not approved, so nothing was written
+    /// (TRACE-1).
+    ///
+    /// The planner is told the user did not approve it, so without this the trail holds the
+    /// question and nothing about its answer, and the turn reads as clean. A no, a Ctrl-C and a
+    /// question nobody could be asked are one answer to the policy, so the sentence says only that
+    /// the write was not approved. `call` is the tool, or a plan's step and its tool. The sentence
+    /// is fixed text and names nothing the call carried (TRACE-2).
+    pub fn refuse_unapproved_write(&mut self, call: &str) {
+        self.refuse_unapproved(call, "write", "nothing was written");
+    }
+
+    /// Record that a fetch was put to the person and not approved, so nothing was fetched
+    /// (TRACE-1). The arguments and the reasons are those of [`Policy::refuse_unapproved_write`].
+    pub fn refuse_unapproved_fetch(&mut self, call: &str) {
+        self.refuse_unapproved(call, "fetch", "nothing was fetched");
+    }
+
+    /// Record that a call to `tool` of the server declared as `alias` was put to the person and not
+    /// approved, so the server was not called (TRACE-1). The reasons are those of
+    /// [`Policy::refuse_unapproved_write`]. The call is named as the gates name it, by the alias
+    /// the person gave the server and the word on the list they vouched for, never by anything the
+    /// server answered or the planner wrote beside it (TRACE-2).
+    pub fn refuse_unapproved_call(&mut self, alias: &str, tool: &str) {
+        self.refuse_unapproved(
+            &format!("{alias}:{tool}"),
+            "call",
+            "the server was not called",
+        );
+    }
+
+    /// The one sentence each of the three says, from words of this file's own, so no caller can put
+    /// anything a call carried into the trail (TRACE-2).
+    fn refuse_unapproved(&mut self, call: &str, asked: &'static str, undone: &'static str) {
+        let _ = self.deny(
+            "approval",
+            Principle::Capability,
+            format!("{call}: the {asked} was not approved, so {undone}"),
         );
     }
 
@@ -10602,6 +10754,72 @@ five
         let label = policy.before_plan(&line).expect("endorsed");
         assert!(label.is_trusted());
         assert!(!label.is_public(), "trusting output is not releasing it");
+    }
+
+    /// The label each `run` line's `provenance` entry says its output was given, in the order the
+    /// lines were gated.
+    fn labels_stated_for_runs(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "provenance",
+                    detail,
+                } => detail
+                    .strip_prefix("run: output labelled ")?
+                    .split_once(", ")
+                    .map(|(label, _)| label.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// TRACE-1, SANDBOX-26, SANDBOX-29: a line that asked for scopes or for no sandbox has its
+    /// output labelled `(U,priv)`, and the `provenance` entry says so, by each road that would
+    /// have trusted it without the request: a vouched entry, and the audited table. Neither was
+    /// made for the programs with a credential in reach or with no profile, and an entry stating
+    /// `(T,priv)` for a line whose output the planner is given as `(U,priv)` contradicts the label.
+    ///
+    /// The same line is gated first without the request and states `(T,priv)`, so the label the
+    /// second entry states is the request's doing and not a road that was never open.
+    #[test]
+    fn a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so() {
+        for (road, line, vouching) in [
+            (
+                "a vouched entry",
+                plan_of(vec![step_named("git", &["apply"])]),
+                true,
+            ),
+            (
+                "the audited table",
+                plan_of(vec![step_named("wc", &["-l", "Cargo.toml"])]),
+                false,
+            ),
+        ] {
+            let mut sink = RecordingSink::new();
+            {
+                let mut policy = in_a_project(&mut sink, &[]);
+                if vouching {
+                    policy.remember_command(vouched("/usr/bin/git", &["apply"]));
+                }
+                assert_eq!(
+                    label_of(&mut policy, &line),
+                    Label::trusted_private(),
+                    "{road}: the line without the request was not trusted, so the request below proves nothing"
+                );
+                policy.endorse_plan(&line);
+                let label = policy.before_plan_requesting(&line).expect("endorsed");
+                assert_eq!(label, Label::untrusted_private(), "{road}");
+            }
+            assert_eq!(
+                labels_stated_for_runs(sink.events()),
+                [
+                    Label::trusted_private().to_string(),
+                    Label::untrusted_private().to_string(),
+                ],
+                "{road}"
+            );
+        }
     }
 
     /// RUN-3's route meets RUN-4's first row: a vouched-for filter over a fetched page prints what
@@ -14690,6 +14908,42 @@ five
         );
     }
 
+    /// Every question the policy asks of the map reads a key that climbs as untrusted, not only the
+    /// ones the two tests above reach (a command line's operand and the scratch directory's own
+    /// answer): the label of one path, of several, the label in force, and the quarantine check.
+    #[test]
+    fn a_climbing_key_is_untrusted_to_every_question_asked_of_the_map() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &["."]);
+
+        for path in ["src/a.rs", "/work/src/a.rs"] {
+            assert!(!policy.read_is_quarantined(path), "control: {path}");
+            assert!(policy.label_in_force(path).is_trusted(), "control: {path}");
+        }
+        for path in [
+            "src/../src/a.rs",
+            "/work/src/../src/a.rs",
+            "../work/src/a.rs",
+        ] {
+            assert!(policy.read_is_quarantined(path), "{path} was shown");
+            assert!(
+                !policy.label_in_force(path).is_trusted(),
+                "{path} was labelled by the rule of a directory it passes through"
+            );
+            let one = policy
+                .observe_path(Capability::FileRead, path)
+                .expect("labelled");
+            assert!(!one.is_trusted(), "{path} observed as trusted");
+            let many = policy
+                .observe_paths(Capability::FileRead, ["src/a.rs", path])
+                .expect("labelled");
+            assert!(
+                !many.is_trusted(),
+                "{path} among others observed as trusted"
+            );
+        }
+    }
+
     /// The workspace's answer is lent only where there is one. A session that vouched for nothing
     /// has none, and then the rules inside the directory are the whole of what is known about it.
     #[test]
@@ -16399,12 +16653,22 @@ five
 
     mod delegates {
         use super::*;
-        use crate::delegate::{DelegateId, Kind, MAX_DELEGATES, MAX_DEPTH};
+        use crate::delegate::{DelegateId, DelegateSpec, Kind, MAX_DEPTH};
 
         /// What a planner's own words look like by the time a tool hands them over: the tool layer
         /// labels every argument pessimistically, because it cannot know where one came from.
         pub(super) fn argument(text: &str) -> Labelled<String> {
             Labelled::new(text.to_string(), Label::untrusted_public())
+        }
+
+        /// A turn whose settings named `bound` as the most delegates it may have running at once.
+        fn bounded_policy(sink: &mut RecordingSink, bound: u32) -> Policy<'_, RecordingSink> {
+            open_policy(sink).with_delegate_bound(Some(bound))
+        }
+
+        /// What a reader asks for, which a test that is about the count and nothing else sends.
+        fn ask_for_a_reader<S: Sink>(policy: &mut Policy<'_, S>) -> Gated<DelegateSpec> {
+            policy.before_delegate(&argument("reader"), &argument("look"), None)
         }
 
         /// A delegate is a planner, so its task must come from a context holding nothing an
@@ -16948,18 +17212,49 @@ five
         }
 
         /// AGENT-6. The list is read as `kind` is, so a private one is refused before any name in
-        /// it is compared with anything.
+        /// it is compared with anything. It names a server the run holds no grant for, so a
+        /// comparison made first would refuse it as a capability and name the servers held.
         #[test]
         fn a_private_server_list_cannot_direct_a_delegate() {
             let mut sink = RecordingSink::new();
             let mut policy = holding_weather_and_notes(&mut sink);
 
-            let private = Labelled::new(vec!["weather".to_string()], Label::untrusted_private());
+            let private = Labelled::new(vec!["gmail".to_string()], Label::untrusted_private());
             let err = policy
                 .before_delegate(&argument("worker"), &argument("fix it"), Some(&private))
                 .expect_err("a private list must not steer a delegate");
             assert_eq!(err.principle, Principle::Confinement);
-            assert!(format!("{err}").contains("mcp_servers"), "{err}");
+            let said = format!("{err}");
+            assert!(said.contains("mcp_servers"), "{said}");
+            assert!(
+                !said.contains("gmail") && !said.contains("weather"),
+                "the confinement refusal compared the list with the run's grants: {said}"
+            );
+        }
+
+        /// AGENT-6. Names are compared with the run's grants only after the integrity gate has
+        /// passed. A list naming a server the run holds no grant for, from a run that has met
+        /// something untrusted, is refused by the integrity gate, so the refusal says nothing
+        /// about which servers the run holds.
+        #[test]
+        fn a_fallen_run_is_refused_before_a_server_list_is_compared_with_its_grants() {
+            let mut sink = RecordingSink::new();
+            let mut fallen =
+                holding_weather_and_notes(&mut sink).resuming(crate::label::Integrity::Untrusted);
+
+            let err = fallen
+                .before_delegate(
+                    &argument("worker"),
+                    &argument("fix it"),
+                    Some(&keeping(&["gmail"])),
+                )
+                .expect_err("a fallen run cannot delegate");
+            assert_eq!(err.principle, Principle::IntegrityGate);
+            let said = format!("{err}");
+            assert!(
+                !said.contains("gmail") && !said.contains("weather"),
+                "the integrity refusal compared the list with the run's grants: {said}"
+            );
         }
 
         fn a_definition_budgeted_at(tokens: Option<u64>) -> crate::delegate::Definitions {
@@ -17440,6 +17735,140 @@ five
             );
         }
 
+        /// A coordinator and the definitions it may start, for the DELEGATE-30 tests.
+        fn coordinators(spawns: Option<&[&str]>) -> crate::delegate::Definitions {
+            let mut definitions = crate::delegate::Definitions::default();
+            let mut coordinator = crate::delegate::Definition::from_file(
+                "coordinator",
+                "starts the others",
+                Kind::Worker,
+                None,
+                "",
+                ".bravebot/agents/coordinator.md",
+            );
+            if let Some(spawns) = spawns {
+                coordinator =
+                    coordinator.with_spawns(spawns.iter().map(|s| s.to_string()).collect());
+            }
+            definitions.insert(coordinator);
+            definitions.insert(crate::delegate::Definition::from_file(
+                "helper",
+                "does any job",
+                Kind::Worker,
+                None,
+                "",
+                ".bravebot/agents/helper.md",
+            ));
+            definitions
+        }
+
+        /// DELEGATE-30. A delegate whose definition lists `reader` is refused a `worker` and is
+        /// told of the reader alone, so the refusal and the advertised kinds are one set.
+        #[test]
+        fn a_delegate_listing_reader_is_refused_a_worker_and_offered_only_reader() {
+            let all = coordinators(Some(&["reader"]));
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.install_delegates(all.clone());
+            let spec = turn
+                .before_delegate(&argument("coordinator"), &argument("coordinate"), None)
+                .expect("a clean context may delegate");
+
+            let mut child_sink = RecordingSink::new();
+            let mut child = open_policy(&mut child_sink).within(&spec);
+            child.install_delegates(all);
+            assert_eq!(child.delegates().names(), ["reader"]);
+            for refused in ["worker", "checker", "helper"] {
+                let err = child
+                    .before_delegate(&argument(refused), &argument("do it"), None)
+                    .expect_err("a name the list left out must not be started");
+                assert!(
+                    err.to_string().contains("the kinds are reader"),
+                    "the refusal did not name only what the list allows: {err}"
+                );
+            }
+            assert!(
+                child
+                    .before_delegate(&argument("reader"), &argument("look"), None)
+                    .is_ok()
+            );
+        }
+
+        /// DELEGATE-30. The list goes down the tree: a child the coordinator was allowed to start
+        /// holds no more of the set than the coordinator did, whatever its own file says.
+        #[test]
+        fn a_grandchild_cannot_start_what_an_ancestors_list_left_out() {
+            let all = coordinators(Some(&["reader", "helper"]));
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.install_delegates(all.clone());
+            let spec = turn
+                .before_delegate(&argument("coordinator"), &argument("coordinate"), None)
+                .expect("a clean context may delegate");
+
+            let mut child_sink = RecordingSink::new();
+            let mut child = open_policy(&mut child_sink).within(&spec);
+            child.install_delegates(all.clone());
+            let helper = child
+                .before_delegate(&argument("helper"), &argument("help"), None)
+                .expect("the list names helper");
+
+            let mut grandchild_sink = RecordingSink::new();
+            let mut grandchild = open_policy(&mut grandchild_sink).within(&helper);
+            grandchild.install_delegates(all);
+            assert!(
+                grandchild
+                    .before_delegate(&argument("worker"), &argument("do it"), None)
+                    .is_err(),
+                "a delegate started beneath a list started what the list left out"
+            );
+            assert!(
+                grandchild
+                    .before_delegate(&argument("reader"), &argument("look"), None)
+                    .is_ok()
+            );
+        }
+
+        /// DELEGATE-30. An empty line names none: the delegate is not offered the tool, and the
+        /// kernel refuses it if it calls it anyway.
+        #[test]
+        fn an_empty_spawns_list_starts_nothing() {
+            let all = coordinators(Some(&[]));
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.install_delegates(all.clone());
+            let spec = turn
+                .before_delegate(&argument("coordinator"), &argument("coordinate"), None)
+                .expect("a clean context may delegate");
+            assert!(!spec.may_delegate());
+
+            let mut child_sink = RecordingSink::new();
+            let mut child = open_policy(&mut child_sink).within(&spec);
+            child.install_delegates(all);
+            assert!(
+                child
+                    .before_delegate(&argument("reader"), &argument("look"), None)
+                    .is_err()
+            );
+        }
+
+        /// A definition naming no `spawns:` leaves its delegate the whole set.
+        #[test]
+        fn a_definition_naming_no_spawns_starts_anything_the_run_may() {
+            let all = coordinators(None);
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.install_delegates(all.clone());
+            let spec = turn
+                .before_delegate(&argument("coordinator"), &argument("coordinate"), None)
+                .expect("a clean context may delegate");
+
+            let mut child_sink = RecordingSink::new();
+            let mut child = open_policy(&mut child_sink).within(&spec);
+            child.install_delegates(all.clone());
+            assert_eq!(child.delegates(), &all);
+        }
+
         /// A delegate's delegates are numbered beneath it, so the trail names a grandchild by
         /// where it sits. Numbered by the policy of the run that spawned them, from the place that
         /// run's spec gave it: a delegate numbering its own from one would mint `d1` twice.
@@ -17535,16 +17964,15 @@ five
         /// leaves the next one startable and numbered as the first.
         #[test]
         fn a_withdrawn_delegate_takes_neither_a_place_nor_a_number() {
+            const BOUND: u32 = 3;
             let mut sink = RecordingSink::new();
-            let mut turn = open_policy(&mut sink);
-            for _ in 0..=MAX_DELEGATES {
-                let spec = turn
-                    .before_delegate(&argument("reader"), &argument("look"), None)
-                    .expect("a withdrawn request filled the tree");
+            let mut turn = bounded_policy(&mut sink, BOUND);
+            for _ in 0..=BOUND {
+                let spec =
+                    ask_for_a_reader(&mut turn).expect("a withdrawn request filled the tree");
                 turn.withdraw_delegate(spec, &crate::delegate::CheckoutRefusal::Reader, 1);
             }
-            let spec = turn
-                .before_delegate(&argument("reader"), &argument("look"), None)
+            let spec = ask_for_a_reader(&mut turn)
                 .expect("the tree was full of delegates that never started");
             assert_eq!(spec.id(), DelegateId::nth(1));
             drop(turn);
@@ -17665,6 +18093,100 @@ five
             );
         }
 
+        /// TRACE-1: a write or a fetch put to the person and not approved is a refusal under
+        /// `approval`, naming the tool or a plan's step and its tool, in fixed words that carry
+        /// nothing the call held (TRACE-2), and the turn does not end as clean. The regression it
+        /// rejects is a no that leaves the question in the trail and nothing about its answer,
+        /// which is how a turn whose work was not done reads as clean.
+        #[test]
+        fn a_write_or_a_fetch_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_write("edit_file");
+            turn.refuse_unapproved_fetch("download_url");
+            turn.refuse_unapproved_write("step 2: write_file");
+            assert!(
+                !turn.finish(),
+                "a turn with an unapproved write ended clean"
+            );
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "edit_file: the write was not approved, so nothing was written"
+                    ),
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "download_url: the fetch was not approved, so nothing was fetched"
+                    ),
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "step 2: write_file: the write was not approved, so nothing was written"
+                    ),
+                ]
+            );
+        }
+
+        /// TRACE-1: a call to a server's tool put to the person and not approved is a refusal under
+        /// `approval`, naming the tool as the alias the person gave the server and the word on its
+        /// list, in fixed words that carry nothing the call or the server held (TRACE-2), and the
+        /// turn does not end as clean. The regression it rejects is a no that leaves the question
+        /// in the trail and nothing about its answer. The two calls name different servers and
+        /// tools, so an entry that names one fixed tool or leaves the alias out fails it.
+        #[test]
+        fn an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_call("weather", "get_forecast");
+            turn.refuse_unapproved_call("notes", "append");
+            assert!(!turn.finish(), "a turn with an unapproved call ended clean");
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "weather:get_forecast: the call was not approved, so the server was not called"
+                    ),
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "notes:append: the call was not approved, so the server was not called"
+                    ),
+                ]
+            );
+        }
+
         /// TRACE-8: each way a delegate can end is its own record, with its time and its rounds
         /// against its bound, and a run that answered at its bound reads as one the bound stopped
         /// rather than as one that finished.
@@ -17753,15 +18275,14 @@ five
 
         /// The ceiling is on the tree rather than on each run, so siblings running at once draw
         /// on one count and no arrangement of fan-outs gets past it. A second turn's tree is its
-        /// own.
+        /// own, and a delegate that has ended is a place the next one takes.
         #[test]
         fn a_turns_tree_holds_at_most_its_bound_however_it_is_arranged() {
+            const BOUND: u32 = 6;
             let mut sink = RecordingSink::new();
-            let mut turn = open_policy(&mut sink);
-            let siblings = [(); 2].map(|()| {
-                turn.before_delegate(&argument("reader"), &argument("look"), None)
-                    .expect("the turn may delegate")
-            });
+            let mut turn = bounded_policy(&mut sink, BOUND);
+            let siblings =
+                [(); 2].map(|()| ask_for_a_reader(&mut turn).expect("the turn may delegate"));
 
             let mut sinks = [RecordingSink::new(), RecordingSink::new()];
             let [left, right] = &mut sinks;
@@ -17769,62 +18290,182 @@ five
                 open_policy(left).within(&siblings[0]),
                 open_policy(right).within(&siblings[1]),
             ];
-            let mut started = siblings.len();
+            let mut running: Vec<DelegateSpec> = Vec::new();
             let mut refused = None;
-            for n in 0..MAX_DELEGATES {
+            for n in 0..BOUND {
                 match beneath[n as usize % 2].before_delegate(
                     &argument("reader"),
                     &argument("look closer"),
                     None,
                 ) {
-                    Ok(_) => started += 1,
+                    Ok(spec) => running.push(spec),
                     Err(denial) => {
                         refused = Some(denial);
                         break;
                     }
                 }
             }
-            assert_eq!(started, MAX_DELEGATES as usize);
+            assert_eq!(siblings.len() + running.len(), BOUND as usize);
             let refused = refused.expect("the tree took more than its bound");
             assert_eq!(refused.principle, Principle::Capability);
             assert!(
-                turn.before_delegate(&argument("reader"), &argument("look"), None)
-                    .is_err(),
+                refused.to_string().contains("6 delegates running"),
+                "the refusal did not say how many the turn may have running: {refused}"
+            );
+            assert!(
+                ask_for_a_reader(&mut turn).is_err(),
                 "the turn was not held to the places its delegates had taken"
             );
 
             let mut other_sink = RecordingSink::new();
+            let mut other_turn = bounded_policy(&mut other_sink, BOUND);
             assert!(
-                open_policy(&mut other_sink)
-                    .before_delegate(&argument("reader"), &argument("look"), None)
-                    .is_ok(),
+                ask_for_a_reader(&mut other_turn).is_ok(),
                 "another turn's tree shared this one's count"
             );
+
+            // One of the delegates ends, and one more may run, from any run in the tree.
+            drop(running.pop());
+            let next = ask_for_a_reader(&mut turn).expect("an ended delegate's place was not free");
+            assert!(
+                beneath[1]
+                    .before_delegate(&argument("reader"), &argument("look closer"), None)
+                    .is_err(),
+                "one ended delegate freed more than its own place"
+            );
+            drop(next);
         }
 
         /// A place in the tree and a number are taken by a delegate that exists. A planner that
-        /// asked badly several times has not used up what the turn may start, and the delegate it
-        /// then starts is `d1`, the first the turn started.
+        /// asked badly several times has not used up what the turn may have running, and the
+        /// delegate it then starts is `d1`, the first the turn started.
         #[test]
         fn a_refused_delegate_takes_no_place_in_the_tree() {
+            const BOUND: u32 = 4;
             let mut sink = RecordingSink::new();
-            let mut turn = open_policy(&mut sink);
-            for _ in 0..MAX_DELEGATES {
+            let mut turn = bounded_policy(&mut sink, BOUND);
+            for _ in 0..BOUND {
                 turn.before_delegate(&argument("auditor"), &argument("look"), None)
                     .expect_err("no kind is called that");
             }
-            let first = turn
-                .before_delegate(&argument("reader"), &argument("look"), None)
-                .expect("refusals took places in the tree");
+            let first = ask_for_a_reader(&mut turn).expect("refusals took places in the tree");
             assert_eq!(first.id(), DelegateId::nth(1));
-            let started = 1
-                + (1..MAX_DELEGATES)
-                    .filter(|_| {
-                        turn.before_delegate(&argument("reader"), &argument("look"), None)
-                            .is_ok()
-                    })
-                    .count();
-            assert_eq!(started, MAX_DELEGATES as usize);
+            let mut running = vec![first];
+            running.extend((1..BOUND).filter_map(|_| ask_for_a_reader(&mut turn).ok()));
+            assert_eq!(running.len(), BOUND as usize);
+            assert!(
+                ask_for_a_reader(&mut turn).is_err(),
+                "the tree took more than its bound"
+            );
+        }
+
+        /// A request refused because the tree is full takes no place either. Refused repeatedly
+        /// while the delegates run, it leaves the tree with exactly the places those delegates
+        /// give back, so one that ends frees one place and the next request is the third
+        /// delegate the turn started.
+        #[test]
+        fn a_refused_request_still_takes_no_place_once_places_return() {
+            const BOUND: u32 = 2;
+            let mut sink = RecordingSink::new();
+            let mut turn = bounded_policy(&mut sink, BOUND);
+            let mut running: Vec<DelegateSpec> = (0..BOUND)
+                .map(|_| ask_for_a_reader(&mut turn).expect("the tree has room"))
+                .collect();
+            for _ in 0..5 {
+                ask_for_a_reader(&mut turn).expect_err("the tree is full");
+            }
+
+            drop(running.remove(0));
+            let third = ask_for_a_reader(&mut turn).expect("the place that went back was not free");
+            assert_eq!(
+                third.id(),
+                DelegateId::nth(3),
+                "a number was reused or skipped"
+            );
+            assert!(
+                ask_for_a_reader(&mut turn).is_err(),
+                "the refused requests left the tree with more places than the delegates gave back"
+            );
+            drop(third);
+            drop(running);
+            let after: Vec<DelegateSpec> = (0..BOUND + 3)
+                .filter_map(|_| ask_for_a_reader(&mut turn).ok())
+                .collect();
+            assert_eq!(
+                after.len(),
+                BOUND as usize,
+                "the tree did not hold exactly its bound once every delegate had ended"
+            );
+        }
+
+        /// A place goes back when a delegate ends, so the delegates a turn starts one after
+        /// another are not counted against the ones running at once, and each is still numbered
+        /// as the next the turn started rather than as one that ended.
+        #[test]
+        fn a_place_a_finished_delegate_returned_is_taken_by_the_next_one() {
+            let mut sink = RecordingSink::new();
+            let mut turn = bounded_policy(&mut sink, 1);
+            for n in 1..=5 {
+                let spec = ask_for_a_reader(&mut turn)
+                    .expect("a delegate that ended was still holding the only place");
+                assert_eq!(spec.id(), DelegateId::nth(n));
+                assert!(
+                    ask_for_a_reader(&mut turn).is_err(),
+                    "a second delegate ran alongside the first under a bound of one"
+                );
+            }
+        }
+
+        /// A run that is a delegate draws on the tree its spec carries. A bound it names for itself
+        /// is ignored, so it cannot start a tree of its own to get past its turn's ceiling.
+        #[test]
+        fn a_delegate_cannot_give_itself_a_tree_with_a_bound_of_its_own() {
+            let mut turn_sink = RecordingSink::new();
+            let mut turn = bounded_policy(&mut turn_sink, 1);
+            let spec = ask_for_a_reader(&mut turn).expect("the turn may delegate");
+
+            let mut sink = RecordingSink::new();
+            let mut delegate = open_policy(&mut sink)
+                .within(&spec)
+                .with_delegate_bound(Some(100));
+            delegate
+                .before_delegate(&argument("reader"), &argument("look closer"), None)
+                .expect_err("a delegate started a tree of its own");
+        }
+
+        /// A turn whose settings name no figure, or a figure of zero, may have 64 delegates running
+        /// at once, and a figure that is named is the one it is held to instead.
+        #[test]
+        fn a_turn_whose_settings_name_no_bound_has_sixty_four_delegates_running() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink).with_delegate_bound(None);
+            let running: Vec<DelegateSpec> = (0..64)
+                .map(|_| ask_for_a_reader(&mut turn).expect("under the default"))
+                .collect();
+            let refused = ask_for_a_reader(&mut turn).expect_err("past the default");
+            assert!(
+                refused.to_string().contains("64 delegates running"),
+                "the refusal did not say what the default is: {refused}"
+            );
+            drop(running);
+
+            let mut zero_sink = RecordingSink::new();
+            let mut zero = bounded_policy(&mut zero_sink, 0);
+            assert!(
+                ask_for_a_reader(&mut zero).is_ok(),
+                "a bound of zero left a turn that could start no delegate"
+            );
+
+            let mut named_sink = RecordingSink::new();
+            let mut named = bounded_policy(&mut named_sink, 100);
+            let running: Vec<DelegateSpec> = (0..100)
+                .map(|_| ask_for_a_reader(&mut named).expect("under the named figure"))
+                .collect();
+            assert!(
+                ask_for_a_reader(&mut named).is_err(),
+                "a figure the settings named did not hold"
+            );
+            drop(running);
         }
 
         /// A refusal at the ceiling is all the trail says about that call. What a delegate is
@@ -17833,21 +18474,26 @@ five
         #[test]
         fn a_delegate_refused_at_the_ceiling_is_recorded_only_as_refused() {
             let mut sink = RecordingSink::new();
+            const BOUND: u32 = 3;
             let mut policy = Policy::begin(
                 routing_with("task", "look into it"),
                 ReleasePlan::new(),
                 CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]),
                 &mut sink,
             )
-            .unwrap();
-            for _ in 0..MAX_DELEGATES {
-                policy
-                    .before_delegate(&argument("worker"), &argument("fix it"), None)
-                    .expect("the tree has room");
-            }
+            .unwrap()
+            .with_delegate_bound(Some(BOUND));
+            let running: Vec<DelegateSpec> = (0..BOUND)
+                .map(|_| {
+                    policy
+                        .before_delegate(&argument("worker"), &argument("fix it"), None)
+                        .expect("the tree has room")
+                })
+                .collect();
             policy
                 .before_delegate(&argument("worker"), &argument("fix it"), None)
                 .expect_err("the tree took more than its bound");
+            drop(running);
 
             let passed_for = |id: DelegateId| {
                 let about = format!("{id}:");
@@ -17860,7 +18506,7 @@ five
                 "a delegate that started did not say what it went without"
             );
             assert!(
-                !passed_for(DelegateId::nth(MAX_DELEGATES + 1)),
+                !passed_for(DelegateId::nth(BOUND + 1)),
                 "the trail allowed a delegate the ceiling then refused"
             );
         }
@@ -18192,6 +18838,98 @@ five
 
         fn trail(sink: &RecordingSink) -> String {
             format!("{:?}", sink.events())
+        }
+
+        /// DELEGATE-30. A definition addressed by a person starts only the delegates it lists,
+        /// and the ones those start are held to the same list.
+        #[test]
+        fn an_addressed_definition_starts_only_the_delegates_it_lists() {
+            let mut sink = RecordingSink::new();
+            let mut routing = routing_with("task", "look into it");
+            routing.insert_trusted(ADDRESSED, "coordinator");
+            let mut policy =
+                Policy::begin(routing, ReleasePlan::new(), all_capabilities(), &mut sink).unwrap();
+            let mut definitions = Definitions::default();
+            definitions.insert(
+                Definition::from_file(
+                    "coordinator",
+                    "starts the others",
+                    Kind::Worker,
+                    None,
+                    "",
+                    ".bravebot/agents/coordinator.md",
+                )
+                .with_spawns(vec!["checker".to_string()]),
+            );
+            policy.install_delegates(definitions);
+
+            policy
+                .address(&OFFERED)
+                .expect("a resolved name is addressed")
+                .expect("the line named a definition");
+            assert_eq!(policy.delegates().names(), ["checker"]);
+            assert!(
+                policy
+                    .before_delegate(
+                        &super::delegates::argument("worker"),
+                        &super::delegates::argument("do it"),
+                        None
+                    )
+                    .is_err()
+            );
+            assert!(
+                policy
+                    .before_delegate(
+                        &super::delegates::argument("checker"),
+                        &super::delegates::argument("check it"),
+                        None
+                    )
+                    .is_ok()
+            );
+        }
+
+        /// DELEGATE-30. An addressed definition whose list leaves no delegate to start is not
+        /// kept `spawn_agent`, as a delegate in that state is not offered it, and one naming no
+        /// list keeps it.
+        #[test]
+        fn an_addressed_definition_with_no_delegate_to_start_is_not_kept_spawn_agent() {
+            for (spawns, kept) in [
+                (Some(vec![]), false),
+                (Some(vec!["nothing-goes-by-this".to_string()]), false),
+                (Some(vec!["checker".to_string()]), true),
+                (None, true),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut routing = routing_with("task", "look into it");
+                routing.insert_trusted(ADDRESSED, "coordinator");
+                let mut policy =
+                    Policy::begin(routing, ReleasePlan::new(), all_capabilities(), &mut sink)
+                        .unwrap();
+                let mut definitions = Definitions::default();
+                let mut definition = Definition::from_file(
+                    "coordinator",
+                    "starts the others",
+                    Kind::Worker,
+                    None,
+                    "",
+                    ".bravebot/agents/coordinator.md",
+                );
+                if let Some(spawns) = spawns.clone() {
+                    definition = definition.with_spawns(spawns);
+                }
+                definitions.insert(definition);
+                policy.install_delegates(definitions);
+
+                let addressed = policy
+                    .address(&OFFERED)
+                    .expect("a resolved name is addressed")
+                    .expect("the line named a definition");
+                assert_eq!(
+                    addressed.tools().iter().any(|tool| tool == "spawn_agent"),
+                    kept,
+                    "spawns {spawns:?}"
+                );
+            }
         }
 
         /// ADDRESS-7. A definition is a person choosing which of their own capabilities to work

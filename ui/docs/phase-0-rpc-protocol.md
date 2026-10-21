@@ -711,6 +711,30 @@ A pending confirmation checks cancellation at most every 50 ms and resolves to r
 No approval is sent, and no additional client reply is required. Cancellation also
 covers the race where the question is registered just after the stop request.
 
+#### `turn.interject`
+
+```json
+{ "id": 7, "method": "turn.interject", "params": { "session": "s1", "prompt": "no, the other one", "target": 12 } }
+→ { "accepted": true }
+```
+
+Sends words into the turn that is running, for the planner to read at the turn's next round
+boundary, after the round's calls have run (INPUT-10, INPUT-46). The words are the person's own,
+read under the routing the turn began with, and carry no file. A marker in `prompt` stands for a
+dropped file or a pasted picture: optional `files` (a list of `{ "marker", "name" }`) and `pictures`
+(a list of markers) say which, and the bridge writes a file as its name and a picture as a sentence
+saying it cannot be shown, as the terminal does (DROP-8). A malformed list is `bad_request`.
+`target` is optional and names the turn as in `turn.cancel`; absent, the
+line is for whatever is running.
+
+`accepted` is `true` when a running turn took it in, and `false` when nothing is running, the turn is
+being stopped, the target names something else, or the work is a manifest run, which asks nothing
+between rounds. A `false` means nobody will read the line, and the caller makes a turn of it. A
+`true` is not a promise: a turn that answers without another round ends with the line unread. The
+`turn.interjected` event says when the planner was given one, and lines are read in the order
+they were sent. A blank `prompt` is `bad_request`, and a session with a session view is refused with
+`bad_request`.
+
 #### `mentions.offer`
 
 ```json
@@ -810,12 +834,18 @@ for. A server reply has none either: an approval lasts as long as the session do
 the first and no more questions about this tool in this project for the second. `mcp-tools.reply`
 and `mcp-move.reply` accept `decision`.
 `ask.reply` accepts an `answers` array, whose entries contain `typed` text or `chosen`
-indices; unreadable entries decline. Choices are fitted to the question before use.
+indices; unreadable entries decline. Choices are fitted to the question before use. The entries
+answer the `prompts` of the request by position. A question the person answered earlier in the
+session is not in `prompts`, and a series whose questions are all settled sends no `ask.request`
+([ASK-8](../../docs/specs/tools/ask-user.md#ASK-8)). A question left without an answer is not
+remembered as declined.
 
 #### Permissions
 
 `permissions.list` takes `session` and returns `paths`, `commands` and `remembered`, the
-kept answer about the session's directory as §9 has it, read when the list is asked for.
+kept answer about the session's directory as §9 has it, read when the list is asked for. Each
+`paths` entry is `{ path, shownPath, integrity }`: a client draws `shownPath` and revokes with `path`,
+and tells the project root by an empty `path`.
 `permissions.revoke` takes `session` plus either `kind: "path"` and `path`,
 `kind: "command"` and `command: { program, startedAs, args }`, or `kind: "remembered"`, which removes
 every answer kept about the directory so the next session there is asked, and leaves this
@@ -924,6 +954,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 |---|---|---|
 | `agent.ready` | `{ build, version, home, configured, defaultModel }` | startup, no `session` |
 | `turn.started` | `{ turn, mode }` | `turn.send` accepted |
+| `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |
@@ -937,8 +968,8 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `tokens` | `{ written }` | `Reporter::output_tokens`, **only when the figure changes** |
 | `audit` | `{ at, turn, event }` | the `Sink`, via `audit::as_json` |
 | `confirm.request` | see §8.1 | `Confirmer::confirm_write` |
-| `run.request` | `{ request, stages, directory, line, plan, writes, releasesPrivate, confinement, vouches, summary }` | command approval |
-| `output.request` | `{ request, command, reference, lines, output, summary }` | admit command output |
+| `run.request` | `{ request, stages, directory, line, plan, writes, shownWrites, releasesPrivate, confinement, vouches, summary }` | command approval |
+| `output.request` | `{ request, command, reference, lines, hidden, hiddenNote, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
 | `server.request` | `{ request, language, program, workspace, runsBuildTooling, summary }` | start a language server for the session |
@@ -946,7 +977,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `manifest.started` | `{ run, mode }` | a manifest run began; `run` counts runs in this open session |
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
 | `manifest.error` | `{ run, kind, message, category, attempts, status, stopped, declined, problem, attempt, record, notices }` | a run stopped |
-| `exposure.request` | `{ request, path, credentials, summary }` | let the planner read a file holding a credential |
+| `exposure.request` | `{ request, path, shownPath, credentials, summary }` | let the planner read a file holding a credential |
 | `mcp.starting` | `{ servers }` | a session's first turn is starting the MCP servers its settings request |
 | `mcp-server.request` | `{ request, alias, transport, command, url, program, variables, reads, directory, digest, requestedBy, changed, fetching }` | use an MCP server (SERVERS-4) |
 | `mcp.started` | `{ servers, confined, notes }` | what started, and a line for each request that did not |
@@ -1024,6 +1055,12 @@ whose events all share one second cannot say which came first.
 } }
 ```
 
+- `path` is the name the planner wrote, and is what the decision is about. `shownPath` is the same
+  name spelled for a person: a name that is empty, has a space at either end of it or of a
+  directory in it, or holds a character that draws as nothing or as a blank cell (a zero-width
+  character, a bidirectional control, a no-break space, the blank braille pattern) is quoted with
+  each such character written out, and any other name is unchanged. A client
+  draws `shownPath` and never `path`. `vouch.request` and `exposure.request` carry it the same way.
 - `request` is agent-assigned and **single-use** for its pending question. IDs can
   recur in later turns; clients must discard pending questions when a turn ends.
 - `changes` is `WriteRequest::diff()`, already condensed. The full `contents` is **not**
@@ -1129,7 +1166,8 @@ preferences to this ID just as they do for `turn.done`.
 `notices` is what the turn said about itself as it ran, as §8.2 carries for a turn that
 answered. A failed turn produces no outcome for those sentences to arrive on, and one of
 them is a hook of the person's own that could not be started, so a client that drops this
-field is a client on which nobody learns their formatter has stopped running.
+field is a client on which nobody learns their formatter has stopped running. The same list
+names each question the turn did not put because the person had already answered it.
 
 ### 8.4 Failure semantics — the load-bearing part
 
@@ -1345,12 +1383,19 @@ Still open:
 
 - `run.request` stages carry `binary`, the file the step runs, and the request carries
   `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
-  sentences }` as the agent worded them.
-- `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `picture` and
+  shownDirectories, sentences }` as the agent worded them. `writes` and `directories` are the paths as
+  held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, with a byte
+  that is not UTF-8 written `\xNN`, for a client to draw in place of them.
+- `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and
   `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
   is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request
   is answered, and `content` is empty. `vet.reply` carries the session, request and
   explicit decision. Its kind is distinct from output and path-vouch replies.
+- `output` of `output.request` and `content` of `vet.request` have each character that draws as
+  nothing written out as `‹U+XXXX›`, and a tag character also names the letter it stands for. `hidden`
+  counts the characters written out, and `hiddenNote` is the sentence saying so in the agent's words,
+  or null when the count is zero. The card draws the sentence above the text when there is one. All
+  three are drawn as sent: the window does not read the text to make, count or word them.
 - `output.request` and `vouch.request` include `vetting`. `confirm.request` includes an
   optional `remark: { preview, lines, label }`. None is interpreted as an approval.
 - `watches.list/add/stop` operate on an open session. Add names a project-relative file;
@@ -1442,7 +1487,7 @@ Still open:
   `proposed`, `plan` and `steps`, as `attempt` does, and `failure`, which is the agent's
   sentence about why the run stopped and is null for a run that finished. It is refused with
   `bad_request` for a session's record, and with `no_such_session` for an id that names none.
-- `exposure.request` carries `request`, `path`, `credentials` and `summary`. `credentials` has
+- `exposure.request` carries `request`, `path`, `shownPath`, `credentials` and `summary`. `credentials` has
   one line per finding, as the agent wrote it: the kind, where it is, and a mask of the value.
   No part of a value and no text of the file is sent. `exposure.reply` carries the session,
   request and explicit decision, and its kind is distinct from every other reply's.

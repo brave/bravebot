@@ -53,6 +53,8 @@ pub struct Picker {
     said: HashMap<String, String>,
     /// Whether a running background session holds a record, which Enter refuses (BG-9).
     held: fn(&str) -> bool,
+    /// The record whose deletion is waiting on a `y`, asked about before anything is removed.
+    deleting: Option<String>,
 }
 
 impl Picker {
@@ -69,6 +71,7 @@ impl Picker {
             corpus: None,
             said: HashMap::new(),
             held: bravebot_session::jobs::is_running,
+            deleting: None,
         }
     }
 
@@ -197,6 +200,13 @@ impl Picker {
         self.sessions.is_empty()
     }
 
+    /// Drop a session from the list once its record is gone, keeping the cursor inside it.
+    fn forget(&mut self, id: &str) {
+        self.sessions.retain(|session| session.id != id);
+        self.said.remove(id);
+        self.clamp();
+    }
+
     fn down(&mut self) {
         let last = self.matching().len().saturating_sub(1);
         self.selected = (self.selected + 1).min(last);
@@ -259,6 +269,8 @@ pub enum Outcome {
     /// Enter would look broken, and the reason is worth knowing: the record is still there to
     /// read, it just has nothing to carry on from.
     Refused(String),
+    /// The person confirmed deleting this session's record.
+    Delete(String),
 }
 
 /// Why a manifest run cannot be picked up.
@@ -283,6 +295,9 @@ fn held_note(id: &str, held: impl Fn(&str) -> bool) -> Option<String> {
     Some(bravebot_session::jobs::held_refusal(id, NAME_SHOWN))
 }
 
+/// How much of a title the deletion question quotes, so the keys after it stay on the row.
+const TITLE_ASKED: usize = 40;
+
 /// Interpret one key press.
 ///
 /// Separated from the loop so it can be tested without a terminal.
@@ -296,8 +311,27 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
         };
     }
 
+    // A question asked of the highlighted row is answered by the next key and by nothing else:
+    // `y` agrees, and any other key, Escape included, keeps the record and stays in the list.
+    if let Some(id) = picker.deleting.take() {
+        return match code {
+            KeyCode::Char('y' | 'Y') => Outcome::Delete(id),
+            _ => Outcome::Continue,
+        };
+    }
+
     match code {
         KeyCode::Esc => Outcome::Cancel,
+        KeyCode::Delete => match picker.chosen() {
+            Some(session) if (picker.held)(&session.id) => {
+                Outcome::Refused(t!(resume_delete_held).to_string())
+            }
+            Some(session) => {
+                picker.deleting = Some(session.id.clone());
+                Outcome::Continue
+            }
+            None => Outcome::Continue,
+        },
         KeyCode::Enter => match picker.chosen() {
             Some(session) if session.manifest => Outcome::Refused(manifest_note().to_string()),
             Some(session) => match held_note(&session.id, picker.held) {
@@ -463,6 +497,10 @@ fn pick<B: Backend>(
                 picker.note = Some(note);
                 continue;
             }
+            Outcome::Delete(id) => {
+                picker.note = Some(delete_record(&mut picker, project, &id, sessions::delete));
+                continue;
+            }
             Outcome::Resume => {
                 let Some(chosen) = picker.chosen() else {
                     continue;
@@ -474,6 +512,24 @@ fn pick<B: Backend>(
                 };
             }
         }
+    }
+}
+
+/// Remove a session's record with `delete` and drop it from the list, returning what to say.
+///
+/// A record that cannot be removed stays listed, because the list is what is on disk.
+fn delete_record(
+    picker: &mut Picker,
+    project: &Path,
+    id: &str,
+    delete: impl Fn(&Path, &str) -> Result<(), sessions::Deletion>,
+) -> String {
+    match delete(project, id) {
+        Ok(()) => {
+            picker.forget(id);
+            t!(resume_delete_done).to_string()
+        }
+        Err(_) => t!(resume_delete_failed).to_string(),
     }
 }
 
@@ -554,7 +610,21 @@ fn draw(frame: &mut Frame, picker: &Picker) {
 
     frame.render_widget(Paragraph::new(list_lines(picker, layout[3])), layout[3]);
 
+    let asked = picker.deleting.as_deref().and_then(|id| {
+        picker
+            .sessions
+            .iter()
+            .find(|session| session.id == id)
+            .map(|session| bravebot_session::search::clean(&session.title, TITLE_ASKED))
+    });
     let (footer, colour) = match &picker.note {
+        _ if asked.is_some() => (
+            format!(
+                "  {}",
+                t!(resume_delete_question, title = asked.unwrap_or_default())
+            ),
+            theme::note(),
+        ),
         Some(note) => (format!("  {note}"), theme::note()),
         None if picker.within_a_session => {
             (format!("  {}", t!(resume_keys_within)), theme::muted())
@@ -713,6 +783,78 @@ mod tests {
             ],
             "/work/bravebot",
         )
+    }
+
+    fn press(picker: &mut Picker, code: KeyCode) -> Outcome {
+        handle_key(picker, code, KeyModifiers::NONE)
+    }
+
+    /// CLI-33. Delete asks first and nothing is removed until `y`: a picker that deleted on the
+    /// key alone would lose a record to a stray press.
+    #[test]
+    fn delete_asks_and_only_y_confirms_it() {
+        let mut picker = picker();
+        press(&mut picker, KeyCode::Down);
+        assert_eq!(press(&mut picker, KeyCode::Delete), Outcome::Continue);
+        assert!(drawn(&picker).contains("User experience progress updates"));
+        assert!(drawn(&picker).contains("y deletes it"));
+        assert_eq!(
+            press(&mut picker, KeyCode::Char('y')),
+            Outcome::Delete("2".to_string())
+        );
+    }
+
+    /// CLI-33. Any other key keeps the record and the list, Escape included, which does not leave
+    /// the picker while a question is open; the key is not typed into the search either.
+    #[test]
+    fn any_other_key_than_y_keeps_the_record() {
+        for code in [
+            KeyCode::Esc,
+            KeyCode::Enter,
+            KeyCode::Char('n'),
+            KeyCode::Char('x'),
+        ] {
+            let mut picker = picker();
+            press(&mut picker, KeyCode::Delete);
+            assert_eq!(press(&mut picker, code), Outcome::Continue, "{code:?}");
+            assert!(picker.deleting.is_none(), "{code:?}");
+            assert!(picker.search.is_empty(), "{code:?}");
+            assert_eq!(ids(&picker), ["1", "2", "3"]);
+            // The question is gone, so a `y` now is typed text and deletes nothing.
+            assert_eq!(press(&mut picker, KeyCode::Char('y')), Outcome::Continue);
+        }
+    }
+
+    /// CLI-33. A record a running background session holds is refused, as `sessions delete` does,
+    /// and no question is asked.
+    #[test]
+    fn delete_on_a_held_session_is_refused_without_asking() {
+        let mut picker = picker().with_held(|id| id == "1");
+        let Outcome::Refused(note) = press(&mut picker, KeyCode::Delete) else {
+            panic!("a held session was offered for deletion");
+        };
+        assert_eq!(note, t!(resume_delete_held));
+        assert!(picker.deleting.is_none());
+        assert_eq!(press(&mut picker, KeyCode::Char('y')), Outcome::Continue);
+    }
+
+    /// CLI-33. A removed record leaves the list and a record that would not go stays in it, since
+    /// the list shows what is on disk.
+    #[test]
+    fn a_deleted_row_leaves_the_list_and_a_failed_one_stays() {
+        let mut picker = picker();
+        press(&mut picker, KeyCode::Down);
+        press(&mut picker, KeyCode::Down);
+        let note = delete_record(&mut picker, Path::new("/w"), "3", |_, _| Ok(()));
+        assert_eq!(note, t!(resume_delete_done));
+        assert_eq!(ids(&picker), ["1", "2"]);
+        assert_eq!(picker.chosen().expect("a session").id, "2");
+
+        let note = delete_record(&mut picker, Path::new("/w"), "2", |_, _| {
+            Err(sessions::Deletion::NotFound)
+        });
+        assert_eq!(note, t!(resume_delete_failed));
+        assert_eq!(ids(&picker), ["1", "2"]);
     }
 
     fn linked(id: &str, branch: &str, issue: Option<&str>, pull_request: Option<&str>) -> Summary {

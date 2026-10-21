@@ -8,6 +8,7 @@
 //! a job that reported green having confined nothing would be the false confidence this crate is
 //! meant to remove.
 #![cfg(windows)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use bravebot_sandbox::base::{Prelude, base};
 use bravebot_sandbox::policy::SandboxPolicy;

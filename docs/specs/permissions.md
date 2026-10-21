@@ -390,7 +390,15 @@ the directory it was asked for, and an entry a rule covers is left out before th
 its name is reported. A directory a rule covers is not descended into. Both are decided ahead of
 the walk's own caps, so a rule never costs a listing or a search the files it was asked about. A walk
 does not follow a symbolic link it meets: the entry is neither reported nor descended into, so a
-link to a denied file is not a second name a listing or a search hands back.
+link to a denied file is not a second name a listing or a search hands back. A hard link is a
+regular file under another name, so a walk reaches it, and an entry is left out when a rule covers
+any name its file has, found by device and inode as for a call that names it. A hard link to a
+denied file is left out of a listing, a search and a repository map as the file is, whichever
+directory the call named. An entry reached by a second path to an open tree (a firmlink or a bind
+mount opened with `/add-dir`) is left out when a rule covers its name beneath the first path, and
+so is a directory. Where the search for the other names reaches the search cap or cannot list a
+directory, or a name of the file is not UTF-8, an entry with more than one name is left out while a
+`Read` deny rule is in force. This is on Unix only.
 
 The files this program reads from the project on its own account are judged the same way. The
 project's instructions file, the file it points at, and a skill or a definition the project holds,
@@ -426,6 +434,8 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 
 `verified-by: bravebot_agent::tools::a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory`
 `verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name`
+`verified-by: bravebot_core::permissions::a_rule_about_a_name_does_not_cover_the_name_with_whitespace_at_an_end`
+`verified-by: bravebot_agent::workspace::a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it`
 `verified-by: bravebot_core::permissions::a_canonical_spelling_is_covered_in_any_case_on_a_folding_volume`
 `verified-by: bravebot_core::permissions::an_allow_rule_is_matched_in_the_spelling_it_was_written_in`
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
@@ -492,6 +502,13 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::workspace::a_listing_does_not_enumerate_a_tree_a_deny_rule_covers`
 `verified-by: bravebot_agent::workspace::a_denied_file_does_not_spend_a_searchs_budget`
 `verified-by: bravebot_agent::turn::a_walk_does_not_report_a_link_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_walk_does_not_read_a_hard_link_to_a_denied_file`
+`verified-by: bravebot_agent::workspace::a_search_does_not_open_a_hard_link_to_a_file_a_deny_rule_covers`
+`verified-by: bravebot_agent::workspace::a_search_leaves_out_a_file_with_two_names_where_the_walk_for_the_other_name_gives_up`
+`verified-by: bravebot_agent::workspace::a_file_with_a_name_that_is_not_utf8_is_covered_and_not_spelled_as_its_lossy_lookalike`
+`verified-by: bravebot_agent::workspace::a_search_leaves_out_a_file_with_a_name_no_rule_can_be_written_about_and_only_that_file`
+`verified-by: bravebot_agent::workspace::a_search_of_a_second_path_to_the_tree_does_not_open_a_file_a_deny_rule_covers`
+`verified-by: bravebot_agent::workspace::a_listing_of_a_second_path_to_the_tree_does_not_name_a_directory_a_deny_rule_covers`
 `verified-by: bravebot_agent::tools::a_read_refused_by_a_rule_with_a_reason_says_the_reason`
 `verified-by: bravebot_agent::tools::a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason`
 `verified-by: bravebot_agent::tools::a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is`
@@ -609,7 +626,8 @@ and the rest of the file still applies. So is an entry that is not a line at all
 rule nested one array too deep. So is a `deny`, `ask` or `allow` value that is not an array, and a
 `permissions` block that is not an object, each named with the keys that lead to it and the file
 that wrote it. Every one dropped is reported: on `doctor`, and in the session where the file was
-read, named in the spelling the file used.
+read, named in the spelling the file used, with each control character drawn as its picture
+([LAYER-3](layering.md#LAYER-3)).
 
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
@@ -622,6 +640,8 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_config::settings::a_malformed_permissions_block_carries_no_rules`
 `verified-by: bravebot_config::settings::a_rule_list_that_is_not_a_list_is_carried_out_to_be_reported`
 `verified-by: bravebot_cli::running::doctor_keeps_the_home_rules_under_a_checkout_block_that_is_not_an_object`
+`verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_checkouts_rule_as_pictures`
 `verified-by: bravebot_agent::permissions::a_line_that_is_not_a_rule_is_reported`
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported`
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching`
@@ -1018,6 +1038,36 @@ it. A rule matches routing only ([PERM-1](#PERM-1)), so the rule is kept as writ
 `verified-by: bravebot_config::settings::a_machine_with_only_pinned_rules_has_no_settings_of_its_own`
 `verified-by: bravebot_agent::permissions::a_managed_deny_holds_against_the_persons_allow_and_a_checkouts_layer`
 
+<a id="PERM-20"></a>
+### PERM-20: a deny or ask rule also covers the program under a wrapper
+
+A `deny` or `ask` rule is matched against a stage as it was written and against what is left of it
+after each leading wrapper, so `Bash(git push *)` in `deny` refuses `timeout 30 git push`, `nice -n 5
+git push` and `timeout 5 nice git push`. A wrapper is one of a fixed table of programs whose first
+word that is not an option is the program they run: `timeout`, `time`, `nice`, `nohup`, `stdbuf`,
+`command`, `builtin`, `noglob` and `env`. The table is not configurable, and each entry has the
+options it reads: `timeout` its signal and kill-after options and its duration, `nice` an adjustment,
+`stdbuf` its three buffer options, `command` `-p`, `time` `-p`, `-v`, `-a`, `-f` and `-o`, and `env`
+its `-i`, its `-u`, `NAME=value` words and `--`. A wrapper with an option the table does not list, a
+`command -v`, a wrapper with nothing after it to run, a wrapper named by a path, and a program that
+only runs another one by another way (`xargs`, `npx`, `devbox run`, `docker exec`) are left whole,
+so a rule is matched against the words that were written and never against a reading of them.
+
+An `allow` rule is matched as written. `Bash(git push *)` in `allow` does not grant
+`timeout 30 git push`, which is a program the rule never named, and a deny rule written for the
+wrapper itself, `Bash(timeout *)`, still matches the whole stage.
+
+**Why.** A deny rule is a statement about what will not happen, and a rule that a prefix defeats is
+a statement that is not true. Looking through the wrapper costs a person a second rule for each one
+otherwise. It is [PERM-4](#PERM-4)'s asymmetry: a rule that restricts covers more and a rule that
+grants covers what it names, and [RUN-20](tools/run.md#RUN-20) declines the same widening for a
+vouch for the same reason. The decision reads the argv and nothing else.
+
+`verified-by: bravebot_core::permissions::a_restricting_rule_covers_the_program_under_a_wrapper`
+`verified-by: bravebot_core::permissions::an_allow_rule_does_not_look_through_a_wrapper`
+`verified-by: bravebot_core::permissions::a_wrapper_the_table_cannot_read_is_left_whole`
+`verified-by: bravebot_core::permissions::a_rule_naming_the_wrapper_still_matches_the_whole_stage`
+
 ## Known costs
 
 - **How many questions a session opens with is the file's to choose.** Every name in
@@ -1070,7 +1120,9 @@ it. A rule matches routing only ([PERM-1](#PERM-1)), so the rule is kept as writ
   they did not write this code has said something about whoever wrote the rules too.
 - **A rule is matched against argv, not against what a program does.** `Bash(git *)` covers
   `git -c core.fsmonitor=<script> diff`, which runs a program the rule never named, and
-  `Bash(devbox run *)` covers whatever follows `run`. A pattern constraining arguments is weaker
+  `Bash(devbox run *)` covers whatever follows `run`. A deny or ask rule looks through the wrappers
+  of [PERM-20](#PERM-20) and no further, so `devbox run git push` and `npx git push` are not
+  covered by `Bash(git push *)`. A pattern constraining arguments is weaker
   than it looks, and a `deny` list is not a sandbox: [sandboxing.md](sandboxing.md) is what
   confines a process, and the label on a program's output is what holds regardless.
 - **A path rule does not reach a program's own file access.** `Read` and `Edit` rules govern the
@@ -1102,6 +1154,15 @@ it. A rule matches routing only ([PERM-1](#PERM-1)), so the rule is kept as writ
   `vendor/secrets/key` and not `vault/key`, since finding every copy is a walk of the tree. And
   the place is looked up in the spelling the rule is stored in, folded where the volume folds case,
   so a link behind a name the volume does not open in its folded spelling is not followed.
+- **A hard link, or a second path to an open tree, reaches a denied file through the files the
+  program looks for itself.** The instructions file and the files it points at, a skill, a
+  definition, a style, a file named with `@`, `--file` or a drop, and an `lsp` location are judged
+  under the name they were found by and the one they land on ([PERM-7](#PERM-7)). A hard link to a
+  denied file, or a file's name beneath a second path to an open tree, is not covered there, though
+  a call that names it is refused and a walk leaves it out. Covering them takes a walk of the open
+  directories for each file that has more than one name, which a repository of hard-linked objects
+  pays once per object, and a walk that cannot finish would leave out a hard-linked instructions
+  file the person wants read.
 - **`readsStayInWorkspace` does not confine a program a `run` starts.** It governs the file tools, as
   the path rules do, and the known cost above about a path rule not reaching a program's own file
   access holds here word for word: `run cat ~/.ssh/id_rsa` is judged against the `Bash` rules and the

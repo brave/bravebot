@@ -13,7 +13,8 @@ four:
 make init
 ```
 
-That points Git at the checked-in pre-commit hook and creates these symlinks:
+That copies the checked-in hooks from `.githooks/` into `bravebot-hooks` in the repository's git
+directory, points Git at the copy by absolute path, and creates these symlinks:
 
 ```
 .claude/skills/<name>    ->  agents/skills/<name>
@@ -32,6 +33,14 @@ link is refreshed, and a real file somebody put in a discovery directory by hand
 rather than replaced.
 `python3 agents/setup.py list` shows the current state, and `unlink` removes only the links it
 owns.
+
+The hooks are a copy because Git resolves a relative `core.hooksPath` against each worktree's own
+top level, so in the worktree of a pull request it would run the hooks that pull request tracks,
+as whoever runs Git there. No branch tracks a copy in the git directory, and `/pr-fix` and
+`/rebase` give Git that directory for every command they run. A clone that has not run `make
+hooks` since this changed has no such directory, so no hook runs in those steps. Run `make hooks`
+again when `.githooks/` changes. Run it in the main checkout: in a linked worktree it installs
+nothing, since the copy would come from that worktree's branch.
 
 Cursor and bravebot both read subagents, so `agents/agents/` links into `.cursor/agents` and
 `.bravebot/agents` as well. bravebot calls one a delegate definition and ignores the frontmatter
