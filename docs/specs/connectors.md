@@ -316,6 +316,8 @@ fail at its step, after earlier steps had run. Here it fails before anything has
 `verified-by: bravebot_agent::connectors::an_approval_lands_only_on_a_pull_chosen_by_its_branch_or_named`
 `verified-by: bravebot_agent::connectors::an_option_is_one_the_definition_lists_and_an_omitted_one_takes_its_default`
 `verified-by: bravebot_agent::connectors::an_act_lands_only_on_an_item_a_fetch_chose_and_narrowed`
+`verified-by: bravebot_agent::connectors::an_act_lands_only_on_an_item_its_own_connector_fetched`
+`verified-by: bravebot_agent::connectors::an_act_on_every_match_needs_narrowing_only_where_its_resource_lists_it`
 `verified-by: bravebot_agent::connectors::an_act_that_takes_values_from_its_item_is_planned_without_them`
 `verified-by: bravebot_agent::connectors::an_acts_own_values_replace_the_definitions_for_its_option`
 `verified-by: bravebot_agent::connectors::an_act_that_takes_no_text_takes_no_slot`
