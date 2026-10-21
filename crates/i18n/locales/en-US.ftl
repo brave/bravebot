@@ -3056,6 +3056,7 @@ session-model-substituted =
 session-error = error: { $problem }
 session-no-output = no output
 shell-kept-private = typed with !!, so this output was not sent to the model
+shell-stopped-not-sent = what it printed before it stopped was not sent to the model
 
 ## Why a turn failed
 

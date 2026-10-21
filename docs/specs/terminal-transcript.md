@@ -839,13 +839,14 @@ are taken out first and the replacement runs after, so an escape that is left, o
 of another code are joined to leave when a code between them is taken out, is replaced like any
 other, and the terminal is sent no escape.
 
-It applies to the output of a command typed in shell mode, to the preview in a quarantined block,
-to the lines drawn under a call the planner read, and to the quarantined block a one-shot run
-writes to stderr. Everything else draws every byte. That includes a block's heading, where the
-origin can be a filename, a path or a name wherever one is drawn, the hunks of a write, and every
-prompt that asks a person to approve text: a write, a command's output, a read, a message, a server
-and its tools. A yes on those releases the text or acts on it, and a code that sets the colour of
-text to the colour of its background is the kind of thing the person is deciding about.
+It applies to the output of a command typed in shell mode, whether the command is still running
+([SHELL-7](shell-mode.md#SHELL-7)) or has ended, to the preview in a quarantined block, to the lines
+drawn under a call the planner read, and to the quarantined block a one-shot run writes to stderr.
+Everything else draws every byte. That includes a block's heading, where the origin can be a
+filename, a path or a name wherever one is drawn, the hunks of a write, and every prompt that asks a
+person to approve text: a write, a command's output, a read, a message, a server and its tools. A
+yes on those releases the text or acts on it, and a code that sets the colour of text to the colour
+of its background is the kind of thing the person is deciding about.
 
 **Why.** The replacement of VIEW-3 pictures the escape and leaves the rest of the code as ordinary
 text, so a CI log that colours every token draws as `␛[0m␛[36m├␛[0m` and is hard to read. A colour
@@ -869,6 +870,8 @@ it was there, and the count gives the person the same for colour codes.
 `verified-by: bravebot_tui::shell_mode::coloured_output_is_drawn_without_its_codes_and_they_are_counted`
 `verified-by: bravebot_tui::shell_mode::output_keeps_every_other_escape_beside_the_codes_it_leaves_out`
 `verified-by: bravebot_tui::shell_mode::output_without_colour_codes_says_nothing_about_them`
+`verified-by: bravebot_tui::shell_mode::running_output_cannot_draw_its_own_escapes`
+`verified-by: bravebot_tui::shell_mode::a_colour_code_split_between_two_pieces_is_counted_once_it_is_whole`
 `verified-by: bravebot_tui::render::a_glimpse_counts_its_colour_codes_and_does_not_draw_them`
 `verified-by: bravebot_tui::render::a_glimpse_line_is_measured_without_its_colour_codes`
 `verified-by: bravebot_tui::render::a_glimpse_from_the_end_counts_its_colour_codes_last`

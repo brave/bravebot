@@ -2548,6 +2548,7 @@ session-model-substituted =
 session-error = erreur : { $problem }
 session-no-output = aucune sortie
 shell-kept-private = saisie avec !!, cette sortie n'a pas été envoyée au modèle
+shell-stopped-not-sent = ce qu'elle a affiché avant de s'arrêter n'a pas été envoyé au modèle
 
 ## Pourquoi un tour a échoué
 

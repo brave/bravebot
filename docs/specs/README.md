@@ -31,7 +31,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [naming-files.md](naming-files.md) | `NAME` | 10 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
 | [pasting.md](pasting.md) | `PASTE` | 11 | what Ctrl-V puts into a turn, text or picture, and on what footing |
 | [dropping.md](dropping.md) | `DROP` | 12 | what dragging a file onto a window puts into a turn, and on what footing |
-| [shell-mode.md](shell-mode.md) | `SHELL` | 6 | the `!` prompt: a line the user typed, and why the planner can never reach it |
+| [shell-mode.md](shell-mode.md) | `SHELL` | 7 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [shell-integration.md](shell-integration.md) | `SHELLINT` | 5 | `bravebot shell-init`: a hook that gives `@bravebot` the commands run in a terminal, as quarantined input |
 | [skills.md](skills.md) | `SKILL` | 15 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for |
 | [instructions.md](instructions.md) | `INSTR` | 15 | which instruction files are looked for, where, in what order, and where what they say ends up |
