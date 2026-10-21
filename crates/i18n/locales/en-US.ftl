@@ -607,6 +607,8 @@ doctor-settings-fallback-ignored =
     fallbackModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-summary-ignored =
     summaryModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-plan-ignored =
+    planModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-processor-ignored =
     processorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-agent-ignored =
@@ -3578,6 +3580,10 @@ delegate-model-needs-sign-in =
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words.
 delegate-model-substituted = { $definition } asked for { $model } and was answered by a different model
+# The model `planModel` named, which a turn begun in plan mode could not use. Said, and the turn
+# runs on the session's own model, since the setting asks for a model and not for a refusal.
+plan-model-unavailable =
+    { $model } is set as the plan model but cannot be used here (no configured service answers for it, it needs a sign-in, or this machine's managed settings do not allow it), so this turn runs on the session's model
 # The model `summaryModel` named, from the person's own settings file. A compaction or a goal check
 # is refused rather than sent to the session's model, since the setting is a cost boundary.
 summary-model-needs-sign-in =

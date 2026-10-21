@@ -5527,6 +5527,7 @@ fn run_turn_animated(
     // this turn runs, and the planner, the tools and the confirmer all read what they pressed last
     // (MODE-8).
     let permission_mode = session.live_permission_mode();
+    let began_in_plan = permission_mode.get() == bravebot_agent::PermissionMode::Plan;
     // The worker starts the language servers, and the info panel on this thread names them.
     let language_servers = session.language_servers().clone();
     let kept_jobs = session.kept_jobs().cloned();
@@ -5612,7 +5613,13 @@ fn run_turn_animated(
         let mut confirmer =
             bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting);
         let egress = Egress::new();
-        let worker_config = config_for_turn(&worker_config, addressed_model.as_deref());
+        let turn_model = model_answering_the_turn(
+            &worker_config,
+            &egress,
+            addressed_model.as_deref(),
+            began_in_plan,
+        );
+        let worker_config = config_for_turn(&worker_config, turn_model.as_deref());
         // Owned by the worker for the duration and handed back afterwards, whether the turn
         // succeeded or not. A failed turn is still part of the conversation, and the next one
         // is usually about it.
@@ -7816,6 +7823,50 @@ mod tests {
             config_for_turn(&config, None).context_budget,
             config.context_budget,
             "a definition naming no model leaves the session's budget"
+        );
+    }
+
+    /// BACKEND-56, BACKEND-7: a turn that begins in plan mode answers on the plan model, so its
+    /// window is the budget; a turn that begins anywhere else, and a turn whose plan model the
+    /// agent sets aside, keep the session's. The fault it rejects: the window read for the plan
+    /// model in every mode, or for a name the turn then does not use.
+    #[test]
+    fn a_plan_turn_takes_the_plan_models_window_and_no_other_turn_does() {
+        let mut config = Config::from_lookup(|name| match name {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+            _ => None,
+        })
+        .expect("a configuration");
+        let egress = bravebot_net::Egress::new();
+        let answering = |config: &Config, definition, plan| {
+            model_answering_the_turn(config, &egress, definition, plan)
+        };
+
+        assert_eq!(answering(&config, None, true), None, "nothing named");
+        config.plan_model = Some("a-plan-model".into());
+        assert_eq!(
+            answering(&config, None, true).as_deref(),
+            Some("a-plan-model")
+        );
+        assert_eq!(answering(&config, None, false), None, "a turn that acts");
+        assert_eq!(
+            answering(&config, Some("a-definition-model"), true).as_deref(),
+            Some("a-definition-model"),
+            "a definition's model outranks the plan model"
+        );
+
+        let refused =
+            std::env::temp_dir().join(format!("bravebot-plan-window-{}.json", std::process::id()));
+        std::fs::write(&refused, r#"{"models": {"deny": ["a-plan-model"]}}"#)
+            .expect("a managed file");
+        config.models = bravebot_config::Managed::at(&refused).models().clone();
+        let _ = std::fs::remove_file(&refused);
+        assert_eq!(
+            answering(&config, None, true),
+            None,
+            "a plan model the turn sets aside is not the one whose window is read"
         );
     }
 

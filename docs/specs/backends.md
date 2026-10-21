@@ -850,7 +850,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 |---|---|
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `processorModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
@@ -869,7 +869,7 @@ is restating an entire configuration to change a host. Going deeper than a name 
 request's destination the product of two files with no single place to read that says where it goes,
 which is why a gateway entry is replaced whole and a project file naming one must name its host too.
 
-`provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel` and `processorModel` are the exception on the other side: which host every request goes to and
+`provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel` and `processorModel` are the exception on the other side: which host every request goes to and
 which credential signs it is exactly what a file nobody opened must not decide, and the credential
 value comes from the person's own environment under names the layer would choose. A project or
 local layer naming one is dropped whole and reported, so the destination of every request stays
@@ -2524,7 +2524,63 @@ no say in either.
 `verified-by: bravebot_bedrock::lib::an_account_stating_an_idle_gap_waits_that_long_for_a_reply_gone_quiet`
 `verified-by: bravebot_bedrock::lib::an_account_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner`
 
+<a id="BACKEND-56"></a>
+### BACKEND-56: a turn that begins in plan mode runs on the model a person named for planning
+
+The `planModel` setting holds one model name. It is read from the person's own settings file and
+from the file `--settings` names, and from no project or local layer ([BACKEND-24](#BACKEND-24)): a
+layer that names it is dropped and `doctor` names the file. A tier word in it resolves as it does
+for `model` ([BACKEND-12](#BACKEND-12)).
+
+A turn that begins in plan mode ([MODE-3](permission-modes.md#MODE-3)) is sent to that model in
+every round, in place of the session's own, including one the person picked with `/model`. A turn
+that begins in any other mode is sent to the session's model, so the next acting turn is on the
+model the plan turn was not. The mode read is the one the turn began in: a mode chosen while the
+turn runs ([MODE-8](permission-modes.md#MODE-8)) does not change the model, so a turn moved out of
+plan mode finishes on the plan model and a turn moved into it finishes on the session's.
+
+The setting yields to a model named more specifically: a model a definition names for the turn
+([DELEGATE-22](delegation.md#DELEGATE-22)), and `--model` on a one-shot run ([CLI-9](cli.md#CLI-9)).
+A delegate takes the model it would have had without the setting, since its definition's model is a
+boundary its file drew.
+
+A name that cannot be used, because the managed layer refuses it ([BACKEND-48](#BACKEND-48)), no
+configured service answers for it, or it needs a sign-in this machine has not made, is not sent to.
+The turn runs on the session's model and the person is told which name was set aside. This differs
+from `summaryModel`, which refuses the request: that key caps a cost, and this one asks for a
+stronger model where one is available, so refusing the turn would remove the planning it was set
+for. The context budget of an interactive turn on the plan model is measured against that model's
+window ([BACKEND-7](#BACKEND-7)).
+
+**Why.** A person who wants a stronger model to plan and a cheaper one to act has to switch with
+`/model` by hand at every change of mode. The mode is a person's own answer and the name is their
+own setting, so nothing untrusted decides either, and a name in the settings is the endorsement of
+the service that serves it, as the `model` key is.
+
+`verified-by: bravebot_agent::turn::a_plan_mode_turn_is_sent_to_the_plan_model_and_an_acting_turn_to_the_sessions`
+`verified-by: bravebot_agent::turn::a_plan_turn_with_no_plan_model_named_stays_on_the_sessions`
+`verified-by: bravebot_agent::turn::a_plan_model_the_machine_refuses_falls_back_to_the_sessions_and_says_so`
+`verified-by: bravebot_agent::turn::a_model_named_on_the_command_line_outranks_the_plan_model`
+`verified-by: bravebot_agent::turn::a_delegate_in_plan_mode_keeps_the_model_it_was_given`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_plan_model`
+`verified-by: bravebot_config::lib::the_plan_setting_resolves_a_tier_word_and_is_absent_when_unset`
+`verified-by: bravebot_tui::app::a_plan_turn_takes_the_plan_models_window_and_no_other_turn_does`
+`verified-by: bravebot_cli::running::doctor_says_a_checkouts_plan_model_is_not_obeyed`
+
 ## Known costs
+
+- **Each change of mode costs a full prefix write.** BACKEND-27 and BACKEND-32 mark a cache prefix
+  per request and a cache belongs to one model, so a turn that begins on the plan model after acting
+  turns on another, and the next acting turn after it, each write the whole prefix again. A person
+  who sets `planModel` is choosing that cost for the stronger planner.
+
+- **A one-shot run in plan mode compacts against the session model's window.** The window is looked
+  up once at startup for the model in force, and `planModel` is chosen per turn, so a plan model with
+  a smaller window than the default can be sent a request over it. An interactive turn looks the
+  window up for the plan model.
+
+- **A plan turn is not on the model the person picked.** `/model` and the startup `--model` of an
+  interactive session are outranked by `planModel` in plan mode, which is what the setting is for.
 
 - **A fallback no service offers is tried anyway.** Where the name belongs to no gateway and no AWS
   account, the aichat endpoint is the service that would answer for it, as it is for any such name

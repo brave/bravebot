@@ -438,7 +438,7 @@ one thing leaves everything else in force:
 | `env`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `processorModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
 | `references` | your own file and a `--settings` file outside the project; a project or local file's block, and a `--settings` file that resolves inside the project, is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
@@ -483,6 +483,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
 | `summaryModel` | the model compaction summaries and `/goal` checks run on ([below](#summarymodel)) |
+| `planModel` | the model a turn that begins in plan mode runs on ([below](#planmodel)) |
 | `processorModel` | the model an isolated processor runs on ([below](#processormodel)) |
 | `references` | directories outside the project that the planner may consult, each with a name and a description ([below](#references)) |
 | `agent` | the definition every turn of a session is addressed to when `--agent` names none ([below](#agent)) |
@@ -554,7 +555,7 @@ others in force, so a mistake in a checkout cannot decide that your own file no 
 :::caution
 **A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned cannot name
 the host every request goes to, the model, the advisor model, the fallback model, or the environment variables read as a
-gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel`, `summaryModel` or `processorModel` key, in a project or local file is ignored, and `bravebot
+gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel` or `processorModel` key, in a project or local file is ignored, and `bravebot
 doctor` names each file whose block or key was dropped. It can still set the other keys here, so read
 a project's settings file before working in it; `doctor` names the files in force. It cannot grant a
 capability either. The names that would (`permissions.allow`, and `permissions.additionalDirectories`)
@@ -714,6 +715,34 @@ other.** The model is sent the conversation, so a `.bravebot/settings.json` or
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier. The context
 budget that decides when to compact is still measured against the window of the model the session is
 using, not this one.
+
+### `planModel`
+
+```json
+{ "planModel": "opus" }
+```
+
+The model a turn runs on when it begins in plan mode. A stronger model can plan and the session's own
+model can act, without switching with `/model` at each change of mode. Without the key a plan turn
+runs on the model the session is using.
+
+The mode a turn began in decides: a turn that begins in plan mode runs on this model in every
+round, including over a model you picked with `/model`, and the next turn in another mode runs on
+the session's model. Pressing the mode key while a turn runs does not move that turn to the other
+model. A model an agent definition names for the turn, and `--model` on a one-shot run, outrank this
+key, and a delegate keeps the model it would have had.
+
+A model that needs a sign-in this machine has not made, that your administrator refuses, or that no
+configured service answers for is not used: bravebot says so and the turn runs on the session's
+model, as a plan turn is not worth refusing for a mistyped name. Each change of mode writes the
+conversation to the model's cache again, since a cache belongs to one model.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** The model is sent the conversation, so a `.bravebot/settings.json` or
+`.bravebot/settings.local.json` that names one is ignored and reported by `bravebot doctor`, as a
+`model` is.
+
+The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
 
 ### `references`
 

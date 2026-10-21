@@ -226,10 +226,16 @@ pub(super) struct ModelForTheTurn {
     /// The model the definition wrote and the one it resolved to, where the definition's model is
     /// the one this turn asked for.
     pub(super) definition_model: Option<(String, String)>,
+    /// Whether the turn runs on the model `planModel` named (BACKEND-56), so the answering model
+    /// is not compared with the session's own.
+    pub(super) on_the_plan_model: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
     config: &Config,
+    egress: &bravebot_net::Egress,
+    started_in: crate::permission_mode::PermissionMode,
     task: &Task,
     addressed: Option<&Addressed>,
     reporter: &mut R,
@@ -292,15 +298,49 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
         (None, Some(spec)) => spec.model().map(|_| spec.definition().to_string()),
         (None, None) => None,
     };
+    // The plan model, where the turn begins in plan mode and nothing more specific named a model:
+    // a definition's (DELEGATE-22), the command line's (CLI-9), and a delegate's, which takes the
+    // model it would have had.
+    let plan_model = match started_in == crate::permission_mode::PermissionMode::Plan
+        && definition_model.is_none()
+        && task.delegate.is_none()
+        && !task.model_outranks_a_definition
+    {
+        true => plan_model_in_force(config, egress, reporter, notices),
+        false => None,
+    };
+    let on_the_plan_model = plan_model.is_some();
     let turn_model = definition_model
         .as_ref()
         .map(|(_, resolved)| resolved.clone())
+        .or(plan_model)
         .or_else(|| task.model.clone());
     Ok(ModelForTheTurn {
         pinned_by,
         turn_model,
         definition_model,
+        on_the_plan_model,
     })
+}
+
+/// The model `planModel` names where it is usable, and the name where it is set and is not
+/// (BACKEND-56). Said and set aside in the second case, leaving the turn on the session's own
+/// model.
+fn plan_model_in_force<R: Reporter + ?Sized>(
+    config: &Config,
+    egress: &bravebot_net::Egress,
+    reporter: &mut R,
+    notices: &mut Vec<crate::skills::Notice>,
+) -> Option<String> {
+    match crate::backend::plan_model(config, egress) {
+        Ok(usable) => usable,
+        Err(named) => {
+            let said = t!(plan_model_unavailable, model = named);
+            reporter.notice(said.clone());
+            notices.push(crate::skills::Notice::from_message(said));
+            None
+        }
+    }
 }
 
 /// A delegate's is its kind's, and the planner cannot write a word of it: what it chose was a

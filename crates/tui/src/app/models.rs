@@ -305,6 +305,29 @@ pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
     reads_effort(&models, model)
 }
 
+/// The model other than the session's that answers a turn, whose window is the budget it compacts
+/// against (BACKEND-7): the one a `/agent` line's definition names, and otherwise `planModel` for a
+/// turn that begins in plan mode (BACKEND-56).
+///
+/// The plan model is asked as the turn asks it, so a name the turn will set aside leaves the
+/// session's window with the session's model.
+pub(super) fn model_answering_the_turn(
+    config: &Config,
+    egress: &bravebot_net::Egress,
+    addressed_model: Option<&str>,
+    began_in_plan: bool,
+) -> Option<String> {
+    if let Some(addressed) = addressed_model {
+        return Some(addressed.to_string());
+    }
+    match began_in_plan {
+        true => bravebot_agent::backend::plan_model(config, egress)
+            .ok()
+            .flatten(),
+        false => None,
+    }
+}
+
 /// The configuration a turn is run on: the session's, with the window of the model that answers it
 /// where a `/agent` line's definition names one other than the session's (BACKEND-7).
 ///

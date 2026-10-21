@@ -1050,6 +1050,12 @@ pub struct Config {
     /// `None` leaves both on the session's own model. [`Config::summary`] resolves a tier word in
     /// it.
     pub summary_model: Option<String>,
+    /// The model the settings in force name for a turn that begins in plan mode, as the file
+    /// spelled it.
+    ///
+    /// `None` leaves such a turn on the session's own model. [`Config::plan`] resolves a tier word
+    /// in it.
+    pub plan_model: Option<String>,
     /// The model the settings in force name for processors to run on, as the file spelled it.
     ///
     /// `None`, and `inherit`, leave a processor on the turn's own model. [`Config::processor`]
@@ -1298,6 +1304,7 @@ impl Config {
         config.max_running_delegates = settings.max_running_delegates();
         config.fallback_model = settings.fallback_model().map(str::to_string);
         config.summary_model = settings.summary_model().map(str::to_string);
+        config.plan_model = settings.plan_model().map(str::to_string);
         config.processor_model = settings.processor_model().map(str::to_string);
         let ttl = settings.prompt_cache_ttl();
         config.prompt_cache_ttl = ttl;
@@ -1429,6 +1436,7 @@ impl Config {
             max_running_delegates: None,
             fallback_model: None,
             summary_model: None,
+            plan_model: None,
             processor_model: None,
             prompt_cache_ttl: None,
             context_budget,
@@ -1689,6 +1697,17 @@ impl Config {
     /// the call and the refusal is the caller's to make (PROC-13).
     pub fn processor(&self) -> Option<String> {
         self.processor_model
+            .as_deref()
+            .map(|name| self.model_named(name))
+    }
+
+    /// The model a turn that begins in plan mode runs on, resolved like `--model` (BACKEND-56).
+    ///
+    /// `None` where the settings name none. Like [`Config::summary`], a model the machine-level
+    /// layer refuses is still returned: the caller asks `agent::backend::serving`, which answers
+    /// that first, and falls back to the session's own model saying so.
+    pub fn plan(&self) -> Option<String> {
+        self.plan_model
             .as_deref()
             .map(|name| self.model_named(name))
     }
@@ -4066,6 +4085,27 @@ mod tests {
             let settings = Settings::parse(&format!(r#"{{"processorModel": "{written}"}}"#));
             let config = resolved(&settings, bedrock, complete_env).expect("configured");
             assert_eq!(config.processor().as_deref(), Some(expected), "{written}");
+        }
+    }
+
+    /// BACKEND-56: the plan setting is a model name like any other, so a tier word in it means the
+    /// model the same word means for the main model, and a setting that is not there leaves a plan
+    /// turn on the session's own model.
+    #[test]
+    fn the_plan_setting_resolves_a_tier_word_and_is_absent_when_unset() {
+        let bedrock = |key: &str| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            other => complete_env(other),
+        };
+        let unset = resolved(&Settings::default(), bedrock, complete_env).expect("configured");
+        assert_eq!(unset.plan(), None);
+
+        for (written, expected) in [("opus", "opus-arn"), ("some-model", "some-model")] {
+            let settings = Settings::parse(&format!(r#"{{"planModel": "{written}"}}"#));
+            let config = resolved(&settings, bedrock, complete_env).expect("configured");
+            assert_eq!(config.plan().as_deref(), Some(expected), "{written}");
         }
     }
 

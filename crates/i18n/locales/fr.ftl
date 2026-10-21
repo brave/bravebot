@@ -529,6 +529,9 @@ doctor-settings-fallback-ignored =
 doctor-settings-summary-ignored =
     summaryModel dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-plan-ignored =
+    planModel dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-processor-ignored =
     processorModel dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
@@ -2998,6 +3001,8 @@ delegate-more-calls = { $count } appels jusqu'ici
 delegate-model-needs-sign-in =
     { $definition } a demandé { $model }, qui exige d'abord une connexion : il n'a pas été lancé
 delegate-model-substituted = { $definition } a demandé { $model } et un autre modèle a répondu
+plan-model-unavailable =
+    { $model } est défini comme modèle de planification mais ne peut pas être utilisé ici (aucun service configuré n'y répond, il exige une connexion, ou les paramètres gérés de cette machine l'interdisent) : ce tour utilise le modèle de la session
 summary-model-needs-sign-in =
     { $model } est défini comme modèle de résumé et exige d'abord une connexion : rien n'a été envoyé
 summary-model-refused =

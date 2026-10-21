@@ -161,6 +161,7 @@ const READ_KEYS: &[&str] = &[
     "model",
     "notificationCondition",
     "notificationMethod",
+    "planModel",
     PERMISSIONS_BLOCK,
     "processorModel",
     "promptCacheTtl",
@@ -264,6 +265,10 @@ pub struct Settings {
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
     summary_model: Option<String>,
+    /// What the top-level `planModel` key named, if it named anything.
+    ///
+    /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
+    plan_model: Option<String>,
     /// What the top-level `processorModel` key named, if it named anything but `inherit`.
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
@@ -424,6 +429,11 @@ pub struct Settings {
     /// Kept for the same reason: the model it names is sent the conversation to summarise and the
     /// exchange to judge, which makes it a destination, and a checkout cannot choose one.
     summary_ignored: Vec<PathBuf>,
+    /// The layers that named `planModel` and were not obeyed, weakest first.
+    ///
+    /// Kept for the same reason: the model it names is sent the whole conversation while the
+    /// session is in plan mode, which makes it a destination, and a checkout cannot choose one.
+    plan_ignored: Vec<PathBuf>,
     /// The layers that named `processorModel` and were not obeyed, weakest first.
     ///
     /// Kept for the same reason: the model it names is sent the files a processor reads, which
@@ -949,6 +959,7 @@ impl Settings {
         let mut advisor_ignored = Vec::new();
         let mut fallback_ignored = Vec::new();
         let mut summary_ignored = Vec::new();
+        let mut plan_ignored = Vec::new();
         let mut processor_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
         let mut style_ignored = Vec::new();
@@ -1027,6 +1038,9 @@ impl Settings {
                 }
                 if root.remove("summaryModel") {
                     summary_ignored.push(path.clone());
+                }
+                if root.remove("planModel") {
+                    plan_ignored.push(path.clone());
                 }
                 if root.remove("processorModel") {
                     processor_ignored.push(path.clone());
@@ -1295,6 +1309,7 @@ impl Settings {
         settings.advisor_ignored = advisor_ignored;
         settings.fallback_ignored = fallback_ignored;
         settings.summary_ignored = summary_ignored;
+        settings.plan_ignored = plan_ignored;
         settings.processor_ignored = processor_ignored;
         settings.agent_ignored = agent_ignored;
         settings.style_ignored = style_ignored;
@@ -1348,6 +1363,7 @@ impl Settings {
             advisor_model: word(root, "advisorModel"),
             fallback_model: word(root, "fallbackModel"),
             summary_model: word(root, "summaryModel"),
+            plan_model: word(root, "planModel"),
             // `inherit` is how other agents' definitions name no model, so it reads back as none,
             // as it does in a definition (DELEGATE-22).
             processor_model: word(root, "processorModel")
@@ -1487,6 +1503,7 @@ impl Settings {
             advisor_ignored: Vec::new(),
             fallback_ignored: Vec::new(),
             summary_ignored: Vec::new(),
+            plan_ignored: Vec::new(),
             processor_ignored: Vec::new(),
             agent_ignored: Vec::new(),
             style: word(root, "style"),
@@ -1556,6 +1573,15 @@ impl Settings {
     /// [`Settings::model`] is.
     pub fn summary_model(&self) -> Option<&str> {
         self.summary_model.as_deref()
+    }
+
+    /// The model the settings in force name for a turn that begins in plan mode, if they name one
+    /// (BACKEND-56).
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn plan_model(&self) -> Option<&str> {
+        self.plan_model.as_deref()
     }
 
     /// The model the settings in force name for isolated processors, if they name one.
@@ -2148,6 +2174,7 @@ impl Settings {
             && self.advisor_ignored.is_empty()
             && self.fallback_ignored.is_empty()
             && self.summary_ignored.is_empty()
+            && self.plan_ignored.is_empty()
             && self.processor_ignored.is_empty()
             && self.agent_ignored.is_empty()
             && self.style_ignored.is_empty()
@@ -2196,6 +2223,12 @@ impl Settings {
     pub fn summary_ignored(&self) -> impl Iterator<Item = &Path> {
         self.summary_ignored.iter().map(PathBuf::as_path)
     }
+
+    /// The files that named `planModel` from a layer not entitled to, weakest first.
+    pub fn plan_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.plan_ignored.iter().map(PathBuf::as_path)
+    }
+
     /// The files that named `processorModel` from a layer not entitled to, weakest first.
     pub fn processor_ignored(&self) -> impl Iterator<Item = &Path> {
         self.processor_ignored.iter().map(PathBuf::as_path)
@@ -2317,6 +2350,7 @@ impl Settings {
             .chain(self.advisor_model.is_some().then_some("advisorModel"))
             .chain(self.fallback_model.is_some().then_some("fallbackModel"))
             .chain(self.summary_model.is_some().then_some("summaryModel"))
+            .chain(self.plan_model.is_some().then_some("planModel"))
             .chain(self.processor_model.is_some().then_some("processorModel"))
             .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
@@ -7705,6 +7739,34 @@ mod tests {
             .global(r#"{"processorModel": "Inherit"}"#)
             .read();
         assert_eq!(inherit.processor_model(), None);
+    }
+
+    /// BACKEND-56: the plan model is a destination for the conversation, so a checkout's layers
+    /// cannot name it, and the layers that can are reported for the ones that could not.
+    #[test]
+    fn a_project_layer_cannot_name_the_plan_model() {
+        let settings = Layers::new("plan-layers")
+            .global(r#"{"planModel": "  personal-plan "}"#)
+            .project(r#"{"planModel": "this-checkout"}"#)
+            .local(r#"{"planModel": "also-this-checkout"}"#)
+            .read();
+        assert_eq!(settings.plan_model(), Some("personal-plan"));
+        assert_eq!(settings.plan_ignored().count(), 2);
+
+        let only_project = Layers::new("plan-only-project")
+            .project(r#"{"planModel": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_project.plan_model(), None);
+        assert_eq!(only_project.plan_ignored().count(), 1);
+
+        // The file `--settings` named is the person's own act, so it may name one and wins over the
+        // home file.
+        let named = Layers::new("plan-named")
+            .global(r#"{"planModel": "personal-plan"}"#)
+            .named(r#"{"planModel": "named-plan"}"#)
+            .read();
+        assert_eq!(named.plan_model(), Some("named-plan"));
+        assert_eq!(named.plan_ignored().count(), 0);
     }
 
     /// ADDRESS-13: a definition chosen for every turn narrows and prompts them all, so a checkout's
