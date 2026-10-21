@@ -722,6 +722,33 @@ mod tests {
         assert_eq!(columns(300), 100);
     }
 
+    /// FILES-4: a press on the state's border starts no drag, and the width the panel was dragged
+    /// to is the one it has again once the state is left.
+    #[test]
+    fn dragging_the_border_does_nothing_in_the_state_and_keeps_the_dragged_width() {
+        let mut session = session_with(&["a.rs"]);
+        screen(&mut session, 120, 30);
+        session.toggle_panel();
+        screen(&mut session, 120, 30);
+        assert!(session.begin_panel_drag(5, 84), "the ordinary border");
+        session.drag_panel_to(70);
+        session.end_panel_drag();
+        assert_eq!(session.panel_columns(120), 50);
+
+        session.toggle_files();
+        assert!(session.files_open(), "the state did not open");
+        screen(&mut session, 120, 30);
+        assert_eq!(session.panel_columns(120), 60, "half of 120");
+        assert!(
+            !session.begin_panel_drag(5, 60),
+            "a press on the state's border began a drag"
+        );
+        assert!(!session.dragging_panel());
+
+        session.toggle_files();
+        assert_eq!(session.panel_columns(120), 50, "the dragged width was lost");
+    }
+
     /// FILES-4: below a hundred columns the state is not drawn and the keys still answer, and it is
     /// drawn again when the terminal is widened.
     #[test]

@@ -20,7 +20,8 @@ the files of the whole session.
 Everything the state draws is held by the session already, in the activity entries of the
 transcript. Nothing is read from disk, run, or sent to a model. The state is for the terminal and for
 what the session's own write calls changed. The desktop window, a source that shows the working tree
-against `HEAD`, and putting an edit back from the state are not built.
+against `HEAD`, and putting an edit back from the state are not built, and each is a Known cost
+below.
 
 ## Clauses
 
@@ -112,6 +113,7 @@ FILES-2.
 
 `verified-by: bravebot_tui::files_mode::the_state_is_half_the_columns_between_sixty_and_a_hundred`
 `verified-by: bravebot_tui::files_mode::the_state_is_not_drawn_below_a_hundred_columns_and_comes_back_when_widened`
+`verified-by: bravebot_tui::files_mode::dragging_the_border_does_nothing_in_the_state_and_keeps_the_dragged_width`
 `verified-by: bravebot_tui::files_mode::no_ordinary_section_is_drawn_in_the_state`
 `verified-by: bravebot_tui::files_mode::the_hint_line_has_the_context_reading_while_the_state_is_open`
 
@@ -239,3 +241,11 @@ Every word the state says is in the catalogue ([localization.md](localization.md
 - **A write a delegate made is not listed.** A delegate's calls are kept under the entry that stands
   for it and are bounded by what a delegate keeps, so the state reads the entries of the session's
   own turns.
+- **The desktop window has no files state.** The state is built on the terminal's panel and its
+  keys, and the window draws its own panel, so a person using the window reads writes in the
+  transcript.
+- **There is no source that shows the working tree against `HEAD`.** The state draws what the
+  session's own write calls changed, which is what [FILES-10](#FILES-10) bounds, and a change made
+  by another program is not in it.
+- **An edit cannot be put back from the state.** `/hunks` does that for the last turn's hunks
+  ([SESSION-37](sessions.md#SESSION-37)), and the state only reads.

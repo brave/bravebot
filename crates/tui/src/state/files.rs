@@ -101,7 +101,8 @@ impl Session {
         }
     }
 
-    /// Highlight the first file, or the last.
+    /// Highlight the first file, or the last. Moving to another file puts its edits back at the
+    /// top, and either way every listed file counts as seen.
     pub fn files_to_end(&mut self, last: bool) {
         let count = self.written_files().len();
         if let Some(state) = &mut self.files {
