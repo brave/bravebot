@@ -122,6 +122,17 @@ through `osascript`; on Linux it needs `wl-paste` or `xclip`.
 
 - A picture wins over text when the clipboard holds both, since copying an image in a browser leaves
   the page's URL behind as text, and text has another key.
+- **A picture is read as a PNG first, then as a JPEG**, and on macOS last as a TIFF, which is how a
+  GIF or a HEIC copied from an app arrives. A PNG and a JPEG are sent as they are, and a TIFF is
+  sent as a PNG. A TIFF that declares a canvas of more than 134 million pixels is not read.
+- **A file copied in Finder, Explorer or a Linux file manager is treated as a drop.** Ctrl-V reads
+  the files the clipboard names and handles them as if you had dragged them onto the window (see
+  [Dropping a file](#dropping-a-file)): an image or a PDF is carried as bytes, a text file becomes
+  context, and any other type has its path written into the line. The files win over a picture or
+  text beside them on the clipboard. A file whose name is not text or holds a line break refuses the
+  whole copy, and none of the files are pasted. On Linux the file manager has to leave a
+  `text/uri-list` or, as GNOME's do, an `x-special/gnome-copied-files`, which `wl-paste` or `xclip`
+  reads.
 - The picture is inlined into the request, never linked, so no other machine fetches it.
 - The marker is written where the caret is, and the picture goes wherever that text goes. Deleting
   the marker unsends it.
@@ -165,7 +176,8 @@ What happens depends on the type:
 | anything else | its path is written into the line, as dropping a file always did |
 
 Extensions are recognised whatever their case. Dropping a directory attaches nothing. A dropped PNG
-or JPEG also gets a thumbnail under the box, as a pasted picture does.
+or JPEG also gets a thumbnail under the box, as a pasted picture does. A file copied in a file
+manager and pasted with Ctrl-V is handled the same way.
 
 The path line goes ahead of the bytes in a turn's prompt, in a question beside the work, and in a plan's
 task. A file that cannot be shown to the model is replaced by the sentence `<path> could not be shown to

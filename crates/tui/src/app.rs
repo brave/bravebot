@@ -1150,6 +1150,15 @@ fn take_from_clipboard(session: &mut Session, pasted: crate::clipboard::Pasted) 
         // the shell as literal text. Saying so beats writing it and letting the shell complain.
         Pasted::Image(_) if session.shell => session.note(t!(paste_not_a_command)),
         Pasted::Image(image) => session.attach(image),
+        // The paths are put to the drop handling as the line a paste of them would have been, so a
+        // copied file is carried, read as context or written out as its path by the rules a dragged
+        // one is, and in shell mode is written as words (PASTE-12). Nothing here reads the file.
+        Pasted::Files(paths) => {
+            if !session.drop_files(&crate::dropped::line_of(&paths)) {
+                session.note(t!(paste_nothing_on_clipboard));
+            }
+        }
+        Pasted::FilesRefused => session.note(t!(paste_files_refused)),
         Pasted::Text(text) => session.paste_text(&text),
         Pasted::TooLarge(bytes) => session.note(bravebot_i18n::sizes::paste_too_large(
             bytes as u64,
@@ -10449,6 +10458,180 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
             assert_eq!(session.input(), "[Image #1]");
+        }
+
+        /// A directory removed when it goes out of scope.
+        struct Scratch(std::path::PathBuf);
+
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        /// A directory holding a file of each name, and the paths a clipboard would name them by.
+        fn copied_files(scratch: &str, names: &[&str]) -> (Scratch, Vec<String>) {
+            let directory = crate::testutil::scratch_dir(scratch);
+            let _ = std::fs::remove_dir_all(&directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            let paths = names
+                .iter()
+                .map(|name| {
+                    let at = directory.join(name);
+                    std::fs::write(&at, b"x").unwrap();
+                    at.to_string_lossy().into_owned()
+                })
+                .collect();
+            (Scratch(directory), paths)
+        }
+
+        /// A copied file is a drop, so the line, the marker and what is staged behind it are the
+        /// ones a terminal's paste of the same path leaves. The staged file is a `dropped` one and
+        /// not a pasted picture: the file's bytes were never read off the clipboard, so nothing went
+        /// through the gate a picture does (PASTE-2).
+        #[test]
+        fn a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it() {
+            let (_scratch, paths) = copied_files("clipboard-files-staged", &["shot.png"]);
+            let mut dropped = Session::new("kernel-enforced");
+            handle_paste(&mut dropped, &crate::dropped::line_of(&paths));
+
+            let mut copied = Session::new("kernel-enforced");
+            take_from_clipboard(&mut copied, Pasted::Files(paths.clone()));
+
+            assert_eq!(dropped.input(), "[Image #1] ");
+            assert_eq!(copied.input(), dropped.input());
+            assert_eq!(copied.attached(), dropped.attached());
+            assert_eq!(copied.attached()[0].shown, paths[0]);
+            assert_eq!(
+                copied.attached()[0].kind,
+                bravebot_filetype::by_name::Kind::Attachment("image/png")
+            );
+            assert!(
+                copied.pasted_named(copied.input()).is_empty(),
+                "a copied file went in as a pasted picture"
+            );
+        }
+
+        /// A drop reads a text file as context and writes the path of a type nothing takes, and a
+        /// copied file is neither more nor less than a drop, whatever its type.
+        #[test]
+        fn a_copied_file_is_carried_read_or_written_out_by_its_type_as_a_dropped_one_is() {
+            let (_scratch, paths) = copied_files(
+                "clipboard-files-types",
+                &["a.png", "notes.txt", "installer.dmg"],
+            );
+            let mut copied = Session::new("kernel-enforced");
+            take_from_clipboard(&mut copied, Pasted::Files(paths.clone()));
+
+            assert_eq!(
+                copied.input(),
+                format!("[Image #1] [File #2] {} ", paths[2])
+            );
+            assert_eq!(copied.attached().len(), 2);
+            assert_eq!(
+                copied.attached()[1].kind,
+                bravebot_filetype::by_name::Kind::Text
+            );
+        }
+
+        /// The paths reach the drop handling as one line each, so a name a shell would split or a
+        /// quote would end is still one file.
+        #[test]
+        fn a_copied_file_named_with_a_space_and_a_quote_is_one_file() {
+            let (_scratch, paths) = copied_files("clipboard-files-awkward", &["a b'c.png"]);
+            let mut copied = Session::new("kernel-enforced");
+            take_from_clipboard(&mut copied, Pasted::Files(paths.clone()));
+
+            assert_eq!(copied.input(), "[Image #1] ");
+            assert_eq!(copied.attached()[0].shown, paths[0]);
+        }
+
+        /// A command line has no marker, so a file copied while the box is armed for the shell is
+        /// written as the word a dropped one is.
+        #[test]
+        fn a_copied_file_is_written_as_its_path_in_shell_mode_and_nothing_is_staged() {
+            let (_scratch, paths) = copied_files("clipboard-files-shell", &["my shot.png"]);
+            let mut dropped = Session::new("kernel-enforced");
+            dropped.shell = true;
+            handle_paste(&mut dropped, &crate::dropped::line_of(&paths));
+
+            let mut copied = Session::new("kernel-enforced");
+            copied.shell = true;
+            take_from_clipboard(&mut copied, Pasted::Files(paths.clone()));
+
+            assert_eq!(copied.input(), format!("'{}' ", paths[0]));
+            assert_eq!(copied.input(), dropped.input());
+            assert!(copied.attached().is_empty(), "a marker reached the shell");
+        }
+
+        /// A path that stopped naming a file between the read and the paste attaches nothing, and
+        /// the person is told so rather than being left with an empty box and no word.
+        #[test]
+        fn a_copied_file_that_is_gone_says_there_is_nothing_to_paste() {
+            let (_scratch, paths) = copied_files("clipboard-files-gone", &["shot.png"]);
+            std::fs::remove_file(&paths[0]).unwrap();
+            let mut session = Session::new("kernel-enforced");
+            take_from_clipboard(&mut session, Pasted::Files(paths));
+
+            assert!(session.input().is_empty());
+            assert!(session.attached().is_empty());
+            assert!(
+                session.transcript[0]
+                    .text
+                    .contains("nothing on the clipboard")
+            );
+        }
+
+        /// A list the clipboard reader refused says so, and stages nothing, so the person is not left
+        /// with an empty box and no word.
+        #[test]
+        fn a_refused_list_of_copied_files_says_so_and_stages_nothing() {
+            let mut session = Session::new("kernel-enforced");
+            take_from_clipboard(&mut session, Pasted::FilesRefused);
+
+            assert!(session.input().is_empty());
+            assert!(session.attached().is_empty());
+            assert!(
+                session.transcript[0]
+                    .text
+                    .contains("none of the files were pasted")
+            );
+        }
+
+        /// A name holding a control character is a drop's to judge, so a copy of it onto a shell
+        /// line is refused whole with the note a dragged file gets (DROP-6), and the file beside it
+        /// is not written without it.
+        #[cfg(unix)]
+        #[test]
+        fn a_copied_file_with_an_escape_in_its_name_refuses_a_shell_line_as_a_dragged_one_does() {
+            let (_scratch, paths) =
+                copied_files("clipboard-files-escape", &["fine.png", "a\u{1b}b.png"]);
+            let mut dragged = Session::new("kernel-enforced");
+            dragged.shell = true;
+            handle_paste(&mut dragged, &crate::dropped::line_of(&paths));
+
+            let mut copied = Session::new("kernel-enforced");
+            copied.shell = true;
+            take_from_clipboard(&mut copied, Pasted::Files(paths));
+
+            assert!(copied.input().is_empty(), "{:?}", copied.input());
+            assert_eq!(copied.input(), dragged.input());
+            assert!(copied.transcript[0].text.contains("control character"));
+            assert_eq!(copied.transcript[0].text, dragged.transcript[0].text);
+        }
+
+        /// Ctrl-V reads the clipboard while a turn runs, and a copied file is put to the drop
+        /// handling there as it is at rest.
+        #[test]
+        fn a_copied_file_is_staged_while_a_turn_runs_too() {
+            let (_scratch, paths) = copied_files("clipboard-files-working", &["shot.png"]);
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+
+            act_while_working(&mut session, Action::Paste, || Pasted::Files(paths));
+
+            assert_eq!(session.input(), "[Image #1] ");
+            assert_eq!(session.attached().len(), 1);
         }
 
         /// A command the box carries out itself has nowhere to put a picture: `/goal` names a

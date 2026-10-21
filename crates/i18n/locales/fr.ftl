@@ -2853,6 +2853,8 @@ paste-with-the-first-tick =
 paste-too-large = cette image fait { $size }, et un collage en porte au plus { $limit }
 attachment-too-large = { $name } fait { $size }, et une pièce jointe en porte au plus { $limit }
 paste-nothing-on-clipboard = il n'y a rien à coller dans le presse-papiers
+paste-files-refused =
+    le nom d'un fichier copié n'est pas du texte ou contient un saut de ligne : aucun fichier n'a été collé
 return-not-pressed =
     cette entrée est arrivée avec d'autres touches, donc ce n'était pas une frappe : appuyez sur Entrée pour envoyer cette ligne, ou Échap pour l'effacer
 leave-not-pressed =
@@ -2880,7 +2882,7 @@ cli-prompt-invisible-removed = { $count ->
    *[other] { $count } caractères invisibles ont été retirés de l'invite donnée à -i
     }
 drop-name-not-written =
-    le nom d'un fichier déposé contient un caractère de contrôle ou un caractère qu'un terminal n'affiche pas, donc aucun chemin n'a été écrit dans la commande
+    le nom d'un fichier déposé ou copié contient un caractère de contrôle ou un caractère qu'un terminal n'affiche pas, donc aucun chemin n'a été écrit dans la commande
 kilobytes = { $size } Ko
 megabytes = { $size } Mo
 gigabytes = { $size } Go
