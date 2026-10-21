@@ -1471,3 +1471,71 @@ fn a_refused_install_leaves_the_users_path_alone() {
     assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
     assert_eq!(outcome.session_path, outcome.session_path_before);
 }
+
+/// A destination the script cannot write or replace is refused with the reason, and what was
+/// there is left as it was. The destination is a directory holding a file, which neither moving a
+/// copy onto it nor replacing it can succeed at, whichever system the test runs on; on Windows a
+/// running executable fails the same call. The staged copy made beside it is removed, nothing is
+/// recorded, and the person's `Path` and the session's are not touched.
+#[test]
+fn a_destination_that_cannot_be_replaced_is_refused_and_left_as_it_was() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("new");
+    let install = Install::new(tools, "unreplaceable")
+        .off_path()
+        .with_stored_path("/opt/one");
+    let destination = install.bin().join(BINARY);
+    std::fs::create_dir_all(&destination).expect("make a directory where the executable goes");
+    let old = destination.join("old");
+    std::fs::write(&old, b"old copy").expect("put a file in it");
+
+    let outcome = install.run_release(&release);
+
+    assert!(!outcome.succeeded, "installed: {}", outcome.output);
+    assert!(
+        outcome.output.contains("unable to write")
+            && outcome.output.contains("close it and run this again"),
+        "refused for another reason: {}",
+        outcome.output
+    );
+    assert!(
+        !outcome.output.contains("Installed bravebot"),
+        "{}",
+        outcome.output
+    );
+    assert!(destination.is_dir(), "the destination was replaced");
+    assert_eq!(
+        read(&old).as_deref(),
+        Some(&b"old copy"[..]),
+        "what was at the destination changed"
+    );
+    assert_eq!(
+        entries(&install.bin()),
+        vec![destination.clone()],
+        "a staged copy or another file was left beside the destination"
+    );
+    assert_eq!(
+        entries(&destination),
+        vec![old],
+        "something was written into the directory at the destination"
+    );
+    assert_eq!(
+        read(&install.record()),
+        None,
+        "a refused install recorded where it went"
+    );
+    assert_eq!(
+        outcome.left_in_temporary,
+        Vec::<String>::new(),
+        "the download was left behind"
+    );
+    assert_eq!(
+        outcome.registry,
+        Vec::<String>::new(),
+        "a refused install read or changed the stored environment"
+    );
+    assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
+    assert_eq!(outcome.session_path, outcome.session_path_before);
+}
