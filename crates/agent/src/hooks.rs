@@ -87,6 +87,8 @@ pub fn default_limit(moment: Moment) -> Duration {
         | Moment::ToolFinished
         | Moment::TurnFinished
         | Moment::PromptShown
+        | Moment::CheckoutMade
+        | Moment::Compacted
         | Moment::SessionStarted => LIMIT,
     }
 }

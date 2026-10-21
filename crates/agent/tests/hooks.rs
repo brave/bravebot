@@ -993,6 +993,8 @@ fn only_a_session_end_has_a_shorter_default_bound_than_thirty_seconds() {
             | Moment::ToolFinished
             | Moment::TurnFinished
             | Moment::PromptShown
+            | Moment::CheckoutMade
+            | Moment::Compacted
             | Moment::SessionStarted => 30,
         });
         assert_eq!(
