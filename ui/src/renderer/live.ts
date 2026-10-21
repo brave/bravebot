@@ -19,6 +19,26 @@ import type { Entry } from './transcript'
 import type { Turns } from './turn-details'
 import { conversationPreferences, setConversation } from './experience'
 
+/** A message waiting for the turn to end, and the grants it was written with. */
+export interface Queued {
+  prompt: string
+  attachments: FileAttachment[]
+  staged: Staged[]
+  /**
+   * Put here because the running turn did not read it, which is not the person's choice to wait.
+   * It goes as a turn of its own whether or not the queue is paused.
+   */
+  fromInterjection?: boolean
+}
+
+/** A line sent into the running turn, kept as written until the turn says it has read it. */
+export interface Interjection {
+  id: string
+  prompt: string
+  attachments: FileAttachment[]
+  staged: Staged[]
+}
+
 /** What the app is doing, which decides most of what the interface offers. */
 export interface Live {
   model: string | null
@@ -116,7 +136,17 @@ export interface Live {
   outcome?: 'complete' | 'failed'
   draftId?: string
   queuePaused?: boolean
-  queued?: { prompt: string; attachments: FileAttachment[]; staged: Staged[] }[]
+  queued?: Queued[]
+  /**
+   * Lines sent into the turn that is running and not yet read by it, oldest first (INPUT-10).
+   *
+   * Drawn as sent the moment the person presses Enter, and moved into the transcript when the
+   * agent says the planner has them. One still here when the turn ends was not read, and goes on
+   * as a turn of its own.
+   */
+  interjected?: Interjection[]
+  /** The turn that is running is the bot's memory update, which takes no line from the person. */
+  consolidating?: boolean
   attachments?: FileAttachment[]
   /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
   sendRefused?: string | null

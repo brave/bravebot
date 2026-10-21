@@ -392,35 +392,17 @@ pub struct AttachedImage {
     pub bytes: Vec<u8>,
 }
 
-impl AttachedImage {
-    /// What stands in the line where the picture cannot travel with it.
-    ///
-    /// Not from the catalog, and deliberately: the planner reads this, so it is part of what the
-    /// model is given rather than something a person is being told. Same reasoning as the marker
-    /// in [`Session::attach`], and the catalog says so at the top of itself.
-    ///
-    /// Why it cannot travel is the caller's to say, because a picture misses a turn already running
-    /// for one reason and a command for another, and the one thing this must not do is guess.
-    fn in_words(&self, why: &str) -> String {
-        format!(
-            "({} was pasted here, but it cannot be shown to you: {why}. Ask for it again if you \
-             need to see it.)",
-            self.marker
-        )
-    }
-}
-
 /// A line with every marker in it standing for one of `carried` replaced by what it says instead.
 ///
 /// One place, because a picture misses a request for more than one reason and the sentence that
 /// takes its place reads the same however it was missed. `why` is the reason, which is the caller's:
-/// see [`AttachedImage::in_words`].
+/// see [`bravebot_filetype::markers::picture_in_words`].
 fn put_back_to_words(line: &str, carried: &[AttachedImage], why: &str) -> String {
-    let mut settled = line.to_string();
-    for picture in carried {
-        settled = settled.replace(&picture.marker, &picture.in_words(why));
-    }
-    settled
+    bravebot_filetype::markers::put_back_to_words(
+        line,
+        carried.iter().map(|picture| picture.marker.as_str()),
+        why,
+    )
 }
 
 /// A line with every marker in it standing for one of `dropped` replaced by that file's name.
@@ -433,11 +415,12 @@ fn put_back_to_words(line: &str, carried: &[AttachedImage], why: &str) -> String
 /// Unlike a picture there is no sentence to write, because the name is the honest answer rather than
 /// a report that the honest answer is missing.
 fn put_back_to_names(line: &str, dropped: &[Attached]) -> String {
-    let mut settled = line.to_string();
-    for file in dropped {
-        settled = settled.replace(&file.marker, &file.name);
-    }
-    settled
+    bravebot_filetype::markers::put_back_to_names(
+        line,
+        dropped
+            .iter()
+            .map(|file| (file.marker.as_str(), file.name.as_str())),
+    )
 }
 
 /// The same command with the text files it named put back to their names.

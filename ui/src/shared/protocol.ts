@@ -895,6 +895,8 @@ export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
   'trust.request': { directory: string; keeping?: string | null; confinedLines?: string | null }
   'turn.started': { turn: number; sandbox?: SandboxMode }
+  /** The planner has read the oldest line sent with `turn.interject`. `prompt` is the words it was given. */
+  'turn.interjected': { prompt: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   phase: { phase: Phase }

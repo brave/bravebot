@@ -2,6 +2,7 @@ import type { BridgeEvent } from '../shared/protocol'
 import * as t from './transcript'
 import { receiveTurn } from './turn-details'
 import type { Live } from './live'
+import { leftOver, taken } from './interjecting'
 
 /** Fold one event into the live session. */
 export function apply(
@@ -27,6 +28,8 @@ export function apply(
         return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, tokens: 0,
           sandboxMode: message.data.sandbox ?? old.sandboxMode,
           entries: t.beginTurn(old.entries, message.data.turn) }
+      case 'turn.interjected':
+        return taken(old)
       case 'audit':
         return old
       // A phase opens a round, so a call written in the last one is over.
@@ -116,7 +119,7 @@ export function apply(
         // takes from the front — so a briefing put at the top of the session is the first thing
         // gone. Saying the bot is no longer grounded is what makes the next prompt carry it again.
         const compacted = message.data.archived > old.archived
-        return {
+        return leftOver({
           ...old,
           contextTokens: message.data.contextTokens,
           summary: { ...old.summary, id: message.data.id ?? old.summary.id },
@@ -132,12 +135,14 @@ export function apply(
           archived: message.data.archived,
           rewind: message.data.rewind ?? [],
           bot: old.bot && compacted ? { ...old.bot, grounded: false } : old.bot,
-        }
+        }, true)
       }
       case 'turn.error': {
         refresh()
         const { kind, message: detail } = message.data
-        return {
+        // A turn the person stopped read nothing more, and what they sent into it goes on. One that
+        // failed leaves it waiting in the queue it paused, for them to resume or remove.
+        return leftOver({
           ...old,
           contextTokens: message.data.contextTokens,
           summary: { ...old.summary, id: message.data.id ?? old.summary.id },
@@ -150,7 +155,7 @@ export function apply(
           awaitingOrdinal: null,
           queuePaused: true,
           rewind: message.data.rewind ?? [],
-        }
+        }, kind === 'cancelled')
       }
       default:
         return old

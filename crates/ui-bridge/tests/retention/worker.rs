@@ -70,6 +70,7 @@ fn take_turn(
             answerers: Default::default(),
             answers: receiver,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            interjections: Default::default(),
         })
     });
     let mut seen = Vec::new();

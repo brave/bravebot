@@ -240,6 +240,7 @@ impl Bridge {
             "drops.classify" => crate::attached::classified(request),
             "pastes.check" => crate::attached::paste_check(request),
             "turn.cancel" => self.cancel_turn(request),
+            "turn.interject" => self.interject_turn(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
                 self.poll_watches();
@@ -1195,6 +1196,7 @@ impl Bridge {
             answers: answers_rx,
             finished,
             target,
+            interjections,
         } = Running::start();
 
         let emitter = self.emitter.clone();
@@ -1256,6 +1258,7 @@ impl Bridge {
                 answerers,
                 answers: answers_rx,
                 finished,
+                interjections,
             });
         });
 
@@ -1340,13 +1343,17 @@ impl Bridge {
             .unwrap_or(1);
 
         let crate::running::Started {
-            running,
+            mut running,
             cancel,
             pending,
             answers: answers_rx,
             finished,
             target,
+            interjections: _,
         } = Running::start();
+        // A run plans before anything is read and asks nothing between rounds, so a line typed
+        // into it would be taken by nobody.
+        running.interjections = None;
 
         self.emitter.send(Event::new(
             "manifest.started",
@@ -1522,6 +1529,51 @@ impl Bridge {
             "trust": { "rules": rules_json(&state.answers.trust) },
             "rewind": rewind_json(state, &project),
         }))
+    }
+
+    /// Hand the turn in flight a line the person typed while it runs (INPUT-10).
+    ///
+    /// The turn reads it at its next round boundary, after the round's calls have run, as the
+    /// person's own words and under the routing it began with. Returns at once with whether the
+    /// line was taken in: `false` means there is no turn to read it, or none that will, so the
+    /// caller makes a turn of it. A line accepted by a turn that then ends without another round is
+    /// not read, and the absence of `turn.interjected` for it is how a front end learns that.
+    ///
+    /// Text only. A turn that is running fixed the shape of its context before it read anything, so
+    /// a marker in the line becomes the dropped file's name or a sentence about the pasted picture
+    /// here (DROP-8), through the same words the terminal uses, and nothing here reads a file.
+    fn interject_turn(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let prompt = request.string("prompt")?;
+        if prompt.trim().is_empty() {
+            return Err(Failure::bad_request(
+                "an interjection needs something to say",
+            ));
+        }
+        let prompt = crate::attached::in_words(request, &prompt)?;
+        if self.emitter.has_view(&handle) {
+            return Err(Failure::bad_request(
+                "session view version 1 does not support interjections",
+            ));
+        }
+        let expected = match request.params.get("target") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .ok_or_else(|| Failure::bad_request("`target` must be a number"))?,
+            ),
+        };
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        let accepted = open
+            .running
+            .as_ref()
+            .filter(|running| expected.is_none_or(|target| running.target == target))
+            .is_some_and(|running| running.interject(prompt));
+        Ok(json!({ "accepted": accepted }))
     }
 
     /// Ask the turn to stop.
@@ -2198,6 +2250,7 @@ struct Work {
     answerers: Answerers,
     answers: mpsc::Receiver<crate::turn::Reply>,
     finished: Arc<std::sync::atomic::AtomicBool>,
+    interjections: crate::running::Interjections,
 }
 
 /// Where the prompt a turn carried landed among the things the user said.
@@ -2304,6 +2357,7 @@ fn work(work: Work) {
         answerers,
         answers,
         finished,
+        interjections,
     } = work;
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
@@ -2326,7 +2380,8 @@ fn work(work: Work) {
         Arc::clone(&state.question_ids),
         cancel.clone(),
     )
-    .answerable_by(answerers);
+    .answerable_by(answerers)
+    .taking_interjections(interjections);
 
     // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
     // Here rather than when the session opened, so that the questions about them come after the
@@ -3686,6 +3741,7 @@ mod watch_tests {
             pending: Arc::new(Mutex::new(None)),
             target: 1,
             finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            interjections: None,
         };
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let handle = bridge.mint(Open {
@@ -3765,6 +3821,10 @@ mod closing_tests;
 #[cfg(test)]
 #[path = "targets_tests.rs"]
 mod targets_tests;
+
+#[cfg(test)]
+#[path = "interjection_tests.rs"]
+mod interjection_tests;
 
 #[cfg(test)]
 #[path = "../tests/retention/worker.rs"]

@@ -58,6 +58,7 @@ try {
       if (method === 'session.new') return { ok: { session: 's-new', directory, branch: 'main', model: 'sample/fast' } }
       if (method === 'session.open') return { ok: { session: 's-' + p.id, model: 'sample/fast', record: { ...rows.find((r) => r.id === p.id), started: 1, turns: 1, tokens: 100, build: 'fixture' }, said: p.id === idA ? said : [], todos: { rows: [{ content: 'Split the lock', status: 'done' }, { content: 'Move the migration', status: 'active' }, { content: 'Write migration tests', status: 'pending' }] }, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
       if (method === 'turn.send') { emit('turn.started', { turn: 2 }, p.session); return { ok: { turn: 2 } } }
+      if (method === 'turn.interject') return { ok: { accepted: true } }
       if (method === 'permissions.list') return { ok: { paths: [{ path: '', shownPath: '""', integrity: 'trusted' }, { path: 'vendor', shownPath: 'vendor', integrity: 'untrusted' }], commands: [{ program: '/usr/bin/git', args: ['status'], display: 'git status' }] } }
       if (method === 'watches.list') return { ok: { busy: false, watches: [{ number: 1, path: 'src/store.ts', state: 'watching', remainingSeconds: 86400, armedBy: null }] } }
       if (method === 'settings.inspect') return { ok: { build: '0.9.0 (abc1234)', configured: true, problem: null, model: 'sample/fast', brave: false, bedrock: false, providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] }, network: { roots: [], problem: null, trustsNothing: false, proxy: null, authenticated: false, unusableProxy: null, noProxy: null } } }
@@ -301,9 +302,23 @@ try {
     await page.locator('.attachment-chips').waitFor()
     for (const text of ['First queued follow-up', 'Second, a longer follow-up that runs on far enough to need truncating in the tray', 'Third', 'Fourth']) {
       await composer.fill(text)
-      await composer.press('Enter')
+      await composer.press('Alt+Enter')
     }
     await variants('23-queue-and-attachments')
+    await page.setViewportSize({ width: 1440, height: 900 })
+  })
+
+  // In the conversation the scene above left running, with its queue still showing under the tray.
+  await scene('23b-sent-into-the-turn', async () => {
+    await page.setViewportSize({ width: 900, height: 560 })
+    const composer = page.getByRole('textbox', { name: 'Message the agent' })
+    for (const text of ['no, the other one', 'And a second line, long enough that the tray has to truncate it before it reaches the end of the row']) {
+      await composer.fill(text)
+      await composer.press('Enter')
+    }
+    await composer.fill('Held for after the turn')
+    await page.locator('[data-test="interjected-messages"]').waitFor()
+    await variants('23b-sent-into-the-turn')
     await page.setViewportSize({ width: 1440, height: 900 })
   })
 

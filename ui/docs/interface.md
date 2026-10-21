@@ -79,10 +79,17 @@ no message box, because a run has no conversation to continue. **New chat here**
 a chat in the run's project. Runs started in the terminal are listed and read the same way.
 
 Drafts and reading positions survive conversation switches and restarts. A running
-conversation can continue in the background. Drafting during a run does not send
-anything: **Queue message** explicitly queues a follow-up. Stop or an error pauses
-the queue; **Resume queue** is required to continue it. Automatic bot-memory
-maintenance reserves the session until it finishes.
+conversation can continue in the background. Enter while a turn runs sends the message into that
+turn, and the agent reads it at the turn's next round, as in the terminal
+([INPUT-46](../../docs/specs/terminal-input.md#INPUT-46)). The message is drawn under the box as
+**Sent to this turn** and joins the transcript when the agent has it. One the turn ends without
+reading goes as a turn of its own. Words only go into a running turn: a dropped file is written as
+its name and a pasted picture as a sentence saying it cannot be shown. **Queue for after** (or
+Alt+Enter) holds a message until the turn ends instead, and each queued message starts a turn of
+its own with the files it names. A message with a file chosen by the attach button, and any message
+sent while a bot's memory is being updated, is queued. Stop or an error pauses the queue;
+**Resume queue** is required to continue it. Automatic bot-memory maintenance reserves the session
+until it finishes.
 
 Conversation actions include pin, archive and restore. Archiving asks for confirmation first; restoring does not. An archived conversation also offers **Delete conversation**, which asks first and then removes the record from disk; it cannot be undone. Code blocks offer copy and wrap
 controls; local file references can open previews. **New activity** returns to the latest
@@ -478,8 +485,9 @@ change to a repository this app does not modify.
 Two more things are honestly imperfect and worth knowing:
 
 - **The turn compaction happens in runs without the briefing.** It can fire on the first round.
-  Nothing can inject mid-turn, so the summary the agent writes is what carries the gist through;
-  the mitigation is keeping a purpose short enough that re-reading it is cheap.
+  Nothing the briefing says can reach the turn once it is running, so the summary the agent writes is
+  what carries the gist through; the mitigation is keeping a purpose short enough that re-reading it
+  is cheap.
 - **A bot whose memory was poisoned loses it rather than reading it back.** The memory arrives under
   whatever the trust map says about its path, so a write that turned the path untrusted means the
   next read is quarantined and the bot carries on without what it knew. That is the gate doing its
@@ -539,7 +547,8 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Ask again; needs a session |
 | | Chat › Undo Last Turn… | [Undo](#undo-and-rewind) the latest turn; greyed while a turn runs or with nothing to undo |
 | `⌥⌘←` / `⌥⌘→` | View › Hide/Show Chat List / Context Panel | Fold the chat list / the context panel |
-| `Enter` | | In the message box: send, or queue the message while a turn is running. With the file list open on a half-typed `@` name, complete it instead |
+| `Enter` | | In the message box: send, or send the message into the turn that is running. With the file list open on a half-typed `@` name, complete it instead |
+| `Alt+Enter` | | In the message box while a turn runs: hold the message until the turn ends |
 | `Tab` | | In the message box, on an `@` name: complete it to the highlighted file or directory |
 | `↑` / `↓` | | In the message box, with the file list open: move through it |
 | `Shift+Enter` | | In the message box: insert a new line |

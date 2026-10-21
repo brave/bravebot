@@ -82,6 +82,7 @@ fn harness() -> Harness {
             pending,
             target: 1,
             finished: Arc::new(AtomicBool::new(false)),
+            interjections: None,
         },
     }
 }
@@ -234,6 +235,7 @@ fn refusing_nothing_queues_nothing() {
             pending: Arc::new(Mutex::new(None)),
             target: 1,
             finished: Arc::new(AtomicBool::new(false)),
+            interjections: None,
         },
     );
 
@@ -1306,6 +1308,7 @@ fn question_numbers_are_not_reused_by_a_later_turn_of_the_same_session() {
             pending: Arc::clone(&pending),
             target: 1,
             finished: Arc::new(AtomicBool::new(false)),
+            interjections: None,
         };
         let answerer = std::thread::spawn(move || {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);

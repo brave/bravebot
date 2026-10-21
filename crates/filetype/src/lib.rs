@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod by_name;
+pub mod markers;
 
 /// Bytes inspected when deciding whether a file is text.
 pub const SNIFF_BYTES: usize = 8_192;

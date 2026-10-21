@@ -22,6 +22,8 @@ governs:
   - crates/tui/src/keybindings.rs
   - crates/config/src/settings.rs
   - crates/tui/src/command_table.rs
+  - crates/ui-bridge/src/running.rs
+  - ui/src/renderer/interjecting.ts
 documented-by:
   - docs/website/docs/using/interactive-mode.md
   - docs/website/docs/using/vi-mode.md
@@ -2738,3 +2740,50 @@ with something else may stand between it and the screen.
 `verified-by: bravebot_mentions::lib::a_settled_directory_is_not_read_again_while_it_is_unchanged`
 `verified-by: bravebot_mentions::lib::a_changed_or_recently_touched_directory_is_read_afresh`
 `verified-by: bravebot_tui::references::the_callers_of_one_key_press_share_one_reading_of_the_directory`
+
+<a id="INPUT-46"></a>
+### INPUT-46: the desktop window sends Enter into the turn that is running, and queues only when asked
+
+Enter in the message box while a turn runs sends the line into that turn, as [INPUT-10](#INPUT-10)
+says for the terminal: the planner reads it at the turn's next round boundary, after the round's
+calls have run, as the person's own words and under the routing the turn began with. The window
+sends it with `turn.interject`, which takes the session, the words and optionally the target of the
+turn it is for. The bridge answers `{ "accepted": true }` when the turn is running, is not being
+stopped and asks between rounds, and `false` otherwise. A plan run asks nothing between rounds, so
+it never accepts one.
+
+The window draws the line under the box as sent to this turn. It is in the transcript only once the
+bridge sends `turn.interjected`, at the moment the planner is given it, and lines are read in the
+order they were sent. A line the bridge does not accept, and a line still unread when the turn
+ends, becomes a turn of its own and goes at once, ahead of anything queued, even when a Stop has
+paused the queue. A turn that failed for any other reason leaves the line in the queue it paused.
+
+Alt+Enter, or **Queue for after**, holds the line for after the turn instead. That queue is the one
+Stop pauses and **Resume** releases, and each message in it starts a turn of its own with the files
+it names.
+
+**What it carries is words.** A dropped file resolves to its name and a pasted picture to a
+sentence saying it cannot be shown, as in [DROP-8](dropping.md#DROP-8). The window sends the line as
+written with `files`, each a marker and a name, and `pictures`, each a marker, and the bridge puts
+them into words with the same Rust functions the terminal does (`bravebot_filetype::markers`), so
+the two front ends give the planner the same line. The main process forwards the session, the
+target, the line and those names and markers of a `turn.interject` and nothing else, so no path,
+file or picture reaches the running turn through it. A message with a file chosen by the attach button, and any
+message sent while the bot's memory update runs, is queued instead.
+
+**Why.** A correction such as "no, the other one" that is held until the turn ends arrives after
+the work it was meant to prevent, and stopping the turn to deliver it sooner also pauses the queue.
+Enter is the key a person presses to say something to the agent, and the terminal already gives it
+this meaning.
+
+`verified-by: bravebot_ui_bridge::interjecting::a_line_typed_while_a_round_runs_is_in_the_next_request`
+`verified-by: bravebot_ui_bridge::interjecting::a_turn_that_is_stopping_or_over_does_not_take_a_line`
+`verified-by: bravebot_ui_bridge::interjecting::a_blank_line_and_an_unknown_session_are_refused`
+`verified-by: bravebot_ui_bridge::interjecting::markers_in_a_line_become_a_name_and_a_sentence_in_the_bridge`
+`verified-by: bravebot_ui_bridge::interjecting::a_malformed_marker_list_is_refused`
+`verified-by: bravebot_ui_bridge::interjecting::a_plan_run_does_not_take_a_line`
+`verified-by: bravebot_filetype::markers::a_picture_becomes_a_sentence_naming_its_marker_and_the_reason`
+`verified-by: bravebot_filetype::markers::a_dropped_file_becomes_its_name_and_text_around_it_is_kept`
+`verified-by: bravebot_ui_bridge::interjection_tests::work_that_asks_nothing_between_rounds_takes_no_line`
+`verified-by: bravebot_ui_bridge::interjection_tests::lines_are_read_in_the_order_they_were_typed`
+`verified-by: by-construction (the renderer and the main process are not crates this workspace compiles, so ui/scripts/interjecting.test.mjs drives the window's own event reducer with the bridge's events: a line is in the transcript only after turn.interjected and in the order it was sent, a line unread when the turn is done or stopped goes on past a paused queue, one left by a failed turn waits, a refused line returns to the head of the queue, the window names its markers and writes no words, a paperclip file or the memory update queues the line, and turn.interject forwards only its line and the names of its markers; make check-ui runs the test)`

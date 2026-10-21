@@ -100,6 +100,8 @@ interface Props {
   storageKey: string
   onNew: (directory?: string) => void
   onQueue: () => void
+  onInterject: () => void
+  interjected: string[]
   queued: string[]
   queuePaused: boolean
   onResumeQueued: () => void
@@ -281,6 +283,8 @@ export function Transcript({
   storageKey,
   onNew,
   onQueue,
+  onInterject,
+  interjected,
   queued, queuePaused, onResumeQueued, onDismissRefusal,
   onRemoveQueued,
   live,
@@ -439,6 +443,7 @@ export function Transcript({
   const stableAnswer = useEvent((...args: Parameters<AnswerQuestions>) => { onAnswer(...args); toComposer() })
   const send = useEvent(() => { latest(); onSubmit(); toComposer() })
   const queue = useEvent(onQueue)
+  const interject = useEvent(onInterject)
   const cancel = useEvent(onCancel)
   const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
@@ -808,6 +813,8 @@ export function Transcript({
           onDraft={draftChanged}
           onSend={send}
           onQueue={queue}
+          onInterject={interject}
+          interjected={interjected}
           onCancel={cancel}
           onPlan={onPlan ? plan : undefined}
           onModel={chooseModelFor}

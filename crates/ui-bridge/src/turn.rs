@@ -256,6 +256,13 @@ impl Reporter for BridgeReporter {
         self.prompt_at = Some(at);
     }
 
+    /// The planner has read a line the person typed while the turn ran, so a front end moves it
+    /// from waiting to said. Emitted at the moment it is taken, and always before the turn's end,
+    /// so a line still waiting when the turn ends was not read.
+    fn interjected(&mut self, said: String) {
+        self.say("turn.interjected", json!({ "prompt": said }));
+    }
+
     fn todos(&mut self, rows: Vec<Row>) {
         let wired: Vec<_> = rows.iter().map(wire::row).collect();
         self.task_list = rows;
@@ -470,6 +477,8 @@ pub struct BridgeConfirmer {
     declined_a_plan: bool,
     /// Which kinds somebody can answer now. Every kind, until a host says otherwise.
     answerers: crate::answerers::Answerers,
+    /// What the person typed while this turn ran. Empty for a confirmer nobody can type into.
+    interjections: crate::running::Interjections,
 }
 
 impl BridgeConfirmer {
@@ -490,7 +499,17 @@ impl BridgeConfirmer {
             cancel,
             declined_a_plan: false,
             answerers: crate::answerers::Answerers::default(),
+            interjections: crate::running::Interjections::default(),
         }
+    }
+
+    /// Read what the person types into this turn from `interjections` at each round boundary.
+    pub(crate) fn taking_interjections(
+        mut self,
+        interjections: crate::running::Interjections,
+    ) -> Self {
+        self.interjections = interjections;
+        self
     }
 
     /// Ask only what `answerers` says somebody can answer, and refuse the rest without showing it.
@@ -727,10 +746,10 @@ impl Confirmer for BridgeConfirmer {
         }
     }
 
-    // The UI queues messages for the next turn; the protocol has no mid-turn input.
-    // In particular, polling must neither block nor consume an approval reply.
+    // Whatever `turn.interject` left since the last boundary. Polling must neither block nor
+    // consume an approval reply, and this reads a queue of its own, never the answers.
     fn interjection(&mut self) -> Option<String> {
-        None
+        self.interjections.take()
     }
 
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {

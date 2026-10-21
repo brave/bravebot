@@ -168,9 +168,9 @@ try {
   assert.equal(rounds.length, 3, 'the held turn reached the model')
   await page.locator('.composer .stop').waitFor()
   await field.fill('Read @../outside.txt')
-  await field.press('Enter')
+  await field.press('Alt+Enter')
   await field.fill('After the refused one')
-  await field.press('Enter')
+  await field.press('Alt+Enter')
   const tray = page.locator('.queued-messages')
   await tray.waitFor()
   held = null
