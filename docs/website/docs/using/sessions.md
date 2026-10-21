@@ -301,8 +301,10 @@ Ghostty and foot change the pointer to a resize arrow over the border. It holds
   shows neither and a turn that only wrote to the cache shows the write alone. The cache figures update after each round of a turn in flight, including
   the first turn, and a round that reports nothing spent leaves the previous figures in place,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
-- the plan, which stays after the turn ends. Where it runs past the bottom it keeps the task in
-  progress in view and counts the rows left out above and below it, as `+12 earlier` or
+- the plan, which stays after the turn ends. A task still pending or in progress is drawn with a
+  filled `■` while a turn is running, and dim with a hollow `□` while none is, as after the turn
+  that wrote the list has ended or in a resumed session. Where it runs past the bottom it keeps the
+  task in progress in view and counts the rows left out above and below it, as `+12 earlier` or
   `+3 more`. A task list with no rows leaves the plan as the last list that had rows. `/clear`, a
   rewind and a new turn clear it.
 

@@ -278,7 +278,7 @@ fn laid_out(
         section(
             &mut body,
             t!(panel_plan).to_string(),
-            plan_rows(plan, text, room),
+            plan_rows(plan, !session.a_turn_is_running(), text, room),
         );
     }
 
@@ -473,13 +473,27 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<u
     (body, links, continued)
 }
 
+/// The mark of a row that no turn is working on and that was neither finished nor dropped.
+///
+/// Hollow where the mark of a row being worked on is filled, so the two differ under `NO_COLOR`
+/// too, where the ink of a row is the terminal's own.
+const LEFT_OPEN_MARKER: &str = "□";
+
 /// The plan in at most `room` rows, the task being worked on among them.
+///
+/// `left_open` is whether no turn is running: a row still outstanding is then drawn hollow and
+/// dim, so that after a turn ends it does not read as work being done.
 ///
 /// Where the rows do not all fit, the visible part starts at the task in progress if it would
 /// otherwise fall below the cut, since what is being done now is what somebody glancing at the
 /// panel is looking for. The last row counts the rows left out above the visible part apart from
 /// those below it, so a count is never read as work still to come when it is work already past.
-fn plan_rows(plan: &[bravebot_core::todo::Row], width: usize, room: usize) -> Vec<Line<'static>> {
+fn plan_rows(
+    plan: &[bravebot_core::todo::Row],
+    left_open: bool,
+    width: usize,
+    room: usize,
+) -> Vec<Line<'static>> {
     let (start, shown) = if plan.len() <= room {
         (0, plan.len())
     } else {
@@ -498,22 +512,33 @@ fn plan_rows(plan: &[bravebot_core::todo::Row], width: usize, room: usize) -> Ve
     let mut lines: Vec<Line<'static>> = plan[start..start + shown]
         .iter()
         .map(|task| {
-            let (marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
-                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+            let (glyph, marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
+                (
+                    task.marker,
+                    dim(),
+                    dim().add_modifier(Modifier::CROSSED_OUT),
+                )
             } else if task.struck() {
                 (
+                    task.marker,
                     Style::default().fg(theme::ok()),
                     dim().add_modifier(Modifier::CROSSED_OUT),
                 )
+            } else if left_open {
+                (LEFT_OPEN_MARKER, dim(), dim())
             } else {
-                (Style::default().fg(theme::running()), Style::default())
+                (
+                    task.marker,
+                    Style::default().fg(theme::running()),
+                    Style::default(),
+                )
             };
             let content = crate::status::cut(
                 &crate::render::printable(&task.content),
                 width.saturating_sub(2),
             );
             Line::from(vec![
-                Span::styled(format!(" {} ", task.marker), marker),
+                Span::styled(format!(" {glyph} "), marker),
                 Span::styled(content, text),
             ])
         })
@@ -1939,6 +1964,122 @@ mod tests {
         assert_ne!(
             cancelled.spans[0].content, done.spans[0].content,
             "a cancelled task carries the finished marker"
+        );
+    }
+
+    /// The rows under the plan's heading, which is the last section, and nothing of the other
+    /// sections, whose figures move from one turn to the next.
+    fn plan_part(session: &Session, rows: usize) -> Vec<Line<'static>> {
+        let all = lines(session, WIDTH, 24);
+        let heading = texts(&all)
+            .iter()
+            .position(|row| *row == t!(panel_plan))
+            .expect("a plan heading");
+        let part: Vec<Line<'static>> = all[heading + 1..]
+            .iter()
+            .take_while(|line| !line.to_string().trim().is_empty())
+            .cloned()
+            .collect();
+        assert_eq!(
+            part.len(),
+            rows,
+            "the plan is not drawn whole: {:#?}",
+            texts(&all)
+        );
+        part
+    }
+
+    fn plan_row(part: &[Line<'static>], needle: &str) -> Line<'static> {
+        part.iter()
+            .find(|line| line.to_string().contains(needle))
+            .unwrap_or_else(|| panic!("no plan row holds {needle}: {:#?}", texts(part)))
+            .clone()
+    }
+
+    const MIXED: [(&str, Status); 4] = [
+        ("finished it", Status::Done),
+        ("dropped it", Status::Cancelled),
+        ("working on it", Status::Active),
+        ("still to do", Status::Pending),
+    ];
+
+    /// A row still open after the turn that wrote the list has ended reads as work nobody is
+    /// doing, which is what the answer beside it says. The mark has to differ as well as the ink,
+    /// since `NO_COLOR` leaves the ink the terminal's own.
+    ///
+    /// Asserted against the same rows drawn while their turn runs, rather than against a colour
+    /// named here, so a theme change that keeps the two apart does not fail it. Finished and
+    /// dropped rows are drawn as they were, and a turn that starts is working on the plan again
+    /// before it has reported a list.
+    #[test]
+    fn a_row_a_turn_left_open_is_drawn_apart_from_work_being_done() {
+        let _held = crate::theme::exclusive();
+        let mut session = working_on(plan(&MIXED));
+        let live = plan_part(&session, 4);
+        session.complete("done", Vec::new(), 0);
+        let left = plan_part(&session, 4);
+
+        for needle in ["working on it", "still to do"] {
+            let (before, after) = (plan_row(&live, needle), plan_row(&left, needle));
+            assert_ne!(
+                after.spans[0].content, before.spans[0].content,
+                "{needle} keeps the mark of work being done after its turn ended"
+            );
+            assert_ne!(
+                after.spans[0].style.fg, before.spans[0].style.fg,
+                "{needle} keeps the ink of work being done after its turn ended"
+            );
+            assert_ne!(
+                after.spans[1].style, before.spans[1].style,
+                "{needle} keeps the text of work being done after its turn ended"
+            );
+            assert!(
+                !after.spans[1]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::CROSSED_OUT),
+                "{needle} is struck through, so it reads as no longer outstanding"
+            );
+        }
+        for needle in ["finished it", "dropped it"] {
+            assert_eq!(
+                plan_row(&left, needle),
+                plan_row(&live, needle),
+                "{needle} was drawn differently once the turn ended"
+            );
+        }
+
+        // The next turn has reported nothing yet, and it is the one that may be working on them.
+        session.type_char('b');
+        session.submit();
+        assert!(session.a_turn_is_running(), "no turn was running");
+        assert_eq!(
+            plan_part(&session, 4),
+            live,
+            "the rows are not drawn as work being done while a turn runs"
+        );
+    }
+
+    /// A compaction or an aside shares the working status with a turn and does no work on the
+    /// plan, so the rows it leaves outstanding stay left open while it runs.
+    #[test]
+    fn a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open() {
+        let _held = crate::theme::exclusive();
+        let mut session = working_on(plan(&MIXED));
+        let live = plan_part(&session, 4);
+        session.complete("done", Vec::new(), 0);
+        let left = plan_part(&session, 4);
+
+        session.begin_aside();
+        assert!(!session.a_turn_is_running(), "the aside is a turn");
+        assert_eq!(
+            plan_part(&session, 4),
+            left,
+            "an aside drew the open rows as work being done"
+        );
+        assert_ne!(
+            left, live,
+            "the fixture draws a turn's rows and its absence alike"
         );
     }
 

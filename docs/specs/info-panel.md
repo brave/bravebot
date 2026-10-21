@@ -257,11 +257,24 @@ progress would fall below the cut, the rows shown move down the list until it is
 last row counts the rows left out above the ones shown apart from those below them (`+12 earlier`,
 `+15 earlier, +7 more`, `+3 more`).
 
+A row that is neither completed nor cancelled is drawn as work being done only while a turn is
+running. While none is, as after the turn that wrote the list has ended and in a resumed session,
+such a row is left open: its mark is hollow (`□`) where work being done has the filled one, so the
+two differ under `NO_COLOR`, and its text is dim. A compaction or another working state that is
+not a turn leaves it open too. Rows that are completed or cancelled are drawn as they are in any
+other plan.
+
+**Why.** Nothing is working on a row once the turn has ended. A filled mark beside an answer that
+says the work is finished reads as work still going.
+
 `verified-by: bravebot_tui::panel::the_plan_stays_after_the_turn_and_clear_empties_it`
 `verified-by: bravebot_tui::panel::an_empty_report_after_one_with_rows_keeps_that_plan`
 `verified-by: bravebot_tui::state::a_failed_or_stopped_turn_after_an_empty_report_keeps_its_plan`
 `verified-by: bravebot_tui::state::a_rewind_or_an_unsent_prompt_leaves_no_plan_after_an_empty_report`
 `verified-by: bravebot_tui::panel::a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it`
+`verified-by: bravebot_tui::panel::a_row_a_turn_left_open_is_drawn_apart_from_work_being_done`
+`verified-by: bravebot_tui::panel::a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open`
+`verified-by: bravebot_tui::sessions::a_resumed_session_draws_the_plan_it_was_left_with_as_left_open`
 
 <a id="PANEL-11"></a>
 ### PANEL-11: the panel draws only on what the person and the driver said
