@@ -14,6 +14,7 @@
 //! are workspace-relative names shown to the person who owns the workspace, and the counts are this
 //! program's own arithmetic. No model reads any of it.
 
+use bravebot_agent::servers::{Access, EffectivePolicy, PolicyEgress};
 use bravebot_agent::watch;
 use bravebot_config::Config;
 use bravebot_core::label::Integrity;
@@ -626,6 +627,10 @@ pub fn report(facts: &Facts<'_>) -> Report {
 
     lines.extend(grant_lines(facts));
 
+    if let Some(session) = &facts.servers.session {
+        lines.extend(server_policy_lines(&session.policies()));
+    }
+
     Report { lines }
 }
 
@@ -1090,6 +1095,80 @@ fn grant_lines(facts: &Facts<'_>) -> Vec<Line> {
             .with_note(t!(status_requested_paths_note)),
             facts.requested_paths,
         ));
+    }
+    lines
+}
+
+/// What each started local server's confinement grants: a heading naming it, a line each for what
+/// its policy says of the network, of subprocesses and of where it starts, then one line for each
+/// path its backend was handed and each path that policy was resolved without (SERVERS-20). What a
+/// row allows is its label, so a path that fills the width of the screen is still one line.
+///
+/// Nothing for a session that started no local server, which is the session this screen has always
+/// described. Every row rather than a count, since this is what a refusal from inside a server is
+/// checked against, and a count cannot say whether the path it refused was granted. The rows are
+/// the policy's own and no word a server sent is among them. A path is drawn in full, as a server
+/// names it in a refusal and as the prompts that name one draw it, so one that holds a control
+/// character, or a character that draws as nothing, is not a row that reads as another.
+fn server_policy_lines(servers: &[(String, EffectivePolicy)]) -> Vec<Line> {
+    let mut lines = Vec::new();
+    for (alias, policy) in servers {
+        lines.push(Line::new(
+            t!(status_server_policy),
+            bravebot_agent::mcp::shown(alias),
+        ));
+        lines.push(Line::new(
+            t!(status_server_policy_egress),
+            match policy.egress {
+                PolicyEgress::Closed => t!(status_server_policy_egress_closed),
+                PolicyEgress::Loopback => t!(status_server_policy_egress_loopback),
+                PolicyEgress::Open => t!(status_server_policy_egress_open),
+                PolicyEgress::Hosts => t!(status_server_policy_egress_hosts),
+            },
+        ));
+        lines.push(Line::new(
+            t!(status_server_policy_subprocesses),
+            match policy.children {
+                true => t!(status_server_policy_subprocesses_allowed),
+                false => t!(status_server_policy_subprocesses_refused),
+            },
+        ));
+        if let Some(directory) = &policy.starts_in {
+            lines.push(Line::new(
+                t!(status_server_policy_starts_in),
+                bravebot_agent::confirm::shown_path(directory),
+            ));
+        }
+        if policy.git_held_back {
+            lines.push(Line::new(
+                t!(status_server_policy_git),
+                t!(status_server_policy_git_held_back),
+            ));
+        }
+        for row in &policy.rows {
+            lines.push(Line::new(
+                match row.access {
+                    Access::Read => t!(status_server_policy_read),
+                    Access::Write => t!(status_server_policy_write),
+                    Access::ReadWrite => t!(status_server_policy_read_write),
+                },
+                bravebot_agent::confirm::shown_path(&row.path),
+            ));
+        }
+        if !policy.left_out.is_empty() {
+            let paths: Vec<String> = policy
+                .left_out
+                .iter()
+                .map(|path| bravebot_agent::confirm::shown_path(path))
+                .collect();
+            lines.extend(rows(
+                Line::new(
+                    t!(status_server_policy_left_out),
+                    t!(status_server_policy_left_out_reason),
+                ),
+                &paths,
+            ));
+        }
     }
     lines
 }
@@ -3217,6 +3296,142 @@ mod tests {
         );
         assert!(note.contains("weather: 3 tools"), "{note}");
         assert!(note.contains("coins: one tool"), "{note}");
+    }
+
+    /// The policy a started server's backend was handed, drawn for the tests of `/status`.
+    fn a_policy_for_the_report() -> EffectivePolicy {
+        use bravebot_agent::servers::PolicyRow;
+        let row = |path: &str, access| PolicyRow {
+            path: path.into(),
+            access,
+        };
+        EffectivePolicy {
+            rows: vec![
+                row("/srv/weather", Access::Read),
+                row("/srv/cache", Access::ReadWrite),
+                row("/var/out", Access::Write),
+            ],
+            egress: PolicyEgress::Hosts,
+            children: false,
+            starts_in: Some("/srv/cache".into()),
+            left_out: vec!["/opt/absent".into(), "/opt/also absent".into()],
+            git_held_back: true,
+        }
+    }
+
+    /// SERVERS-20: `/status` lists what a started server's backend was handed, one fact to a line:
+    /// the network, whether it may start subprocesses, where it starts, whether a `.git` is held
+    /// back, every row with what it allows, and the paths left out with the reason. A row is drawn
+    /// as the access it grants and no other, so a write-only row is not read as a read.
+    #[test]
+    fn a_started_servers_policy_is_listed_row_by_row_with_what_each_row_allows() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let started =
+            crate::mcp_command::tests::holding_started_under("weather", a_policy_for_the_report());
+
+        let drawn = report(&Facts {
+            servers: &started.servers,
+            ..facts(&config, &trust)
+        });
+
+        let at = drawn
+            .lines
+            .iter()
+            .position(|line| line.label == t!(status_server_policy))
+            .expect("the server's policy is on the report");
+        let listed: Vec<(&str, &str, &str)> = drawn.lines[at..]
+            .iter()
+            .map(|line| (line.label.as_str(), line.value.as_str(), line.note.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (t!(status_server_policy), "weather", ""),
+                (
+                    t!(status_server_policy_egress),
+                    t!(status_server_policy_egress_hosts),
+                    ""
+                ),
+                (
+                    t!(status_server_policy_subprocesses),
+                    t!(status_server_policy_subprocesses_refused),
+                    ""
+                ),
+                (t!(status_server_policy_starts_in), "/srv/cache", ""),
+                (
+                    t!(status_server_policy_git),
+                    t!(status_server_policy_git_held_back),
+                    ""
+                ),
+                (t!(status_server_policy_read), "/srv/weather", ""),
+                (t!(status_server_policy_read_write), "/srv/cache", ""),
+                (t!(status_server_policy_write), "/var/out", ""),
+                (
+                    t!(status_server_policy_left_out),
+                    t!(status_server_policy_left_out_reason),
+                    ""
+                ),
+                ("", "/opt/absent", ""),
+                ("", "/opt/also absent", ""),
+            ]
+        );
+    }
+
+    /// SERVERS-20: a session with no confined server has no policy to show, whether it started
+    /// nothing or only a server reached over HTTP, which is no process of the session's.
+    #[test]
+    fn a_session_with_no_confined_server_shows_no_server_policy() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let remote = crate::mcp_command::tests::holding(&["docs"]);
+
+        for servers in [&NO_SERVERS, &remote.servers] {
+            let drawn = report(&Facts {
+                servers,
+                ..facts(&config, &trust)
+            });
+
+            assert!(
+                drawn
+                    .lines
+                    .iter()
+                    .all(|line| line.label != t!(status_server_policy)),
+                "a policy was shown for a server that has none"
+            );
+        }
+    }
+
+    /// SERVERS-20: a path is drawn in full as the prompts that name one draw it, so a control
+    /// character in a directory name is its picture and not a sequence the terminal obeys, and a
+    /// character that draws as nothing is spelled out so two rows cannot look alike.
+    #[test]
+    fn a_path_in_a_servers_policy_is_drawn_without_sending_its_control_characters() {
+        let mut policy = a_policy_for_the_report();
+        policy.rows[0].path = "/srv/\u{1b}[2Jweather".into();
+        policy.rows[1].path = "/srv/data\u{3164}".into();
+        policy.rows[2].path = "/srv/my cache".into();
+        policy.left_out = vec!["/opt/\u{1b}[2Jabsent".into()];
+
+        let lines = server_policy_lines(&[("weather".to_string(), policy)]);
+
+        let values: Vec<&str> = lines.iter().map(|line| line.value.as_str()).collect();
+        assert_eq!(
+            values
+                .iter()
+                .filter(|value| value.contains("\u{241b}[2J"))
+                .count(),
+            2,
+            "a row and a path left out hold the escape as its picture: {values:?}"
+        );
+        assert!(values.contains(&r#""/srv/data\u{3164}""#), "{values:?}");
+        assert!(values.contains(&"/srv/my cache"), "{values:?}");
+        assert!(
+            values
+                .iter()
+                .all(|value| !value.contains('\u{1b}') && !value.contains('\u{3164}')),
+            "a character that is not drawn as itself reached the screen: {values:?}"
+        );
     }
 
     /// The markings a write recorded are the part nothing else reports: a poisoned file is otherwise

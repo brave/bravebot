@@ -553,6 +553,31 @@ Before the first turn a list reads `its tools are put to you before the next tur
 you said no to reads `no tool offered, as you answered`. It says `none` where it started none. A requested server that was not started is not on the line;
 why is said once, as the session opens.
 
+A server that runs on your machine has a `Server policy` heading at the end of the report, with what
+its confinement allows it: the network, whether it may start subprocesses, where it starts and one
+line for each path it may read or write. It is what to check a refusal from inside the server
+against:
+
+```
+  Server policy  weather
+  egress         any address
+  subprocesses   allowed
+  starts in      /Users/you/work
+  .git           not written under a write row
+  read           /usr/lib
+  read           /usr/bin
+  read, write    /dev/null
+  read, write    /var/folders/v6/0scctxs13mb3nbg5y3t46w4r0000gn/T
+  read, write    /Users/you/.bravebot/mcp-home/31e1d0473746eba39a0e9e04e1105ef23298573af672413c346738fadf234f4f
+  read           /Users/you/servers/weather
+  read, write    /Users/you/work
+```
+
+On Linux the `.git` line is absent, and the base lists the system directories of that platform.
+`left out` heads the paths that were wanted for the server and are not on disk, on a platform that
+grants no path that is not, with the reason beside it. A server reached over HTTP runs no process
+here and has no such lines.
+
 ## Seeing what is declared
 
 ```

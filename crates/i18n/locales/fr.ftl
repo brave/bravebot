@@ -1962,6 +1962,23 @@ status-mcp-servers-tools =
        *[other] { $alias } : { $count } outils proposés au modèle
     }
 status-mcp-servers-declined = { $alias } : aucun outil proposé, selon votre réponse
+status-server-policy = Politique du serveur
+status-server-policy-egress = sortie réseau
+status-server-policy-egress-closed = aucune
+status-server-policy-egress-loopback = cette machine uniquement
+status-server-policy-egress-open = n'importe quelle adresse
+status-server-policy-egress-hosts = uniquement par le proxy des hôtes autorisés
+status-server-policy-subprocesses = sous-processus
+status-server-policy-subprocesses-allowed = autorisés
+status-server-policy-subprocesses-refused = refusés
+status-server-policy-starts-in = démarre dans
+status-server-policy-git = .git
+status-server-policy-git-held-back = non écrit sous une ligne en écriture
+status-server-policy-read = lecture
+status-server-policy-write = écriture
+status-server-policy-read-write = lecture, écriture
+status-server-policy-left-out = écartés
+status-server-policy-left-out-reason = absents du disque, et cette plateforme n'accorde aucun chemin absent du disque
 status-loop = Boucle
 status-loop-every = toutes les { $every }
 status-loop-self-paced = cadencée par chaque tour

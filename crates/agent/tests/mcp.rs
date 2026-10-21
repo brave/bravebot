@@ -12,6 +12,7 @@ mod turns;
 
 use bravebot_agent::confirm::{CallDecision, McpCallRequest, MoveRequest, ToolListRequest};
 use bravebot_agent::mcp::{Connection, Offering, Reached, Session};
+use bravebot_agent::servers::{Access, EffectivePolicy, PolicyEgress, PolicyRow};
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{
     Confirmer, Decision, IgnoreReports, PermissionMode, SessionScratch, Unattended, Workspace,
@@ -2513,6 +2514,64 @@ fn a_session_without_a_server_holds_no_grant_for_it_and_offers_none_of_its_tools
         "a tool of the server turned off was offered: {first}"
     );
     assert!(kept.without("weather").is_none());
+}
+
+/// A session names what each confined server was started under, with each server's own policy
+/// against its own alias, in the order of its servers. A server that is no process of the session's
+/// is not among them, and joining or leaving a server takes its policy along (SERVERS-20).
+#[test]
+fn a_session_names_the_policy_each_confined_server_was_started_under_and_no_other() {
+    let scratch = Scratch::new("policies");
+    let (weather, _weather) = serve_weather();
+    let (docs, _docs) = serve_tool("lookup");
+    let (maps, _maps) = serve_tool("lookup");
+    let under = |path: &str, egress| EffectivePolicy {
+        rows: vec![PolicyRow {
+            path: PathBuf::from(path),
+            access: Access::Read,
+        }],
+        egress,
+        children: false,
+        starts_in: None,
+        left_out: Vec::new(),
+        git_held_back: false,
+    };
+    let weather_policy = under("/weather", PolicyEgress::Closed);
+    let maps_policy = under("/maps", PolicyEgress::Open);
+    let new = |servers: Vec<Reached>| {
+        Session::new(
+            servers,
+            scratch.project(),
+            Some(scratch.state()),
+            true,
+            Managed::default(),
+        )
+    };
+    let session = new(vec![
+        reach_as("weather", &weather).confined_by(weather_policy.clone()),
+        reach_as("docs", &docs),
+    ]);
+
+    assert_eq!(
+        session.policies(),
+        vec![("weather".to_string(), weather_policy.clone())],
+        "a server that is no process of the session's has no policy"
+    );
+
+    let joined = session.joined_by(&new(vec![
+        reach_as("maps", &maps).confined_by(maps_policy.clone()),
+    ]));
+    assert_eq!(
+        joined.policies(),
+        vec![
+            ("weather".to_string(), weather_policy.clone()),
+            ("maps".to_string(), maps_policy.clone())
+        ],
+        "each policy is against the server it belongs to"
+    );
+
+    let left = joined.without("weather").expect("maps is left");
+    assert_eq!(left.policies(), vec![("maps".to_string(), maps_policy)]);
 }
 
 /// A worker holds the servers its parent holds and no other the session reached. A first turn
