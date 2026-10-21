@@ -95,14 +95,16 @@ programs may reach, the questions about a directory, the names a checkout's remo
 the vouch prompt, and the files a run would write and the directories it is confined to. The
 terminal's trust questions draw the file a yes is kept in and the file each proposed rule came from
 the same way, and so does the question in lines for the file a yes is kept in. A name that is empty,
-is only whitespace, has whitespace at either end, or holds a character that draws as nothing (a
-zero-width character, a bidirectional control, a tag character, a variation selector, a no-break
-space) is drawn quoted with each such character spelled, so it cannot read as another name. Any
-other name is drawn as it is. The one-line description a front end draws in place of the prompt,
-such as the question in lines and an editor's title, names the path the same way. Under the vouch
-prompt's name the prompt draws the rule a yes writes, the full path the trust map will hold it under
-([TRUST-8](trust-map.md#TRUST-8)), so a rule wider than the name reads as wider. The rule is shown
-and nothing branches on it.
+is only whitespace, has a space at either end of it or of a directory in it, or holds a character
+that draws as nothing (a zero-width character, a bidirectional control, a tag character, a variation
+selector, a no-break space) or as a blank cell (the blank braille pattern) is drawn quoted with each
+such character spelled, so it cannot read as another name. The terminal and the desktop window also
+spell a byte of a path that is not part of a UTF-8 character as `\xNN`, so two paths that differ
+only in such bytes are not drawn alike. Any other name is drawn as it is. The one-line description a
+front end draws in place of the prompt, such as the question in lines and an editor's title, names
+the path the same way. Under the vouch prompt's name the prompt draws the rule a yes writes, the
+full path the trust map will hold it under ([TRUST-8](trust-map.md#TRUST-8)), so a rule wider than
+the name reads as wider. The rule is shown and nothing branches on it.
 
 Every prompt a check was run for shows what it said, and the three are drawn out of one row builder
 rather than three, so a prompt cannot carry a verdict and forget to say what it was. Which prompts
@@ -142,6 +144,11 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_ui_bridge::wire::a_write_and_a_credential_read_carry_the_name_spelled_for_a_person`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the write, credential-read, vouch and run cards through react-dom and asserts each draws the name the agent spelled and not the name as written, and make check-ui runs it)`
 `verified-by: bravebot_agent::confirm::a_name_that_draws_as_nothing_is_shown_as_what_it_is`
+`verified-by: bravebot_agent::confirm::a_directory_in_a_path_that_starts_or_ends_in_a_space_is_shown_as_what_it_is`
+`verified-by: bravebot_agent::confirm::a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name`
+`verified-by: bravebot_core::invisible::only_the_blank_braille_pattern_is_a_cell_with_no_mark`
+`verified-by: bravebot_tui::confirm::the_run_prompt_draws_a_path_that_is_not_text_as_the_bytes_it_holds`
+`verified-by: bravebot_ui_bridge::wire::a_run_request_carries_a_directory_that_is_not_text_spelled_as_the_bytes_it_holds`
 `verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person`
 `verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
@@ -758,7 +765,8 @@ made where the text is released for the screen, in the reshape that counts its l
 
 One list names the characters. An MCP server's tool descriptions, a vouch prompt's file name and
 pasted text use it too. A paste removes fewer of them than a prompt writes out, because scripts and
-emoji sequences are written with some of them.
+emoji sequences are written with some of them. A file name is also written out for the blank braille
+pattern, which draws as an empty cell, and a text is not, since braille drawings are written with it.
 
 **Why.** A person who answers yes agrees to the text the planner reads, and a character they cannot
 see is part of that text. Writing it out puts it among the rows the answer waits on.

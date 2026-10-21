@@ -8,7 +8,8 @@
 //!
 //! [`draws_as_nothing`] is the one list of those characters. The screens that put content in front
 //! of a person to decide about, the MCP tool list and a vouch prompt's file name all take their
-//! membership from it, so a character added here is hidden from none of them.
+//! membership from it, so a character added here is hidden from none of them. A file name is also
+//! spelled for [`draws_as_blank`], which text is not.
 //!
 //! [`spelled`] is a map from characters to characters. It reads no meaning from the text and
 //! decides nothing about any effect. Its only output besides the spelled text is a count, which
@@ -39,6 +40,16 @@ pub fn draws_as_nothing(c: char) -> bool {
             | '\u{1D173}'..='\u{1D17A}'
             | '\u{E0000}'..='\u{E0FFF}'
     )
+}
+
+/// Whether `c` takes up room and shows no mark although Unicode does not count it as white space:
+/// the blank braille pattern.
+///
+/// A file name made of it draws as spaces, and a name that holds one reads as another. It is not
+/// in [`draws_as_nothing`], so [`spelled`] leaves it in text, where a blank cell hides nothing a
+/// person reads and braille drawings are written with it.
+pub fn draws_as_blank(c: char) -> bool {
+    c == '\u{2800}'
 }
 
 /// Text as a person is shown it, and how many characters in it draw as nothing.
@@ -219,5 +230,21 @@ mod tests {
         ] {
             assert!(!draws_as_nothing(c), "{:?}", c);
         }
+    }
+
+    /// The blank braille pattern is the one character that draws as an empty cell without being
+    /// white space or default ignorable, and the patterns with a dot are marks. Text is not spelled
+    /// for it, since a braille drawing is written with it.
+    #[test]
+    fn only_the_blank_braille_pattern_is_a_cell_with_no_mark() {
+        assert!(draws_as_blank('\u{2800}'));
+        for c in [
+            'a', ' ', '\u{a0}', '\u{27ff}', '\u{2801}', '\u{28ff}', '\u{3000}',
+        ] {
+            assert!(!draws_as_blank(c), "{c:?}");
+        }
+        let text = "\u{2800}\u{2801}\u{2800}".to_string();
+        assert_eq!(spelled(text.clone()).text, text);
+        assert_eq!(spelled(text).hidden, 0);
     }
 }

@@ -855,6 +855,8 @@ mod tests {
             ("note.md ", "\"note.md\u{2423}\""),
             ("a\u{202e}b", "\"a\\u{202e}b\""),
             ("a\u{200b}b", "\"a\\u{200b}b\""),
+            ("/work/state /file", "\"/work/state\u{2423}/file\""),
+            ("a\u{2800}b", "\"a\\u{2800}b\""),
         ] {
             let written = drawn(name, "/work");
             assert!(

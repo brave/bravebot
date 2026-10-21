@@ -1197,6 +1197,41 @@ mod tests {
         }
     }
 
+    /// PROMPT-1, PATH-003: the run prompt draws a directory it is confined to, and a file the line
+    /// writes, under a directory whose name holds a byte that is not UTF-8 with that byte spelled, so
+    /// neither is drawn as the one its replacement-character rendering spells.
+    #[cfg(unix)]
+    #[test]
+    fn the_run_prompt_draws_a_path_that_is_not_text_as_the_bytes_it_holds() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let screen = |directory: &[u8]| {
+            let directory = std::path::PathBuf::from(OsStr::from_bytes(directory));
+            let mut request = a_run(false);
+            request.plan.writes = vec![directory.join("note.md")];
+            request.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_screen(&request, (160, 40), 0, &mut RowsShown::default())
+                .0
+                .join("\n")
+        };
+        let invalid = screen(b"/work/a\xffb");
+        let lookalike = screen("/work/a\u{fffd}b".as_bytes());
+        assert_ne!(invalid, lookalike);
+        assert!(invalid.contains("\"/work/a\\xffb\""), "{invalid}");
+        assert!(invalid.contains("\"/work/a\\xffb/note.md\""), "{invalid}");
+        assert!(lookalike.contains("/work/a\u{fffd}b"), "{lookalike}");
+        assert!(!lookalike.contains("\\xff"), "{lookalike}");
+    }
+
     /// SANDBOX-18: where nothing holds a `.git` back from a program that is not git, the heading a
     /// person approves under says that such a program can write a repository's hooks and
     /// configuration, at the size a terminal opens at, above the directories it names.
@@ -4946,11 +4981,13 @@ mod tests {
 
     /// The names a prompt has to draw as what they are: each is the planner's spelling of a name
     /// that would draw as nothing, or as another name, and the quoted form a person is shown.
-    const UNSEEN_NAMES: [(&str, &str); 4] = [
+    const UNSEEN_NAMES: [(&str, &str); 6] = [
         (" ", "\"\u{2423}\""),
         ("note.md ", "\"note.md\u{2423}\""),
         ("a\u{202e}b", "\"a\\u{202e}b\""),
         ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ("/work/state /file", "\"/work/state\u{2423}/file\""),
+        ("a\u{2800}b", "\"a\\u{2800}b\""),
     ];
 
     /// PROMPT-1: the write prompt, for a create and for an overwrite, draws a name that would draw

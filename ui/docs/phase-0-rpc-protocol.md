@@ -1052,9 +1052,10 @@ whose events all share one second cannot say which came first.
 ```
 
 - `path` is the name the planner wrote, and is what the decision is about. `shownPath` is the same
-  name spelled for a person: a name that is empty, has whitespace at either end or holds a
-  character that draws as nothing (a zero-width character, a bidirectional control, a no-break
-  space) is quoted with each such character written out, and any other name is unchanged. A client
+  name spelled for a person: a name that is empty, has a space at either end of it or of a
+  directory in it, or holds a character that draws as nothing or as a blank cell (a zero-width
+  character, a bidirectional control, a no-break space, the blank braille pattern) is quoted with
+  each such character written out, and any other name is unchanged. A client
   draws `shownPath` and never `path`. `vouch.request` and `exposure.request` carry it the same way.
 - `request` is agent-assigned and **single-use** for its pending question. IDs can
   recur in later turns; clients must discard pending questions when a turn ends.
@@ -1378,8 +1379,8 @@ Still open:
 - `run.request` stages carry `binary`, the file the step runs, and the request carries
   `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
   shownDirectories, sentences }` as the agent worded them. `writes` and `directories` are the paths as
-  held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, for a client
-  to draw in place of them.
+  held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, with a byte
+  that is not UTF-8 written `\xNN`, for a client to draw in place of them.
 - `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and
   `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
   is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request

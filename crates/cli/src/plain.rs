@@ -2732,11 +2732,13 @@ mod tests {
     }
 
     /// The names a question in lines has to draw as what they are, with the form a person is shown.
-    const UNSEEN_NAMES: [(&str, &str); 4] = [
+    const UNSEEN_NAMES: [(&str, &str); 6] = [
         (" ", "\"\u{2423}\""),
         ("note.md ", "\"note.md\u{2423}\""),
         ("a\u{202e}b", "\"a\\u{202e}b\""),
         ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ("/work/state /file", "\"/work/state\u{2423}/file\""),
+        ("a\u{2800}b", "\"a\\u{2800}b\""),
     ];
 
     /// PROMPT-1: the question for a write, a credential read, a path and a directory draws a name
