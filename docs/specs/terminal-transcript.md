@@ -330,6 +330,8 @@ it did spend is counted against the session all the same.
 `verified-by: bravebot_tui::render::a_session_that_has_not_run_a_turn_reports_nothing`
 `verified-by: bravebot_tui::state::a_completed_turn_is_reported_with_what_it_cost`
 `verified-by: bravebot_tui::state::a_failed_turn_is_reported_as_failed`
+`verified-by: bravebot_tui::state::a_completed_turn_is_reported_with_how_long_it_took`
+`verified-by: bravebot_tui::render::only_a_finished_turns_row_carries_its_cost_and_duration`
 `verified-by: bravebot_tui::state::starting_another_turn_forgets_the_last_one`
 `verified-by: bravebot_tui::state::a_session_that_has_not_run_a_turn_reports_none_finished`
 `verified-by: bravebot_tui::state::clearing_a_session_forgets_the_turn_that_finished`
