@@ -1931,10 +1931,12 @@ run-remember-explained = r: stop asking about this exact line, in this directory
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined
 run-remember-every-session = every session started in this directory reads it, not just this one
-# Said only for a sub-command the program's table lists, under the record's own rows. The line below
-# it is the entry as it will be held, with the slot drawn where the number goes.
-run-remember-family-explained = f: stop asking about this line with any number in place of this one, in this directory, from now on
-run-remember-family-only-number = only a whole number may change: another repository, another flag or another sub-command is still asked about
+# Said only for a line the program's table lists, under the record's own rows. The name under the
+# first row is the scope in words, and the two rows after it say what it covers and what stays fixed.
+run-remember-scope-explained = s: stop asking about this, in this directory, from now on:
+run-remember-scope-read-covers = it covers viewing a pull request or an issue and reading a pull request's diff and checks, each with any number
+run-remember-scope-read-fixed = everything else is still asked about: another repository, another flag, and anything that writes
+run-remember-scope-one-entry = it is saved as one entry in the same file, and deleting that line takes all of it back
 # Said where the person has already answered a prompt for this binary under other arguments, which
 # is the only thing a prompt can establish about a line that will be asked about however it is
 # answered. No pattern is suggested: which argument carried the message is the person's to decide.
@@ -1946,7 +1948,7 @@ run-pattern-only-asking = a pattern stops the asking and nothing else: what the 
 run-yes = run it
 run-always = always this session
 run-remember = remember it
-run-remember-family = any number
+run-remember-scope-read-pull-requests-and-issues = read pull requests and issues in { $repository }
 run-no = don't
 # Said above the keys while a row of the plan has not been on the screen. It counts rows, which is
 # what the arrows move by, and the count comes first so a narrow box does not cut it off.
@@ -2161,6 +2163,10 @@ count-commands = { $count ->
     [one] { $count } command
    *[other] { $count } commands
     }
+count-remembered = { $count ->
+    [one] { $count } entry
+   *[other] { $count } entries
+    }
 count-requested-paths = { $count ->
     [one] { $count } path
    *[other] { $count } paths
@@ -2361,6 +2367,7 @@ status-nothing-vouched-this-session = nothing vouched for this session; the line
 status-trusted-commands = Trusted commands
 status-trusted-commands-note = run unasked, and their output is trusted
 status-command-in = in { $directory }
+scope-read-pull-requests-and-issues = Read pull requests and issues in { $repository }
 status-remembered = Remembered lines
 status-remembered-note = run unasked in this directory, and their output stays quarantined
 status-remembered-this-session = remembered in this session

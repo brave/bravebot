@@ -2,6 +2,7 @@
 
 use bravebot_agent::confirm::{KeyAnswer, RunDecision, RunRequest};
 use bravebot_agent::reach::Lasting;
+use bravebot_core::remembered::{Scope, scopes};
 use bravebot_i18n::t;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -35,13 +36,13 @@ pub enum RunAnswer {
     /// an answer lasts, where the other decides what a label is. The row says so in as many words,
     /// because one word saying `always` is what could be read as either.
     ApproveAndRecord,
-    /// Run it, and record this line with its number left free ([RUN-20]).
+    /// Run it, and record the scope this line is in ([RUN-20]).
     ///
     /// Its own key rather than a wider reading of `r`, because it covers lines nobody has been
-    /// asked about, and the row for it says exactly which parts may change.
+    /// asked about, and the rows for it say in words what the scope is and what stays fixed.
     ///
     /// [RUN-20]: ../../../docs/specs/tools/run.md
-    ApproveAndRecordFamily,
+    ApproveAndRecordScope,
     /// Run it, and remember the credential scopes the planner requested for this session
     /// ([SANDBOX-27]).
     ///
@@ -70,7 +71,7 @@ impl RunAnswer {
             RunAnswer::Approve => RunDecision::approve(),
             RunAnswer::ApproveAlways => RunDecision::approve_always(),
             RunAnswer::ApproveAndRecord => RunDecision::approve_and_record(),
-            RunAnswer::ApproveAndRecordFamily => RunDecision::approve_and_record_family(),
+            RunAnswer::ApproveAndRecordScope => RunDecision::approve_and_record_scope(),
             RunAnswer::KeepReach => RunDecision::approve_and_keep_reach(Lasting::ThisSession),
             RunAnswer::KeepReachEverySession => {
                 RunDecision::approve_and_keep_reach(Lasting::EverySession)
@@ -88,7 +89,7 @@ impl RunAnswer {
             RunAnswer::Approve
             | RunAnswer::ApproveAlways
             | RunAnswer::ApproveAndRecord
-            | RunAnswer::ApproveAndRecordFamily
+            | RunAnswer::ApproveAndRecordScope
             | RunAnswer::KeepReach
             | RunAnswer::KeepReachEverySession
             | RunAnswer::ChooseKey(_)
@@ -138,8 +139,8 @@ pub(super) fn run_answer_for(key: KeyEvent, request: &RunRequest) -> Option<RunR
         }
         // Unbound where the prompt did not draw it, for the same reason, and where the table in
         // the core does not list the line.
-        KeyCode::Char('f' | 'F') if request.offers_a_family() => {
-            Some(RunResponse::Answer(RunAnswer::ApproveAndRecordFamily))
+        KeyCode::Char('s' | 'S') if request.offered_scope().is_some() => {
+            Some(RunResponse::Answer(RunAnswer::ApproveAndRecordScope))
         }
         // Unbound where the prompt did not draw them, for the reason `r` is: each writes a standing
         // grant, and the programs it names are worked out from the plan again here and not taken
@@ -197,8 +198,8 @@ pub(super) struct RunDrawn {
     pub(super) always_unread: usize,
     /// Rows saying what `r` grants besides running the line, not on the screen yet.
     pub(super) record_unread: usize,
-    /// Rows saying what `f` grants besides running the line, not on the screen yet.
-    pub(super) family_unread: usize,
+    /// Rows saying what `s` grants besides running the line, not on the screen yet.
+    pub(super) scope_unread: usize,
     /// Rows saying what `m` and `e` remember, not on the screen yet.
     pub(super) reach_unread: usize,
     /// Rows naming the keys a digit chooses and what choosing one remembers, not on the screen yet.
@@ -207,14 +208,14 @@ pub(super) struct RunDrawn {
 
 impl RunDrawn {
     /// Whether this draw takes `answer`. A key that runs the line waits on the plan, and `a`,
-    /// `r` and `f` each wait on what they grant besides as well. Refusing waits on nothing.
+    /// `r` and `s` each wait on what they grant besides as well. Refusing waits on nothing.
     pub(super) fn takes(&self, answer: RunAnswer) -> bool {
         let grant_unread = match answer {
             RunAnswer::Reject | RunAnswer::Interrupt => return true,
             RunAnswer::Approve => 0,
             RunAnswer::ApproveAlways => self.always_unread,
             RunAnswer::ApproveAndRecord => self.record_unread,
-            RunAnswer::ApproveAndRecordFamily => self.family_unread,
+            RunAnswer::ApproveAndRecordScope => self.scope_unread,
             RunAnswer::KeepReach | RunAnswer::KeepReachEverySession => self.reach_unread,
             RunAnswer::ChooseKey(_) => self.key_unread,
         };
@@ -441,7 +442,7 @@ pub(super) fn draw_run(
     let plan = 0..measure(&lines);
     let mut always = 0..0;
     let mut record = 0..0;
-    let mut family = 0..0;
+    let mut scope = 0..0;
     let mut reach = 0..0;
     let mut key = 0..0;
 
@@ -468,15 +469,15 @@ pub(super) fn draw_run(
         record = from..measure(&lines);
     }
 
-    // What `f` would grant, where the table lists the line: the same record, with the number left
-    // free. The line is drawn as the entry will hold it, so the reader sees the slot, and the
-    // sentence under it names what stays fixed, because "any number" is the half a person is most
-    // likely to read as wider than it is.
-    if let Some(family_line) = request.family_display() {
+    // What `s` would grant, where the table lists the line: a named group of lines in the same
+    // record. It is put in words, with no argument list and no slot, and the rows under the name
+    // say what is covered and what stays fixed, because "any number" and "a group" are the halves
+    // a person is most likely to read as wider than they are.
+    if let Some(offered) = request.offered_scope() {
         lines.push(Line::raw(""));
         let from = measure(&lines);
-        lines.extend(family_rows(&family_line));
-        family = from..measure(&lines);
+        lines.extend(scope_rows(&offered));
+        scope = from..measure(&lines);
     }
 
     // What `m` and `e` would remember, where they are offered: the programs by name, the scopes, and
@@ -541,7 +542,7 @@ pub(super) fn draw_run(
         unread: shown.unseen(plan),
         always_unread: shown.unseen(always),
         record_unread: shown.unseen(record),
-        family_unread: shown.unseen(family),
+        scope_unread: shown.unseen(scope),
         reach_unread: shown.unseen(reach),
         key_unread: shown.unseen(key),
     };
@@ -550,7 +551,7 @@ pub(super) fn draw_run(
     // needs to know then is why the key does nothing.
     let waiting = drawn.always_unread
         + drawn.record_unread
-        + drawn.family_unread
+        + drawn.scope_unread
         + drawn.reach_unread
         + drawn.key_unread;
     let hint = if drawn.unread > 0 {
@@ -859,22 +860,57 @@ fn record_rows(path: &std::path::Path) -> Vec<Line<'static>> {
     lines
 }
 
-/// The rows for `f`: the line with its number left free and what stays fixed.
-fn family_rows(family_line: &str) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(Line::from(Span::styled(
-        format!("  {}", t!(run_remember_family_explained)),
-        Style::default().fg(theme::muted()),
-    )));
-    lines.push(Line::from(Span::styled(
-        format!("       {family_line}"),
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(Span::styled(
-        format!("     {}", t!(run_remember_family_only_number)),
-        Style::default().fg(theme::running()),
-    )));
-    lines
+/// What a scope is called, in the words the prompt and the reading back put to it.
+pub(crate) fn scope_name(scope: &Scope) -> String {
+    match scope.kind {
+        scopes::Kind::ReadPullRequestsAndIssues => t!(
+            scope_read_pull_requests_and_issues,
+            repository = scope.repository.as_str()
+        ),
+    }
+}
+
+/// What the key that records a scope says it does, in the same words as [`scope_name`] with its
+/// first letter small, as the other keys' labels are.
+fn scope_label(scope: &Scope) -> String {
+    match scope.kind {
+        scopes::Kind::ReadPullRequestsAndIssues => t!(
+            run_remember_scope_read_pull_requests_and_issues,
+            repository = scope.repository.as_str()
+        ),
+    }
+}
+
+/// The rows for `s`: the scope in words, what it covers and what stays fixed.
+fn scope_rows(scope: &Scope) -> Vec<Line<'static>> {
+    let (covers, fixed) = match scope.kind {
+        scopes::Kind::ReadPullRequestsAndIssues => (
+            t!(run_remember_scope_read_covers),
+            t!(run_remember_scope_read_fixed),
+        ),
+    };
+    vec![
+        Line::from(Span::styled(
+            format!("  {}", t!(run_remember_scope_explained)),
+            Style::default().fg(theme::muted()),
+        )),
+        Line::from(Span::styled(
+            format!("       {}", scope_name(scope)),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            format!("     {covers}"),
+            Style::default().fg(theme::muted()),
+        )),
+        Line::from(Span::styled(
+            format!("     {fixed}"),
+            Style::default().fg(theme::running()),
+        )),
+        Line::from(Span::styled(
+            format!("     {}", t!(run_remember_scope_one_entry)),
+            Style::default().fg(theme::muted()),
+        )),
+    ]
 }
 
 /// The rows for `m` and `e`: the programs and scopes they keep, and where the record is written.
@@ -1051,14 +1087,14 @@ fn run_keys(
         ));
         key_spans.push(Span::raw(format!(" {}    ", t!(run_remember))));
     }
-    if request.offers_a_family() {
+    if let Some(offered) = request.offered_scope() {
         key_spans.push(Span::styled(
-            "f",
+            "s",
             Style::default()
-                .fg(colour(RunAnswer::ApproveAndRecordFamily, theme::running()))
+                .fg(colour(RunAnswer::ApproveAndRecordScope, theme::running()))
                 .add_modifier(Modifier::BOLD),
         ));
-        key_spans.push(Span::raw(format!(" {}    ", t!(run_remember_family))));
+        key_spans.push(Span::raw(format!(" {}    ", scope_label(&offered))));
     }
     if request.offers_to_keep_reach() {
         for (key, answer, label) in [

@@ -21812,19 +21812,19 @@ fn answering_with_a_key_the_prompt_did_not_offer_records_nothing() {
     );
 }
 
-/// RUN-20: the family answer is checked against the table where it is acted on. A program the
-/// table does not list is run once and recorded as nothing, however the front end came to send it.
+/// RUN-20: the scope answer is checked against the table where it is acted on. A program the table
+/// does not list is run once and recorded as nothing, however the front end came to send it.
 #[test]
-fn the_family_answer_for_a_program_the_table_does_not_list_records_nothing() {
-    let scratch = Scratch::new("run-remembered-family-unlisted");
-    let home = Scratch::new("run-remembered-family-unlisted-home");
+fn the_scope_answer_for_a_program_the_table_does_not_list_records_nothing() {
+    let scratch = Scratch::new("run-remembered-scope-unlisted");
+    let home = Scratch::new("run-remembered-scope-unlisted-home");
     let mut confirmer =
-        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record_family());
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_and_record_scope());
     a_run_turn_remembering(
         &scratch,
         &home.path,
         Some("a-session"),
-        r#"{"command":"touch family.txt"}"#,
+        r#"{"command":"touch scope.txt"}"#,
         &mut confirmer,
     )
     .expect("the turn runs");
@@ -21832,16 +21832,20 @@ fn the_family_answer_for_a_program_the_table_does_not_list_records_nothing() {
     let asked = confirmer.seen.lock().unwrap();
     let request = asked.first().expect("the person was asked");
     assert!(
-        !request.offers_a_family(),
-        "the prompt offered a family for a program the table does not list"
+        request.offered_scope().is_none(),
+        "the prompt offered a scope for a program the table does not list"
     );
     assert!(
-        scratch.path.join("family.txt").exists(),
+        scratch.path.join("scope.txt").exists(),
         "the approved line did not run"
     );
     assert!(
         record_for(&home.path, &scratch).read().is_empty(),
-        "a family answer for an unlisted program put a line into the record"
+        "a scope answer for an unlisted program put a line into the record"
+    );
+    assert!(
+        !record_for(&home.path, &scratch).path().exists(),
+        "a scope answer for an unlisted program wrote an entry, which a later reader refuses"
     );
 }
 
@@ -24969,7 +24973,7 @@ fn a_standing_answer_to_a_request_remembers_nothing() {
         decision: bravebot_agent::Decision::Approve,
         remember: true,
         record: true,
-        record_family: false,
+        record_scope: false,
         remember_reach: None,
         key: None,
         note: None,

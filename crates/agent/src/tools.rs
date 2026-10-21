@@ -7837,15 +7837,18 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // with a key the prompt never offered must not be able to put a line into a record that
     // outlives the session, and a guard that consulted what was drawn would be resting on the
     // very thing it is there to check. `may_be_added_to` is asked a second time too, inside
-    // the store, for the mode that adds nothing to the state directory. The family answer of
-    // RUN-20 is asked of the table again by `line_to_record`.
+    // the store, for the mode that adds nothing to the state directory. The scope answer of
+    // RUN-20 is asked of the table again by `scope_to_record`.
     if policy.may_remember(plan)
         && requested.is_empty()
         && !unconfined
-        && let (Some(store), Some(session), Some(line)) =
-            (record, tools.remembering, answer.line_to_record(plan))
+        && let (Some(store), Some(session)) = (record, tools.remembering)
     {
-        store.remember(&line, session);
+        if let Some(line) = answer.line_to_record(plan) {
+            store.remember(&line, session);
+        } else if let Some(scope) = answer.scope_to_record(plan) {
+            store.remember_scope(&scope, session);
+        }
     }
     Ok(())
 }

@@ -1028,17 +1028,34 @@ fn usage_lines(facts: &Facts<'_>) -> Vec<Line> {
 /// nothing from a line about it, and the programs line above already says every run is asked.
 fn remembered_lines(facts: &Facts<'_>, record: Remembered<'_>) -> Vec<Line> {
     let mut lines = Vec::new();
-    let entries: Vec<&bravebot_core::remembered::Entry> = record.lines.iter().collect();
+    // Each scope as the one item it was answered as, before the lines: it is the wider grant, so it
+    // is the one that must not be cut off by the length limit below.
+    let entries: Vec<(String, &str)> = record
+        .lines
+        .scopes()
+        .map(|entry| {
+            (
+                crate::confirm::scope_name(&entry.scope),
+                entry.answered_in.as_str(),
+            )
+        })
+        .chain(
+            record
+                .lines
+                .iter()
+                .map(|entry| (entry.line.display(), entry.answered_in.as_str())),
+        )
+        .collect();
     lines.push(
         Line::new(
             t!(status_remembered),
-            t!(count_commands, count = entries.len()),
+            t!(count_remembered, count = entries.len()),
         )
         .with_note(t!(status_remembered_note)),
     );
-    for entry in entries.iter().take(MAX_REMEMBERED) {
-        lines.push(Line::new("", entry.line.display()).with_note(
-            match entry.answered_in == facts.session_id {
+    for (shown, answered_in) in entries.iter().take(MAX_REMEMBERED) {
+        lines.push(Line::new("", shown.as_str()).with_note(
+            match *answered_in == facts.session_id {
                 true => t!(status_remembered_this_session),
                 false => t!(status_remembered_earlier),
             },
@@ -1051,7 +1068,7 @@ fn remembered_lines(facts: &Facts<'_>, record: Remembered<'_>) -> Vec<Line> {
         let left_out = &entries[MAX_REMEMBERED..];
         let earlier = left_out
             .iter()
-            .filter(|entry| entry.answered_in != facts.session_id)
+            .filter(|(_, answered_in)| *answered_in != facts.session_id)
             .count();
         lines.push(Line::new(
             "",
@@ -2324,6 +2341,61 @@ mod tests {
         assert!(shown.contains("stays quarantined"), "{shown}");
         assert!(
             shown.contains("/home/someone/.bravebot/remembered"),
+            "{shown}"
+        );
+    }
+
+    /// A scope for `gh pr view 12 --repo brave/bravebot`, as the prompt would have offered it.
+    fn a_remembered_scope() -> bravebot_core::remembered::Scope {
+        use bravebot_core::command::{Plan, Step, Steps};
+        let plan = Plan {
+            line: String::new(),
+            directory: std::path::PathBuf::from("/work"),
+            steps: Steps::Pipeline(vec![Step {
+                program: "gh".to_string(),
+                resolved: std::path::PathBuf::from("/usr/bin/gh"),
+                started_as: std::path::PathBuf::from("/usr/bin/gh"),
+                args: ["pr", "view", "12", "--repo", "brave/bravebot"]
+                    .map(String::from)
+                    .to_vec(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            }]),
+            writes: Vec::new(),
+            reads: Vec::new(),
+            stdin: None,
+        };
+        bravebot_core::remembered::scopes::offered_for(&plan).expect("a listed line")
+    }
+
+    /// RUN-20: a remembered scope is listed as the one item it was answered as, named in words, with
+    /// who answered it. The lines it expands to are not listed beside it, and a long list of lines
+    /// does not push it off the end, because it is the widest answer in the record.
+    #[test]
+    fn the_report_lists_a_remembered_scope_as_one_item_in_words() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut record = record_of(MAX_REMEMBERED + 3);
+        record.record_scope(a_remembered_scope(), "a-session-last-week");
+        let mut facts = facts(&config, &trust);
+        facts.remembered = Some(Remembered {
+            lines: &record,
+            path: Path::new("/home/someone/.bravebot/remembered/-tmp-project.jsonl"),
+        });
+
+        let shown = rendered(&report(&facts));
+        assert!(
+            shown.contains("Read pull requests and issues in brave/bravebot"),
+            "{shown}"
+        );
+        for expanded in ["<number>", "pr diff", "pr checks", "issue view"] {
+            assert!(
+                !shown.contains(expanded),
+                "the scope was listed as its lines ({expanded}): {shown}"
+            );
+        }
+        assert!(
+            shown.contains(&t!(count_remembered, count = MAX_REMEMBERED + 4)),
             "{shown}"
         );
     }

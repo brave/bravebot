@@ -20,7 +20,7 @@
 use crate::diff::Diff;
 use bravebot_core::Pipeline;
 use bravebot_core::ask::{Answer, Asking};
-use bravebot_core::remembered::RememberedLine;
+use bravebot_core::remembered::{RememberedLine, Scope, scopes};
 use bravebot_core::vetting::Verdict;
 use bravebot_i18n::t;
 use bravebot_sandbox::scope::Requested;
@@ -792,20 +792,16 @@ impl RunRequest {
         self.record.is_some() && !self.unconfined
     }
 
-    /// Whether the prompt may also offer to record this line with its number left free: it may
-    /// record at all, and the line is one the table in
-    /// [`bravebot_core::remembered::families`] lists.
-    pub fn offers_a_family(&self) -> bool {
-        self.may_record() && RememberedLine::family_of(&self.plan).is_some()
-    }
-
-    /// The line as the family answer would record it, drawn with its number free, where the
-    /// prompt offers that answer.
-    pub fn family_display(&self) -> Option<String> {
-        if !self.offers_a_family() {
+    /// The scope the prompt may also offer to record: it may record at all, and the line is one
+    /// the table in [`bravebot_core::remembered::scopes`] lists.
+    ///
+    /// `None` everywhere else, and the key is not drawn. What the prompt names and what a keypress
+    /// records are both worked out from the plan here, so neither rests on the other.
+    pub fn offered_scope(&self) -> Option<Scope> {
+        if !self.may_record() {
             return None;
         }
-        RememberedLine::family_of(&self.plan).map(|line| line.display())
+        scopes::offered_for(&self.plan)
     }
 
     /// A short description for a prompt line.
@@ -1465,15 +1461,15 @@ pub struct RunDecision {
     /// lifetimes, and one field could not carry both: this one stops the asking and leaves every
     /// label where it was, while `remember` also says what the command prints may be read.
     pub record: bool,
-    /// Whether the person asked for this line to stop being asked about past the session with its
-    /// number free ([RUN-20]).
+    /// Whether the person asked for the scope this line is in to stop being asked about past the
+    /// session ([RUN-20]).
     ///
     /// A third field rather than a variant of `record`, so a front end that sets `record` keeps
     /// meaning exactly the line. Never set together with `record`: the acting layer takes `record`
     /// first.
     ///
     /// [RUN-20]: ../../../docs/specs/tools/run.md
-    pub record_family: bool,
+    pub record_scope: bool,
     /// Whether the person asked for the credential scopes the planner requested for this line to be
     /// remembered for the stages they were added to, and for how long ([SANDBOX-27]).
     ///
@@ -1513,7 +1509,7 @@ impl RunDecision {
     pub fn note(&self) -> Option<&str> {
         let standing = self.remember
             || self.record
-            || self.record_family
+            || self.record_scope
             || self.remember_reach.is_some()
             || self.key.is_some();
         self.note.as_deref().filter(|_| !standing)
@@ -1536,7 +1532,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: false,
-            record_family: false,
+            record_scope: false,
             remember_reach: None,
             key: None,
             note: None,
@@ -1549,7 +1545,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: true,
             record: false,
-            record_family: false,
+            record_scope: false,
             remember_reach: None,
             key: None,
             note: None,
@@ -1566,21 +1562,21 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: true,
-            record_family: false,
+            record_scope: false,
             remember_reach: None,
             key: None,
             note: None,
         }
     }
 
-    /// Run it, and record this line with its number left free, so every session in this directory
-    /// runs the same sub-command on the same repository with any number unasked.
-    pub fn approve_and_record_family() -> Self {
+    /// Run it, and record the scope this line is in, so every session in this directory runs each
+    /// sub-command of that group on the same repository with any number unasked.
+    pub fn approve_and_record_scope() -> Self {
         Self {
             decision: Decision::Approve,
             remember: false,
             record: false,
-            record_family: true,
+            record_scope: true,
             remember_reach: None,
             key: None,
             note: None,
@@ -1599,7 +1595,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: false,
-            record_family: false,
+            record_scope: false,
             remember_reach: Some(lasting),
             key: None,
             note: None,
@@ -1612,7 +1608,7 @@ impl RunDecision {
             decision: Decision::Reject,
             remember: false,
             record: false,
-            record_family: false,
+            record_scope: false,
             remember_reach: None,
             key: None,
             note: None,
@@ -1623,22 +1619,23 @@ impl RunDecision {
         self.decision == Decision::Approve
     }
 
-    /// The line this answer asks to have recorded for `plan`, where it asks for one.
-    ///
-    /// The exact line for `record`, which outranks the other. The family for `record_family`, and
-    /// only where the table lists the plan: for any other plan that answer records nothing. The
-    /// caller still asks the policy whether the plan may be remembered at all.
+    /// The line this answer asks to have recorded for `plan`, where it asks for one: the exact
+    /// line, for `record`. The caller still asks the policy whether the plan may be remembered at
+    /// all.
     pub fn line_to_record(&self, plan: &bravebot_core::command::Plan) -> Option<RememberedLine> {
-        if !self.approved() {
+        (self.approved() && self.record).then(|| RememberedLine::of(plan))
+    }
+
+    /// The scope this answer asks to have recorded for `plan`, where it asks for one.
+    ///
+    /// `record` outranks `record_scope`, so a front end that sets both gets the exact line and no
+    /// scope. Only where the table lists the plan: for any other plan this answer records nothing.
+    /// The caller still asks the policy whether the plan may be remembered at all.
+    pub fn scope_to_record(&self, plan: &bravebot_core::command::Plan) -> Option<Scope> {
+        if !self.approved() || self.record || !self.record_scope {
             return None;
         }
-        if self.record {
-            Some(RememberedLine::of(plan))
-        } else if self.record_family {
-            RememberedLine::family_of(plan)
-        } else {
-            None
-        }
+        scopes::offered_for(plan)
     }
 }
 
@@ -3199,7 +3196,7 @@ mod tests {
         for standing in [
             RunDecision::approve_always(),
             RunDecision::approve_and_record(),
-            RunDecision::approve_and_record_family(),
+            RunDecision::approve_and_record_scope(),
             RunDecision::approve_and_keep_reach(crate::reach::Lasting::ThisSession),
             RunDecision::approve_with_key(KeyAnswer::SshDefault),
         ] {
@@ -3258,40 +3255,52 @@ mod tests {
         gh_plan(&["pr", "view", "1081", "--repo", "brave/bravebot"])
     }
 
-    /// RUN-20: the family answer records the family, the exact answer records the line, and
-    /// neither records anything for a refusal.
+    /// RUN-20: the scope answer records the scope and not the line, the exact answer records the
+    /// line and not the scope, and neither records anything for a refusal.
     #[test]
-    fn each_answer_records_the_line_it_names() {
+    fn each_answer_records_what_it_names() {
         let plan = a_listed_line();
         assert_eq!(
             RunDecision::approve_and_record().line_to_record(&plan),
             Some(RememberedLine::of(&plan))
         );
-        let family = RunDecision::approve_and_record_family()
-            .line_to_record(&plan)
-            .expect("a listed line has a family");
-        assert!(family.is_family());
-        assert_eq!(family, RememberedLine::family_of(&plan).unwrap());
-        assert_eq!(RunDecision::approve().line_to_record(&plan), None);
-        assert_eq!(RunDecision::approve_always().line_to_record(&plan), None);
+        assert_eq!(
+            RunDecision::approve_and_record().scope_to_record(&plan),
+            None
+        );
+        let scope = RunDecision::approve_and_record_scope()
+            .scope_to_record(&plan)
+            .expect("a listed line is in a scope");
+        assert_eq!(scope.lines.len(), 4);
+        assert_eq!(Some(&scope), scopes::offered_for(&plan).as_ref());
+        assert_eq!(
+            RunDecision::approve_and_record_scope().line_to_record(&plan),
+            None,
+            "the scope answer also recorded the exact line"
+        );
+        for neither in [RunDecision::approve(), RunDecision::approve_always()] {
+            assert_eq!(neither.line_to_record(&plan), None);
+            assert_eq!(neither.scope_to_record(&plan), None);
+        }
         let refused = RunDecision {
             decision: Decision::Reject,
-            ..RunDecision::approve_and_record_family()
+            ..RunDecision::approve_and_record_scope()
         };
         assert_eq!(refused.line_to_record(&plan), None);
+        assert_eq!(refused.scope_to_record(&plan), None);
     }
 
-    /// RUN-20: the family answer for a line the table does not list records nothing, so a front
-    /// end that sends it for any line cannot widen the record.
+    /// RUN-20: the scope answer for a line the table does not list records nothing, so a front end
+    /// that sends it for any line cannot widen the record.
     #[test]
-    fn the_family_answer_for_an_unlisted_line_records_nothing() {
+    fn the_scope_answer_for_an_unlisted_line_records_nothing() {
         for plan in [
             gh_plan(&["pr", "view", "1081", "--repo", "brave/bravebot", "--web"]),
             gh_plan(&["pr", "merge", "1081", "--repo", "brave/bravebot"]),
             gh_plan(&["pr", "view", "abc", "--repo", "brave/bravebot"]),
         ] {
             assert_eq!(
-                RunDecision::approve_and_record_family().line_to_record(&plan),
+                RunDecision::approve_and_record_scope().scope_to_record(&plan),
                 None
             );
         }
@@ -3303,16 +3312,17 @@ mod tests {
         let plan = a_listed_line();
         let both = RunDecision {
             record: true,
-            record_family: true,
+            record_scope: true,
             ..RunDecision::approve()
         };
         assert_eq!(both.line_to_record(&plan), Some(RememberedLine::of(&plan)));
+        assert_eq!(both.scope_to_record(&plan), None);
     }
 
-    /// RUN-20: the prompt offers the family key only where it offers to record at all and the
-    /// table lists the line.
+    /// RUN-20: the prompt offers the scope key only where it offers to record at all and the table
+    /// lists the line, and what it offers is the scope the acting layer will record.
     #[test]
-    fn the_prompt_offers_the_family_key_for_a_listed_line_it_may_record() {
+    fn the_prompt_offers_the_scope_key_for_a_listed_line_it_may_record() {
         let request = |plan, record: Option<&str>| RunRequest {
             plan,
             record: record.map(std::path::PathBuf::from),
@@ -3327,16 +3337,16 @@ mod tests {
             a_listed_line(),
             Some("/home/.bravebot/remembered/work.jsonl"),
         );
-        assert!(offered.offers_a_family());
         assert_eq!(
-            offered.family_display().as_deref(),
-            Some("/usr/bin/gh pr view <number> --repo brave/bravebot")
+            offered.offered_scope(),
+            scopes::offered_for(&a_listed_line())
         );
-        assert!(!request(a_listed_line(), None).offers_a_family());
-        assert_eq!(request(a_listed_line(), None).family_display(), None);
+        assert!(offered.offered_scope().is_some());
+        assert_eq!(request(a_listed_line(), None).offered_scope(), None);
         let unlisted = gh_plan(&["pr", "merge", "1", "--repo", "brave/bravebot"]);
-        assert!(
-            !request(unlisted, Some("/home/.bravebot/remembered/work.jsonl")).offers_a_family()
+        assert_eq!(
+            request(unlisted, Some("/home/.bravebot/remembered/work.jsonl")).offered_scope(),
+            None
         );
     }
 

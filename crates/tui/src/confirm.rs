@@ -44,6 +44,7 @@ use mcp::{
 };
 pub use note::Noted;
 use pinned::{Drawn, Seen};
+pub(crate) use run::scope_name;
 #[cfg(test)]
 use run::{RowsShown, RunDrawn, RunResponse, draw_run, run_answer_for};
 pub use run::{RunAnswer, ask_run};
@@ -2113,8 +2114,8 @@ mod tests {
         );
     }
 
-    /// A run prompt for a line the family table lists, in a session that can record.
-    fn a_family_run() -> RunRequest {
+    /// A run prompt for a line the scope table lists, in a session that can record.
+    fn a_scope_run() -> RunRequest {
         RunRequest {
             record: a_recordable_run().record,
             ..RunRequest::from_pipeline(
@@ -2130,92 +2131,136 @@ mod tests {
         }
     }
 
-    /// RUN-20: the family answer has a key of its own, approves the run, and records the family
-    /// and not the exact line. It vouches for nothing.
+    /// RUN-20: the scope answer has a key of its own, approves the run, and records the scope and
+    /// not the exact line. It vouches for nothing.
     #[test]
-    fn the_family_key_approves_and_records_the_family_only() {
+    fn the_scope_key_approves_and_records_the_scope_only() {
         assert_eq!(
-            run_answer_for(press(KeyCode::Char('f')), &a_family_run()),
-            Some(RunResponse::Answer(RunAnswer::ApproveAndRecordFamily))
+            run_answer_for(press(KeyCode::Char('s')), &a_scope_run()),
+            Some(RunResponse::Answer(RunAnswer::ApproveAndRecordScope))
         );
-        let decision = RunAnswer::ApproveAndRecordFamily.decision();
+        let decision = RunAnswer::ApproveAndRecordScope.decision();
         assert!(decision.approved());
-        assert!(decision.record_family);
+        assert!(decision.record_scope);
         assert!(
             !decision.record,
-            "the family key also recorded the exact line"
+            "the scope key also recorded the exact line"
         );
         assert!(
             !decision.remember,
-            "the family key also vouched for the programs"
+            "the scope key also vouched for the programs"
         );
-        assert!(!RunAnswer::ApproveAndRecord.decision().record_family);
+        assert!(!RunAnswer::ApproveAndRecord.decision().record_scope);
+    }
+
+    /// RUN-20: the `f` key that answered "any number" before scopes is bound to nothing, so a
+    /// person who reaches for it does not record a scope they were not shown.
+    #[test]
+    fn the_old_any_number_key_answers_nothing() {
+        assert_eq!(
+            run_answer_for(press(KeyCode::Char('f')), &a_scope_run()),
+            None
+        );
     }
 
     /// RUN-20: the key is unbound where the line is not in the table, and where the prompt cannot
     /// record at all, so no key promises what the screen did not offer.
     #[test]
-    fn the_family_key_is_unbound_where_the_prompt_does_not_offer_it() {
+    fn the_scope_key_is_unbound_where_the_prompt_does_not_offer_it() {
         let cannot_record = RunRequest {
             record: None,
-            ..a_family_run()
+            ..a_scope_run()
         };
         for request in [a_run(false), a_recordable_run(), cannot_record] {
             assert_eq!(
-                run_answer_for(press(KeyCode::Char('f')), &request),
+                run_answer_for(press(KeyCode::Char('s')), &request),
                 None,
-                "a key recorded a family the prompt did not offer"
+                "a key recorded a scope the prompt did not offer"
             );
         }
     }
 
-    /// RUN-20: refusing and interrupting record no family.
+    /// RUN-20: refusing and interrupting record no scope.
     #[test]
-    fn refusing_a_run_records_no_family() {
+    fn refusing_a_run_records_no_scope() {
         for answer in [RunAnswer::Reject, RunAnswer::Interrupt] {
-            assert!(!answer.decision().record_family, "{answer:?}");
+            assert!(!answer.decision().record_scope, "{answer:?}");
         }
     }
 
-    /// RUN-20, PROMPT-4: the family key waits for the rows saying what it grants, as `r` waits for
+    /// RUN-20, PROMPT-4: the scope key waits for the rows saying what it grants, as `r` waits for
     /// its own.
     #[test]
-    fn the_family_key_waits_for_the_rows_saying_what_it_grants() {
+    fn the_scope_key_waits_for_the_rows_saying_what_it_grants() {
         let seen = RunDrawn {
             whole: true,
             ..RunDrawn::default()
         };
-        assert!(seen.takes(RunAnswer::ApproveAndRecordFamily));
+        assert!(seen.takes(RunAnswer::ApproveAndRecordScope));
         let unread = RunDrawn {
-            family_unread: 1,
+            scope_unread: 1,
             ..seen
         };
-        assert!(!unread.takes(RunAnswer::ApproveAndRecordFamily));
+        assert!(!unread.takes(RunAnswer::ApproveAndRecordScope));
         assert!(unread.takes(RunAnswer::Approve));
         assert!(unread.takes(RunAnswer::ApproveAndRecord));
     }
 
-    /// RUN-20: the prompt draws the entry with its slot, says what stays fixed, and draws the key.
-    /// A prompt for a line the table does not list draws none of it.
+    /// RUN-20: the prompt names the scope in words, says what it covers and what stays fixed, and
+    /// draws the key. It draws no argument list with a slot in it and no rule syntax, and a prompt
+    /// for a line the table does not list draws none of it.
     #[test]
-    fn a_prompt_offering_a_family_draws_the_entry_with_its_number_free() {
-        let drawn = fully_rendered_run(&a_family_run());
+    fn a_prompt_offering_a_scope_asks_in_words() {
+        let drawn = fully_rendered_run(&a_scope_run());
         for wanted in [
-            "pr view <number> --repo brave/bravebot",
-            "only a whole number may change",
-            "any number",
+            "Read pull requests and issues in brave/bravebot",
+            "read pull requests and issues in brave/bravebot",
+            "viewing a pull request or an issue and reading a pull request's diff and checks",
+            "everything else is still asked about: another repository, another flag, and anything that writes",
+            "deleting that line takes all of it back",
         ] {
             assert!(drawn.contains(wanted), "{wanted:?} was not drawn: {drawn}");
         }
+        for unwanted in ["<number>", "any number in place", "Bash(", "gh pr view *"] {
+            assert!(
+                !drawn.contains(unwanted),
+                "{unwanted:?} was drawn at a prompt that asks in words: {drawn}"
+            );
+        }
         let cannot_record = RunRequest {
             record: None,
-            ..a_family_run()
+            ..a_scope_run()
         };
         for request in [a_recordable_run(), cannot_record] {
             let plain = fully_rendered_run(&request);
-            assert!(!plain.contains("<number>"), "{plain}");
-            assert!(!plain.contains("any number"), "{plain}");
+            assert!(!plain.contains("Read pull requests"), "{plain}");
+            assert!(!plain.contains("read pull requests"), "{plain}");
         }
+    }
+
+    /// RUN-20: the scope is named for the repository the line named, so a person answering for
+    /// another repository is shown that one.
+    #[test]
+    fn the_scope_prompt_names_the_repository_the_line_named() {
+        let request = RunRequest {
+            record: a_recordable_run().record,
+            ..RunRequest::from_pipeline(
+                &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+                    "gh",
+                    ["issue", "view", "7", "--repo", "someone/else"]
+                        .map(String::from)
+                        .to_vec(),
+                )]),
+                &["/usr/bin/gh".into()],
+                "/home/someone/project",
+            )
+        };
+        let drawn = fully_rendered_run(&request);
+        assert!(
+            drawn.contains("Read pull requests and issues in someone/else"),
+            "{drawn}"
+        );
+        assert!(!drawn.contains("brave/bravebot"), "{drawn}");
     }
 
     /// A run prompt for `gh pr view` that asked for `requested`, in a session that keeps a record
@@ -2275,14 +2320,14 @@ mod tests {
             assert_eq!(decision.remember_reach, Some(lasting));
             assert!(!decision.remember, "{answer:?} vouched for the programs");
             assert!(!decision.record, "{answer:?} recorded the line");
-            assert!(!decision.record_family, "{answer:?} recorded a family");
+            assert!(!decision.record_scope, "{answer:?} recorded a scope");
             assert!(!answer.stops_the_turn());
         }
         for answer in [
             RunAnswer::Approve,
             RunAnswer::ApproveAlways,
             RunAnswer::ApproveAndRecord,
-            RunAnswer::ApproveAndRecordFamily,
+            RunAnswer::ApproveAndRecordScope,
             RunAnswer::Reject,
             RunAnswer::Interrupt,
         ] {
@@ -2445,7 +2490,7 @@ mod tests {
             let decision = RunAnswer::ChooseKey(answer).decision();
             assert!(decision.approved());
             assert_eq!(decision.key, Some(answer));
-            assert!(!decision.remember && !decision.record && !decision.record_family);
+            assert!(!decision.remember && !decision.record && !decision.record_scope);
             assert_eq!(decision.remember_reach, None);
             assert!(!RunAnswer::ChooseKey(answer).stops_the_turn());
         }
@@ -2479,7 +2524,7 @@ mod tests {
             RunAnswer::Approve,
             RunAnswer::ApproveAlways,
             RunAnswer::ApproveAndRecord,
-            RunAnswer::ApproveAndRecordFamily,
+            RunAnswer::ApproveAndRecordScope,
             RunAnswer::KeepReach,
             RunAnswer::KeepReachEverySession,
             RunAnswer::Reject,
