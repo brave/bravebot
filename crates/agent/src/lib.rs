@@ -68,6 +68,10 @@ pub mod servers;
 pub mod shared;
 pub mod shell;
 pub mod skills;
+// The build script reads it into the pages `help` serves, so the program itself holds no parser:
+// compiling it here is for its tests.
+#[cfg(test)]
+mod spec_headings;
 pub mod spend_limit;
 pub mod styles;
 pub mod subscription;

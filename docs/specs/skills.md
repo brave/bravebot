@@ -264,13 +264,38 @@ a path ([SKILL-8](#SKILL-8)), and a page is trusted for the reason the skill is:
 program's own text ([SKILL-12](#SKILL-12)). A skill of the user's own named `bravebot-help` shadows
 the built-in, and the pages go with it.
 
+The clause headings of `docs/specs/` are carried the same way. The index has one more line, for the
+page `bravebot-help/specs`, which lists every spec with its title and the number of its clauses. The
+page of one spec is `bravebot-help/specs/<place of the spec file>`, such as
+`bravebot-help/specs/tools/read-file`, and holds that spec's file name and the heading of each of
+its clauses in file order, each starting with its clause id. The clause text is not carried, so a
+question the headings do not settle is answered with the clause id and the file. A page says when
+its spec is `proposed`.
+
+The headings are read out of the spec files when the program is built, so a spec that changes is
+carried by the next build and no copy of them is kept in the tree. A heading is a `###` line outside
+a code fence that starts with a clause id. A file in `docs/specs/` other than its README that has no
+frontmatter `id` fails the build rather than dropping out of the skill. A spec page is selected the
+way a documentation page is, by an exact match against the compiled table, so the name is never a
+path.
+
 [CMD-24](commands.md#CMD-24) is the command that asks for the skill by name. Without it the planner
 decides from the description when to load the skill.
 
-**What this clause does not do.** The clause headings of `docs/specs/` are not carried.
+**What this clause does not do.** The text of a clause is not carried: a question about the exact
+wording of a rule is answered from its heading, and the program holds the clause text nowhere.
 
 `verified-by: bravebot_agent::skills::the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else`
 `verified-by: bravebot_agent::help::every_published_page_is_carried_in_the_binary`
+`verified-by: bravebot_agent::help::every_spec_is_carried_with_the_clause_headings_its_file_holds`
+`verified-by: bravebot_agent::help::a_spec_page_holds_the_heading_of_a_clause_and_names_its_file`
+`verified-by: bravebot_agent::help::a_spec_page_is_found_by_its_exact_name_and_nothing_else`
+`verified-by: bravebot_agent::help::the_list_of_specs_names_a_page_that_loads_for_each_spec`
+`verified-by: bravebot_agent::help::the_index_names_the_list_of_specs_and_carries_none_of_their_headings`
+`verified-by: bravebot_agent::spec_headings::only_a_clause_heading_outside_a_code_fence_is_a_heading`
+`verified-by: bravebot_agent::spec_headings::a_fence_is_closed_only_by_the_same_mark_at_least_as_long`
+`verified-by: bravebot_agent::spec_headings::a_page_names_its_file_and_says_when_the_spec_is_only_proposed`
+`verified-by: bravebot_agent::tools::a_spec_page_loads_by_the_name_the_list_gives_it`
 `verified-by: bravebot_agent::tools::a_documentation_page_loads_by_the_name_the_index_gives_it`
 `verified-by: bravebot_agent::tools::a_users_skill_of_the_help_name_takes_the_pages_with_it`
 

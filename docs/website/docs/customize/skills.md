@@ -226,7 +226,9 @@ name shadows one. The skill that tells a
 [`/loop`](../reference/commands.md#loop-interval-prompt) tick how to pace itself is one,
 and `bravebot-help` is another: it carries these documentation pages, so asking how to use bravebot
 is answered from the version you are running. Its pages are loaded one at a time, only the ones the
-question needs. [`/help <question>`](../reference/commands.md#help-question) asks for it by name.
+question needs. It also carries the heading of every clause of the specifications, one page for each
+spec, for a question about exactly what bravebot does.
+[`/help <question>`](../reference/commands.md#help-question) asks for it by name.
 
 :::caution
 A skill downloaded into `~/.bravebot/skills` is trusted exactly as far as a config file you pasted
