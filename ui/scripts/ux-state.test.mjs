@@ -654,7 +654,7 @@ test('submit and the run-plan callback list every field they test', () => {
 function bridgeFields(over = {}) {
   return {
     handle: 's-9', model: 'm', summary: { id: null, title: 'T', project: 'p', branch: null, directory: '/d' },
-    entries: [], todos: [], askingTrust: '/d', keepingTrust: null, trustRemembered: null, forkedFrom: null,
+    entries: [], todos: [], askingTrust: '/d', keepingTrust: null, shownKeepingTrust: null, trustRemembered: null, forkedFrom: null,
     focus: 4, bot: null, archived: 2, autoVetting: true, permissionMode: 'ask', sandboxMode: 'on', rules: null,
     ...over,
   }

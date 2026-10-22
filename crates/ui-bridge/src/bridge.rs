@@ -401,7 +401,7 @@ impl Bridge {
         // the same as nothing trusted, and reading an absent map as an empty one would
         // answer on behalf of somebody who was never asked.
         let opening = Opening::of(&directory, record.trust_map(&directory));
-        let reported = opening.json();
+        let reported = opening.json(&directory);
         // A kept answer settles a record that kept no map, and the session then opens known, as a
         // fork of it does: `known: false` is the one sign that the question was put.
         let settled = opening
@@ -622,7 +622,7 @@ impl Bridge {
         // it. Unanswered, the map is empty until they answer; nothing runs before then, so it is
         // never the map a turn uses.
         let opening = Opening::of(&directory, None);
-        let reported = opening.json();
+        let reported = opening.json(&directory);
         let handle = self.mint(Open::opened(
             directory.clone(),
             State::fresh(opening.trust),
@@ -757,7 +757,7 @@ impl Bridge {
         // question (a record written before maps were kept) hands the question down, which a
         // kept answer about the directory settles as it would for the parent.
         let opening = Opening::of(&project, answered_trust.then_some(trust));
-        let reported = opening.json();
+        let reported = opening.json(&project);
         let known = opening.answered;
         let rules = rules_json(&opening.trust);
 
@@ -3094,10 +3094,18 @@ impl Opening {
     }
 
     /// What the response opening the session adds about it, for the window to say in turn.
-    fn json(&self) -> Value {
+    ///
+    /// `project` and the record a yes is kept in come with the spelling the startup question
+    /// carries (PROMPT-1), so the window draws those and never the paths as held.
+    fn json(&self, project: &Path) -> Value {
         json!({
             "remembered": self.remembered.as_ref().map(|(kept, path)| kept_json(kept, path)),
+            "shownDirectory": bravebot_agent::confirm::shown_path(project),
             "keeping": self.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+            "shownKeeping": self
+                .keeping
+                .as_ref()
+                .map(|(store, _)| bravebot_agent::confirm::shown_path(store.path())),
             "confinedLines": (!self.answered).then(trusted::confined_lines_notice),
         })
     }
@@ -3134,12 +3142,15 @@ fn honoured(project: &Path) -> Option<trusted::Honoured> {
 }
 
 /// A kept answer as a window is told about it: when it was given, the file it is kept in, and the
-/// directory it is about, which is the session's own or the root of the worktree around it.
+/// directory it is about, which is the session's own or the root of the worktree around it. The
+/// file and the directory also come spelled for a person (PROMPT-1), which is what a window draws.
 fn kept_json(kept: &trusted::Kept, path: &Path) -> Value {
     json!({
         "at": kept.at,
         "path": path.display().to_string(),
+        "shownPath": bravebot_agent::confirm::shown_path(path),
         "root": kept.root.display().to_string(),
+        "shownRoot": bravebot_agent::confirm::shown_path(&kept.root),
     })
 }
 

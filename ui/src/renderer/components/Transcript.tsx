@@ -1364,7 +1364,7 @@ function Questions({
  * of every export: a note this window wrote about a session is not something the session said.
  * The fork link is a button and not a link, because nothing in this window navigates.
  */
-function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onManage }: {
+export function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onManage }: {
   forkedFrom: { title: string; prompt: number } | null
   kept: KeptTrust | null
   vetting: boolean
@@ -1388,7 +1388,7 @@ function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onMana
         </p>
       )}
       {kept && (
-        <p className="session-banner session-notice" role="note" data-tooltip={`Trusted ${ago(kept.at)} · kept in ${kept.path}`}>
+        <p className="session-banner session-notice" role="note" data-tooltip={`Trusted ${ago(kept.at)} · kept in ${kept.shownPath}`}>
           <Icon name="shield-done" />
           <span className="notice-text">You trusted this directory, so chats started here are not asked.</span>
           <Button kind="plain" size="tiny" className="link" onClick={onManage}>Manage</Button>
@@ -1450,7 +1450,7 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
           <ul>
             {rules.proposed.map((entry, index) => (
               <li key={index}>
-                <code>{entry.rule}</code> from <code>{entry.file}</code>
+                <code>{entry.shownRule}</code> from <code>{entry.shownFile}</code>
               </li>
             ))}
           </ul>

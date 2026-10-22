@@ -102,7 +102,11 @@ file a yes is kept in and the file each proposed rule came from the same way, an
 question in lines for the file a yes is kept in. The question about the rules a checkout proposed
 draws the text of each rule the same way, except that a space in it is never marked, since a rule is not a name. The startup trust question the bridge puts to an editor or
 to the mobile app carries the directory and the file a yes is kept in spelled for a person, and both
-draw those. The mobile app's write, run and trust cards, and the line its transcript keeps for a
+draw those. The desktop window's startup question does the same with the spelled directory and file
+that the responses opening a session carry, and the list of rules a checkout proposed draws each
+rule's text and file as the bridge spelled them. The notice above a transcript and the permissions
+list that say a yes was kept draw the file it is kept in, and the directory it is about, as spelled.
+The mobile app's write, run and trust cards, and the line its transcript keeps for a
 waiting write, draw the spelled paths the bridge sends and never the paths as held. A name that is
 empty, is only whitespace, has a space at either end of it or of a directory in it, or holds a character
 that draws as nothing (a zero-width character, a bidirectional control, a tag character, a variation
@@ -158,7 +162,7 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_cli::plain::a_question_in_lines_spells_a_name_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::acp::the_title_of_a_question_about_a_file_spells_a_name_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::wire::a_write_and_a_credential_read_carry_the_name_spelled_for_a_person`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the write, credential-read, vouch and run cards through react-dom and asserts each draws the name the agent spelled and not the name as written, and make check-ui runs it)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the write, credential-read, vouch and run cards, the startup question, the notice and the list of what is kept, and the list of proposed rules through react-dom and asserts each draws the name the agent spelled and not the name as written, ui/scripts/drive-remembered-trust.mjs asks the startup question in the real window about a directory whose name ends in a space, and make check-ui runs them)`
 `verified-by: bravebot_agent::confirm::a_name_that_draws_as_nothing_is_shown_as_what_it_is`
 `verified-by: bravebot_agent::confirm::a_directory_in_a_path_that_starts_or_ends_in_a_space_is_shown_as_what_it_is`
 `verified-by: bravebot_agent::confirm::a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name`
@@ -172,6 +176,9 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_ui_bridge::acp::the_trust_question_spells_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::acp::the_trust_question_names_the_record_as_the_bridge_spelled_it`
 `verified-by: bravebot_ui_bridge::acp::the_trust_question_names_a_directory_that_ends_in_a_space_as_the_terminal_does`
+`verified-by: bravebot_ui_bridge::opening_tests::the_response_opening_a_session_carries_the_directory_and_the_record_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::opening_tests::a_kept_answer_carries_its_file_and_its_root_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::rules::a_proposed_rule_and_its_file_are_reported_spelled_for_a_person`
 `verified-by: by-construction (the mobile app is not a crate this workspace compiles; mobile/src/__tests__/approvals.test.tsx and transcript.test.tsx render the write, run and trust cards and the waiting-write line through react-test-renderer and assert each draws the path the bridge spelled and not the path as held, mobile/src/__tests__/payloads.test.ts asserts a request without the spelled fields is not offered, and make check-mobile runs them)`
 `verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
