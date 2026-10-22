@@ -5386,6 +5386,7 @@ mod tests {
                 height: 10,
                 rows: 40,
                 expandable: vec![(32, 38, 0)],
+                delegates: Vec::new(),
                 ..Laid::default()
             };
 

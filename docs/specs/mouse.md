@@ -11,7 +11,7 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking a call in the scroller is built. Clicking other things on the screen, a context menu, edge
+drag selects is spelled out here. Clicking a call or a delegate in the scroller is built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
@@ -149,3 +149,17 @@ stays the way to do it without a mouse.
 `verified-by: bravebot_tui::app::a_click_off_a_call_or_a_drag_over_one_expands_nothing`
 `verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_expands_nothing`
 `verified-by: bravebot_tui::app::a_click_in_a_delegates_view_expands_nothing`
+
+<a id="MOUSE-10"></a>
+### MOUSE-10: a click on a delegate in the scroller opens its view
+
+In the scroller, a left click that sweeps nothing on a row of a delegate's block opens the view of
+that delegate, as the watch key does on it, and the key that closes the view returns to the
+scroller. The press and the release are on one cell and the press is a single click, so a drag, a
+double click and a triple click are selections and copy as before. A click on a row that belongs to
+no delegate, with the key list open over the transcript, or where a view is already open, opens
+nothing. The watch key stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_on_a_delegate_in_the_scroller_opens_that_delegates_view`
+`verified-by: bravebot_tui::app::a_drag_over_a_delegate_or_a_click_off_one_opens_no_view`
+`verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_opens_no_delegate`

@@ -329,7 +329,10 @@ fn entry_extras(
 
     // The expand key acts on the rows from the call to the end of what it returned, so the end is
     // taken here, before anything that hangs beneath the call is drawn.
-    if has_more_to_show(entry) {
+    //
+    // A delegate's block is recorded the same way, as the rows a click on it opens its view for
+    // (MOUSE-10). Nothing about it can be expanded, so [`lay_out`] tells the two apart.
+    if has_more_to_show(entry) || entry.delegate.is_some() {
         calls.push((began, lines.len(), index));
     }
 
@@ -993,10 +996,18 @@ pub(super) fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'
         at = at.saturating_add(rows_of(line, width));
     }
     starts.push(at);
-    laid.expandable = calls
-        .into_iter()
-        .map(|(first, last, index)| (starts[first], starts[last].saturating_sub(1), index))
-        .collect();
+    let viewed = session.viewed();
+    for (first, last, index) in calls {
+        let rows = (starts[first], starts[last].saturating_sub(1), index);
+        if viewed
+            .get(index)
+            .is_some_and(|entry| entry.delegate.is_some())
+        {
+            laid.delegates.push(rows);
+        } else {
+            laid.expandable.push(rows);
+        }
+    }
     laid.rows = at;
     (lines, laid)
 }
