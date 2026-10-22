@@ -2581,6 +2581,12 @@ ask-key-answer = answer
 ask-key-skip = skip
 ask-key-skip-question = skip the question
 ask-key-back-to-options = back to the options
+ask-key-back = back
+ask-key-send = send
+ask-key-change = change an answer
+ask-review-title = review your answers
+ask-review-heading = Nothing has been sent yet.
+ask-review-skipped = (skipped)
 
 
 ## Handing the line to an editor

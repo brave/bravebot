@@ -1,5 +1,6 @@
 ## [0.17.0](https://github.com/brave/bravebot/releases/tag/v0.17.0)
 
+ - Added a review before a series of questions from the agent is sent, with Left to go back to an earlier question and a number to reopen one from the review. Nothing reaches the agent until you press Enter there. ([#1443](https://github.com/brave/bravebot/issues/1443))
  - Added the `askIdleSeconds` setting, which closes a question from the agent that sits that long with no key pressed and tells the agent no answer was given and you may be away. Without it a question waits for as long as it takes. ([#1444](https://github.com/brave/bravebot/issues/1444))
  - Added a terminal notice, an OSC 9 sequence or the bell, when a turn ends or a question is waiting while the terminal is not in front. The `notificationMethod` and `notificationCondition` settings choose how and when. ([#1493](https://github.com/brave/bravebot/issues/1493))
  - Added an offer at first start to use the models a running LM Studio or llama-server serves, beside the one for Ollama, so a machine running either needs no provider block written by hand. ([#1385](https://github.com/brave/bravebot/issues/1385))

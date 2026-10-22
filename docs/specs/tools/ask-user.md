@@ -275,8 +275,50 @@ and the line does not read them a second time to count them.
 `verified-by: bravebot_agent::tools::the_line_counts_one_question_in_the_singular`
 `verified-by: bravebot_agent::turn::the_line_under_a_skipped_question_does_not_call_it_an_answer`
 
+<a id="ASK-11"></a>
+### ASK-11: a series of questions is reviewed before anything is sent, and can be gone back through
+
+In the terminal picker, a series of more than one question ends in a review rather than at its last
+answer. The review lists each question, under its tag or its sentence where it has none, beside what
+the person picked, typed or skipped, and says that nothing has been sent. Enter sends. A digit reopens
+that question, and escape reopens the last, so neither declines anything already answered. Left, or
+`h`, goes back one question from the list and then walks the series on again. A question reopened
+comes back with its earlier marks or words, and one reopened from the review returns to the review when it is settled, so a person
+changing one answer does not walk through the rest. What was marked on the question they left is not
+carried. A series of one has no review, and a series answered entirely from memory asks nothing, so
+shows none ([ASK-8](#ASK-8)).
+
+Nothing reaches the planner or the session's memory before Enter on the review: the answers leave the
+picker only as the one ordered vector it returns, so the memory is written from what was confirmed
+and ASK-5, ASK-6 and the report to the planner are as they were. The one other way out is the clock
+([ASK-9](#ASK-9)), which keeps every answer given, including the one a reopened question had, and
+closes only a question never answered.
+
+**Why.** A wrong keypress on the first question was final once the second appeared, and the planner
+acted on an answer the person did not mean. The review draws only what the person was already shown
+and what they wrote, and no key on it depends on any of that text.
+
+`verified-by: bravebot_tui::ask::an_answer_changed_from_the_review_is_the_one_sent`
+`verified-by: bravebot_tui::ask::nothing_is_sent_before_the_review_is_confirmed`
+`verified-by: bravebot_tui::ask::going_back_reopens_a_question_with_its_earlier_answer`
+`verified-by: bravebot_tui::ask::going_back_from_the_first_question_does_nothing`
+`verified-by: bravebot_tui::ask::a_question_reopened_from_the_review_returns_to_the_review`
+`verified-by: bravebot_tui::ask::escape_on_the_review_declines_nothing`
+`verified-by: bravebot_tui::ask::a_digit_past_the_last_question_does_nothing_on_the_review`
+`verified-by: bravebot_tui::ask::a_lone_question_has_no_review`
+`verified-by: bravebot_tui::ask::the_review_lists_every_answer_beside_its_question`
+`verified-by: bravebot_tui::ask::a_long_answer_does_not_push_the_keys_off_the_review`
+`verified-by: bravebot_tui::ask::the_way_back_is_offered_only_where_there_is_one`
+`verified-by: bravebot_tui::ask::a_review_left_alone_keeps_the_answers_given`
+`verified-by: bravebot_tui::ask::a_question_gone_back_to_keeps_its_answer_and_so_do_those_after_it`
+`verified-by: bravebot_tui::ask::going_back_by_hand_from_a_reopened_question_walks_the_series_on`
+`verified-by: bravebot_tui::ask::a_wide_answer_and_a_long_tag_leave_the_keys_on_the_review`
+`verified-by: bravebot_tui::ask::the_answer_remembered_is_the_one_confirmed`
+
 ## Known costs
 
+- Only the terminal picker reviews. The line-by-line interface and the desktop app still settle a
+  series question by question, and neither can go back.
 - The setting applies to the terminal interface's picker alone. A session in lines (`--plain`) reads
   its answers from its input and has no picker whose quiet time the interface measures, so a question
   there waits for as long as it takes.

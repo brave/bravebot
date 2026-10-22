@@ -2265,6 +2265,12 @@ ask-key-answer = répondre
 ask-key-skip = passer
 ask-key-skip-question = passer la question
 ask-key-back-to-options = revenir aux options
+ask-key-back = retour
+ask-key-send = envoyer
+ask-key-change = modifier une réponse
+ask-review-title = vérifiez vos réponses
+ask-review-heading = Rien n'a encore été envoyé.
+ask-review-skipped = (passée)
 
 
 ## Confier la ligne à un éditeur
