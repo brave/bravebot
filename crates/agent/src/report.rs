@@ -1238,18 +1238,30 @@ mod tests {
 
     /// A wait that ended early on output reads like one that sat out its bound, and nothing new
     /// reads like a standing account of the job. Saying that nothing is watching now is what makes
-    /// the answer an account of those seconds only.
+    /// the answer an account of those seconds only. The sentence belongs to a look that watched,
+    /// whatever it waited for, and not to one that only took a snapshot.
     #[test]
     fn a_look_that_waited_says_nothing_is_watching_the_job_now() {
-        let said = Outcome::Running {
-            ran_for: std::time::Duration::from_secs(90),
-            waited: Some(std::time::Duration::from_secs(30)),
+        for waited in [1, 30, 600] {
+            let said = Outcome::Running {
+                ran_for: std::time::Duration::from_secs(900),
+                waited: Some(std::time::Duration::from_secs(waited)),
+            }
+            .describe();
+            assert!(
+                said.contains("Nothing is watching it now."),
+                "a wait of {waited}s does not say the job is no longer watched: {said}"
+            );
+        }
+
+        let snapshot = Outcome::Running {
+            ran_for: std::time::Duration::from_secs(900),
+            waited: None,
         }
         .describe();
-
         assert!(
-            said.contains("Nothing is watching it now."),
-            "a look that waited does not say the job is no longer watched: {said}"
+            !snapshot.contains("watching"),
+            "a look that watched nothing claims a watch ended: {snapshot}"
         );
     }
 

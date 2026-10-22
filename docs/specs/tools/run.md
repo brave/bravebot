@@ -1115,6 +1115,8 @@ the window.
 `verified-by: bravebot_agent::tools::job_output_offers_a_wait_that_output_does_not_end`
 `verified-by: bravebot_agent::report::a_look_that_waited_is_described_with_both_the_window_and_the_warning`
 `verified-by: bravebot_agent::report::one_second_is_described_in_the_singular`
+`verified-by: bravebot_agent::report::a_look_that_waited_says_nothing_is_watching_the_job_now`
+`verified-by: bravebot_agent::tools::job_output_says_its_wait_stays_inside_the_turn`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing`
