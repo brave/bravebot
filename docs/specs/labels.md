@@ -10,6 +10,7 @@ governs:
 guards:
   - symbol: Labelled::new
     sites:
+      - crates/agent/src/backend.rs: 2
       - crates/agent/src/commit_message.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
