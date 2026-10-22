@@ -33,6 +33,7 @@ bytes at another.
 `verified-by: bravebot_core::policy::a_path_that_lost_its_trust_fills_the_slot_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_an_unvouched_path_is_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted`
+`verified-by: bravebot_agent::turn::a_read_the_planner_may_not_see_still_says_when_no_file_is_there`
 
 <a id="READ-2"></a>
 ### READ-2: a long file is paged, and says where to continue from

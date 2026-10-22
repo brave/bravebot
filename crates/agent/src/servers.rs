@@ -3645,6 +3645,38 @@ mod tests {
         assert_eq!(started(&settled), vec!["weather"], "{:?}", settled.notes);
     }
 
+    /// A name a checkout wrote is drawn at the person's terminal. Left bare, a name with an escape
+    /// in it would move the cursor or clear the screen, and one with a space would blur where the
+    /// alias ends, so one that is not a plain alias is quoted with its escapes.
+    #[test]
+    fn a_requested_name_that_is_not_an_alias_is_shown_quoted_with_its_escapes() {
+        let (home, project, _) = declared("cli-servers-quoted", &["weather-mcp"]);
+        let requested = vec![(
+            project.join(".bravebot/settings.json"),
+            "two words\u{1b}[2J".to_string(),
+        )];
+
+        let settled = settled_on(&requested, &project, &home, "", Prelude::current());
+
+        assert!(settled.plans.is_empty());
+        assert_eq!(
+            settled.notes,
+            vec![
+                t!(
+                    servers_not_declared,
+                    file = ".bravebot/settings.json",
+                    alias = r#""two words\u{1b}[2J""#
+                )
+                .to_string()
+            ]
+        );
+        assert!(
+            !settled.notes.iter().any(|note| note.contains('\u{1b}')),
+            "an escape reached the person's terminal: {:?}",
+            settled.notes
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_checkout_reached_through_a_link_names_its_settings_file_inside_it() {

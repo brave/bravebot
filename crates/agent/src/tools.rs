@@ -14096,6 +14096,116 @@ mod tests {
         }
     }
 
+    /// A map that says nothing reads as the whole tree, and a planner told nothing concludes that a
+    /// symbol is absent when the map was cut. Each way a map falls short has its own sentence, and a
+    /// map that fell short in none says nothing after its body.
+    #[test]
+    fn a_map_says_each_way_it_fell_short_and_a_whole_one_says_nothing() {
+        use crate::workspace::RepoMap;
+        let whole = RepoMap {
+            body: "a.rs:\n  fn one()\n".to_string(),
+            found: 3,
+            shown: 3,
+            files: 1,
+            unvouched: 0,
+            skipped: 0,
+            truncated: false,
+            unreadable: false,
+        };
+        assert_eq!(
+            map_as_told(&whole),
+            whole.body,
+            "a whole map carries a note"
+        );
+
+        let fell_short = [
+            (
+                "fewer declarations shown than found",
+                RepoMap {
+                    shown: 1,
+                    ..whole.clone()
+                },
+                "this map shows 1 of 3 declarations, most referenced first",
+            ),
+            (
+                "the walk stopped at a cap",
+                RepoMap {
+                    truncated: true,
+                    ..whole.clone()
+                },
+                "the walk stopped at a cap on files or bytes, so this map is incomplete",
+            ),
+            (
+                "a directory could not be opened",
+                RepoMap {
+                    unreadable: true,
+                    ..whole.clone()
+                },
+                "part of this tree could not be read and is not in this map",
+            ),
+            (
+                "files nobody vouched for",
+                RepoMap {
+                    unvouched: 2,
+                    ..whole.clone()
+                },
+                "2 source files were left out because nobody vouched for them",
+            ),
+            (
+                "one file nobody vouched for",
+                RepoMap {
+                    unvouched: 1,
+                    ..whole.clone()
+                },
+                "1 source file was left out because nobody vouched for it",
+            ),
+            (
+                "files left out as unreadable or too large",
+                RepoMap {
+                    skipped: 2,
+                    ..whole.clone()
+                },
+                "2 source files were left out as unreadable, too large or not safe to show",
+            ),
+        ];
+        let sentences: Vec<&str> = fell_short.iter().map(|(_, _, said)| *said).collect();
+        for (how, map, said) in &fell_short {
+            let told = map_as_told(map);
+            assert!(
+                told.starts_with(&whole.body),
+                "{how}: the body is not first: {told}"
+            );
+            assert!(
+                told.ends_with(')') && told.contains(&format!("\n\n({said}")),
+                "{how}: the map does not say so: {told}"
+            );
+            for other in sentences.iter().filter(|other| *other != said) {
+                assert!(
+                    !told.contains(other),
+                    "{how}: the map also says '{other}': {told}"
+                );
+            }
+        }
+    }
+
+    /// A wait is a way to spend part of one turn watching. A planner that reads it as a way to be
+    /// told about something after the turn ends waits for news that cannot arrive, so the tool says
+    /// where the wait ends and what happens to the job then.
+    #[test]
+    fn job_output_says_its_wait_ends_with_the_turn() {
+        let said = tool_description(Scheduling::ArrangingALook, "job_output");
+        for stated in [
+            "a wait inside this turn",
+            "anything that happens after the turn ends",
+            "says whether it is killed then or kept",
+        ] {
+            assert!(
+                said.contains(stated),
+                "job_output no longer says '{stated}': {said}"
+            );
+        }
+    }
+
     /// The flag is how a planner gets one call to cover a job that prints often, so it has to be in
     /// the schema the planner reads, typed as a boolean, and the descriptions have to say what it
     /// changes: output stops ending the wait, and a bound is still needed.

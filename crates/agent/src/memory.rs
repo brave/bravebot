@@ -934,6 +934,25 @@ mod tests {
         root: &Path,
         rules: impl FnOnce(&mut bravebot_core::trust::TrustStore),
     ) -> Standing {
+        asked_in(root, rules, |policy, workspace| {
+            standing(policy, workspace, "notes")
+        })
+    }
+
+    /// What a run under a definition keeping the memory `notes` in `root` is told of it, under a
+    /// map made by `rules`.
+    fn told_in(root: &Path, rules: impl FnOnce(&mut bravebot_core::trust::TrustStore)) -> String {
+        asked_in(root, rules, |policy, workspace| {
+            told(policy, workspace, "notes")
+        })
+    }
+
+    /// `ask`ed of a policy over `root`, under a map made by `rules`.
+    fn asked_in<R>(
+        root: &Path,
+        rules: impl FnOnce(&mut bravebot_core::trust::TrustStore),
+        ask: impl FnOnce(&Policy<'_, bravebot_core::event::RecordingSink>, &Workspace) -> R,
+    ) -> R {
         let workspace = Workspace::new(root).expect("a workspace");
         let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
         rules(&mut trust);
@@ -951,7 +970,7 @@ mod tests {
         .expect("a policy")
         .with_trust(trust)
         .with_root(workspace.root());
-        standing(&policy, &workspace, "notes")
+        ask(&policy, &workspace)
     }
 
     /// MEMORY-4: a trusted memory is empty where nothing is there and kept where a file is, and a
@@ -1002,6 +1021,52 @@ mod tests {
                 Standing::NotRead,
                 "a linked directory"
             );
+        }
+    }
+
+    /// MEMORY-4: a run that is told its memory is a link, or a directory, is told so and not that
+    /// nothing is kept or that notes are there to read. A run told either would write over the path
+    /// or read what the link names, which the map never vouched for.
+    #[test]
+    fn a_run_is_told_a_memory_that_is_not_a_file_is_not_to_be_read() {
+        let scratch = Scratch::new("memory-told-not-read");
+        let root = scratch.path.join("work");
+        let memory = root.join(".bravebot/memory");
+        std::fs::create_dir_all(memory.join("notes.md")).unwrap();
+        let trusted = |trust: &mut bravebot_core::trust::TrustStore| trust.trust(".");
+        // As the run is told it, which is from the working directory the workspace resolved.
+        let at = Workspace::new(&root)
+            .expect("a workspace")
+            .root()
+            .join(".bravebot/memory/notes.md")
+            .display()
+            .to_string();
+        let told_of = |shape: &str, said: String| {
+            assert!(
+                said.contains(&at),
+                "{shape}: the path is not in what the run is told: {said}"
+            );
+            assert!(
+                said.contains(
+                    "is a link, is reached through one or is not a file, so it is not to be read"
+                ),
+                "{shape}: the run is not told it is not to be read: {said}"
+            );
+            assert!(
+                !said.contains("Nothing is kept there yet")
+                    && !said.contains("Its notes are there"),
+                "{shape}: the run is told of a memory it is not to read as one it can: {said}"
+            );
+        };
+
+        told_of("a directory", told_in(&root, trusted));
+        #[cfg(unix)]
+        {
+            std::fs::remove_dir(memory.join("notes.md")).unwrap();
+            let outside = scratch.path.join("outside.md");
+            std::fs::write(&outside, "somebody else's").unwrap();
+            std::os::unix::fs::symlink(&outside, memory.join("notes.md")).unwrap();
+            told_of("a linked file", told_in(&root, trusted));
         }
     }
 

@@ -12662,6 +12662,36 @@ fn a_repo_map_says_when_the_file_cap_stopped_it() {
     assert_eq!(map.files, 5);
 }
 
+/// A tree with a directory that cannot be opened is not the tree the map shows, and a map that says
+/// nothing reads as complete. The files beside the directory are still mapped.
+#[cfg(unix)]
+#[test]
+fn a_repo_map_says_when_a_directory_could_not_be_opened() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("map-unreadable");
+    let locked = scratch.path.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(scratch.path.join("kept.rs"), "pub fn kept_function() {}\n").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A superuser opens it anyway, which leaves nothing to observe.
+    if std::fs::read_dir(&locked).is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: a mode 000 directory can be opened here, so none is unreadable");
+        return;
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let map = map_of(&workspace, trust, None, ".");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (map, _) = map.expect("an unreadable nested directory failed the map");
+
+    assert!(map.unreadable, "the missing directory was not reported");
+    assert!(!map.truncated, "a directory left out was reported as a cap");
+    assert!(map.body.contains("kept_function"), "{}", map.body);
+    assert_eq!(map.files, 1);
+}
+
 /// The argument names a directory; a file there is refused in the tool's words, not left to the
 /// filesystem's "Not a directory".
 #[test]
