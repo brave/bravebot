@@ -5577,6 +5577,39 @@ mod tests {
         );
     }
 
+    /// SKILL-21. A skill the gate would present as a reference is no mode for the turn: nothing of
+    /// its words is returned for the system prompt, and the trail does not record it as kept in
+    /// force, since a turn that went on would run under instructions the person believes apply.
+    #[test]
+    fn a_skill_mode_the_gate_quarantines_is_not_returned_and_not_recorded() {
+        let skill = crate::skills::Skill::untrusted_for_a_test("ship-it", "RELEASE-STEPS-BODY");
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "keep a mode");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .unwrap();
+        let mut conversation = Conversation::new();
+
+        let admitted = admit_mode_skill(&mut policy, &mut conversation, &skill)
+            .expect("a quarantined mode is not a failed turn");
+
+        assert_eq!(admitted, None, "words the gate held back were applied");
+        drop(policy);
+        assert!(
+            !sink.events().iter().any(|e| matches!(
+                e,
+                bravebot_core::event::Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("kept in force")
+            )),
+            "the trail records a mode that was never applied"
+        );
+    }
+
     /// ADDRESS-8: a turn addressed to a definition arranges no later look and arms no watch, even
     /// where the session is ticking or the caller asked for a look. A turn that is not addressed
     /// keeps what the tick and the caller say.

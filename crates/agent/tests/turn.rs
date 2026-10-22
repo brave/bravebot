@@ -73500,3 +73500,140 @@ fn a_skill_mode_that_the_gate_or_the_catalogue_does_not_hold_is_not_applied_and_
         );
     }
 }
+
+/// SKILL-21. A `permissions` deny rule on a skill's file leaves the turn without the skill, and the
+/// person is told, exactly as for a skill nobody vouched for. The control is the same skill with no
+/// rule, so the refusal is the rule's and not a fixture that never held the skill.
+#[test]
+fn a_skill_mode_whose_file_permissions_deny_is_not_applied_and_is_said() {
+    let scratch = Scratch::new("skill-mode-denied");
+    write_project_skill(
+        &scratch.path,
+        "house-rules",
+        "house-rules",
+        "PROJECT-MODE-BODY",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("allowed"), reply_with("denied")]);
+    let config = config_for(&endpoint);
+    for (permissions, applied) in [
+        (rules(&[], &[], &[]), true),
+        (rules(&["Read(./.bravebot/skills/**)"], &[], &[]), false),
+    ] {
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut bravebot_agent::Conversation::new(),
+            Task::new("go")
+                .with_permissions(permissions)
+                .with_skill_mode(Some("house-rules".to_string())),
+            &mut reporter,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+        let request = received.recv().expect("the request");
+        assert_eq!(
+            request.contains("PROJECT-MODE-BODY"),
+            applied,
+            "applied {applied}: {request}"
+        );
+        assert_eq!(
+            reporter
+                .notices
+                .iter()
+                .any(|said| said.contains("mode was not applied")),
+            !applied,
+            "{:?}",
+            reporter.notices
+        );
+    }
+}
+
+/// SKILL-21. A delegate is in no mode: the mode is the person's, and a delegate's words come from
+/// its own definition. Neither its request nor its trail carries the skill: the trail would
+/// otherwise say a mode was kept in force for a run whose prompt never held it. The control is the
+/// person's own turn with the same skill, which carries it and records it.
+#[test]
+fn a_delegate_is_not_given_the_skill_mode_of_the_session_that_started_it() {
+    let scratch = Scratch::new("skill-mode-delegate");
+    write_project_skill(
+        &scratch.path,
+        "house-rules",
+        "house-rules",
+        "PROJECT-MODE-BODY",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let spec = {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "look it up");
+        let mut sink = RecordingSink::new();
+        let mut policy = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::FileRead,
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        policy
+            .before_delegate(
+                &bravebot_core::value::Labelled::trusted("reader".to_string()),
+                &bravebot_core::value::Labelled::trusted("look it up".to_string()),
+                None,
+            )
+            .expect("a trusted run may delegate")
+    };
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("person"), reply_with("delegate")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    for (task, applied) in [
+        (Task::new("look it up"), true),
+        (Task::delegated(spec), false),
+    ] {
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &task.with_skill_mode(Some("house-rules".to_string())),
+            &mut bravebot_agent::Conversation::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+        let request = received.recv().expect("the request");
+        assert_eq!(
+            request.contains("PROJECT-MODE-BODY"),
+            applied,
+            "applied {applied}: {request}"
+        );
+        assert_eq!(
+            sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed { gate: "provenance", detail } if detail.contains("kept in force")
+            )),
+            applied,
+            "the trail disagrees with the request about the mode"
+        );
+        assert!(
+            !reporter
+                .notices
+                .iter()
+                .any(|said| said.contains("mode was not applied")),
+            "a turn was told of a mode it was never in: {:?}",
+            reporter.notices
+        );
+    }
+}

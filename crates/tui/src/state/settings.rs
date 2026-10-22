@@ -203,7 +203,7 @@ impl Session {
         self.style.as_ref()
     }
 
-    /// The skill `/mode` put in force, or `None` where the session is in none.
+    /// Only a name, which each turn resolves again, so it can name a skill that has since gone.
     pub fn skill_mode(&self) -> Option<&str> {
         self.skill_mode.as_deref()
     }

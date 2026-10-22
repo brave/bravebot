@@ -735,14 +735,18 @@ pub fn completions(line: &str) -> Vec<Command> {
     offered
 }
 
-/// The line `/effort ` or `/sandbox ` plus the start of one of its words becomes, or `None` where
-/// Tab has nothing to add.
+/// The line `/effort `, `/sandbox ` or `/mode ` plus the start of one of its words becomes, or
+/// `None` where Tab has nothing to add.
 ///
-/// The words are this program's own, so completing one reads nothing a person did not type. A
+/// The words are this program's own, or for `/mode` the names of the skills the box already offers,
+/// so completing one reads nothing a person did not type. A
 /// start that fits one word becomes that word, and a start that fits several is carried as far as
 /// they agree.
-pub(crate) fn complete_argument(line: &str) -> Option<String> {
+pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
     let line = line.trim_start();
+    if let Some(typed) = line.strip_prefix(MODE_COMMAND) {
+        return complete_exact_word(MODE_COMMAND, typed, skills);
+    }
     if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
         let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
             .iter()
@@ -759,11 +763,26 @@ pub(crate) fn complete_argument(line: &str) -> Option<String> {
 }
 
 fn complete_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
+    complete(command, after, words, str::to_ascii_lowercase)
+}
+
+/// [`complete_word`] for names that are matched as typed, because `/mode` takes a skill's name
+/// with its case.
+fn complete_exact_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
+    complete(command, after, words, str::to_string)
+}
+
+fn complete(
+    command: &str,
+    after: &str,
+    words: &[&str],
+    fold: fn(&str) -> String,
+) -> Option<String> {
     let typed = after.strip_prefix(' ')?;
     if typed.is_empty() || typed.contains(char::is_whitespace) {
         return None;
     }
-    let typed = typed.to_ascii_lowercase();
+    let typed = fold(typed);
     let mut fits = words.iter().filter(|word| word.starts_with(&typed));
     let mut shared = fits.next()?.to_string();
     for word in fits {

@@ -2082,7 +2082,7 @@ impl Handle {
         self.skill_mode = name;
     }
 
-    /// The skill the session is in as a mode, if it is in one.
+    /// Only a name: each turn resolves it again, so it can name a skill that has since gone.
     pub fn skill_mode(&self) -> Option<&str> {
         self.skill_mode.as_deref()
     }

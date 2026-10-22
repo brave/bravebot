@@ -20613,6 +20613,26 @@ mod tests {
         }
     }
 
+    /// SKILL-21. Tab on `/mode re` goes as far as the skills the box holds agree: one match is
+    /// finished, several are carried to what they share, and a name is matched as written, so the
+    /// case the person typed is not folded onto a skill that is spelled otherwise.
+    #[test]
+    fn tab_finishes_a_skill_name_started_after_the_mode_command() {
+        for (typed, finished) in [
+            ("/mode review", "/mode review-pr"),
+            ("/mode rel", "/mode release-notes"),
+            ("/mode re", "/mode re"),
+            ("/mode x", "/mode x"),
+            ("/mode REL", "/mode REL"),
+            ("/mode retro", "/mode retro"),
+        ] {
+            let mut session = Session::new("none");
+            type_with_skills(&mut session, typed);
+            handle_key(&mut session, key(KeyCode::Tab));
+            assert_eq!(session.input(), finished, "{typed:?}");
+        }
+    }
+
     fn skill_names(offered: &[crate::skills::Skill]) -> Vec<&str> {
         offered.iter().map(|skill| skill.name.as_str()).collect()
     }
