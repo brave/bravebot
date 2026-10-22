@@ -1231,7 +1231,7 @@ mcp-problem-twice =
     { $name } is given twice: a variable has one value, stored or read from your environment
 mcp-problem-reads = reads is not a list of absolute paths
 mcp-problem-directory = the directory is not an absolute path
-mcp-problem-url = the url is not http or https with a host
+mcp-problem-url = the url is not http or https with a host and, where it writes a port, a number up to 65535
 mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
 mcp-problem-header = { $name } is not a valid HTTP header token

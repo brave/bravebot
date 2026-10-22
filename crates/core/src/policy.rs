@@ -798,7 +798,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // What a `Location` header names is a server's own bytes, so a refusal repeating it
             // would be writing them into whatever formats that refusal. The declared destination
             // is what a person wrote down, so a refusal names that.
-            if crate::url::socket_of(url) != self.calling_socket {
+            //
+            // A url that names no socket is on none, the declared one included, so two of them
+            // are never taken for one place.
+            let on_declared_socket = match (crate::url::socket_of(url), &self.calling_socket) {
+                (Some(hop), Some(declared)) => hop == *declared,
+                _ => false,
+            };
+            if !on_declared_socket {
                 // Kept for the prompt and nothing else: see `take_server_hop`.
                 self.server_hop = Some(url.to_string());
                 return Err(self.deny(
@@ -978,7 +985,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The port counts, unlike anywhere a rule about a host decides. A declaration is one URL
     /// somebody wrote in full, and the machine it names runs other services on other ports, so a
-    /// hop that keeps the address and changes the port is a different service.
+    /// hop that keeps the address and changes the port is a different service. So does the
+    /// scheme, and a url whose port cannot be read names no socket at all: a hop to one is a
+    /// move, and so is every request to a server declared at one.
     ///
     /// No rule widens this, which is the other difference from a fetch. A `WebFetch` rule says
     /// which websites the planner may reach, and that is not a statement that one server's
@@ -12690,6 +12699,55 @@ five
             .before_network("https://127.0.0.1/mcp")
             .expect_err("a hop from implied port 80 to implied port 443 was followed");
         assert!(policy.take_server_hop().is_some());
+    }
+
+    /// A server answering plain text on a port is not the one answering TLS on it, so a hop that
+    /// keeps the address and the written port and changes the scheme has left the server.
+    #[test]
+    fn a_servers_request_cannot_be_redirected_to_the_other_scheme_on_the_same_port() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        policy.before_server_request("http://127.0.0.1:8931/mcp");
+        policy
+            .before_network("http://127.0.0.1:8931/mcp/v2")
+            .expect("the scheme the server was declared with was refused");
+        policy
+            .before_network("https://127.0.0.1:8931/mcp")
+            .expect_err("a hop to the other scheme on the declared port was followed");
+        assert!(policy.take_server_hop().is_some());
+    }
+
+    /// A port that cannot be read is a port the transport replaces with the scheme's default, so
+    /// two urls that write one name sockets the comparison cannot see. A url that names none is
+    /// on no socket, including the one that was declared, and is never taken for another that
+    /// names none either: the hop is a move and nothing is sent to it.
+    #[test]
+    fn a_hop_is_a_move_whenever_a_port_cannot_be_read() {
+        for port in ["", "abc", "99999"] {
+            let declared = format!("http://127.0.0.1:{port}/mcp");
+            let moved = format!("https://127.0.0.1:{port}/moved");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            policy.before_server_request(&declared);
+            policy
+                .before_network(&moved)
+                .expect_err("a hop between two ports nobody can read was taken for one socket");
+            assert!(policy.take_server_hop().is_some(), "{port:?}");
+
+            policy.before_server_request(&declared);
+            policy
+                .before_network(&declared)
+                .expect_err("a declaration whose socket cannot be read was taken for itself");
+            assert!(policy.take_server_hop().is_some(), "{port:?}");
+
+            policy.before_server_request("http://127.0.0.1:8931/mcp");
+            policy
+                .before_network(&moved)
+                .expect_err("a hop to a port nobody can read was followed");
+            assert!(policy.take_server_hop().is_some(), "{port:?}");
+        }
     }
 
     /// The destination a refused hop named is kept for the prompt, as the server's bytes, and

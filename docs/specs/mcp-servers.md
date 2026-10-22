@@ -1131,6 +1131,13 @@ Nothing in the settings answers that question in advance. A `WebFetch` rule name
 planner may reach, and what goes out here is one server's call with its arguments and its session
 id, so a rule about a host is not consent to hand those to a different service.
 
+The socket is the scheme, the host and the port the client connects to, so a hop that changed the
+scheme has left it too, whichever port both write. A port is written in digits after a `:` and is
+at most 65535. A url whose `:` is followed by anything else names no socket, since the client may
+connect to the scheme's default instead of what the url spells. Such a url cannot be declared, a hop
+to one is a move, and so is every request to a server declared at one, so two urls that name no
+socket are never taken for one place.
+
 The destination is shown where a server's bytes may be shown and nowhere else. It reaches the
 prompt, which is drawn for a person and parsed by nothing afterwards, and it does not reach the
 refusal the planner is given: that names the declared destination, which is what somebody wrote
@@ -1197,6 +1204,18 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_mcp::http::a_failed_server_request_stops_confining_the_turns_other_egress`
 `verified-by: bravebot_core::policy::a_rule_does_not_let_a_servers_request_be_redirected_off_its_host`
 `verified-by: bravebot_core::policy::a_servers_request_cannot_be_redirected_to_another_port_on_the_same_host`
+`verified-by: bravebot_core::policy::a_servers_request_cannot_be_redirected_to_the_other_scheme_on_the_same_port`
+`verified-by: bravebot_core::policy::a_hop_is_a_move_whenever_a_port_cannot_be_read`
+`verified-by: bravebot_core::url::a_change_of_scheme_is_a_change_of_socket`
+`verified-by: bravebot_core::url::a_port_spelled_another_way_is_the_same_socket`
+`verified-by: bravebot_core::url::a_colon_that_is_not_followed_by_a_port_names_no_socket`
+`verified-by: bravebot_net::lib::a_socket_is_the_one_the_client_connects_to`
+`verified-by: bravebot_net::lib::no_url_the_client_reads_is_given_a_socket_it_does_not_connect_to`
+`verified-by: bravebot_net::egress::a_redirect_to_the_other_scheme_on_the_declared_port_is_not_sent_there`
+`verified-by: bravebot_net::egress::a_server_declared_with_a_port_that_cannot_be_read_is_sent_nothing`
+`verified-by: bravebot_config::mcp::a_url_writing_a_port_that_is_not_one_is_refused`
+`verified-by: bravebot_config::mcp::a_stored_url_with_a_colon_and_no_port_is_reported_and_kept_as_written`
+`verified-by: bravebot_mcp::http::a_url_can_be_declared_exactly_when_it_names_a_socket`
 `verified-by: bravebot_core::policy::a_refused_hop_off_a_server_is_kept_untrusted_for_the_prompt`
 `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement`
 `verified-by: bravebot_agent::mcp::a_hop_the_person_says_is_a_move_is_declared_and_the_call_reaches_it`
@@ -1606,6 +1625,9 @@ persisting secrets in configuration files or leaking them to other origins acros
 `verified-by: bravebot_config::mcp::http_headers_and_bearer_env_are_validated_digested_and_roundtripped`
 `verified-by: bravebot_net::egress::socket_scoped_headers_and_authorization_are_dropped_across_different_sockets_on_redirect`
 `verified-by: bravebot_net::egress::socket_scoped_headers_are_kept_on_same_socket_redirect`
+`verified-by: bravebot_net::egress::a_redirect_to_the_other_scheme_on_the_declared_port_is_not_sent_there`
+`verified-by: bravebot_net::egress::a_server_declared_with_a_port_that_cannot_be_read_is_sent_nothing`
+`verified-by: bravebot_core::url::a_change_of_scheme_is_a_change_of_socket`
 `verified-by: bravebot_mcp::http::configured_headers_are_attached_to_requests`
 `verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
 `verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
