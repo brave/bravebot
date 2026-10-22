@@ -26,6 +26,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/limit` | `[<amount> \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
+| `/mode` | `[skill \| off]` | Keep a skill applied to every turn: list skills, pick one, or leave |
 | `/help` | `<question>` | Ask a question about bravebot, answered from its own documentation |
 | `/changelog` | | Show what changed in this version |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
@@ -265,6 +266,25 @@ is, and are listed after the others when you type `/style`. A project's file can
 a built-in style or one of your own. The file is read again at the start of each turn, so a style
 whose file is no longer trusted is not used and the turn says so. The `style` setting does not
 name a project's style.
+
+## `/mode [skill | off]`
+
+Keeps one skill applied to every turn until you leave it, for a skill that says how to work, such as
+a review checklist or a test-first playbook. `/mode` alone says which skill is the mode and lists
+the names it could take, `/mode tdd-playbook` puts that skill in force from the next turn, and
+`/mode off` leaves it. A name is compared whole against the skills the planner would be offered, plus
+[the ones only you can load](../customize/skills.md#a-skill-only-you-can-load): a prefix, a different
+case or a skill from a project you have not trusted is not taken, and the mode you had stays.
+
+The skill's instructions go in the system prompt of each turn, after bravebot's own words and ahead of
+your `AGENTS.md`, so your own instructions still have the last word. They are not added to the
+conversation, so a long session holds them once. The skill is read again at the start of each turn, so
+one that was edited is followed, and one that is gone or no longer trusted is not applied: the turn
+says so and goes on without it. Only the instructions apply; the skill's `model` and `effort` do not.
+
+The mode's name is shown in the bottom border of the box while it is in force, it is written to the
+session's record, and a resumed session is back in it and says so. A delegate is not given it.
+Typed while a turn runs, `/mode` waits for the turn to end.
 
 ## `/effort [level]`
 

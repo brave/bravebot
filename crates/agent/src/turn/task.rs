@@ -319,6 +319,10 @@ pub struct Task {
     /// The built-in style `/style` chose, which stands in for the opening where `--system-prompt`
     /// did not (CLI-19). A person's own words win over it. Not given to a delegate.
     pub style: Option<crate::styles::Style>,
+    /// The name of the skill `/mode` made the session's mode, whose body each turn reads again and
+    /// puts in its system instructions (SKILL-21). Only a name: the body comes from the catalogue
+    /// the turn resolved, through the gate any skill goes through. Not given to a delegate.
+    pub skill_mode: Option<String>,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -560,6 +564,7 @@ impl Task {
             attribution: bravebot_config::Attribution::default(),
             system_prompts: SystemPrompts::default(),
             style: None,
+            skill_mode: None,
             delegate: None,
             addressing: None,
             model_outranks_a_definition: false,
@@ -886,6 +891,12 @@ impl Task {
     /// Open the system prompt with this style's words, unless `--system-prompt` named its own.
     pub fn with_style(mut self, style: Option<crate::styles::Style>) -> Self {
         self.style = style;
+        self
+    }
+
+    /// Keep the skill of this name applied to the turn, as the person's `/mode` pick (SKILL-21).
+    pub fn with_skill_mode(mut self, name: Option<String>) -> Self {
+        self.skill_mode = name;
         self
     }
 

@@ -26,6 +26,12 @@ pub(crate) const STYLE_COMMAND: &str = "/style";
 /// The word after `/style` that clears the session's pick.
 pub(crate) const STYLE_OFF: &str = "off";
 
+/// The line that lists the skills a session could be in as a mode, puts one in force, or leaves it.
+pub(crate) const MODE_COMMAND: &str = "/mode";
+
+/// The word after `/mode` that leaves the session's mode.
+pub(crate) const MODE_OFF: &str = "off";
+
 /// The line that reports the session's spend limit, sets it, or removes it.
 pub(crate) const LIMIT_COMMAND: &str = "/limit";
 
@@ -364,7 +370,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 55] {
+pub fn commands() -> [Command; 56] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -449,6 +455,12 @@ pub fn commands() -> [Command; 55] {
             argument: "[name | off]",
             description: t!(command_style),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: MODE_COMMAND,
+            argument: "[skill | off]",
+            description: t!(command_mode),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: LANGUAGE_COMMAND,
@@ -701,6 +713,10 @@ pub fn commands() -> [Command; 55] {
 
 /// The commands a half-typed line could still become, in the order they are offered.
 ///
+/// A command typed in full is offered first, ahead of the longer names that begin with it: with
+/// `/model` earlier in the table, Enter on `/mode` would otherwise complete to `/model` and never
+/// run the command that was typed (CMD-27).
+///
 /// Empty unless the line is a lone word starting with a slash: a command takes its argument after a
 /// space, so once there is one the command is settled and there is no command left to complete. A
 /// line that is not a command at all completes to nothing, which is what closes the list.
@@ -709,21 +725,28 @@ pub fn completions(line: &str) -> Vec<Command> {
     if !trimmed.starts_with('/') || trimmed.contains(char::is_whitespace) {
         return Vec::new();
     }
-    commands()
+    let mut offered: Vec<Command> = commands()
         .iter()
         .filter(|command| command.name.starts_with(trimmed))
         .copied()
-        .collect()
+        .collect();
+    // Stable, so the others keep the table's order.
+    offered.sort_by_key(|command| command.name != trimmed);
+    offered
 }
 
-/// The line `/effort ` or `/sandbox ` plus the start of one of its words becomes, or `None` where
-/// Tab has nothing to add.
+/// The line `/effort `, `/sandbox ` or `/mode ` plus the start of one of its words becomes, or
+/// `None` where Tab has nothing to add.
 ///
-/// The words are this program's own, so completing one reads nothing a person did not type. A
+/// The words are this program's own, or for `/mode` the names of the skills the box already offers,
+/// so completing one reads nothing a person did not type. A
 /// start that fits one word becomes that word, and a start that fits several is carried as far as
 /// they agree.
-pub(crate) fn complete_argument(line: &str) -> Option<String> {
+pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
     let line = line.trim_start();
+    if let Some(typed) = line.strip_prefix(MODE_COMMAND) {
+        return complete_exact_word(MODE_COMMAND, typed, skills);
+    }
     if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
         let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
             .iter()
@@ -740,11 +763,26 @@ pub(crate) fn complete_argument(line: &str) -> Option<String> {
 }
 
 fn complete_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
+    complete(command, after, words, str::to_ascii_lowercase)
+}
+
+/// [`complete_word`] for names that are matched as typed, because `/mode` takes a skill's name
+/// with its case.
+fn complete_exact_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
+    complete(command, after, words, str::to_string)
+}
+
+fn complete(
+    command: &str,
+    after: &str,
+    words: &[&str],
+    fold: fn(&str) -> String,
+) -> Option<String> {
     let typed = after.strip_prefix(' ')?;
     if typed.is_empty() || typed.contains(char::is_whitespace) {
         return None;
     }
-    let typed = typed.to_ascii_lowercase();
+    let typed = fold(typed);
     let mut fits = words.iter().filter(|word| word.starts_with(&typed));
     let mut shared = fits.next()?.to_string();
     for word in fits {
@@ -1147,6 +1185,7 @@ mod tests {
             (RENAME_COMMAND, false, false, false, false),
             (NOTE_COMMAND, false, false, false, false),
             (STYLE_COMMAND, false, false, false, false),
+            (MODE_COMMAND, false, true, true, true),
             (FORGET_TRUST_COMMAND, false, false, false, false),
             (ISSUE_COMMAND, false, false, false, false),
             (PR_COMMAND, false, false, false, false),

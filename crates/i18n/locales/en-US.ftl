@@ -2922,6 +2922,14 @@ command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
 command-advisor = Name the model the planner may consult, say which it may, or drop the choice
 command-style = Choose how the planner answers: list the styles, pick one, or clear the pick
+command-mode = Keep a skill applied to every turn: list skills, pick one, or leave
+session-mode-set = the { $skill } skill is in force from the next turn, until you leave it with /mode off
+session-mode-in-force = mode: { $skill }; available: { $skills }
+session-mode-none = no mode; available: { $skills }
+session-mode-cleared = mode left
+session-mode-unknown = no skill called { $skill }; available: { $skills }
+session-mode-resumed = this session was in the { $skill } mode, which is in force again
+input-skill-mode = mode: { $skill }
 command-config = Choose how the input box edits text
 command-language = Choose the interface language for the next start, or drop the choice
 command-add-dir = Open another directory and trust it for this session, or close one
@@ -3776,6 +3784,12 @@ agent-model-outranked =
 agent-style-not-used =
     the { $style } style was not used: its file is not trusted or is no longer a style, so this turn
     opened with the usual words
+# Said where the skill the person put in force with /mode could not be applied to a turn: it is no
+# longer found, or its file is no longer trusted. The turn goes on without it. The skill is the name
+# the person typed.
+agent-skill-mode-not-used =
+    the { $skill } mode was not applied: its skill is not found or not trusted, so this turn ran
+    without it
 # Said where a turn is addressed to a definition whose isolation line asks for a checkout of its
 # own. Only a delegate is given one, so the person's own turn works in their working directory. The
 # definition's name is the word of a vouched-for file.

@@ -203,6 +203,23 @@ impl Session {
         self.style.as_ref()
     }
 
+    /// Only a name, which each turn resolves again, so it can name a skill that has since gone.
+    pub fn skill_mode(&self) -> Option<&str> {
+        self.skill_mode.as_deref()
+    }
+
+    /// Keep this skill applied to every later turn, or `None` to leave the mode (SKILL-21).
+    pub fn choose_skill_mode(&mut self, name: Option<String>) {
+        self.skill_mode = name;
+    }
+
+    /// Put back the mode a resumed record held, and say so, since the transcript shown has no line
+    /// of its own for it.
+    pub fn resume_skill_mode(&mut self, name: &str) {
+        self.skill_mode = Some(name.to_string());
+        self.note(t!(session_mode_resumed, skill = name));
+    }
+
     /// The names of the project's styles offered after the others, as last read.
     pub fn project_styles(&self) -> &[String] {
         &self.project_styles

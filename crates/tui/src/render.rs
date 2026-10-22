@@ -6824,6 +6824,18 @@ mod tests {
         }
     }
 
+    /// SKILL-21. The mode in force is named on the box for as long as it is in force, and the box
+    /// of a session in none says nothing of one.
+    #[test]
+    fn the_box_names_the_mode_while_one_is_in_force() {
+        let mut session = Session::new("none");
+        assert!(!rendered_at(&session, 100, 24).contains("mode: "));
+        session.choose_skill_mode(Some("tdd-playbook".to_string()));
+        assert!(rendered_at(&session, 100, 24).contains("mode: tdd-playbook"));
+        session.choose_skill_mode(None);
+        assert!(!rendered_at(&session, 100, 24).contains("mode: "));
+    }
+
     /// A skill row says where the skill was found. Nothing below the box wraps, so a description
     /// too long for the screen is cut short of the edge, which keeps that on the row, and one the
     /// file wrapped or put an escape in is still one row of plain text.

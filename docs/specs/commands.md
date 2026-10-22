@@ -1349,6 +1349,34 @@ word into a dispatch that decides something.
 `verified-by: bravebot_agent::mcp::a_quoted_value_unescapes_a_quote_and_a_backslash_and_nothing_else`
 `verified-by: bravebot_agent::mcp::words_that_are_not_arguments_are_refused_naming_the_word`
 
+<a id="CMD-27"></a>
+### CMD-27: `/mode <skill>` keeps a skill applied to every turn, and `/mode off` leaves it
+
+`/mode` alone says which skill is the session's mode, or that there is none, and lists the names it
+could take. `/mode <skill>` takes one by its whole name, among the skills a turn starting now would
+resolve, read the way the box offers them ([CMD-9](#CMD-9)): through the trust map and the rules, so
+a skill from a project nobody vouched for is not named, offered or taken. A name that matches none,
+a prefix, another case and a name with a space after it, keeps the mode that was there and says so.
+`/mode off` leaves the mode. The name is stored in the session's record ([SKILL-21](skills.md#SKILL-21))
+and shown in the border of the box while the mode stands, so a person who has forgotten it is told by
+the place they type in.
+
+The command's word is written in this program like every other ([CMD-7](#CMD-7)): no skill becomes a
+command, and a skill called `mode` is not offered as a row. A command typed in full is offered first, so Enter on
+`/mode` runs it although `/model` shares its letters. Only a line a person typed sets or clears
+a mode. A mid-turn `/mode` waits for the turn to end, which is the kind CMD-8 gives every command it
+does not name: the turn in flight was built without the change.
+
+**Why.** The same words the skill rows carry are the ones a person is choosing between, so a
+mode needs no second list. Taking only a name the driver enumerated keeps the mode a choice among
+sources already trusted for skills, and not a way to name a file.
+
+`verified-by: bravebot_tui::app::the_mode_command_puts_a_skill_in_force_by_its_whole_name_and_off_leaves_it`
+`verified-by: bravebot_tui::app::the_mode_command_takes_a_name_or_nothing`
+`verified-by: bravebot_tui::app::enter_on_mode_typed_in_full_runs_mode_and_not_model`
+`verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`
+`verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+
 ## Known costs
 
 - **The list is one row per command and per skill, and a screen with no room for it loses the
