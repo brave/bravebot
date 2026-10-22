@@ -1104,6 +1104,11 @@ Questions are put one at a time. You may choose an option, answer in your own wo
 skipped question is an answer to work with rather than a reason to ask again. An answer is remembered
 for the session, question by question.
 
+In the terminal, a series of more than one ends in a review that lists each question beside your
+answer. Nothing has been sent until you press Enter there. Left goes back a question, a number
+reopens that question from the review, and either brings back what you had answered. A single
+question has no review.
+
 With [`askIdleSeconds`](../customize/configuration.md#askidleseconds) set, the terminal closes a question
 that sits that long with no key pressed, and every question behind it. The planner is told that no
 answer was given in the time allowed and that you may be away, not that you declined, and the answers
