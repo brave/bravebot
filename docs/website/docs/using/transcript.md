@@ -345,7 +345,7 @@ which the list says. A terminal too short for the list loses rows from the middl
 500 lines per result, instead of the few lines the transcript shows by default. Pressing `x` again
 collapses it. The extra lines are cleaned the same way the short view is: control characters are
 replaced and each line is cut to one row. Clicking a call that has more to show does the same for
-that call, and clicking it again collapses it. A drag, a double click or a triple click still selects.
+that call, and clicking it again collapses it. Clicking a delegate's block opens that delegate's view, as the watch key does. A drag, a double click or a triple click still selects.
 
 `v` opens the transcript in your editor. What goes is the rows as they are drawn, margins and all,
 so untrusted content is marked in the file exactly the way it is marked on the screen. It is written

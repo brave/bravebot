@@ -34,6 +34,9 @@ pub struct Laid {
     /// The first row, the last row and the transcript index of each call that has more to show
     /// than it draws, top to bottom. Empty unless the scroller is open.
     pub expandable: Vec<(u16, u16, usize)>,
+    /// The first row, the last row and the transcript index of each delegate's block, top to
+    /// bottom. Empty unless the scroller is open.
+    pub delegates: Vec<(u16, u16, usize)>,
     /// The screen rows of the transcript that continue the line drawn above them, because the
     /// line was wider than the transcript and wrapped, each with whether the wrap broke the line
     /// at a blank. A copy joins them without a line break, and with a space where it did.
@@ -483,6 +486,49 @@ impl Session {
             return false;
         };
         self.flip_call(index, start, relaid);
+        true
+    }
+
+    /// Open the view of the delegate whose block is drawn on the screen row `row`, as a click on
+    /// it does (MOUSE-10).
+    ///
+    /// Says whether a delegate was there. The view it opens is the one the watch key opens on that
+    /// delegate, and it closes the same way. Nothing happens where a view is already open, the
+    /// key list is over the transcript, or the row belongs to no delegate.
+    pub fn watch_delegate_at(&mut self, row: u16) -> bool {
+        if self.watching.is_some()
+            || row >= self.laid.height
+            || self.scroller().is_none_or(|scroller| scroller.help)
+        {
+            return false;
+        }
+        let at = self.top_row().saturating_add(row);
+        let Some(&(_, _, index)) = self
+            .laid
+            .delegates
+            .iter()
+            .find(|(start, end, _)| (*start..=*end).contains(&at))
+        else {
+            return false;
+        };
+        let Some(id) = self
+            .transcript
+            .get(index)
+            .and_then(|entry| entry.delegate.as_ref())
+            .map(|delegate| delegate.id)
+        else {
+            return false;
+        };
+        let Some(place) = self.delegates().iter().position(|held| held.id == id) else {
+            return false;
+        };
+        self.held_view = Some(self.scroll);
+        self.scroll = 0;
+        self.watching = Some(Watching {
+            at: self.asides.len() + place,
+            listing: false,
+            on_session: false,
+        });
         true
     }
 

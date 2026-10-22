@@ -8877,6 +8877,7 @@ mod tests {
                 prompts: Vec::new(),
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
             });
@@ -9524,6 +9525,7 @@ mod tests {
                 prompts: vec![0, 30, 60],
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
             });
@@ -10079,6 +10081,7 @@ mod tests {
                 prompts: Vec::new(),
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
             });
@@ -10105,6 +10108,7 @@ mod tests {
                 prompts: vec![10, 40, 70],
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
             });
@@ -10139,6 +10143,7 @@ mod tests {
                 prompts: Vec::new(),
                 matches: vec![20, 50, 80],
                 expandable: Vec::new(),
+                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
             });
@@ -11750,6 +11755,67 @@ mod tests {
 
         assert!(session.stop_watching());
         assert!(!render::as_text(&session).contains("out 29"));
+    }
+
+    /// The scroller over one call and two delegates, so that a click has to pick the right one.
+    fn scroller_over_two_delegates() -> Session {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        let mut session = scroller_over_one_call();
+        for (n, task) in [(1, "find the parser"), (2, "write the docs")] {
+            session.delegate_started(Delegation {
+                stop: Default::default(),
+                id: DelegateId::nth(n),
+                kind: "reader".to_string(),
+                task: task.to_string(),
+            });
+        }
+        session.laid.height = 40;
+        session.note_layout(render::as_last_drawn(&session));
+        session
+    }
+
+    /// MOUSE-10: a click on a delegate's block in the scroller opens the view of that delegate and
+    /// not of another, and the key that closes the view returns to the scroller.
+    #[test]
+    fn a_click_on_a_delegate_in_the_scroller_opens_that_delegates_view() {
+        let mut session = scroller_over_two_delegates();
+        let (row, column) = find_on_text(&session, "write the docs");
+
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+
+        let delegate = session.watched_delegate().expect("a delegate's view");
+        assert_eq!(delegate.task, "write the docs");
+        assert!(session.watching_a_delegate());
+        assert!(session.selection.is_none());
+        assert!(session.stop_watching());
+        assert!(session.scrolling());
+    }
+
+    /// A drag that begins on a delegate is a selection, and a click beside it opens nothing.
+    #[test]
+    fn a_drag_over_a_delegate_or_a_click_off_one_opens_no_view() {
+        let mut session = scroller_over_two_delegates();
+        let (row, column) = find_on_text(&session, "write the docs");
+        swept(&mut session, (row, column), (row, column + 3));
+        handle_mouse(
+            &mut session,
+            drag(MouseEventKind::Up(MouseButton::Left), row, column + 3),
+        );
+        assert!(session.watching().is_none());
+
+        let (call, column) = find_on_text(&session, "out 0");
+        click(&mut session, call, column);
+        assert!(session.watching().is_none());
+    }
+
+    /// With the key list open the click is on the list, which covers the delegate.
+    #[test]
+    fn a_click_with_the_scroller_help_open_opens_no_delegate() {
+        let mut session = scroller_over_two_delegates();
+        let (row, column) = find_on_text(&session, "write the docs");
+        session.toggle_scroller_help();
+        click(&mut session, row, column);
+        assert!(session.watching().is_none());
     }
 
     /// The row and column where `needle` is drawn in the session's own frame.
