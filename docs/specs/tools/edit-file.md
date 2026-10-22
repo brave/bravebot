@@ -224,6 +224,9 @@ what a read of the notebook shows.
 `verified-by: bravebot_agent::turn::an_approved_cell_edit_changes_only_that_cell`
 `verified-by: bravebot_agent::turn::a_cell_edit_of_an_untrusted_notebook_is_refused`
 `verified-by: bravebot_agent::turn::a_cell_argument_is_refused_beside_a_passage_and_on_a_plain_file`
+`verified-by: bravebot_agent::turn::an_insert_at_zero_puts_a_markdown_cell_first`
+`verified-by: bravebot_agent::turn::an_insert_after_a_cell_defaults_to_a_code_cell_placed_after_it`
+`verified-by: bravebot_agent::turn::a_delete_removes_only_the_numbered_cell`
 `verified-by: bravebot_agent::notebook::a_replace_changes_one_cell_and_keeps_every_other_byte`
 `verified-by: bravebot_agent::notebook::a_replaced_code_cell_loses_its_outputs_and_keeps_its_metadata_and_id`
 `verified-by: bravebot_agent::notebook::a_replace_with_the_same_source_changes_nothing`

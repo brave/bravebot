@@ -11409,6 +11409,106 @@ fn an_approved_cell_edit_changes_only_that_cell() {
     assert_eq!(written, expected);
 }
 
+/// Runs one `edit_file` call on a vouched-for `n.ipynb` that holds `NOTEBOOK_WITH_AN_OUTPUT`, in a
+/// scratch directory called `name`. Returns the file as written and the result the planner was
+/// given.
+fn edit_the_notebook(name: &str, arguments: &str) -> (String, String) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("n.ipynb"), NOTEBOOK_WITH_AN_OUTPUT).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("edit_file", arguments),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let task = Task::new("edit n.ipynb");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let written = std::fs::read_to_string(scratch.path.join("n.ipynb")).unwrap();
+    (written, second)
+}
+
+/// `insert_after` with `cell` 0 puts a new cell of the given type first, with an id no cell has, and
+/// leaves every other cell as it was.
+#[test]
+fn an_insert_at_zero_puts_a_markdown_cell_first() {
+    let (written, result) = edit_the_notebook(
+        "insert-notebook-first",
+        r##"{"path":"n.ipynb","cell":0,"cell_action":"insert_after","cell_type":"markdown","new_text":"# Top"}"##,
+    );
+
+    let expected = NOTEBOOK_WITH_AN_OUTPUT.replacen(
+        "\"cells\": [\n",
+        "\"cells\": [\n  {\n   \"cell_type\": \"markdown\",\n   \"id\": \"cell-1\",\n   \"metadata\": {},\n   \"source\": [\n    \"# Top\"\n   ]\n  },\n",
+        1,
+    );
+    assert_eq!(written, expected);
+    assert!(
+        result.contains("edited n.ipynb: inserted a cell after cell 0"),
+        "{result}"
+    );
+}
+
+/// `insert_after` names the cell the new one follows, and a cell with no `cell_type` is a code cell.
+#[test]
+fn an_insert_after_a_cell_defaults_to_a_code_cell_placed_after_it() {
+    let (written, result) = edit_the_notebook(
+        "insert-notebook-after",
+        r##"{"path":"n.ipynb","cell":1,"cell_action":"insert_after","new_text":"y = 2"}"##,
+    );
+
+    let expected = NOTEBOOK_WITH_AN_OUTPUT.replacen(
+        "   \"source\": [\n    \"# Title\"\n   ]\n  },\n",
+        "   \"source\": [\n    \"# Title\"\n   ]\n  },\n  {\n   \"cell_type\": \"code\",\n   \"execution_count\": null,\n   \"id\": \"cell-1\",\n   \"metadata\": {},\n   \"outputs\": [],\n   \"source\": [\n    \"y = 2\"\n   ]\n  },\n",
+        1,
+    );
+    assert_eq!(written, expected);
+    assert!(
+        result.contains("edited n.ipynb: inserted a cell after cell 1"),
+        "{result}"
+    );
+}
+
+/// `delete` removes the numbered cell and nothing else, and takes no `new_text`.
+#[test]
+fn a_delete_removes_only_the_numbered_cell() {
+    let (written, result) = edit_the_notebook(
+        "delete-notebook-cell",
+        r##"{"path":"n.ipynb","cell":1,"cell_action":"delete"}"##,
+    );
+
+    let expected = NOTEBOOK_WITH_AN_OUTPUT.replacen(
+        "  {\n   \"cell_type\": \"markdown\",\n   \"id\": \"intro\",\n   \"metadata\": {},\n   \"source\": [\n    \"# Title\"\n   ]\n  },\n",
+        "",
+        1,
+    );
+    assert_ne!(
+        expected, NOTEBOOK_WITH_AN_OUTPUT,
+        "the fixture lost its first cell"
+    );
+    assert_eq!(written, expected);
+    assert!(
+        result.contains("edited n.ipynb: deleted cell 1"),
+        "{result}"
+    );
+}
+
 /// A cell edit is an edit: it is refused on a notebook nobody vouched for, without asking.
 #[test]
 fn a_cell_edit_of_an_untrusted_notebook_is_refused() {
