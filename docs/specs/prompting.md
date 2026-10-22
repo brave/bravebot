@@ -100,7 +100,7 @@ recorded in: the remembered-lines record, the settings file a pattern would go i
 kept reach and the record and the key files of a chosen key. The terminal's trust questions draw the
 file a yes is kept in and the file each proposed rule came from the same way, and so does the
 question in lines for the file a yes is kept in. The question about the rules a checkout proposed
-draws the text of each rule the same way. The startup trust question the bridge puts to an editor or
+draws the text of each rule the same way, except that a space in it is never marked, since a rule is not a name. The startup trust question the bridge puts to an editor or
 to the mobile app carries the directory and the file a yes is kept in spelled for a person, and both
 draw those. The mobile app's write, run and trust cards, and the line its transcript keeps for a
 waiting write, draw the spelled paths the bridge sends and never the paths as held. A name that is
@@ -145,6 +145,7 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_tui::confirm::the_run_prompt_marks_an_unreadable_record_path`
 `verified-by: bravebot_tui::trust_prompt::the_trust_rows_name_a_file_with_a_name_that_would_draw_as_another`
 `verified-by: bravebot_tui::trust_prompt::a_proposed_rule_holding_an_invisible_character_is_drawn_spelled`
+`verified-by: bravebot_agent::confirm::a_space_in_the_text_of_a_rule_is_not_marked_as_the_edge_of_a_name`
 `verified-by: bravebot_approval::lib::a_run_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::a_run_question_spells_the_directory_and_the_binary_that_would_draw_as_another`

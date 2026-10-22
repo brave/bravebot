@@ -637,7 +637,7 @@ fn draw_granted(
     // is what explains where a line the person never wrote came from.
     for rule in rules {
         lines.push(Line::from(Span::styled(
-            format!("  {}", bravebot_agent::confirm::shown_name(&rule.rule)),
+            format!("  {}", bravebot_agent::confirm::shown_text(&rule.rule)),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
@@ -1957,6 +1957,13 @@ mod tests {
         let plain = drawn("Read(/work/notes.md)");
         assert!(plain.contains("Edit(src/**)"), "{plain}");
         assert!(plain.contains("Read(/work/notes.md)"), "{plain}");
+        // A rule is not a path: a space before a `/` is between two words and is not marked.
+        let spaced = drawn("Bash(cat /etc/hosts)");
+        assert!(spaced.contains("Bash(cat /etc/hosts)"), "{spaced}");
+        assert!(
+            !spaced.contains('"') && !spaced.contains('\u{2423}'),
+            "a rule with a space beside a separator was spelled: {spaced}"
+        );
         assert!(
             !plain.contains('"'),
             "a rule that needs no spelling was quoted: {plain}"
