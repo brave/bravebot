@@ -1221,6 +1221,7 @@ mod tests {
         reporter.narration("about to write".into());
         reporter.notice("AGENTS.md was not loaded".into());
         reporter.streaming("about".into());
+        reporter.thinking("weighing it".into());
         reporter.composing(Some("Write"));
         reporter.delegate_waiting(DelegateId::nth(1));
         reporter.tool_started(Activity::running("Write", "notes.md"));
@@ -1238,6 +1239,7 @@ mod tests {
                 "narration",
                 "notice",
                 "streaming",
+                "thinking",
                 "composing",
                 "delegate waiting",
                 "started",
