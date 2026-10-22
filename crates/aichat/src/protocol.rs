@@ -375,7 +375,8 @@ struct NamedSchema {
 }
 
 impl ResponseFormat {
-    /// The schema a reply must match.
+    /// The `generateContent` client sends the raw schema as `responseJsonSchema`, not this
+    /// protocol's `response_format` wrapper.
     pub fn schema(&self) -> &serde_json::Value {
         &self.json_schema.schema
     }

@@ -3233,10 +3233,10 @@ value, while which models read a budget at all is learned from a refusal as BACK
   leak, since the host is Google's own. The key alone names the service, so exporting it for any
   other Google tool also takes it off the environment of the programs this agent starts.
 
-- **The compiled Gemini list was answered by the other route.** Each id on BACKEND-49's list was
-  answered by the OpenAI-compatible endpoint, and express mode serves the same ids under the native
-  API without that having been checked for each, so a row that express mode does not serve fails
-  when picked. A block naming models replaces the list, and any model is reachable named qualified.
+- **The compiled Gemini list is unchecked against express mode.** Each id on BACKEND-49's list is
+  one the OpenAI-compatible endpoint answers, and express mode is assumed to serve the same ids under
+  the native API without that having been checked for each, so a row that express mode does not
+  serve fails when picked. A block naming models replaces the list, and any model is reachable named qualified.
 
 - **Express mode reports no thinking to `/thinking`.** The service returns a summary of the model's
   reasoning only when the request asks for one, and this build does not ask, so the screen has none
