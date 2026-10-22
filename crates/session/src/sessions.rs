@@ -6070,6 +6070,7 @@ mod tests {
                 conversation: &empty,
                 turns: 1,
                 tokens: 0,
+                split: Default::default(),
                 spend: &spend,
                 timing: &timing,
                 model: None,
