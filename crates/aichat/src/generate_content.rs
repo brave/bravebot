@@ -65,6 +65,8 @@ pub struct GenerateContentClient<'a> {
     /// service has never heard of.
     model: String,
     token: Option<Secret>,
+    /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
+    headers: Vec<(String, Secret)>,
     cancel: Option<Cancel>,
     /// Whether requests still carry the thinking budget a turn's level asks for.
     ///
@@ -98,6 +100,7 @@ impl<'a> GenerateContentClient<'a> {
             provider,
             model: model.into(),
             token,
+            headers: Vec::new(),
             cancel: None,
             effort: true,
             recalled: Refusals::default(),
@@ -130,6 +133,16 @@ impl<'a> GenerateContentClient<'a> {
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
         self.cancel = Some(cancel);
+        self
+    }
+
+    /// Also send the headers the gateway's block asked for, already resolved (BACKEND-60).
+    ///
+    /// Separate from [`Self::new`] because a value may name a variable and this crate reads none:
+    /// the caller that resolved the token resolves these at the same moment, from the same
+    /// environment.
+    pub fn with_gateway_headers(mut self, headers: Vec<(String, Secret)>) -> Self {
+        self.headers = headers;
         self
     }
 
@@ -268,6 +281,12 @@ impl<'a> GenerateContentClient<'a> {
             // layer, which does not know this header is a credential.
             let (name, value) = self.provider.credential_header(token);
             http = http.socket_header(name, value);
+        }
+        // After the credential, and never over it: a name this request already set is refused
+        // where the block is read, because `Request::header` appends and a second copy of one of
+        // these would be sent rather than replace the first.
+        for (name, value) in &self.headers {
+            http = http.header(name.clone(), value.expose());
         }
         let bound = reply_bound(self.stated_ceiling().unwrap_or(ASSUMED_CEILING));
         // A stream's headers come at once and the model writes after them; a reply asked for whole

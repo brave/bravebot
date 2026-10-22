@@ -2321,8 +2321,9 @@ fn a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated() {
     )
     .expect("policy");
 
-    let models = bravebot_aichat::models::list_from_gateway(&mut policy, &provider, None, &egress)
-        .expect("the roster was fetched");
+    let models =
+        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, None, &[], &egress)
+            .expect("the roster was fetched");
     assert_eq!(models[0].key, "ollama/qwen3-coder:30b");
 
     let captured = received.recv().expect("request captured");
@@ -2353,8 +2354,14 @@ fn a_gateway_with_a_credential_is_asked_what_that_account_may_reach() {
     )
     .expect("policy");
 
-    bravebot_aichat::models::list_from_gateway(&mut policy, &provider, Some("a-token"), &egress)
-        .expect("the roster was fetched");
+    bravebot_aichat::models::list_from_gateway(
+        &mut policy,
+        &provider,
+        Some("a-token"),
+        &[],
+        &egress,
+    )
+    .expect("the roster was fetched");
 
     let captured = received.recv().expect("request captured");
     assert_eq!(captured.request_line, "GET /v1/models/user HTTP/1.1");
@@ -2379,7 +2386,7 @@ fn a_gateways_roster_request_carries_no_brave_product_header() {
         )
         .expect("policy");
 
-        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &egress)
+        bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &[], &egress)
             .expect("the roster was fetched");
 
         let captured = received.recv().expect("request captured");
@@ -2394,6 +2401,73 @@ fn a_gateways_roster_request_carries_no_brave_product_header() {
             "a gateway's roster request named this product (credential: {token:?})"
         );
     }
+}
+
+/// BACKEND-60: the roster request carries `options.headers` the same way a chat request does. A
+/// gateway that needs a header to route a request needs it to answer a listing too, so a roster
+/// asked without one is a person seeing no models with nothing local to explain it. Dropping the
+/// loop that attaches `headers` in `list_from_gateway` would pass every other test here, since
+/// each of them passes `&[]`; this is the one that would catch it.
+#[test]
+fn a_header_the_block_asked_for_reaches_the_roster_request() {
+    let (endpoint, received) = serve(GATEWAY_ROSTER);
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{
+                "baseURL": "{endpoint}/v1",
+                "headers": {{"X-Tenant-Id": "team-7", "x-route": "{{env:GW_ROUTE}}"}}
+            }}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let headers = provider.request_headers(|name| match name {
+        "GW_ROUTE" => Some("eu".to_string()),
+        _ => None,
+    });
+
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    bravebot_aichat::models::list_from_gateway(
+        &mut policy,
+        &provider,
+        Some("a-token"),
+        &headers,
+        &egress,
+    )
+    .expect("the roster was fetched");
+
+    let captured = received.recv().expect("request captured");
+    assert_eq!(
+        captured.header("x-tenant-id"),
+        Some("team-7"),
+        "the header the block asked for did not reach the roster request: {:?}",
+        captured.headers
+    );
+    assert_eq!(
+        captured.header("x-route"),
+        Some("eu"),
+        "the value went out as the reference the file wrote, not what it resolved to: {:?}",
+        captured.headers
+    );
+    assert_eq!(
+        captured.header("authorization"),
+        Some("Bearer a-token"),
+        "a configured header replaced the credential on the roster request: {:?}",
+        captured.headers
+    );
 }
 
 /// The account-scoped route is a gateway's own extension, so a gateway without it still has to end
@@ -2423,6 +2497,7 @@ fn a_gateway_that_cannot_answer_the_account_question_is_asked_for_its_whole_rost
             &mut policy,
             &provider,
             Some("a-token"),
+            &[],
             &egress,
         )
         .unwrap_or_else(|e| panic!("{name}: the roster was not fetched: {e:?}"));
@@ -2485,6 +2560,7 @@ fn an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists() 
         &mut policy,
         &provider,
         Some("a-token"),
+        &[],
         &egress,
     )
     .expect("the roster was fetched");
@@ -2547,7 +2623,7 @@ fn a_google_vertex_entry_offers_the_compiled_models_without_asking() {
 
     for token in [Some("placeholder-key"), None] {
         let models =
-            bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &egress)
+            bravebot_aichat::models::list_from_gateway(&mut policy, &provider, token, &[], &egress)
                 .expect("nothing to fetch is not a failure");
         let keys: Vec<&str> = models.iter().map(|model| model.key.as_str()).collect();
         let expected: Vec<String> = compiled
@@ -2663,6 +2739,90 @@ fn a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refu
             }
         }
     }
+}
+
+/// A gateway in front of a service routes on headers of its own, and a request that arrives
+/// without them is refused or sent to the wrong tenant. The configured header has to arrive
+/// beside the credential the client sets. A request carrying only the configured header is
+/// unauthenticated. A request carrying only the credential is the request the block was written
+/// to change. A header value naming a variable is resolved by the caller, so the resolved value
+/// is what has to be on the wire.
+#[test]
+fn a_header_the_block_asked_for_reaches_the_request() {
+    let model = "a-model-behind-a-routing-header";
+    let (endpoint, received) = serve(REPLY);
+    let block = format!(
+        r#"{{"provider": {{"a-gateway": {{
+            "options": {{
+                "baseURL": "{endpoint}",
+                "headers": {{"X-Tenant-Id": "team-7", "x-route": "{{env:GW_ROUTE}}"}}
+            }},
+            "models": {{"{model}": {{}}}}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let headers = provider.request_headers(|name| match name {
+        "GW_ROUTE" => Some("eu".to_string()),
+        _ => None,
+    });
+
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(
+            &provider,
+            model,
+            Some(bravebot_config::Secret::new("a-token")),
+        )
+        .with_gateway_headers(headers)
+        .complete(
+            &mut policy,
+            &ChatRequest::new(model, vec![Message::user("hi")]),
+        )
+        .expect("the gateway answered");
+
+    let sent = received.recv().expect("request captured");
+    assert_eq!(
+        sent.header("x-tenant-id"),
+        Some("team-7"),
+        "the header the block asked for did not reach the request: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.header("x-route"),
+        Some("eu"),
+        "the value went out as the reference the file wrote: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.header("authorization"),
+        Some("Bearer a-token"),
+        "a configured header replaced the credential: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-tenant-id"))
+            .count(),
+        1,
+        "one configured header was sent twice: {:?}",
+        sent.headers
+    );
 }
 
 /// A malformed tool call must not hide a valid bill.
@@ -3800,6 +3960,71 @@ fn an_anthropic_request_carries_its_key_in_x_api_key_and_nowhere_else() {
     );
 }
 
+/// BACKEND-60 says a configured header goes on every request, the Messages protocol included, and
+/// that a name the credential goes in is refused where the block is read: `x-api-key` here, not
+/// `authorization`, since that is where an `anthropic` entry's key goes (BACKEND-57).
+#[test]
+fn a_header_the_block_asked_for_reaches_an_anthropic_request() {
+    let (endpoint, received) = serve(MESSAGES_REPLY);
+    let block = format!(
+        r#"{{"provider": {{"anthropic": {{
+            "env": ["ANTHROPIC_API_KEY"],
+            "options": {{
+                "baseURL": "{endpoint}/v1",
+                "headers": {{"X-Tenant-Id": "team-7", "x-api-key": "a-second-credential"}}
+            }}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    assert_eq!(
+        provider.headers_refused,
+        [(
+            "x-api-key".to_string(),
+            bravebot_config::provider::HeaderFault::Reserved
+        )],
+        "the credential's own header was not refused at the block"
+    );
+    let headers = provider.request_headers(|_| None);
+
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    AnthropicClient::new(
+        &config,
+        &egress,
+        &provider,
+        "claude-test",
+        Some(bravebot_config::Secret::new(ANTHROPIC_KEY)),
+    )
+    .with_gateway_headers(headers)
+    .complete(
+        &mut policy,
+        &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]),
+    )
+    .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(
+        sent.header("x-tenant-id"),
+        Some("team-7"),
+        "the header the block asked for did not reach the request: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.header("x-api-key"),
+        Some(ANTHROPIC_KEY),
+        "a configured header replaced the credential: {:?}",
+        sent.headers
+    );
+}
+
 /// A block that names nowhere for a key to live is somebody saying none is needed, so none is sent:
 /// not a header with nothing in it, and not whatever an exported variable meant for another tool
 /// holds.
@@ -4533,6 +4758,7 @@ fn an_anthropic_listing_is_asked_for_once_as_a_whole_page_with_the_key_in_its_he
         &mut policy,
         &provider,
         Some(ANTHROPIC_KEY),
+        &[],
         &egress,
     )
     .expect("the roster was fetched");
@@ -4941,6 +5167,7 @@ fn an_anthropic_key_does_not_follow_a_redirect_to_another_host() {
         &mut policy,
         &provider,
         Some(ANTHROPIC_KEY),
+        &[],
         &egress,
     )
     .expect("the redirected listing was answered");
@@ -5071,6 +5298,68 @@ fn a_google_express_request_carries_its_key_in_x_goog_api_key_and_nowhere_else()
     assert_eq!(body["contents"][0]["parts"][0]["text"], "hello");
     assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be brief");
     assert!(body.get("model").is_none(), "{body}");
+}
+
+/// BACKEND-60 says a configured header goes on every request, the native `generateContent` API
+/// included, and that a name the credential goes in is refused where the block is read:
+/// `x-goog-api-key` here, which [BACKEND-51](../../../docs/specs/backends.md#BACKEND-51) already
+/// refuses.
+#[test]
+fn a_header_the_block_asked_for_reaches_a_google_express_request() {
+    let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+    let block = format!(
+        r#"{{"provider": {{"google-vertex": {{
+            "npm": "@ai-sdk/google-vertex",
+            "options": {{
+                "apiKey": "in-the-file",
+                "baseURL": "{endpoint}/v1",
+                "headers": {{"X-Tenant-Id": "team-7", "x-goog-api-key": "a-second-credential"}}
+            }}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    assert_eq!(
+        provider.headers_refused,
+        [(
+            "x-goog-api-key".to_string(),
+            bravebot_config::provider::HeaderFault::Reserved
+        )],
+        "the credential's own header was not refused at the block"
+    );
+    let headers = provider.request_headers(|_| None);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    express_client(&egress, &provider, "google/gemini-test")
+        .with_gateway_headers(headers)
+        .complete(
+            &mut policy,
+            &ChatRequest::new(
+                "google-vertex/google/gemini-test",
+                vec![Message::user("hello")],
+            ),
+        )
+        .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(
+        sent.header("x-tenant-id"),
+        Some("team-7"),
+        "the header the block asked for did not reach the request: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.header("x-goog-api-key"),
+        Some(GOOGLE_KEY),
+        "a configured header replaced the credential: {:?}",
+        sent.headers
+    );
 }
 
 /// A block that names nowhere for a key to live sends none: not a header with nothing in it.

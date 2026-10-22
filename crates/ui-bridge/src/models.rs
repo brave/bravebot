@@ -76,6 +76,7 @@ fn roster(config: &Config) -> (Vec<Model>, Vec<String>) {
         // qualification in one place, and the decode stays a declassification site the agent
         // owns rather than one this crate has to be pinned for.
         let token = bearer(&credential);
+        let headers = provider.request_headers(|name| std::env::var(name).ok());
         let result = Policy::begin(
             routing,
             ReleasePlan::new(),
@@ -84,7 +85,7 @@ fn roster(config: &Config) -> (Vec<Model>, Vec<String>) {
         )
         .ok()
         .and_then(|mut policy| {
-            models::list_from_gateway(&mut policy, provider, token, &Egress::new()).ok()
+            models::list_from_gateway(&mut policy, provider, token, &headers, &Egress::new()).ok()
         });
         match result {
             Some(listed) => rows.extend(listed),

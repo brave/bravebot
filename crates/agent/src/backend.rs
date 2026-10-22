@@ -1097,18 +1097,48 @@ fn gateway_client<'a>(
     wire_model: &str,
     egress: &'a Egress,
 ) -> Result<GatewayClient<'a>, BackendError> {
-    let token = gateway_token(provider, |name| std::env::var(name).ok())?;
+    let (token, headers) = gateway_request_parts(provider, |name| std::env::var(name).ok())?;
     Ok(match provider.protocol() {
         Protocol::ChatCompletions => GatewayClient::Chat(
-            AichatClient::new(config, egress).for_gateway(provider, wire_model, token),
+            AichatClient::new(config, egress)
+                .for_gateway(provider, wire_model, token)
+                .with_gateway_headers(headers),
         ),
-        Protocol::Messages => GatewayClient::Messages(AnthropicClient::new(
-            config, egress, provider, wire_model, token,
-        )),
-        Protocol::GenerateContent => GatewayClient::GenerateContent(GenerateContentClient::new(
-            egress, provider, wire_model, token,
-        )),
+        Protocol::Messages => GatewayClient::Messages(
+            AnthropicClient::new(config, egress, provider, wire_model, token)
+                .with_gateway_headers(headers),
+        ),
+        Protocol::GenerateContent => GatewayClient::GenerateContent(
+            GenerateContentClient::new(egress, provider, wire_model, token)
+                .with_gateway_headers(headers),
+        ),
     })
+}
+
+/// A gateway's credential and the headers its block names, both resolved.
+///
+/// The credential is `None` where the block named none.
+type GatewayRequestParts = (
+    Option<bravebot_config::Secret>,
+    Vec<(String, bravebot_config::Secret)>,
+);
+
+/// `provider`'s token and the headers its block names, resolved through `lookup`.
+///
+/// One lookup for both. A header value may name a variable ([BACKEND-60]), and it is read at the
+/// point a request needs it on the footing [BACKEND-16] gives a credential: a value read when
+/// settings were loaded is stale in a session where somebody exported another. Resolving both here
+/// means a header is read in the same place and by the same means as the token.
+///
+/// [BACKEND-16]: ../../../docs/specs/backends.md#BACKEND-16
+/// [BACKEND-60]: ../../../docs/specs/backends.md#BACKEND-60
+fn gateway_request_parts(
+    provider: &bravebot_config::provider::Provider,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<GatewayRequestParts, BackendError> {
+    let token = gateway_token(provider, &lookup)?;
+    let headers = provider.request_headers(&lookup);
+    Ok((token, headers))
 }
 
 /// A client for a configured gateway, whichever protocol it speaks.
@@ -1905,6 +1935,18 @@ mod tests {
         content_type: &'static str,
         streamed: bool,
     ) -> (Result<Completion, BackendError>, Received) {
+        call_once_with_options(provider, "", reply, content_type, streamed)
+    }
+
+    /// `call_once`, with `extra_options` as more of the entry's `options` object: a `headers`
+    /// block, for a test that wants one configured.
+    fn call_once_with_options(
+        provider: &str,
+        extra_options: &str,
+        reply: &'static str,
+        content_type: &'static str,
+        streamed: bool,
+    ) -> (Result<Completion, BackendError>, Received) {
         let (endpoint, received) = answer_once(reply, content_type);
         // A Vertex entry states an endpoint and no project, and says by its SDK that the endpoint
         // takes Vertex's own API.
@@ -1915,7 +1957,7 @@ mod tests {
         };
         let block = format!(
             r#"{{"provider": {{"{provider}": {{{sdk}
-                "options": {{"baseURL": "{endpoint}/v1", "apiKey": "a-key"}},
+                "options": {{"baseURL": "{endpoint}/v1", "apiKey": "a-key"{extra_options}}},
                 "models": {{"a-model": {{}}}}
             }}}}}}"#
         );
@@ -2074,6 +2116,52 @@ mod tests {
         }
     }
 
+    /// BACKEND-60: a header a block names reaches the request whichever protocol the gateway
+    /// answers in, through the one path every call takes, `gateway_client`: the Messages API, the
+    /// native `generateContent` API, and chat completions alike. Each of the three builds the
+    /// header in separately, and a test that stopped at `gateway_request_parts` or called
+    /// `with_gateway_headers` by hand, as the aichat crate's own tests do, would still pass with
+    /// any one of those three calls removed.
+    #[test]
+    fn a_header_the_block_asked_for_reaches_the_request_whichever_protocol_it_answers_in() {
+        for (provider, reply, content_type, route) in [
+            (
+                "anthropic",
+                ANTHROPIC_WHOLE,
+                "application/json",
+                "POST /v1/messages HTTP/1.1",
+            ),
+            (
+                "google-vertex",
+                GOOGLE_WHOLE,
+                "application/json",
+                "POST /v1/publishers/google/models/a-model:generateContent HTTP/1.1",
+            ),
+            (
+                "elsewhere",
+                OPENAI_WHOLE,
+                "application/json",
+                "POST /v1/chat/completions HTTP/1.1",
+            ),
+        ] {
+            let (outcome, received) = call_once_with_options(
+                provider,
+                r#", "headers": {"X-Tenant-Id": "team-7"}"#,
+                reply,
+                content_type,
+                false,
+            );
+
+            outcome.expect("the reply was read");
+            assert_eq!(received.0, route, "{provider}");
+            assert_eq!(
+                header(&received, "x-tenant-id"),
+                Some("team-7"),
+                "{provider} did not carry the configured header"
+            );
+        }
+    }
+
     /// A Messages call the service answered with a refusal fails, and the failure carries the one
     /// request it took and the prompt size the service reported, whether the reply was read whole
     /// or as it arrived. The turn spends and records its usage from that, so a path that returned
@@ -2218,6 +2306,69 @@ mod tests {
         assert!(
             gateway_client(&config, provider, wire, &egress).is_ok(),
             "a gateway that names no credential was refused one"
+        );
+    }
+
+    /// BACKEND-60: a header value may be a whole-value `{env:NAME}` reference, read from the
+    /// environment at the point a request needs it, on BACKEND-16's footing for a credential.
+    ///
+    /// A value resolved when settings were loaded and held on the provider would pass a test that
+    /// only checked some value arrives. Two builds from one configuration are asserted here, each
+    /// through a lookup holding a different value, so a cached value shows up as the second build
+    /// carrying the first build's header. The written reference text is asserted absent for the
+    /// same reason: a block whose value was never resolved sends `{env:A_HEADER_VARIABLE}` to the
+    /// service, which is a header the person did not write.
+    #[test]
+    fn a_header_naming_a_variable_is_read_where_the_token_is() {
+        let config = with_providers(
+            r#"{"provider": {"openrouter": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {
+                    "baseURL": "https://openrouter.example.invalid/api/v1",
+                    "headers": {"X-Tenant": "{env:A_HEADER_VARIABLE}"}
+                },
+                "models": {"z-ai/glm-4.6": {}}
+            }}}"#,
+        );
+        let (provider, _) = config.provider_for("z-ai/glm-4.6").expect("offered");
+
+        let built = |held: &'static str| {
+            let (token, headers) = gateway_request_parts(provider, move |name| match name {
+                "A_TOKEN_VARIABLE" => Some("a-token".to_string()),
+                "A_HEADER_VARIABLE" => Some(held.to_string()),
+                _ => None,
+            })
+            .expect("not refused");
+            let token = token
+                .expect("a token was named and held")
+                .expose()
+                .to_string();
+            let headers: Vec<(String, String)> = headers
+                .into_iter()
+                .map(|(name, value)| (name, value.expose().to_string()))
+                .collect();
+            (token, headers)
+        };
+
+        let (token, headers) = built("the-first-value");
+        assert_eq!(token, "a-token");
+        assert_eq!(
+            headers,
+            vec![("x-tenant".to_string(), "the-first-value".to_string())],
+            "the header did not carry what the lookup held"
+        );
+
+        let (_, headers) = built("the-second-value");
+        assert_eq!(
+            headers,
+            vec![("x-tenant".to_string(), "the-second-value".to_string())],
+            "the header carried a value from an earlier resolution"
+        );
+        assert!(
+            !headers
+                .iter()
+                .any(|(_, value)| value.contains("{env:") || value.contains("A_HEADER_VARIABLE")),
+            "the reference was sent unresolved: {headers:?}"
         );
     }
 
