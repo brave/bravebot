@@ -2044,7 +2044,7 @@ function Card({
             text: decision === 'reject' ? 'You refused this command' : remember ? 'You ran this and vouched for the programs' : 'You ran this once',
           }}
           head={<CardHead icon="window-console" intent={commands === 1 ? 'Run a command' : `Run ${commands} commands`} deciding
-            subject={<code className="path" data-tooltip={request.directory}>{request.directory}</code>} />}
+            subject={<code className="path" data-tooltip={request.shownDirectory}>{request.shownDirectory}</code>} />}
           actions={<>
             <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('run', request.request, false)}>
               Don’t run
@@ -2084,8 +2084,7 @@ function Card({
               <li key={index}>
                 <code className="argv">{stage.display}</code>
                 <span className="resolved">
-                  {stage.startedAs && stage.startedAs !== stage.resolved && `${stage.startedAs} -> `}
-                  {stage.resolved ?? 'not found on PATH'}
+                  {stage.resolved === null ? 'not found on PATH' : stage.shownBinary}
                 </span>
               </li>
             ))}

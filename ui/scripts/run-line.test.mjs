@@ -60,11 +60,13 @@ const asked = (line, confinement, notSandboxed) =>
       {
         program: 'wc',
         resolved: '/usr/bin/wc',
+        shownBinary: '/usr/bin/wc',
         args: ['-l', 'notes.txt', 'report.txt'],
         display: 'wc -l notes.txt report.txt',
       },
     ],
     directory: '/home/someone/project',
+    shownDirectory: '/home/someone/project',
     releasesPrivate: false,
     ambient: [],
     vouches: [{ program: '/usr/bin/wc', args: ['-l'], display: 'wc -l' }],

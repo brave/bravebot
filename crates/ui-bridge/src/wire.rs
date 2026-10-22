@@ -512,6 +512,10 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
                 // The file the step runs after the path that starts it, which is what the
                 // terminal shows under the step.
                 "binary": stage.binary(),
+                // The same file spelled as the terminal draws it, so a path ending in whitespace
+                // or holding a byte that is not text is not drawn as another. The window draws
+                // this and never `binary`, `resolved` or `startedAs`.
+                "shownBinary": bravebot_agent::confirm::shown_binary(stage),
                 "startedAs": stage.started_as,
                 "args": stage.args,
                 "display": stage.as_written(),
@@ -523,6 +527,8 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "request": id,
         "stages": stages,
         "directory": request.directory(),
+        // Spelled as `shownWrites` is.
+        "shownDirectory": request.shown_directory(),
         // The line as the planner spelled it, which is not what an approval binds to: two
         // spellings that compile to the same plan are one endorsement. It is sent because a
         // reader with only the plan has nothing to compare it against, and a compiler that got

@@ -1166,6 +1166,55 @@ fn a_run_request_carries_the_written_files_and_directories_spelled_for_a_person(
     );
 }
 
+/// PROMPT-1: the desktop is handed the directory a line runs in and the file each step runs
+/// already spelled, beside the raw ones, so a card draws what the terminal draws. A path that needs
+/// no spelling is sent as it is, and the held values keep the bytes they had.
+#[test]
+fn a_run_request_carries_the_directory_and_the_binary_spelled_for_a_person() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage, Steps};
+    let run = |directory: &str, started_as: &str, resolved: &str| {
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], directory);
+        let Steps::Pipeline(steps) = &mut request.plan.steps else {
+            panic!("a pipeline");
+        };
+        steps[0].started_as = started_as.into();
+        steps[0].resolved = resolved.into();
+        wire::run_request(1, &request)
+    };
+    let plain = run("/work", "/usr/bin/tee", "/usr/bin/tee");
+    assert_eq!(plain["directory"], json!("/work"));
+    assert_eq!(plain["shownDirectory"], json!("/work"));
+    assert_eq!(plain["stages"][0]["shownBinary"], json!("/usr/bin/tee"));
+
+    let trailing = run("/work ", "/usr/bin/tee ", "/usr/bin/tee ");
+    assert_eq!(trailing["directory"], json!("/work "));
+    assert_eq!(trailing["shownDirectory"], json!("\"/work\u{2423}\""));
+    assert_eq!(trailing["stages"][0]["resolved"], json!("/usr/bin/tee "));
+    assert_eq!(
+        trailing["stages"][0]["shownBinary"],
+        json!("\"/usr/bin/tee\u{2423}\"")
+    );
+
+    // A step started through a link is drawn as the link and the file, each spelled on its own.
+    let linked = run("/work", "/usr/local/bin/tee ", "/usr/bin/te\u{202e}e");
+    assert_eq!(
+        linked["stages"][0]["shownBinary"],
+        json!("\"/usr/local/bin/tee\u{2423}\" -> \"/usr/bin/te\\u{202e}e\"")
+    );
+    assert_eq!(
+        linked["summary"],
+        json!("run 1 step in /work"),
+        "the summary names the directory the card names"
+    );
+    let spelled_summary = run("/wo\u{202e}rk", "/usr/bin/tee", "/usr/bin/tee");
+    assert_eq!(
+        spelled_summary["summary"],
+        json!("run 1 step in \"/wo\\u{202e}rk\"")
+    );
+}
+
 /// PROMPT-1, PATH-003: a directory whose name holds a byte that is not UTF-8 reaches the desktop
 /// spelled with that byte, so the card does not draw it as the directory its replacement character
 /// spells. The held directory is sent with the replacement character, as it always was.

@@ -68,8 +68,8 @@ const vouch = (overrides = {}) =>
 
 const run = (overrides = {}) =>
   t.askedRun({
-    request: 4, stages: [{ program: 'tee', resolved: '/usr/bin/tee', args: [], display: 'tee' }],
-    directory: '/work', releasesPrivate: false, canBeRemembered: false, line: '', plan: 'tee',
+    request: 4, stages: [{ program: 'tee', resolved: '/usr/bin/tee', shownBinary: '/usr/bin/tee', args: [], display: 'tee' }],
+    directory: '/work', shownDirectory: '/work', releasesPrivate: false, canBeRemembered: false, line: '', plan: 'tee',
     writes: ['note.md'], shownWrites: ['note.md'], ambient: [], vouches: [], summary: 'write it',
     confinement: { heading: 'confined to:', directories: ['/work'], shownDirectories: ['/work'], sentences: [] },
     ...overrides,
@@ -111,6 +111,22 @@ test('a run card draws each file the line writes and each directory it is confin
   assert.ok(markup.includes('<code>&quot;/work␣&quot;</code>'), markup)
   assert.ok(!markup.includes(`<code>${WRITTEN}</code>`), markup)
   assert.ok(!markup.includes('<code>/work </code>'), markup)
+})
+
+test('a run card draws the directory it runs in and the file each step runs as spelled', () => {
+  const markup = draw(run({
+    directory: '/work ',
+    shownDirectory: '"/work␣"',
+    stages: [
+      { program: 'tee', resolved: '/usr/bin/tee ', startedAs: '/usr/bin/tee ', shownBinary: '"/usr/bin/tee␣"', args: [], display: 'tee' },
+      { program: 'cat', resolved: '/usr/bin/cat', startedAs: '/usr/local/bin/cat', shownBinary: '/usr/local/bin/cat -> /usr/bin/cat', args: [], display: 'cat' },
+    ],
+  }))
+  assert.ok(markup.includes('<code class="path" data-tooltip="&quot;/work␣&quot;">&quot;/work␣&quot;</code>'), markup)
+  assert.ok(markup.includes('<span class="resolved">&quot;/usr/bin/tee␣&quot;</span>'), markup)
+  assert.ok(markup.includes('<span class="resolved">/usr/local/bin/cat -&gt; /usr/bin/cat</span>'), markup)
+  assert.ok(!markup.includes('/work </code>'), markup)
+  assert.ok(!markup.includes('/usr/bin/tee </span>'), markup)
 })
 
 test('the permissions list draws each rule as spelled, and the root as the project root', () => {

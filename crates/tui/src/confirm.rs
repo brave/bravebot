@@ -1200,6 +1200,158 @@ mod tests {
         }
     }
 
+    /// Whether `screen` has a row that holds `text` and nothing else inside the box.
+    fn has_row(screen: &str, text: &str) -> bool {
+        screen
+            .lines()
+            .any(|row| row.trim_matches(|c: char| c == ' ' || c == '│') == text)
+    }
+
+    /// The run question at a size that holds every row of it, one string per row.
+    fn whole_run_screen(request: &RunRequest) -> String {
+        run_screen(request, (160, 90), 0, &mut RowsShown::default())
+            .0
+            .join("\n")
+    }
+
+    /// PROMPT-1: the run prompt draws the directory the line runs in, in its header and beside the
+    /// command `a` would vouch for, and the file each step runs, quoted and spelled where the path
+    /// would draw as nothing or as another, so a yes to a line in `/work/state ` is not read as one
+    /// in `/work/state`, and the same for the binary it starts.
+    #[test]
+    fn the_run_prompt_marks_an_unreadable_directory_and_binary() {
+        let screen = |directory: &str, binary: &str| {
+            let mut request = a_run(false);
+            request.plan.directory = directory.into();
+            let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+                panic!("a pipeline");
+            };
+            steps[0].resolved = binary.into();
+            steps[0].started_as = binary.into();
+            // The header, and the row of each command `a` would vouch for.
+            let rows = 1 + request.would_vouch_for().len();
+            (whole_run_screen(&request), rows)
+        };
+        let (plain, _) = screen("/work", "/usr/bin/git");
+        assert!(plain.contains("/work"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let (directory, rows) = screen(name, "/usr/bin/git");
+            assert_ne!(directory, plain, "{name:?}");
+            assert_eq!(
+                directory.matches(spelled).count(),
+                rows,
+                "{name:?}\n{directory}"
+            );
+            let (binary, _) = screen("/work", name);
+            assert_ne!(binary, plain, "{name:?}");
+            // The row under the step, and the command `a` would vouch for.
+            assert!(has_row(&binary, spelled), "{name:?}\n{binary}");
+            assert!(
+                binary.contains(&format!("{spelled} log --oneline")),
+                "{name:?}\n{binary}"
+            );
+        }
+    }
+
+    /// PROMPT-1: a step started through a link is drawn as the link and the file it leads to, each
+    /// spelled on its own, so a link and a file that differ only in a trailing space are two paths.
+    #[test]
+    fn the_run_prompt_spells_the_link_and_the_file_a_step_starts_through() {
+        let mut request = a_run(false);
+        let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+            panic!("a pipeline");
+        };
+        steps[0].started_as = "/usr/local/bin/git ".into();
+        steps[0].resolved = "/usr/bin/git\u{202e}".into();
+        let drawn = whole_run_screen(&request);
+        let spelled = "\"/usr/local/bin/git\u{2423}\" -> \"/usr/bin/git\\u{202e}\"";
+        assert!(has_row(&drawn, spelled), "{drawn}");
+        assert!(
+            drawn.contains(&format!("{spelled} log --oneline")),
+            "{drawn}"
+        );
+    }
+
+    /// PROMPT-1, PROMPT-2: the file a yes is recorded in is drawn in each row that names one, the
+    /// remembered-lines record, the settings file a pattern would go in, the record of a kept reach
+    /// and the record of a chosen key with the key files on offer, spelled where the path would draw
+    /// as another.
+    #[test]
+    fn the_run_prompt_marks_an_unreadable_record_path() {
+        /// A run whose row under test names the file it is given.
+        type Naming = fn(&str) -> RunRequest;
+        let rows: [(&str, Naming); 5] = [
+            ("record", |name| RunRequest {
+                record: Some(name.into()),
+                ..a_recordable_run()
+            }),
+            ("pattern", |name| RunRequest {
+                pattern: Some(name.into()),
+                ..a_recordable_run()
+            }),
+            ("reach record", |name| RunRequest {
+                reach_record: Some(name.into()),
+                ..a_run_keeping_remote()
+            }),
+            ("key record", |name| {
+                let mut request = a_run_offering_two_keys();
+                request.key_choice.as_mut().expect("a choice").record = name.into();
+                request
+            }),
+            ("key candidate", |name| {
+                let mut request = a_run_offering_two_keys();
+                request.key_choice.as_mut().expect("a choice").candidates[1] = name.into();
+                request
+            }),
+        ];
+        for (row, request) in rows {
+            let plain = whole_run_screen(&request("/home/someone/.bravebot/file"));
+            assert!(
+                plain.contains("/home/someone/.bravebot/file"),
+                "{row}\n{plain}"
+            );
+            for (name, spelled) in UNSEEN_NAMES {
+                let drawn = whole_run_screen(&request(name));
+                assert_ne!(drawn, plain, "{row}: {name:?}");
+                assert!(drawn.contains(spelled), "{row}: {name:?}\n{drawn}");
+            }
+        }
+    }
+
+    /// PROMPT-1, PATH-003: a directory, a binary and a file a record is written to whose names hold a
+    /// byte that is not UTF-8 are drawn with that byte spelled, so none of them draws as the one its
+    /// replacement-character rendering spells.
+    #[cfg(unix)]
+    #[test]
+    fn the_run_prompt_draws_a_directory_binary_and_record_that_are_not_text_as_their_bytes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let screen = |byte: &[u8]| {
+            let path = |stem: &str| {
+                let mut bytes = stem.as_bytes().to_vec();
+                bytes.extend_from_slice(byte);
+                std::path::PathBuf::from(OsStr::from_bytes(&bytes))
+            };
+            let mut request = a_recordable_run();
+            request.plan.directory = path("/work/dir-");
+            request.record = Some(path("/record/file-"));
+            let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+                panic!("a pipeline");
+            };
+            steps[0].resolved = path("/bin/binary-");
+            steps[0].started_as = path("/bin/binary-");
+            whole_run_screen(&request)
+        };
+        let invalid = screen(b"\xff");
+        let lookalike = screen("\u{fffd}".as_bytes());
+        assert_ne!(invalid, lookalike);
+        for spelled in ["\"/work/dir-\\xff\"", "\"/record/file-\\xff\""] {
+            assert!(invalid.contains(spelled), "{spelled}\n{invalid}");
+        }
+        assert!(has_row(&invalid, "\"/bin/binary-\\xff\""), "{invalid}");
+        assert!(!lookalike.contains("\\xff"), "{lookalike}");
+    }
+
     /// PROMPT-1, PATH-003: the run prompt draws a directory it is confined to, and a file the line
     /// writes, under a directory whose name holds a byte that is not UTF-8 with that byte spelled, so
     /// neither is drawn as the one its replacement-character rendering spells.

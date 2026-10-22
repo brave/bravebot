@@ -92,9 +92,14 @@ from.
 These prompts draw the path they ask about through one function, `shown_name`, which every front end
 uses: the write, overwrite and edit prompts, the credential-read prompt, the prompt about a path
 programs may reach, the questions about a directory, the names a checkout's removal would delete,
-the vouch prompt, and the files a run would write and the directories it is confined to. The
-terminal's trust questions draw the file a yes is kept in and the file each proposed rule came from
-the same way, and so does the question in lines for the file a yes is kept in. A name that is empty,
+the vouch prompt, and the files a run would write and the directories it is confined to. The run
+prompt also draws the directory the line runs in, in its header, on the summary line and beside each
+command `a` would vouch for, and the file each step runs (the path that starts it and the file it
+leads to, each spelled on its own), the same way, and so do the rows that say which file a yes is
+recorded in: the remembered-lines record, the settings file a pattern would go in, the record of a
+kept reach and the record and the key files of a chosen key. The terminal's trust questions draw the
+file a yes is kept in and the file each proposed rule came from the same way, and so does the
+question in lines for the file a yes is kept in. A name that is empty,
 is only whitespace, has a space at either end of it or of a directory in it, or holds a character
 that draws as nothing (a zero-width character, a bidirectional control, a tag character, a variation
 selector, a no-break space) or as a blank cell (the blank braille pattern) is drawn quoted with each
@@ -132,12 +137,17 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_tui::trust_prompt::the_directory_questions_mark_a_name_that_would_draw_as_another`
 `verified-by: bravebot_tui::confirm::the_remove_checkout_question_marks_a_name_that_would_draw_as_another`
 `verified-by: bravebot_tui::confirm::the_run_prompt_marks_an_unreadable_written_file_and_directory`
+`verified-by: bravebot_tui::confirm::the_run_prompt_marks_an_unreadable_directory_and_binary`
+`verified-by: bravebot_tui::confirm::the_run_prompt_marks_an_unreadable_record_path`
 `verified-by: bravebot_tui::trust_prompt::the_trust_rows_name_a_file_with_a_name_that_would_draw_as_another`
 `verified-by: bravebot_approval::lib::a_run_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
+`verified-by: bravebot_cli::plain::a_run_question_spells_the_directory_and_the_binary_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::the_question_in_lines_spells_the_file_a_yes_is_kept_in`
 `verified-by: bravebot_ui_bridge::acp::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
+`verified-by: bravebot_ui_bridge::acp::the_editor_is_read_the_directory_and_the_binary_spelled`
 `verified-by: bravebot_ui_bridge::wire::a_run_request_carries_the_written_files_and_directories_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::wire::a_run_request_carries_the_directory_and_the_binary_spelled_for_a_person`
 `verified-by: bravebot_agent::confirm::a_description_of_a_write_or_a_credential_read_spells_the_name`
 `verified-by: bravebot_cli::plain::a_question_in_lines_spells_a_name_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::acp::the_title_of_a_question_about_a_file_spells_a_name_that_would_draw_as_another`
@@ -148,6 +158,8 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_agent::confirm::a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name`
 `verified-by: bravebot_core::invisible::only_the_blank_braille_pattern_is_a_cell_with_no_mark`
 `verified-by: bravebot_tui::confirm::the_run_prompt_draws_a_path_that_is_not_text_as_the_bytes_it_holds`
+`verified-by: bravebot_tui::confirm::the_run_prompt_draws_a_directory_binary_and_record_that_are_not_text_as_their_bytes`
+`verified-by: bravebot_tui::confirm::the_run_prompt_spells_the_link_and_the_file_a_step_starts_through`
 `verified-by: bravebot_ui_bridge::wire::a_run_request_carries_a_directory_that_is_not_text_spelled_as_the_bytes_it_holds`
 `verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person`
 `verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`

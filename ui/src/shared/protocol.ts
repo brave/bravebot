@@ -493,6 +493,8 @@ export interface Stage {
   startedAs?: string
   /** The file the step runs, which is what the terminal shows under the step. */
   binary?: string
+  /** `startedAs` and `resolved` spelled as `ConfirmRequest.shownPath` is. Draw this and not `binary`, `resolved` or `startedAs`. */
+  shownBinary: string
   args: string[]
   /** The agent's own rendering of the argv, so both front-ends show the same characters. */
   display: string
@@ -756,6 +758,8 @@ export interface RunRequest {
   stdin?: string | null
   stages: Stage[]
   directory: string
+  /** `directory` spelled as `shownWrites` is. Draw this and not `directory`. */
+  shownDirectory: string
   /**
    * Whether approving would hand the user's own data to a program.
    *

@@ -170,7 +170,7 @@ try {
 
   await scene('06-run-output-vouch', async () => {
     await page.locator('.confirm .reject').last().click()
-    await emit('run.request', { request: 3, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, releasesPrivate: false, ambient: [], vouches: [{ program: 'npm', args: ['test'], display: 'npm test' }], summary: 'Run the store tests' })
+    await emit('run.request', { request: 3, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', shownBinary: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, shownDirectory: directory, releasesPrivate: false, ambient: [], vouches: [{ program: 'npm', args: ['test'], display: 'npm test' }], summary: 'Run the store tests' })
     await page.locator('.confirm.run').last().scrollIntoViewIfNeeded()
     await variants('06-run')
     await page.locator('.confirm.run .approve').first().click()

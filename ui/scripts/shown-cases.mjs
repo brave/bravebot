@@ -39,8 +39,8 @@ export const CASES = {
     event: 'run.request',
     request: {
       request: 102,
-      stages: range(30).map((n) => ({ program: 'grep', resolved: '/usr/bin/grep', args: [`zqr${pad(n + 1)}`], display: `grep zqr${pad(n + 1)}` })),
-      directory: '/work/zqr36', releasesPrivate: false, canBeRemembered: true,
+      stages: range(30).map((n) => ({ program: 'grep', resolved: '/usr/bin/grep', shownBinary: '/usr/bin/grep', args: [`zqr${pad(n + 1)}`], display: `grep zqr${pad(n + 1)}` })),
+      directory: '/work/zqr36', shownDirectory: '/work/zqr36', releasesPrivate: false, canBeRemembered: true,
       line: 'grep zqr31 notes.md', writes: ['/work/project/zqr32.txt'], shownWrites: ['/work/project/zqr32.txt'], stdin: 'zqr33',
       ambient: [{ authority: 'agent-socket', named: 'zqr34' }], requestedScopes: ['zqr35'],
       confinement: { heading: 'confined to:', directories: ['/work/zqr37'], shownDirectories: ['/work/zqr37'], sentences: ['zqr38 each stage brings nothing more'] },
