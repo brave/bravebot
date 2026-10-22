@@ -1414,7 +1414,12 @@ carried out as you type them behind a command line, behind `/add-dir`, `/memory`
 `/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
 request or leaves for another session, and behind the other two. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
 `/reach`, `/branch`, `/add-dir`, `/cd`, `/mcp`, `/rename`, `/note`, `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox` they are carried
-out as you type them. What they say goes into the history as you type them,
+out as you type them. `/style` picks what every turn opens its prompt with, so it waits behind a prompt, behind a command that begins a turn and behind
+`/clear`, `/cd`, `/add-dir`, `/reach`, `/mcp`, `/branch`, `/handoff`, `/resume`, `/bg`, `/exit`, `/after`, `/undo`, `/rewind` and `/hunks`; behind a command line, `/compact`,
+`/btw`, `/recap`, `/memory` and the settings commands above it is carried out as you type it. `/forget-trust` withdraws the answer kept about the
+directory, which a program a prompt or a command line runs can change the meaning of by making a `.git` entry, so it waits behind those as well as behind the
+commands that start a session here, move the directory or leave the session, and is carried out as you type it behind `/compact`, `/btw`, `/recap`, `/memory` and the settings commands
+above it. What they say goes into the history as you type them,
 so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and
 a question the turn asks takes the screen until you have answered it. A list still open when the turn

@@ -372,9 +372,20 @@ it already holds, and `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forge
 `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` write neither, so behind any of those, and
 behind a waiting `/note` for `/rename` and a waiting `/rename` for `/note`, they are carried out as
 they are typed. A `/note` typed behind a waiting `!make` is written at once and stamped with the turn
-the running turn is. Every other waiting line holds `/forget-trust`, `/style` and `/sandbox` back,
-whether it is a command, a prompt or a command line, since a command line may write the files `/style`
-looks its names up in. A
+the running turn is. `/style` acts on the pick that every turn reads when it is built and on the
+person's own style files its name is looked up among, which a program cannot write. A prompt, every
+command that begins a turn, and `/clear`, `/cd`, `/add-dir`, `/reach`, `/mcp`, `/branch`, `/handoff`,
+`/resume`, `/bg`, `/exit`, `/after`, `/undo`, `/rewind` and `/hunks` hold it back, and it names the line. A
+command line and `/compact`, `/btw`, `/recap`, `/memory`, `/rename`, `/note`, `/forget-trust`,
+`/issue`, `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` do not, so behind any of those it
+is carried out as it is typed. `/forget-trust` acts on the answer kept about the working directory
+and the git worktree around it ([TRUST-24](trust-map.md#TRUST-24)). A prompt and a command line can
+run a program that makes the `.git` entry that moves which root is around the directory, a line that
+starts a session here reads the answer, and one that moves the directory or leaves the session
+changes what is withdrawn, so all of those and `/add-dir`, `/reach`, `/mcp`, `/branch`, `/after`, `/undo`,
+`/rewind` and `/hunks`, which have not been read against the file the answer is kept in, hold it back.
+Behind `/compact`, `/btw`, `/recap`, `/memory`, `/rename`, `/note`, `/style`, `/issue`, `/pr`,
+`/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed. A
 command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
@@ -540,8 +551,11 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_no_request_is_set_when_typed`
 `verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_a_request_waits_behind_it`
 `verified-by: bravebot_tui::app::a_choice_names_the_first_waiting_line_that_could_change_it`
-`verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_the_record_and_the_choice`
-`verified-by: bravebot_tui::app::a_style_or_a_forgotten_answer_waits_behind_a_prompt_and_a_command_line`
+`verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`
+`verified-by: bravebot_tui::app::a_style_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_style_typed_behind_a_line_that_could_change_it_waits_behind_it`
+`verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_could_change_it_waits_behind_it`
 `verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_leaves_the_record_alone_is_carried_out_when_typed`
 `verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_could_change_the_record_waits_behind_it`
 `verified-by: bravebot_session::sessions::a_save_for_a_command_line_keeps_the_name_and_the_notes_given_before_it`
