@@ -173,7 +173,7 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 15
+      - crates/agent/src/tools.rs: 16
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::decode_transport
