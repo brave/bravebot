@@ -1701,6 +1701,20 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.extend_selection(mouse.row, mouse.column);
             Action::Redraw
         }
+        // A click in the scroller that swept over nothing is a click on whatever is there: a
+        // call opens or closes as `x` does (MOUSE-9). Anything swept, or a word or row taken by
+        // a double or triple click, is a selection and is copied as before.
+        MouseEventKind::Up(MouseButton::Left)
+            if session.scrolling()
+                && session
+                    .selection
+                    .is_none_or(|selection| selection.is_empty())
+                && session.last_click.is_some_and(|click| click.count() == 1)
+                && session.toggle_expanded_at(mouse.row, render::as_last_drawn) =>
+        {
+            session.clear_selection();
+            Action::Redraw
+        }
         MouseEventKind::Up(MouseButton::Left) => Action::Copy,
         _ => Action::None,
     }

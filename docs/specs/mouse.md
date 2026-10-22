@@ -11,8 +11,8 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking things on the screen, a context menu, edge scrolling and
-copying a selection longer than the screen are proposed in
+drag selects is spelled out here. Clicking a call in the scroller is built. Clicking other things on the screen, a context menu, edge
+scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
 ## Clauses
@@ -134,3 +134,18 @@ panel is drawn on the same ones.
 `verified-by: bravebot_tui::render::transcript::a_break_is_told_from_one_inside_a_word`
 `verified-by: bravebot_tui::select::a_wrap_in_the_transcript_does_not_join_the_rows_of_another_pane`
 `verified-by: bravebot_tui::app::a_wrapped_reply_copies_as_one_paragraph`
+
+<a id="MOUSE-9"></a>
+### MOUSE-9: a click on a call in the scroller expands it
+
+In the scroller, a left click that sweeps nothing on a row of a call that has more to show than it
+draws expands that call, and a second click collapses it, as `x` does ([SCROLL-10](scroller.md#SCROLL-10)).
+The press and the release are on one cell and the press is a single click, so a drag, a double click
+and a triple click are selections and copy as before. A click on a row that belongs to no call, with
+the key list open over the transcript, or in a delegate's view, does nothing to any call. The key
+stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_on_a_call_in_the_scroller_expands_and_collapses_it`
+`verified-by: bravebot_tui::app::a_click_off_a_call_or_a_drag_over_one_expands_nothing`
+`verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_expands_nothing`
+`verified-by: bravebot_tui::app::a_click_in_a_delegates_view_expands_nothing`
