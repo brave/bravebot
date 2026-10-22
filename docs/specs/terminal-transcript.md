@@ -29,7 +29,13 @@ governs:
   - crates/tui/src/list_picker.rs
   - crates/tui/src/model_prompt.rs
   - ui/src/renderer/components/Transcript.tsx
+  - ui/src/renderer/components/ThinkingTail.tsx
+  - ui/src/renderer/thinking.ts
+  - ui/src/renderer/apply.ts
+  - ui/src/renderer/live.ts
+  - crates/ui-bridge/src/turn.rs
   - ui/scripts/ux-state.test.mjs
+  - ui/scripts/marking.test.mjs
 documented-by: docs/website/docs/using/transcript.md
 ---
 
@@ -1047,8 +1053,42 @@ what to show, and it decides only by the toggle and the byte count, never by wha
 `verified-by: bravebot_tui::app::the_thinking_command_toggles_what_is_drawn_and_runs_mid_turn`
 `verified-by: bravebot_agent::turn::the_thinking_of_a_round_reaches_the_reporter_and_is_in_no_request_or_record`
 
+<a id="VIEW-34"></a>
+### VIEW-34: the desktop window shows the model's thinking on request, on the terms of VIEW-33
+
+The bridge sends the thinking a service hands over as it goes ([BACKEND-46](backends.md#BACKEND-46)) as
+`thinking` events, each holding the words that arrived since the last, in order and as they arrived.
+A frame with none is not sent, and a delegate's thinking is not sent. The window holds the end of what
+the round now being written has thought, the last 4,096 characters of it, whether or not it is shown,
+apart from the transcript, and drops it when the round's words arrive, a call starts, the next round
+opens, or the turn ends, fails or is stopped. It is off when a session opens and is that session's
+alone. A button in the working row turns it on and off: it is offered once the session has been sent
+any thinking, and is there for the rest of the session. While it is on, the last eight lines of what
+is held are drawn under the working row, never taller than eight rows, under a head of its own,
+dimmed and in italics, as text and never as markdown or markup.
+
+It is no part of the conversation: it is not an entry of the transcript, an export or a resumed
+session, and no later request carries it. A service that sends no thinking, or a session with the
+toggle off, draws nothing, and a session that has not been sent any has no button.
+
+**Why.** [VIEW-33](#VIEW-33) gives the terminal a way to see what a long round is working on. Without
+an event to carry it, the window shows only a token count and a spinner for the same long round.
+
+The thinking is model output released for a screen, on the footing of the reply taking shape. The
+renderer draws it as a text child under a head the model's words cannot spell, as
+[LAYER-5](layering.md#LAYER-5) requires of released content, and decides what to show only by the
+toggle and the line count, never by what the text says. The kept length is counted in characters
+where the terminal counts bytes, since the window holds a string, and a cut through the middle of a
+character gives up that character.
+
+`verified-by: bravebot_ui_bridge::reporting::the_models_thinking_is_reported_in_order_and_a_delegates_and_an_empty_one_are_not`
+`verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs drives the window's own event reducer with the bridge's events: the thinking is held apart from the transcript's entries, only its last 4,096 characters are kept and a cut through a character gives it up, a new round, a words event, a call, a new turn, a finished turn, a failed or stopped turn and a plan run starting, finishing or failing each clear it, the choice to show it outlives the round it was made in, and the button is offered from the first thinking sent and stays through every round's end; ui/scripts/marking.test.mjs renders the working row through react-dom and asserts that the last eight lines are drawn under one head, that markup in them is drawn as the characters it is and makes no element, attribute or request, that nothing is drawn with the toggle off or with nothing thought, and that the button is absent for a session sent no thinking and present for one that was, between rounds as well; make check-ui runs both)`
+
 ## Known costs
 
+- **The desktop window is sent the thinking whether or not it is shown.** Holding it is what lets
+  turning it on mid-round show what has come so far, as the terminal does, and the cost is an event
+  across the pipe for each frame that carries some, however long the model thinks.
 - **The trust question asked when the interface opens is not noticed.** The terminal has not reported
   being left when it is drawn, and the person who started the program is looking at it, so
   [VIEW-31](#VIEW-31) writes nothing for it under any `notificationCondition`. A question put to a

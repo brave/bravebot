@@ -45,7 +45,8 @@ function load(path) {
   return module.exports
 }
 
-const { Row } = load('src/renderer/components/Transcript.tsx')
+const { Row, WorkingRow } = load('src/renderer/components/Transcript.tsx')
+const { ThinkingTail } = load('src/renderer/components/ThinkingTail.tsx')
 const t = load('src/renderer/transcript.ts')
 
 /** One transcript entry, drawn the way the transcript draws it. */
@@ -329,6 +330,55 @@ test('every entry kind is drawn with its marking, whether or not its turn ended 
       for (const attribute of FETCHING) assert.ok(!drawn.includes(attribute), `drew ${attribute}, ${where}`)
     }
   }
+})
+
+/** The working line a turn draws, with the model's thinking as given and the toggle as set. */
+const working = (thinking, showThinking, offerThinking = thinking !== '' || showThinking) =>
+  renderToStaticMarkup(
+    React.createElement(WorkingRow, {
+      bot: null, word: 'Thinking', tokens: 0, turn: null, onAudit() {}, thinking, showThinking, offerThinking, onThinking() {},
+    }),
+  )
+
+// VIEW-34. The model's thinking is its own output, so the head above it is the renderer's and
+// nothing it says can add a second one, it arrives as a text child, and it is drawn only while asked for.
+test('the thinking is drawn as text under one head of the renderer\'s own, and only while it is asked for', () => {
+  const lines = Array.from({ length: 12 }, (_, line) => `line ${line + 1}`)
+  const thought = [FORGED_CHROME.replace('quarantine-head', 'thinking-head'), '<img src="https://example.invalid/p.png">', ...lines].join('\n')
+
+  const shown = working(thought, true)
+  assert.equal(occurrences(shown, 'class="thinking-head"'), 1, shown)
+  assert.equal(occurrences(shown, 'class="thinking"'), 1, shown)
+  assert.ok(!shown.includes('<img'), shown)
+  const tail = renderToStaticMarkup(React.createElement(ThinkingTail, { text: thought }))
+  for (const attribute of FETCHING) assert.ok(!tail.includes(attribute), `drew ${attribute}: ${tail}`)
+  // The last eight lines, the earlier ones and the forged head among them gone.
+  assert.match(tail, /line 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12<\/div>/, tail)
+  assert.ok(!tail.includes('line 4'), tail)
+  assert.ok(!tail.includes('forged') && !tail.includes('thinking-head&quot;'), tail)
+
+  // Markup in the last lines is drawn as the characters it is.
+  const spelled = renderToStaticMarkup(React.createElement(ThinkingTail, { text: FORGED_CHROME.replace('quarantine-head', 'thinking-head') }))
+  assert.equal(occurrences(spelled, 'class="thinking-head"'), 1, spelled)
+  assert.match(spelled, /&lt;div class=&quot;thinking-head&quot;&gt;/, spelled)
+
+  // Off, the words are nowhere in the markup, and the toggle says it is off.
+  const hidden = working(thought, false)
+  assert.ok(!hidden.includes('line 12') && !hidden.includes('class="thinking"'), hidden)
+  assert.match(hidden, /data-tooltip="Show thinking"/, hidden)
+  assert.match(shown, /data-tooltip="Hide thinking"/, shown)
+})
+
+// A service that sends no thinking gets no control and no empty block, and a session that has been
+// sent some keeps the control through a round that has thought nothing yet.
+test('nothing is drawn for a model that has not thought, and the toggle stays once it has', () => {
+  assert.ok(!working('', false).includes('thinking-toggle'))
+  assert.ok(working('', false, true).includes('thinking-toggle'), 'the button went with the round that offered it')
+  assert.ok(!working('', false, true).includes('class="thinking"'))
+  assert.ok(!working('', false).includes('class="thinking"'))
+  assert.ok(working('', true).includes('thinking-toggle'))
+  assert.ok(!working('', true).includes('class="thinking"'), 'an empty block was drawn')
+  assert.ok(!working(' \n\n ', true).includes('class="thinking"'), 'a block of blank lines was drawn')
 })
 
 /**

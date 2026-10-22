@@ -66,6 +66,19 @@ export interface Live {
   hook: Hook | null
   /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
   composing: string | null
+  /**
+   * The end of what the model has thought in the round now being written (VIEW-34), held whether
+   * or not it is shown so that turning it on mid-round shows what has come so far. Never part of
+   * `entries`: it is no part of the conversation and goes when the round does.
+   */
+  thinking: string
+  /** Whether that is drawn. Off when a session opens, and this session's alone. */
+  showThinking?: boolean
+  /**
+   * Whether this session has been sent any thinking, which is what offers the button that shows it.
+   * Kept past the round, since the button would otherwise be gone before it could be pressed.
+   */
+  thinkingSeen?: boolean
   tokens: number
   contextTokens?: number
   running: boolean
@@ -185,7 +198,7 @@ export function cameFrom(
 export const NEW_CHAT = 'New Chat'
 
 /** The fields every new `Live` starts with, whichever answer it is built from. */
-type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'composing' | 'tokens' | 'running'
+type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'composing' | 'thinking' | 'tokens' | 'running'
 
 /**
  * A session as the window first holds it: what the bridge's answer says, and nothing yet said,
@@ -200,6 +213,7 @@ export function newLive(fields: Omit<Live, Starting>): Live {
     checking: null,
     hook: null,
     composing: null,
+    thinking: '',
     tokens: 0,
     running: false,
   }

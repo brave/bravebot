@@ -29,6 +29,7 @@ import { ErrorCard } from './ErrorCard'
 import { RunRecord } from './RunRecord'
 import { failureSummary } from '../failure'
 import { FilePreview } from './FilePreview'
+import { ThinkingTail } from './ThinkingTail'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
@@ -52,6 +53,9 @@ interface Live {
   checking: Checking | null
   hook: Hook | null
   composing: string | null
+  thinking: string
+  showThinking?: boolean
+  thinkingSeen?: boolean
   contextTokens?: number
   archived?: number
   tokens: number
@@ -98,6 +102,8 @@ interface Props {
   onCheckBackend: () => void
   onDiagnostics: () => void
   onSetup: () => void
+  /** Show or stop showing the model's thinking in this session (VIEW-34). */
+  onThinking: (shown: boolean) => void
   storageKey: string
   onNew: (directory?: string) => void
   onQueue: () => void
@@ -281,6 +287,7 @@ export function Transcript({
   onCheckBackend,
   onDiagnostics,
   onSetup,
+  onThinking,
   storageKey,
   onNew,
   onQueue,
@@ -513,6 +520,14 @@ export function Transcript({
     if (following.current) jump(bottom.current)
     else setUnseen(true)
   }, [live?.handle, live?.entries, live?.phase])
+
+  // The thinking tail grows under the working row without adding an entry, so a reader at the
+  // bottom is carried down with it. It is never counted as something unseen: it is not an entry,
+  // and it goes when the round does.
+  useEffect(() => {
+    // Instant: a frame arrives many times a second, and a smooth scroll begun for each interrupts the last.
+    if (live?.showThinking && live.thinking !== '' && following.current && focusRef.current === null) bottom.current?.scrollIntoView({ block: 'nearest', behavior: 'auto' })
+  }, [live?.showThinking, live?.thinking])
 
   useEffect(() => {
     if (!focused) return
@@ -773,6 +788,10 @@ export function Transcript({
             tokens={live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
             onAudit={onAudit}
+            thinking={live.thinking}
+            showThinking={live.showThinking === true}
+            offerThinking={live.thinkingSeen === true || live.showThinking === true}
+            onThinking={onThinking}
           />
         )}
         <div ref={bottom} />
@@ -959,12 +978,17 @@ export function workingWord(phase: Waiting | null, checking: Checking | null, co
  * written. Stopping it is the composer's Stop, which is where the eye already is while waiting;
  * a second Cancel here was one more thing to aim at for the same act.
  */
-function WorkingRow({ bot, word, tokens, turn, onAudit }: {
+export function WorkingRow({ bot, word, tokens, turn, onAudit, thinking, showThinking, offerThinking, onThinking }: {
   bot: Bot | null
   word: string
   tokens: number
   turn: number | null
   onAudit: OpenAudit
+  thinking: string
+  showThinking: boolean
+  /** Whether the session has been sent any thinking, so that there is something to turn on. */
+  offerThinking: boolean
+  onThinking: (shown: boolean) => void
 }): React.JSX.Element {
   const [since] = useState(() => Date.now())
   const [now, setNow] = useState(since)
@@ -975,6 +999,7 @@ function WorkingRow({ bot, word, tokens, turn, onAudit }: {
   const seconds = Math.floor((now - since) / 1000)
   const elapsed = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
   return (
+    <>
     <div className={`working${bot ? ' working-bot' : ''}`}>
       {/* For a bot, the bot itself, looking down at the page — the one place in the transcript
           its face carries something the header does not: it is *here*, at the point of
@@ -991,9 +1016,16 @@ function WorkingRow({ bot, word, tokens, turn, onAudit }: {
         {seconds > 0 && elapsed}
         {tokens > 0 && `${seconds > 0 ? ' · ' : ''}${tokens.toLocaleString()} tokens written`}
       </span>
+      {/* Offered once the session has been sent thinking, and kept from then on rather than for the
+          round that sent it, which would take it away before it could be pressed. A service that
+          sends none never offers it. */}
+      {offerThinking && <IconButton icon="idea" label="Thinking" tooltip={showThinking ? 'Hide thinking' : 'Show thinking'} size="tiny"
+        className="thinking-toggle" pressed={showThinking} data-test="thinking-toggle" onClick={() => onThinking(!showThinking)} />}
       {turn !== null && <IconButton icon="shield-done" label="Audit" tooltip="Audit this turn" size="tiny" className="turn-audit-link"
         controls="turn-audit-inspector" onClick={(event) => onAudit(turn, event.currentTarget as HTMLButtonElement)} />}
     </div>
+    {showThinking && <ThinkingTail text={thinking} />}
+    </>
   )
 }
 

@@ -776,7 +776,9 @@ this round are drawn dimmed, under a heading, above the reply as it is written, 
 round's words arrive. Only a service that sends its thinking shows any: Bedrock sends it when asked,
 and Brave's endpoint or an OpenAI-compatible gateway shows what a model sends in `reasoning_content`.
 The thinking is for the screen alone: it is not saved to the session, not exported, and not sent in a
-later request, and turning it on changes nothing the model is asked.
+later request, and turning it on changes nothing the model is asked. The desktop window has no
+command: a Thinking button appears in the line that says a turn is running once the session has been
+sent thinking, and shows the last eight lines of it under that line on the same terms.
 
 ## `/checkouts [apply <n> | remove <n>]`
 

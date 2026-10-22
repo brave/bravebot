@@ -201,6 +201,9 @@ Compose from these before inventing a new pattern.
 - **Notice**: a caption row with a 14px icon, one sentence and at most one inline link. Notes about a
   session (fork, remembered trust, vetting) sit at the top of the transcript and are not entries,
   so they are never exported.
+- **Thinking tail**: the last eight lines of what the model has thought this round, in caption type,
+  dimmed and in italics under a head of its own, below the working row. It is off until the person
+  presses the Thinking button the working row offers once thinking has arrived, and it is plain text.
 - **Tray**: what is said about sending docks onto the top edge of the composer at the composer's
   width (backend not set up, the queue). What needs attention floats above it as a pill.
 - **Toast**: bottom-right of the conversation card. Confirmations clear themselves after four
