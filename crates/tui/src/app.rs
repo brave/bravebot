@@ -10819,6 +10819,50 @@ mod tests {
             );
         }
 
+        /// `/after` sends its line from the loop's clock and not from the line that was typed, so
+        /// what the line named cannot travel with it: a picture becomes words saying it cannot be
+        /// shown, a dropped file becomes its name, and the person is told about the picture. A wrong
+        /// implementation holds the literal marker, which names a screenshot nothing is sent with.
+        #[test]
+        fn what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers() {
+            let mut session = Session::new("kernel-enforced");
+            let action = dispatch_command(
+                &mut session,
+                crate::state::Commanded {
+                    line: "/after 5m look at [Image #1] and [Image #2]".to_string(),
+                    pasted: vec![crate::state::AttachedImage {
+                        marker: "[Image #1]".to_string(),
+                        media_type: "image/png",
+                        bytes: b"pixels".to_vec(),
+                    }],
+                    attached: vec![crate::state::Attached {
+                        marker: "[Image #2]".to_string(),
+                        name: "shot.png".to_string(),
+                        shown: "/home/me/shot.png".to_string(),
+                        kind: bravebot_filetype::by_name::Kind::Attachment("image/png"),
+                    }],
+                },
+            );
+
+            assert_eq!(action, Action::Redraw);
+            let prompt = session
+                .looping()
+                .map(crate::loops::Running::prompt)
+                .expect("the line was not held");
+            assert_eq!(
+                prompt,
+                "look at ([Image #1] was pasted here, but it cannot be shown to you: a picture \
+                 cannot join that command. Ask for it again if you need to see it.) and shot.png"
+            );
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|said| said.text.contains("does not go with that command")),
+                "nothing said the picture had stayed behind"
+            );
+        }
+
         /// Waiting changes nothing about what a command can carry, and by the time the queue reaches
         /// one nobody is there to be asked about it. So a command the box carries out itself is
         /// settled where it is carried out, and reads the same as one dispatched at rest.

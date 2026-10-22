@@ -484,9 +484,11 @@ sends the five characters `/exit` and runs nothing. It is one of the session's l
 are held, replaces a goal as `/loop` does, and ends on the same endings as one
 ([LOOP-11](#LOOP-11)), including `/loop stop`, and is never written down ([LOOP-12](#LOOP-12)). It
 goes in the order [LOOP-17](#LOOP-17) gives. Its turn is a prompt like any other and is not told it
-is a tick ([LOOP-10](#LOOP-10)). It is listed beside a loop by `/status` and the bare `/loop`. The
-row under the box counts loops only, and says it is sending later and not that it is looping where
-an `/after` line is all that is held.
+is a tick ([LOOP-10](#LOOP-10)). A picture pasted or a file dropped into the line is not kept: the
+file is held as its name, the picture as words saying it cannot be shown, and the person is told
+about the picture. It is listed beside a loop by `/status` and the bare `/loop`. The row under the
+box counts loops only, and says it is sending later and not that it is looping where an `/after`
+line is all that is held.
 
 **Why a place among the loops and not a kind of its own.** The cap, the numbers, the ordering and
 the endings are already the loops'. A second collection of pending lines would need a rule for which
@@ -501,6 +503,7 @@ of them a tick belongs to, and the person asked for neither.
 `verified-by: bravebot_tui::app::the_after_command_holds_the_line_and_sends_nothing_now`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping`
 `verified-by: bravebot_tui::app::a_loop_stop_typed_behind_a_waiting_after_waits_behind_it`
+`verified-by: bravebot_tui::app::what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers`
 
 ## Known costs
 
