@@ -843,6 +843,8 @@ mod tests {
             "gateway-keys.json",
             "leo-premium.json",
             "leo-premium.lock",
+            "chatgpt-account.json",
+            "chatgpt-account.lock",
             "mcp.json",
             "mcp-approved",
             "mcp-projects",

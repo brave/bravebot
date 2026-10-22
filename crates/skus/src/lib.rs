@@ -37,6 +37,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod chatgpt;
 pub mod device;
 pub mod profile;
 pub mod secret;
@@ -157,7 +158,7 @@ pub fn new_request_id() -> String {
 ///
 /// A failure is not survivable: a predictable request id could collide with another device's batch,
 /// so there is no sensible fallback to a weaker source.
-fn fill_random(bytes: &mut [u8]) {
+pub(crate) fn fill_random(bytes: &mut [u8]) {
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(bytes);
 }

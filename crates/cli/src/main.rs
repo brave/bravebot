@@ -5,6 +5,7 @@
 mod auth;
 mod background;
 mod bug_report;
+mod chatgpt;
 mod completion;
 mod continued;
 mod doctor;

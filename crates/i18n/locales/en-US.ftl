@@ -1068,6 +1068,7 @@ auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
 auth-way-gateway = A key for a gateway a provider block in settings names, typed here and kept by bravebot
+auth-way-chatgpt = A ChatGPT Plus or Pro account, signed in to in a browser
 # The status of the gateway way where keys are stored. The ids are provider ids.
 auth-gateway-held = a key stored for { $ids }
 auth-gateway-held-unreadable = the file of gateway keys cannot be read
@@ -1168,6 +1169,11 @@ auth-status-not-all-usable = a sign-in asked about is not usable
 auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock or gateway
 auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
 auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
+# The instant is the one the access token expires, written as 2026-10-22T21:05:27Z. The token is
+# replaced when it is next used, so a past instant is still signed in.
+auth-status-chatgpt-expires = the access token expires { $expires }
+auth-status-chatgpt-none = no ChatGPT sign-in is stored; run bravebot auth login chatgpt
+auth-status-chatgpt-nowhere = this machine has nowhere to keep a sign-in, so none is stored
 auth-status-bedrock-good = the AWS session gives credentials to sign a request with
 # The next four are fixed sentences because a line of `auth status` carries no text the AWS CLI
 # chose: its error text names accounts and roles, and its profile list can embed an account id.
@@ -1175,6 +1181,64 @@ auth-status-bedrock-lapsed = the AWS session has lapsed: run `bravebot auth logi
 auth-status-bedrock-no-profile = the AWS CLI has no profile by this name: name one it has in settings
 auth-status-bedrock-no-cli = the AWS CLI is not installed, and Bedrock credentials come from it
 auth-status-bedrock-undecodable = the AWS CLI answered with something that is not a credential
+
+
+## Signing in with a ChatGPT account
+
+chatgpt-not-while-incognito = signing in stores a token on disk, which an incognito session will not do
+chatgpt-needs-a-terminal =
+    signing in to ChatGPT shows an address to open and waits for the browser, so bravebot auth login chatgpt needs a terminal on standard error
+chatgpt-held-needs-a-terminal =
+    a ChatGPT sign-in is already stored and replacing it needs an answer, so bravebot auth login chatgpt needs a terminal on standard input
+chatgpt-name-is-a-gateway =
+    a provider block named chatgpt is a gateway, and one name cannot select two services: rename the block, then run bravebot auth login chatgpt again
+chatgpt-held = A ChatGPT sign-in is already stored.
+# Beside the way in the list of ways, where the file a sign-in is kept in cannot be read.
+chatgpt-held-unusable = a stored sign-in cannot be read
+chatgpt-replace = Replace it?
+chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
+chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
+chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
+chatgpt-not-used-yet = bravebot sends no request with this sign-in yet
+chatgpt-forgotten =
+    forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings
+chatgpt-nothing-to-forget = no ChatGPT sign-in is stored
+# Why the sign-in stopped. Each is chosen from the step that failed and, for a failed request, the
+# class of its status. None repeats anything the browser, OpenAI or a settings file said.
+chatgpt-failed-listener =
+    could not listen for the browser on the loopback address, so no browser was opened and nothing was changed
+chatgpt-failed-timed-out =
+    the browser did not return to bravebot in time, so the sign-in stopped and nothing was stored; a browser on another machine reaches this machine's loopback port only if the port named above is forwarded to it
+chatgpt-failed-no-code =
+    the browser returned no authorization code, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-no-client =
+    the browser returned no usable client for bravebot, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-client-changed =
+    the browser returned a different client from the one stored, so the sign-in stopped and nothing was changed; run bravebot auth logout chatgpt and sign in again
+chatgpt-failed-no-use-scope =
+    the sign-in did not allow bravebot to use the subscription's tokens, so nothing was stored; run bravebot auth login chatgpt and allow it, or use an API key with the openai gateway
+chatgpt-failed-exchange = the sign-in could not be completed: { $reason }; nothing was stored
+chatgpt-class-refused = the authorization server refused the request
+chatgpt-class-rate-limited = the authorization server is limiting requests; try again later
+chatgpt-class-unavailable = the authorization server is unavailable; try again later
+chatgpt-class-incomplete = the authorization server's reply was incomplete
+chatgpt-class-transport = the authorization server could not be reached
+# The detail is a path and what the operating system said about it.
+chatgpt-account-nowhere = there is nowhere to keep a ChatGPT sign-in: { $detail }
+chatgpt-account-unusable =
+    the stored ChatGPT sign-in could not be read: { $detail }; run bravebot auth login chatgpt to sign in again, or bravebot auth logout chatgpt to forget it
+chatgpt-account-malformed =
+    the stored ChatGPT sign-in is unusable: { $defect }; run bravebot auth login chatgpt to sign in again, or bravebot auth logout chatgpt to forget it
+chatgpt-account-unwritable = the ChatGPT sign-in could not be stored: { $detail }; nothing was changed
+chatgpt-defect-empty = the file holds nothing, which an interrupted write leaves behind
+chatgpt-defect-not-json = the file is not valid JSON
+chatgpt-defect-other-version = it was written by another version, and this build reads version 1
+chatgpt-defect-missing-field = a field is missing or empty
+chatgpt-defect-no-expiry = it has no expiry
+# The two pages the browser is shown: after it returns to bravebot, and for any other request to the
+# port. They are shown in the browser, not in the terminal.
+chatgpt-page-done = You can close this tab and return to bravebot, which says whether the sign-in worked.
+chatgpt-page-not-found = Not found.
 
 
 ## Declaring an MCP server, and approving one

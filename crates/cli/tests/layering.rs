@@ -657,6 +657,42 @@ fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
     }
 }
 
+/// CHATGPT-1 says only a command a person types signs in. The flow is `bravebot_skus::chatgpt`'s
+/// `sign_in`, which opens a browser, holds a port and ends with a credential on disk, so a tool, a
+/// hook, a slash command or a background host that called it would start that on content's say. The
+/// one caller is the command's own file, and a file that names the module and `sign_in` together is
+/// a second.
+#[test]
+fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
+    let crates = workspace().join("crates");
+    let mut callers = Vec::new();
+    let mut scanned = 0;
+    for krate in std::fs::read_dir(&crates).expect("the crates directory") {
+        let source = krate.expect("a crate").path().join("src");
+        if !source.is_dir() {
+            continue;
+        }
+        for file in rust_files(&source) {
+            scanned += 1;
+            let text = std::fs::read_to_string(&file).expect("a source file");
+            if text.contains("bravebot_skus::chatgpt") && text.contains("sign_in") {
+                callers.push(
+                    file.strip_prefix(workspace())
+                        .expect("a path under the workspace")
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+
+    assert!(
+        scanned > 100,
+        "{scanned} source files, so this test would pass by scanning almost nothing"
+    );
+    assert_eq!(callers, ["crates/cli/src/chatgpt.rs"]);
+}
+
 /// The scan that holds the kernel to no I/O has to see each way of reaching out, or the test
 /// above passes on a crate that has found one it does not look for.
 #[test]
