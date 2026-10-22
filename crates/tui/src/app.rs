@@ -11587,6 +11587,28 @@ mod tests {
         assert!(!render::as_text(&session).contains("out 29"));
     }
 
+    /// A delegate's view draws its calls as one row, so a click where a call was is not on one.
+    #[test]
+    fn a_click_in_a_delegates_view_expands_nothing() {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        let mut session = scroller_over_one_call();
+        let (row, column) = find_on_text(&session, "out 0");
+        let id = DelegateId::nth(1);
+        session.delegate_started(Delegation {
+            stop: Default::default(),
+            id,
+            kind: "reader".to_string(),
+            task: "find the parser".to_string(),
+        });
+        assert!(session.watch());
+        assert!(session.watched_delegate().is_some());
+
+        click(&mut session, row, column);
+
+        assert!(session.stop_watching());
+        assert!(!render::as_text(&session).contains("out 29"));
+    }
+
     /// The row and column where `needle` is drawn in the session's own frame.
     fn find_on_text(session: &Session, needle: &str) -> (u16, u16) {
         let text = render::as_text(session);

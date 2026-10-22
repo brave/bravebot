@@ -148,3 +148,4 @@ stays the way to do it without a mouse.
 `verified-by: bravebot_tui::app::a_click_on_a_call_in_the_scroller_expands_and_collapses_it`
 `verified-by: bravebot_tui::app::a_click_off_a_call_or_a_drag_over_one_expands_nothing`
 `verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_expands_nothing`
+`verified-by: bravebot_tui::app::a_click_in_a_delegates_view_expands_nothing`
