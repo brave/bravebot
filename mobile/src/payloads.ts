@@ -70,6 +70,8 @@ function readChange(value: JsonValue): Change | null {
 export interface ConfirmView {
   request: number
   path: string
+  /** `path` spelled for a person (PROMPT-1). Drawn in its place, so a name that would read as another is marked. */
+  shownPath: string
   intent: 'create' | 'overwrite' | 'edit'
   untrusted: boolean
   existing: boolean
@@ -88,6 +90,7 @@ export function readConfirm(data: JsonValue): ConfirmView | null {
   if (source === null) return null
   const request = count(source, 'request')
   const path = text(source, 'path')
+  const shownPath = text(source, 'shownPath')
   const intent = text(source, 'intent')
   const untrusted = flag(source, 'untrusted')
   const existing = flag(source, 'existing')
@@ -95,7 +98,7 @@ export function readConfirm(data: JsonValue): ConfirmView | null {
   const removed = count(source, 'removed')
   const exact = flag(source, 'exact')
   const changes = list(source, 'changes', readChange)
-  if (request === null || path === null || untrusted === null || existing === null) return null
+  if (request === null || path === null || shownPath === null || untrusted === null || existing === null) return null
   if (added === null || removed === null || exact === null || changes === null) return null
   if (intent !== 'create' && intent !== 'overwrite' && intent !== 'edit') return null
   let remark: ConfirmView['remark'] = null
@@ -112,7 +115,7 @@ export function readConfirm(data: JsonValue): ConfirmView | null {
   if (credentials === null || writtenSinceCheckout === null) return null
   const lineEndings = optionalText(source, 'lineEndings')
   if (lineEndings === undefined) return null
-  return { request, path, intent, untrusted, existing, added, removed, exact, changes, remark, credentials, writtenSinceCheckout, lineEndings }
+  return { request, path, shownPath, intent, untrusted, existing, added, removed, exact, changes, remark, credentials, writtenSinceCheckout, lineEndings }
 }
 
 export interface Stage {
@@ -120,6 +123,8 @@ export interface Stage {
   resolved: string | null
   startedAs: string | null
   binary: string | null
+  /** The file the step runs, and the path that starts it where that is another, spelled for a person. Drawn in place of `resolved`, `startedAs` and `binary`. */
+  shownBinary: string
   args: string[]
   display: string
 }
@@ -130,12 +135,13 @@ function readStage(value: JsonValue): Stage | null {
   const program = text(source, 'program')
   const args = texts(source, 'args')
   const display = text(source, 'display')
-  if (program === null || args === null || display === null) return null
+  const shownBinary = text(source, 'shownBinary')
+  if (program === null || args === null || display === null || shownBinary === null) return null
   const resolved = optionalText(source, 'resolved')
   const startedAs = optionalText(source, 'startedAs')
   const binary = optionalText(source, 'binary')
   if (resolved === undefined || startedAs === undefined || binary === undefined) return null
-  return { program, resolved, startedAs, binary, args, display }
+  return { program, resolved, startedAs, binary, shownBinary, args, display }
 }
 
 export interface Ambient {
@@ -157,10 +163,15 @@ export interface RunView {
   plan: string
   stages: Stage[]
   directory: string
+  /** `directory` spelled for a person (PROMPT-1). */
+  shownDirectory: string
   writes: string[]
+  /** `writes` spelled for a person, in the same order. */
+  shownWrites: string[]
   stdin: string | null
   releasesPrivate: boolean
-  confinement: { heading: string; directories: string[]; sentences: string[] } | null
+  /** `directories` is the paths as held and `shownDirectories` the same paths spelled for a person. */
+  confinement: { heading: string; directories: string[]; shownDirectories: string[]; sentences: string[] } | null
   /** The bridge's sentence for a command nothing confines. Present exactly when `confinement` is null. */
   notSandboxed: string | null
   requestedScopes: string[]
@@ -173,13 +184,15 @@ export function readRun(data: JsonValue): RunView | null {
   if (source === null) return null
   const request = count(source, 'request')
   const directory = text(source, 'directory')
+  const shownDirectory = text(source, 'shownDirectory')
   const releasesPrivate = flag(source, 'releasesPrivate')
   const stages = list(source, 'stages', readStage)
-  if (request === null || directory === null || releasesPrivate === null || stages === null) return null
+  if (request === null || directory === null || shownDirectory === null || releasesPrivate === null || stages === null) return null
   const writes = texts(source, 'writes')
+  const shownWrites = texts(source, 'shownWrites')
   const requestedScopes = texts(source, 'requestedScopes')
   const ambient = list(source, 'ambient', readAmbient)
-  if (writes === null || requestedScopes === null || ambient === null) return null
+  if (writes === null || shownWrites === null || requestedScopes === null || ambient === null) return null
   const stdin = optionalText(source, 'stdin')
   if (stdin === undefined) return null
   let confinement: RunView['confinement'] = null
@@ -187,9 +200,10 @@ export function readRun(data: JsonValue): RunView | null {
     const found = obj(source.confinement)
     const heading = found && text(found, 'heading')
     const directories = found && texts(found, 'directories')
+    const shownDirectories = found && texts(found, 'shownDirectories')
     const sentences = found && texts(found, 'sentences')
-    if (!found || heading === null || directories === null || sentences === null) return null
-    confinement = { heading, directories, sentences }
+    if (!found || heading === null || directories === null || shownDirectories === null || sentences === null) return null
+    confinement = { heading, directories, shownDirectories, sentences }
   }
   const notSandboxed = optionalText(source, 'notSandboxed')
   if (notSandboxed === undefined || (confinement === null && notSandboxed === null)) return null
@@ -197,7 +211,7 @@ export function readRun(data: JsonValue): RunView | null {
   const plan = text(source, 'plan')
   const summary = source.summary === undefined ? '' : text(source, 'summary')
   if (line === null || plan === null || summary === null) return null
-  return { request, line, plan, stages, directory, writes, stdin, releasesPrivate, confinement, notSandboxed, requestedScopes, ambient, summary }
+  return { request, line, plan, stages, directory, shownDirectory, writes, shownWrites, stdin, releasesPrivate, confinement, notSandboxed, requestedScopes, ambient, summary }
 }
 
 export interface FetchView {
@@ -271,16 +285,23 @@ export function readAsk(data: JsonValue): AskView | null {
 
 export interface TrustView {
   directory: string
+  /** `directory` spelled for a person (PROMPT-1). Drawn in its place. */
+  shownDirectory: string
   keeping: string | null
+  /** `keeping` spelled for a person. Null exactly when `keeping` is. */
+  shownKeeping: string | null
 }
 
 export function readTrust(data: JsonValue): TrustView | null {
   const source = obj(data)
   if (source === null) return null
   const directory = text(source, 'directory')
+  const shownDirectory = text(source, 'shownDirectory')
   const keeping = optionalText(source, 'keeping')
-  if (directory === null || keeping === undefined) return null
-  return { directory, keeping }
+  const shownKeeping = optionalText(source, 'shownKeeping')
+  if (directory === null || shownDirectory === null || keeping === undefined || shownKeeping === undefined) return null
+  if ((keeping === null) !== (shownKeeping === null)) return null
+  return { directory, shownDirectory, keeping, shownKeeping }
 }
 
 export interface ShownView {

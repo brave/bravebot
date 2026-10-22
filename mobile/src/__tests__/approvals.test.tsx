@@ -18,6 +18,10 @@ function request(name: string): Pending {
   return REQUESTS[name]!
 }
 
+function withData(base: Pending, patch: Record<string, unknown>): Pending {
+  return { ...base, data: { ...(base.data as object), ...patch } } as Pending
+}
+
 function handlers() {
   const calls: unknown[][] = []
   const value: ApprovalHandlers = {
@@ -97,7 +101,7 @@ describe('a write\'s changes', () => {
       request: 5,
       kind: 'confirm',
       supported: true,
-      data: { request: 5, path: 'a.ts', intent: 'edit', untrusted: false, existing: true, added: 1, removed: 1, exact: true, credentials: [], writtenSinceCheckout: false, changes: [{ kind: 'removed', text: 'old' }, { kind: 'added', text: 'new' }] },
+      data: { request: 5, path: 'a.ts', shownPath: 'a.ts', intent: 'edit', untrusted: false, existing: true, added: 1, removed: 1, exact: true, credentials: [], writtenSinceCheckout: false, changes: [{ kind: 'removed', text: 'old' }, { kind: 'added', text: 'new' }] },
     } as Pending
     const both = await show(retry)
     expect(background(both.tree, 'Removed: old')).toBe(themes.light.status.errorBg)
@@ -172,8 +176,6 @@ describe('command approval', () => {
     }
     expect(textOf(byTestId(tree, 'run-stage-0-name'))).toContain('Name')
     expect(textOf(byTestId(tree, 'run-stage-0-name'))).toContain('npm')
-    expect(textOf(byTestId(tree, 'run-stage-0-resolved'))).toContain('Resolves to')
-    expect(textOf(byTestId(tree, 'run-stage-0-resolved'))).toContain('/opt/homebrew/bin/npm')
     expect(textOf(byTestId(tree, 'run-stage-0-binary'))).toContain('Runs')
     expect(textOf(byTestId(tree, 'run-stage-0-binary'))).toContain('/opt/homebrew/Cellar/node/24.1.0/bin/node')
   })
@@ -301,9 +303,67 @@ describe('questions that share a key', () => {
   })
 })
 
+/** What a person is shown of a path the planner or a checkout named: the bridge's spelling, never the path as held. */
+describe('a path the card names', () => {
+  const marked = (card: Awaited<ReturnType<typeof show>>['tree'], id: string) => textOf(byTestId(card, id))
+
+  it('is the write path as the bridge spelled it, so a name ending in a space is not read as the one without', async () => {
+    const base = request('update-changelog')
+    const { tree } = await show(withData(base, { path: 'note.md ', shownPath: '"note.md\u2423"' }))
+    expect(marked(tree, 'confirm-path-value')).toContain('"note.md\u2423"')
+    const plain = await show(withData(base, { path: 'note.md', shownPath: 'note.md' }))
+    expect(marked(plain.tree, 'confirm-path-value')).toContain('note.md')
+    expect(marked(plain.tree, 'confirm-path-value')).not.toContain('"')
+  })
+
+  it('is each run path as the bridge spelled it: the directory, the files written, the directories confined to and the file a step runs', async () => {
+    const { tree } = await show(
+      withData(request('run-tests'), {
+        directory: '/work/notes ',
+        shownDirectory: '"/work/notes\u2423"',
+        writes: ['/work/out '],
+        shownWrites: ['"/work/out\u2423"'],
+        confinement: { heading: 'Limited to', directories: ['/work/tmp '], shownDirectories: ['"/work/tmp\u2423"'], sentences: [] },
+        stages: [
+          { program: 'tee', resolved: '/usr/bin/tee ', startedAs: '/usr/bin/tee ', binary: '/usr/bin/tee ', shownBinary: '"/usr/bin/tee\u2423"', args: [], display: 'tee' },
+          {
+            program: 'cat',
+            resolved: '/usr/bin/ca\u202et',
+            startedAs: '/usr/local/bin/cat ',
+            binary: '/usr/local/bin/cat  -> /usr/bin/ca\u202et',
+            shownBinary: '"/usr/local/bin/cat\u2423" -> "/usr/bin/ca\\u{202e}t"',
+            args: [],
+            display: 'cat',
+          },
+        ],
+      }),
+    )
+    const text = allText(tree)
+    for (const spelled of ['"/work/notes\u2423"', '"/work/out\u2423"', '"/work/tmp\u2423"']) expect(text).toContain(spelled)
+    expect(textOf(byTestId(tree, 'run-stage-0-binary'))).toContain('"/usr/bin/tee\u2423"')
+    // A step started through a link names both paths in its one row, each spelled on its own.
+    expect(textOf(byTestId(tree, 'run-stage-1-binary'))).toContain('"/usr/local/bin/cat\u2423" -> "/usr/bin/ca\\u{202e}t"')
+    for (const held of ['/work/notes ', '/work/out ', '/work/tmp ', '/usr/bin/tee ', '/usr/local/bin/cat ']) expect(text.includes(held)).toBe(false)
+  })
+
+  it('is the startup question\'s directory and record as the bridge spelled them', async () => {
+    const { tree } = await show(null, {
+      directory: '/work/notes ',
+      shownDirectory: '"/work/notes\u2423"',
+      keeping: '/home/me/state /trusted/k.jsonl',
+      shownKeeping: '"/home/me/state\u2423/trusted/k.jsonl"',
+    })
+    const text = allText(tree)
+    expect(text).toContain('"/work/notes\u2423"')
+    expect(text).toContain('"/home/me/state\u2423/trusted/k.jsonl"')
+    expect(text.includes('/work/notes ')).toBe(false)
+    expect(text.includes('/home/me/state /')).toBe(false)
+  })
+})
+
 describe('startup trust', () => {
   it('asks the question and answers only when told to', async () => {
-    const { tree, calls } = await show(null, { directory: '/work/notes', keeping: null })
+    const { tree, calls } = await show(null, { directory: '/work/notes', shownDirectory: '/work/notes', keeping: null, shownKeeping: null })
     expect(allText(tree)).toContain('Do you trust this directory?')
     expect(calls).toEqual([])
     await press(tree, 'trust-decline')

@@ -30,7 +30,7 @@ const WAITING_TITLE = new Map([
 function approvalDetail(row: Row): string | null {
   switch (row.event) {
     case 'confirm.request':
-      return readConfirm(row.data)?.path ?? null
+      return readConfirm(row.data)?.shownPath ?? null
     case 'run.request': {
       const run = readRun(row.data)
       return run?.line || run?.stages[0]?.display || null

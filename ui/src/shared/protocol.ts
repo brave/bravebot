@@ -906,7 +906,8 @@ export type AskAnswer = { chosen?: number[]; typed?: string }
 /** Every event the bridge emits, keyed by name. */
 export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
-  'trust.request': { directory: string; keeping?: string | null; confinedLines?: string | null }
+  /** `shownDirectory` and `shownKeeping` are `directory` and `keeping` spelled as `ConfirmRequest.shownPath` is. Draw those. */
+  'trust.request': { directory: string; shownDirectory: string; keeping?: string | null; shownKeeping?: string | null; confinedLines?: string | null }
   'turn.started': { turn: number; sandbox?: SandboxMode }
   /** The planner has read the oldest line sent with `turn.interject`. `prompt` is the words it was given. */
   'turn.interjected': { prompt: string }

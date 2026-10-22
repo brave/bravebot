@@ -49,14 +49,15 @@ describe('a command approval draws every field of the program through the escapi
     resolved: `/usr/bin/${ZERO_WIDTH}curl`,
     startedAs: `/usr/bin/x${BELL}`,
     binary: `/bin/${OVERRIDE}sh`,
+    shownBinary: `/usr/bin/x${BELL} -> /usr/bin/${ZERO_WIDTH}curl`,
     args: [],
     display: 'curl',
   }
 
-  it('writes out what hides or reorders the name, the resolved path, the start path and the binary', async () => {
+  it('writes out what hides or reorders the name and the file the step runs, even where the bridge did not spell it', async () => {
     const tree = await show(withData(request('run-tests'), { stages: [stage] }))
     expectEscaped(allText(tree), ['U+202E', 'U+200B', 'U+0007'])
-    for (const id of ['run-stage-0-name', 'run-stage-0-resolved', 'run-stage-0-started', 'run-stage-0-binary']) {
+    for (const id of ['run-stage-0-name', 'run-stage-0-binary']) {
       expect(allText({ root: byTestId(tree, id) } as never)).toContain('U+')
     }
   })

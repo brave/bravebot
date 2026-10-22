@@ -986,7 +986,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `mcp-move.request` | `{ request, alias, declared, destination, authority, mayRecord }` | a remote server's reply pointed elsewhere (SERVERS-11) |
 | `host.request` | `{ request, hosts }` | let programs reach hosts `sandbox.network.allowedHosts` does not list (SANDBOX-24) |
 | `ask.request` | `{ request, prompts }` | user questions |
-| `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
+| `trust.request` | `{ directory, shownDirectory, keeping, shownKeeping, confinedLines }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
 | `turn.error` | see §8.3 | `Err(TurnError)` |
 
@@ -1228,6 +1228,11 @@ carry `keeping`, the file a yes writes; the client names it on the question and 
 is kept. `keeping` is `null` where the answer may not be kept: no state directory,
 a filesystem root, the home directory or one holding it, a filesystem that cannot say when
 the directory was made, or an incognito session.
+
+The `trust.request` event also carries `shownDirectory` and `shownKeeping`, which are `directory`
+and `keeping` spelled as `shownPath` is. A client that draws the question from the event draws
+those and never `directory` or `keeping`. `shownKeeping` is `null` exactly when `keeping` is. The
+responses of `session.new`, `session.open` and `session.fork` carry `keeping` and no spelling of it.
 
 ---
 

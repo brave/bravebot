@@ -100,8 +100,11 @@ recorded in: the remembered-lines record, the settings file a pattern would go i
 kept reach and the record and the key files of a chosen key. The terminal's trust questions draw the
 file a yes is kept in and the file each proposed rule came from the same way, and so does the
 question in lines for the file a yes is kept in. The question about the rules a checkout proposed
-draws the text of each rule the same way. A name that is empty,
-is only whitespace, has a space at either end of it or of a directory in it, or holds a character
+draws the text of each rule the same way. The startup trust question the bridge puts to an editor or
+to the mobile app carries the directory and the file a yes is kept in spelled for a person, and both
+draw those. The mobile app's write, run and trust cards, and the line its transcript keeps for a
+waiting write, draw the spelled paths the bridge sends and never the paths as held. A name that is
+empty, is only whitespace, has a space at either end of it or of a directory in it, or holds a character
 that draws as nothing (a zero-width character, a bidirectional control, a tag character, a variation
 selector, a no-break space) or as a blank cell (the blank braille pattern) is drawn quoted with each
 such character spelled, so it cannot read as another name. The terminal and the desktop window also
@@ -164,6 +167,11 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_tui::confirm::the_run_prompt_spells_the_link_and_the_file_a_step_starts_through`
 `verified-by: bravebot_ui_bridge::wire::a_run_request_carries_a_directory_that_is_not_text_spelled_as_the_bytes_it_holds`
 `verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::control_tests::the_startup_question_carries_the_directory_and_the_record_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::acp::the_trust_question_spells_a_directory_that_would_draw_as_another`
+`verified-by: bravebot_ui_bridge::acp::the_trust_question_names_the_record_as_the_bridge_spelled_it`
+`verified-by: bravebot_ui_bridge::acp::the_trust_question_names_a_directory_that_ends_in_a_space_as_the_terminal_does`
+`verified-by: by-construction (the mobile app is not a crate this workspace compiles; mobile/src/__tests__/approvals.test.tsx and transcript.test.tsx render the write, run and trust cards and the waiting-write line through react-test-renderer and assert each draws the path the bridge spelled and not the path as held, mobile/src/__tests__/payloads.test.ts asserts a request without the spelled fields is not offered, and make check-mobile runs them)`
 `verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
 `verified-by: bravebot_tui::confirm::the_plan_prompt_shows_the_task_and_every_step`

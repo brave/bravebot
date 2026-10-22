@@ -189,6 +189,65 @@ fn the_startup_question_is_asked_again_only_while_it_is_unanswered() {
     }
 }
 
+/// PROMPT-1: the startup question carries the directory and the record a yes is kept in spelled
+/// for a person beside the ones held, so a client that draws them does not draw one that ends in a
+/// space, or holds a byte that is not text, as another. A path that needs no spelling is sent as it
+/// is, and the held values keep the bytes they had.
+#[test]
+fn the_startup_question_carries_the_directory_and_the_record_spelled_for_a_person() {
+    let made = tempfile::tempdir().unwrap();
+    let identity = trusted::Identity::of(made.path()).expect("a directory");
+    let asked = |project: &Path, home: &Path| {
+        let (mut bridge, said) = a_bridge();
+        let handle = bridge.mint(Open::opened(
+            project.to_path_buf(),
+            State::fresh(TrustStore::new(project)),
+            false,
+            Some((trusted::Store::new(home, project), identity)),
+            false,
+        ));
+        bridge.ask_about_trust(&handle);
+        let events = said.lock().unwrap();
+        let [event] = events.as_slice() else {
+            panic!("one event was expected: {:?}", names(&said));
+        };
+        assert_eq!(event.name, "trust.request");
+        event.data.clone()
+    };
+    let plain = asked(Path::new("/work/proj"), Path::new("/home/me/state"));
+    assert_eq!(plain["shownDirectory"], plain["directory"]);
+    assert_eq!(plain["shownDirectory"], json!("/work/proj"));
+    assert_eq!(plain["shownKeeping"], plain["keeping"]);
+
+    let odd = asked(
+        Path::new("/work/proj "),
+        Path::new("/home/me/state\u{202e}"),
+    );
+    assert_eq!(odd["directory"], json!("/work/proj "));
+    assert_eq!(odd["shownDirectory"], json!("\"/work/proj\u{2423}\""));
+    let held = odd["keeping"].as_str().expect("a record");
+    let shown = odd["shownKeeping"].as_str().expect("a spelled record");
+    assert!(
+        held.starts_with("/home/me/state\u{202e}/trusted/"),
+        "{held}"
+    );
+    assert!(
+        shown.starts_with("\"/home/me/state\\u{202e}/trusted/") && shown.ends_with(".jsonl\""),
+        "{shown}"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = asked(
+            Path::new(std::ffi::OsStr::from_bytes(b"/work/pr\xffoj")),
+            Path::new("/home/me/state"),
+        );
+        assert_eq!(bytes["directory"], json!("/work/pr\u{fffd}oj"));
+        assert_eq!(bytes["shownDirectory"], json!("\"/work/pr\\xffoj\""));
+    }
+}
+
 /// A session with no view has nothing to hand over, and a session that is not open cannot be
 /// taken. Neither runs the hand-over or changes who can answer.
 #[test]

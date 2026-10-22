@@ -75,7 +75,8 @@ struct Shared {
     wake: Box<dyn Fn() + Send>,
     sessions: HashMap<String, Session>,
     /// Sessions the bridge asked the trust question about before `session/new` had returned, with
-    /// the record a yes is kept in where the question offered to keep it.
+    /// the record a yes is kept in, as the bridge spelled it for a person, where the question
+    /// offered to keep it.
     unasked: HashMap<String, Option<String>>,
     asked: HashMap<u64, Asked>,
     next: u64,
@@ -318,22 +319,7 @@ impl Acp {
         };
         if let Some((directory, keeping)) = trust {
             let mut shared = self.lock();
-            let title = format!("Trust {}", plain(&directory));
-            // A yes is kept wherever the bridge offered to keep it, so the question says so and
-            // names the record, since nobody can endorse a record they were not shown.
-            let (allow, text) = match keeping {
-                Some(record) => (
-                    "Trust and remember",
-                    format!(
-                        "A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked. It is written to {}. Delete the lines naming this directory from that file to be asked again.",
-                        plain(&record)
-                    ),
-                ),
-                None => (
-                    "Trust for this session",
-                    "This answer cannot be kept here, so a session started in this directory later asks again.".to_string(),
-                ),
-            };
+            let (title, allow, text) = trust_question(&directory, keeping.as_deref());
             shared.ask(
                 &session.clone(),
                 Asked::Trust { session, turn },
@@ -493,6 +479,35 @@ fn pictured(text: &str) -> String {
 /// what would make the editor fetch something unasked taken out of it.
 fn plain(text: &str) -> String {
     without_loading(&pictured(text))
+}
+
+/// The trust question for a session in `directory`: its title, the answer that grants it and what a
+/// yes does.
+///
+/// `keeping` is the record a yes is kept in, spelled as the bridge spells a path for a person, and
+/// `None` where this client cannot keep one. The directory is spelled the same way, so one that
+/// ends in whitespace is not read as the one without it.
+fn trust_question(directory: &str, keeping: Option<&str>) -> (String, &'static str, String) {
+    let title = format!(
+        "Trust {}",
+        plain(&bravebot_agent::confirm::shown_name(directory))
+    );
+    // A yes is kept wherever the bridge offered to keep it, so the question says so and names the
+    // record, since nobody can endorse a record they were not shown.
+    let (allow, text) = match keeping {
+        Some(record) => (
+            "Trust and remember",
+            format!(
+                "A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked. It is written to {}. Delete the lines naming this directory from that file to be asked again.",
+                plain(record)
+            ),
+        ),
+        None => (
+            "Trust for this session",
+            "This answer cannot be kept here, so a session started in this directory later asks again.".to_string(),
+        ),
+    };
+    (title, allow, text)
 }
 
 /// Bare tags an editor still gets, because they carry no attribute to load anything from but
@@ -672,7 +687,7 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
     let data = &event.data;
     match event.name {
         "trust.request" => {
-            let keeping = data["keeping"].as_str().map(str::to_string);
+            let keeping = data["shownKeeping"].as_str().map(str::to_string);
             shared.unasked.insert(session, keeping);
         }
         "narration" => {
@@ -1684,6 +1699,81 @@ mod tests {
             titled("exposure", exposure("note.md ")),
             "read \"note.md\u{2423}\", which holds a credential"
         );
+    }
+
+    /// PROMPT-1: the trust question's title names the directory spelled as the terminal spells it,
+    /// so `/work/proj ` is not read as `/work/proj`, and a directory that needs no spelling is
+    /// named as it was.
+    #[test]
+    fn the_trust_question_spells_a_directory_that_would_draw_as_another() {
+        let titled = |directory: &str| trust_question(directory, None).0;
+        assert_eq!(titled("/work/proj"), "Trust /work/proj");
+        assert_eq!(titled("/work/proj "), "Trust \"/work/proj\u{2423}\"");
+        assert_eq!(
+            titled("/work/pr\u{202e}oj"),
+            "Trust \"/work/pr\\u{202e}oj\""
+        );
+        assert_eq!(titled(" "), "Trust \"\u{2423}\"");
+    }
+
+    /// PROMPT-1: the record a yes is kept in is read from the bridge's spelling of it and not from
+    /// the path as held, so a record under a directory that ends in a space is named as another is
+    /// not. Held and spelled differ here, and the question must carry the spelled one.
+    #[test]
+    fn the_trust_question_names_the_record_as_the_bridge_spelled_it() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::new(),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        on_event(
+            &shared,
+            Event::new(
+                "trust.request",
+                "s",
+                json!({
+                    "directory": "/work/proj ",
+                    "shownDirectory": "\"/work/proj\u{2423}\"",
+                    "keeping": "/home/me/state /trusted/k.jsonl",
+                    "shownKeeping": "\"/home/me/state\u{2423}/trusted/k.jsonl\"",
+                }),
+            ),
+        );
+        let kept = shared.lock().unwrap().unasked.get("s").cloned();
+        assert_eq!(
+            kept,
+            Some(Some(
+                "\"/home/me/state\u{2423}/trusted/k.jsonl\"".to_string()
+            ))
+        );
+        let (_, allow, said) = trust_question("/work/proj ", kept.flatten().as_deref());
+        assert_eq!(allow, "Trust and remember");
+        assert!(
+            said.contains("written to \"/home/me/state\u{2423}/trusted/k.jsonl\"."),
+            "{said}"
+        );
+
+        // A question that offers to keep nothing carries no record.
+        on_event(
+            &shared,
+            Event::new(
+                "trust.request",
+                "t",
+                json!({
+                    "directory": "/work/proj",
+                    "shownDirectory": "/work/proj",
+                    "keeping": null,
+                    "shownKeeping": null,
+                }),
+            ),
+        );
+        assert_eq!(shared.lock().unwrap().unasked.get("t"), Some(&None));
     }
 
     #[test]
