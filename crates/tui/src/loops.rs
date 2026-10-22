@@ -627,14 +627,14 @@ impl Loops {
             .find(|running| running.number == number)
     }
 
-    /// End the loop with this number, and say whether there was one.
+    /// The answer is what lets `/loop stop <n>` tell a number that never ran from one already ended.
     pub fn stop(&mut self, number: usize) -> bool {
         let before = self.live.len();
         self.live.retain(|running| running.number != number);
         self.live.len() != before
     }
 
-    /// End every loop, and say how many there were.
+    /// The count is what the stop notice reports to the person.
     pub fn stop_all(&mut self) -> usize {
         let count = self.live.len();
         self.live.clear();
@@ -968,6 +968,8 @@ mod tests {
         assert_eq!(loops.next_due(now), Some(1));
     }
 
+    /// LOOP-15: a number is never reused, because a stale `/loop stop N` typed after loop N ended
+    /// would otherwise end a different loop.
     #[test]
     fn a_number_is_never_issued_twice() {
         let mut loops = Loops::default();
