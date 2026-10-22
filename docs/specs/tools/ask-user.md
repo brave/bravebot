@@ -290,12 +290,12 @@ shows none ([ASK-8](#ASK-8)).
 
 Nothing reaches the planner or the session's memory before Enter on the review: the answers leave the
 picker only as the one ordered vector it returns, so the memory is written from what was confirmed
-and ASK-5, ASK-6 and the report to the planner are as they were. The one other way out is the clock
+and ASK-5, ASK-6 and the report to the planner are unchanged. The one other way out is the clock
 ([ASK-9](#ASK-9)), which keeps every answer given, including the one a reopened question had, and
 closes only a question never answered.
 
-**Why.** A wrong keypress on the first question was final once the second appeared, and the planner
-acted on an answer the person did not mean. The review draws only what the person was already shown
+**Why.** Without a review, a mistaken keypress on an earlier question cannot be corrected once the
+next one appears, and the planner acts on an answer the person did not mean. The review draws only what the person was already shown
 and what they wrote, and no key on it depends on any of that text.
 
 `verified-by: bravebot_tui::ask::an_answer_changed_from_the_review_is_the_one_sent`
