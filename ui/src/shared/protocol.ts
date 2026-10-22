@@ -914,6 +914,8 @@ export interface EventMap {
   'watch.ended': { number: number; reason: string; message?: string }
   phase: { phase: Phase }
   composing: { call: string | null }
+  /** What the model has thought since the last one, never empty. A delegate's is not sent (VIEW-34). */
+  thinking: { text: string }
   narration: { text: string }
   'tool.started': Activity
   'tool.finished': Activity

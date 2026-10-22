@@ -161,6 +161,46 @@
   font-variant-numeric: tabular-nums;
 }
 .working .turn-audit-link { margin-left: auto; }
+.working .thinking-toggle { margin-left: auto; }
+.working .thinking-toggle + .turn-audit-link { margin-left: 0; }
+
+/* What the model has thought this round, under the working line: the last few lines of it, a
+   register below the conversation like the rest of the activity. Plain text in a block with a head
+   of its own, so the model's words cannot draw that head, and isolated so a right-to-left override in
+   them cannot reorder anything outside the block. */
+.thinking {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-s);
+  min-width: 0;
+  margin-left: calc(var(--leo-spacing-s) + var(--icon-meta) / 2);
+  padding-left: var(--leo-spacing-m);
+  border-left: 1px solid var(--border-hairline);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  --leo-icon-size: var(--icon-caption);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.thinking-head {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  color: var(--ink-secondary);
+}
+/* Eight lines of the caption's own line height, anchored to the end: what overflows is the start of
+   the text, which is the part that has already been read. */
+.thinking-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: calc(8 * 1.5em);
+  overflow: hidden;
+  font-style: italic;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  unicode-bidi: isolate;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .working-word { animation: none; background: none; color: var(--ink-secondary); }

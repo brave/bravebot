@@ -957,6 +957,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
+| `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |
 | `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |
 | `tool.started` | `Activity` | `Reporter::tool_started` |
 | `tool.finished` | `Activity` | `Reporter::tool_finished` |

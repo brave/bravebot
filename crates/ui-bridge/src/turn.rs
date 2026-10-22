@@ -318,6 +318,21 @@ impl Reporter for BridgeReporter {
         self.say("narration", json!({ "text": text }));
     }
 
+    /// What the model has thought since the last event, for the window to draw on request
+    /// (VIEW-34).
+    ///
+    /// The engine reports it with every frame of a streamed reply, empty for most of them, and an
+    /// event is a wake-up across a pipe, so an empty one is not sent. A delegate's is dropped for
+    /// the reason its call is: one model thinks at a time, and a delegate's thought drawn beside the
+    /// turn's working line would read as the planner's. Nothing is kept here, since the window holds
+    /// the end of it and the turn's record never has it.
+    fn thinking(&mut self, text: String) {
+        if text.is_empty() || self.reporting_for.is_some() {
+            return;
+        }
+        self.say("thinking", json!({ "text": text }));
+    }
+
     /// Kept for whichever event ends the turn to carry, rather than sent as its own.
     ///
     /// An event of this reporter's names the session and not the turn, and a notice belongs to the

@@ -1160,6 +1160,7 @@ export function App(): React.JSX.Element {
         onCheckBackend={() => void checkBackend()}
         onDiagnostics={() => void doctor()}
         onSetup={() => openSettingsPage('agent')}
+        onThinking={(shown) => setLive((old) => old ? { ...old, showThinking: shown } : old)}
         storageKey={draftKey}
         attachments={live?.attachments ?? []}
         onAttach={() => {

@@ -367,7 +367,7 @@ function liveSession() {
   const { apply } = load('src/renderer/apply.ts')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
-    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
+    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
   }
   session.send = (event, data) => apply({ event, data }, (update) => { session.live = update(session.live) }, () => {}, () => {})
   session.word = () => workingWord(session.live.phase, session.live.checking, session.live.composing, session.live.hook)
@@ -407,6 +407,61 @@ test('the call being written names the wait, and every event that ends it clears
   session.send('composing', { call: 'Read' })
   session.send('turn.error', { kind: 'failed', message: 'x', category: 'other', attempts: 1, status: null, turn: 1, prompt: 'p', contextTokens: 0, id: null })
   assert.equal(session.live.composing, null)
+})
+
+// VIEW-34: the thinking is held as it arrives whether or not it is shown, so turning it on mid-round
+// shows what has come so far; it is no part of the conversation; only its end is kept; and it goes
+// when the round does, whichever way the round ends.
+test('the thinking is held apart from the transcript, kept to its end, and gone when the round is', () => {
+  const session = liveSession()
+  session.send('turn.started', { turn: 1 })
+  const before = session.live.entries
+  session.send('thinking', { text: 'first ' })
+  session.send('thinking', { text: 'second' })
+  assert.equal(session.live.thinking, 'first second')
+  assert.equal(session.live.showThinking, undefined, 'it was held only once it was asked for')
+  assert.equal(session.live.thinkingSeen, true, 'a session sent thinking was not offered the button')
+  assert.equal(session.live.entries, before, 'the thinking became part of the conversation')
+
+  session.send('thinking', { text: 'a'.repeat(3000) })
+  session.send('thinking', { text: 'b'.repeat(3000) })
+  assert.equal(session.live.thinking, 'a'.repeat(1096) + 'b'.repeat(3000), 'what was kept was not the end of it')
+
+  // A cut through the middle of a character gives up the character rather than draw half of it.
+  session.send('phase', { phase: 'planning' })
+  session.send('thinking', { text: '😀'.repeat(2500) + 'z' })
+  assert.equal(session.live.thinking.length, 4095)
+  assert.ok(!/^[\udc00-\udfff]/.test(session.live.thinking), 'half a character was drawn')
+
+  session.send('phase', { phase: 'planning' })
+  const ended = [
+    ['phase', { phase: 'planning' }],
+    ['narration', { text: 'Reading it.' }],
+    ['tool.started', { verb: 'Write', target: 'a.txt', why: null, note: null, failed: false, untrusted: false, changes: [], waitedSeconds: null }],
+    ['turn.started', { turn: 2 }],
+    ['turn.error', { kind: 'failed', message: 'x', category: 'other', attempts: 1, status: null, turn: 1, prompt: 'p', contextTokens: 0, id: null }],
+  ]
+  for (const [ender, data] of ended) {
+    session.send('thinking', { text: 'a thought' })
+    assert.equal(session.live.thinking, 'a thought')
+    session.send(ender, data)
+    assert.equal(session.live.thinking, '', `${ender} left the round's thinking up`)
+    assert.equal(session.live.thinkingSeen, true, `${ender} took the button away with the round`)
+  }
+})
+
+// The choice is a session's own and outlasts the round it was made in, and the thinking it shows
+// is the round now being written and not the one before.
+test('showing the thinking is kept by the session while each round starts without any', () => {
+  const session = liveSession()
+  session.live = { ...session.live, showThinking: true }
+  session.send('turn.started', { turn: 1 })
+  session.send('thinking', { text: 'one' })
+  session.send('phase', { phase: 'planning' })
+  session.send('thinking', { text: 'two' })
+  assert.equal(session.live.thinking, 'two')
+  session.send('turn.error', { kind: 'cancelled', message: 'x', category: 'other', attempts: 1, status: null, turn: 1, prompt: 'p', contextTokens: 0, id: null })
+  assert.equal(session.live.showThinking, true, 'a round ending turned it off')
 })
 
 // A check is a whole model call inside a tool call whose row is already drawn, and the round's phase
@@ -601,13 +656,13 @@ function bridgeFields(over = {}) {
   }
 }
 
-test('a new session starts with the eight starting values and keeps every field it was given', () => {
+test('a new session starts with the nine starting values and keeps every field it was given', () => {
   const { newLive } = load('src/renderer/live.ts')
   const fields = bridgeFields()
   const live = newLive(fields)
   assert.deepEqual(
-    { turns: live.turns, quarantine: live.quarantine, phase: live.phase, checking: live.checking, hook: live.hook, composing: live.composing, tokens: live.tokens, running: live.running },
-    { turns: {}, quarantine: [], phase: null, checking: null, hook: null, composing: null, tokens: 0, running: false },
+    { turns: live.turns, quarantine: live.quarantine, phase: live.phase, checking: live.checking, hook: live.hook, composing: live.composing, thinking: live.thinking, tokens: live.tokens, running: live.running },
+    { turns: {}, quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false },
   )
   for (const [key, value] of Object.entries(fields)) assert.deepEqual(live[key], value, `${key} lands unchanged`)
   assert.notEqual(newLive(fields).turns, live.turns, 'two sessions do not share one turns object')
