@@ -60,7 +60,7 @@ use crate::workspace::{
     rules_for_a_one_shot_run, scratch_for_this_run, unattended_trust,
 };
 use bravebot_agent::Mode;
-use bravebot_agent::turn::{self, SystemPrompts, Task};
+use bravebot_agent::turn::{self, MAX_TOOL_ROUNDS, RunLimits, SystemPrompts, Task};
 use bravebot_config::{Config, Managed};
 use bravebot_core::cancel::Cancel;
 use bravebot_i18n::t;
@@ -1271,6 +1271,21 @@ struct Invocation {
     /// Whether the person typed `--trust-input-lines`, which makes those lines their own words
     /// where otherwise they are a program's (CLI-36).
     trust_input_lines: bool,
+    /// The limits the command line gave the run, which end it where they are reached (CLI-38).
+    limits: RunLimits,
+}
+
+/// The whole number after `--max-rounds` or `--max-tokens`, or `None` where the word is anything
+/// else (CLI-38).
+///
+/// Digits and nothing else, so a sign, a fraction, an exponent or a space is refused as the
+/// mistake in a value a script computed that it is. Zero is refused as well, rather than read as no
+/// limit: a limit of nothing would stop the run before its first request, and a script that means
+/// no limit leaves the flag off.
+fn limit_count(next: Option<&String>) -> Option<u64> {
+    next.filter(|word| !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|word| word.parse::<u64>().ok())
+        .filter(|count| *count > 0)
 }
 
 /// The name after `--model`, for a one-shot run and for the session `-i` opens.
@@ -1326,6 +1341,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut goal = None;
     let mut input_lines = false;
     let mut trust_input_lines = false;
+    let mut limits = RunLimits::default();
     let mut index = 0;
 
     while index < args.len() {
@@ -1435,6 +1451,27 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 }
                 None => return Err(t!(cli_goal_needs_a_condition).to_string()),
             },
+            // Refused unless it is a whole number of rounds below the built-in bound, for the reason
+            // a word that is no level is refused by `--effort`: a script that computed a bad value
+            // asked for a cap and would otherwise run without one, untold. At the built-in bound
+            // or above it the run is cut off there by that bound, which takes its tools away and
+            // has it answer, so the status a script reads is 0 and not this one.
+            "--max-rounds" => {
+                let rounds = limit_count(args.get(index + 1))
+                    .and_then(|count| usize::try_from(count).ok())
+                    .filter(|count| *count < MAX_TOOL_ROUNDS);
+                limits.rounds = Some(rounds.ok_or_else(|| {
+                    t!(cli_max_rounds_needs_a_count, most = MAX_TOOL_ROUNDS - 1).to_string()
+                })?);
+                index += 2;
+            }
+            "--max-tokens" => {
+                limits.tokens = Some(
+                    limit_count(args.get(index + 1))
+                        .ok_or_else(|| t!(cli_max_tokens_needs_a_count).to_string())?,
+                );
+                index += 2;
+            }
             "--json" => {
                 json = true;
                 index += 1;
@@ -1496,6 +1533,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         goal,
         input_lines,
         trust_input_lines,
+        limits,
     })
 }
 
@@ -1573,6 +1611,41 @@ fn input_lines_conflict(
         return Some(t!(cli_input_lines_not_with_a_manifest).to_string());
     }
     incognito.then(|| t!(cli_input_lines_not_with_incognito).to_string())
+}
+
+/// The sentence that refuses a run limit given to a manifest run, which plans before it makes any
+/// round of tool calls and has none to count (CLI-38). `None` for a turn, and for a run given none.
+///
+/// Refused by name rather than taken and ignored: a script that capped a run and was given one
+/// with no cap would pay for the cost it asked to bound.
+fn limit_not_with_a_manifest(mode: Mode, limits: RunLimits) -> Option<String> {
+    let flag = limit_flag(limits)?;
+    (mode == Mode::Manifest).then(|| t!(cli_limit_not_with_a_manifest, flag = flag))
+}
+
+/// The sentence that refuses a run limit given with `--goal`, whose rounds are each a turn that
+/// counts a limit from nothing, so a limit would bound each round and not the run (CLI-38).
+/// `None` for a run with no goal, and for a run given no limit.
+///
+/// Refused by name for the reason a manifest run is: a script that capped a run would be given one
+/// that spends the cap in every round, up to eleven times over.
+fn limit_not_with_a_goal(has_goal: bool, limits: RunLimits) -> Option<String> {
+    let flag = limit_flag(limits)?;
+    has_goal.then(|| t!(cli_limit_not_with_a_goal, flag = flag))
+}
+
+/// The flag that gave the run a limit, `--max-rounds` before `--max-tokens` where it gave both
+/// (CLI-38). `None` for a run given none.
+fn limit_flag(limits: RunLimits) -> Option<&'static str> {
+    match limits {
+        RunLimits {
+            rounds: Some(_), ..
+        } => Some("--max-rounds"),
+        RunLimits {
+            tokens: Some(_), ..
+        } => Some("--max-tokens"),
+        _ => None,
+    }
 }
 
 /// Whether a one-shot puts its plan to somebody: only where both ends of the conversation are a
@@ -1703,6 +1776,7 @@ fn prepare_the_run(
         goal,
         input_lines,
         trust_input_lines,
+        limits,
     } = invocation;
 
     // Refused before stdin is read, since a run that reads lines owns the rest of the stream.
@@ -1746,6 +1820,11 @@ fn prepare_the_run(
         &prompts,
         resume.as_ref(),
     ) {
+        return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
+    }
+    if let Some(conflict) = limit_not_with_a_manifest(mode, limits)
+        .or_else(|| limit_not_with_a_goal(goal.is_some(), limits))
+    {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
     }
     // Read and vetted before anything is sent, so a schema outside what is checked is a refused
@@ -1998,6 +2077,7 @@ fn prepare_the_run(
         .with_model(model_asked_for(named, pick.into_model()))
         .with_advisor(advisor)
         .with_output_schema(output_schema)
+        .with_run_limits(limits)
         .with_permissions(permissions)
         .with_permission_mode(bravebot_agent::LiveMode::unattended(permission_mode))
         // The words the command line put in the planner's system prompt (CLI-19). A manifest run
@@ -2719,6 +2799,9 @@ fn report_a_failed_turn(
         say_the_result(&what_ran(
             ending,
             &error.to_string(),
+            error
+                .limit_reached()
+                .map_or(0, bravebot_agent::turn::LimitReached::rounds),
             reporter.spent(),
             reporter.calls(),
             &with_declined(refusals(sink.recorded()), declined),
@@ -3445,6 +3528,7 @@ mod tests {
         let object = what_ran(
             Ending::Failed,
             "BB1001: nothing answered",
+            0,
             Default::default(),
             &[],
             &[],
@@ -5228,6 +5312,185 @@ mod tests {
             let err = parse_invocation(&typed).expect_err("must refuse");
             assert!(err.contains("--effort"), "{typed:?}: {err}");
             assert!(err.contains("xhigh"), "{typed:?}: {err}");
+        }
+    }
+
+    /// The two flags name a limit each, and a run that names neither has none, which leaves the
+    /// built-in bound to be the only one (CLI-38).
+    #[test]
+    fn the_limit_flags_name_the_most_rounds_and_tokens_a_run_may_spend() {
+        let invocation = parse_invocation(&args(&[
+            "--max-rounds",
+            "12",
+            "do a thing",
+            "--max-tokens",
+            "250000",
+        ]))
+        .expect("parses");
+        assert_eq!(
+            invocation.limits,
+            RunLimits {
+                rounds: Some(12),
+                tokens: Some(250_000),
+            }
+        );
+        assert_eq!(invocation.prompt, "do a thing");
+
+        let invocation = parse_invocation(&args(&["do a thing"])).expect("parses");
+        assert_eq!(invocation.limits, RunLimits::default());
+    }
+
+    /// A rounds limit has to be below the built-in bound, since at it the bound takes the tools
+    /// away and has the run answer, which ends on status 0 where the limit is meant to give 8. A
+    /// limit in tokens has no upper end.
+    #[test]
+    fn a_rounds_limit_has_to_be_below_the_built_in_bound() {
+        let below = (MAX_TOOL_ROUNDS - 1).to_string();
+        let invocation = parse_invocation(&args(&["--max-rounds", &below, "go"])).expect("parses");
+        assert_eq!(invocation.limits.rounds, Some(MAX_TOOL_ROUNDS - 1));
+
+        for refused in [MAX_TOOL_ROUNDS, MAX_TOOL_ROUNDS + 1] {
+            let typed = refused.to_string();
+            let err =
+                parse_invocation(&args(&["--max-rounds", &typed, "go"])).expect_err("refused");
+            assert!(err.contains("--max-rounds"), "{err}");
+            assert!(err.contains(&below), "{err}");
+        }
+
+        let invocation =
+            parse_invocation(&args(&["--max-tokens", "18446744073709551615", "go"])).expect("ok");
+        assert_eq!(invocation.limits.tokens, Some(u64::MAX));
+    }
+
+    /// A value that is not a whole number of 1 or more is refused by name, because read as no
+    /// limit it would hand a script that computed a bad value a run with no cap, untold. Zero is
+    /// among them, since a limit of nothing stops the run before its first request.
+    #[test]
+    fn a_limit_flag_that_is_not_a_whole_number_of_one_or_more_is_refused() {
+        for flag in ["--max-rounds", "--max-tokens"] {
+            for value in [
+                "",
+                " ",
+                "0",
+                "00",
+                "-1",
+                "+5",
+                "5.0",
+                "1e3",
+                "ten",
+                "5 ",
+                " 5",
+                "0x10",
+                "1_000",
+                "--json",
+                "99999999999999999999999",
+            ] {
+                for typed in [
+                    args(&[flag, value, "do a thing"]),
+                    args(&["do a thing", flag, value]),
+                ] {
+                    let err = parse_invocation(&typed).expect_err("must refuse");
+                    assert!(err.contains(flag), "{typed:?}: {err}");
+                }
+            }
+            let err = parse_invocation(&args(&["do a thing", flag])).expect_err("refused");
+            assert!(err.contains(flag), "{flag} ending the line: {err}");
+        }
+    }
+
+    /// The last value wins, as it does for `--effort`, so a wrapper that appends a flag to a line
+    /// it was given can change it.
+    #[test]
+    fn the_last_value_given_for_a_limit_is_the_one_in_force() {
+        let invocation = parse_invocation(&args(&[
+            "--max-rounds",
+            "9",
+            "--max-rounds",
+            "3",
+            "--max-tokens",
+            "10",
+            "--max-tokens",
+            "20",
+            "go",
+        ]))
+        .expect("parses");
+        assert_eq!(invocation.limits.rounds, Some(3));
+        assert_eq!(invocation.limits.tokens, Some(20));
+    }
+
+    /// A manifest run plans before it makes a round of tool calls, so a limit on rounds has nothing
+    /// to count and a limit it accepted and did not hold would cost what it was given to bound. A
+    /// turn is never refused, and neither is a manifest run given no limit.
+    #[test]
+    fn a_manifest_run_refuses_the_limit_flags_by_name() {
+        let both = RunLimits {
+            rounds: Some(3),
+            tokens: Some(100),
+        };
+        let rounds = RunLimits {
+            rounds: Some(3),
+            tokens: None,
+        };
+        let tokens = RunLimits {
+            rounds: None,
+            tokens: Some(100),
+        };
+
+        let refused = limit_not_with_a_manifest(Mode::Manifest, rounds).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+        let refused = limit_not_with_a_manifest(Mode::Manifest, tokens).expect("refused");
+        assert!(refused.contains("--max-tokens"), "{refused}");
+        let refused = limit_not_with_a_manifest(Mode::Manifest, both).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+
+        assert_eq!(limit_not_with_a_manifest(Mode::Turn, both), None);
+        assert_eq!(
+            limit_not_with_a_manifest(Mode::Manifest, RunLimits::default()),
+            None
+        );
+    }
+
+    /// A goal run sends the work back as further turns, and each counts a limit from nothing, so a
+    /// limit given with `--goal` would bound each round and let the run spend it eleven times over.
+    /// It is refused by name, as it is for a manifest run. A run with no goal is never refused, and
+    /// neither is a goal run given no limit.
+    #[test]
+    fn a_goal_run_refuses_the_limit_flags_by_name() {
+        let both = RunLimits {
+            rounds: Some(3),
+            tokens: Some(100),
+        };
+        let rounds = RunLimits {
+            rounds: Some(3),
+            tokens: None,
+        };
+        let tokens = RunLimits {
+            rounds: None,
+            tokens: Some(100),
+        };
+
+        let refused = limit_not_with_a_goal(true, rounds).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+        assert!(refused.contains("--goal"), "{refused}");
+        let refused = limit_not_with_a_goal(true, tokens).expect("refused");
+        assert!(refused.contains("--max-tokens"), "{refused}");
+        let refused = limit_not_with_a_goal(true, both).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+
+        assert_eq!(limit_not_with_a_goal(false, both), None);
+        assert_eq!(limit_not_with_a_goal(true, RunLimits::default()), None);
+    }
+
+    /// Either flag may lead the line, as the other task flags do: `bravebot --max-rounds 3 "task"`
+    /// is a one-shot run and not an unknown option.
+    #[test]
+    fn a_limit_flag_may_lead_the_line_like_the_other_task_flags() {
+        for flag in ["--max-rounds", "--max-tokens"] {
+            assert!(TASK_FLAGS.contains(&flag), "{flag}");
+            assert!(
+                flags::is_a_one_shot(&args(&[flag, "3", "go"]), false),
+                "{flag}"
+            );
         }
     }
 

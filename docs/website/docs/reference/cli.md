@@ -102,6 +102,8 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--output-schema <path>` | hold the reply to the JSON Schema in this file, or end on status 6 ([below](#--output-schema-path)) |
 | `--goal <condition>` | keep working until a judge says the condition holds, or end on status 7 ([below](#--goal-condition)) |
+| `--max-rounds <n>` | stop the run when the agent asks for a round of tool calls past this many, and end on status 8 ([below](#--max-rounds-n-and---max-tokens-n)) |
+| `--max-tokens <n>` | stop the run before a request once it has spent this many tokens, and end on status 8 ([below](#--max-rounds-n-and---max-tokens-n)) |
 | `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
 | `--sandbox <mode>` | how far the programs the agent runs may reach: `strict`, `read-only` (which also stops the agent's file tools writing), `workspace-write` or `off`. Without it the mode is `workspace-write` ([`sandbox.mode`](../security/security.md)). Where a machine-level file pins `sandbox.mode`, a mode that reads more of the machine, writes more or both is refused, and the refusal says which and names the pinned mode to run with |
 | `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
@@ -526,7 +528,8 @@ the verdict and its reason.
 
 The run is written down as one session, so `--resume` carries the whole conversation, and the
 condition is not carried with it. The flag is refused with status 2 before anything is sent when no
-condition follows it, when it is blank or is the next flag, and with `--mode manifest`. A
+condition follows it, when it is blank or is the next flag, and with `--mode manifest`,
+`--max-rounds` or `--max-tokens`. A
 [`summaryModel`](../customize/configuration.md#summarymodel) that cannot be used for the judge is
 refused with status 3 before the first round.
 
@@ -534,6 +537,42 @@ refused with status 3 before the first round.
 **Every round re-sends the conversation.** Ten rounds of a long task cost more than ten ordinary
 turns, and a condition the conversation can never show to be met spends all ten.
 :::
+
+## `--max-rounds <n>` and `--max-tokens <n>`
+
+```sh
+bravebot --json --max-rounds 30 --max-tokens 400000 -p "update the changelog"
+```
+
+Two limits on a one-shot run, for a job that has to bound what a run costs or how long it takes.
+
+`--max-rounds` is the most rounds of tool calls the run may make. When the agent asks for another
+round after that many, the calls are not run and the run stops. `--max-tokens` is the most tokens,
+input and output together, the run may have spent when it is about to send a request. At or over it
+the request is not sent. The count is the one the result object reports as `tokens.total`, so the
+figure from an earlier run is the number to choose from.
+
+A run that reaches either ends on status 8 (`BB1008`). The message on stderr says which limit it
+was and nothing goes to stdout. Under [`--json`](#--json) the object has `"reason": "limit"`, the
+rounds the run made in `steps`, the tokens it spent and the calls it made, and `reply` is empty.
+The files it had changed stay changed, and no session is recorded for it.
+
+A run that finishes within the limits is not affected. An agent that answers after its last
+allowed round has reached nothing. An answer that takes the total past `--max-tokens` is still
+written, because the limit stops a request from being sent and none is left, so `--max-tokens`
+bounds what the run sends next and not what it has spent. The count comes from the usage the service
+reports, so a service that reports none never stops a run at it, and a delegate still running
+when the run stops is waited for and its tokens are in the total.
+
+Each takes a whole number written in digits, 1 or more. `--max-rounds` is below 200, the bound
+every one-shot run carries, which has the agent answer with what it has and exits 0. Either flag
+is refused with status 2, before anything is sent, when its value is anything else, and when
+[`--mode manifest`](#--mode-turnmanifest) is given, since a manifest run plans the whole run first
+and makes no rounds of tool calls, and when [`--goal`](#--goal-condition) is given, since each round
+of a goal run counts a limit from nothing and the run would spend it in every round. There is no
+limit in money, because bravebot holds no price table. A session has the
+[`limit`](../customize/configuration.md#limit) setting and
+[`/limit`](commands.md#limit-amount--off) instead.
 
 ## `--json-stream`
 
@@ -1222,6 +1261,7 @@ different things to do about a failed run.
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` asked for |
 | 7 | `BB1007` | worked towards the condition `--goal` gave, and it did not hold |
+| 8 | `BB1008` | reached the limit `--max-rounds` or `--max-tokens` gave it, and stopped before going past it |
 
 Only the transport's own failures are status 5. A non-success answer from the service is the service
 answering, so a refused credential is a configuration problem rather than a connection to retry.
@@ -1247,5 +1287,5 @@ one-shot run is pipeable.
 |---|---|
 | piped input | 10 MiB, refused rather than truncated past that |
 | a pasted picture | 10 MB |
-| tool rounds in one turn | unbounded interactively; 200 for a one-shot or manifest run, after which the planner answers with what it has |
+| tool rounds in one turn | unbounded interactively; 200 for a one-shot or manifest run, after which the planner answers with what it has; [`--max-rounds`](#--max-rounds-n-and---max-tokens-n) lowers it for a one-shot run and stops the run instead |
 | context budget | the window your model advertises; 24,000 prompt tokens where it advertises none |

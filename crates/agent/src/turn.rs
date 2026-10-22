@@ -262,10 +262,82 @@ fn after_a_ceiling_stop(
     )
 }
 
+/// Which of the limits a person gave a run ended it, and what the run had done by then (TURN-14).
+///
+/// Numbers the driver counted and nothing a reply or a tool result said, so a caller may put them
+/// in a sentence or a result object without reading content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitReached {
+    /// The planner asked for a round of tool calls past the most the run may make. The round it
+    /// asked for was not run.
+    Rounds {
+        /// The limit, which is also how many rounds were made.
+        most: usize,
+    },
+    /// The run had spent as many tokens as it may when it was about to send another request, which
+    /// was not sent.
+    Tokens {
+        /// The limit.
+        most: u64,
+        /// Tokens the run had spent, which is at least `most`.
+        spent: u64,
+        /// Rounds of tool calls made before the run stopped.
+        rounds: usize,
+    },
+}
+
+impl LimitReached {
+    /// Rounds of tool calls the run made before it stopped.
+    pub fn rounds(&self) -> usize {
+        match *self {
+            Self::Rounds { most } => most,
+            Self::Tokens { rounds, .. } => rounds,
+        }
+    }
+}
+
+impl fmt::Display for LimitReached {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Rounds { most } => write!(f, "{}", t!(run_limit_rounds, most = most)),
+            Self::Tokens { most, spent, .. } => {
+                write!(f, "{}", t!(run_limit_tokens, spent = spent, most = most))
+            }
+        }
+    }
+}
+
+/// The limit on tokens a person gave the run, where the run has spent it (TURN-14).
+fn token_limit_reached(task: &Task, state: &State<'_>) -> Option<LimitReached> {
+    let most = task.limits.tokens?;
+    (state.account.tokens >= most).then_some(LimitReached::Tokens {
+        most,
+        spent: state.account.tokens,
+        rounds: state.steps,
+    })
+}
+
+/// End the run at a limit its person gave it, with a line in the trail saying which and how far
+/// the run had got (TURN-14).
+fn stopped_at<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    round: usize,
+    reached: LimitReached,
+) -> TurnError {
+    let (counts, made, limit) = match reached {
+        LimitReached::Rounds { most } => ("rounds", round as u64, most as u64),
+        LimitReached::Tokens { most, spent, .. } => ("tokens", spent, most),
+    };
+    policy.record_run_limit(round, counts, made, limit);
+    TurnError::LimitReached(reached)
+}
+
 #[derive(Debug)]
 pub enum TurnError {
     /// The user asked for the turn to stop.
     Cancelled { attempts: Option<u32> },
+    /// The run reached a limit its person gave it, and stopped before going past it (TURN-14).
+    LimitReached(LimitReached),
     /// Routing could not be precommitted.
     Precommit(String),
     /// A file operation failed or was refused.
@@ -290,6 +362,7 @@ impl fmt::Display for TurnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cancelled { .. } => write!(f, "cancelled"),
+            Self::LimitReached(reached) => write!(f, "{reached}"),
             Self::Precommit(detail) => write!(f, "{detail}"),
             Self::Workspace(e) => write!(f, "{e}"),
             Self::Chat(e) => write!(f, "{e}"),
@@ -308,6 +381,9 @@ impl TurnError {
             Self::Cancelled { attempts } => Ending::Stopped {
                 attempts: *attempts,
             },
+            // The person's own limit, so a stop and not a failure of anything. No request was
+            // handed to egress after it was reached.
+            Self::LimitReached(_) => Ending::Stopped { attempts: Some(0) },
             Self::Chat(error) => Ending::Failed(error.diagnosis()),
             Self::Workspace(_) => Ending::Failed(Diagnosis::of(Category::Workspace)),
             // A precommit that would not hold and a plan that would not run are both this program
@@ -315,6 +391,15 @@ impl TurnError {
             Self::Precommit(_) | Self::Manifest { .. } => {
                 Ending::Failed(Diagnosis::of(Category::Internal))
             }
+        }
+    }
+
+    /// The limit that ended the run, where one did.
+    pub fn limit_reached(&self) -> Option<&LimitReached> {
+        match self {
+            Self::LimitReached(reached) => Some(reached),
+            Self::Manifest { cause, .. } => cause.limit_reached(),
+            _ => None,
         }
     }
 
@@ -3998,6 +4083,13 @@ where
             }
         }
 
+        // The person's own limit on the run, which ends it where the session limit above asks
+        // (TURN-14). Nobody is asked: a run that has one has nobody to ask, and raising a limit
+        // the person set is theirs to do by running it again.
+        if let Some(reached) = token_limit_reached(task, state) {
+            return Err(stopped_at(policy, state.steps, reached));
+        }
+
         round_steps::compact_if_due(
             config,
             egress,
@@ -4022,6 +4114,12 @@ where
                 Some(_) => None,
             },
         )?;
+
+        // Again, because the summary a compaction asks for spends tokens of its own, and the
+        // request that follows it is the one this limit is meant to hold back (TURN-14).
+        if let Some(reached) = token_limit_reached(task, state) {
+            return Err(stopped_at(policy, state.steps, reached));
+        }
 
         // Said before the request goes out, so the longest silence in a turn is explained
         // while it happens rather than accounted for afterwards.
@@ -4271,6 +4369,19 @@ where
                 continue;
             }
             break completion;
+        }
+
+        // The planner asked for a round past the most the person allowed. Stopped before that
+        // round runs, so nothing it would have done has happened (TURN-14). A run that answered
+        // after its last allowed round never gets here, since it asked for no further round.
+        if let Some(most) = task.limits.rounds
+            && state.steps >= most
+        {
+            return Err(stopped_at(
+                policy,
+                state.steps,
+                LimitReached::Rounds { most },
+            ));
         }
 
         state.steps += 1;

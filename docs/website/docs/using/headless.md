@@ -296,6 +296,11 @@ A one-shot run carries a limit of 200 rounds of tool calls, where an interactive
 On the limiting round the planner is offered no tools and told it has none left, so it answers with
 what it has.
 
+[`--max-rounds <n>`](../reference/cli.md#--max-rounds-n-and---max-tokens-n) lowers that limit, and
+[`--max-tokens <n>`](../reference/cli.md#--max-rounds-n-and---max-tokens-n) adds one on the tokens a
+run may spend. A run that reaches either stops, without the planner's answer, and ends on status 8,
+so a job can tell a run that was cut short from one that finished.
+
 ## Exit codes
 
 A failure exits non-zero, and **the status says which failure it was**. A configuration error, a
@@ -312,6 +317,7 @@ explanation on stdout.
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` asked for |
 | 7 | `BB1007` | worked towards the condition `--goal` gave, and it did not hold |
+| 8 | `BB1008` | reached the limit `--max-rounds` or `--max-tokens` gave it, and stopped before going past it |
 
 A status is never renumbered and never given a second meaning, so a script can branch on one: "the
 endpoint was not there, try again", "the configuration is wrong, fail the build" and "a gate refused
@@ -344,6 +350,8 @@ the wrong thing to search for.
 | `--trust-input-lines` | treat those lines as your own words and not a program's |
 | `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
 | `--goal <condition>` | keep working until a judge says the condition holds; a condition that never does ends on status 7 |
+| `--max-rounds <n>` | stop the run when the agent asks for a round of tool calls past this many; ends on status 8 |
+| `--max-tokens <n>` | stop the run before a request once this many tokens are spent; ends on status 8 |
 | `--settings <path>` | read a settings file above the ones found, for this run |
 | `--mode manifest` | plan the whole run first, then walk the plan |
 

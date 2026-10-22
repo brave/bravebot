@@ -167,6 +167,7 @@ exiting successfully with an explanation on stdout, and each of them has a statu
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` (CLI-28) asked for |
 | 7 | `BB1007` | worked towards the condition `--goal` (CLI-35) gave, and it did not hold |
+| 8 | `BB1008` | reached a limit `--max-rounds` or `--max-tokens` (CLI-38) gave it, and stopped before going past it |
 
 A status is never renumbered and never given a second meaning. A failure kind nothing here names
 is 1, and one worth telling apart takes the next number.
@@ -204,6 +205,8 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::exit::a_manifest_run_is_classified_by_what_stopped_it`
 `verified-by: bravebot_cli::running::a_reply_off_the_output_schema_ends_on_its_own_status`
 `verified-by: bravebot_cli::running::a_goal_never_met_stops_after_ten_rounds_on_its_own_status`
+`verified-by: bravebot_cli::running::a_run_asking_for_a_round_past_max_rounds_ends_on_status_eight`
+`verified-by: bravebot_cli::exit::a_run_stopped_at_its_limit_is_told_apart_from_a_failure`
 `verified-by: bravebot_agent::backend::a_request_that_never_left_is_told_apart_from_one_that_was_answered`
 `verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
 `verified-by: bravebot_cli::main::what_nobody_could_be_asked_is_kept_and_what_was_answered_is_not`
@@ -580,7 +583,7 @@ A failed run retains measured cumulative token usage from completed work. The la
 replaces earlier reports; a successful outcome is charged once. A goal run (CLI-35) adds the rounds
 before the latest, and the judge's checks, to the latest round's figure. Required numeric token fields
 remain zero when no measurement exists. Failure reports do not invent a model, reply or round
-count.
+count, except that a run stopped at a limit (CLI-38) reports the rounds it made, which it counted.
 
 The object takes the reply's place on stdout and nothing else goes there. Progress, the message and
 the trail stay on stderr, exactly as they are without the flag.
@@ -622,6 +625,7 @@ what may change, every field is either frozen by accident or broken without warn
 `verified-by: bravebot_cli::running::a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so`
 `verified-by: bravebot_cli::main::a_write_and_a_fetch_nobody_could_be_asked_about_count_for_the_status_and_are_listed_once`
 `verified-by: bravebot_cli::main::an_mcp_call_nobody_could_be_asked_about_counts_for_the_status_and_is_listed_once`
+`verified-by: bravebot_cli::running::a_run_that_has_spent_max_tokens_sends_no_further_request_and_ends_on_status_eight`
 
 <a id="CLI-13"></a>
 ### CLI-13: `--settings` names a file that outranks every layer found
@@ -1912,7 +1916,8 @@ The condition is recorded nowhere else, so `--resume` carries that conversation 
 
 The flag is refused with the status for an argument (CLI-6) before anything is sent when no
 condition follows it, when the condition is blank or is the next flag, with `--mode manifest`, which
-is planned once and has no conversation to send the work back into, and where a background session
+is planned once and has no conversation to send the work back into, with `--max-rounds` or
+`--max-tokens`, which count from nothing in each round (CLI-38), and where a background session
 is started, whose words after `--bg` are all its prompt. A model for the judge
 that cannot be used, because `summaryModel` names one that needs a sign-in this machine has not
 made or that the machine-level layer excludes ([COMPACT-15](compaction.md#COMPACT-15)), is refused
@@ -2257,3 +2262,75 @@ reading the answer, so none of it goes to a planner.
 `verified-by: bravebot_cli::running::stats_draws_a_model_name_with_nothing_a_terminal_would_act_on`
 `verified-by: bravebot_cli::running::a_muddled_stats_request_is_refused_with_the_argument_status_and_no_figures`
 `verified-by: bravebot_cli::running::stats_runs_under_incognito_and_counts_the_records_written_before`
+
+<a id="CLI-38"></a>
+### CLI-38: `--max-rounds` and `--max-tokens` stop a one-shot run at a limit, on a status of their own
+
+`--max-rounds <n>` is the most rounds of tool calls the run may make, and `--max-tokens <n>` is the
+most tokens it may have spent when it is about to send a request. A run that reaches either stops
+before the round or the request that would pass it ([TURN-14](turns.md#TURN-14)) and ends on status
+8 (`BB1008`), with the identifier in front of the message on stderr as CLI-6 has it. The message
+says which limit was reached. Without `--json` nothing goes to stdout, as for any failure. With it
+the result object (CLI-12) has `reason` `limit` and says what the run had done: the rounds it made
+in `steps`, the tokens it spent and the calls it made, with `reply` and `model` empty. `--trace`
+puts a line in the trail that says which limit it was.
+
+A run that finishes within both limits ends as it would without them. A planner that answers after
+its last allowed round has not reached the limit, and an answer that carries the total past
+`--max-tokens` is still the answer, since the limit stops a request from being sent and none is
+left. Status 8 is given only to a run that was cut short.
+
+Each value is a whole number written in digits, 1 or more. A value that is not, a flag with no
+value, a `--max-rounds` of 200 or more, which is the bound a one-shot run carries
+([TURN-2](turns.md#TURN-2)), and either flag given with `--mode manifest` or `--goal` are refused
+with status 2 before anything is sent, and the refusal names the flag. A flag given twice takes the
+last value. A session's own limit is the `limit` setting and `/limit`
+([TURN-8](turns.md#TURN-8)).
+
+**Why.** A CI job that runs the agent cannot say how much it is willing to spend. The only bound is
+a constant of 200 rounds, and the run that reaches it answers with what it has and exits 0
+([TURN-1](turns.md#TURN-1)), which suits a person reading it. A script needs to tell a run that was
+cut short from one that finished, so the limit stops the run and the status says so. Status 1 would
+read as something that went wrong, and status 0 as success.
+
+Refused rather than read as no limit, for the reason CLI-11 gives about two audiences: a script that
+computed a bad value asked for a cap, and a run with none costs what the cap was for. Zero is
+refused for the same reason, since it would stop the run before its first request, and a script
+that means no limit leaves the flag off. 200 and above is refused because the bound that takes a
+run's tools away ([TURN-1](turns.md#TURN-1)) ends the run first, on status 0 with an answer, where
+the script expects 8.
+
+A manifest run plans the whole run first and makes no rounds of tool calls, so a limit has no round
+to stop before. Both flags are refused there, as `--output-schema` is, since the script would
+believe it had a limit that nothing enforces.
+
+A goal run (CLI-35) is a turn for each round, and each turn counts rounds of tool calls and tokens
+from nothing. A limit given with it would bound each round, and the run could spend it in the first
+round and in each of the ten that follow. Both flags are refused there for the reason a manifest
+run refuses them: the script would believe it had capped the run.
+
+**Known costs.** A limit in tokens is passed by the request that reached it, as the session limit is
+([TURN-8](turns.md#TURN-8)), so it bounds what the run sends next and not what it has spent. It is
+counted from the usage the backend reports, so a backend that reports none never stops a run at it.
+A delegate still running when the run ends is waited for, and what it spends is in the result. No
+limit in money is offered, because the tree holds no price table. A run that ends on a limit writes
+no session record, so `--resume` cannot carry it on. No limit applies across the rounds of a
+`--goal` run. The flags are refused with it, and the rounds of CLI-35 are what bound its spend.
+
+`verified-by: bravebot_cli::running::a_run_asking_for_a_round_past_max_rounds_ends_on_status_eight`
+`verified-by: bravebot_cli::running::a_run_stopped_at_max_rounds_writes_nothing_to_stdout`
+`verified-by: bravebot_cli::running::a_run_that_finishes_within_max_rounds_ends_as_it_would_without_it`
+`verified-by: bravebot_cli::running::a_run_that_has_spent_max_tokens_sends_no_further_request_and_ends_on_status_eight`
+`verified-by: bravebot_cli::running::an_answer_that_passes_max_tokens_is_still_written`
+`verified-by: bravebot_cli::running::a_limit_that_names_no_count_is_refused_before_anything_is_sent`
+`verified-by: bravebot_cli::running::a_manifest_run_refuses_a_limit_and_sends_nothing`
+`verified-by: bravebot_cli::running::a_goal_run_refuses_a_limit_and_sends_nothing`
+`verified-by: bravebot_cli::main::the_limit_flags_name_the_most_rounds_and_tokens_a_run_may_spend`
+`verified-by: bravebot_cli::main::a_rounds_limit_has_to_be_below_the_built_in_bound`
+`verified-by: bravebot_cli::running::a_run_asking_for_a_round_past_the_largest_max_rounds_ends_on_status_eight`
+`verified-by: bravebot_cli::main::a_limit_flag_that_is_not_a_whole_number_of_one_or_more_is_refused`
+`verified-by: bravebot_cli::main::the_last_value_given_for_a_limit_is_the_one_in_force`
+`verified-by: bravebot_cli::main::a_manifest_run_refuses_the_limit_flags_by_name`
+`verified-by: bravebot_cli::main::a_goal_run_refuses_the_limit_flags_by_name`
+`verified-by: bravebot_cli::main::a_limit_flag_may_lead_the_line_like_the_other_task_flags`
+`verified-by: bravebot_cli::exit::a_run_stopped_at_its_limit_is_told_apart_from_a_failure`

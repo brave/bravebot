@@ -172,6 +172,8 @@ pub(crate) fn print_help() {
         ("--trust-input-lines", t!(cli_option_trust_input_lines)),
         ("--output-schema <path>", t!(cli_option_output_schema)),
         ("--goal <condition>", t!(cli_option_goal)),
+        ("--max-rounds <n>", t!(cli_option_max_rounds)),
+        ("--max-tokens <n>", t!(cli_option_max_tokens)),
         ("--incognito", t!(cli_option_incognito)),
         ("--safe", t!(cli_option_safe)),
         ("--locked", t!(cli_option_locked)),
