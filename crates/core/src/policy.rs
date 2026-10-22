@@ -1140,6 +1140,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.issue_grant("mcp_tools", "alias", alias.to_string());
     }
 
+    /// Record that `alias` announced a change to its tools, so its list is read again and put to a
+    /// person as a first list is (MCP-12). Nothing about the list as it now stands is in the record.
+    pub fn record_tool_list_change(&mut self, alias: &str) {
+        self.allow(
+            "mcp_tools_changed",
+            format!(
+                "the MCP server {alias} announced that its tools changed, so none of its tools is \
+                 offered until the list it now gives is vouched for"
+            ),
+        );
+    }
+
     /// Take the word of whoever endorsed a server's tool list and give the planner the list.
     ///
     /// A promotion road of its own (LABEL-8), and the one a server's words reach the planner by.

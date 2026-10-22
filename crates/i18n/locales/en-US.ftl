@@ -1452,6 +1452,8 @@ mcp-tools-yes = Yes, offer them
 mcp-tools-no = No, continue without them
 mcp-tools-declined = { $alias } offers no tool in this session: its list was not approved
 mcp-tools-refused = { $alias } offers no tool in this session: { $reason }
+mcp-tools-changed = { $alias } changed its tools: it offers none until the list it gives now is approved
+mcp-tools-reread-failed = { $alias } offers no tool in this session: its changed list could not be read ({ $reason })
 
 ## One call to a tool of an MCP server
 

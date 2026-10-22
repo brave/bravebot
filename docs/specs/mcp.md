@@ -271,3 +271,36 @@ says.
 `verified-by: bravebot_agent::mcp::a_prompt_a_person_ran_reaches_the_server_with_their_arguments_and_the_planner_gets_a_reference`
 `verified-by: bravebot_agent::mcp::a_prompt_the_server_rejects_is_said_and_not_guessed_at`
 `verified-by: bravebot_agent::mcp::a_rule_that_denies_a_name_refuses_the_prompt_before_anything_is_sent`
+
+<a id="MCP-12"></a>
+### MCP-12: a local server that announces a change to its tools has its list read again and put to a person as a first list is
+
+A stdio server that declared `capabilities.tools.listChanged` as `true` in its handshake may write
+`notifications/tools/list_changed`, a message with that method and no id, at any time. Where one is
+seen, whether while a request was waiting for its reply or between two requests, the next turn the
+person asks for reads `tools/list` again, applies the filters the declaration gave, records in the
+trail that the server announced a change, and says so to the person. None of the server's tools is
+offered until the list it gives now is put to the person and vouched for, whatever was answered
+about the list before it ([SERVERS-8](mcp-servers.md#SERVERS-8)). A list that cannot be read offers
+none of the server's tools. A server that did not declare it is not read as having announced a
+change, whatever it writes.
+
+The notice's parameters are not read. The one bit taken from it is that the method was named, which
+only ever brings forward a question the person would be asked about a new server anyway.
+
+**Why.** What a person vouched for was a list as it stood, and a changed list is a different one. A
+tool a server added or redescribed after the vouch must not reach the planner under it. The earlier
+answer is not carried over by comparing the two lists, since that comparison would be a decision
+taken from the server's bytes ([LABEL-8](labels.md#LABEL-8)).
+
+**A known cost.** A remote server is not read this way. Its requests are one POST each and no
+stream is held open between them, so a notice has nowhere to arrive. A prompt a server adds after it
+starts is not offered until it starts again, whether or not it announces the change.
+
+`verified-by: bravebot_mcp::stdio::a_tool_list_change_the_server_announced_is_found_once_and_the_list_read_again`
+`verified-by: bravebot_agent::mcp::a_tool_list_that_cannot_be_read_again_offers_none_of_the_servers_tools`
+`verified-by: bravebot_mcp::stdio::a_notice_from_a_server_that_did_not_declare_it_is_ignored`
+`verified-by: bravebot_mcp::protocol::a_server_declares_tool_list_changes_in_its_handshake`
+`verified-by: bravebot_mcp::protocol::only_a_message_with_the_method_and_no_id_is_the_notice`
+`verified-by: bravebot_agent::mcp::a_tool_list_the_server_announced_a_change_to_is_put_to_the_person_again_before_it_is_offered`
+`verified-by: bravebot_agent::mcp::a_tool_list_read_again_after_a_change_is_held_to_the_declarations_filters`
