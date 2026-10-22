@@ -1954,8 +1954,16 @@ refusal is read. Taking the lines from the value the launch passes to the backen
 second reading of the declaration, is what keeps a path shown as granted from being one the backend
 never received.
 
-Not built: `bravebot mcp get` prints the declaration and the digest and not the policy a session
-would build from it (#2910).
+`bravebot mcp get <alias>` ends with the same lines for a local server before any session starts it,
+under a line saying a session here would confine it to them. They are the policy a launch would
+hand the backend, built by the launch's own steps under the network decision and host list this
+process settled, and nothing is started to show them: the allowed-hosts proxy is not, so its port is
+not known and the egress line says only that it would be held to it, and the server's own directory
+is not made. Where that directory is kept under the state directory its path is a row, listed after
+the others, and where this session may write nothing there it is a throwaway whose path does not
+exist yet, so a line says that in place of a row. A server a session would not start has the
+sentence the session says for it in the place of the lines, and a server reached over HTTP has
+neither.
 
 `verified-by: bravebot_agent::servers::a_servers_view_lists_the_rows_its_backend_was_handed_and_names_each_path_left_out`
 `verified-by: bravebot_agent::servers::a_servers_view_keeps_apart_two_paths_a_lossy_rendering_would_join`
@@ -1965,4 +1973,9 @@ would build from it (#2910).
 `verified-by: bravebot_agent::mcp::a_session_names_the_policy_each_confined_server_was_started_under_and_no_other`
 `verified-by: bravebot_tui::status::a_started_servers_policy_is_listed_row_by_row_with_what_each_row_allows`
 `verified-by: bravebot_tui::status::a_session_with_no_confined_server_shows_no_server_policy`
+`verified-by: bravebot_agent::servers::a_foreseen_policy_is_the_one_a_launch_hands_its_backend`
+`verified-by: bravebot_agent::servers::a_foreseen_policy_lists_an_absent_path_as_left_out_where_the_platform_cannot_name_it`
+`verified-by: bravebot_agent::servers::a_foreseen_server_a_session_would_not_start_says_why_and_a_remote_one_has_no_policy`
+`verified-by: bravebot_agent::servers::a_foreseen_policy_holds_the_session_network_decision_and_starts_no_proxy`
+`verified-by: bravebot_cli::mcp::get_lists_the_policy_a_session_would_confine_a_local_server_to`
 `verified-by: bravebot_tui::status::a_path_in_a_servers_policy_is_drawn_without_sending_its_control_characters`

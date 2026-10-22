@@ -655,7 +655,23 @@ declared in /Users/you/.bravebot/mcp.json
             variables: PATH
             digest: 25edc5e806956f3254b5ff2b116f1c07ae5ad8d4a5df00f6d15c0f8aadfec43f
             approved
+            a session here would confine it to:
+              egress        any address
+              subprocesses  allowed
+              starts in     /Users/you/work
+              read          /usr/lib
+              read, write   /Users/you/work
+              ...
 ```
+
+For a server that runs on your machine, `get` ends with the confinement a session would start it
+under, in the words `/status` uses for one that is running, so you can read what a server would be
+allowed before you approve it. Nothing is started to show it. Under an allowed-hosts
+list the egress line says the server would be held to the proxy that applies the list. The server's
+own directory is not made: where it is kept under your state directory its path is listed, and where
+the session may write nothing there it is a new directory in the temporary directory and the line
+says so. A server a session would not start has the sentence the session says for it, and a server
+reached over HTTP has no such lines.
 
 ## Removing one
 

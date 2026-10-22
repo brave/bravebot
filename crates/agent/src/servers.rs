@@ -994,6 +994,139 @@ pub fn unreached(
         .collect()
 }
 
+/// The state directory as the filesystem names it, or `None` where there is none.
+fn state_directory(home: &Home) -> Option<PathBuf> {
+    home.directory
+        .as_deref()
+        .map(|state| state.canonicalize().unwrap_or_else(|_| state.to_path_buf()))
+}
+
+/// Where a local server's own home is, said without making it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnHome {
+    /// Under the state directory, kept from one launch to the next.
+    Kept(PathBuf),
+    /// A new directory in the temporary directory, made when the server starts and removed when it
+    /// ends, because this session may write nothing in the state directory.
+    Throwaway,
+}
+
+/// What a session would confine `declaration` to, found without starting anything (SERVERS-20).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Foreseen {
+    /// A server reached over HTTP is no process of the session's, so nothing confines it.
+    Remote,
+    /// The policy a launch would hand the backend, and where the home it would be given is.
+    Confined {
+        policy: EffectivePolicy,
+        home: OwnHome,
+    },
+    /// A session would not start it, and the sentence it would say, which is the launch's own.
+    Unstarted(String),
+}
+
+/// What [`start`] would confine the server `alias` declares to, under the session network
+/// `network` and `hosts`, without making its home, starting the allowed-hosts proxy or the server.
+///
+/// Every step is the launch's own: the plan, the confinement, the session's network decision and
+/// the resolution against what this backend can name. What a launch does and this cannot is
+/// handled where the two differ. The home is made at launch, so its rows are put in after the
+/// resolution that would otherwise take them out as absent from the disk, and a session that may
+/// write nothing in the state directory gets a throwaway home whose path is not known yet, so it
+/// has no row here and `home` says so. The proxy is replaced by a port that is none's.
+pub fn foreseen(
+    alias: &str,
+    declaration: &Declaration,
+    home: &Home,
+    network: bravebot_sandbox::network::Network,
+    hosts: Option<&Hosts>,
+    environment: &dyn Fn(&str) -> Option<OsString>,
+) -> Foreseen {
+    let Plan::Stdio {
+        program,
+        searched,
+        mut reads,
+        directory,
+        declared,
+        ..
+    } = (match planned(declaration, environment) {
+        Ok(plan) => plan,
+        Err(reason) => {
+            return Foreseen::Unstarted(
+                t!(servers_not_reached, alias = alias, reason = reason).to_string(),
+            );
+        }
+    })
+    else {
+        return Foreseen::Remote;
+    };
+    if let Some(directory) = &directory
+        && let Some(repository) = repository_holding(directory)
+    {
+        return Foreseen::Unstarted(
+            t!(
+                servers_not_reached,
+                alias = alias,
+                reason = in_a_repository(directory, &repository)
+            )
+            .to_string(),
+        );
+    }
+    let state = state_directory(home);
+    reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
+    let sandbox = match bravebot_sandbox::for_current_platform() {
+        Ok(sandbox) => sandbox,
+        Err(error) => {
+            return Foreseen::Unstarted(
+                t!(
+                    servers_not_confined,
+                    alias = alias,
+                    reason = error.to_string()
+                )
+                .to_string(),
+            );
+        }
+    };
+    let (own, kept) = match state.as_deref().filter(|_| home.writable) {
+        Some(state) => {
+            let own = mcp::server_home(state, &declared);
+            let own = own.canonicalize().unwrap_or(own);
+            (own.clone(), OwnHome::Kept(own))
+        }
+        None => (
+            temporary_directory().join("a-server-home-not-yet-made"),
+            OwnHome::Throwaway,
+        ),
+    };
+    let Some(mut policy) =
+        confinement_here(&program, &searched, &reads, directory.as_deref(), &own)
+    else {
+        return Foreseen::Unstarted(t!(servers_no_confinement_here, alias = alias).to_string());
+    };
+    policy.readable.retain(|row| *row != own);
+    policy.writable.retain(|row| row.path != own);
+    let granted = sandbox.capabilities();
+    let policy = match crate::confine::foreseen_under_the_session_network(
+        policy, &program, network, hosts, &granted,
+    ) {
+        Ok(held) => held,
+        Err(reason) => {
+            return Foreseen::Unstarted(
+                t!(servers_not_confined, alias = alias, reason = reason).to_string(),
+            );
+        }
+    };
+    let (policy, view, _) = nameable(alias, policy, &granted);
+    let policy = match kept {
+        OwnHome::Kept(_) => policy.allow_read(&own).allow_write(&own),
+        OwnHome::Throwaway => policy,
+    };
+    Foreseen::Confined {
+        policy: EffectivePolicy::of(&policy, view.left_out),
+        home: kept,
+    }
+}
+
 /// `declaration` with a read granted for each file one of its stored values or arguments names,
 /// where its confinement would otherwise refuse it (SERVERS-10).
 ///
@@ -1782,10 +1915,7 @@ fn start_under(
         .any(|(_, plan)| matches!(plan, Plan::Stdio { .. }))
         .then(bravebot_sandbox::for_current_platform);
     // A declaration's file can be edited by hand, so `add` keeping reads out of here is not enough.
-    let state = home
-        .directory
-        .as_deref()
-        .map(|state| state.canonicalize().unwrap_or_else(|_| state.to_path_buf()));
+    let state = state_directory(home);
 
     for (alias, plan) in plans {
         let sender = sender.clone();
@@ -2258,6 +2388,73 @@ impl EffectivePolicy {
             left_out,
             git_held_back: macos && !policy.writable.is_empty() && !policy.git_directories_writable,
         }
+    }
+}
+
+impl EffectivePolicy {
+    /// The policy as lines of a label and what it says, for every front end that shows one
+    /// (SERVERS-20): what it says of the network and of subprocesses, where the server starts, a
+    /// `.git` line where a write row stops short of one, one line for each row labelled with what
+    /// it grants, and the paths left out one to a line under a label that gives the reason, with
+    /// no label of their own.
+    ///
+    /// A path is drawn in full, as the prompts that name one draw it.
+    pub fn described(&self) -> Vec<(String, String)> {
+        let mut lines = vec![
+            (
+                t!(status_server_policy_egress).to_string(),
+                match self.egress {
+                    PolicyEgress::Closed => t!(status_server_policy_egress_closed),
+                    PolicyEgress::Loopback => t!(status_server_policy_egress_loopback),
+                    PolicyEgress::Open => t!(status_server_policy_egress_open),
+                    PolicyEgress::Hosts => t!(status_server_policy_egress_hosts),
+                }
+                .to_string(),
+            ),
+            (
+                t!(status_server_policy_subprocesses).to_string(),
+                match self.children {
+                    true => t!(status_server_policy_subprocesses_allowed),
+                    false => t!(status_server_policy_subprocesses_refused),
+                }
+                .to_string(),
+            ),
+        ];
+        if let Some(directory) = &self.starts_in {
+            lines.push((
+                t!(status_server_policy_starts_in).to_string(),
+                crate::confirm::shown_path(directory),
+            ));
+        }
+        if self.git_held_back {
+            lines.push((
+                t!(status_server_policy_git).to_string(),
+                t!(status_server_policy_git_held_back).to_string(),
+            ));
+        }
+        for row in &self.rows {
+            lines.push((
+                match row.access {
+                    Access::Read => t!(status_server_policy_read),
+                    Access::Write => t!(status_server_policy_write),
+                    Access::ReadWrite => t!(status_server_policy_read_write),
+                }
+                .to_string(),
+                crate::confirm::shown_path(&row.path),
+            ));
+        }
+        if !self.left_out.is_empty() {
+            lines.push((
+                t!(status_server_policy_left_out).to_string(),
+                t!(status_server_policy_left_out_reason).to_string(),
+            ));
+            lines.extend(
+                self.left_out
+                    .iter()
+                    .map(|path| (String::new(), crate::confirm::shown_path(path))),
+            );
+        }
+        lines
     }
 }
 
@@ -4094,6 +4291,283 @@ mod tests {
             "a path that was left out is still a row"
         );
         assert!(view.left_out.contains(&absent), "{:?}", view.left_out);
+    }
+
+    /// [`scratch`], under the temporary directory, since a server is not started in a directory a
+    /// git repository holds and the build directory is in one.
+    #[cfg(unix)]
+    fn outside_a_repository(name: &str) -> PathBuf {
+        let path = temporary_directory().join(format!("bravebot-{name}"));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create scratch");
+        path.canonicalize().expect("canonical scratch")
+    }
+
+    /// A declaration for a program in `bin` that reads `key` and starts in `work`, with a `PATH`
+    /// that names `absent` and `bin` as well as the system's, which the server's own shell needs.
+    #[cfg(unix)]
+    fn declared_for_a_view(bin: &Path, key: &Path, work: &Path, absent: &Path) -> Declaration {
+        let program = installed(bin, "weather-mcp");
+        std::fs::write(&program, HOME_WRITING_SERVER).expect("write the server");
+        let path = std::env::join_paths([absent, bin, Path::new("/usr/bin"), Path::new("/bin")])
+            .expect("a PATH");
+        Declaration::stdio(
+            vec![program.display().to_string()],
+            Vec::new(),
+            Some(work.display().to_string()),
+        )
+        .and_then(|declaration| {
+            declaration.storing([("PATH".to_string(), path.to_string_lossy().into_owned())].into())
+        })
+        .and_then(|declaration| declaration.reading(vec![key.display().to_string()]))
+        .expect("a declaration")
+    }
+
+    /// SERVERS-20: what `get` shows is what a launch grants. The same declaration is foreseen and
+    /// then started through the road a session starts it by, and the two views agree on every row,
+    /// on what was left out, and on the rest, which a view built by reading the declaration a
+    /// second way would get wrong in one of them. Foreseeing makes nothing: the server's home is
+    /// not on disk until the launch makes it.
+    #[cfg(unix)]
+    #[test]
+    fn a_foreseen_policy_is_the_one_a_launch_hands_its_backend() {
+        let root = outside_a_repository("cli-servers-foreseen")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let absent = temporary_directory().join("bravebot-foreseen-absent-directory");
+        assert!(!absent.exists(), "{} is on disk", absent.display());
+        let key = root.join("api-key");
+        std::fs::write(&key, "the key").expect("the key");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).expect("state");
+        let home = Home {
+            directory: Some(state.clone()),
+            writable: true,
+        };
+        let declaration = declared_for_a_view(&root.join("bin"), &key, &work, &absent);
+
+        let Foreseen::Confined {
+            policy: foreseen,
+            home: kept,
+        } = foreseen("weather", &declaration, &home, Network::Open, None, &|_| {
+            None
+        })
+        else {
+            panic!("a server that can be confined was not foreseen as one");
+        };
+        let own = mcp::server_home(&state, &declaration.digest());
+        assert!(!own.exists(), "foreseeing made {}", own.display());
+        assert_eq!(kept, OwnHome::Kept(own.clone()));
+
+        let plan = planned(&declaration, &|_| None).expect("a plan");
+        let mut notes = Vec::new();
+        let started = start_under(
+            None,
+            (Network::Open, None),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+        assert_eq!(started.len(), 1, "the server did not start: {notes:?}");
+        let session = Session::new(started, root.clone(), None, false, Managed::default());
+        let [(_, launched)] = session
+            .policies()
+            .try_into()
+            .expect("one local server, one view");
+
+        let by_path = |view: &EffectivePolicy| {
+            let mut rows: Vec<_> = view
+                .rows
+                .iter()
+                .map(|row| (row.path.clone(), row.access))
+                .collect();
+            rows.sort_by(|left, right| left.0.cmp(&right.0));
+            rows
+        };
+        assert_eq!(by_path(&foreseen), by_path(&launched));
+        assert!(
+            foreseen.rows.iter().any(|row| row.path == own),
+            "the home a launch makes is a row before it is made"
+        );
+        let mut foreseen_left_out = foreseen.left_out.clone();
+        let mut launched_left_out = launched.left_out.clone();
+        foreseen_left_out.sort();
+        launched_left_out.sort();
+        assert_eq!(foreseen_left_out, launched_left_out);
+        assert!(
+            !foreseen.left_out.contains(&own),
+            "the home is made at launch, so it is not one the platform could not name"
+        );
+        let unchanged = |view: &EffectivePolicy| {
+            (
+                view.egress,
+                view.children,
+                view.starts_in.clone(),
+                view.git_held_back,
+            )
+        };
+        assert_eq!(unchanged(&foreseen), unchanged(&launched));
+    }
+
+    /// SERVERS-20: a path the declaration grants that is not on disk is listed as left out, where
+    /// this platform names no such path, and is a row where it names one, so `get` does not show as
+    /// granted a path the backend would never be handed.
+    #[cfg(unix)]
+    #[test]
+    fn a_foreseen_policy_lists_an_absent_path_as_left_out_where_the_platform_cannot_name_it() {
+        let root = outside_a_repository("cli-servers-foreseen-absent")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        let Ok(sandbox) = bravebot_sandbox::for_current_platform() else {
+            eprintln!("SKIPPED (no backend here)");
+            return;
+        };
+        if Prelude::current().is_none() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let absent = temporary_directory().join("bravebot-foreseen-absent-path");
+        assert!(!absent.exists(), "{} is on disk", absent.display());
+        let key = root.join("api-key");
+        std::fs::write(&key, "the key").expect("the key");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let declaration = declared_for_a_view(&root.join("bin"), &key, &work, &absent);
+
+        let Foreseen::Confined { policy, home } =
+            foreseen("weather", &declaration, &home, Network::Open, None, &|_| {
+                None
+            })
+        else {
+            panic!("a server that can be confined was not foreseen as one");
+        };
+
+        let names_an_absent_path = sandbox.capabilities().grants_paths_that_do_not_exist;
+        let a_row = policy.rows.iter().any(|row| row.path == absent);
+        assert_eq!(a_row, names_an_absent_path, "{policy:?}");
+        assert_eq!(
+            policy.left_out.contains(&absent),
+            !names_an_absent_path,
+            "{policy:?}"
+        );
+        assert_eq!(
+            home,
+            OwnHome::Throwaway,
+            "a session that may write no state directory has no path for the home yet"
+        );
+        assert!(
+            policy.rows.iter().all(|row| !row
+                .path
+                .to_string_lossy()
+                .contains("a-server-home-not-yet-made")),
+            "the placeholder for a home nobody can name is a row: {policy:?}"
+        );
+    }
+
+    /// SERVERS-20: where a session would not start the server, `get` says what a session says
+    /// rather than a policy it would never be started under, and a server reached over HTTP has
+    /// none.
+    #[test]
+    fn a_foreseen_server_a_session_would_not_start_says_why_and_a_remote_one_has_no_policy() {
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let missing =
+            Declaration::stdio(words(&["no-such-program-anywhere"]), words(&["PATH"]), None)
+                .expect("declaration");
+        let Foreseen::Unstarted(sentence) =
+            foreseen("weather", &missing, &home, Network::Open, None, &|_| None)
+        else {
+            panic!("a program that is nowhere was foreseen as confined");
+        };
+        assert!(
+            sentence.starts_with("weather was not started"),
+            "{sentence}"
+        );
+
+        let remote = Declaration::http("https://a.example.com".into()).expect("declaration");
+        assert_eq!(
+            foreseen("weather", &remote, &home, Network::Open, None, &|_| None),
+            Foreseen::Remote
+        );
+    }
+
+    /// SERVERS-20: the session's network decision shapes the foreseen policy as it shapes a launch,
+    /// and a host list is shown without the proxy that applies it being started.
+    #[cfg(unix)]
+    #[test]
+    fn a_foreseen_policy_holds_the_session_network_decision_and_starts_no_proxy() {
+        let root = outside_a_repository("cli-servers-foreseen-network")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        let Ok(sandbox) = bravebot_sandbox::for_current_platform() else {
+            eprintln!("SKIPPED (no backend here)");
+            return;
+        };
+        if Prelude::current().is_none() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let capabilities = sandbox.capabilities();
+        let key = root.join("api-key");
+        std::fs::write(&key, "the key").expect("the key");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let declaration = declared_for_a_view(&root.join("bin"), &key, &work, &root.join("none"));
+        let hosts = Hosts {
+            allowed: Some(vec![bravebot_config::sandbox_network::HostEntry {
+                entry: "api.example.com".to_string(),
+                by: None,
+            }]),
+            ..Hosts::default()
+        };
+        let under = |network, hosts: Option<&Hosts>| {
+            foreseen("weather", &declaration, &home, network, hosts, &|_| None)
+        };
+
+        match under(Network::Closed, None) {
+            Foreseen::Confined { policy, .. } => {
+                assert!(capabilities.network_denial_enforced);
+                assert_eq!(policy.egress, PolicyEgress::Closed);
+            }
+            Foreseen::Unstarted(sentence) => {
+                assert!(!capabilities.network_denial_enforced, "{sentence}");
+                assert!(sentence.contains("run.network"), "{sentence}");
+            }
+            other => panic!("{other:?}"),
+        }
+        match under(Network::Open, Some(&hosts)) {
+            Foreseen::Confined { policy, .. } => {
+                assert!(capabilities.egress_limited_to_a_port);
+                assert_eq!(policy.egress, PolicyEgress::Hosts);
+            }
+            Foreseen::Unstarted(sentence) => {
+                assert!(!capabilities.egress_limited_to_a_port, "{sentence}");
+                assert!(sentence.contains("allowedHosts"), "{sentence}");
+            }
+            other => panic!("{other:?}"),
+        }
+        match under(Network::Open, None) {
+            Foreseen::Confined { policy, .. } => assert_eq!(policy.egress, PolicyEgress::Open),
+            other => panic!("{other:?}"),
+        }
     }
 
     /// SERVERS-10: a stored value reaches the server as the declaration holds it, and this
