@@ -99,7 +99,8 @@ leads to, each spelled on its own), the same way, and so do the rows that say wh
 recorded in: the remembered-lines record, the settings file a pattern would go in, the record of a
 kept reach and the record and the key files of a chosen key. The terminal's trust questions draw the
 file a yes is kept in and the file each proposed rule came from the same way, and so does the
-question in lines for the file a yes is kept in. A name that is empty,
+question in lines for the file a yes is kept in. The question about the rules a checkout proposed
+draws the text of each rule the same way. A name that is empty,
 is only whitespace, has a space at either end of it or of a directory in it, or holds a character
 that draws as nothing (a zero-width character, a bidirectional control, a tag character, a variation
 selector, a no-break space) or as a blank cell (the blank braille pattern) is drawn quoted with each
@@ -140,6 +141,7 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_tui::confirm::the_run_prompt_marks_an_unreadable_directory_and_binary`
 `verified-by: bravebot_tui::confirm::the_run_prompt_marks_an_unreadable_record_path`
 `verified-by: bravebot_tui::trust_prompt::the_trust_rows_name_a_file_with_a_name_that_would_draw_as_another`
+`verified-by: bravebot_tui::trust_prompt::a_proposed_rule_holding_an_invisible_character_is_drawn_spelled`
 `verified-by: bravebot_approval::lib::a_run_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_cli::plain::a_run_question_spells_the_directory_and_the_binary_that_would_draw_as_another`

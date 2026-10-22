@@ -637,7 +637,7 @@ fn draw_granted(
     // is what explains where a line the person never wrote came from.
     for rule in rules {
         lines.push(Line::from(Span::styled(
-            format!("  {}", rule.rule),
+            format!("  {}", bravebot_agent::confirm::shown_name(&rule.rule)),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
@@ -1928,6 +1928,60 @@ mod tests {
                 assert_ne!(drawn, plain, "{directory:?}");
                 assert!(drawn.contains(spelled), "{directory:?}\n{drawn}");
             }
+        }
+    }
+
+    /// PROMPT-1: the text of a proposed rule is drawn with a character that would draw as nothing,
+    /// or as another one, spelled and the rule quoted, so a yes cannot grant `Read(/work/notes.md)`
+    /// under a row that reads like it. A rule that needs no spelling is drawn as it was written,
+    /// and one rule spelled does not change how the others in the list are drawn.
+    #[test]
+    fn a_proposed_rule_holding_an_invisible_character_is_drawn_spelled() {
+        let drawn = |rule: &str| {
+            let rules = proposed(&[
+                ("/work/.bravebot/settings.json", "Edit(src/**)"),
+                ("/work/.bravebot/settings.json", rule),
+            ]);
+            let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+            terminal
+                .draw(|frame| draw_granted_at_rest(frame, &rules))
+                .expect("draw");
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        let plain = drawn("Read(/work/notes.md)");
+        assert!(plain.contains("Edit(src/**)"), "{plain}");
+        assert!(plain.contains("Read(/work/notes.md)"), "{plain}");
+        assert!(
+            !plain.contains('"'),
+            "a rule that needs no spelling was quoted: {plain}"
+        );
+        for (rule, spelled) in [
+            (
+                "Read(/work/not\u{200b}es.md)",
+                "\"Read(/work/not\\u{200b}es.md)\"",
+            ),
+            (
+                "Read(/work/notes\u{202e}dm.)",
+                "\"Read(/work/notes\\u{202e}dm.)\"",
+            ),
+            (
+                "Read(/work/notes.md)\u{3000}",
+                "\"Read(/work/notes.md)\\u{3000}\"",
+            ),
+        ] {
+            let drawn = drawn(rule);
+            assert_ne!(drawn, plain, "{rule:?}");
+            assert!(drawn.contains(spelled), "{rule:?}\n{drawn}");
+            assert!(
+                drawn.contains("Edit(src/**)") && !drawn.contains("\"Edit(src/**)"),
+                "the other rule in the list was changed: {drawn}"
+            );
         }
     }
 
