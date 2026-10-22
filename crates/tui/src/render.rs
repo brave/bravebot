@@ -8567,6 +8567,34 @@ mod tests {
             .collect()
     }
 
+    /// LINK-4: the line under the box names the link while its words are there, and says how many
+    /// there are and to review them once there are more than the box shows. Without the long form a
+    /// thousand-character prompt looks like the three lines of it that fit.
+    #[test]
+    fn the_hint_line_names_the_link_and_gives_the_length_of_a_long_prompt() {
+        let mut session = Session::new("none");
+        session.prefill_from_link("fix the test");
+        let short = hint_row_at(&session, 120, 24);
+        assert!(short.contains("external link"), "{short}");
+        assert!(!short.contains("characters"), "{short}");
+
+        let mut session = Session::new("none");
+        session.prefill_from_link(&"a".repeat(1500));
+        let long = hint_row_at(&session, 140, 24);
+        assert!(long.contains("1500 characters"), "{long}");
+        assert!(long.contains("review"), "{long}");
+
+        let mut session = Session::new("none");
+        session.prefill_from_link(&"a".repeat(1000));
+        assert!(
+            !hint_row_at(&session, 140, 24).contains("characters"),
+            "1000 is not over the line"
+        );
+
+        let plain = Session::new("none");
+        assert!(!hint_row_at(&plain, 120, 24).contains("external link"));
+    }
+
     /// The frame drawn after the terminal changed size is the one a terminal of that size would
     /// have drawn from the start: the hint row sits on the new bottom row and is fitted to the new
     /// width, nothing left from the old layout. Both directions, since a narrowing leaves a row too

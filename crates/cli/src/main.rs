@@ -8,6 +8,7 @@ mod bug_report;
 mod chatgpt;
 mod completion;
 mod continued;
+mod deep_link;
 mod doctor;
 mod exit;
 mod finish;
@@ -560,6 +561,10 @@ fn main() -> ExitCode {
         Some("-i" | "--interactive") => {
             open_on(&args[1..], as_json, agent, links, skip_permissions, prompts)
         }
+        // What a `bravebot://open` link starts (LINK-1). Takes the link and nothing else, and none of
+        // the flags that compose with other ways of starting: the line is written by the operating
+        // system's registration, and a flag on it would be a way for a link to ask for more.
+        Some("--handle-uri") => open_link(&args[1..], as_json, agent, skip_permissions, prompts),
         // Picking up where a session left off, chosen from a list or named outright.
         Some("--resume" | "-r" | "--continue" | "-c") if continues_with_a_task(&args) => {
             run_task(&args, skip_permissions, accept_edits, agent, prompts)
@@ -700,6 +705,58 @@ fn open_on(
         agent,
         links,
         skip_permissions,
+        prompts,
+    )
+}
+
+/// `--handle-uri <link>`: open a session on what a `bravebot://open` link asks, with its prompt put
+/// in the box and not sent (LINK-1 to LINK-5).
+fn open_link(
+    words: &[String],
+    as_json: bool,
+    agent: Option<String>,
+    skip_permissions: bool,
+    prompts: SystemPrompts,
+) -> ExitCode {
+    let [text] = words else {
+        return stopped_before_the_turn(as_json, Ending::Argument, t!(deep_link_takes_one_link));
+    };
+    // A link that is switched off, or that cannot be read, starts nothing, before the terminal is
+    // taken, so what is said is where the person will see it.
+    if bravebot_config::Settings::load().deep_links() == Some(false) {
+        return fail(Ending::Configuration, t!(deep_link_switched_off));
+    }
+    let link = match deep_link::parse(text) {
+        Ok(link) => link,
+        Err(refused) => return stopped_before_the_turn(as_json, Ending::Argument, refused.said()),
+    };
+    // A link carries a directory and words, and nothing that decides how the session runs: the
+    // flags that would, taken from the line before this ran, are refused rather than honoured.
+    if skip_permissions || agent.is_some() || flag_named(&prompts).is_some() {
+        return stopped_before_the_turn(as_json, Ending::Argument, t!(deep_link_takes_one_link));
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return fail(Ending::Argument, t!(deep_link_needs_a_terminal));
+    }
+    let profile = bravebot_agent::home::profile();
+    let placement = deep_link::place(link.dir.as_deref(), profile.as_deref(), |directory| {
+        bravebot_agent::trusted::honoured(
+            bravebot_agent::home::directory().as_deref(),
+            profile.as_deref(),
+            directory,
+        )
+        .is_some()
+    });
+    if let Some(directory) = &placement.start_in
+        && let Err(problem) = std::env::set_current_dir(directory)
+    {
+        return fail(Ending::Failed, t!(cli_workspace_problem, problem = problem));
+    }
+    interactive(
+        bravebot_tui::app::Start::Prefilling(link.prompt.unwrap_or_default(), placement.note),
+        None,
+        bravebot_tui::app::Links::default(),
+        false,
         prompts,
     )
 }

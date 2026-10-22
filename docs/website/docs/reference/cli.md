@@ -35,6 +35,7 @@ Usage:
   bravebot permissions check <call>      Report which permission rule decides a tool call
   bravebot completion <bash|zsh|fish>    Print a shell completion script
   bravebot shell-init <bash|zsh|fish>    Print the shell hook that gives @bravebot the commands you ran
+  bravebot --handle-uri <link>           Open a session from a bravebot://open link, its prompt in the box and not sent
 ```
 
 ## Commands
@@ -712,6 +713,30 @@ than ignored.
 It is refused with the argument status when no prompt follows it, after `--resume`, `--continue`,
 `--fork`, `--from-pr` or `--bg`, and where stdin or stdout is not a terminal, since there is nothing
 to draw the session on. Use `-p` for a run nobody watches.
+
+## `--handle-uri <link>`
+
+```sh
+bravebot --handle-uri 'bravebot://open?dir=%2Fhome%2Fme%2Fproject&prompt=fix+the+failing+test'
+```
+
+What a `bravebot://open` link runs. On Linux `install.sh` registers it, so opening such a link in a
+browser starts a terminal with this command. You do not type it.
+
+A link carries two optional parameters, percent-encoded: `dir`, an absolute path, and `prompt`.
+Anything else in a link, a mode, a tool, a model or `dangerously-skip-permissions` among them,
+refuses the whole link with the argument status, since a link has no say in how the session runs.
+
+- **Where it starts.** In `dir` only if you already answered yes to trusting that directory in an
+  earlier session. Otherwise in your home directory, and the first line of the session says so. The
+  question about trusting the directory is asked as in any session.
+- **The prompt.** It is put in the box as a paste is, and is not sent. The line under the box says
+  it came from an external link, and over 1000 characters says how many there are and asks you to
+  scroll and review it. Enter sends it as your own message, as it sends any paste, so read it first.
+  The note goes when the box is emptied or the message is sent.
+
+Links are switched off by [`deepLinks`](../customize/configuration.md#deeplinks), and the installer
+registers nothing where `BRAVEBOT_NO_DEEP_LINKS` is set. macOS and Windows register nothing yet.
 
 ## `--plain`
 

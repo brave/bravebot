@@ -162,6 +162,46 @@ verify_code_signature() {
     spctl -a -t install "$1"
 }
 
+# Registers the handler for bravebot:// links on a Linux desktop (LINK-6): a launcher entry that runs
+# the installed binary in a terminal with the link as its one argument, and the scheme pointed at it.
+# Nothing is registered where BRAVEBOT_NO_DEEP_LINKS is set, where there is no place to put the entry,
+# or where the binary's path holds a character a launcher's Exec line would read as something else.
+# A failure to register is not a failure to install, so every step here is allowed to fail quietly.
+register_deep_link() {
+  dest="$1"
+  [ -z "${BRAVEBOT_NO_DEEP_LINKS:-}" ] || return 0
+  case "$dest" in
+    /* ) ;;
+    *) return 0 ;;
+  esac
+  case "$dest" in
+    *'"'* | *'%'* | *'`'* | *'$'* | *\\* | *'
+'*) return 0 ;;
+  esac
+  applications="${XDG_DATA_HOME:-${HOME:+$HOME/.local/share}}"
+  [ -n "$applications" ] || return 0
+  case "$applications" in
+    /*) ;;
+    *) return 0 ;;
+  esac
+  applications="${applications}/applications"
+  mkdir -p "$applications" 2>/dev/null || return 0
+  entry="${applications}/bravebot-handler.desktop"
+  rm -f "$entry" 2>/dev/null || true
+  printf '%s\n' \
+    '[Desktop Entry]' \
+    'Type=Application' \
+    'Name=bravebot link handler' \
+    "Exec=\"${dest}\" --handle-uri %u" \
+    'Terminal=true' \
+    'NoDisplay=true' \
+    'MimeType=x-scheme-handler/bravebot;' > "$entry" 2>/dev/null || return 0
+  if command -v xdg-mime >/dev/null 2>&1; then
+    xdg-mime default bravebot-handler.desktop x-scheme-handler/bravebot >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
 main() {
   [ "$#" -le 1 ] || fail "usage: install.sh [version]"
   # Checked first, so an argument that is refused costs no request and writes nothing.
@@ -316,6 +356,10 @@ main() {
     fi
     rm -f "$INSTALLED_BY" 2>/dev/null || true
     (umask 077 && printf '%s\n' "$DEST_PATH" > "$INSTALLED_BY") 2>/dev/null || true
+  fi
+
+  if [ "$OS_KEY" = "linux" ]; then
+    register_deep_link "$DEST_PATH"
   fi
 
   echo "Installed ${BIN_NAME} ${TAG} to ${DEST_PATH}"

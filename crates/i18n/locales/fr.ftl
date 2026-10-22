@@ -3520,3 +3520,25 @@ doctor-push-unanswered = { $host } n'a donné aucune réponse pour cette clé
 doctor-push-chosen = Choisie
 doctor-push-chosen-by = git.identities nomme cette clé pour le propriétaire
 doctor-push-chosen-at-prompt = vous avez choisi cette clé pour le propriétaire à une demande d'exécution ; /reach keys dans le client en terminal la liste et l'oublie
+
+# Ce qu'est le gestionnaire d'un lien bravebot:// dans la table d'usage.
+cli-usage-handle-uri = Ouvrir une session depuis un lien bravebot://open, son invite placée dans la zone de saisie sans être envoyée
+# Dit quand --handle-uri reçoit autre chose que le lien seul, ou une option qui changerait le
+# fonctionnement de la session. Un lien porte un répertoire et des mots, rien d'autre.
+deep-link-takes-one-link = --handle-uri prend un lien bravebot://open et rien d'autre
+# Dit quand le réglage deepLinks vaut false.
+deep-link-switched-off = Les liens qui ouvrent une session sont désactivés par le réglage deepLinks
+# Dit quand un lien est lu dans un programme sans terminal où ouvrir la session.
+deep-link-needs-a-terminal = Un lien ouvre une session dans un terminal, et ce programme n'en a pas
+# Les façons dont un lien est refusé. Aucune ne cite le lien : son texte est celui d'un autre.
+deep-link-not-a-link = Ce n'est pas un lien bravebot://open
+deep-link-too-long = Ce lien dépasse les { $limit } octets lus
+deep-link-parameter = Un lien peut porter dir et prompt, chacun une fois, et rien d'autre
+deep-link-encoding = Le texte de ce lien n'est pas de l'UTF-8 encodé en pourcentage valide
+deep-link-directory = Le dir du lien n'est pas un chemin absolu
+# La première ligne d'une session qu'un lien a démarrée dans le répertoire personnel à cause de ce
+# qu'il désignait. Le chemin est celui du lien et arrive échappé.
+deep-link-started-in-home = Le lien désignait { $dir }, qui n'est pas un répertoire auquel vous avez accordé votre confiance ici, donc cette session a démarré dans votre répertoire personnel
+# Sous la zone de saisie tant que les mots qu'un lien extérieur y a mis s'y trouvent encore.
+deep-link-banner = Invite d'un lien externe, pas encore envoyée  ·  lisez-la, puis Entrée l'envoie
+deep-link-banner-long = Invite d'un lien externe, { $count } caractères, non envoyée  ·  faites défiler et relisez tout d'abord
