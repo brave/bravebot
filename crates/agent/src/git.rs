@@ -665,6 +665,68 @@ mod tests {
         );
     }
 
+    /// A name under `.git` is matched as a file system that ignores case would open it, and listed
+    /// as the reader spells it, so the workspace holds the one spelling against the rules. The
+    /// index is listed for a status and a staged diff, and the info files for a status alone.
+    #[test]
+    fn a_name_under_git_in_another_case_is_listed_as_the_reader_spells_it() {
+        let repo = Repo::new("survey-case");
+        std::fs::remove_file(repo.git.join("config")).expect("config removed");
+        let stored = [
+            "Config",
+            "CONFIG.worktree",
+            "Packed-Refs",
+            "SHALLOW",
+            "Index",
+            "info/EXCLUDE",
+            "info/Attributes",
+        ];
+        for name in stored {
+            repo.put(name, "\n");
+        }
+        let listed = |query| {
+            relative(
+                &repo.git,
+                &survey(&repo.git, query, later()).expect("surveyed"),
+            )
+        };
+
+        assert_eq!(
+            listed(Query::Status),
+            [
+                "HEAD",
+                "config",
+                "config.worktree",
+                "index",
+                "info/attributes",
+                "info/exclude",
+                "packed-refs",
+                "shallow",
+            ]
+        );
+        assert_eq!(
+            listed(Query::Staged),
+            [
+                "HEAD",
+                "config",
+                "config.worktree",
+                "index",
+                "packed-refs",
+                "shallow"
+            ]
+        );
+        assert_eq!(
+            listed(Query::Log),
+            [
+                "HEAD",
+                "config",
+                "config.worktree",
+                "packed-refs",
+                "shallow"
+            ]
+        );
+    }
+
     /// Each of these sends a read to files outside the ones [`survey`] listed, or answers with
     /// objects other than the ones stored, so a repository laid out this way is declined before
     /// anything in it is decoded.
@@ -2184,6 +2246,33 @@ mod tests {
         );
     }
 
+    /// A file past the size cap is searched for nothing and described by its size, but it was
+    /// still read, so it labels the answer as every file a search opened does: one the map
+    /// distrusts makes a search that matched only elsewhere untrusted too.
+    #[test]
+    fn a_file_past_the_size_cap_is_shown_whether_or_not_the_pattern_would_match_it() {
+        let large = "needle\n".repeat((MAX_BLOB as usize) / 7 + 1);
+        let (repo, _) = searchable("search-large-shown", Some(("zz.log", &large)));
+        for pattern in ["needle", "absent"] {
+            let answer = searched(&repo, None, None, pattern, &|_| false).expect("answered");
+            assert!(
+                answer.text.contains("(zz.log is "),
+                "{pattern}: {}",
+                answer.text
+            );
+            assert!(
+                !answer.text.contains("zz.log:"),
+                "{pattern}: {}",
+                answer.text
+            );
+            assert!(
+                answer.shown.iter().any(|path| path == "zz.log"),
+                "{pattern}: a file past the cap was left out of what the answer showed: {:?}",
+                answer.shown
+            );
+        }
+    }
+
     /// A shallow clone stops at commits whose parents it never fetched, and git reads those
     /// commits as roots: following the parent would find nothing and fail the whole log.
     #[test]
@@ -2994,6 +3083,120 @@ mod tests {
 
             let under = status(&repo, Some("dir")).expect("answered");
             assert_eq!(under.text, " D dir/d.txt\n");
+        }
+
+        /// What each question means is fixed by this reader. A configuration is part of the tree being
+        /// read, so the programs it names are never run (`core.fsmonitor` on a status, a diff driver's
+        /// `command` and `textconv` and a filter on a diff, `gpg.program` on a log that shows
+        /// signatures), no question's answer depends on a key in it, and no remote's URL or name is
+        /// part of one. The history ends in a signed commit with a remote-tracking ref beside it, and
+        /// the index holds a file with stale stat data that an attribute names a filter for, so each
+        /// of those keys has something to act on, in a status and a staged diff as in the rest.
+        #[cfg(unix)]
+        #[test]
+        fn a_configuration_naming_programs_and_remotes_changes_no_answer_and_runs_nothing() {
+            use std::os::unix::fs::PermissionsExt;
+            const REMOTE: &str = "https://example.com/THE-REMOTE-URL.git";
+            let h = history("programs");
+            let readme = h.repo.blob("hello\nworld\nagain\n");
+            let tree = h
+                .repo
+                .tree(&[("100644", "README", readme), ("40000", "src", h.src)]);
+            let when = T1 + 3 * DAY;
+            let signed = h.repo.object(
+                Kind::Commit,
+                format!(
+                    "tree {}\nparent {}\nauthor A U Thor <author@example.com> {when} +0000\n\
+                     committer C O Mitter <committer@example.com> {when} +0000\n\
+                     gpgsig -----BEGIN PGP SIGNATURE-----\n \n c2lnbmVk\n -----END PGP SIGNATURE-----\n\
+                     \nsigned\n",
+                    tree.to_hex(),
+                    h.third.to_hex(),
+                )
+                .as_bytes(),
+            );
+            h.repo.point("refs/heads/main", signed);
+            h.repo.point("refs/remotes/origin/main", h.third);
+            let marker = h.repo.root.join("ran");
+            let program = h.repo.git.join("hooks/program");
+            h.repo.put(
+                "hooks/program",
+                &format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+            );
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                .expect("runnable");
+            std::fs::write(
+                h.repo.root.join(".gitattributes"),
+                "README diff=x filter=x\n",
+            )
+            .expect("attributes");
+            std::fs::write(h.repo.root.join("README"), "hello\nworld\nagain\n")
+                .expect("working copy");
+            index(&h.repo, &[("README", FILE, readme, 0, false)]);
+            let program = program.display();
+            let plain = "[core]\n\trepositoryformatversion = 0\n";
+            let naming = format!(
+                "{plain}\tfsmonitor = {program}\n\
+                 [log]\n\tshowSignature = true\n\
+                 [gpg]\n\tprogram = {program}\n\
+                 [diff \"x\"]\n\tcommand = {program}\n\ttextconv = {program}\n\
+                 [filter \"x\"]\n\tclean = {program}\n\tsmudge = {program}\n\tprocess = {program}\n\
+                 [remote \"origin\"]\n\turl = {REMOTE}\n\tpushurl = {REMOTE}\n\
+                 \tfetch = +refs/heads/*:refs/remotes/origin/*\n\
+                 [branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n"
+            );
+            let asked = |config: &str| {
+                h.repo.put("config", config);
+                let queries = [
+                    (Query::Log, None, None),
+                    (Query::Show, Some("HEAD"), None),
+                    (Query::Show, Some("HEAD:README"), None),
+                    (Query::Diff, Some("HEAD~1 HEAD"), None),
+                    (Query::Tags, None, None),
+                    (Query::Status, None, None),
+                    (Query::Staged, None, None),
+                ];
+                let mut answers: Vec<String> = queries
+                    .iter()
+                    .map(|&(query, revision, path)| {
+                        h.repo
+                            .ask(query, revision, path)
+                            .unwrap_or_else(|declined| {
+                                panic!("{query:?} was declined: {declined:?}")
+                            })
+                            .text
+                    })
+                    .collect();
+                let pattern = compiled("again");
+                let mut search = request(Query::Search, None, None);
+                search.pattern = Some(&pattern);
+                answers.push(
+                    h.repo
+                        .opened()
+                        .expect("opened")
+                        .answer(&search, &|_| false)
+                        .expect("searched")
+                        .text,
+                );
+                answers
+            };
+
+            let naming_programs = asked(&naming);
+            assert!(
+                !marker.exists(),
+                "a program the repository's configuration names was run"
+            );
+            assert!(
+                naming_programs
+                    .iter()
+                    .all(|text| !text.contains(REMOTE) && !text.contains("origin")),
+                "a remote reached an answer: {naming_programs:?}"
+            );
+            assert!(
+                naming_programs[0].contains("signed") && naming_programs[3].contains("+again\n"),
+                "the signed commit was not read as this reader reads it: {naming_programs:?}"
+            );
+            assert_eq!(naming_programs, asked(plain));
         }
 
         fn staged(repo: &Repo, path: Option<&str>, withheld: &dyn Fn(&str) -> bool) -> Answer {

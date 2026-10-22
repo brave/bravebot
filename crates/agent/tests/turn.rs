@@ -61035,6 +61035,111 @@ fn a_repository_holding_a_file_a_deny_rule_covers_is_not_opened() {
     );
 }
 
+/// GIT-4. A file a question names is refused under a deny rule before anything under `.git` is
+/// opened, so the refusal is the rule's even where the repository would have been declined for
+/// what its files hold. A repository whose configuration names a format read_git does not read is
+/// declined for it the moment the question names no denied file.
+#[test]
+fn a_named_file_a_deny_rule_covers_is_refused_before_the_repository_is_opened() {
+    let scratch = Scratch::new("read-git-denied-before-open");
+    repository::commit_files(
+        &scratch.path,
+        &[(".env", "TOKEN=hunter2\n"), ("README", "hello\n")],
+        "add env",
+    );
+    std::fs::write(
+        scratch.path.join(".git/config"),
+        "[core]\n\trepositoryformatversion = 9\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"show","revision":"HEAD:.env"}"#),
+        tool_request_2("read_git", r#"{"query":"log","path":".env"}"#),
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what is in .env").with_permissions(rules(&["Read(./.env)"], &[], &[])),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    for what in ["a revision", "a path"] {
+        let refused = newest_tool_result(received.recv().expect("the next request"));
+        assert!(
+            refused.contains("deny rule") && !refused.contains("repository format"),
+            "{what} naming a denied file was refused for the repository, not the rule: {refused}"
+        );
+    }
+    let declined = newest_tool_result(received.recv().expect("fourth request"));
+    assert!(
+        declined.contains("repository format") && !declined.contains("deny rule"),
+        "the repository was not declined for its configuration: {declined}"
+    );
+}
+
+/// The planner's reading of `log` over a repository whose commit subject is `SUBJECT`, when the
+/// map trusts `.` and distrusts `distrusted`.
+fn read_git_log_when_the_map_distrusts(name: &str, distrusted: &str) -> String {
+    let scratch = Scratch::new(name);
+    repository::commit_files(&scratch.path, &[("README", "hello\n")], SUBJECT_OF_THE_LOG);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_git", r#"{"query":"log"}"#),
+        reply_with("understood"),
+    ]);
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust(distrusted);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("what changed"),
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+    let _first = received.recv().expect("first request");
+    newest_tool_result(received.recv().expect("second request"))
+}
+
+const SUBJECT_OF_THE_LOG: &str = "SUBJECT-OF-A-LOGGED-COMMIT";
+
+/// GIT-2. The map is asked about `.git` as a subtree, so a rule distrusting one file anywhere
+/// beneath it, a pack somebody fetched or the ref a branch is, keeps the repository closed and is
+/// said to. Asked about `.git` alone, a map that trusts `.` and distrusts one file inside it would
+/// open the repository.
+#[test]
+fn a_distrusted_file_deep_under_git_keeps_the_repository_closed() {
+    for (name, distrusted) in [
+        ("pack", ".git/objects/pack/fetched.pack"),
+        ("ref", ".git/refs/heads/main"),
+    ] {
+        let shown =
+            read_git_log_when_the_map_distrusts(&format!("read-git-closed-{name}"), distrusted);
+        assert!(
+            shown.contains("read_git does not open it") && !shown.contains(SUBJECT_OF_THE_LOG),
+            "{distrusted} distrusted, and the repository was opened: {shown}"
+        );
+    }
+    let outside = read_git_log_when_the_map_distrusts("read-git-closed-control", "vendor");
+    assert!(
+        outside.contains(SUBJECT_OF_THE_LOG),
+        "a rule over a path outside .git closed the repository: {outside}"
+    );
+}
+
 /// CRED-15. A commit that added a key puts the key in the diff, so what read_git would show is
 /// scanned as a file read is, and held back until the person agrees. Both directions, since a scan
 /// that held every such answer back would make a repository with a `.env` in its history unreadable.
@@ -61678,6 +61783,33 @@ fn read_git_over_a_distrusted_file(name: &str, vendor: &str, arguments: &str) ->
     .expect("turn runs");
     let _first = received.recv().expect("first request");
     newest_tool_result(received.recv().expect("second request"))
+}
+
+/// GIT-14. A file past the size cap is described by its size rather than searched, and the search
+/// still read it: one the map distrusts makes the answer untrusted though nothing was matched in
+/// it, and narrowed to a trusted path the same search is shown. The filler is one byte past the
+/// 1 MiB the clause gives as read_git's cap.
+#[test]
+fn a_search_that_met_a_distrusted_file_past_the_size_cap_is_quarantined() {
+    let past_the_cap = "x".repeat((1 << 20) + 1);
+    let whole = read_git_over_a_distrusted_file(
+        "read-git-search-past-the-cap",
+        &past_the_cap,
+        r#"{"query":"search","pattern":"ours"}"#,
+    );
+    assert!(
+        whole.contains("could not be shown to you") && !whole.contains("README:1: ours"),
+        "a search that met a distrusted file past the cap reached the planner: {whole}"
+    );
+    let narrowed = read_git_over_a_distrusted_file(
+        "read-git-search-past-the-cap-narrowed",
+        &past_the_cap,
+        r#"{"query":"search","pattern":"ours","path":"README"}"#,
+    );
+    assert!(
+        narrowed.contains("README:1: ours"),
+        "the search narrowed to a trusted path was not shown: {narrowed}"
+    );
 }
 
 /// GIT-3 and GIT-14, and the fifth of labels.md's Known costs. `read_git` compares a pattern
