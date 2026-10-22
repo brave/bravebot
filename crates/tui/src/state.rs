@@ -10827,6 +10827,49 @@ mod tests {
         );
     }
 
+    /// LOOP-18: an `/after` line joins the loops under a number of its own and counts towards the
+    /// cap. A wrong implementation replaces the loop that is running, or lets a sixth line in.
+    #[test]
+    fn an_after_line_joins_the_loops_with_a_number_and_counts_towards_the_cap() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let after = |s: &mut Session, line: &str| match crate::loops::parse_after(line) {
+            crate::loops::Delayed::Start(request) => s.start_after(request),
+            _ => panic!("unread"),
+        };
+
+        after(&mut s, "5m tail the log");
+        let held: Vec<(usize, &str)> = s
+            .loops()
+            .iter()
+            .map(|running| (running.number(), running.prompt()))
+            .collect();
+        assert_eq!(
+            held,
+            [
+                (1, "check the deploy"),
+                (2, "check the pull request"),
+                (3, "tail the log")
+            ]
+        );
+        assert_eq!(
+            said(&s),
+            [t!(after_started, number = 3, delay = "5m").to_string()]
+        );
+
+        for n in 0..crate::loops::MAX_LIVE - 3 {
+            after(&mut s, &format!("5m later {n}"));
+        }
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        s.transcript.clear();
+        after(&mut s, "5m one too many");
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        assert_eq!(
+            said(&s),
+            [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]
+        );
+    }
+
     /// LOOP-15: a number ends that loop and no other, and the others keep their numbers.
     #[test]
     fn stopping_a_loop_by_number_ends_only_that_one() {

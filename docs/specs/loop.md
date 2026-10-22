@@ -500,8 +500,10 @@ of them a tick belongs to, and the person asked for neither.
 `verified-by: bravebot_tui::loops::a_line_sent_once_is_due_at_its_delay_and_is_gone_after_its_turn`
 `verified-by: bravebot_tui::state::an_after_line_is_sent_once_when_its_delay_is_up_and_leaves_no_schedule`
 `verified-by: bravebot_tui::state::a_prompt_typed_while_an_after_line_waits_does_not_use_it_up`
+`verified-by: bravebot_tui::state::an_after_line_joins_the_loops_with_a_number_and_counts_towards_the_cap`
 `verified-by: bravebot_tui::app::the_after_command_holds_the_line_and_sends_nothing_now`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping`
+`verified-by: bravebot_tui::render::the_hint_line_counts_loops_and_not_a_held_after_line`
 `verified-by: bravebot_tui::app::a_loop_stop_typed_behind_a_waiting_after_waits_behind_it`
 `verified-by: bravebot_tui::app::what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers`
 

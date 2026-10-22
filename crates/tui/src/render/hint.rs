@@ -190,8 +190,16 @@ fn hint_facts(session: &Session) -> HintFacts {
     // is live to be counted.
     let now = std::time::Instant::now();
     let soonest = |once: bool| {
-        let held = || session.loops().iter().filter(move |running| running.once() == once);
-        (held().count(), held().filter_map(|running| running.until(now)).min())
+        let held = || {
+            session
+                .loops()
+                .iter()
+                .filter(move |running| running.once() == once)
+        };
+        (
+            held().count(),
+            held().filter_map(|running| running.until(now)).min(),
+        )
     };
     let looping = match (soonest(false), soonest(true)) {
         ((0, _), (0, _)) => String::new(),
