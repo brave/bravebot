@@ -1044,6 +1044,7 @@ what to show, and it decides only by the toggle and the byte count, never by wha
 `verified-by: bravebot_tui::state::a_delegates_thinking_is_not_the_turns`
 `verified-by: bravebot_tui::render::the_models_thinking_is_drawn_only_when_asked_for_and_inert`
 `verified-by: bravebot_tui::app::the_thinking_command_toggles_what_is_drawn_and_runs_mid_turn`
+`verified-by: bravebot_agent::turn::the_thinking_of_a_round_reaches_the_reporter_and_is_in_no_request_or_record`
 
 ## Known costs
 

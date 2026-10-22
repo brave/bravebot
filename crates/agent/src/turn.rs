@@ -7723,6 +7723,99 @@ mod tests {
         );
     }
 
+    /// VIEW-33: the thinking a service streams is carried to the reporter and kept out of the
+    /// conversation.
+    mod thinking {
+        use super::ceiling::said;
+        use super::*;
+        use crate::backend::scripted;
+
+        const FIRST: &str = "THE-MODEL-WEIGHS-THE-FILE ";
+        const SECOND: &str = "AND-DECIDES-TO-READ-IT";
+
+        /// Two rounds, the first calling a tool, each preceded by thinking from the service. The
+        /// reporter is handed every piece in order, which is what a screen draws from. None of it
+        /// is in a request, in the session record, in the reply or in the words drawn as the reply
+        /// took shape, so the second request and the answer are the ones a service that sent no
+        /// thinking would have produced.
+        ///
+        /// The regressions it rejects: the driver not forwarding `Progress::thinking`, which leaves
+        /// `thought` empty, and the driver appending it to the words of the reply, which puts it in
+        /// the second request and the record.
+        #[test]
+        fn the_thinking_of_a_round_reaches_the_reporter_and_is_in_no_request_or_record() {
+            let scratch = crate::testutil::scratch_dir("thinking-reaches-the-reporter-only");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            std::fs::write(scratch.join("a.txt"), "body\n").unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let config = Config::from_lookup(|key| match key {
+                "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+                "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+                _ => None,
+            })
+            .unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let mut conversation = Conversation::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            scripted::script(vec![
+                said("", &[("read_file", r#"{"path":"a.txt"}"#)], None),
+                said("done", &[], None),
+            ]);
+            scripted::thinking_before_each_reply(&[FIRST, SECOND]);
+            let outcome = resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &Task::new("read a.txt"),
+                &mut conversation,
+                &mut crate::confirm::ApproveWrites,
+                &mut reporter,
+                &mut sink,
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome;
+            let requests = scripted::asked();
+            scripted::clear();
+
+            let outcome = outcome.expect("a turn whose model thought runs to its answer");
+            assert_eq!(
+                reporter.thought,
+                [FIRST, SECOND, FIRST, SECOND],
+                "the reporter was not handed the thinking of each round, in order"
+            );
+            assert_eq!(
+                requests.len(),
+                2,
+                "the turn did not go on to the request after the tool call: {requests:?}"
+            );
+            assert_eq!(outcome.reply_for_display(), "done");
+            let held = [
+                ("a request", requests.concat()),
+                (
+                    "the session record",
+                    serde_json::to_string(&conversation.snapshot()).unwrap(),
+                ),
+                ("the reply", outcome.reply_for_display().to_string()),
+                ("the reply as it was drawn", reporter.streamed.concat()),
+            ];
+            for (place, text) in held {
+                for piece in [FIRST, SECOND] {
+                    assert!(
+                        !text.contains(piece),
+                        "{place} holds the model's thinking {piece:?}: {text}"
+                    );
+                }
+            }
+        }
+    }
+
     /// TURN-10: the reads of one round run beside each other.
     mod reading_together {
         use super::ceiling::said;
