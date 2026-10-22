@@ -995,7 +995,8 @@ fn only_a_session_end_has_a_shorter_default_bound_than_thirty_seconds() {
             | Moment::PromptShown
             | Moment::CheckoutMade
             | Moment::Compacted
-            | Moment::SessionStarted => 30,
+            | Moment::SessionStarted
+            | Moment::FileChanged => 30,
         });
         assert_eq!(
             hooks::default_limit(moment),
@@ -1102,4 +1103,250 @@ fn an_interface_is_told_whether_a_start_hook_will_run() {
 
     let undeclared = hooks::SessionMoments::read(Some(&without), &scratch.path);
     assert!(!undeclared.will_start_a_hook());
+}
+
+/// A state directory declaring `file-changed` entries that each append a line to `ran-<name>` when
+/// they fire, and a watched file for each, written as `a`. Answers the state directory and the
+/// files.
+fn watching_files(at: &Path, names: &[&str]) -> (PathBuf, Vec<PathBuf>) {
+    let entries: Vec<String> = names
+        .iter()
+        .map(|name| {
+            let run = script(
+                at,
+                &format!("run-{name}"),
+                &format!("#!/bin/sh\ncat >> told-{name}.json\necho x >> ran-{name}\n"),
+            );
+            std::fs::write(at.join(name), "a").expect("a watched file");
+            format!(
+                r#"{{"on": "file-changed", "path": {name:?}, "run": [{:?}]}}"#,
+                run.to_str().expect("a path")
+            )
+        })
+        .collect();
+    let home = a_home_declaring(at, &entries.join(", "));
+    (home, names.iter().map(|name| at.join(name)).collect())
+}
+
+/// How many times the entry for `name` ran.
+fn runs(at: &Path, name: &str) -> usize {
+    std::fs::read_to_string(at.join(format!("ran-{name}"))).map_or(0, |text| text.lines().count())
+}
+
+fn polled(watched: &mut hooks::FileChanged, now: std::time::Instant) -> Vec<String> {
+    let _held = starting();
+    watched.poll(now)
+}
+
+/// HOOK-2: several changes seen in one window run the entry once, and a file that did not change
+/// runs nothing. The regressions it rejects are a run for each change, which a save that writes
+/// twice turns into two builds, and a run for each look.
+#[test]
+fn a_changed_file_runs_the_hook_once_for_the_changes_one_window_held() {
+    let scratch = Scratch::new("file-changed-once");
+    let (home, files) = watching_files(&scratch.path, &["moved", "still"]);
+    let began = std::time::Instant::now();
+    let mut watched = hooks::FileChanged::read(Some(&home), &scratch.path, began);
+    let look = hooks::BETWEEN_LOOKS;
+
+    for step in 1..=3 {
+        std::fs::write(&files[0], "b".repeat(step + 1)).expect("change it");
+    }
+    assert!(polled(&mut watched, began + look).is_empty());
+    assert_eq!(runs(&scratch.path, "moved"), 1);
+    assert_eq!(runs(&scratch.path, "still"), 0, "nothing changed");
+
+    polled(&mut watched, began + look * 2);
+    assert_eq!(
+        runs(&scratch.path, "moved"),
+        1,
+        "the next look saw no change"
+    );
+}
+
+/// HOOK-2: a file is looked at no oftener than every five seconds, so a change made before the
+/// first look is due runs nothing yet. The regression it rejects is a look at every poll.
+#[test]
+fn a_file_is_looked_at_no_oftener_than_the_interval() {
+    let scratch = Scratch::new("file-changed-interval");
+    let (home, files) = watching_files(&scratch.path, &["moved"]);
+    let began = std::time::Instant::now();
+    let mut watched = hooks::FileChanged::read(Some(&home), &scratch.path, began);
+
+    std::fs::write(&files[0], "changed").expect("change it");
+    polled(
+        &mut watched,
+        began + hooks::BETWEEN_LOOKS - Duration::from_millis(1),
+    );
+    assert_eq!(runs(&scratch.path, "moved"), 0);
+
+    polled(&mut watched, began + hooks::BETWEEN_LOOKS);
+    assert_eq!(runs(&scratch.path, "moved"), 1);
+}
+
+/// HOOK-2: a file that appears or is deleted is a change, as one that is written to is.
+#[test]
+fn a_file_that_appears_or_goes_is_a_change() {
+    let scratch = Scratch::new("file-changed-appears");
+    let (home, files) = watching_files(&scratch.path, &["moved"]);
+    let began = std::time::Instant::now();
+    let mut watched = hooks::FileChanged::read(Some(&home), &scratch.path, began);
+    let look = hooks::BETWEEN_LOOKS;
+
+    std::fs::remove_file(&files[0]).expect("delete it");
+    polled(&mut watched, began + look);
+    assert_eq!(runs(&scratch.path, "moved"), 1, "deleted");
+
+    std::fs::write(&files[0], "back").expect("create it");
+    polled(&mut watched, began + look * 3);
+    assert_eq!(runs(&scratch.path, "moved"), 2, "created");
+}
+
+/// HOOK-5: the hook is told the moment and nothing else, though the entry names a path. The
+/// regression it rejects is the path, or anything the filesystem produced, on its standard input.
+#[test]
+fn a_file_changed_hook_is_told_the_moment_and_not_the_path() {
+    let scratch = Scratch::new("file-changed-told");
+    let (home, files) = watching_files(&scratch.path, &["moved"]);
+    let began = std::time::Instant::now();
+    let mut watched = hooks::FileChanged::read(Some(&home), &scratch.path, began);
+
+    std::fs::write(&files[0], "changed").expect("change it");
+    polled(&mut watched, began + hooks::BETWEEN_LOOKS);
+
+    let told = std::fs::read_to_string(scratch.path.join("told-moved.json")).expect("told");
+    assert_eq!(told, "{\"event\":\"file-changed\"}\n");
+}
+
+/// HOOK-2: an entry runs at most once in the floor after its last run, and the change seen in the
+/// meantime runs it when the floor is over. The regression it rejects is no floor, where a command
+/// that writes the file it watches runs at every look.
+#[test]
+fn a_hook_that_ran_lately_waits_out_the_floor_before_it_runs_again() {
+    let scratch = Scratch::new("file-changed-floor");
+    let (home, files) = watching_files(&scratch.path, &["moved"]);
+    let began = std::time::Instant::now();
+    let mut watched = hooks::FileChanged::read(Some(&home), &scratch.path, began);
+    let look = hooks::BETWEEN_LOOKS;
+
+    std::fs::write(&files[0], "one").expect("change it");
+    polled(&mut watched, began + look);
+    std::fs::write(&files[0], "second").expect("change it again");
+    polled(&mut watched, began + look * 2);
+    assert_eq!(runs(&scratch.path, "moved"), 1, "within the floor");
+
+    polled(&mut watched, began + look * 2 + hooks::BETWEEN_RUNS);
+    assert_eq!(
+        runs(&scratch.path, "moved"),
+        2,
+        "the change was kept, not lost"
+    );
+}
+
+/// HOOK-2: a session keeps eight entries and no more. The regression it rejects is every entry
+/// kept, which is a file of paths looked at forever.
+#[test]
+fn a_session_keeps_no_more_than_eight_file_entries() {
+    let scratch = Scratch::new("file-changed-bound");
+    let names: Vec<String> = (0..9).map(|n| format!("f{n}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (home, files) = watching_files(&scratch.path, &names);
+    let began = std::time::Instant::now();
+    let mut watched = hooks::FileChanged::read(Some(&home), &scratch.path, began);
+
+    for file in &files {
+        std::fs::write(file, "changed").expect("change it");
+    }
+    polled(&mut watched, began + hooks::BETWEEN_LOOKS);
+
+    let ran: usize = names.iter().map(|name| runs(&scratch.path, name)).sum();
+    assert_eq!(ran, hooks::MAX_WATCHED);
+    assert_eq!(runs(&scratch.path, "f8"), 0, "the ninth is not kept");
+}
+
+/// HOOK-2: entries for the other moments are not looked at.
+#[test]
+fn an_entry_for_another_moment_watches_no_file() {
+    let scratch = Scratch::new("file-changed-other");
+    let home = a_home_declaring(
+        &scratch.path,
+        r#"{"on": "turn-finished", "path": "x", "run": ["true"]}"#,
+    );
+
+    let watched = hooks::FileChanged::read(Some(&home), &scratch.path, std::time::Instant::now());
+
+    assert!(watched.is_empty());
+}
+
+/// HOOK-2: a tool named on a `file-changed` entry fires it for nothing, so the watch keeps no file
+/// for it. The regression it rejects is a filter on the moment alone, which watches and runs an
+/// entry the editor reports as never firing.
+#[test]
+fn a_tool_named_on_a_file_changed_entry_watches_no_file() {
+    let scratch = Scratch::new("file-changed-tool");
+    std::fs::write(scratch.path.join("moved"), "a").expect("a watched file");
+    let home = a_home_declaring(
+        &scratch.path,
+        r#"{"on": "file-changed", "path": "moved", "tool": "edit", "run": ["true"]}"#,
+    );
+
+    let watched = hooks::FileChanged::read(Some(&home), &scratch.path, std::time::Instant::now());
+
+    assert!(watched.is_empty());
+}
+
+/// HOOK-7: a hook that could not start is said, naming the moment and the program, and the watch
+/// goes on.
+#[test]
+fn a_file_changed_hook_that_could_not_start_is_said() {
+    let scratch = Scratch::new("file-changed-trouble");
+    std::fs::write(scratch.path.join("moved"), "a").expect("a watched file");
+    let home = a_home_declaring(
+        &scratch.path,
+        r#"{"on": "file-changed", "path": "moved", "run": ["/nonexistent/notify"]}"#,
+    );
+    let began = std::time::Instant::now();
+    let mut watched = hooks::FileChanged::read(Some(&home), &scratch.path, began);
+
+    std::fs::write(scratch.path.join("moved"), "changed").expect("change it");
+    let said = polled(&mut watched, began + hooks::BETWEEN_LOOKS);
+
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("file-changed"), "{said:?}");
+    assert!(said[0].contains("/nonexistent/notify"), "{said:?}");
+}
+
+/// HOOK-7, HOOK-9: an interface looking on its own thread is told what a hook said, without a turn
+/// to carry it. The regression it rejects is a thread that runs the hook and drops what it said.
+#[test]
+fn a_thread_looking_for_an_interface_hands_back_what_a_hook_said() {
+    let scratch = Scratch::new("file-changed-thread");
+    std::fs::write(scratch.path.join("moved"), "a").expect("a watched file");
+    let home = a_home_declaring(
+        &scratch.path,
+        r#"{"on": "file-changed", "path": "moved", "run": ["/nonexistent/notify"]}"#,
+    );
+    let watched = hooks::FileChanged::read(Some(&home), &scratch.path, std::time::Instant::now())
+        .looking_every(Duration::from_millis(20));
+    let watching = hooks::Watching::begin(watched).expect("one entry is kept");
+
+    std::fs::write(scratch.path.join("moved"), "changed").expect("change it");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let mut said = Vec::new();
+    while said.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        said = watching.said();
+    }
+
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("/nonexistent/notify"), "{said:?}");
+}
+
+/// HOOK-2: nothing kept is nothing to look on a thread.
+#[test]
+fn no_thread_looks_where_no_entry_is_kept() {
+    let scratch = Scratch::new("file-changed-no-thread");
+    let watched = hooks::FileChanged::read(None, &scratch.path, std::time::Instant::now());
+
+    assert!(hooks::Watching::begin(watched).is_none());
 }

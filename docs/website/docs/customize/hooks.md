@@ -30,7 +30,7 @@ inside a checkout, so a command named in one would be a command that arrived wit
 }
 ```
 
-## The eight moments
+## The nine moments
 
 Each entry names one moment in `on`:
 
@@ -44,6 +44,7 @@ Each entry names one moment in `on`:
 | `compacted` | after a summary has replaced the older part of the conversation in the request |
 | `session-started` | when the interface you opened has begun a session, before it sends a turn |
 | `session-ended` | when you leave that interface, however it ended |
+| `file-changed` | when the file the entry names has changed since the last look |
 
 `turn-finished` fires even when the turn was cancelled or failed on its first request, because the
 commonest thing to attach to it is telling somebody who walked away, and a turn that died is exactly
@@ -52,6 +53,19 @@ when they want telling.
 A `tool-finished` entry may add `"tool": "write_file"` to fire for calls of that name alone. An entry
 naming no tool fires for every call. A `tool` on any other moment is about a call that does
 not happen there, so that entry fires for nothing.
+
+A `file-changed` entry names the one file to watch in `path`, a literal path that is relative to the
+directory you opened bravebot in or absolute, and not a pattern or a directory:
+
+```json
+{ "on": "file-changed", "path": ".envrc", "run": ["/usr/bin/notify-send", ".envrc changed"] }
+```
+
+The full-screen interface looks at the file every 5 seconds and runs the command when its size or
+modification time differs from the last look, or when it appears or is deleted. Several changes in
+one window run it once, and it does not run again until 5 seconds after the last run ended. No turn
+starts and the model is told nothing. The command is told the moment and not the path, so one
+command for two files is two entries. Up to 8 entries are kept, and the looks end when you leave.
 
 Two entries on one moment are two commands, run one after the other in the order the file lists them.
 A word this build does not fire declares no hook and leaves the rest of the file in force.

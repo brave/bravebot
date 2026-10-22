@@ -2627,6 +2627,14 @@ fn event_loop(
     // The session has begun and the first turn is not yet sent, which is where a hook on the start
     // of a session runs (HOOK-10).
     start_the_session(&mut session, moments, |session| redraw(terminal, session))?;
+    // The files a person asked to have a command run for, looked at from here until the interface is
+    // left (HOOK-2). Read from the directory the session opened in, as the session moments are.
+    let watching =
+        bravebot_agent::hooks::Watching::begin(bravebot_agent::hooks::FileChanged::read(
+            bravebot_agent::home::directory().as_deref(),
+            workspace.root(),
+            Instant::now(),
+        ));
 
     // Drawn when something has changed rather than on every pass. A drag arrives as a stream of
     // positions, and a frame for each costs more than the whole gesture is worth: with a long
@@ -2692,6 +2700,14 @@ fn event_loop(
         if let Some(picked) = session.take_pick() {
             carry_out_pick(&mut session, config, picked);
             needs_draw = true;
+        }
+
+        // What a `file-changed` command said when it went wrong, which no turn is open to carry.
+        if let Some(watching) = &watching {
+            for said in watching.said() {
+                session.note(said);
+                needs_draw = true;
+            }
         }
 
         // Waiting for the burst to end, but not indefinitely: a drag that never pauses would
