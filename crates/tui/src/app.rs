@@ -24782,36 +24782,255 @@ mod tests {
         );
     }
 
-    /// The style and the answer kept about the directory have not been read against the lines that
-    /// could change them, so every line but a waiting `/sandbox` holds them back: a prompt and a
-    /// command line as well as a command. The regression it rejects is the reach of `/note` and
-    /// `/rename` extended to these: a style picked ahead of a command line would be looked up
-    /// before the line could write the file that names it.
+    /// `/style` typed during a turn with `waiting` queued ahead of it. Returns the session and what
+    /// was said under the turn since `waiting` was queued.
+    fn a_style_typed_behind(waiting: &str, line: &str) -> (Session, Vec<String>) {
+        let mut session = a_turn_running_on("first");
+        wait_as(&mut session, waiting);
+        let before = said_under_the_turn(&session).len();
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+        });
+        let said = said_under_the_turn(&session)[before..]
+            .iter()
+            .map(|said| said.to_string())
+            .collect();
+        (session, said)
+    }
+
+    /// A turn reads the style when it is built, and nothing a command line, a request that is not a
+    /// turn or a write to the record does changes which style a name is, so behind any of those
+    /// `/style` is carried out when it is typed and the line stays where it was. The regression it
+    /// rejects is every line holding it back, which leaves a style picked behind a `!make` unset
+    /// until the turn ends.
     #[test]
-    fn a_style_or_a_forgotten_answer_waits_behind_a_prompt_and_a_command_line() {
+    fn a_style_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed() {
         if !crate::test_profile::in_isolated_profile() {
             return;
         }
-        for waiting in ["second", "!make", "/compact"] {
-            for then in ["/style off", FORGET_TRUST_COMMAND] {
-                let mut session = a_turn_running_on("first");
-                wait_as(&mut session, waiting);
-                let before = said_under_the_turn(&session).len();
+        for waiting in [
+            "!make",
+            "/compact",
+            "/btw what is this",
+            "/recap",
+            "/memory",
+            "/rename deploy watch",
+            "/note a thought",
+            FORGET_TRUST_COMMAND,
+            "/issue https://github.com/brave/bravebot/issues/2688",
+            "/pr https://github.com/brave/bravebot/pull/2884",
+            "/sandbox off",
+            "/model",
+            "/effort high",
+            "/advisor off",
+        ] {
+            let (session, said) = a_style_typed_behind(waiting, "/style concise");
+            assert_eq!(
+                session.style().map(|style| style.name.to_string()),
+                Some("concise".to_string()),
+                "/style waited behind {waiting}"
+            );
+            assert_eq!(said, [t!(session_style_set, style = "concise")]);
+            assert_eq!(
+                waiting_prompts(&session),
+                vec![waiting.trim_start_matches('!')]
+            );
+        }
+    }
 
-                nothing_beside(|beside| {
-                    typed_during_a_turn(&mut session, then, key(KeyCode::Enter), beside)
-                });
+    /// A prompt begins a turn that reads the style, a line that begins a turn does the same, one that
+    /// replaces the session starts the next from the style settings name, and one that moves or
+    /// reopens the directories the session is made of has not been read against the style files a name
+    /// is looked up among, so `/style` waits behind each and names it. The regression it rejects is
+    /// the list of lines that leave the style alone extended to a prompt: a style picked behind a
+    /// waiting prompt would open the turn that prompt began, which the person typed under the old one.
+    #[test]
+    fn a_style_typed_behind_a_line_that_could_change_it_waits_behind_it() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for waiting in [
+            "second",
+            CLEAR_COMMAND,
+            "/cd crates/tui",
+            "/add-dir ../other",
+            "/reach",
+            "/mcp",
+            "/branch",
+            "/handoff the next goal",
+            "/resume",
+            BACKGROUND_COMMAND,
+            EXIT_COMMAND,
+            "/undo",
+            "/rewind",
+            "/hunks",
+            "/plan the task",
+            "/init",
+            "/review",
+            "/loop 5m check the deploy",
+            "/after 5m check the deploy",
+        ] {
+            // A prompt is named by what it is and a command by the line typed.
+            let named = match waiting {
+                "second" => t!(queued_a_prompt).to_string(),
+                command => command.to_string(),
+            };
+            let (session, said) = a_style_typed_behind(waiting, "/style concise");
+            assert!(
+                said.len() == 1 && said[0].ends_with(&format!("behind {named}.")),
+                "/style was carried out ahead of a waiting {waiting}: {said:?}"
+            );
+            assert!(session.style().is_none(), "/style behind {waiting}");
+            assert_eq!(waiting_prompts(&session), vec![waiting, "/style concise"]);
+        }
+    }
 
-                let said = said_under_the_turn(&session);
-                assert!(
-                    said.len() == before + 1 && said[before].contains("behind"),
-                    "{then} was carried out ahead of a waiting {waiting}: {said:?}"
-                );
-                assert_eq!(
-                    waiting_prompts(&session),
-                    vec![waiting.trim_start_matches('!'), then]
-                );
-            }
+    /// `/forget-trust` typed during a turn with `waiting` queued ahead of it, with an answer kept
+    /// about the directory. Returns whether the answer is still kept, what was said under the turn
+    /// since `waiting` was queued, the lines waiting and the directory. `None` where the filesystem
+    /// keeps no birth time, which a sibling test covers.
+    fn trust_forgotten_behind(
+        waiting: &str,
+    ) -> Option<(bool, Vec<String>, Vec<String>, std::path::PathBuf)> {
+        use bravebot_agent::trusted::{Identity, Store};
+        let slug: String = waiting
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        let scratch = crate::testutil::scratch_dir(&format!("bravebot-app-forget-trust-{slug}"));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let home = scratch.join("home");
+        let root = scratch.join("work");
+        std::fs::create_dir_all(&root).expect("create");
+        let identity = Identity::of(&root)?;
+        let store = Store::new(&home, &root);
+        assert!(store.keep(&identity, "1-2", 7, false));
+        let mut session = a_turn_running_on("first");
+        wait_as(&mut session, waiting);
+        let before = said_under_the_turn(&session).len();
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        typed_during_a_turn(
+            &mut session,
+            FORGET_TRUST_COMMAND,
+            key(KeyCode::Enter),
+            &mut Beside {
+                managed: &bravebot_config::Managed::default(),
+                stored: &mut stored,
+                root: &root,
+                home: Some(&home),
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+        let said = said_under_the_turn(&session)[before..]
+            .iter()
+            .map(|said| said.to_string())
+            .collect();
+        let waiting = waiting_prompts(&session)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let kept = store.kept(&identity).is_some();
+        let _ = std::fs::remove_dir_all(&scratch);
+        Some((kept, said, waiting, root))
+    }
+
+    /// The answer kept about the directory is read by a line that starts a session there and
+    /// changed by one that moves the directory or leaves the session, and a prompt or a command line
+    /// can run a program that makes the `.git` entry that moves the root around the directory. A
+    /// request that is not a turn, and a write to the record or the session's own choices, do none
+    /// of those, so behind them `/forget-trust` is carried out when it is typed. The regression it
+    /// rejects is every line holding it back, which leaves an answer a person withdrew in place
+    /// until the turn ends.
+    #[test]
+    fn a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for waiting in [
+            "/compact",
+            "/btw what is this",
+            "/recap",
+            "/memory",
+            "/rename deploy watch",
+            "/note a thought",
+            "/style off",
+            "/issue https://github.com/brave/bravebot/issues/2688",
+            "/pr https://github.com/brave/bravebot/pull/2884",
+            "/sandbox off",
+            "/model",
+            "/effort high",
+            "/advisor off",
+        ] {
+            let Some((kept, said, waiting_lines, root)) = trust_forgotten_behind(waiting) else {
+                return;
+            };
+            assert!(!kept, "/forget-trust waited behind {waiting}");
+            assert_eq!(
+                said,
+                [t!(session_trust_forgotten, directory = root.display())],
+                "behind {waiting}"
+            );
+            assert_eq!(waiting_lines, vec![waiting]);
+        }
+    }
+
+    /// A prompt and a command line can run a program that makes a `.git` entry, which changes which
+    /// answers `/forget-trust` withdraws. A line that starts a session here reads the answer, one
+    /// that moves the directory or leaves the session changes what is withdrawn, and a command not
+    /// read against the file the answer is kept in is held back like them, so the answer is kept and
+    /// the command waits, naming the line. The regression it rejects is a command line or a prompt
+    /// added to the lines that leave the answer alone.
+    #[test]
+    fn a_forgotten_answer_typed_behind_a_line_that_could_change_it_waits_behind_it() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for waiting in [
+            "second",
+            "!make",
+            CLEAR_COMMAND,
+            "/handoff the next goal",
+            "/resume",
+            BACKGROUND_COMMAND,
+            EXIT_COMMAND,
+            "/cd crates/tui",
+            "/add-dir ../other",
+            "/reach",
+            "/mcp",
+            "/branch",
+            "/undo",
+            "/rewind",
+            "/hunks",
+            "/plan the task",
+            "/init",
+            "/review",
+            "/loop 5m check the deploy",
+            "/after 5m check the deploy",
+        ] {
+            let Some((kept, said, waiting_lines, _)) = trust_forgotten_behind(waiting) else {
+                return;
+            };
+            // A prompt is named by what it is, a command line by that, and a command by the line.
+            let named = match waiting {
+                "second" => t!(queued_a_prompt).to_string(),
+                "!make" => t!(queued_a_shell_line).to_string(),
+                command => command.to_string(),
+            };
+            assert!(kept, "/forget-trust was carried out ahead of {waiting}");
+            assert!(
+                said.len() == 1 && said[0].ends_with(&format!("behind {named}.")),
+                "behind {waiting}: {said:?}"
+            );
+            assert_eq!(
+                waiting_lines,
+                vec![waiting.trim_start_matches('!'), FORGET_TRUST_COMMAND]
+            );
         }
     }
 
