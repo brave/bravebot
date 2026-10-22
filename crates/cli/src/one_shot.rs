@@ -172,7 +172,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "run",
                 reason: "the program was not approved, and nobody was there to approve it",
-                in_the_trail: false,
+                in_the_trail: true,
             });
         }
         decision

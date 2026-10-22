@@ -3636,13 +3636,13 @@ mod tests {
         assert!(answered.declined().is_empty());
     }
 
-    /// CLI-6, CLI-12, TRACE-1: a write or a fetch nobody could be asked about ends the run on the
-    /// refused status and is listed once. The policy records both in the trail, so the confirmer
-    /// keeps its own record of each for the status alone: a delegate's policy holds its refusals
-    /// apart from the turn's, and this confirmer is shared with it. A plan and a `run` are not
-    /// told to the policy and are listed from here. The regressions it rejects are an entry that
-    /// is dropped, which a delegate's unapproved write needs to end the run on the refused
-    /// status, a write or a fetch listed again beside the trail's, and a plan or a run marked as
+    /// CLI-6, CLI-12, TRACE-1: a write, a fetch or a run nobody could be asked about ends the run
+    /// on the refused status and is listed once. The policy records each in the trail, so the
+    /// confirmer keeps its own record of it for the status alone: a delegate's policy holds its
+    /// refusals apart from the turn's, and this confirmer is shared with it. Only a plan is never
+    /// told to the policy, so it is listed from here. The regressions it rejects are an entry
+    /// that is dropped, which a delegate's unapproved write needs to end the run on the refused
+    /// status, a write, a fetch or a run listed again beside the trail's, and the plan marked as
     /// already in the trail, which lists it nowhere.
     #[test]
     fn a_write_and_a_fetch_nobody_could_be_asked_about_count_for_the_status_and_are_listed_once() {
@@ -3685,7 +3685,7 @@ mod tests {
             .iter()
             .map(|refusal| refusal.gate)
             .collect();
-        assert_eq!(listed, ["run", "manifest_plan"]);
+        assert_eq!(listed, ["manifest_plan"]);
     }
 
     /// CLI-6, CLI-12, TRACE-1: a call to a server's tool nobody could be asked about ends the run on
