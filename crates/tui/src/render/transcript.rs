@@ -409,7 +409,8 @@ fn push_entries(
     }
 }
 
-/// How many of the end's lines of the model's thinking are drawn.
+/// How many of the last lines of the model's thinking are drawn, so that thinking takes at most
+/// this much height from the reply under it.
 const THINKING_ROWS: usize = 8;
 
 /// The model's thinking, dimmed and italic under a heading, the last few lines of it.

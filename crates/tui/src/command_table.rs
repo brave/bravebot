@@ -157,7 +157,10 @@ pub(crate) const FILES_COMMAND: &str = "/files";
 
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
-/// Show or hide the model's thinking as it arrives.
+
+/// The line that shows or hides the model's thinking as it arrives.
+///
+/// Answered by the screen alone: it changes what is drawn and sends nothing to the model.
 pub(crate) const THINKING_COMMAND: &str = "/thinking";
 
 /// The line that lists the checkouts delegates kept, and removes one by its number.

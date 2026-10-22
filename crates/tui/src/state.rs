@@ -40,13 +40,17 @@ pub use entry::{
 pub use scroller::{Laid, Scroller};
 pub use watching::Watching;
 
+/// How many bytes of the model's thinking are kept for the screen, counted from the end.
+///
+/// The thinking is split into lines and drawn again on every frame, so this bounds that work
+/// however long the model thinks.
+const THINKING_KEPT: usize = 4096;
+
 /// How many newlines a paste carries before it is folded behind a marker.
 ///
 /// Counted in newlines rather than in lines so that three lines with nothing after the last of
 /// them is the first paste to fold: the third newline is the point where the box was going to grow
 /// past what a prompt is meant to look like.
-/// How many bytes of the model's thinking are kept for the screen, counted from the end.
-const THINKING_KEPT: usize = 4096;
 const FOLD_AT_NEWLINES: usize = 3;
 
 /// How many changes back `u` reaches, which is vim's `undolevels` as it ships.
