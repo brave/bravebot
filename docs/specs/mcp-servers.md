@@ -357,6 +357,7 @@ write, so one made while the question waited is refused too.
 `verified-by: bravebot_cli::mcp::a_link_made_while_the_question_waits_is_not_written_through`
 `verified-by: bravebot_config::import::a_destination_requests_a_server_once_and_withdraws_only_it`
 `verified-by: bravebot_cli::running::a_server_enabled_in_a_checkout_is_requested_there_until_disabled`
+`verified-by: bravebot_agent::servers::a_requested_name_that_is_not_an_alias_is_shown_quoted_with_its_escapes`
 
 <a id="SERVERS-3"></a>
 ### SERVERS-3: adding a server is a command a person types, and typing it is not the approval

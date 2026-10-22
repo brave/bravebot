@@ -230,6 +230,43 @@ fn an_empty_home_is_treated_as_no_home_at_all() {
     assert_eq!(found, None, "an empty home was joined onto anyway");
 }
 
+/// A machine that never imported a subscription is not told one could not be used.
+///
+/// A turn that reported it as a fault would send somebody who has never held a subscription to
+/// re-import one. Three machines have nothing: one whose state directory does not exist, one whose
+/// state directory exists with no credentials file in it, and one that has nowhere to keep
+/// credentials at all, which the store answers with the error it gives a file that would not read.
+#[test]
+fn a_machine_that_imported_nothing_is_not_told_its_subscription_cannot_be_used() {
+    let nothing =
+        || bravebot_agent::ImportedSubscription::discover("https://ai-chat.bsg.brave.com");
+
+    with_temp_home("nothing-imported-bare", |_| {
+        let discovery = nothing();
+
+        assert_eq!(discovery.complaint(), None, "no state directory");
+        assert!(discovery.found().is_none(), "nothing spendable");
+    });
+
+    with_temp_home("nothing-imported-directory", |_| {
+        let path = bravebot_skus::store::path().expect("a scratch home");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the state directory");
+        assert!(!path.exists(), "a credentials file is already there");
+
+        let discovery = nothing();
+
+        assert_eq!(discovery.complaint(), None, "a state directory, no file");
+        assert!(discovery.found().is_none(), "nothing spendable");
+    });
+
+    with_no_home(|| {
+        let discovery = nothing();
+
+        assert_eq!(discovery.complaint(), None, "nowhere to keep credentials");
+        assert!(discovery.found().is_none(), "nothing spendable");
+    });
+}
+
 /// A file left holding nothing must be reported, not read as never having imported.
 ///
 /// A write interrupted partway leaves it that way, since the file is truncated before anything is

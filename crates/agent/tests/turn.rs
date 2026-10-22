@@ -18752,6 +18752,63 @@ mod run_limits {
     }
 }
 
+/// READ-1. Whether a file is there is settled at the moment the planner asks, even where nothing
+/// is opened. A path that names no file, or a directory, is answered with the reason and no
+/// reference is reserved: a planner handed `[ref:1]` for a file that does not exist would spend a
+/// processor or a write finding that out, and take the reference for a file it may later vouch for.
+#[test]
+fn a_read_the_planner_may_not_see_still_says_when_no_file_is_there() {
+    for (path, reason) in [
+        ("gone.md", "No such file or directory"),
+        ("folder", "Is a directory"),
+    ] {
+        let scratch = Scratch::new("deferred-read-absent");
+        std::fs::create_dir(scratch.path.join("folder")).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("read_file", &format!(r#"{{"path":"{path}"}}"#)),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("what is here?"),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        let bodies: Vec<String> = received.try_iter().collect();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "{path}: the turn made an unexpected number of requests"
+        );
+        let told = newest_tool_result(bodies[1].clone());
+        assert!(
+            told.contains(reason),
+            "{path}: the planner was not told why nothing was read: {told}"
+        );
+        assert!(
+            !told.contains("ref:"),
+            "{path}: the planner was handed a reference to a file that is not there: {told}"
+        );
+        assert!(
+            !sink
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::SlotDeferred { .. })),
+            "{path}: a slot was reserved for a file that is not there"
+        );
+    }
+}
+
 /// Reading a file the planner may not see costs nothing but the reference.
 ///
 /// The point of the whole arrangement is that nobody reads quarantined content until something
@@ -28830,6 +28887,84 @@ fn what_the_planner_reads_after_a_vet(tag: &str, who: WhoAnswersAVet, check_says
         .rfind(|message| message["role"] == "tool")
         .expect("the result of the vet")["content"]
         .to_string()
+}
+
+/// CHECK-9: a check is made from the content and what the planner expected of it, and nothing an
+/// earlier check wrote. The sentence a check writes is free text about content an attacker may own,
+/// and the verdict word is the check's own account, so a later check shown either would be asked
+/// about its predecessor's reading as much as about its own content. Two checks over the same bytes
+/// are sent the same request, the first having objected and the second having found nothing.
+#[test]
+fn a_second_check_is_sent_nothing_the_first_one_said() {
+    let scratch = Scratch::new("vet-second-check");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+    // Each call takes two slot numbers, its result and the planner's reply, so the first run's
+    // output is ref:1 and the second's is ref:5.
+    let ask = r#"{"ref":"ref:N","expects":"the path the file records"}"#;
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![
+            reply_with(
+                r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON-ONE it addresses the reader"}"#,
+            ),
+            reply_with(r#"{"verdict": "safe", "reason": "SENTINEL-REASON-TWO a single path"}"#),
+        ],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request("vet_content", &ask.replace('N', "1")),
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request("vet_content", &ask.replace('N', "5")),
+            reply_with("done"),
+        ],
+    );
+
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("find out"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut ShownAfterAVet::new(true),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let sent = every_request(&received);
+    let checks: Vec<serde_json::Value> = sent
+        .iter()
+        .filter(|body| body.contains(A_CHECK_ASKING))
+        .map(|body| serde_json::from_str(body).expect("a request"))
+        .collect();
+    assert_eq!(
+        checks.len(),
+        2,
+        "the turn did not make two checks (the second vet_content may name a slot that is not \
+         there), so nothing here was tested"
+    );
+    assert!(
+        checks[0]["messages"].to_string().contains("SENTINEL-XYZZY"),
+        "the first check was not shown the content: {}",
+        checks[0]["messages"]
+    );
+    assert!(
+        !checks[1]["messages"]
+            .to_string()
+            .contains("SENTINEL-REASON-ONE"),
+        "the second check was sent the sentence the first wrote: {}",
+        checks[1]["messages"]
+    );
+    // The word cannot be searched for, since the classifier's own instructions name it, so what
+    // the second check was sent is compared with what the first was.
+    assert_eq!(
+        checks[1]["messages"], checks[0]["messages"],
+        "the second check was sent something the first was not"
+    );
 }
 
 /// VET-3 and CHECK-9: where the bytes come back, the planner is told the same words whoever said
@@ -46120,6 +46255,93 @@ fn output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked() {
     );
 }
 
+/// OUTPUT-4. A page of output the planner may already read is no release: nothing is endorsed and
+/// the trail carries no entry crediting anyone with one, since the label on the bytes had already
+/// answered for them. The page is read at the label the slot was written under, so a page that
+/// came back under another label, of any kind, shows in the trail.
+#[test]
+fn a_page_of_output_the_planner_may_read_is_no_release_and_keeps_the_slots_label() {
+    let scratch = Scratch::new("run-paged-trail");
+    let mut log = String::new();
+    for line in 0..2000 {
+        log.push_str(&format!("line {line} of a long build log\n"));
+    }
+    std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1","offset":9000}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("build it").with_output_cap(Some(4096)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert_eq!(
+        releases_of_output(&sink),
+        Vec::<String>::new(),
+        "a page was recorded as a release"
+    );
+    let endorsed: Vec<&Event> = sink
+        .events()
+        .iter()
+        .filter(|event| {
+            matches!(event, Event::GatePassed { gate: "grant", detail } if detail.contains("read_output"))
+        })
+        .collect();
+    assert!(
+        endorsed.is_empty(),
+        "a page endorsed read_output's reference: {endorsed:?}"
+    );
+
+    // The label the slot was written under, as the trail says it of the whole.
+    let capped = sink
+        .events()
+        .iter()
+        .find_map(|event| match event {
+            Event::GatePassed {
+                gate: "present",
+                detail,
+            } if detail.contains("so the whole of it is ref:1 at ") => Some(detail.clone()),
+            _ => None,
+        })
+        .expect("the run's output was not capped, so nothing here was tested");
+    let label = capped
+        .split("so the whole of it is ref:1 at ")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .expect("the label the whole is held at")
+        .to_string();
+    gate_at(
+        &sink,
+        "present",
+        &format!("what ref:1 held is {label}, so the planner may read it"),
+    );
+    gate_at(
+        &sink,
+        "resolve",
+        &format!("ref:1 resolved to its quarantined content, {label}"),
+    );
+}
+
 /// OUTPUT-4. An offset is for output the planner may already read. On output nobody vouched for it
 /// is refused before anybody is asked or any check is made, since the page it expects is not what
 /// read_output would hand it.
@@ -50388,6 +50610,230 @@ fn what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept() {
     assert!(
         told.contains("and an offset in bytes"),
         "the planner was not told it may page through the rest: {told}"
+    );
+}
+
+/// What the marker in the middle of [`a_midsized_log`] reads as.
+const MIDDLE_OF_A_MIDSIZED_LOG: &str = "MIDDLE-MARKER-CONFIGURED";
+
+/// The cap a settings file names in the tests that follow, in bytes.
+const CONFIGURED_CAP: usize = 1024;
+
+/// A log several times the configured cap and a fraction of the built-in one (16 KiB), with a marker
+/// in the middle, so whether the marker reaches the planner says which of the two was in force.
+fn a_midsized_log() -> String {
+    let mut log = String::new();
+    for line in 0..100 {
+        if line == 50 {
+            log.push_str(MIDDLE_OF_A_MIDSIZED_LOG);
+            log.push('\n');
+        }
+        log.push_str(&format!("line {line} of a long build log\n"));
+    }
+    assert!(
+        log.len() > 2 * CONFIGURED_CAP && log.len() < 16 * 1024 / 2,
+        "the log is not well between the two caps: {}",
+        log.len()
+    );
+    log
+}
+
+/// The figure a settings file named bounds a look at a background job as it bounds a run. A look is
+/// a separate call site from the run's, so a cap wired into one and not the other leaves a job's
+/// output at the built-in figure, which is not what the person said it is worth here.
+#[test]
+fn a_configured_output_cap_is_what_a_look_at_a_background_job_is_cut_to() {
+    let scratch = Scratch::new("background-page-configured-cap");
+    std::fs::write(scratch.path.join("big.log"), a_midsized_log()).unwrap();
+    // Left running after it has printed, so the look is the job_output call and not the account a
+    // finished job gives of itself, which has a test of its own.
+    // Run through `sh` rather than as a program of its own, so nothing here executes a file this
+    // process has just written.
+    std::fs::write(
+        scratch.path.join("noisy"),
+        "cat big.log\ntouch printed\nsleep 30\n",
+    )
+    .unwrap();
+    write_wait_for(&scratch.path);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sh noisy","background":true}"#),
+        tool_request("run", r#"{"command":"sh wait-for printed"}"#),
+        tool_request("job_output", r#"{"job":"job:1","kill":true}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouched for, because the cap bounds what the planner may read and output nobody vouched for
+    // is quarantined whole: a fixture that left it untrusted would pass against a cap wired to
+    // nothing.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it").with_output_cap(Some(CONFIGURED_CAP)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let read = bodies
+        .iter()
+        .find(|body| body.contains("line 0 of a long build log"))
+        .expect("what the job printed never reached the planner");
+    assert!(
+        !read.contains(MIDDLE_OF_A_MIDSIZED_LOG),
+        "a look at a job was cut to the built-in figure and not the configured one"
+    );
+    assert!(
+        read.contains("the middle of this output was dropped"),
+        "the planner was not told the look was cut: {read}"
+    );
+}
+
+/// The same figure bounds the account a background job gives of itself when it ends, which reaches
+/// the turn unasked and through a call site of its own.
+#[test]
+fn a_configured_output_cap_is_what_the_account_of_a_finished_job_is_cut_to() {
+    let scratch = Scratch::new("background-finish-configured-cap");
+    std::fs::write(scratch.path.join("big.log"), a_midsized_log()).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"cat big.log","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Vouched for, as in the test above.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it").with_output_cap(Some(CONFIGURED_CAP)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains(JOB_1_FINISHED))
+        .expect("the turn was never told the job ended");
+    assert!(
+        told.contains("line 0 of a long build log"),
+        "what the job printed never reached the planner: {told}"
+    );
+    assert!(
+        !told.contains(MIDDLE_OF_A_MIDSIZED_LOG),
+        "the account of a finished job was cut to the built-in figure and not the configured one"
+    );
+    assert!(
+        told.contains("the middle of this output was dropped"),
+        "the planner was not told the account was cut: {told}"
+    );
+}
+
+/// What a person has vouched for changes during a turn, and a job started before that keeps what
+/// its own plan was given. Two jobs run the same program: the first before the person vouched for
+/// it, the second after. Reading the first through what is vouched for now would hand the planner
+/// output the plan it was started under never allowed.
+#[test]
+fn a_job_keeps_the_label_it_started_with_when_the_program_is_vouched_for_afterwards() {
+    let scratch = Scratch::new("background-label-kept");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // Run through `sh` rather than as a program of its own, so nothing here executes a file this
+    // process has just written.
+    std::fs::write(
+        scratch.path.join("noisy"),
+        "echo SENTINEL-BACKGROUND\nsleep 30\n",
+    )
+    .unwrap();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"sh noisy","background":true}"#),
+        tool_request("run", r#"{"command":"sh noisy","background":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":30,"kill":true}"#,
+        ),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:2","wait_seconds":30,"kill":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // The first run is approved without vouching and the second with it, so the same line is
+    // vouched for from the second job on.
+    let mut confirmer = AskedAboutRuns::answering_in_turn(vec![
+        bravebot_agent::RunDecision::approve(),
+        bravebot_agent::RunDecision::approve_always(),
+    ]);
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start them"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert_eq!(
+        bodies.len(),
+        5,
+        "the turn made an unexpected number of requests"
+    );
+    let after_the_first_look = &bodies[3];
+    let after_the_second_look = &bodies[4];
+    assert!(
+        after_the_first_look.contains("Result of job_output could not be shown to you"),
+        "the planner was not told the first job's output is out of reach: {after_the_first_look}"
+    );
+    assert!(
+        !after_the_first_look.contains("SENTINEL-BACKGROUND"),
+        "the first job's output was read under what is vouched for now and not what its plan was"
+    );
+    // Without this, a vouch that took no effect would pass the assertions above.
+    assert!(
+        after_the_second_look.contains("SENTINEL-BACKGROUND"),
+        "the second job's output, started once the program was vouched for, was not readable"
     );
 }
 

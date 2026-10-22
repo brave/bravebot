@@ -1236,6 +1236,23 @@ mod tests {
         );
     }
 
+    /// A wait that ended early on output reads like one that sat out its bound, and nothing new
+    /// reads like a standing account of the job. Saying that nothing is watching now is what makes
+    /// the answer an account of those seconds only.
+    #[test]
+    fn a_look_that_waited_says_nothing_is_watching_the_job_now() {
+        let said = Outcome::Running {
+            ran_for: std::time::Duration::from_secs(90),
+            waited: Some(std::time::Duration::from_secs(30)),
+        }
+        .describe();
+
+        assert!(
+            said.contains("Nothing is watching it now."),
+            "a look that waited does not say the job is no longer watched: {said}"
+        );
+    }
+
     /// Every duration in these sentences is a number the planner reads, and "1 seconds" in one of
     /// them is a driver that cannot count reporting on a program.
     #[test]
