@@ -458,6 +458,37 @@ impl Session {
         else {
             return;
         };
+        self.flip_call(index, start, relaid);
+    }
+
+    /// Expand or collapse the call drawn on the screen row `row`, as a click on it does (MOUSE-9).
+    ///
+    /// Says whether a call was there. The scroller draws the transcript from the first screen row,
+    /// so the row clicked is the view's top row plus `row`. A click on a call's rows beneath its
+    /// heading acts on that call as well, since they are the call's.
+    pub fn toggle_expanded_at(&mut self, row: u16, relaid: impl Fn(&Session) -> Laid) -> bool {
+        if self.watched_delegate().is_some()
+            || row >= self.laid.height
+            || self.scroller().is_none_or(|scroller| scroller.help)
+        {
+            return false;
+        }
+        let at = self.top_row().saturating_add(row);
+        let Some(&(start, _, index)) = self
+            .laid
+            .expandable
+            .iter()
+            .find(|(start, end, _)| (*start..=*end).contains(&at))
+        else {
+            return false;
+        };
+        self.flip_call(index, start, relaid);
+        true
+    }
+
+    /// Flip one call and lay the transcript out again, keeping the view on the call.
+    fn flip_call(&mut self, index: usize, start: u16, relaid: impl Fn(&Session) -> Laid) {
+        let top = self.top_row();
         if let Some(entry) = self.transcript.get_mut(index) {
             entry.expanded = !entry.expanded;
         }

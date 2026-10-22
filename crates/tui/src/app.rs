@@ -11507,6 +11507,95 @@ mod tests {
         assert!(!text.contains("PANELMARK"), "{text:?}");
     }
 
+    /// A scroller whose one call returned thirty lines and draws five, laid out at 80 by 10.
+    fn scroller_over_one_call() -> Session {
+        use bravebot_agent::report::{Activity, Landing, Returned};
+        let mut session = Session::new("kernel-enforced");
+        session.finish_activity(Activity::running("Run", "make").done("ok"));
+        session.landed(Landing::Context);
+        let lines: Vec<String> = (0..30).map(|n| format!("out {n}")).collect();
+        session.returned(Returned {
+            lines: lines[..5].to_vec(),
+            total: 30,
+            from_the_end: false,
+            whole: lines,
+        });
+        session.open_scroller();
+        session.laid.width = 80;
+        session.laid.height = 10;
+        session.laid = render::as_last_drawn(&session);
+        session
+    }
+
+    fn click(session: &mut Session, row: u16, column: u16) -> Action {
+        handle_mouse(
+            session,
+            drag(MouseEventKind::Down(MouseButton::Left), row, column),
+        );
+        handle_mouse(
+            session,
+            drag(MouseEventKind::Up(MouseButton::Left), row, column),
+        )
+    }
+
+    /// MOUSE-9: a click on a call's row in the scroller expands it as `x` does, a second click
+    /// collapses it, and neither leaves a selection or a copy behind.
+    #[test]
+    fn a_click_on_a_call_in_the_scroller_expands_and_collapses_it() {
+        let mut session = scroller_over_one_call();
+        let (row, column) = find_on_text(&session, "out 0");
+        assert!(!render::as_text(&session).contains("out 29"));
+
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(render::as_text(&session).contains("out 29"));
+        assert!(session.selection.is_none());
+
+        let (row, column) = find_on_text(&session, "out 3");
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(!render::as_text(&session).contains("out 29"));
+    }
+
+    /// A click on a row that belongs to no call, and a drag that begins on one, expand nothing:
+    /// the drag is a selection and is copied as it always was.
+    #[test]
+    fn a_click_off_a_call_or_a_drag_over_one_expands_nothing() {
+        let mut session = scroller_over_one_call();
+        let (row, column) = find_on_text(&session, "out 0");
+        let below = session.laid.height - 1;
+        assert_ne!(below, row);
+        assert_eq!(click(&mut session, below, 0), Action::Copy);
+        assert!(!render::as_text(&session).contains("out 29"));
+
+        swept(&mut session, (row, column), (row, column + 3));
+        assert_eq!(
+            handle_mouse(
+                &mut session,
+                drag(MouseEventKind::Up(MouseButton::Left), row, column + 3)
+            ),
+            Action::Copy
+        );
+        assert!(!render::as_text(&session).contains("out 29"));
+    }
+
+    /// With the key list open the click is on the list, which covers the call.
+    #[test]
+    fn a_click_with_the_scroller_help_open_expands_nothing() {
+        let mut session = scroller_over_one_call();
+        let (row, column) = find_on_text(&session, "out 0");
+        session.toggle_scroller_help();
+        click(&mut session, row, column);
+        assert!(!render::as_text(&session).contains("out 29"));
+    }
+
+    /// The row and column where `needle` is drawn in the session's own frame.
+    fn find_on_text(session: &Session, needle: &str) -> (u16, u16) {
+        let text = render::as_text(session);
+        text.lines()
+            .enumerate()
+            .find_map(|(row, line)| line.find(needle).map(|column| (row as u16, column as u16)))
+            .expect("text on the screen")
+    }
+
     /// A press on another cell starts the count again, so two clicks on different words select
     /// nothing in whole.
     #[test]

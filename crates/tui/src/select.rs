@@ -105,6 +105,13 @@ pub struct Click {
     count: u8,
 }
 
+impl Click {
+    /// Which press of its run this was.
+    pub fn count(&self) -> u8 {
+        self.count
+    }
+}
+
 /// Which press of a run this one is: 1 for a lone press, 2 for a double click, 3 for a triple
 /// click. A fourth press starts the count again.
 ///
