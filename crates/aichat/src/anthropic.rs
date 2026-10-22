@@ -481,7 +481,8 @@ impl<'a> AnthropicClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        // Move the last completed bill into the call total before clearing attempt state.
+        // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
+        // what the call has been billed so far is kept apart from it.
         self.retried_usage = self.completed_usage();
         self.completed_usage = None;
         if self.cancelled() {
@@ -643,7 +644,8 @@ impl<'a> AnthropicClient<'a> {
         attempt: u32,
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        // Move the last completed bill into the call total before clearing attempt state.
+        // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
+        // what the call has been billed so far is kept apart from it.
         self.retried_usage = self.completed_usage();
         self.completed_usage = None;
         // Before the request is built, let alone sent. A stop that landed while the last attempt was
