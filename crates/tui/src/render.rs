@@ -3982,7 +3982,7 @@ mod tests {
                 after_a_shell_line.type_char(c);
             }
             assert!(after_a_shell_line.queue_shell());
-            queue_command(&mut after_a_shell_line, "/rename deploy watch");
+            queue_command(&mut after_a_shell_line, "/style off");
 
             let rows = rows_at(&after_a_command, 100, 30);
             assert!(
@@ -4000,8 +4000,7 @@ mod tests {
             );
             let rows = rows_at(&after_a_shell_line, 100, 30);
             assert!(
-                mark_under(&rows, "/rename deploy watch")
-                    .contains("after the shell line before it"),
+                mark_under(&rows, "/style off").contains("after the shell line before it"),
                 "{rows:#?}"
             );
         }

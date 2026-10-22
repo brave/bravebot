@@ -833,13 +833,18 @@ enum Acts {
     /// `/advisor`. A prompt or a command that sends a request reads them, and a command that
     /// switches the session or leaves it replaces them.
     Choice,
-    /// The name, the notes, the style, the answer kept about the directory and the sandbox mode:
-    /// `/rename`, `/note`, `/style`, `/forget-trust` and `/sandbox`. Every waiting line could change
-    /// these but a waiting `/sandbox`, which moves the mode the next turn is built with and writes
-    /// nothing else (SANDBOX-22). The mode is read where a turn is built, by `/resume` and
-    /// `/status`, and when the transcript is drawn, and by no command that changes something, so
-    /// each of those gives the same result before it as after it. `/sandbox` itself is held back by
-    /// the rule for a line of the same command.
+    /// The notes and the name the record holds, which `/note` and `/rename` write: a note is stamped
+    /// with the turn count it is typed at, and a rename gives up the rewind points and is undone by
+    /// the ones that restore a title. Only a line that begins a turn, changes the turn count, puts a
+    /// point back or starts, switches to or leaves a record changes what these act on.
+    NotesAndName,
+    /// The style, the answer kept about the directory and the sandbox mode: `/style`,
+    /// `/forget-trust` and `/sandbox`. Every waiting line could change these but a waiting
+    /// `/sandbox`, which moves the mode the next turn is built with and writes nothing else
+    /// (SANDBOX-22). The mode is read where a turn is built, by `/resume` and `/status`, and when
+    /// the transcript is drawn, and by no command that changes something, so each of those gives
+    /// the same result before it as after it. `/sandbox` itself is held back by the rule for a
+    /// line of the same command.
     Other,
 }
 
@@ -850,6 +855,7 @@ fn acts_on(command: &str) -> Acts {
     match command {
         ISSUE_COMMAND | PR_COMMAND => Acts::Link,
         MODEL_COMMAND | EFFORT_COMMAND | ADVISOR_COMMAND => Acts::Choice,
+        NOTE_COMMAND | RENAME_COMMAND => Acts::NotesAndName,
         _ => Acts::Other,
     }
 }
@@ -898,20 +904,57 @@ const LEAVES_THE_CHOICE_ALONE: &[&str] = &[
     SANDBOX_COMMAND,
 ];
 
+/// The commands that neither begin a turn, change the turn count, put a rewind point back nor
+/// start, switch to or leave a record, and that write neither the notes nor the name. A command not
+/// named here holds `/note` and `/rename` back.
+///
+/// A command line is never held back: it saves the record with the notes and the name it holds, and
+/// a save keeps a name already chosen. Each command named was read against what the two write.
+/// `/add-dir` closes the rewind points, which a rename closes too, so the two give the same result
+/// in either order. `/issue` and `/pr` set a link that no point holds (PANEL-12), `/model`,
+/// `/effort`, `/advisor`, `/style`, `/forget-trust` and `/sandbox` set the session's own choices,
+/// and `/memory`, `/reach` and `/mcp` are handed the session's transcript and settings and not the
+/// record. `/note` and `/rename` leave each other
+/// alone: the first writes the notes and the second the name and the points. `/cd` is not named,
+/// since it moves the record to the new directory, nor `/hunks`, which puts a hunk back against the
+/// last point a rename gives up. A command added to the table is placed against this list by
+/// `every_command_that_can_wait_is_placed_against_the_record_and_the_choice`.
+const LEAVES_NOTES_AND_NAME_ALONE: &[&str] = &[
+    ADD_DIR_COMMAND,
+    MEMORY_COMMAND,
+    REACH_COMMAND,
+    MCP_COMMAND,
+    RENAME_COMMAND,
+    NOTE_COMMAND,
+    STYLE_COMMAND,
+    FORGET_TRUST_COMMAND,
+    ISSUE_COMMAND,
+    PR_COMMAND,
+    SANDBOX_COMMAND,
+    MODEL_COMMAND,
+    EFFORT_COMMAND,
+    ADVISOR_COMMAND,
+];
+
+/// Whether a waiting line holds back a command whose rule names the commands that leave what it acts
+/// on alone: a command line never does, a prompt always does, and a command does unless it is named.
+fn held_unless_listed(goes: Bound, waiting: Option<&str>, leaves_alone: &[&str]) -> bool {
+    match goes {
+        // The line runs a program in the working directory and says what it printed.
+        Bound::Run => false,
+        Bound::CarriedOut => !waiting.is_some_and(|word| leaves_alone.contains(&word)),
+        Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn => true,
+    }
+}
+
 /// Whether a waiting line could change what a command that acts on `acts` acts on. `goes` is where
 /// the line is going, and `waiting` the command it is, where it is one.
 fn could_change(goes: Bound, waiting: Option<&str>, acts: Acts) -> bool {
     match acts {
         Acts::Other => waiting != Some(SANDBOX_COMMAND),
+        Acts::NotesAndName => held_unless_listed(goes, waiting, LEAVES_NOTES_AND_NAME_ALONE),
         Acts::Link => waiting.is_some_and(|word| REPLACES_THE_RECORD.contains(&word)),
-        Acts::Choice => match goes {
-            // The line runs a program in the working directory and says what it printed.
-            Bound::Run => false,
-            Bound::CarriedOut => {
-                !waiting.is_some_and(|word| LEAVES_THE_CHOICE_ALONE.contains(&word))
-            }
-            Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn => true,
-        },
+        Acts::Choice => held_unless_listed(goes, waiting, LEAVES_THE_CHOICE_ALONE),
     }
 }
 
@@ -991,54 +1034,57 @@ mod tests {
     use super::*;
 
     /// Every command that can wait is placed against what a waiting line could change in the commands
-    /// that act on a record's link and on the choice a request is built with (CMD-8). The two rules
-    /// name commands in lists, and a command added to the table that is in neither would be carried
+    /// that act on a record's link, on the choice a request is built with and on the notes and the
+    /// name a record holds (CMD-8). The three rules
+    /// name commands in lists, and a command added to the table that is in none would be carried
     /// out ahead of a line it could change, or wait behind one it could not. The rows are written
     /// out here rather than read from the lists, so a command is placed by deciding it twice. The
     /// regression it rejects is a command added to the table and left out of the rules.
     #[test]
     fn every_command_that_can_wait_is_placed_against_the_record_and_the_choice() {
-        // The command, whether it starts another record, switches to one or leaves this one, and
+        // The command, whether it starts another record, switches to one or leaves this one,
         // whether it sends a request, reads or changes the model, the level or the advisor, or
-        // leaves for another session.
-        const PLACED: &[(&str, bool, bool)] = &[
-            (ADD_DIR_COMMAND, false, false),
-            (CD_COMMAND, false, false),
-            (COMPACT_COMMAND, false, true),
-            (BTW_COMMAND, false, true),
-            (RECAP_COMMAND, false, true),
-            (CLEAR_COMMAND, true, false),
-            (HANDOFF_COMMAND, true, true),
-            (BRANCH_COMMAND, true, false),
-            (RESUME_COMMAND, true, true),
-            (BACKGROUND_COMMAND, true, true),
-            (REACH_COMMAND, false, false),
-            (CHECKOUTS_COMMAND, false, true),
-            (PLAN_COMMAND, false, true),
-            (MANIFEST_COMMAND, false, true),
-            (AGENT_COMMAND, false, true),
-            (MEMORY_COMMAND, false, false),
-            (INIT_COMMAND, false, true),
-            (REVIEW_COMMAND, false, true),
-            (COMMIT_MESSAGE_COMMAND, false, true),
-            (HELP_COMMAND, false, true),
-            (UNDO_COMMAND, false, false),
-            (REWIND_COMMAND, false, false),
-            (HUNKS_COMMAND, false, false),
-            (EXIT_COMMAND, true, true),
-            (MCP_COMMAND, false, false),
-            (LOOP_COMMAND, false, true),
-            (GOAL_COMMAND, false, true),
-            (MODEL_COMMAND, false, true),
-            (EFFORT_COMMAND, false, true),
-            (ADVISOR_COMMAND, false, true),
-            (RENAME_COMMAND, false, false),
-            (NOTE_COMMAND, false, false),
-            (STYLE_COMMAND, false, false),
-            (FORGET_TRUST_COMMAND, false, false),
-            (ISSUE_COMMAND, false, false),
-            (PR_COMMAND, false, false),
-            (SANDBOX_COMMAND, false, false),
+        // leaves for another session, and whether it could change the notes or the name the record
+        // holds: begin a turn, change the turn count, put a rewind point back, or move or replace
+        // the record.
+        const PLACED: &[(&str, bool, bool, bool)] = &[
+            (ADD_DIR_COMMAND, false, false, false),
+            (CD_COMMAND, false, false, true),
+            (COMPACT_COMMAND, false, true, true),
+            (BTW_COMMAND, false, true, true),
+            (RECAP_COMMAND, false, true, true),
+            (CLEAR_COMMAND, true, false, true),
+            (HANDOFF_COMMAND, true, true, true),
+            (BRANCH_COMMAND, true, false, true),
+            (RESUME_COMMAND, true, true, true),
+            (BACKGROUND_COMMAND, true, true, true),
+            (REACH_COMMAND, false, false, false),
+            (CHECKOUTS_COMMAND, false, true, true),
+            (PLAN_COMMAND, false, true, true),
+            (MANIFEST_COMMAND, false, true, true),
+            (AGENT_COMMAND, false, true, true),
+            (MEMORY_COMMAND, false, false, false),
+            (INIT_COMMAND, false, true, true),
+            (REVIEW_COMMAND, false, true, true),
+            (COMMIT_MESSAGE_COMMAND, false, true, true),
+            (HELP_COMMAND, false, true, true),
+            (UNDO_COMMAND, false, false, true),
+            (REWIND_COMMAND, false, false, true),
+            (HUNKS_COMMAND, false, false, true),
+            (EXIT_COMMAND, true, true, true),
+            (MCP_COMMAND, false, false, false),
+            (LOOP_COMMAND, false, true, true),
+            (GOAL_COMMAND, false, true, true),
+            (MODEL_COMMAND, false, true, false),
+            (EFFORT_COMMAND, false, true, false),
+            (ADVISOR_COMMAND, false, true, false),
+            (RENAME_COMMAND, false, false, false),
+            (NOTE_COMMAND, false, false, false),
+            (STYLE_COMMAND, false, false, false),
+            (FORGET_TRUST_COMMAND, false, false, false),
+            (ISSUE_COMMAND, false, false, false),
+            (PR_COMMAND, false, false, false),
+            (SANDBOX_COMMAND, false, false, false),
         ];
         for command in commands() {
             // A command that is carried out as it is typed waits only behind a line of its own.
@@ -1051,7 +1097,7 @@ mod tests {
                 command.name
             );
         }
-        for &(name, replaces_the_record, builds_a_request) in PLACED {
+        for &(name, replaces_the_record, builds_a_request, changes_the_record) in PLACED {
             assert!(
                 commands().iter().any(|command| command.name == name),
                 "{name} is placed and is not in the table"
@@ -1065,6 +1111,11 @@ mod tests {
                 could_change(Bound::CarriedOut, Some(name), Acts::Choice),
                 builds_a_request,
                 "{name} and the choice"
+            );
+            assert_eq!(
+                could_change(Bound::CarriedOut, Some(name), Acts::NotesAndName),
+                changes_the_record,
+                "{name} and the notes and the name"
             );
         }
     }

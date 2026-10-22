@@ -346,7 +346,8 @@ has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/st
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
 that sets one, which wait. `/theme`, `/config` and `/language` are too, whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model` and `/effort` are too unless a line waiting ahead of them could change what they act on, a
-waiting `/clear` for `/rename`, say, and then they wait behind that line and the mark under the box names it. A waiting `/sandbox off` holds none of
+waiting `/clear` for `/rename`, say, and then they wait behind that line and the mark under the box names it. `/rename` and `/note` wait behind a prompt and a command that
+could change the record's name or notes, and are carried out as you press Enter behind a command line. A waiting `/sandbox off` holds none of
 them back. The four that open a list draw it over the turn. What they answer goes into the
 transcript as it is said, so it scrolls with the rest of the history, and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
 every command waits. A paste or a pasted picture arriving during one of them is kept in the box like any other. While work runs, the list of commands offered when you type `/` marks each row: `now` for a

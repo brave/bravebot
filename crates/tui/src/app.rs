@@ -24513,24 +24513,18 @@ mod tests {
         );
     }
 
-    /// The name, the notes, the style and the answer kept about the directory have not been read
-    /// against the lines that could change them, so every line but a waiting `/sandbox` holds
-    /// them back: a prompt and a command line as well as a command. The regression it rejects is
-    /// the reach of `/issue`, `/pr`, `/model`, `/effort` and `/advisor` extended to these: a note
-    /// stamped with the turn it was typed in would be written ahead of the prompt that opens the
-    /// next.
+    /// The style and the answer kept about the directory have not been read against the lines that
+    /// could change them, so every line but a waiting `/sandbox` holds them back: a prompt and a
+    /// command line as well as a command. The regression it rejects is the reach of `/note` and
+    /// `/rename` extended to these: a style picked ahead of a command line would be looked up
+    /// before the line could write the file that names it.
     #[test]
-    fn a_name_a_note_a_style_or_a_forgotten_answer_waits_behind_a_prompt_and_a_command_line() {
+    fn a_style_or_a_forgotten_answer_waits_behind_a_prompt_and_a_command_line() {
         if !crate::test_profile::in_isolated_profile() {
             return;
         }
         for waiting in ["second", "!make", "/compact"] {
-            for then in [
-                "/rename deploy watch",
-                "/note a thought",
-                "/style off",
-                FORGET_TRUST_COMMAND,
-            ] {
+            for then in ["/style off", FORGET_TRUST_COMMAND] {
                 let mut session = a_turn_running_on("first");
                 wait_as(&mut session, waiting);
                 let before = said_under_the_turn(&session).len();
@@ -24548,6 +24542,137 @@ mod tests {
                     waiting_prompts(&session),
                     vec![waiting.trim_start_matches('!'), then]
                 );
+            }
+        }
+    }
+
+    /// `line` typed during a turn with `waiting` queued ahead of it, on a fresh record. Returns the
+    /// session, the record, and what was said under the turn since `waiting` was queued.
+    fn typed_behind(
+        waiting: &str,
+        line: &str,
+    ) -> (Session, bravebot_session::sessions::Handle, Vec<String>) {
+        let mut session = a_turn_running_on("first");
+        wait_as(&mut session, waiting);
+        let before = said_under_the_turn(&session).len();
+        let mut stored = a_record_to_write_a_link_to();
+        typed_on_a_record(&mut session, &mut stored, line);
+        let said = said_under_the_turn(&session)[before..]
+            .iter()
+            .map(|said| said.to_string())
+            .collect();
+        (session, stored, said)
+    }
+
+    /// `/note` and `/rename` act on the notes and the name a record holds. A line waiting ahead of
+    /// them changes those only by beginning a turn, changing the turn count, putting a rewind point
+    /// back, or moving or replacing the record, so behind a command line, or a command that leaves
+    /// the record alone, each is carried out when it is typed and the line stays where it was. The
+    /// regression it rejects is every line holding them back, which leaves a note typed behind a
+    /// `!make` unwritten, and a name unset, until the turn ends.
+    #[test]
+    fn a_note_or_a_name_typed_behind_a_line_that_leaves_the_record_alone_is_carried_out_when_typed()
+    {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for waiting in [
+            "!make",
+            "/add-dir ../other",
+            "/reach",
+            "/memory",
+            "/mcp",
+            "/style off",
+            FORGET_TRUST_COMMAND,
+            "/issue https://github.com/brave/bravebot/issues/2688",
+            "/pr https://github.com/brave/bravebot/pull/2884",
+            "/sandbox off",
+            "/model",
+            "/effort high",
+            "/advisor off",
+        ] {
+            let (session, stored, said) = typed_behind(waiting, "/note remember the deploy");
+            assert_eq!(stored.notes().len(), 1, "/note waited behind {waiting}");
+            assert_eq!(stored.notes()[0].text, "remember the deploy");
+            assert_eq!(stored.notes()[0].turn, 1, "behind {waiting}");
+            assert_eq!(said, [t!(session_note_added, turn = 1)], "behind {waiting}");
+            assert_eq!(
+                waiting_prompts(&session),
+                vec![waiting.trim_start_matches('!')]
+            );
+
+            let (session, stored, said) = typed_behind(waiting, "/rename deploy watch");
+            assert_eq!(
+                stored.title(),
+                "deploy watch",
+                "/rename waited behind {waiting}"
+            );
+            assert_eq!(
+                said,
+                [t!(session_renamed, title = "deploy watch")],
+                "behind {waiting}"
+            );
+            assert_eq!(
+                waiting_prompts(&session),
+                vec![waiting.trim_start_matches('!')]
+            );
+        }
+        // Each leaves the other alone: the first writes the notes, the second the name.
+        let (_, stored, _) = typed_behind("/rename deploy watch", "/note a thought");
+        assert_eq!(stored.notes().len(), 1, "/note waited behind /rename");
+        let (_, stored, _) = typed_behind("/note a thought", "/rename deploy watch");
+        assert_eq!(
+            stored.title(),
+            "deploy watch",
+            "/rename waited behind /note"
+        );
+    }
+
+    /// A prompt begins a turn and so changes the turn count a note is stamped with, and a command
+    /// that begins one, changes the count, puts a point back, or moves or replaces the record changes
+    /// the notes and the name the record holds, so `/note` and `/rename` wait behind each and name
+    /// it. The regression it rejects is the record's lines left out of the rule: a note typed behind
+    /// a prompt would be stamped with the turn the prompt is about to replace, and a name typed
+    /// behind `/undo` would be put back by it.
+    #[test]
+    fn a_note_or_a_name_typed_behind_a_line_that_could_change_the_record_waits_behind_it() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for waiting in [
+            "second",
+            CLEAR_COMMAND,
+            "/compact",
+            "/btw what is this",
+            "/recap",
+            "/cd crates/tui",
+            "/handoff the next goal",
+            "/branch",
+            "/resume",
+            BACKGROUND_COMMAND,
+            EXIT_COMMAND,
+            "/undo",
+            "/rewind",
+            "/hunks",
+            "/plan the task",
+            "/init",
+            "/review",
+            "/loop 5m check the deploy",
+        ] {
+            // A prompt is named by what it is and a command by the line typed.
+            let named = match waiting {
+                "second" => t!(queued_a_prompt).to_string(),
+                command => command.to_string(),
+            };
+            for line in ["/note a thought", "/rename deploy watch"] {
+                let (session, stored, said) = typed_behind(waiting, line);
+                assert!(
+                    said.len() == 1 && said[0].ends_with(&format!("behind {named}.")),
+                    "{line} was carried out ahead of a waiting {waiting}: {said:?}"
+                );
+                assert!(stored.notes().is_empty(), "{line} behind {waiting}");
+                assert_eq!(stored.title(), "", "{line} behind {waiting}");
+                assert_eq!(waiting_prompts(&session), vec![waiting, line]);
             }
         }
     }
