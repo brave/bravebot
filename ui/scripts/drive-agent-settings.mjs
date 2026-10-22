@@ -79,14 +79,13 @@ try {
   await dialog.locator('[data-test="hook-when-0"]').click()
   await page.getByRole('option', { name: 'Question waiting', exact: true }).click()
   await placeholderBecomes('44')
-  // The two session moments are offered, and the form says the desktop app does not fire them yet.
+  // The two session moments are offered, and the form no longer says the desktop app does not fire them.
   await dialog.locator('[data-test="hook-when-0"]').click()
   await page.getByRole('option', { name: 'Session ends', exact: true }).click()
-  await dialog.getByText('The desktop app does not fire this moment yet.').waitFor()
   await placeholderBecomes('7')
+  assert.equal(await dialog.getByText('does not fire this moment yet').count(), 0)
   await dialog.locator('[data-test="hook-when-0"]').click()
   await page.getByRole('option', { name: 'Turn ends', exact: true }).click()
-  await dialog.getByText('The desktop app does not fire this moment yet.').waitFor({ state: 'detached' })
   await placeholderBecomes('43')
   // An entry with no program is one the agent reads no hook out of, and a file this panel wrote and
   // the agent cannot read whole is a file this panel then refuses to edit.

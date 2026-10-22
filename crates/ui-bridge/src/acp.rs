@@ -146,6 +146,12 @@ impl Acp {
         Self { bridge, shared }
     }
 
+    /// The editor has gone: close every session and wait up to `limit` for the work still running
+    /// for them, a `session-ended` hook included. Returns whether it had all ended.
+    pub fn finish(&mut self, limit: std::time::Duration) -> bool {
+        self.bridge.shut_down(limit)
+    }
+
     fn lock(&self) -> MutexGuard<'_, Shared> {
         self.shared
             .lock()

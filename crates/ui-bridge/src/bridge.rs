@@ -19,6 +19,7 @@ use crate::running::{Mcp, Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
 use crate::{store, wire};
 use bravebot_agent::confirm::Decision;
+use bravebot_agent::report::Reporter;
 use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
 use bravebot_agent::workspace::WorkspaceError;
@@ -30,11 +31,12 @@ use bravebot_net::Egress;
 use bravebot_sandbox::SandboxMode;
 use bravebot_session::sessions::{Handle, Record, Standing};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 /// A session this process has open.
 struct Open {
@@ -130,6 +132,13 @@ pub struct Bridge {
     emitter: Emitter,
     /// The worker threads each open session has started, so a close can say when they have ended.
     workers: HashMap<String, Arc<crate::workers::Workers>>,
+    /// The sessions that have accepted a turn, and so have begun (HOOK-10). Kept here, on the thread
+    /// that accepts a turn and closes a session, so a close knows whether there is an end to fire
+    /// without waiting for a turn that holds the session's state.
+    begun: HashSet<String>,
+    /// The workers of the sessions closed and not yet seen to have ended, so that a process ending
+    /// soon after a close waits for the hook that ends the session as it waits for an open one's.
+    closing: Vec<Arc<crate::workers::Workers>>,
     /// Who can answer each session's questions. A session with no entry is answered by anyone,
     /// as every client of the stdio transports does.
     answerers: HashMap<String, Answerers>,
@@ -146,6 +155,8 @@ impl Bridge {
             settings: None,
             emitter: Emitter::new(emit),
             workers: HashMap::new(),
+            begun: HashSet::new(),
+            closing: Vec::new(),
             answerers: HashMap::new(),
             refuse_until_set: false,
         }
@@ -994,6 +1005,7 @@ impl Bridge {
 
         self.emitter.detach_view(&handle);
         self.answerers.remove(&handle);
+        let begun = self.begun.remove(&handle);
 
         // Stop the work, then refuse whatever it was waiting on. Both, and in that order:
         // cancelling alone would leave a write blocked on an answer that is never coming,
@@ -1002,7 +1014,27 @@ impl Bridge {
             running.cancel.cancel();
             running.refuse_pending();
         }
-        Ok(self.workers.remove(&handle).unwrap_or_default())
+        let workers = self.workers.remove(&handle).unwrap_or_default();
+        // The end of a session that began is one of the workers this returns, so a host that waits for
+        // them waits for it, and it follows the turn that was running (HOOK-10).
+        if begun {
+            let state = Arc::clone(&open.state);
+            workers.spawn_after_the_rest(move || end_the_session(&state));
+        }
+        self.closing.retain(|closing| !closing.is_idle());
+        self.closing.push(Arc::clone(&workers));
+        Ok(workers)
+    }
+
+    /// Close every open session and wait up to `limit` for the threads working for them, so that a
+    /// turn still writing its record and a `session-ended` hook are not cut off by the process
+    /// ending. Returns whether they had all ended.
+    ///
+    /// For a client that has gone, so nothing is said to it while this closes what it held.
+    pub fn shut_down(&mut self, limit: Duration) -> bool {
+        self.emitter.go_quiet();
+        self.stop_all();
+        crate::workers::Workers::all_end_within(&self.closing, limit)
     }
 
     /// Choose what the session's next turn asks before it acts.
@@ -1226,6 +1258,7 @@ impl Bridge {
             open.model = model;
             open.definition = addressing.clone();
         }
+        self.begun.insert(handle.clone());
         self.workers_of(&handle).spawn(move || {
             work(Work {
                 model: worker_model,
@@ -2372,6 +2405,26 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
+    let mut reporter = BridgeReporter::new(emitter.clone(), &session);
+
+    // The session begins with its first turn (HOOK-10), here on the worker so the request that
+    // sent the turn is answered at once, and before anything else the turn does, so a hook that
+    // starts something the turn uses has started it. Said as a running hook while it holds the
+    // turn (HOOK-9), and what goes wrong is carried by the notices of this turn's end.
+    let session_began = state
+        .moments
+        .get_or_insert_with(|| {
+            bravebot_agent::hooks::SessionMoments::read(
+                bravebot_agent::home::directory().as_deref(),
+                &project,
+            )
+        })
+        .started_watched(&mut |edge| match edge {
+            bravebot_agent::hooks::Watch::Starting { moment, program } => {
+                reporter.hook_started(moment, program.to_string())
+            }
+            bravebot_agent::hooks::Watch::Over => reporter.hook_finished(),
+        });
     let mut confirmer = BridgeConfirmer::new(
         emitter.clone(),
         &session,
@@ -2456,7 +2509,6 @@ fn work(work: Work) {
     } else {
         bravebot_agent::watch::Arming::Allowed { free }
     });
-    let mut reporter = BridgeReporter::new(emitter.clone(), &session);
     let mut sink = BridgeSink::new(emitter.clone(), &session, turn);
     let egress = Egress::new();
 
@@ -2571,7 +2623,12 @@ fn work(work: Work) {
             let rules = rules_json(&state.answers.trust);
             // What the turn said, then each question it did not put because the person had
             // already answered it.
-            let notices = [outcome.notices.as_slice(), confirmer.reused()].concat();
+            let notices = [
+                session_began.as_slice(),
+                outcome.notices.as_slice(),
+                confirmer.reused(),
+            ]
+            .concat();
 
             Event::new(
                 "turn.done",
@@ -2625,7 +2682,12 @@ fn work(work: Work) {
             );
             let _ = save(&project, &mut state, turn, sink.trail());
 
-            let notices = [reporter.notices(), confirmer.reused()].concat();
+            let notices = [
+                session_began.as_slice(),
+                reporter.notices(),
+                confirmer.reused(),
+            ]
+            .concat();
             let chosen = task.model.as_deref().unwrap_or(&config.default_model);
             let mut data = failure_fields(&error, &config, chosen);
             merge(
@@ -2653,6 +2715,22 @@ fn work(work: Work) {
     }
     drop(state);
     emitter.finish(event, &finished);
+}
+
+/// Fire `session-ended` for a session that has been closed, once the last of its work has ended
+/// (HOOK-10).
+///
+/// What goes wrong is said to nobody: the session is closed, and the window it was drawn in has no
+/// turn to carry a sentence.
+fn end_the_session(state: &Mutex<State>) {
+    // A turn that panicked poisoned the lock, and what an end needs is not what it left half done:
+    // a session that began still ends.
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(moments) = state.moments.as_mut() {
+        let _ = moments.ended();
+    }
 }
 
 /// Start the MCP servers `requested` names, putting the questions about them to the window.
@@ -3824,6 +3902,10 @@ mod completion_tests;
 #[cfg(test)]
 #[path = "closing_tests.rs"]
 mod closing_tests;
+
+#[cfg(all(test, unix))]
+#[path = "../tests/ending/worker.rs"]
+mod ending_tests;
 
 #[cfg(test)]
 #[path = "targets_tests.rs"]
