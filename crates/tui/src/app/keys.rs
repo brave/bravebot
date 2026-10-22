@@ -999,7 +999,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // reaches for when nothing else will stop it. Reversed, the key that ends a loop would be
         // the key that ends the session, and there would be no way to keep one without the other.
         KeyCode::Char('c') if ctrl && session.looping().is_some() => {
-            session.stop_loop();
+            session.stop_loops();
             Action::Redraw
         }
         // For the reason the loop is here: a goal is a thing still happening, and a person

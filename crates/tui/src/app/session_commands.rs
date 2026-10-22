@@ -499,7 +499,7 @@ pub(super) fn branch_session(
     match stored.branch_off(name) {
         Ok(original) => {
             session.rewind.close();
-            session.stop_loop();
+            session.stop_loops();
             session.clear_goal();
             session.stop_watches();
             let title = stored.title().to_string();

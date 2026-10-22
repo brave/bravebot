@@ -2038,6 +2038,7 @@ status-server-policy-read-write = lecture, écriture
 status-server-policy-left-out = écartés
 status-server-policy-left-out-reason = absents du disque, et cette plateforme n'accorde aucun chemin absent du disque
 status-loop = Boucle
+status-loop-numbered = Boucle { $number }
 status-loop-every = toutes les { $every }
 status-loop-self-paced = cadencée par chaque tour
 status-loop-next = prochaine dans { $next }
@@ -2691,13 +2692,13 @@ loop-needs-a-prompt =
     /loop demande quelque chose à répéter, comme /loop 5m vérifie le déploiement, ou
     /loop surveille la compilation pour laisser chaque tour dire quand recommencer
 loop-started-every =
-    répétition toutes les { $every } ; /loop stop l'arrête, comme ctrl-c ou partir
+    boucle { $number } : répétition toutes les { $every } ; /loop stop { $number } l'arrête, comme ctrl-c ou partir
 loop-started-self-paced =
-    répétition au rythme que fixe chaque tour ; /loop stop l'arrête, comme ctrl-c ou partir
+    boucle { $number } : répétition au rythme que fixe chaque tour ; /loop stop { $number } l'arrête, comme ctrl-c ou partir
 # La réponse à la commande nue. La consigne en fait partie parce que la note ci-dessus a défilé,
 # et qui demande ce qui se répète a le plus souvent perdu de vue ce qu'il avait lancé.
-loop-active = répétition : { $prompt } · { $pace } · { $when }
-loop-ends-with = /loop stop l'arrête, comme ctrl-c ou partir
+loop-active = boucle { $number }, répétition : { $prompt } · { $pace } · { $when }
+loop-ends-with = /loop stop <numéro> en arrête une, /loop stop seul arrête la seule, et ctrl-c ou partir les arrêtent toutes
 loop-none =
     rien ne se répète. /loop 5m vérifie le déploiement envoie une ligne toutes les cinq minutes,
     /loop surveille la compilation laisse chaque tour dire quand recommencer, et /loop stop arrête
@@ -2707,25 +2708,32 @@ loop-none =
 # les mesures, et une partie qui ne tient pas dans le terminal est une partie que la ligne laisse.
 loop-hint = en boucle
 loop-hint-next = en boucle, prochaine dans { $next }
+loop-hint-several = { $count } boucles
+loop-hint-several-next = { $count } boucles, prochaine dans { $next }
 loop-interval-raised = l'intervalle a été relevé à { $every }, le plus rapide qu'une boucle aille
 loop-interval-capped = l'intervalle a été plafonné à { $every }, le plus long qu'une boucle vive
-loop-replaced = la boucle qui tournait a été remplacée
-loop-tick = boucle { $count }
+loop-full = { $count } boucles se répètent déjà, ce qu'une session peut en tenir ; /loop stop <numéro> en arrête une
+loop-stop-which = { $count } boucles se répètent, /loop stop demande donc le numéro de celle à arrêter ; /loop les liste
+loop-no-such = aucune boucle n'a le numéro { $number } ; /loop liste ce qui se répète
+loop-stopped-numbered = la boucle { $number } est arrêtée
+loop-stopped-all = les { $count } boucles sont arrêtées
+loop-cleared-all = les { $count } boucles sont arrêtées, car elles appartenaient à la session effacée
+loop-tick = boucle { $number }, passage { $count }
 loop-tick-quiet = { $quiet ->
-    [one] boucle { $count }, après { $quiet } passage sans rien trouver
-   *[other] boucle { $count }, après { $quiet } passages sans rien trouver
+    [one] boucle { $number }, passage { $count }, après { $quiet } passage sans rien trouver
+   *[other] boucle { $number }, passage { $count }, après { $quiet } passages sans rien trouver
     }
 loop-stopped = la boucle est arrêtée
 loop-cleared = la boucle est arrêtée, car elle appartenait à la session effacée
-loop-aged-out = la boucle a tourné une semaine et s'est arrêtée d'elle-même
-loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle est donc arrêtée
-loop-finished = ce tour a dit que la boucle est terminée, la boucle est donc arrêtée
+loop-aged-out = la boucle { $number } a tourné une semaine et s'est arrêtée d'elle-même
+loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle { $number } est donc arrêtée
+loop-finished = ce tour a dit que la boucle est terminée, la boucle { $number } est donc arrêtée
 loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci
 loop-replaces-goal =
     l'objectif qui était fixé a été retiré : une session ne travaille qu'à une chose à la fois
 loop-armed-by-the-turn =
-    nouveau regard dans { $after }, en répétant ce que vous avez demandé ; /loop stop l'arrête,
-    comme ctrl-c ou partir
+    boucle { $number } : nouveau regard dans { $after }, en répétant ce que vous avez demandé ;
+    /loop stop { $number } l'arrête, comme ctrl-c ou partir
 loop-not-armed-under-a-goal =
     un regard plus tard a été demandé sans être lancé : cette session travaille vers un objectif,
     et elle fait une chose à la fois

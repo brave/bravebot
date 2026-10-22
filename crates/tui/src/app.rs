@@ -182,7 +182,7 @@ fn status_report(
         trust: rules.map_or(&empty_trust, |(trust, _)| trust),
         programs: rules.map_or(&empty_programs, |(_, programs)| programs),
         turn_holds_rules: rules.is_none(),
-        looping: session.looping(),
+        looping: session.loops().as_slice(),
         watches: session.watches(),
         jobs: session.jobs().collect(),
         goal: session.goal(),
@@ -644,10 +644,8 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
                 session.report_loop();
                 Action::Redraw
             }
-            crate::loops::Asked::Stop => {
-                if !session.stop_loop() {
-                    session.note(t!(loop_none));
-                }
+            crate::loops::Asked::Stop(which) => {
+                session.stop_loop(which);
                 Action::Redraw
             }
             crate::loops::Asked::Start(request) => {
@@ -5694,7 +5692,10 @@ fn run_turn_animated(
     // mid-round. A number here would only interrupt work that was going fine.
     // Which tick of a loop this is, where it is one at all. A prompt the person typed in the
     // middle of a loop is not a tick of it and carries nothing.
-    let tick = session.looping().and_then(|running| running.tick());
+    let tick = session
+        .loops()
+        .in_flight()
+        .and_then(|running| running.tick());
     // And what the session is working towards, where a person set a condition. Every turn under a
     // goal carries it, the first one included: the round that sets the direction is the one that
     // most needs to know what it is aiming at.
@@ -6792,10 +6793,10 @@ struct Carried {
 /// Whether the prompt went back to the box, which is when the turn is also taken out of the
 /// conversation (INPUT-4).
 fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u32>) -> bool {
-    // Stopping a turn stops the loop it was part of, and stops one the person was not part way
-    // through: the key means "stop what is happening", and a schedule that survived it would send
-    // the next prompt as though nothing had been said (LOOP-11).
-    session.stop_loop();
+    // Stopping a turn stops every loop, whether or not it was a tick of one: the key means "stop
+    // what is happening", and a schedule that survived it would send the next prompt as though
+    // nothing had been said (LOOP-11).
+    session.stop_loops();
     // And the watch whose fire this turn was, since stopping a fire's turn is the most exact way
     // anybody has to say which watch they are finished with: they are reading its prompt when they
     // press the key. A turn that was not a fire ends no watch, because that press is a person
@@ -17632,6 +17633,38 @@ mod tests {
         );
     }
 
+    /// LOOP-15: `/loop stop 2` typed in the box ends loop 2 and leaves loop 1, and a bare `stop`
+    /// with both live ends neither.
+    #[test]
+    fn the_loop_command_ends_the_loop_it_names() {
+        let mut session = Session::new("none");
+        for line in ["5m check the deploy", "1h check the pull request"] {
+            session.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            session.complete("done", Vec::new(), 0);
+            session.loop_turn_ended(None);
+        }
+        let type_line = |session: &mut Session, line: &str| {
+            for c in line.chars() {
+                handle_key(session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(handle_key(session, key(KeyCode::Enter)), Action::Redraw);
+        };
+
+        type_line(&mut session, "/loop stop");
+        assert_eq!(session.loops().len(), 2, "a bare stop picked a loop");
+
+        type_line(&mut session, "/loop stop 2");
+        let left: Vec<usize> = session.loops().iter().map(|r| r.number()).collect();
+        assert_eq!(left, [1]);
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(loop_stopped_numbered, number = 2)),
+            "the ending was not announced"
+        );
+    }
+
     /// The same ending asked for during a turn, which is where a loop worth ending usually is. The
     /// line reads and ends the loop alone, and the tick in flight holds nothing of the loop, so it
     /// ends it on the press rather than when the queue is reached (CMD-8). The tick goes on, and the
@@ -19735,6 +19768,22 @@ mod tests {
         // The rung that leaves offers first, so the press that takes it is a second one.
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
+    }
+
+    /// LOOP-11: Ctrl-C ends every loop, not the lowest-numbered one, because a key that left one
+    /// running would send the next prompt as though nothing had been said.
+    #[test]
+    fn interrupting_ends_every_loop_when_several_are_live() {
+        let mut session = Session::new("none");
+        for line in ["5m check the deploy", "1h check the pull request"] {
+            session.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            session.complete("done", Vec::new(), 0);
+            session.loop_turn_ended(None);
+        }
+        assert_eq!(session.loops().len(), 2);
+
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
+        assert!(session.loops().is_empty(), "a loop survived the interrupt");
     }
 
     /// A half-written line is nearer than the loop, so stopping the loop does not cost somebody
@@ -29745,7 +29794,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create");
         let (workspace, mut session, mut stored, conversation, mut answers) =
             a_session_to_branch(&root);
-        session.stop_loop();
+        session.stop_loops();
         session.start_goal("cargo test exits 0".to_string());
         assert!(session.goal().is_some(), "the goal was not set");
 
@@ -29777,7 +29826,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create");
         let (workspace, mut session, mut stored, conversation, mut answers) =
             a_session_to_branch(&root);
-        session.stop_loop();
+        session.stop_loops();
         session.arm_watch(
             "notes.md",
             "/work",
@@ -31881,7 +31930,7 @@ mod tests {
             Vec::new(),
         );
         let offered = will_look_again(&ticking, Wrote::ThePerson);
-        ticking.stop_loop();
+        ticking.stop_loops();
 
         assert_eq!(
             watch_to_start(Some(turn::Wakeup::asked(900, false)), offered),

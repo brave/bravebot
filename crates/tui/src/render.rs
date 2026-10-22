@@ -6032,20 +6032,35 @@ mod tests {
     #[test]
     fn the_loop_part_names_a_moment_only_while_one_is_still_ahead() {
         let word = t!(loop_hint).to_string();
-        assert_eq!(loop_part(None), word, "a tick in flight names no moment");
+        assert_eq!(loop_part(1, None), word, "a tick in flight names no moment");
         assert_eq!(
-            loop_part(Some(std::time::Duration::ZERO)),
+            loop_part(1, Some(std::time::Duration::ZERO)),
             word,
             "a tick already due names no moment"
         );
         assert_eq!(
-            loop_part(Some(std::time::Duration::from_millis(999))),
+            loop_part(1, Some(std::time::Duration::from_millis(999))),
             word,
             "anything under a second is spelled 0s, which is that same nothing"
         );
         assert_eq!(
-            loop_part(Some(std::time::Duration::from_secs(90))),
+            loop_part(1, Some(std::time::Duration::from_secs(90))),
             t!(loop_hint_next, next = "1m 30s")
+        );
+    }
+
+    /// LOOP-13: with several live the row counts them and counts down to the soonest.
+    #[test]
+    fn the_loop_part_counts_the_loops_where_several_are_live() {
+        assert_eq!(loop_part(3, None), t!(loop_hint_several, count = 3));
+        assert_eq!(
+            loop_part(3, Some(std::time::Duration::from_secs(90))),
+            t!(loop_hint_several_next, count = 3, next = "1m 30s")
+        );
+        assert_eq!(
+            loop_part(2, Some(std::time::Duration::ZERO)),
+            t!(loop_hint_several, count = 2),
+            "a moment already gone is not spelled"
         );
     }
 

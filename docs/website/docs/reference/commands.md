@@ -40,7 +40,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
 | `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it from the next turn |
-| `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
+| `/loop` | `[[interval] <prompt> \| stop [n]]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
@@ -443,18 +443,26 @@ no such command yet.
 
 ## `/loop [interval] <prompt>`
 
-Sends one prompt again and again until you stop it, says what is repeating, or ends it.
+Sends a prompt again and again until you stop it, says what is repeating, or ends one. A session
+holds up to five loops at once, numbered in the order they began.
 
 ```
 /loop 5m check the deploy          # now, and every five minutes
 /loop check the deploy every 20m   # the same, written the other way round
 /loop watch the build              # now, and each turn says when the next is due
-/loop                              # what is repeating, and how to end it
-/loop stop                         # end it
+/loop                              # what is repeating, each loop under its number
+/loop stop                         # end the loop, when only one is running
+/loop stop 2                       # end loop 2 and leave the others
 ```
 
-`stop` is the ending whenever it is the whole of the line that would be sent, whatever its case and
-with or without a pace, so `/loop STOP` and `/loop 5m stop` end the loop too. A line that only begins
+A second `/loop` starts another loop and leaves the first running. A sixth is refused. Ticks go one
+at a time, whichever is due first, and each is announced with its loop's number. `/loop stop` with
+several running ends none of them and asks for a number. Ctrl-C, stopping a turn, `/clear` and
+setting a goal end every loop.
+
+`stop`, alone or with a number, is the ending whenever it is the whole of the line that would be sent,
+whatever its case and with or without a pace, so `/loop STOP`, `/loop 5m stop` and `/loop stop 2`
+end a loop too. A line that only begins
 with the word is a line: `/loop stop the deploy` is a loop over `stop the deploy`, and
 `/loop stop the deploy every 20m` is that line every twenty minutes. The bare command with no loop
 running says so, and so does `/loop stop`.
@@ -519,15 +527,15 @@ Six things end a loop, and each says so:
 
 | What | When |
 |---|---|
-| you ask | `/loop stop`, which ends the loop and leaves the turn in flight running |
-| you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving |
-| a turn is stopped | any turn cancelled while a loop runs, tick or not |
+| you ask | `/loop stop`, or `/loop stop <number>` where several are live, which ends the loop and leaves the turn in flight running |
+| you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving; it ends every loop |
+| a turn is stopped | any turn cancelled while a loop runs, tick or not; it ends every loop |
 | the turn says it is finished | a self-paced tick that calls `schedule_next` with `stop`, which ends the loop with no further tick |
-| the session moves on | `/clear`, and leaving |
+| the session moves on | `/clear`, and leaving, which end every loop; so does setting a goal |
 | age | seven days after it started |
 
 **A loop, a [goal](#goal-condition) and a [watch](#watch-stop-n) are never live together**, because a
-session does one of the three at a time. Whichever of a loop and a goal was asked for second stands,
+session does one of the three at a time. Several loops may be live together, since the rule is about kinds. Whichever of a loop and a goal was asked for second stands,
 and the one it replaced is reported as stopped. Asking for either ends every live watch.
 
 **A loop is never written down.** It is not in the session record, so `--resume` restores none and it

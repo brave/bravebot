@@ -184,12 +184,12 @@ pub struct Facts<'a> {
     /// Whether the turn in flight holds the two above, which it answers into as it runs. Then
     /// neither is read and the report says the rules are the turn's until it ends.
     pub turn_holds_rules: bool,
-    /// The loop repeating a prompt, where the person started one.
+    /// The loops repeating a prompt, where the person started any, oldest first.
     ///
     /// Absent from the report entirely when there is none, rather than reported as "no loop": a
     /// line saying a thing is not happening is a line on every report for the sake of the few
     /// where it is.
-    pub looping: Option<&'a crate::loops::Running>,
+    pub looping: &'a [crate::loops::Running],
     /// The condition the session is working towards, where the person set one.
     ///
     /// Left out when there is none, for the reason the loop is.
@@ -849,7 +849,8 @@ fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
 
     // What is going to happen without anybody typing anything, which is the one thing about a
     // session that a person cannot read off the transcript.
-    if let Some(running) = facts.looping {
+    let several = facts.looping.len() > 1;
+    for running in facts.looping {
         let pace = running.pace();
         let when = running.when(std::time::Instant::now());
         // The repeated line is the value, the way the goal line below carries its condition. A
@@ -859,8 +860,14 @@ fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
         // Its first line only. A prompt is whatever somebody typed, a turn may arrange a loop over
         // one they pasted, and this panel spends one row per fact: the rest of a multi-line prompt
         // would land where the next fact goes.
+        //
+        // Told apart by number where there are several, the number `/loop stop` takes.
+        let label = match several {
+            true => t!(status_loop_numbered, number = running.number()).to_string(),
+            false => t!(status_loop).to_string(),
+        };
         lines.push(
-            Line::new(t!(status_loop), crate::render::one_line(running.prompt()))
+            Line::new(&label, crate::render::one_line(running.prompt()))
                 .with_note(format!("{pace} · {when}")),
         );
     }
@@ -1449,7 +1456,7 @@ mod tests {
             turn_holds_rules: false,
             // Nothing repeating, which is every session that has not been asked to. Tests about
             // the loop line set this themselves.
-            looping: None,
+            looping: &[],
             // Nothing to work towards, on the same footing.
             goal: None,
             // Nothing watched, on the same footing. The test about the watch lines builds its
@@ -2012,7 +2019,7 @@ mod tests {
         running.ended(None, std::time::Instant::now());
 
         let mut facts = facts(&config, &trust);
-        facts.looping = Some(&running);
+        facts.looping = std::slice::from_ref(&running);
         let report = report(&facts);
 
         let line = report
@@ -2038,6 +2045,44 @@ mod tests {
         );
     }
 
+    /// LOOP-13: with several loops each has its own row under its number, the one `/loop stop`
+    /// takes, and a single loop's row keeps the plain label.
+    #[test]
+    fn the_report_has_a_row_per_loop_under_its_number() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut loops = crate::loops::Loops::default();
+        loops.start(crate::loops::Running::begin(crate::loops::request(
+            "5m check the deploy",
+        )));
+        loops.start(crate::loops::Running::begin(crate::loops::request(
+            "1h check the pull request",
+        )));
+
+        let mut facts = facts(&config, &trust);
+        facts.looping = loops.as_slice();
+        let report = report(&facts);
+        let rows: Vec<(String, &str)> = report
+            .lines
+            .iter()
+            .filter(|line| line.label.trim().starts_with(t!(status_loop).trim()))
+            .map(|line| (line.label.trim().to_string(), line.value.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    t!(status_loop_numbered, number = 1).to_string(),
+                    "check the deploy"
+                ),
+                (
+                    t!(status_loop_numbered, number = 2).to_string(),
+                    "check the pull request"
+                ),
+            ]
+        );
+    }
+
     /// A loop a turn arranged is always self-paced, so its pacing says nothing about the work.
     /// The line is the only thing on the row that can, and it is the one reached by pasting.
     #[test]
@@ -2051,7 +2096,7 @@ mod tests {
         );
 
         let mut facts = facts(&config, &trust);
-        facts.looping = Some(&running);
+        facts.looping = std::slice::from_ref(&running);
         let report = report(&facts);
 
         let line = report
