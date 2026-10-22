@@ -288,7 +288,7 @@ A delegate in a checkout is not offered the `lsp` tool, because the session's la
 rooted at your working directory. The answer to the spawn says so.
 
 A checkout holds tracked files only, so a delegate in one finds no installed dependencies and none
-of the files your repository ignores. A [`checkout-made` hook](hooks.md#the-eight-moments) in your own
+of the files your repository ignores. A [`checkout-made` hook](hooks.md#the-nine-moments) in your own
 `hooks.json` runs a command of yours in each new checkout before its delegate starts, and is told
 the checkout and your working directory so it can install and copy. A checkout it ran in is kept.
 

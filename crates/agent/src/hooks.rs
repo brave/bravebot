@@ -83,7 +83,8 @@ pub const SESSION_END_LIMIT: Duration = Duration::from_secs(5);
 pub fn default_limit(moment: Moment) -> Duration {
     match moment {
         Moment::SessionEnded => SESSION_END_LIMIT,
-        Moment::TurnStarted
+        Moment::FileChanged
+        | Moment::TurnStarted
         | Moment::ToolFinished
         | Moment::TurnFinished
         | Moment::PromptShown
@@ -267,6 +268,174 @@ impl SessionMoments {
             &self.directory,
             self.end_limit,
         ))
+    }
+}
+
+/// How many `file-changed` entries a session keeps, so a file of them cannot become a directory
+/// of paths looked at every few seconds. Entries past it, in the order the file lists them, are
+/// not kept.
+pub const MAX_WATCHED: usize = 8;
+
+/// How often a watched file is looked at, which is how late a change is noticed.
+pub const BETWEEN_LOOKS: Duration = Duration::from_secs(5);
+
+/// The least time between the end of one run of an entry and the start of its next, so a command
+/// that writes the file it is watching runs once in this time and not continuously.
+pub const BETWEEN_RUNS: Duration = Duration::from_secs(5);
+
+/// What one look at a watched file found: its size and modification time, or nothing where it is
+/// not there. The whole of what is kept of it, so no byte of the file and no name the filesystem
+/// produced reaches anything.
+type Token = Option<(u64, std::time::SystemTime)>;
+
+fn looked_at(path: &Path) -> Token {
+    let found = std::fs::metadata(path).ok()?;
+    Some((found.len(), found.modified().ok()?))
+}
+
+struct Watched {
+    hook: Hook,
+    path: PathBuf,
+    seen: Token,
+    /// When the next look is due.
+    next_look: Instant,
+    /// A change seen and not yet run, because the entry ran too lately to run again.
+    pending: bool,
+    /// The earliest the entry may run again.
+    not_before: Instant,
+}
+
+/// The `file-changed` entries of a session, each looking at the one file it names (HOOK-2).
+///
+/// Looks and nothing else: a change is a size or modification time that differs between two looks,
+/// and what a hook is told is the moment alone (HOOK-5), so no filesystem-produced string reaches
+/// it and none reaches a turn. It begins no turn, as a watch a turn armed does
+/// ([`crate::watch`]), and nothing it holds is written to disk, so it ends with the process
+/// (FSWATCH-11).
+pub struct FileChanged {
+    watched: Vec<Watched>,
+    directory: PathBuf,
+    between_looks: Duration,
+}
+
+impl FileChanged {
+    /// Read the entries for a session opened in `directory`, taking the first look at each file
+    /// now. A relative path is the file in that directory.
+    pub fn read(home: Option<&Path>, directory: &Path, now: Instant) -> Self {
+        let watched = in_force(home)
+            .declared()
+            .iter()
+            .filter(|hook| hook.moment() == Moment::FileChanged)
+            .filter_map(|hook| {
+                let path = directory.join(hook.path()?);
+                Some(Watched {
+                    hook: hook.clone(),
+                    seen: looked_at(&path),
+                    path,
+                    next_look: now + BETWEEN_LOOKS,
+                    pending: false,
+                    not_before: now,
+                })
+            })
+            .take(MAX_WATCHED)
+            .collect();
+        Self {
+            watched,
+            directory: directory.to_path_buf(),
+            between_looks: BETWEEN_LOOKS,
+        }
+    }
+
+    /// The same, looking at the stated interval rather than every [`BETWEEN_LOOKS`], so a test does
+    /// not wait the real one out.
+    pub fn looking_every(mut self, interval: Duration) -> Self {
+        self.between_looks = interval;
+        for entry in &mut self.watched {
+            entry.next_look = entry.next_look.min(Instant::now() + interval);
+        }
+        self
+    }
+
+    /// Whether any entry is kept.
+    pub fn is_empty(&self) -> bool {
+        self.watched.is_empty()
+    }
+
+    /// Look at each file whose look is due and run the entries whose file changed, once each however
+    /// many changes the window held, and say what went wrong where something did.
+    pub fn poll(&mut self, now: Instant) -> Vec<String> {
+        let mut fired = Vec::new();
+        for entry in &mut self.watched {
+            if now >= entry.next_look {
+                entry.next_look = now + self.between_looks;
+                let token = looked_at(&entry.path);
+                if token != entry.seen {
+                    entry.seen = token;
+                    entry.pending = true;
+                }
+            }
+            if entry.pending && now >= entry.not_before {
+                entry.pending = false;
+                let began = Instant::now();
+                let trouble = run(
+                    &entry.hook,
+                    &announcement(Moment::FileChanged),
+                    &self.directory,
+                    default_limit(Moment::FileChanged),
+                    None,
+                );
+                entry.not_before = now + began.elapsed() + BETWEEN_RUNS;
+                fired.push(Fired {
+                    program: entry.hook.run().first().cloned().unwrap_or_default(),
+                    moment: Moment::FileChanged.as_str(),
+                    trouble,
+                });
+            }
+        }
+        crate::turn::trouble_sentences(fired)
+    }
+}
+
+/// A [`FileChanged`] looked at on a thread of its own, for an interface that has no turn to hold
+/// open and must not stop drawing while a command runs.
+///
+/// What a hook said when it went wrong is collected by [`Self::said`]. Dropping it asks the thread
+/// to stop; a command already running ends or reaches its bound (HOOK-7).
+pub struct Watching {
+    said: std::sync::mpsc::Receiver<Vec<String>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Watching {
+    /// Begin looking, or `None` where no entry is kept.
+    pub fn begin(mut watched: FileChanged) -> Option<Self> {
+        if watched.is_empty() {
+            return None;
+        }
+        let (send, said) = std::sync::mpsc::channel();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let asked = stop.clone();
+        std::thread::spawn(move || {
+            while !asked.load(std::sync::atomic::Ordering::Relaxed) {
+                let trouble = watched.poll(Instant::now());
+                if !trouble.is_empty() && send.send(trouble).is_err() {
+                    return;
+                }
+                std::thread::sleep(TICK);
+            }
+        });
+        Some(Self { said, stop })
+    }
+
+    /// What the entries have said since the last call.
+    pub fn said(&self) -> Vec<String> {
+        self.said.try_iter().flatten().collect()
+    }
+}
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -496,6 +665,10 @@ mod tests {
         assert_eq!(
             announcement(Moment::SessionEnded),
             "{\"event\":\"session-ended\"}\n"
+        );
+        assert_eq!(
+            announcement(Moment::FileChanged),
+            "{\"event\":\"file-changed\"}\n"
         );
     }
 

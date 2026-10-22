@@ -69,7 +69,7 @@ learn.
 `verified-by: by-construction (one path is ever built, by joining the file name onto the state directory the caller was given; nothing reads a hooks file from a working directory or an ancestor of one)`
 
 <a id="HOOK-2"></a>
-### HOOK-2: eight moments, and each fires the hooks written for it
+### HOOK-2: nine moments, and each fires the hooks written for it
 
 A declaration names one moment. These are the moments:
 
@@ -83,6 +83,7 @@ A declaration names one moment. These are the moments:
 | `compacted` | after a summary has been adopted in place of the older part of the conversation |
 | `session-started` | when an interface a person opened has begun a session, before it sends a turn |
 | `session-ended` | when that interface is left, however it ended |
+| `file-changed` | when the file the entry names has a different size or modification time at one look than at the one before, or appears or goes |
 
 A `tool-finished` entry may name a `tool`, and then fires for calls of that name alone; one that
 names none fires for every call. A tool named on any of the other moments is about a call
@@ -122,6 +123,21 @@ its own, which the person never held. It is told the moment and nothing of the s
 messages it replaced or how many (HOOK-5), the compaction is the same whatever the hook does
 (HOOK-6), and a hook that fails leaves the conversation shortened and is said to the person
 (HOOK-7).
+
+A `file-changed` entry names the one file it watches in `path`, written by the person in their own
+file, so the path is trusted as the program and its arguments are (HOOK-1, HOOK-3). A path is one
+file: no glob and no directory, as [FSWATCH-2](file-watches.md#FSWATCH-2). An entry with no `path`
+declares no hook, and a `path` on any other moment fires for nothing, as a `tool` does. A relative
+path is the file in the directory the session opened in. The full-screen interface takes a first look
+when the session begins and looks again at most every 5 seconds, and runs the entry when a look
+differs from the one before it, once however many changes the window held. An entry does not run again
+until 5 seconds after its last run ended, and a change seen in that time runs it when they are up. A
+session keeps the first 8 `file-changed` entries and no more. It begins no turn and sends the planner
+nothing, so [FSWATCH-4](file-watches.md#FSWATCH-4) and [FSWATCH-6](file-watches.md#FSWATCH-6) are
+untouched, and the looks stop with the interface, since the entries are read once when it begins
+([FSWATCH-11](file-watches.md#FSWATCH-11)). The looks and the command run on a thread of their own,
+so a slow command does not stop the interface drawing. What it says when it goes wrong reaches the
+transcript (HOOK-7).
 
 **Why.** A short vocabulary in a person's own terms, rather than the events the audit trail
 records: those say which gate decided what, and somebody wanting their formatter to run should not
@@ -170,6 +186,16 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_config::hooks::the_list_of_moments_names_each_once_in_a_spelling_a_file_accepts`
 `verified-by: bravebot_config::hooks::a_session_moment_fires_only_the_hooks_written_for_it`
 `verified-by: bravebot_config::hooks::a_tool_named_on_a_session_moment_fires_for_nothing`
+`verified-by: bravebot_config::hooks::a_file_changed_entry_names_the_file_it_watches`
+`verified-by: bravebot_config::hooks::a_path_on_another_moment_fires_for_nothing`
+`verified-by: bravebot_agent::hooks::a_changed_file_runs_the_hook_once_for_the_changes_one_window_held`
+`verified-by: bravebot_agent::hooks::a_file_is_looked_at_no_oftener_than_the_interval`
+`verified-by: bravebot_agent::hooks::a_file_that_appears_or_goes_is_a_change`
+`verified-by: bravebot_agent::hooks::a_hook_that_ran_lately_waits_out_the_floor_before_it_runs_again`
+`verified-by: bravebot_agent::hooks::a_session_keeps_no_more_than_eight_file_entries`
+`verified-by: bravebot_agent::hooks::an_entry_for_another_moment_watches_no_file`
+`verified-by: bravebot_agent::hooks::a_thread_looking_for_an_interface_hands_back_what_a_hook_said`
+`verified-by: bravebot_agent::hooks::no_thread_looks_where_no_entry_is_kept`
 
 <a id="HOOK-3"></a>
 ### HOOK-3: a hook is a program and its arguments, never a line a shell parses
@@ -262,6 +288,7 @@ would reach a hook as another directory through a line of JSON.
 
 `verified-by: bravebot_agent::hooks::a_hook_is_told_the_moment_and_nothing_else`
 `verified-by: bravebot_agent::hooks::the_line_a_hook_is_told_is_built_from_the_moment_alone`
+`verified-by: bravebot_agent::hooks::a_file_changed_hook_is_told_the_moment_and_not_the_path`
 `verified-by: bravebot_agent::hooks::a_session_start_hook_fires_once_however_often_it_is_asked`
 `verified-by: bravebot_agent::hooks::a_hook_is_given_no_environment_of_its_own`
 `verified-by: bravebot_agent::hooks::a_checkout_hook_is_handed_the_checkout_and_the_working_directory_it_was_made_from`
@@ -354,6 +381,7 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_agent::hooks::a_session_end_hook_is_stopped_at_the_bound_the_end_has`
 `verified-by: bravebot_agent::hooks::a_session_end_hook_that_states_a_timeout_keeps_it`
 `verified-by: bravebot_agent::hooks::a_session_hook_that_goes_wrong_is_said_naming_the_moment_and_program`
+`verified-by: bravebot_agent::hooks::a_file_changed_hook_that_could_not_start_is_said`
 `verified-by: bravebot_cli::running::a_session_hook_that_could_not_start_is_said_whether_the_run_answered_or_failed`
 
 <a id="HOOK-8"></a>
@@ -384,6 +412,7 @@ turn would fire.
 
 `verified-by: bravebot_config::hooks::a_file_read_for_showing_reports_the_text_it_was_read_from`
 `verified-by: bravebot_config::hooks::whatever_went_unread_leaves_the_file_not_wholly_read`
+`verified-by: bravebot_config::hooks::an_entry_with_a_path_leaves_the_file_not_wholly_read`
 `verified-by: bravebot_config::hooks::a_file_that_is_not_there_is_wholly_read_and_one_too_large_is_not`
 `verified-by: bravebot_config::hooks::an_entry_says_whether_it_fires_for_nothing`
 `verified-by: bravebot_ui_bridge::hooks::a_front_end_is_told_the_entries_the_agent_read`
@@ -581,5 +610,15 @@ path in the hook that ends a session is the path its twin started from, whatever
 - **A conversation begun inside an open interface fires nothing.** `/resume` and `/clear` begin
   another conversation in the interface that is already open, so a command meant to run once for each
   conversation runs once for the interface.
+- **`file-changed` fires in the full-screen interface alone.** A session in lines, a one-shot run,
+  the desktop interface, an editor over ACP and the local host look at no file, so an entry for it
+  fires nowhere else.
+- **`file-changed` does not say which file.** A hook is told the moment and nothing else (HOOK-5), so
+  a person who wants one command for two files declares two entries. The desktop form has no field
+  for `path`, so a file holding one is reported as not wholly read and is edited by hand.
+- **A command that writes the file it watches runs every 5 seconds or so.** Nothing stops that but
+  the floor between runs and the person's own command.
+- **A change is noticed by looking.** A file written and put back to the same size and modification
+  time between two looks is not seen, as a watch a turn armed is not ([FSWATCH-3](file-watches.md#FSWATCH-3)).
 - **A hook added to the file while a session runs is not part of it.** The hooks a session fires at
   its end are the ones it read at its start (HOOK-10).

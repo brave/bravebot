@@ -86,11 +86,13 @@ pub enum Moment {
     SessionStarted,
     /// The interface a person opened is being left, however that came about.
     SessionEnded,
+    /// A file the entry names has changed on disk, seen by a look the session takes itself.
+    FileChanged,
 }
 
 impl Moment {
     /// Every moment a hook can be written for, in the order the specification lists them.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::TurnStarted,
         Self::ToolFinished,
         Self::TurnFinished,
@@ -99,6 +101,7 @@ impl Moment {
         Self::Compacted,
         Self::SessionStarted,
         Self::SessionEnded,
+        Self::FileChanged,
     ];
 
     /// The word a file spells it with, or `None` for a word this build does not fire.
@@ -115,6 +118,7 @@ impl Moment {
             "compacted" => Some(Self::Compacted),
             "session-started" => Some(Self::SessionStarted),
             "session-ended" => Some(Self::SessionEnded),
+            "file-changed" => Some(Self::FileChanged),
             _ => None,
         }
     }
@@ -130,6 +134,7 @@ impl Moment {
             Self::Compacted => "compacted",
             Self::SessionStarted => "session-started",
             Self::SessionEnded => "session-ended",
+            Self::FileChanged => "file-changed",
         }
     }
 }
@@ -144,6 +149,11 @@ pub struct Hook {
     /// what the writer said and dropping it at read time would leave nothing able to report that
     /// it says nothing here.
     tool: Option<String>,
+    /// The one file a `file-changed` entry watches, as the person wrote it.
+    ///
+    /// Read for every moment and consulted only by [`Moment::FileChanged`], for the reason `tool`
+    /// is. An entry for that moment with no usable path is not kept: there is nothing to look at.
+    path: Option<String>,
     /// The program and its arguments. Never empty: an entry with nothing to run is not kept.
     run: Vec<String>,
     /// How long this hook may run, in whole seconds, where the entry stated one. `None` is the
@@ -162,6 +172,11 @@ impl Hook {
         self.tool.as_deref()
     }
 
+    /// The file a `file-changed` entry watches, where it named one.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
+    }
+
     /// The program and its arguments.
     pub fn run(&self) -> &[String] {
         &self.run
@@ -178,7 +193,8 @@ impl Hook {
     /// out from the moment and the name again would be a second answer to which entries are about
     /// a call.
     pub fn fires_for_nothing(&self) -> bool {
-        self.tool.is_some() && self.moment != Moment::ToolFinished
+        (self.tool.is_some() && self.moment != Moment::ToolFinished)
+            || (self.path.is_some() && self.moment != Moment::FileChanged)
     }
 
     /// Whether this entry fires for `moment`, for a call on `tool` where there was one.
@@ -288,6 +304,16 @@ impl Declarations {
         }
     }
 
+    #[cfg(test)]
+    fn read_text(text: &str) -> Self {
+        let (hooks, entire) = read(text);
+        Self {
+            hooks,
+            text: Some(text.to_string()),
+            entire,
+        }
+    }
+
     /// What the file declares, which is what a turn would fire.
     pub fn hooks(&self) -> &Hooks {
         &self.hooks
@@ -348,8 +374,13 @@ fn accounted(value: &serde_json::Value, hook: &Hook) -> bool {
     };
     if object
         .keys()
-        .any(|key| !matches!(key.as_str(), "on" | "tool" | "run" | "timeout"))
+        .any(|key| !matches!(key.as_str(), "on" | "tool" | "path" | "run" | "timeout"))
     {
+        return false;
+    }
+    // An editor composing the file back from the entries has no field for a path, so an entry with
+    // one is a file it must leave to be edited by hand, whatever it says.
+    if hook.path.is_some() {
         return false;
     }
     // A name read as `None` because it was blank, because it was not a string at all, or trimmed
@@ -380,6 +411,15 @@ fn entry(value: &serde_json::Value) -> Option<Hook> {
         }
         _ => None,
     };
+    let path = match object.get("path") {
+        Some(serde_json::Value::String(path)) if !path.trim().is_empty() => Some(path.clone()),
+        _ => None,
+    };
+    // Nothing to look at is nothing to fire for, so this moment's entry is dropped, as one with no
+    // program is.
+    if moment == Moment::FileChanged && path.is_none() {
+        return None;
+    }
     let serde_json::Value::Array(words) = object.get("run")? else {
         return None;
     };
@@ -408,6 +448,7 @@ fn entry(value: &serde_json::Value) -> Option<Hook> {
     Some(Hook {
         moment,
         tool,
+        path,
         run,
         timeout,
     })
@@ -440,7 +481,7 @@ mod tests {
         }
     }
 
-    /// HOOK-2: the eight moments are the vocabulary, and each is spelled the way the file spells it.
+    /// HOOK-2: the nine moments are the vocabulary, and each is spelled the way the file spells it.
     #[test]
     fn each_moment_is_named_by_the_word_a_file_spells_it_with() {
         for (moment, word) in [
@@ -452,6 +493,7 @@ mod tests {
             (Moment::Compacted, "compacted"),
             (Moment::SessionStarted, "session-started"),
             (Moment::SessionEnded, "session-ended"),
+            (Moment::FileChanged, "file-changed"),
         ] {
             assert_eq!(Moment::parse(word), Some(moment));
             assert_eq!(moment.as_str(), word);
@@ -902,5 +944,47 @@ mod tests {
 
         assert!(!loaded(65536), "a file of exactly 64 KB was passed over");
         assert!(loaded(65537), "a file a byte past 64 KB was read");
+    }
+
+    /// HOOK-2: a `file-changed` entry names the one file it watches, and an entry that names none
+    /// has nothing to look at and is not kept. The regression it rejects is keeping it, which
+    /// leaves a hook that can never fire and says nothing about why.
+    #[test]
+    fn a_file_changed_entry_names_the_file_it_watches() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "file-changed", "path": ".envrc", "run": ["notify"]},
+                {"on": "file-changed", "run": ["no-path"]},
+                {"on": "file-changed", "path": "  ", "run": ["blank"]}
+            ]}"#,
+        );
+
+        let kept: Vec<_> = hooks.firing(Moment::FileChanged, None).collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].path(), Some(".envrc"));
+        assert!(!kept[0].fires_for_nothing());
+    }
+
+    /// HOOK-2: a path on any other moment fires for nothing, as a tool does on a moment that has
+    /// no call. The regression it rejects is a form showing that entry as one that fires.
+    #[test]
+    fn a_path_on_another_moment_fires_for_nothing() {
+        let hooks =
+            Hooks::parse(r#"{"hooks": [{"on": "turn-finished", "path": "x", "run": ["notify"]}]}"#);
+
+        assert!(hooks.declared()[0].fires_for_nothing());
+    }
+
+    /// HOOK-8: a file holding a path is not one an editor may compose back from its entries, which
+    /// have no field for it. The regression it rejects is reporting it wholly read, which lets a
+    /// form rewrite the file without the path.
+    #[test]
+    fn an_entry_with_a_path_leaves_the_file_not_wholly_read() {
+        let kept = Declarations::read_text(
+            r#"{"hooks": [{"on": "file-changed", "path": "x", "run": ["notify"]}]}"#,
+        );
+
+        assert!(!kept.entire());
+        assert_eq!(kept.hooks().declared().len(), 1);
     }
 }

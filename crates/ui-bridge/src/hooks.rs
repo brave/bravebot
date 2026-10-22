@@ -117,6 +117,7 @@ mod tests {
                 "compacted": 30,
                 "session-started": 30,
                 "session-ended": 5,
+                "file-changed": 30,
             })
         );
     }
