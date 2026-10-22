@@ -44,6 +44,7 @@ pub mod mcp;
 pub mod memory;
 pub mod messages;
 pub mod mode;
+pub mod notebook;
 pub mod outcome;
 pub mod output_schema;
 pub mod permission_mode;

@@ -5,13 +5,14 @@ status: normative
 governs:
   - crates/agent/src/replace.rs
   - crates/agent/src/diff.rs
+  - crates/agent/src/notebook.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
 
 ## Scope
 
-Replacing an exact passage in a file, or several in one call. `path` and `replace_all` are routing;
-`old_text`, `new_text` and `edits` are content. The result is a confirmation.
+Replacing an exact passage in a file, or several in one call. `path`, `replace_all`, `cell`,
+`cell_action` and `cell_type` are routing; `old_text`, `new_text` and `edits` are content. The result is a confirmation.
 
 ## Why this exists rather than a whole-file write
 
@@ -195,3 +196,44 @@ and a second approval on something the server already knew.
 
 `verified-by: bravebot_agent::lsp::an_edit_reports_the_error_lines_a_running_server_found`
 `verified-by: bravebot_agent::lsp::an_edit_starts_no_language_server`
+
+<a id="EDIT-8"></a>
+### EDIT-8: a notebook cell is changed by its number, and everything else in the file is kept
+
+On a `.ipynb` file, `cell` replaces passage matching: the number a read showed ([READ-9](read-file.md#READ-9)),
+from 1, with `new_text` as the cell's whole source. `cell_action` is `replace` (the default),
+`insert_after`, where `cell` is the cell the new one follows and 0 puts it first and `cell_type`
+(`code` by default, or `markdown`) says what it is, or `delete`, which takes no `new_text`. `cell` is
+refused beside `old_text`, `edits` or `replace_all`, on a file that is not a `.ipynb`, and for a
+number the notebook has no cell for. [EDIT-2](#EDIT-2) holds: a notebook nobody vouched for is not
+edited, and the planner-argument gate applies to `new_text`. The edit is approved as a diff
+([EDIT-3](#EDIT-3)).
+
+The notebook is written back in the layout Jupyter writes, one space of indent, keys in sorted
+order and a final newline, so a notebook Jupyter wrote changes only where the edit is, and one laid
+out differently is rewritten into that layout and the diff shows it. The other cells, their ids,
+their metadata, the notebook's own metadata and its format version are kept. Replacing a code cell
+drops that cell's saved outputs and its execution count, which describe source that is no longer
+there, and the diff the person approves shows them going. A new cell gets an id no cell has where the
+format version gives cells ids.
+
+**Why.** A passage inside a JSON string means escapes, array-of-lines punctuation and a unique match
+in a file that repeats itself, and a planner that gets one wrong breaks the notebook. A cell number is
+what a read of the notebook shows.
+
+`verified-by: bravebot_agent::turn::an_approved_cell_edit_changes_only_that_cell`
+`verified-by: bravebot_agent::turn::a_cell_edit_of_an_untrusted_notebook_is_refused`
+`verified-by: bravebot_agent::turn::a_cell_argument_is_refused_beside_a_passage_and_on_a_plain_file`
+`verified-by: bravebot_agent::turn::an_insert_at_zero_puts_a_markdown_cell_first`
+`verified-by: bravebot_agent::turn::an_insert_after_a_cell_defaults_to_a_code_cell_placed_after_it`
+`verified-by: bravebot_agent::turn::a_delete_removes_only_the_numbered_cell`
+`verified-by: bravebot_agent::tools::a_malformed_cell_argument_is_refused`
+`verified-by: bravebot_agent::tools::a_well_formed_cell_argument_is_accepted_as_what_it_names`
+`verified-by: bravebot_agent::notebook::a_replace_changes_one_cell_and_keeps_every_other_byte`
+`verified-by: bravebot_agent::notebook::a_replaced_code_cell_loses_its_outputs_and_keeps_its_metadata_and_id`
+`verified-by: bravebot_agent::notebook::a_replace_with_the_same_source_changes_nothing`
+`verified-by: bravebot_agent::notebook::a_cell_that_does_not_exist_is_refused`
+`verified-by: bravebot_agent::notebook::an_insert_goes_after_the_named_cell_with_an_id_nothing_else_has`
+`verified-by: bravebot_agent::notebook::an_insert_at_zero_goes_first_and_past_the_end_is_refused`
+`verified-by: bravebot_agent::notebook::an_insert_into_a_format_without_cell_ids_adds_none`
+`verified-by: bravebot_agent::notebook::a_delete_removes_exactly_the_named_cell`

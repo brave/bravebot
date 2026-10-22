@@ -86,14 +86,14 @@ the routing-versus-content split they share.
 | Spec | Id | Clauses | Tool |
 |---|---|---|---|
 | [tools/tool-surface.md](tools/tool-surface.md) | `TOOL` | 6 | the surface every tool shares |
-| [tools/read-file.md](tools/read-file.md) | `READ` | 8 | `read_file` |
+| [tools/read-file.md](tools/read-file.md) | `READ` | 9 | `read_file` |
 | [tools/list-files.md](tools/list-files.md) | `LIST` | 5 | `list_files` |
 | [tools/search.md](tools/search.md) | `SEARCH` | 12 | `search` |
 | [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |
 | [tools/read-git.md](tools/read-git.md) | `GIT` | 15 | `read_git` |
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 13 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 7 | `write_file` |
-| [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 7 | `edit_file` |
+| [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 8 | `edit_file` |
 | [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 5 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 7 | `spawn_agent` |
 | [tools/run.md](tools/run.md) | `RUN` | 28 | `run` |

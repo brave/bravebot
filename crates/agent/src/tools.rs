@@ -5309,6 +5309,92 @@ fn bring_back<S: Sink, C: Confirmer>(
 /// An `old_text` and the `new_text` that replaces it, as the planner wrote them.
 type EditPair = (Labelled<String>, Labelled<String>);
 
+/// An `edit_file` call that names a notebook cell instead of a passage.
+struct CellRequest {
+    cell: usize,
+    action: CellAction,
+    kind: crate::notebook::CellKind,
+    new_text: Option<Labelled<String>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CellAction {
+    Replace,
+    InsertAfter,
+    Delete,
+}
+
+/// The cell an `edit_file` call addresses, where it gives `cell` (EDIT-8).
+///
+/// `cell` is the number the read showed, from 1, or 0 for an insert at the start. Every argument is
+/// the planner's own, and none of them is read from the file.
+fn cell_request(arguments: &Value) -> Result<Option<CellRequest>, String> {
+    let Some(cell) = arguments.get("cell").filter(|cell| !cell.is_null()) else {
+        if arguments.get("cell_action").is_some() || arguments.get("cell_type").is_some() {
+            return Err(
+                "error: 'cell_action' and 'cell_type' go with 'cell', which names the \
+                        notebook cell to change"
+                    .to_string(),
+            );
+        }
+        return Ok(None);
+    };
+    let Some(cell) = cell.as_u64().map(|cell| cell as usize) else {
+        return Err("error: 'cell' must be a whole number, the cell's number from the read".into());
+    };
+    if ["old_text", "edits", "replace_all"]
+        .iter()
+        .any(|key| arguments.get(key).is_some())
+    {
+        return Err(
+            "error: 'cell' addresses a notebook cell, so it cannot be given with \
+                    'old_text', 'edits' or 'replace_all'"
+                .to_string(),
+        );
+    }
+    let action = match arguments.get("cell_action").and_then(Value::as_str) {
+        None | Some("replace") => CellAction::Replace,
+        Some("insert_after") => CellAction::InsertAfter,
+        Some("delete") => CellAction::Delete,
+        Some(_) => {
+            return Err(
+                "error: 'cell_action' must be \"replace\", \"insert_after\" or \"delete\"".into(),
+            );
+        }
+    };
+    let kind = match arguments.get("cell_type").and_then(Value::as_str) {
+        None => crate::notebook::CellKind::Code,
+        Some(name) => crate::notebook::CellKind::named(name)
+            .ok_or("error: 'cell_type' must be \"code\" or \"markdown\"")?,
+    };
+    if action != CellAction::InsertAfter && arguments.get("cell_type").is_some() {
+        return Err("error: 'cell_type' is for an insert_after, which makes a new cell".into());
+    }
+    let new_text = argument(arguments, "new_text");
+    match (action, &new_text) {
+        (CellAction::Delete, Some(_)) => {
+            return Err("error: deleting a cell takes no 'new_text'".into());
+        }
+        (CellAction::Replace | CellAction::InsertAfter, None) => {
+            return Err(
+                "error: 'new_text' is required and must be a string: the cell's source".into(),
+            );
+        }
+        _ => {}
+    }
+    if action != CellAction::InsertAfter && cell == 0 {
+        return Err(
+            "error: cells are numbered from 1; 0 is only for an insert_after at the start".into(),
+        );
+    }
+    Ok(Some(CellRequest {
+        cell,
+        action,
+        kind,
+        new_text,
+    }))
+}
+
 /// The passages an `edit_file` call carries: the `edits` array, or the single `old_text` and
 /// `new_text` pair, never both.
 fn edit_pairs(arguments: &Value) -> Result<Vec<EditPair>, &'static str> {
@@ -5375,9 +5461,23 @@ fn edit_file<S: Sink, C: Confirmer>(
     };
     let (proposed, destination, shown_path, proposed_path) =
         (found.path, found.destination, found.shown, found.released);
-    let pairs = match edit_pairs(arguments) {
-        Ok(pairs) => pairs,
+    let cell_request = match cell_request(arguments) {
+        Ok(request) => request,
         Err(problem) => return Produced::problem(problem),
+    };
+    let pairs = match &cell_request {
+        // A cell edit carries its text in `new_text` alone and locates nothing by it.
+        Some(_) if !crate::notebook::is_notebook_path(&proposed_path) => {
+            return Produced::problem(
+                "error: 'cell' addresses a cell of a .ipynb notebook, and this is not one. Give \
+                 'old_text' and 'new_text' for a passage",
+            );
+        }
+        Some(_) => Vec::new(),
+        None => match edit_pairs(arguments) {
+            Ok(pairs) => pairs,
+            Err(problem) => return Produced::problem(problem),
+        },
     };
     // Absent or non-boolean means the strict single-match behaviour, which is the safe
     // reading of an ambiguous argument.
@@ -5406,6 +5506,31 @@ fn edit_file<S: Sink, C: Confirmer>(
         };
         passages.push((old_text, new_text));
     }
+    // The cell's source is the planner's own text, held to the same gate as a passage.
+    let cell_edit = match &cell_request {
+        Some(request) => {
+            let source = match &request.new_text {
+                Some(text) => match policy.read_planner_argument("edit_file", "new_text", text) {
+                    Ok(text) => text,
+                    Err(denial) => return Produced::problem(format!("refused: {denial}")),
+                },
+                None => String::new(),
+            };
+            Some(match request.action {
+                CellAction::Replace => crate::notebook::CellEdit::Replace {
+                    cell: request.cell,
+                    source,
+                },
+                CellAction::InsertAfter => crate::notebook::CellEdit::Insert {
+                    after: request.cell,
+                    kind: request.kind,
+                    source,
+                },
+                CellAction::Delete => crate::notebook::CellEdit::Delete { cell: request.cell },
+            })
+        }
+        None => None,
+    };
 
     // Reading to locate the passage is non-destructive and confined, so the path may be
     // promoted here exactly as it is for read_file. The write below is what needs a person.
@@ -5453,6 +5578,15 @@ fn edit_file<S: Sink, C: Confirmer>(
     let total = passages.len();
     let mut running = current.clone();
     let mut occurrences = 0;
+    if let Some(edit) = &cell_edit {
+        // A cell is found by its number, which the planner gave, and the file is read as the
+        // notebook it is: the file is trusted, as `read_trusted_content` above established.
+        match crate::notebook::apply(&current, edit) {
+            Ok(contents) => running = contents,
+            Err(e) => return Produced::problem(format!("error: {e}")),
+        }
+        occurrences = 1;
+    }
     for (at, (old_text, new_text)) in passages.iter().enumerate() {
         match crate::replace::replace(&running, old_text, new_text, replace_all) {
             Ok(r) => {
@@ -5586,7 +5720,23 @@ fn edit_file<S: Sink, C: Confirmer>(
                 ..
             } = reviewed;
             let note = carried_note(note, &scanned);
-            let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
+            let headline = match &cell_request {
+                Some(request) => match request.action {
+                    CellAction::Replace => {
+                        format!("edited {shown_path}: replaced cell {}", request.cell)
+                    }
+                    CellAction::InsertAfter => {
+                        format!(
+                            "edited {shown_path}: inserted a cell after cell {}",
+                            request.cell
+                        )
+                    }
+                    CellAction::Delete => {
+                        format!("edited {shown_path}: deleted cell {}", request.cell)
+                    }
+                },
+                None => format!("edited {shown_path}: {occurrences} replacement(s)"),
+            };
             // What a server that is already running makes of the file now (LSP-12). It reads the
             // file, which this edit has just changed, and the sentence is counts and lines.
             let headline = match diagnostics_after_a_write(policy, servers, &proposed_path) {
@@ -11807,6 +11957,133 @@ fn read_git<S: Sink, C: Confirmer>(
 
 #[cfg(test)]
 mod tests {
+    /// EDIT-8: a malformed cell argument is refused before the file is read, so nothing is written.
+    /// Each row is a call that is wrong in one way, with the words of the refusal that names it.
+    #[test]
+    fn a_malformed_cell_argument_is_refused() {
+        let refused = [
+            (json!({"cell_action": "delete"}), "go with 'cell'"),
+            (json!({"cell_type": "markdown"}), "go with 'cell'"),
+            (json!({"cell": 1.5, "new_text": "x"}), "whole number"),
+            (json!({"cell": -1, "new_text": "x"}), "whole number"),
+            (json!({"cell": "1", "new_text": "x"}), "whole number"),
+            (
+                json!({"cell": 1, "cell_action": "move", "new_text": "x"}),
+                "'cell_action' must be",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "insert_after", "cell_type": "raw", "new_text": "x"}),
+                "'cell_type' must be",
+            ),
+            (
+                json!({"cell": 1, "cell_type": "markdown", "new_text": "x"}),
+                "is for an insert_after",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "replace", "cell_type": "code", "new_text": "x"}),
+                "is for an insert_after",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "delete", "cell_type": "code"}),
+                "is for an insert_after",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "delete", "new_text": "x"}),
+                "takes no 'new_text'",
+            ),
+            (json!({"cell": 1}), "'new_text' is required"),
+            (
+                json!({"cell": 1, "cell_action": "insert_after"}),
+                "'new_text' is required",
+            ),
+            (json!({"cell": 1, "new_text": 7}), "'new_text' is required"),
+            (json!({"cell": 0, "new_text": "x"}), "numbered from 1"),
+            (
+                json!({"cell": 0, "cell_action": "delete"}),
+                "numbered from 1",
+            ),
+            (
+                json!({"cell": 1, "old_text": "a", "new_text": "x"}),
+                "cannot be given with",
+            ),
+            (
+                json!({"cell": 1, "edits": [], "new_text": "x"}),
+                "cannot be given with",
+            ),
+            (
+                json!({"cell": 1, "replace_all": true, "new_text": "x"}),
+                "cannot be given with",
+            ),
+        ];
+        for (arguments, words) in refused {
+            match cell_request(&arguments) {
+                Err(problem) => assert!(
+                    problem.contains(words),
+                    "{arguments} was refused with {problem:?}, which does not say {words:?}"
+                ),
+                Ok(_) => panic!("{arguments} was accepted"),
+            }
+        }
+    }
+
+    /// EDIT-8: the calls the table above sits beside are accepted, with the action, the cell
+    /// number and the cell type each mapped to the request they name. A call with no `cell` is not
+    /// a cell edit.
+    #[test]
+    fn a_well_formed_cell_argument_is_accepted_as_what_it_names() {
+        use crate::notebook::CellKind;
+        let accepted = [
+            (
+                json!({"cell": 2, "new_text": "x"}),
+                CellAction::Replace,
+                2,
+                CellKind::Code,
+            ),
+            (
+                json!({"cell": 2, "cell_action": "replace", "new_text": "x"}),
+                CellAction::Replace,
+                2,
+                CellKind::Code,
+            ),
+            (
+                json!({"cell": 0, "cell_action": "insert_after", "cell_type": "markdown", "new_text": "x"}),
+                CellAction::InsertAfter,
+                0,
+                CellKind::Markdown,
+            ),
+            (
+                json!({"cell": 3, "cell_action": "insert_after", "new_text": "x"}),
+                CellAction::InsertAfter,
+                3,
+                CellKind::Code,
+            ),
+            (
+                json!({"cell": 1, "cell_action": "delete"}),
+                CellAction::Delete,
+                1,
+                CellKind::Code,
+            ),
+        ];
+        for (arguments, action, cell, kind) in accepted {
+            let request = cell_request(&arguments)
+                .unwrap_or_else(|problem| panic!("{arguments} was refused: {problem}"))
+                .unwrap_or_else(|| panic!("{arguments} was not read as a cell edit"));
+            assert!(request.action == action, "{arguments}: wrong action");
+            assert_eq!(request.cell, cell, "{arguments}");
+            assert!(request.kind == kind, "{arguments}: wrong cell type");
+        }
+        assert!(
+            cell_request(&json!({"old_text": "a", "new_text": "b"}))
+                .is_ok_and(|request| request.is_none()),
+            "a passage edit was read as a cell edit"
+        );
+        assert!(
+            cell_request(&json!({"cell": null, "old_text": "a", "new_text": "b"}))
+                .is_ok_and(|request| request.is_none()),
+            "a null cell was read as a cell edit"
+        );
+    }
+
     /// WRITE-7: the editor is offered for the planner's own text in a trusted context and for
     /// nothing else. A body from a quarantined reference is never offered one, whatever its label
     /// says, and neither is text a planner wrote after it had met untrusted content: the person's
