@@ -3434,6 +3434,9 @@ mod tests {
         }
     }
 
+    /// FETCH-4: a redirect hop is asked with the host it came from. A hop shown as a fresh fetch
+    /// asks the person to approve a host they were never shown, so the redirect row has to be in
+    /// the question beside the lines a plain fetch gets.
     #[test]
     fn a_fetch_hop_is_asked_with_the_host_it_came_from() {
         let request = FetchRequest {
