@@ -298,6 +298,7 @@ stream is held open between them, so a notice has nowhere to arrive. A prompt a 
 starts is not offered until it starts again, whether or not it announces the change.
 
 `verified-by: bravebot_mcp::stdio::a_tool_list_change_the_server_announced_is_found_once_and_the_list_read_again`
+`verified-by: bravebot_agent::mcp::a_tool_list_that_cannot_be_read_again_offers_none_of_the_servers_tools`
 `verified-by: bravebot_mcp::stdio::a_notice_from_a_server_that_did_not_declare_it_is_ignored`
 `verified-by: bravebot_mcp::protocol::a_server_declares_tool_list_changes_in_its_handshake`
 `verified-by: bravebot_mcp::protocol::only_a_message_with_the_method_and_no_id_is_the_notice`

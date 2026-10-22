@@ -4398,12 +4398,45 @@ while IFS= read -r line; do
 done
 "#;
 
+/// A local server that lists `before`, announces a change when that tool is called, and answers
+/// every later `tools/list` with an error.
+const UNREADABLE_SERVER: &str = r#"#!/bin/sh
+lists=0
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      lists=$((lists + 1))
+      if [ "$lists" = 1 ]; then
+        printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"before","inputSchema":{"type":"object"}}]}}\n' "$id"
+      else
+        printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32603,"message":"cannot list"}}\n' "$id"
+      fi
+      ;;
+    *'"tools/call"'*'"name":"before"'*)
+      printf '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"announced"}]}}\n' "$id"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#;
+
 /// The announcing server after its handshake and its list, launched under confinement, or `None`
 /// where this machine confines nothing.
 fn reach_announcing(scratch: &Scratch, excluded: &[String]) -> Option<Reached> {
+    reach_script(scratch, ANNOUNCING_SERVER, excluded)
+}
+
+/// A server running `source`, launched as `reach_announcing` launches its own.
+fn reach_script(scratch: &Scratch, source: &str, excluded: &[String]) -> Option<Reached> {
     let sandbox = bravebot_sandbox::for_current_platform().ok()?;
     let script = scratch.path.join("announcing.sh");
-    std::fs::write(&script, ANNOUNCING_SERVER).expect("write the script");
+    std::fs::write(&script, source).expect("write the script");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -4594,4 +4627,74 @@ fn a_tool_list_read_again_after_a_change_is_held_to_the_declarations_filters() {
     for body in rounds(&chat) {
         assert!(!body.contains("after_change"), "offered: {body}");
     }
+}
+
+/// A list that cannot be read after the server announced a change offers none of its tools: the
+/// earlier yes is not kept, the person is told, and the trail records the change.
+#[test]
+fn a_tool_list_that_cannot_be_read_again_offers_none_of_the_servers_tools() {
+    let scratch = Scratch::new("list-changed-unreadable");
+    let Some(reached) = reach_script(&scratch, UNREADABLE_SERVER, &[]) else {
+        eprintln!("SKIPPED (no confinement here)");
+        return;
+    };
+    let session = Session::new(
+        vec![reached],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request("mcp__weather__before", ""),
+        reply_with("done"),
+    ]);
+    let mut first = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("hello").with_mcp(Some(session.clone())),
+        &mut first,
+    );
+    assert_eq!(first.lists.len(), 1);
+
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut second = Answering::new(Decision::Approve, CallDecision::approve());
+    let mut trail = RecordingSink::new();
+    let outcome = turns::run(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &Workspace::new(scratch.project()).expect("workspace"),
+        &Task::new("again").with_mcp(Some(session.clone())),
+        &mut second,
+        &mut trail,
+    )
+    .expect("the turn runs");
+    assert!(second.lists.is_empty(), "{:?}", second.lists);
+    assert!(
+        trail.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "mcp_tools_changed", detail } if detail.contains("weather")
+        )),
+        "the change is not in the trail: {:?}",
+        trail.events()
+    );
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("weather offers no tool") && said.contains("-32603")),
+        "{:?}",
+        outcome.notices
+    );
+    for body in rounds(&chat) {
+        assert!(
+            !body.contains("mcp__weather__"),
+            "a tool was offered: {body}"
+        );
+    }
+    assert_eq!(
+        session.offering(),
+        vec![("weather".to_string(), Offering::Declined)]
+    );
 }
