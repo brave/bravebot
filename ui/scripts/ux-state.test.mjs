@@ -439,7 +439,11 @@ test('the thinking is held apart from the transcript, kept to its end, and gone 
     ['narration', { text: 'Reading it.' }],
     ['tool.started', { verb: 'Write', target: 'a.txt', why: null, note: null, failed: false, untrusted: false, changes: [], waitedSeconds: null }],
     ['turn.started', { turn: 2 }],
+    ['turn.done', { turn: 2, reply: 'done', prompt: 1, archived: 0, contextTokens: 0 }],
     ['turn.error', { kind: 'failed', message: 'x', category: 'other', attempts: 1, status: null, turn: 1, prompt: 'p', contextTokens: 0, id: null }],
+    ['manifest.started', { run: 1 }],
+    ['manifest.done', { run: 1, reply: 'done', model: 'm', steps: 1, clean: true, tokens: 0, outputTokens: 0, attempt: null, record: null, trust: { rules: [] } }],
+    ['manifest.error', { run: 1, kind: 'failed', message: 'x', category: 'other', stopped: false, declined: false, problem: null, attempt: null, record: null }],
   ]
   for (const [ender, data] of ended) {
     session.send('thinking', { text: 'a thought' })

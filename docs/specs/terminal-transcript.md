@@ -1071,9 +1071,8 @@ It is no part of the conversation: it is not an entry of the transcript, an expo
 session, and no later request carries it. A service that sends no thinking, or a session with the
 toggle off, draws nothing, and a session that has not been sent any has no button.
 
-**Why.** [VIEW-33](#VIEW-33) gives the terminal a way to see what a long round is working on, and
-the window had no event to carry it, so the same round showed a token count and a spinner there and
-nothing else.
+**Why.** [VIEW-33](#VIEW-33) gives the terminal a way to see what a long round is working on. Without
+an event to carry it, the window shows only a token count and a spinner for the same long round.
 
 The thinking is model output released for a screen, on the footing of the reply taking shape. The
 renderer draws it as a text child under a head the model's words cannot spell, as
@@ -1083,7 +1082,7 @@ where the terminal counts bytes, since the window holds a string, and a cut thro
 character gives up that character.
 
 `verified-by: bravebot_ui_bridge::reporting::the_models_thinking_is_reported_in_order_and_a_delegates_and_an_empty_one_are_not`
-`verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs drives the window's own event reducer with the bridge's events: the thinking is held apart from the transcript's entries, only its last 4,096 characters are kept and a cut through a character gives it up, a new round, a words event, a call, a new turn and a failed or stopped turn each clear it, the choice to show it outlives the round it was made in, and the button is offered from the first thinking sent and stays through every round's end; ui/scripts/marking.test.mjs renders the working row through react-dom and asserts that the last eight lines are drawn under one head, that markup in them is drawn as the characters it is and makes no element, attribute or request, that nothing is drawn with the toggle off or with nothing thought, and that the button is absent for a session sent no thinking and present for one that was, between rounds as well; make check-ui runs both)`
+`verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs drives the window's own event reducer with the bridge's events: the thinking is held apart from the transcript's entries, only its last 4,096 characters are kept and a cut through a character gives it up, a new round, a words event, a call, a new turn, a finished turn, a failed or stopped turn and a plan run starting, finishing or failing each clear it, the choice to show it outlives the round it was made in, and the button is offered from the first thinking sent and stays through every round's end; ui/scripts/marking.test.mjs renders the working row through react-dom and asserts that the last eight lines are drawn under one head, that markup in them is drawn as the characters it is and makes no element, attribute or request, that nothing is drawn with the toggle off or with nothing thought, and that the button is absent for a session sent no thinking and present for one that was, between rounds as well; make check-ui runs both)`
 
 ## Known costs
 
