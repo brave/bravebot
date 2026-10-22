@@ -225,6 +225,14 @@ pub fn path() -> Result<PathBuf, StoreError> {
     )
 }
 
+/// A file named `file` in the directory the imported credentials are kept in.
+///
+/// For a credential file of another sign-in that this crate keeps: the directory is decided once,
+/// by the rules above, so two files of one person's credentials cannot end up in two places.
+pub(crate) fn beside(file: &str) -> Result<PathBuf, StoreError> {
+    Ok(path()?.with_file_name(file))
+}
+
 /// The same answer from the values, `stated` being what [`STATE_VARIABLE`] holds.
 ///
 /// The directory it names holds the file itself, and a value that names nothing falls through to
@@ -274,7 +282,7 @@ fn path_named(
 ///
 /// It holds no bytes. What it says, it says by existing, so the one file
 /// [PREM-7](../../../docs/specs/premium-credentials.md#PREM-7) keeps credentials in is still one.
-struct Claim {
+pub(crate) struct Claim {
     path: PathBuf,
 }
 
@@ -300,8 +308,22 @@ const GIVE_UP_AFTER: std::time::Duration = std::time::Duration::from_secs(15);
 impl Claim {
     /// Take the exclusive claim on the store at `store`, waiting for whoever holds it.
     fn take(store: &Path) -> Result<Self, StoreError> {
+        Self::take_as(store, CLAIM, ABANDONED_AFTER)
+    }
+
+    /// Take the claim named `name` beside `store`, which is judged abandoned once it is
+    /// `abandoned_after` old.
+    ///
+    /// A file whose hold is longer than one local read and write, such as one that is renewed over
+    /// a network round trip, states a longer age than [`ABANDONED_AFTER`]: a claim broken while its
+    /// holder still waits for a reply lets a second holder in beside it.
+    pub(crate) fn take_as(
+        store: &Path,
+        name: &str,
+        abandoned_after: std::time::Duration,
+    ) -> Result<Self, StoreError> {
         prepare_directory(store)?;
-        let path = store.with_file_name(CLAIM);
+        let path = store.with_file_name(name);
         let waiting_since = std::time::Instant::now();
         loop {
             match create_claim(&path) {
@@ -313,7 +335,7 @@ impl Claim {
                     });
                 }
             }
-            if waiting_since.elapsed() >= GIVE_UP_AFTER {
+            if waiting_since.elapsed() >= GIVE_UP_AFTER.max(abandoned_after * 3) {
                 return Err(StoreError::Unusable {
                     detail: format!(
                         "{} is held by another bravebot and did not come free",
@@ -321,8 +343,8 @@ impl Claim {
                     ),
                 });
             }
-            if abandoned(&path) {
-                break_abandoned(&path);
+            if abandoned(&path, abandoned_after) {
+                break_abandoned(&path, abandoned_after);
             }
             std::thread::sleep(LOOK_AGAIN_IN);
         }
@@ -360,12 +382,12 @@ fn create_claim(path: &Path) -> std::io::Result<std::fs::File> {
 ///
 /// A modification time that cannot be read, or one in the future, is not old: a clock disagreeing
 /// with the one that wrote the file is a reason to wait rather than a reason to take it.
-fn abandoned(path: &Path) -> bool {
+fn abandoned(path: &Path, after: std::time::Duration) -> bool {
     std::fs::metadata(path)
         .and_then(|found| found.modified())
         .ok()
         .and_then(|written| written.elapsed().ok())
-        .is_some_and(|age| age >= ABANDONED_AFTER)
+        .is_some_and(|age| age >= after)
 }
 
 /// Remove the claim at `path` if what is there is abandoned, and leave a live one in place.
@@ -380,19 +402,21 @@ fn abandoned(path: &Path) -> bool {
 /// The name is free between the move and the put-back. A third process that takes it in that gap
 /// holds beside the claim's owner, which needs that process to arrive within those two calls of a
 /// claim being broken. An owner that finishes in the gap removes nothing, and the claim put back
-/// is then nobody's until it ages out after [`ABANDONED_AFTER`].
-fn break_abandoned(path: &Path) {
+/// is then nobody's until it ages out after `after`.
+fn break_abandoned(path: &Path, after: std::time::Duration) {
     static MOVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    let aside = path.with_file_name(format!(
-        "{CLAIM}.{}.{}",
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}.{}",
         std::process::id(),
         MOVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
+    let aside = path.with_file_name(name);
     if std::fs::rename(path, &aside).is_err() {
         return;
     }
-    let was_abandoned = abandoned(&aside);
+    let was_abandoned = abandoned(&aside, after);
     let _ = std::fs::remove_file(&aside);
     if !was_abandoned {
         let _ = create_claim(path);
@@ -549,11 +573,15 @@ fn write_at(destination: &Path, credentials: &StoredCredentials) -> Result<(), S
 ///
 /// The temporary holds tokens, so one left by a failed write (a full disk, for one) would stay in
 /// the directory, and each failing process would leave another named for its id.
-fn write_through(
+pub(crate) fn write_through(
     destination: &Path,
     fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
 ) -> Result<(), StoreError> {
-    let temporary = destination.with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+    // Built as an OS string: a name that is not UTF-8 stays the name it is, so two such names do not
+    // share a temporary.
+    let mut name = destination.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{}.tmp", std::process::id()));
+    let temporary = destination.with_file_name(name);
     let placed = stage_and_rename(&temporary, destination, fill);
     if placed.is_err() {
         let _ = std::fs::remove_file(&temporary);
@@ -1952,7 +1980,10 @@ mod tests {
             let claim = path.with_file_name(CLAIM);
             std::fs::File::create(&claim).expect("a claim");
 
-            assert!(!abandoned(&claim), "a claim taken now is somebody's");
+            assert!(
+                !abandoned(&claim, ABANDONED_AFTER),
+                "a claim taken now is somebody's"
+            );
 
             std::fs::OpenOptions::new()
                 .write(true)
@@ -1962,7 +1993,7 @@ mod tests {
                 .expect("an aged claim");
 
             assert!(
-                abandoned(&claim),
+                abandoned(&claim, ABANDONED_AFTER),
                 "a claim this old belongs to a process that died holding it"
             );
         });
@@ -1982,7 +2013,7 @@ mod tests {
             let claim = path.with_file_name(CLAIM);
             create_claim(&claim).expect("a claim just taken by another process");
 
-            break_abandoned(&claim);
+            break_abandoned(&claim, ABANDONED_AFTER);
 
             let third = create_claim(&claim);
             assert_eq!(
@@ -2008,7 +2039,7 @@ mod tests {
                 .set_modified(std::time::SystemTime::now() - ABANDONED_AFTER * 2)
                 .expect("a claim as old as a dead process leaves");
 
-            break_abandoned(&claim);
+            break_abandoned(&claim, ABANDONED_AFTER);
 
             let left: Vec<_> = std::fs::read_dir(path.parent().expect("a directory"))
                 .expect("a listing")

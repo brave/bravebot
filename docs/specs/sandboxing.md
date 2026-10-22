@@ -3238,7 +3238,8 @@ the session only; and whether a covered line is announced in the transcript befo
 The programs bravebot starts on its own account and looks up by name, unconfined and with the
 person's access to `~/.ssh`, `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard
 tools, `osascript`, the inhibitor `/caffeinate` starts, a hook's program, a language server, the
-editor Ctrl-G opens, the credential authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
+editor Ctrl-G opens, the browser opener `auth login chatgpt` starts (`open`, `xdg-open` or `rundll32`,
+[CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13)), the credential authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
 ([SANDBOX-16](#SANDBOX-16)), and what `doctor --sandbox-check` runs with no sandbox
 ([SANDBOX-21](#SANDBOX-21)): the `gh` of the stored-login row, the programs of a workflow's setup
 stages, and the programs of a workflow run again without the sandbox as the control, `git`, `sh`,

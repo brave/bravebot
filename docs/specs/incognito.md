@@ -169,7 +169,10 @@ cleared and by what, and one missed ordering writes the thing the mode exists no
 `import-leo-creds` in an incognito session reports that it will not run and exits without
 registering a device. Forgetting an existing import is still allowed. Storing a gateway key with
 `bravebot auth login gateway` is refused the same way, before the key is asked for, and forgetting
-one with `bravebot auth logout gateway` is allowed.
+one with `bravebot auth logout gateway` is allowed. Signing in with a ChatGPT account with
+`bravebot auth login chatgpt` is refused the same way, before the listener binds and before a browser
+opens, and `bravebot auth logout chatgpt` is allowed
+([CHATGPT-12](chatgpt-sign-in.md#CHATGPT-12)).
 Deleting a stored session with `bravebot sessions delete` or `sessions purge` is allowed for the same
 reason ([CLI-33](cli.md#CLI-33)).
 
@@ -183,6 +186,8 @@ mode points.
 `verified-by: bravebot_cli::running::forgetting_an_import_is_allowed_in_an_incognito_session`
 `verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
 `verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
+`verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
+`verified-by: bravebot_cli::running::auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one`
 
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so

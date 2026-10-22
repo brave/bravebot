@@ -11,19 +11,10 @@ docs/specs/background-sessions.md:BG-1: a background session is an ordinary sess
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
-docs/specs/chatgpt-sign-in.md:CHATGPT-1: only a command a person types signs in
-docs/specs/chatgpt-sign-in.md:CHATGPT-2: a token reaches only the hosts compiled in for it
-docs/specs/chatgpt-sign-in.md:CHATGPT-3: the values the request depends on are generated here, for one sign-in
-docs/specs/chatgpt-sign-in.md:CHATGPT-4: the listener takes the one callback that carries its state
 docs/specs/chatgpt-sign-in.md:CHATGPT-5: nothing the flow reads from outside reaches the driver or the planner
-docs/specs/chatgpt-sign-in.md:CHATGPT-6: the tokens are one file the account owns
 docs/specs/chatgpt-sign-in.md:CHATGPT-7: an access token is replaced before it expires
-docs/specs/chatgpt-sign-in.md:CHATGPT-8: a failure names its step and quotes nothing
 docs/specs/chatgpt-sign-in.md:CHATGPT-9: the account's models are offered under the identifier `chatgpt`
 docs/specs/chatgpt-sign-in.md:CHATGPT-10: a request to the serving host is made in the Responses protocol and carries the token and the session's identifiers
-docs/specs/chatgpt-sign-in.md:CHATGPT-11: logging out, status and doctor never print the sign-in
-docs/specs/chatgpt-sign-in.md:CHATGPT-12: signing in is refused where it cannot be done
-docs/specs/chatgpt-sign-in.md:CHATGPT-13: the URL is always printed, so a machine with no browser can finish the sign-in elsewhere
 docs/specs/chatgpt-sign-in.md:CHATGPT-14: a refresh is still written in an incognito session
 docs/specs/commits.md:COMMIT-1: `commit` is a setting with two values, `off` and `turn`, and only the person's own files set it
 docs/specs/commits.md:COMMIT-2: a turn that ends with a reply makes one commit, in a fixed order, and a turn that does not end with one makes none

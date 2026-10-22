@@ -4337,6 +4337,7 @@ mod tests {
             for held_back in [
                 format!("{HOME}/.bravebot/gateway-keys.json"),
                 format!("{HOME}/.bravebot/leo-premium.json"),
+                format!("{HOME}/.bravebot/chatgpt-account.json"),
                 format!("{HOME}/.bravebot/mcp.json"),
                 format!("{HOME}/.bravebot-browser/secret"),
                 format!("{HOME}/.ssh/id_ed25519"),

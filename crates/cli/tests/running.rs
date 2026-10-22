@@ -8329,6 +8329,17 @@ fn status_of(
         !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
         "{arguments:?} printed a gateway key: {stdout}{stderr}"
     );
+    for held in [
+        A_CHATGPT_ACCESS_TOKEN,
+        A_CHATGPT_REFRESH_TOKEN,
+        A_CHATGPT_CLIENT,
+        A_CHATGPT_HOST,
+    ] {
+        assert!(
+            !stdout.contains(held) && !stderr.contains(held),
+            "{arguments:?} printed a ChatGPT sign-in value: {stdout}{stderr}"
+        );
+    }
     (output.status.code(), stdout, stderr)
 }
 
@@ -8587,9 +8598,210 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     }
     let (_, _, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["elsewhere"]);
     assert!(
-        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]]"),
+        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]|chatgpt]"),
         "{stderr}"
     );
+}
+
+const A_CHATGPT_ACCESS_TOKEN: &str = "placeholder-chatgpt-access-token";
+const A_CHATGPT_REFRESH_TOKEN: &str = "placeholder-chatgpt-refresh-token";
+const A_CHATGPT_CLIENT: &str = "placeholder-chatgpt-client";
+const A_CHATGPT_HOST: &str = "urn:uuid:placeholder-chatgpt-host";
+
+/// The file `auth login chatgpt` stores, for an access token that expires `expires_at` seconds after
+/// 1970-01-01.
+fn a_chatgpt_sign_in(expires_at: u64) -> String {
+    format!(
+        r#"{{"version":1,"access_token":"{A_CHATGPT_ACCESS_TOKEN}","refresh_token":"{A_CHATGPT_REFRESH_TOKEN}","expires_at":{expires_at},"client_id":"{A_CHATGPT_CLIENT}","host_id":"{A_CHATGPT_HOST}"}}"#
+    )
+}
+
+/// CLI-23 and CHATGPT-11: a stored sign-in is reported by the instant its access token expires and
+/// nothing else, a past instant is still signed in, nothing stored is not signed in, and a file that
+/// cannot be used is unusable with the remedy and does not quote it. With no way named the
+/// ChatGPT sign-in is one of those asked about, so a person who holds only it can ask whether
+/// bravebot can run.
+#[test]
+fn auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request() {
+    let nothing = Scratch::new("cli-running-auth-status-chatgpt-none");
+    let (code, stdout, stderr) = status_of(&nothing, NOTHING_CONFIGURED, &["chatgpt"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "chatgpt: not signed in: no ChatGPT sign-in is stored; run bravebot auth login chatgpt\n"
+    );
+
+    let held = Scratch::new("cli-running-auth-status-chatgpt")
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127));
+    let (code, stdout, stderr) = status_of(&held, NOTHING_CONFIGURED, &["chatgpt"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "chatgpt: signed in: the access token expires 2026-10-22T21:05:27Z\n"
+    );
+    assert_eq!(stderr, "");
+
+    let (code, stdout, stderr) = status_of(&held, NOTHING_CONFIGURED, &[]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("chatgpt: signed in: "), "{stdout}");
+    assert!(stdout.contains("leo: not signed in: "), "{stdout}");
+
+    let lapsed = Scratch::new("cli-running-auth-status-chatgpt-lapsed")
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1));
+    let (code, stdout, _) = status_of(&lapsed, NOTHING_CONFIGURED, &["chatgpt"]);
+    assert_eq!(code, Some(0), "{stdout}");
+    assert_eq!(
+        stdout,
+        "chatgpt: signed in: the access token expires 1970-01-01T00:00:01Z\n"
+    );
+
+    let garbled = Scratch::new("cli-running-auth-status-chatgpt-garbled").with_state(
+        "chatgpt-account.json",
+        r#"{"access_token": "placeholder-chatgpt-access-token" oops"#,
+    );
+    let (code, stdout, stderr) = status_of(&garbled, NOTHING_CONFIGURED, &["chatgpt"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stdout.starts_with("chatgpt: unusable: "), "{stdout}");
+    assert!(stdout.contains("bravebot auth login chatgpt"), "{stdout}");
+    assert!(stdout.contains("bravebot auth logout chatgpt"), "{stdout}");
+}
+
+/// Put stand-in `open` and `xdg-open` under `scratch` that record being run in `marker`, and return
+/// the `PATH` that finds them.
+#[cfg(unix)]
+fn opener_stand_in(scratch: &Scratch, marker: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = scratch.path.join("opener-bin");
+    std::fs::create_dir_all(&bin).expect("create the bin directory");
+    for name in ["open", "xdg-open"] {
+        let opener = bin.join(name);
+        std::fs::write(
+            &opener,
+            format!("#!/bin/sh\necho \"$@\" >> '{}'\n", marker.display()),
+        )
+        .expect("write the stand-in opener");
+        std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o755))
+            .expect("make it executable");
+    }
+    bin.to_str().expect("a UTF-8 path").to_string()
+}
+
+/// CHATGPT-12 and CHATGPT-1: what cannot be done is refused before the listener binds and before a
+/// browser opens, each with the ending its reason belongs to, and writes nothing. The browser is a
+/// stand-in that records being run, so a refusal made after the opener started is seen.
+#[cfg(unix)]
+#[test]
+fn auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done() {
+    let scratch = Scratch::new("cli-running-auth-chatgpt-refused");
+    let marker = scratch.path.join("browser-opened");
+    let path = opener_stand_in(&scratch, &marker);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("PATH", path.as_str()));
+
+    for (arguments, code, said_this) in [
+        (
+            &["--incognito", "auth", "login", "chatgpt"][..],
+            1,
+            "incognito",
+        ),
+        (
+            &["auth", "login", "chatgpt"][..],
+            2,
+            "needs a terminal on standard error",
+        ),
+        (
+            &["auth", "login", "chatgpt", "now"][..],
+            2,
+            "does not take now",
+        ),
+    ] {
+        let output = bravebot(&scratch.path, &environment, arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(code), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(stderr.contains(said_this), "{arguments:?}: {stderr}");
+        assert!(!marker.exists(), "{arguments:?} opened a browser");
+        assert!(
+            !scratch.path.join(".bravebot/chatgpt-account.json").exists(),
+            "{arguments:?} stored a sign-in"
+        );
+    }
+
+    let gateway = Scratch::new("cli-running-auth-chatgpt-gateway").with_settings(
+        r#"{"provider": {"chatgpt": {"options": {"baseURL": "https://gateway.example/v1"}}}}"#,
+    );
+    let output = bravebot(&gateway.path, &environment, &["auth", "login", "chatgpt"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("a provider block named chatgpt is a gateway"),
+        "{stderr}"
+    );
+    assert!(!marker.exists(), "a gateway of that name opened a browser");
+}
+
+/// CHATGPT-11: logging out removes the one file and says what it leaves, is allowed in an
+/// incognito session, is not an error where nothing is stored, leaves the Leo credentials where
+/// they are, and leaves no claim or temporary behind.
+#[test]
+fn auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one() {
+    let scratch = Scratch::new("cli-running-auth-logout-chatgpt")
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127))
+        .with_state("leo-premium.json", &a_batch_for("production"));
+
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "logout", "chatgpt"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("forgot the stored ChatGPT sign-in"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("stays valid at OpenAI"), "{stdout}");
+    assert!(!stdout.contains(A_CHATGPT_ACCESS_TOKEN), "{stdout}");
+    let state = scratch.path.join(".bravebot");
+    assert!(!state.join("chatgpt-account.json").exists());
+    assert!(
+        scratch.credentials().exists(),
+        "the Leo credentials went too"
+    );
+    let mut left: Vec<String> = std::fs::read_dir(&state)
+        .expect("the state directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        ["leo-premium.json"],
+        "something was left beside the credentials"
+    );
+
+    let again = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "logout", "chatgpt"],
+    );
+    let (stdout, stderr) = said(&again);
+    assert!(again.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("no ChatGPT sign-in is stored"), "{stdout}");
+
+    let extra = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "logout", "chatgpt", "now"],
+    );
+    assert_eq!(extra.status.code(), Some(2));
 }
 
 /// CLI-23: an AWS account is signed in where its session gives credentials, asked of the AWS CLI

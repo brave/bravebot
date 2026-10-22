@@ -7,6 +7,13 @@ governs:
   - crates/config/src/provider.rs
   - crates/agent/src/backend.rs
   - crates/aichat/src/lib.rs
+  - crates/cli/src/chatgpt.rs
+  - crates/skus/src/chatgpt/mod.rs
+  - crates/skus/src/chatgpt/account.rs
+  - crates/skus/src/chatgpt/authorize.rs
+  - crates/skus/src/chatgpt/encoding.rs
+  - crates/skus/src/chatgpt/exchange.rs
+  - crates/skus/src/chatgpt/listener.rs
 documented-by:
   - none (gap: a page on signing in with a ChatGPT account, owed until the design is built)
 ---
@@ -23,19 +30,21 @@ identifier.
 Reaching OpenAI with a pay-per-token API key is a different route, the `openai` entry that
 [backends.md](backends.md) describes. It needs none of this and this needs none of it.
 
-Nothing here is built, and nothing here has been observed in a sign-in made with a real account. A clause in
-this spec reads `verified-by: none` until the work it describes lands. The spec is written to be argued
-about first, so the points where it changes a built spec are named in
-[What this changes elsewhere](#what-this-changes-elsewhere) and none of those specs is edited until the work
-lands.
+The command is built: `auth login chatgpt` signs in and stores the tokens, `auth logout chatgpt` forgets
+them, and `auth status` and the list of ways report them. [What is built](#what-is-built) says which parts of
+which clauses that is. Nothing here has been observed in a sign-in made with a real account. A clause reads
+`verified-by: none` until the work it describes lands, and a clause built in part says which part is not. The
+points where the unbuilt work changes a built spec are named in
+[What this changes elsewhere](#what-this-changes-elsewhere), and those specs are edited when it lands.
 
 The hosts, parameters, field names and headers the clauses state are read from opencode's source
 (`packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`), which is another program's code.
 Each is a value to confirm with a sign-in, and [What the exchange has to record](#what-the-exchange-has-to-record)
 lists them beside what no source states. Whether OpenAI's terms allow a program to use a subscription this
 way, and whether OpenAI registers a client for this program, are
-[decisions left open](#decisions-left-open). The build waits on those and on the Responses protocol of
-#2994.
+[decisions left open](#decisions-left-open). The command is built on the values as stated, and a release
+that carries it waits on the first of those decisions. Sending a request with the sign-in waits on the
+Responses protocol of #2994.
 
 The flow carries no workspace content and no model output. The rule that untrusted content never
 reaches the driver or the planner is [AGENTS.md](../../agents/AGENTS.md), and
@@ -79,6 +88,9 @@ is sent. The refusal is a sentence from [CHATGPT-8](#CHATGPT-8), and it names th
 The way is named `chatgpt`. `openai` is the id of the gateway reached with `OPENAI_API_KEY`, and
 `auth status openai` would name two credentials.
 
+**Not built:** the refusal of a turn whose model is named `chatgpt/<name>`, which comes with the account's
+models ([CHATGPT-9](#CHATGPT-9)).
+
 **Why.** The flow opens a browser, holds a port and ends with a credential on disk. Each is a decision
 about a person's machine and account, and a person's own typing is the one source for it that no content
 can author. A session signs in to AWS when it opens, because that sign-in is the AWS CLI's, run in the
@@ -87,7 +99,10 @@ acts on, and a person on another machine has to be told which port to forward. A
 desktop window or a background run has nowhere to show the URL. A session with no service configured
 already takes this road: it says the command to type and does not start the work.
 
-`verified-by: none`
+`verified-by: bravebot_cli::layering::the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else`
+`verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
+`verified-by: bravebot_cli::auth::every_way_is_listed_and_only_a_held_one_says_what_it_holds`
+`verified-by: bravebot_cli::auth::a_way_is_picked_by_its_number_or_its_name`
 
 <a id="CHATGPT-2"></a>
 ### CHATGPT-2: a token reaches only the hosts compiled in for it
@@ -115,6 +130,9 @@ and the tokens of this account are never sent to a gateway.
 A model of this service is answered with the stored sign-in and with nothing else. `OPENAI_API_KEY`, a
 gateway key and any other variable are not looked for.
 
+**Not built:** the key set and the serving host, and the answering of a model of this service with the stored
+sign-in. The flow sends to the authorization page and the token endpoint only.
+
 **Why.** A settings file may name a destination, which is right where the credential is one the person
 typed for that destination. A checkout's settings file naming where an account's refresh token goes would
 send a person's subscription to whoever wrote the file, and a token whose host came from a reply would go
@@ -123,7 +141,9 @@ for each other: a person who has a key and a subscription gets the one their mod
 ([CHATGPT-9](#CHATGPT-9)). A redirect re-sends the request, and with it the token, to a host nobody
 compiled in.
 
-`verified-by: none`
+`verified-by: bravebot_skus::chatgpt::authorize::a_first_sign_in_asks_for_a_client_and_carries_the_parameters_listed_and_no_other`
+`verified-by: bravebot_skus::chatgpt::a_redirect_in_answer_to_the_exchange_is_not_followed`
+`verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
 
 <a id="CHATGPT-3"></a>
 ### CHATGPT-3: the values the request depends on are generated here, for one sign-in
@@ -160,7 +180,14 @@ the listener to end a sign-in ([Known costs](#known-costs)). A client registered
 by it, says truthfully which program is asking, where another program's client identifier would say it is
 that program.
 
-`verified-by: none`
+`verified-by: bravebot_skus::chatgpt::authorize::a_first_sign_in_asks_for_a_client_and_carries_the_parameters_listed_and_no_other`
+`verified-by: bravebot_skus::chatgpt::authorize::a_sign_in_over_a_stored_one_presents_its_client_and_host_and_asks_for_no_client`
+`verified-by: bravebot_skus::chatgpt::authorize::the_challenge_is_the_hash_of_the_verifier_and_the_verifier_is_not_in_the_url`
+`verified-by: bravebot_skus::chatgpt::authorize::each_sign_in_generates_its_own_verifier_state_and_nonce`
+`verified-by: bravebot_skus::chatgpt::authorize::the_values_are_percent_encoded_in_the_url`
+`verified-by: bravebot_skus::chatgpt::encoding::a_challenge_is_the_rfc_7636_one_for_its_verifier`
+`verified-by: bravebot_skus::chatgpt::encoding::a_random_value_is_43_url_safe_characters_and_a_new_one_each_time`
+`verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
 
 <a id="CHATGPT-4"></a>
 ### CHATGPT-4: the listener takes the one callback that carries its state
@@ -181,7 +208,9 @@ it reads `code`, `state` and `client_id` and nothing else, and it reads no heade
 `client_id` is used only where no client was stored, and only if it is a non-empty string of at most 128
 characters holding letters, digits, hyphens, underscores and periods. A callback with no such `client_id`
 at a first sign-in ends it, and so does one whose `client_id` differs from a stored one. The reply to a
-callback is one fixed page that loads nothing and repeats nothing from the request.
+callback is one fixed page that loads nothing and repeats nothing from the request. After any reply the
+connection is told nothing more will be sent and what it still sends is discarded unread, up to 64 KiB and half a
+second, so that closing it does not reset it and take the page with it.
 
 The query string and the values read from it are held in memory for the exchange and are written nowhere:
 not to a log, a trace, an error message or the terminal ([CHATGPT-8](#CHATGPT-8)).
@@ -194,10 +223,27 @@ network. A redirect to the literal address `127.0.0.1` is not resolved by name, 
 one address the listener is bound to. A page that repeated the query would put a `code` in a second place,
 and a log of it would keep a `code` and a `state` for as long as the log. Reading only the three named
 parameters keeps a callback, which is bytes a browser sent, down to a `code` to hand on, a `state` to
-compare and a client identifier that is checked for its shape and then verified by the exchange and the ID
-token ([CHATGPT-5](#CHATGPT-5)).
+compare and a client identifier that is checked for its shape and then verified by the exchange, and by the ID
+token once that is verified ([CHATGPT-5](#CHATGPT-5)).
 
-`verified-by: none`
+`verified-by: bravebot_skus::chatgpt::listener::the_listener_is_bound_to_the_loopback_address_only`
+`verified-by: bravebot_skus::chatgpt::listener::the_callback_with_the_state_is_served_and_answered_with_a_page_that_repeats_nothing`
+`verified-by: bravebot_skus::chatgpt::listener::a_request_that_is_not_the_callback_is_answered_and_ignored_and_the_wait_goes_on`
+`verified-by: bravebot_skus::chatgpt::listener::a_callback_with_no_code_is_returned_as_one_with_none`
+`verified-by: bravebot_skus::chatgpt::listener::only_the_first_callback_is_served`
+`verified-by: bravebot_skus::chatgpt::listener::the_query_is_decoded_and_the_first_of_a_repeated_name_is_read`
+`verified-by: bravebot_skus::chatgpt::listener::a_client_identifier_of_the_wrong_shape_is_dropped`
+`verified-by: bravebot_skus::chatgpt::listener::a_connection_that_sends_nothing_delays_no_other`
+`verified-by: bravebot_skus::chatgpt::listener::a_connection_that_sends_nothing_is_closed_when_its_time_is_up`
+`verified-by: bravebot_skus::chatgpt::listener::a_request_line_longer_than_the_limit_is_closed_without_an_answer`
+`verified-by: bravebot_skus::chatgpt::listener::the_request_line_is_all_that_is_read`
+`verified-by: bravebot_skus::chatgpt::listener::each_page_carries_the_callers_words_escaped_and_the_two_differ`
+`verified-by: bravebot_skus::chatgpt::listener::a_reply_reaches_a_client_that_sent_more_than_its_request_line`
+`verified-by: bravebot_skus::chatgpt::listener::a_wait_that_sees_no_callback_ends_at_the_bound`
+`verified-by: bravebot_skus::chatgpt::encoding::two_values_are_the_same_only_when_every_byte_is`
+`verified-by: bravebot_skus::chatgpt::the_browser_has_five_minutes_to_return_by_default`
+`verified-by: bravebot_skus::chatgpt::a_callback_naming_another_client_than_the_stored_one_ends_the_sign_in_unexchanged`
+`verified-by: bravebot_skus::chatgpt::a_callback_without_a_code_or_without_a_usable_first_client_stops_before_the_exchange`
 
 <a id="CHATGPT-5"></a>
 ### CHATGPT-5: nothing the flow reads from outside reaches the driver or the planner
@@ -235,7 +281,9 @@ Three conditions keep the argument true, and a change that breaks one is a chang
 2. What the agent receives from it is a token, in the secret type that
    [credential-protection.md](credential-protection.md) describes, and a value from the closed set of
    [CHATGPT-8](#CHATGPT-8). No string taken from a reply is part of either.
-3. The ID token is verified once, at the sign-in, and no claim of it is stored, sent or displayed. Its
+3. The ID token is verified once, at the sign-in, and no claim of it is stored, sent or displayed. This
+   is not built: the reply's `id_token` is dropped unread, since the verification needs a signature
+   verifier this crate does not hold ([Decisions left open](#decisions-left-open)). Its
    signature is checked against the key set with RS256 only, and its issuer, audience (the client of the
    sign-in), expiry, nonce (the one sent) and subject (present and not empty) are compared. No other claim
    is read. The access token's expiry is read from the `expires_in` field of the reply, not from the token,
@@ -284,13 +332,32 @@ A token is held in the secret type that spec describes, so it is redacted wherev
 buffers are cleared and kept out of crash artifacts. It reaches no program a turn starts, no prompt and no
 record, and it is never passed as a command-line argument.
 
+**Not built:** the tier and what would end each token are not recorded in the account `doctor` gives of a held
+credential ([CRED-25](credential-protection.md#CRED-25)), since `doctor` does not report this sign-in
+([CHATGPT-11](#CHATGPT-11)).
+
 **Why.** A file of its own because the shape differs from the gateway keys, which are one string under an id
 with no expiry, and from the Leo batch, which is spent a credential at a time. Held because the arrangement
 is the one that spec names as the false pass, a short-lived token that the holder renews by itself. A record
 of what ends the credential is what a person who suspects a leak needs, and it can only be written down
 while the arrangement is understood.
 
-`verified-by: none`
+`verified-by: bravebot_skus::chatgpt::account::a_stored_sign_in_is_read_back_field_for_field`
+`verified-by: bravebot_skus::chatgpt::account::the_file_holds_the_named_fields_and_nothing_else`
+`verified-by: bravebot_skus::chatgpt::account::no_file_is_no_sign_in`
+`verified-by: bravebot_skus::chatgpt::account::a_file_that_cannot_be_used_is_an_error_naming_its_defect_and_not_an_absent_sign_in`
+`verified-by: bravebot_skus::chatgpt::account::a_refusal_of_a_malformed_file_quotes_none_of_it`
+`verified-by: bravebot_skus::chatgpt::account::the_tokens_are_redacted_wherever_the_account_is_printed`
+`verified-by: bravebot_skus::chatgpt::account::the_file_is_readable_by_its_owner_alone_and_so_is_its_replacement`
+`verified-by: bravebot_skus::chatgpt::account::a_write_that_stops_part_way_leaves_the_last_good_file_and_no_temporary`
+`verified-by: bravebot_skus::chatgpt::account::a_second_sign_in_replaces_the_first_and_forgetting_removes_it`
+`verified-by: bravebot_skus::chatgpt::account::a_write_waits_for_the_claim_on_this_file_and_not_for_the_leo_one`
+`verified-by: bravebot_skus::chatgpt::account::a_claim_on_this_file_is_waited_on_until_it_is_a_minute_old`
+`verified-by: bravebot_skus::chatgpt::account::the_temporary_of_a_name_that_is_not_utf8_is_named_from_its_bytes`
+`verified-by: bravebot_agent::home::a_directory_named_in_the_environment_is_the_state_directory_in_every_crate`
+`verified-by: bravebot_agent::home::a_value_that_names_no_directory_leaves_no_state_directory_to_guess`
+`verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
+`verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
 
 <a id="CHATGPT-7"></a>
 ### CHATGPT-7: an access token is replaced before it expires
@@ -374,6 +441,10 @@ the terminal once by [CHATGPT-13](#CHATGPT-13) and goes nowhere else. A test hol
 against each of those outputs, as the trail's test does for the credentials the agent holds, and leaves out
 that one line.
 
+**Not built:** the sentences of a refused refresh and of a refused model request, the completed command that
+says the account reaches no model, and the test that holds every secret the process held against each output
+of a run that signs in, refreshes and fails. The sentences of the sign-in are built.
+
 **Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
 to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
 Choosing from a closed set also keeps [CHATGPT-5](#CHATGPT-5) true: what the agent branches on is a value
@@ -381,7 +452,16 @@ this crate computed from a step and a status class. The categories are the ones 
 failures already use, so a rate limit here is waited out and reported as a rate limit is elsewhere, and a
 remedy that signing in again would not supply is not offered.
 
-`verified-by: none`
+`verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
+`verified-by: bravebot_skus::chatgpt::a_failed_exchange_is_classed_by_its_status_and_quotes_nothing`
+`verified-by: bravebot_skus::chatgpt::a_reply_that_does_not_allow_the_use_stores_nothing`
+`verified-by: bravebot_skus::chatgpt::a_browser_that_never_returns_ends_the_sign_in_at_the_bound`
+`verified-by: bravebot_skus::chatgpt::an_unreachable_server_and_a_reply_of_another_shape_are_reported_as_such`
+`verified-by: bravebot_skus::chatgpt::exchange::a_status_is_classed_as_the_backends_classify_it`
+`verified-by: bravebot_skus::chatgpt::account::a_refusal_of_a_malformed_file_quotes_none_of_it`
+`verified-by: bravebot_cli::chatgpt::each_stop_of_the_sign_in_has_its_own_sentence_and_names_the_remedy_where_there_is_one`
+`verified-by: bravebot_cli::chatgpt::a_failure_of_the_file_is_worded_with_its_detail_made_printable_and_the_remedy`
+`verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 
 <a id="CHATGPT-9"></a>
 ### CHATGPT-9: the account's models are offered under the identifier `chatgpt`
@@ -482,12 +562,20 @@ line holds no token, claim, identifier, email or account name.
 expiry. The list `auth login` prints says **signed in** on this way's line where the file holds a sign-in.
 Signing in again over one asks first and replaces the tokens only on a yes.
 
+**Not built:** the line in `bravebot doctor`. The list `auth login` prints, `auth status` and `auth logout` are
+built.
+
 **Why.** Each is an answer about whether the next request will work, and none needs the secret to give it.
 A sign-in that OpenAI has ended is found out by a refresh and removed by it ([CHATGPT-7](#CHATGPT-7)), so
 the file that is there is the one that has not been found to fail. An identifier or an email on a status
 line is the one thing in a pasted report that says whose account it was.
 
-`verified-by: none`
+`verified-by: bravebot_cli::running::auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request`
+`verified-by: bravebot_cli::running::auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one`
+`verified-by: bravebot_cli::chatgpt::a_stored_sign_in_is_reported_by_its_expiry_alone`
+`verified-by: bravebot_cli::chatgpt::a_token_past_its_expiry_is_still_signed_in_and_nothing_stored_is_not`
+`verified-by: bravebot_cli::chatgpt::a_file_that_cannot_be_used_is_unusable_and_no_place_to_keep_one_is_said_apart`
+`verified-by: bravebot_cli::chatgpt::a_stored_sign_in_needs_a_terminal_to_be_asked_about_and_a_first_one_does_not`
 
 <a id="CHATGPT-12"></a>
 ### CHATGPT-12: signing in is refused where it cannot be done
@@ -502,7 +590,11 @@ nobody is watching cannot answer.
 **Why.** Refusing the sign-in is the same argument as the import's: doing it and discarding the result
 would leave a session that was signed in once and never again.
 
-`verified-by: none`
+`verified-by: bravebot_cli::chatgpt::each_condition_that_cannot_be_answered_stops_the_command_with_its_own_ending`
+`verified-by: bravebot_cli::chatgpt::a_stored_sign_in_needs_a_terminal_to_be_asked_about_and_a_first_one_does_not`
+`verified-by: bravebot_cli::chatgpt::a_stored_sign_in_is_replaced_only_on_a_yes_and_a_first_one_asks_nothing`
+`verified-by: bravebot_cli::chatgpt::the_mode_is_the_refusal_given_where_several_apply`
+`verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 
 <a id="CHATGPT-13"></a>
 ### CHATGPT-13: the URL is always printed, so a machine with no browser can finish the sign-in elsewhere
@@ -528,7 +620,13 @@ the opener exits successfully and opens nothing, which a machine reached over SS
 the program and the URL would read the `&` the query holds. The URL holds the `state`, the challenge and the
 identifiers, and the person needs it, so it is the one line [CHATGPT-8](#CHATGPT-8) lets reach the terminal.
 
-`verified-by: none`
+`verified-by: bravebot_cli::chatgpt::the_address_and_the_port_are_shown_before_the_browser_is_asked_for`
+`verified-by: bravebot_cli::chatgpt::the_address_is_one_argument_of_the_platforms_own_opener`
+`verified-by: bravebot_cli::chatgpt::the_opener_is_not_handed_this_agents_own_credentials`
+`verified-by: bravebot_cli::chatgpt::a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started`
+`verified-by: bravebot_cli::chatgpt::a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written`
+`verified-by: bravebot_skus::chatgpt::the_announcement_names_the_port_the_listener_is_already_bound_to`
+`verified-by: bravebot_skus::chatgpt::a_browser_that_never_returns_ends_the_sign_in_at_the_bound`
 
 <a id="CHATGPT-14"></a>
 ### CHATGPT-14: a refresh is still written in an incognito session
@@ -543,6 +641,24 @@ token on use, and the person would find out at the first turn of the next sessio
 
 `verified-by: none`
 
+## What is built
+
+The sign-in is the `chatgpt` module of `bravebot-skus` and the command is `crates/cli/src/chatgpt.rs`.
+[LAYER-1](layering.md#LAYER-1)'s row for `bravebot-skus` covers the module, which needs no dependency the
+crate does not hold and depends on no crate of this workspace, so [CHATGPT-5](#CHATGPT-5)'s first condition
+holds by reading its manifest.
+
+- **Built whole:** [CHATGPT-3](#CHATGPT-3), [CHATGPT-4](#CHATGPT-4), [CHATGPT-12](#CHATGPT-12) and
+  [CHATGPT-13](#CHATGPT-13).
+- **Built in part,** each naming what is not: [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2),
+  [CHATGPT-6](#CHATGPT-6), [CHATGPT-8](#CHATGPT-8) and [CHATGPT-11](#CHATGPT-11).
+- **Not built:** [CHATGPT-7](#CHATGPT-7) and [CHATGPT-14](#CHATGPT-14), the replacing of an access token;
+  [CHATGPT-9](#CHATGPT-9), the account's models in the picker; [CHATGPT-10](#CHATGPT-10), requests to the
+  serving host, which wait on the Responses protocol of #2994 and on a zstd encoder; and the verification
+  of the ID token of [CHATGPT-5](#CHATGPT-5).
+
+A sign-in made now is stored and not yet used by a turn, and the command says so.
+
 ## Decisions left open
 
 These are a person's to decide, and no test can settle them.
@@ -556,7 +672,9 @@ These are a person's to decide, and no test can settle them.
   the tree already holds a verifier that serves, or one is added, is a decision about a dependency
   ([DEP-001](../best-practices/dependencies.md#DEP-001)). The alternative is to read no ID token, which
   drops the `nonce` and the audience check and leaves the code exchange and PKCE to tie the sign-in to this
-  process.
+  process. The command is built on that alternative until this is decided: the `nonce` is sent and not
+  checked, and the reply's `id_token` is dropped unread. The tree holds no RS256 verifier, so the other
+  choice adds a dependency.
 - **Compressing the body.** [CHATGPT-10](#CHATGPT-10) sends zstd. The tree may hold no encoder, and adding
   one is a decision about a dependency in the same way.
 - **The compiled list.** [CHATGPT-9](#CHATGPT-9) offers one where the listing cannot be read. Its contents
@@ -635,12 +753,12 @@ work lands, in the same commit as the code.
   account gains the credential.
 - **Sandboxing.** [SANDBOX-30](sandboxing.md#SANDBOX-30)'s list of programs started by name gains the
   browser opener of [CHATGPT-13](#CHATGPT-13).
-- **Layering.** [LAYER-1](layering.md#LAYER-1) gains a row for the crate that runs the flow, named
-  `bravebot-chatgpt` here as a proposal. It is auth
-  only, holds no workspace content and no labelled value, and depends on `bravebot-config` for the secret
-  type, `bravebot-sandbox` for starting the opener and clearing buffers, and `bravebot-diag`. It depends on
-  neither `bravebot-core` nor `bravebot-agent`. Its files are added to this spec's `governs` when it is
-  created, since [CHATGPT-5](#CHATGPT-5) rests on that dependency set.
+- **Layering.** [LAYER-1](layering.md#LAYER-1)'s row for `bravebot-skus` says the crate also runs this
+  sign-in. The flow is auth only, holds no workspace content and no labelled value, and depends on no crate of
+  this workspace. The browser is started by `bravebot-cli`, which depends on `bravebot-sandbox`. A crate of its
+  own is needed if the flow comes to need the secret type of `bravebot-config` or the clearing of buffers in
+  `bravebot-sandbox`, which `bravebot-skus` spells for itself. [CHATGPT-5](#CHATGPT-5) rests on the dependency
+  set either way.
 - **Network egress.** [network-egress.md](network-egress.md) names no host for any service, so none is added,
   and the key set is fetched from the authorization server's host without a credential. The crate keeps a client of its own as `bravebot-skus` does, because a request here carries no labelled
   value for the gate in `bravebot-net` to judge, so the register in its Known costs gains the crate, and the
@@ -676,6 +794,10 @@ work lands, in the same commit as the code.
   refuses at the first request.
 - One account is signed in at a time on one machine, as one subscription is imported at a time.
 - A person whose gateway entry already has the id `chatgpt` renames it to sign in.
+- The sign-in is stored and no request is sent with it, and an access token that has expired is not
+  replaced, so a sign-in made now is a file that nothing reads until the clauses that use it are built.
+- The ID token is not verified, so the `nonce` and the audience are not checked
+  ([Decisions left open](#decisions-left-open)).
 - Whether a third-party program may use a subscription this way is not this spec's to settle
   ([Decisions left open](#decisions-left-open)). The design assumes a person is allowed to, and an answer of
   no ends it.
