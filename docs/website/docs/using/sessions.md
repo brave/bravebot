@@ -207,15 +207,17 @@ sessions, which is what the record is read for.
 bravebot stats
 ```
 
-adds the sessions, turns and tokens of every recorded session, where `/cost` reports the one in
-front of you. `--days 7` keeps the sessions last written in the last seven days, `--models` shows
-what each model spent, and `--project` keeps the sessions that ran in this directory, or in the one
-`--project <dir>` names. Every option is described under [`stats`](../reference/cli.md#stats).
+adds the sessions, turns and tokens of every recorded session, with how many of the tokens the model
+read and how many it wrote, where `/cost` reports the one in front of you. `--days 7` keeps the
+sessions last written in the last seven days, `--models` shows what each model spent, and
+`--project` keeps the sessions that ran in this directory, or in the one `--project <dir>` names.
+Every option is described under [`stats`](../reference/cli.md#stats).
 
 The same limits apply as for `/cost`: the figures are tokens, and a session is counted whole, under
-the day it was last written and the model it ended on. An incognito session leaves no record, so it
-is not in the total. A session you forked, or moved with `/cd`, is counted once for each record it
-left, so its spend can appear more than once.
+the day it was last written and the model it ended on. The read and written figures cover the
+sessions written by a version that kept them, and the tokens of the rest are in the unsplit column.
+An incognito session leaves no record, so it is not in the total. A session you forked, or moved
+with `/cd`, is counted once for each record it left, so its spend can appear more than once.
 
 ## What is never written down
 

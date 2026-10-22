@@ -90,9 +90,21 @@ impl Session {
     /// The counter answers "what has this cost me", and that answer does not become smaller
     /// because the process restarted. Set rather than added to: this is a session being picked
     /// up, not a second one being merged into it.
+    ///
+    /// The split of the tokens counted before is dropped with them, so a caller that restores the
+    /// total and not [`Session::restore_split`] leaves the split at none rather than at one that
+    /// describes tokens no longer in the total.
     pub fn restore_spend(&mut self, tokens: u64, by_turn: std::collections::BTreeMap<usize, u64>) {
         self.tokens = tokens;
+        self.split = Default::default();
         self.spend = by_turn;
+    }
+
+    /// Take on how many of the restored tokens the model read and how many it wrote, which the
+    /// record keeps beside the total and a record written before it was kept leaves at zero.
+    /// Called after [`Session::restore_spend`], which clears it.
+    pub fn restore_split(&mut self, split: bravebot_session::sessions::Split) {
+        self.split = split;
     }
 
     /// Take on the model an earlier session's record says answered.
@@ -107,6 +119,7 @@ impl Session {
     /// the model, which are the figures a save writes back whole.
     pub fn restore_accounts(&mut self, record: &bravebot_session::sessions::Record) {
         self.restore_spend(record.tokens, record.spend.clone());
+        self.restore_split(record.split);
         self.restore_timing(record.timing.clone());
         self.restore_model(record.model.clone());
     }
@@ -121,6 +134,23 @@ impl Session {
         by_turn: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
     ) {
         self.timing = by_turn;
+    }
+
+    /// How many of the session's tokens the model read and how many it wrote, for the charges that
+    /// said, for writing the session down.
+    pub fn split(&self) -> bravebot_session::sessions::Split {
+        self.split
+    }
+
+    /// Record how a charge divides: of `tokens`, already added to the total, the model wrote
+    /// `written`.
+    ///
+    /// Apart from the charge because most of the places that charge a session know a total and no
+    /// more. A charge nobody reports the split for stays in the total alone, which is what the
+    /// split's readers expect of it ([`bravebot_session::sessions::Split`]).
+    pub fn charged_split(&mut self, tokens: u64, written: u64) {
+        self.split
+            .add(bravebot_session::sessions::Split::of(tokens, written));
     }
 
     /// What each turn cost, by turn number.
@@ -170,6 +200,7 @@ impl Session {
     pub(super) fn charge_progress(&mut self) -> u64 {
         let spent = std::mem::take(&mut self.progress);
         self.charge(spent.tokens);
+        self.charged_split(spent.tokens, spent.output_tokens);
         self.spent_time(spent.timing);
         // A turn that ended before any request completed reports nothing (BACKEND-31), which is
         // neither a zero drawn over the session's figures nor the turn before it left on the panel.

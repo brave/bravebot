@@ -92,9 +92,12 @@ fr:sessions-purge-row
 fr:source-is-large
 fr:sources-large-together
 fr:stats-column-model
+fr:stats-column-read
 fr:stats-column-sessions
 fr:stats-column-tokens
 fr:stats-column-turns
+fr:stats-column-unsplit
+fr:stats-column-written
 fr:stats-incognito
 fr:stats-model-unknown
 fr:stats-row-total

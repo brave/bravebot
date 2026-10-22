@@ -81,6 +81,8 @@ pub struct State {
     /// and extended by every turn taken here, so a save writes back the history it was given.
     pub history: Option<Vec<bravebot_session::sessions::StoredTurn>>,
     pub tokens: u64,
+    /// How many of `tokens` the model read and how many it wrote, for the turns that reported it.
+    pub split: bravebot_session::sessions::Split,
     /// What each turn cost, by turn number.
     ///
     /// The total says what the session cost; this says which turn cost it, which is the question
@@ -195,6 +197,7 @@ impl State {
             turns: 0,
             history: Some(Vec::new()),
             tokens: 0,
+            split: Default::default(),
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
             model: None,
@@ -238,6 +241,7 @@ impl State {
             turns: record.turns,
             history: record.history.clone(),
             tokens: record.tokens,
+            split: record.split,
             spend: record.spend.clone(),
             timing: record.timing.clone(),
             model: record.model.clone(),
@@ -301,6 +305,7 @@ impl State {
             // are carried: the fork reads as the legacy shape, as it did before.
             history: None,
             tokens: 0,
+            split: Default::default(),
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
             model: None,

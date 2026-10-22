@@ -4049,6 +4049,11 @@ stats-column-model = Model
 stats-column-sessions = Sessions
 stats-column-turns = Turns
 stats-column-tokens = Tokens
+stats-column-read = Read
+stats-column-written = Written
+# Tokens a record holds that its split into read and written does not cover: every token of a
+# session written before the split was kept.
+stats-column-unsplit = Unsplit
 stats-row-total = Total
 # A session whose record names no model: one written before the model was kept, one whose turns
 # never reached a server, and one copied in from another program.

@@ -111,6 +111,52 @@ pub struct Aside {
     pub kept: bool,
 }
 
+/// How a session's tokens divide into those the model read and those it wrote.
+///
+/// Kept as two running totals beside [`Record::tokens`] rather than as a second total, because
+/// a charge that reports no split still adds to the total. What the two figures leave out of the
+/// total is tokens whose split is not known, which is every token of a record written before the
+/// split was kept.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Split {
+    /// Tokens the model was sent, which is the total less what it wrote, as the account panel
+    /// reckons it.
+    #[serde(default)]
+    pub read: u64,
+    /// Tokens the model wrote.
+    #[serde(default)]
+    pub written: u64,
+}
+
+impl Split {
+    /// The split of `tokens` of which the model wrote `written`. A figure past the total reads as
+    /// the whole of it written.
+    pub fn of(tokens: u64, written: u64) -> Self {
+        Self {
+            read: tokens.saturating_sub(written),
+            written,
+        }
+        .within(tokens)
+    }
+
+    /// This split cut to fit inside `tokens`, so that the tokens it leaves out never wrap past zero.
+    /// Written is kept first and read takes what is left.
+    pub fn within(self, tokens: u64) -> Self {
+        let written = self.written.min(tokens);
+        Self {
+            read: self.read.min(tokens - written),
+            written,
+        }
+    }
+
+    /// Saturates like the token totals `stats` sums beside it: a figure read back from a record
+    /// can be any number, and adding two of them must not overflow.
+    pub fn add(&mut self, other: Split) {
+        self.read = self.read.saturating_add(other.read);
+        self.written = self.written.saturating_add(other.written);
+    }
+}
+
 /// A checkpoint of session state captured before a turn begins, for `/undo`.
 #[derive(Debug, Clone)]
 pub struct TurnSnapshot {
@@ -120,6 +166,8 @@ pub struct TurnSnapshot {
     pub turns: usize,
     /// Cumulative tokens before this turn.
     pub tokens: u64,
+    /// How many of those were read and how many written, where that was recorded.
+    pub split: Split,
     /// Spend by turn before this turn.
     pub spend: std::collections::BTreeMap<usize, u64>,
     /// Timing by turn before this turn.
@@ -287,6 +335,13 @@ pub struct Record {
     /// than about the process that happened to be running it.
     #[serde(default)]
     pub tokens: u64,
+    /// How many of [`Record::tokens`] were read and how many were written, for the part of the
+    /// spend that was recorded with the split.
+    ///
+    /// Zero for a record written before the split was kept, and short of the total for a session
+    /// that went on after one: what the split does not cover is `tokens` less the two figures.
+    #[serde(default)]
+    pub split: Split,
     /// The model the server reported answering with, as of the last turn.
     ///
     /// What answered rather than what was asked for, since those differ: an endpoint may serve
@@ -697,6 +752,10 @@ pub struct StoredRewind {
     pub turns: usize,
     /// Cumulative tokens before the turn.
     pub tokens: u64,
+    /// The split of those that was recorded, which a record written before it was kept leaves at
+    /// zero.
+    #[serde(default)]
+    pub split: Split,
     #[serde(default)]
     pub spend: BTreeMap<usize, u64>,
     #[serde(default)]
@@ -854,6 +913,7 @@ impl StoredRewind {
             conversation: snapshot.conversation.clone(),
             turns: snapshot.turns,
             tokens: snapshot.tokens,
+            split: snapshot.split,
             spend: snapshot.spend.clone(),
             timing: snapshot.timing.clone(),
             trust: Some(stored_rules(&snapshot.trust)),
@@ -951,6 +1011,7 @@ impl StoredRewind {
                 conversation: self.conversation,
                 turns: self.turns,
                 tokens: self.tokens,
+                split: self.split,
                 spend: self.spend,
                 timing: self.timing,
                 cached: None,
@@ -1268,6 +1329,7 @@ pub fn record_manifest_run(
     let programs = TrustedPrograms::new();
     let usage = manifest_usage(outcome, retained);
     let tokens = usage.map_or(0, |s| s.tokens);
+    let split = usage.map_or(Split::default(), |s| Split::of(s.tokens, s.output_tokens));
     // One turn, so the breakdown and the total say the same thing. Written anyway, because a
     // reader comparing runs should not have to special-case where the figure came from.
     let spend = BTreeMap::from([(1, tokens)]);
@@ -1289,6 +1351,7 @@ pub fn record_manifest_run(
             conversation: &snapshot,
             turns: 1,
             tokens,
+            split,
             spend: &spend,
             timing: &timing,
             model: outcome.as_ref().ok().map(|o| o.model.as_str()),
@@ -1614,6 +1677,7 @@ pub struct Summary {
 /// figure is left out. The terminal and the desktop window both charge through here.
 pub fn charge_failed_turn(
     tokens: &mut u64,
+    split: &mut Split,
     spend: &mut std::collections::BTreeMap<usize, u64>,
     timing: &mut std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
     turn: usize,
@@ -1624,6 +1688,7 @@ pub fn charge_failed_turn(
         return false;
     }
     *tokens += spent.tokens;
+    split.add(Split::of(spent.tokens, spent.output_tokens));
     *spend.entry(turn).or_insert(0) += spent.tokens;
     let timing = timing.entry(turn).or_default();
     timing.wall_ms += u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
@@ -1641,6 +1706,8 @@ pub struct Standing<'a> {
     pub history: Option<&'a [StoredTurn]>,
     pub turns: usize,
     pub tokens: u64,
+    /// How many of `tokens` were read and how many written, where that was recorded.
+    pub split: Split,
     /// What each turn cost, by turn number.
     pub spend: &'a BTreeMap<usize, u64>,
     /// Where each turn's wall clock went, by turn number.
@@ -1671,6 +1738,8 @@ pub struct Continuation<'a> {
     pub prompt: &'a str,
     /// What the turn spent.
     pub tokens: u64,
+    /// How many of `tokens` the model read and how many it wrote.
+    pub split: Split,
     /// The model the server reported answering with.
     pub model: &'a str,
     /// The trust map after the turn.
@@ -2131,6 +2200,7 @@ impl Handle {
             updated: now(),
             turns: standing.turns,
             tokens: standing.tokens,
+            split: standing.split,
             model: standing.model.map(str::to_string),
             spend: standing.spend.clone(),
             timing: standing.timing.clone(),
@@ -2225,6 +2295,7 @@ impl Handle {
         }
         record.turns = number;
         record.tokens += next.tokens;
+        record.split.add(next.split);
         *record.spend.entry(number).or_insert(0) += next.tokens;
         record.timing.insert(number, next.timing);
         record.model = Some(next.model.to_string());
@@ -3203,9 +3274,10 @@ mod tests {
     fn a_failed_turn_is_charged_once_and_a_turn_with_no_request_not_at_all() {
         use bravebot_agent::timing::Timing;
 
-        let (mut tokens, mut spend, mut timing) = Default::default();
+        let (mut tokens, mut split, mut spend, mut timing) = Default::default();
         let spent = bravebot_agent::Spent {
             tokens: 107,
+            output_tokens: 40,
             timing: Timing {
                 wall_ms: 999_999,
                 inference_ms: 11,
@@ -3218,6 +3290,7 @@ mod tests {
 
         assert!(!charge_failed_turn(
             &mut tokens,
+            &mut split,
             &mut spend,
             &mut timing,
             1,
@@ -3225,10 +3298,12 @@ mod tests {
             took
         ));
         assert_eq!(tokens, 0);
+        assert_eq!(split, Split::default());
         assert!(spend.is_empty() && timing.is_empty());
 
         assert!(charge_failed_turn(
             &mut tokens,
+            &mut split,
             &mut spend,
             &mut timing,
             1,
@@ -3236,6 +3311,14 @@ mod tests {
             took
         ));
         assert_eq!(tokens, 107);
+        assert_eq!(
+            split,
+            Split {
+                read: 67,
+                written: 40
+            },
+            "the failed turn's split was not charged with its total"
+        );
         assert_eq!(spend.get(&1), Some(&107));
         assert_eq!(
             timing.get(&1),
@@ -4521,6 +4604,7 @@ mod tests {
             conversation: &snapshot,
             prompt: "next",
             tokens: 1,
+            split: Default::default(),
             model: "m",
             trust: &trust,
             begins: 0,
@@ -4540,6 +4624,171 @@ mod tests {
         assert_eq!(
             load(&root, handle.id()).expect("written").agent.as_deref(),
             Some("another")
+        );
+    }
+
+    /// Every record written before the split was kept lacks the field, and it must still resume,
+    /// with the split read as not recorded rather than with an error that loses the session.
+    #[test]
+    fn a_record_from_before_the_split_reads_it_as_none_recorded() {
+        let mut record = a_record();
+        record.tokens = 900;
+        record.split = Split {
+            read: 600,
+            written: 300,
+        };
+        let mut written = serde_json::to_value(record).expect("serialises");
+        let fields = written.as_object_mut().expect("an object");
+        fields.remove("split").expect("the split is written");
+
+        let old: Record = serde_json::from_value(written).expect("an older record reads");
+
+        assert_eq!(old.tokens, 900);
+        assert_eq!(old.split, Split::default());
+    }
+
+    /// A turn carried on from a record adds its split to the record's, as it adds its tokens. A
+    /// split that replaced the record's would report the last turn's division as the session's, and
+    /// one that was left out would report none for a session that kept it.
+    #[test]
+    fn a_continued_turn_adds_its_split_to_the_record() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-split-continued");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let trust = TrustStore::new(&root);
+        let snapshot = a_record().conversation;
+        let mut carry_on = |tokens: u64, written: u64| {
+            let record = load(&root, handle.id()).expect("written");
+            assert!(handle.save_continuation(
+                record,
+                Continuation {
+                    conversation: &snapshot,
+                    prompt: "next",
+                    tokens,
+                    split: Split::of(tokens, written),
+                    model: "m",
+                    trust: &trust,
+                    begins: 0,
+                    ends: 0,
+                    prompt_at: None,
+                    rewind: &[],
+                    timing: Default::default(),
+                },
+            ));
+            load(&root, handle.id()).expect("written")
+        };
+
+        let first = carry_on(100, 30);
+        assert_eq!(
+            first.split,
+            Split {
+                read: 70,
+                written: 30
+            }
+        );
+
+        let second = carry_on(30, 20);
+        assert_eq!(second.tokens, 130);
+        assert_eq!(
+            second.split,
+            Split {
+                read: 80,
+                written: 50
+            },
+            "the second turn's split did not add to the first's"
+        );
+    }
+
+    /// Undoing a turn restores the tokens from before it, and the split has to come back with them
+    /// from the record too, or a session resumed after an undo reports more read and written than
+    /// it holds in all.
+    #[test]
+    fn a_stored_rewind_point_keeps_the_split_of_the_tokens_before_its_turn() {
+        let mut stored = a_stored_point(vec![]);
+        stored.tokens = 90;
+        stored.split = Split {
+            read: 60,
+            written: 20,
+        };
+        let mut record = a_record();
+        record.rewind = vec![stored];
+
+        let reread: Record = serde_json::from_slice(&serde_json::to_vec(&record).unwrap()).unwrap();
+        let point = reread.rewind_points("/work").remove(0);
+
+        assert_eq!(point.snapshot.tokens, 90);
+        assert_eq!(
+            point.snapshot.split,
+            Split {
+                read: 60,
+                written: 20
+            }
+        );
+        assert_eq!(
+            StoredRewind::of(&point, Path::new("/work")).split,
+            point.snapshot.split,
+            "a point written back lost its split"
+        );
+    }
+
+    /// A rewind point written before the split was kept lacks the field, and it must still read,
+    /// with the split as not recorded rather than with an error that loses the point, as the
+    /// record's own field does.
+    #[test]
+    fn a_rewind_point_from_before_the_split_reads_it_as_none_recorded() {
+        let mut stored = a_stored_point(vec![]);
+        stored.tokens = 90;
+        stored.split = Split {
+            read: 60,
+            written: 20,
+        };
+        let mut written = serde_json::to_value(stored).expect("serialises");
+        let fields = written.as_object_mut().expect("an object");
+        fields.remove("split").expect("the split is written");
+
+        let old: StoredRewind = serde_json::from_value(written).expect("an older point reads");
+
+        assert_eq!(old.tokens, 90);
+        assert_eq!(old.split, Split::default());
+        assert_eq!(
+            old.into_point(Path::new("/work")).snapshot.split,
+            Split::default()
+        );
+    }
+
+    /// A manifest run that failed keeps what its completed requests cost, and how that divided, as
+    /// a turn does.
+    #[test]
+    fn a_failed_manifest_record_keeps_the_split_of_what_it_spent() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("manifest-split");
+        let retained = Some(bravebot_agent::Spent {
+            tokens: 90,
+            output_tokens: 25,
+            ..Default::default()
+        });
+
+        let id = record_manifest_run(
+            &root,
+            "summarise",
+            &a_failed_run(),
+            retained,
+            Front::Terminal,
+            A_BUILD,
+        )
+        .unwrap();
+
+        assert_eq!(
+            load(&root, &id).unwrap().split,
+            Split {
+                read: 65,
+                written: 25
+            }
         );
     }
 
@@ -5001,6 +5250,7 @@ mod tests {
             conversation: bravebot_agent::Conversation::new().snapshot(),
             turns: 1,
             tokens: 0,
+            split: Default::default(),
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
             trust: None,
@@ -5028,6 +5278,7 @@ mod tests {
             updated: 1,
             turns: 0,
             tokens: 0,
+            split: Default::default(),
             model: None,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
@@ -5223,6 +5474,7 @@ mod tests {
                 conversation: &snapshot,
                 turns: 1,
                 tokens: 0,
+                split: Default::default(),
                 spend: &BTreeMap::new(),
                 timing: &BTreeMap::new(),
                 model: None,
@@ -5418,6 +5670,7 @@ mod tests {
                 conversation: &snapshot,
                 turns: 3,
                 tokens: 99,
+                split: Default::default(),
                 spend: &BTreeMap::from([(1, 42), (2, 7)]),
                 timing: &BTreeMap::new(),
                 model: None,
@@ -5705,6 +5958,7 @@ mod tests {
                 conversation: &empty,
                 turns: 1,
                 tokens: 0,
+                split: Default::default(),
                 spend: &BTreeMap::new(),
                 timing: &BTreeMap::new(),
                 model: None,
@@ -5760,6 +6014,7 @@ mod tests {
             conversation: &empty,
             turns,
             tokens: 0,
+            split: Default::default(),
             spend: &spend,
             timing: &timing,
             model: None,
@@ -5815,6 +6070,7 @@ mod tests {
                 conversation: &empty,
                 turns: 1,
                 tokens: 0,
+                split: Default::default(),
                 spend: &spend,
                 timing: &timing,
                 model: None,
@@ -5865,6 +6121,7 @@ mod tests {
                     conversation: &bravebot_agent::Conversation::new().snapshot(),
                     turns: 1,
                     tokens: 0,
+                    split: Default::default(),
                     spend: &BTreeMap::new(),
                     timing: &BTreeMap::new(),
                     model: None,
@@ -6272,6 +6529,7 @@ mod tests {
                 conversation: &snapshot,
                 turns: 1,
                 tokens: 10,
+                split: Default::default(),
                 spend: &BTreeMap::from([(1, 10)]),
                 timing: &timing,
                 model: Some("old-model"),
@@ -6294,6 +6552,7 @@ mod tests {
                 conversation: &snapshot,
                 prompt: "second question",
                 tokens: 5,
+                split: Default::default(),
                 model: "new-model",
                 trust: &TrustStore::new("/work"),
                 begins: 2,
@@ -6358,6 +6617,7 @@ mod tests {
                 conversation: &snapshot,
                 prompt: "next",
                 tokens: 1,
+                split: Default::default(),
                 model: "m",
                 trust: &TrustStore::new("/work"),
                 begins: 0,
@@ -6408,6 +6668,7 @@ mod tests {
                 conversation: &snapshot,
                 prompt: "next",
                 tokens: 1,
+                split: Default::default(),
                 model: "m",
                 trust: &TrustStore::new("/work"),
                 begins: 0,
@@ -6464,6 +6725,7 @@ mod tests {
                 conversation: &snapshot,
                 prompt: "next",
                 tokens: 1,
+                split: Default::default(),
                 model: "m",
                 trust: &TrustStore::new("/work"),
                 begins: 0,

@@ -1,3 +1,7 @@
+## Unreleased
+
+ - Added the tokens the model read and the tokens it wrote to `bravebot stats`, as Read and Written columns beside the total. A session recorded before the split was kept shows its tokens in an Unsplit column. ([#1497](https://github.com/brave/bravebot/issues/1497))
+
 ## [0.18.0](https://github.com/brave/bravebot/releases/tag/v0.18.0)
 
  - Added Anthropic with an API key: an `anthropic` provider entry reaches `api.anthropic.com` without a `baseURL`, and a key from Claude Code's settings is offered at import. An `anthropic` entry that stated a `baseURL` for an OpenAI-compatible gateway is now sent Messages requests there, so add `npm: "@ai-sdk/openai-compatible"` to keep chat completions. ([#2993](https://github.com/brave/bravebot/issues/2993))

@@ -894,6 +894,9 @@ pub struct Session {
     unplaced_todos: std::collections::BTreeMap<usize, Vec<bravebot_core::todo::Row>>,
     /// Tokens spent across the whole session.
     pub tokens: u64,
+    /// How many of [`Session::tokens`] the model read and how many it wrote, for the charges that
+    /// reported the split. A charge that did not is in the total and in neither of these.
+    split: bravebot_session::sessions::Split,
     /// What each turn cost, by turn number, and what was spent before the first turn under zero.
     ///
     /// The session total answers "what has this cost me"; this answers "where did it go", which is
@@ -1473,6 +1476,7 @@ impl Session {
             turn_places: Default::default(),
             unplaced_todos: Default::default(),
             tokens: 0,
+            split: Default::default(),
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             occupancy: Occupancy::Unmeasured,
@@ -1817,6 +1821,7 @@ impl Session {
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
         self.tokens = 0;
+        self.split = Default::default();
         self.spend_limit.forget_credits();
         self.spend.clear();
         self.timing.clear();
@@ -4764,6 +4769,13 @@ impl Session {
         // to both figures rather than only to the wall clock, or an aside would read as time the
         // harness spent on itself.
         self.timing.entry(self.turns).or_default().inference_ms += took;
+    }
+
+    /// [`Session::end_aside`] for a model call that reported its usage, so that the cost is
+    /// charged with how it divides into what was read and what was written.
+    pub fn end_aside_of(&mut self, usage: bravebot_aichat::protocol::Usage) {
+        self.end_aside(usage.total());
+        self.charged_split(usage.total(), usage.completion_tokens);
     }
 
     /// Leave a manifest run the session started, adding what it cost to the session's total.
@@ -11655,6 +11667,7 @@ mod tests {
             conversation: bravebot_agent::Conversation::new().snapshot(),
             turns,
             tokens: 10,
+            split: Default::default(),
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             cached: None,
@@ -15007,6 +15020,120 @@ mod tests {
                 s.spend_by_turn().values().sum::<u64>(),
                 s.tokens,
                 "the breakdown and the total disagreed"
+            );
+        }
+
+        /// A person asking what a session cost wants to know how much of it the model wrote, and the
+        /// two figures have to add up from every charge that reported them. A charge that reports
+        /// nothing is in the total alone, so it must not be counted as read.
+        #[test]
+        fn a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total() {
+            let mut s = session();
+            let split = |s: &Session| (s.split().read, s.split().written);
+
+            s.type_char('a');
+            s.submit();
+            s.complete("first", Vec::new(), 400);
+            s.charged_split(400, 100);
+            assert_eq!(split(&s), (300, 100));
+
+            s.type_char('b');
+            s.submit();
+            s.complete("second", Vec::new(), 1_600);
+            s.charged_split(1_600, 1_000);
+            assert_eq!(
+                split(&s),
+                (900, 1_100),
+                "the second charge replaced the first"
+            );
+
+            s.begin_aside();
+            s.end_aside(250);
+            assert_eq!(s.tokens, 2_250);
+            assert_eq!(
+                split(&s),
+                (900, 1_100),
+                "a charge that reported no split was counted as read or written"
+            );
+        }
+
+        /// A `/compact` reports its usage, so what it wrote is counted as written and not as read.
+        #[test]
+        fn an_aside_that_reports_its_usage_is_charged_with_its_split() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_aside_of(bravebot_aichat::protocol::Usage {
+                prompt_tokens: 200,
+                completion_tokens: 50,
+                ..Default::default()
+            });
+
+            assert_eq!(s.tokens, 250);
+            assert_eq!(
+                s.split(),
+                bravebot_session::sessions::Split {
+                    read: 200,
+                    written: 50
+                }
+            );
+        }
+
+        /// Restoring a total describes a different set of tokens than the ones counted so far, so a
+        /// split counted before it must not stay beside it: read and written would then add up to
+        /// more than the total they divide.
+        #[test]
+        fn restoring_the_spend_leaves_no_split_from_before_it() {
+            let mut s = session();
+            s.begin_aside();
+            s.end_aside_of(bravebot_aichat::protocol::Usage {
+                prompt_tokens: 200,
+                completion_tokens: 50,
+                ..Default::default()
+            });
+
+            s.restore_spend(100, std::collections::BTreeMap::from([(1, 100)]));
+
+            assert_eq!(s.tokens, 100);
+            assert_eq!(s.split(), bravebot_session::sessions::Split::default());
+        }
+
+        /// Clearing begins a new session, and the split of what the old one spent is not this one's.
+        #[test]
+        fn clearing_forgets_the_split() {
+            let mut s = session();
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 400);
+            s.charged_split(400, 100);
+
+            s.clear();
+
+            assert_eq!(s.split(), bravebot_session::sessions::Split::default());
+        }
+
+        /// A session picked up from a record carries on counting from the split the record kept, as
+        /// it does from its total.
+        #[test]
+        fn a_resumed_session_carries_on_counting_the_split_it_was_written_with() {
+            let mut s = session();
+            s.restore_spend(1_000, std::collections::BTreeMap::from([(1, 1_000)]));
+            s.restore_split(bravebot_session::sessions::Split {
+                read: 700,
+                written: 300,
+            });
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 100);
+            s.charged_split(100, 40);
+
+            assert_eq!(
+                s.split(),
+                bravebot_session::sessions::Split {
+                    read: 760,
+                    written: 340
+                }
             );
         }
 

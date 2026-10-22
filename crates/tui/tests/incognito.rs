@@ -261,6 +261,7 @@ fn no_session_record_is_written() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,

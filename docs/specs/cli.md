@@ -2167,7 +2167,8 @@ one the person chose to run with the flag.
 ### CLI-37: `stats` totals what the recorded sessions spent
 
 `bravebot stats [--days <n>] [--models] [--project [<dir>]]` prints how many sessions, turns and
-tokens the session records under the state directory hold. With no flag that is every record of
+tokens the session records under the state directory hold, and how many of the tokens the model read
+and how many it wrote. With no flag that is every record of
 every project. `--days <n>` keeps the sessions last written within the last `n` days, counted back
 from now in days of 24 hours. `--project` keeps the sessions that ran in the directory the command
 runs in, or in `<dir>` where a word follows it, and a word that opens with `-` is the next flag and
@@ -2175,8 +2176,12 @@ not a directory. `--models` puts a row for each model above the total, the one t
 first.
 
 The output is a sentence saying what the figures cover, then a table with a heading row, a row for
-each model when asked for, and a total row. Every figure is written out in full as a number, and the
-only words that are not fixed are a model's name and the directory, which have the characters a
+each model when asked for, and a total row, with the columns sessions, turns, tokens, read,
+written and unsplit. Read and written are the split of [SESSION-11](sessions.md#SESSION-11) added
+over the sessions that recorded it, and unsplit is the tokens of the rest, so the three add up to
+the tokens. A session written before the split was kept has tokens and no split, so its tokens are
+all unsplit. Every figure is written out in full as a number, and the only words that are not fixed
+are a model's name and the directory, which have the characters a
 terminal would act on removed. A model's name is cut to 60 characters, and names that read alike
 after cleaning and cutting are one row. A name with nothing left after cleaning is the `unknown` row.
 The notes about what is not counted go to stderr, so stdout carries the table and nothing else
@@ -2188,7 +2193,8 @@ such an entry.
 
 It writes nothing and runs under `--incognito`, which only stops a session adding records. A file is
 a record when `sessions list` would list it as one, and is read for its directory, when it was last
-written, its turns, its tokens and the model that answered its last turn, and for nothing it says.
+written, its turns, its tokens, how they divided and the model that answered its last turn, and for
+nothing it says.
 Which records belong to a project is decided by the path inside each record and never by the name of
 the directory holding them, which two working directories can share. A project that is not a
 directory, an empty directory, a count of zero or above 9223372036854775807, a count that is not a
@@ -2197,7 +2203,9 @@ print no figures.
 
 A session whose record names no model is its own row, named `unknown`: a record written before the
 model was kept, one whose turns never reached a server, and one copied in from another program. A
-record that holds no turns or tokens counts as a session with none.
+record that holds no turns or tokens counts as a session with none. A record whose split names more
+than its own tokens is cut to the tokens, so a figure somebody edited cannot make the tokens left
+without a split wrap.
 
 **Why.** `/cost` answers what one session spent, and nothing answers what a week of them spent,
 which models took it, or which project it went to without opening each record. The figures are the
@@ -2206,10 +2214,11 @@ reading the answer, so none of it goes to a planner.
 
 **Known costs.**
 
-- The record keeps one token total for a session, so `stats` prints tokens, not tokens read and
-  tokens written separately, and nothing in money. [sessions.md](sessions.md) gives the reason a price
-  is not composed: no model listing carries one, and the record keeps no cache split. Printing the
-  split, or a price, needs the record to keep one.
+- Nothing is printed in money. [sessions.md](sessions.md) gives the reason a price is not composed:
+  no model listing carries one, and the record keeps no cache split.
+- Read is the tokens the model was sent, which is the total less what it wrote, so a prompt the
+  service answered out of its own cache is counted as read. A record that holds tokens and no
+  split counts all of those tokens in the unsplit column.
 - A session is counted whole, under the day it was last written and the model that answered its last
   turn. A session that ran over several days is counted when it was last written, and one that changed
   model part way is counted under the model it ended on, because the record keeps neither a time nor
@@ -2259,12 +2268,17 @@ reading the answer, so none of it goes to a planner.
 `verified-by: bravebot_session::stats::a_record_from_before_spend_was_kept_counts_as_a_session_with_none`
 `verified-by: bravebot_session::stats::a_hand_edited_figure_cannot_wrap_or_panic_the_total`
 `verified-by: bravebot_session::stats::nothing_recorded_totals_to_nothing`
+`verified-by: bravebot_session::stats::the_split_totals_the_records_that_kept_it_and_leaves_the_rest_unsplit`
+`verified-by: bravebot_session::stats::a_session_that_went_on_after_an_unsplit_record_is_split_for_the_later_turns_only`
+`verified-by: bravebot_session::stats::a_split_past_the_total_is_cut_to_it`
+`verified-by: bravebot_cli::stats::the_split_is_drawn_under_its_own_headings_beside_the_total`
 `verified-by: bravebot_cli::running::stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_total`
 `verified-by: bravebot_cli::running::stats_by_model_has_a_row_for_each_model_and_one_for_a_record_that_names_none`
 `verified-by: bravebot_cli::running::stats_counts_a_record_it_cannot_read_without_naming_it`
 `verified-by: bravebot_cli::running::stats_draws_a_model_name_with_nothing_a_terminal_would_act_on`
 `verified-by: bravebot_cli::running::a_muddled_stats_request_is_refused_with_the_argument_status_and_no_figures`
 `verified-by: bravebot_cli::running::stats_runs_under_incognito_and_counts_the_records_written_before`
+`verified-by: bravebot_cli::running::stats_reports_how_the_tokens_of_one_shot_runs_divided`
 
 <a id="CLI-38"></a>
 ### CLI-38: `--max-rounds` and `--max-tokens` stop a one-shot run at a limit, on a status of their own

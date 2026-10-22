@@ -120,8 +120,11 @@ fn report(request: &Request, project: Option<&Path>, totals: &Totals) -> String 
         t!(stats_column_sessions).to_string(),
         t!(stats_column_turns).to_string(),
         t!(stats_column_tokens).to_string(),
+        t!(stats_column_read).to_string(),
+        t!(stats_column_written).to_string(),
+        t!(stats_column_unsplit).to_string(),
     ];
-    let cells: Vec<[String; 4]> = rows
+    let cells: Vec<[String; 7]> = rows
         .iter()
         .map(|(name, spent)| {
             [
@@ -129,10 +132,13 @@ fn report(request: &Request, project: Option<&Path>, totals: &Totals) -> String 
                 spent.sessions.to_string(),
                 spent.turns.to_string(),
                 spent.tokens.to_string(),
+                spent.split.read.to_string(),
+                spent.split.written.to_string(),
+                spent.unsplit().to_string(),
             ]
         })
         .collect();
-    let widths: Vec<usize> = (0..4)
+    let widths: Vec<usize> = (0..7)
         .map(|column| {
             std::iter::once(&heading)
                 .chain(&cells)
@@ -229,6 +235,15 @@ mod tests {
             sessions,
             turns,
             tokens,
+            split: bravebot_session::sessions::Split::default(),
+        }
+    }
+
+    /// The same, for sessions that recorded how the tokens divided.
+    fn spent_split(sessions: u64, turns: u64, read: u64, written: u64) -> Spent {
+        Spent {
+            split: bravebot_session::sessions::Split { read, written },
+            ..spent(sessions, turns, read + written)
         }
     }
 
@@ -244,9 +259,7 @@ mod tests {
     fn totals(models: &[(Option<&str>, Spent)]) -> Totals {
         let mut totals = Totals::default();
         for (model, spent) in models {
-            totals.all.sessions += spent.sessions;
-            totals.all.turns += spent.turns;
-            totals.all.tokens += spent.tokens;
+            totals.all.merge(*spent);
             totals.by_model.insert(model.map(str::to_string), *spent);
         }
         totals
@@ -337,7 +350,54 @@ mod tests {
         assert_eq!(lines[1], "");
         assert!(lines[2].contains(t!(stats_column_tokens)), "{report}");
         assert!(lines[3].starts_with(t!(stats_row_total)), "{report}");
-        assert!(lines[3].ends_with("1255"), "{report}");
+        assert_eq!(
+            lines[3].split_whitespace().collect::<Vec<_>>(),
+            [t!(stats_row_total), "3", "9", "1255", "0", "0", "1255"],
+            "{report}"
+        );
+    }
+
+    /// The read and written columns are the figures of the sessions that recorded the split, and a
+    /// row whose sessions did not has its tokens in the unsplit column. A column swapped for its
+    /// neighbour would put the written figure under Read, and a row that counted unsplit tokens as
+    /// read would claim a division no record made.
+    #[test]
+    fn the_split_is_drawn_under_its_own_headings_beside_the_total() {
+        let report = report(
+            &Request {
+                models: true,
+                ..Request::default()
+            },
+            None,
+            &totals(&[
+                (Some("split"), spent_split(2, 5, 900, 100)),
+                (Some("old"), spent(1, 3, 40)),
+            ]),
+        );
+
+        let heading: Vec<&str> = report.lines().nth(2).unwrap().split_whitespace().collect();
+        assert_eq!(
+            heading,
+            [
+                t!(stats_column_model),
+                t!(stats_column_sessions),
+                t!(stats_column_turns),
+                t!(stats_column_tokens),
+                t!(stats_column_read),
+                t!(stats_column_written),
+                t!(stats_column_unsplit),
+            ],
+            "{report}"
+        );
+        assert_eq!(
+            stats_rows_of(&report),
+            [
+                vec!["split", "2", "5", "1000", "900", "100", "0"],
+                vec!["old", "1", "3", "40", "0", "0", "40"],
+                vec![t!(stats_row_total), "3", "8", "1040", "900", "100", "40"],
+            ],
+            "{report}"
+        );
     }
 
     /// The model that spent the most is first, and the total is last whatever it is called.
@@ -360,10 +420,10 @@ mod tests {
         assert_eq!(
             rows,
             [
-                vec!["big", "1", "4", "9000"],
-                vec!["small", "1", "2", "100"],
-                vec![t!(stats_model_unknown), "1", "0", "0"],
-                vec![t!(stats_row_total), "3", "6", "9100"],
+                vec!["big", "1", "4", "9000", "0", "0", "9000"],
+                vec!["small", "1", "2", "100", "0", "0", "100"],
+                vec![t!(stats_model_unknown), "1", "0", "0", "0", "0", "0"],
+                vec![t!(stats_row_total), "3", "6", "9100", "0", "0", "9100"],
             ],
             "{report}"
         );
@@ -389,8 +449,9 @@ mod tests {
         let rows: Vec<&str> = report.lines().skip(3).collect();
         assert_eq!(rows.len(), 2, "{report}");
         assert!(rows[0].starts_with("evil [2Jmodel"), "{report}");
-        assert!(
-            rows[0].ends_with("30"),
+        assert_eq!(
+            rows[0].split_whitespace().rev().nth(3),
+            Some("30"),
             "the two names were not one row: {report}"
         );
     }
@@ -487,8 +548,8 @@ mod tests {
         assert_eq!(
             rows,
             [
-                vec![t!(stats_model_unknown), "3", "7", "70"],
-                vec![t!(stats_row_total), "3", "7", "70"],
+                vec![t!(stats_model_unknown), "3", "7", "70", "0", "0", "70"],
+                vec![t!(stats_row_total), "3", "7", "70", "0", "0", "70"],
             ],
             "{report}"
         );

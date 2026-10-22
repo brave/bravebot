@@ -1759,6 +1759,7 @@ fn rewind_point(
         conversation: conversation.snapshot(),
         turns: began.turns,
         tokens: session.tokens,
+        split: session.split(),
         spend: session.spend_by_turn().clone(),
         timing: session.timing_by_turn().clone(),
         cached: session.cached(),
@@ -1844,6 +1845,7 @@ fn with_standing<R>(
         conversation: &conversation.snapshot(),
         turns: session.turns,
         tokens: session.tokens,
+        split: session.split(),
         spend: session.spend_by_turn(),
         timing: session.timing_by_turn(),
         model: session.served_model(),
@@ -1933,6 +1935,7 @@ fn rewind(
     session.turns = snapshot.turns;
     session.tokens = snapshot.tokens;
     session.restore_spend(snapshot.tokens, snapshot.spend);
+    session.restore_split(snapshot.split);
     session.restore_timing(snapshot.timing);
     // With the spend, for the same reason clearing takes it: the figure describes a
     // prompt that is no longer part of what this session sent.
@@ -2932,7 +2935,7 @@ struct Suggesting {
 struct Suggested {
     /// The suggestion, where the answer was inside the counts the instruction asked for.
     text: Option<String>,
-    tokens: u64,
+    usage: bravebot_aichat::protocol::Usage,
     events: Vec<Stamped>,
 }
 
@@ -3000,10 +3003,10 @@ fn suggest_next(
                     )
                     .ok()
                 });
-        let (text, tokens) = suggested_text(done);
+        let (text, usage) = suggested_text(done);
         let _ = send.send(Suggested {
             text,
-            tokens,
+            usage,
             events: sink.events().to_vec(),
         });
     });
@@ -3015,16 +3018,18 @@ fn suggest_next(
 /// Text is offered only where the answer is one the planner could have held (`kept`), as a brief
 /// is: a conversation that has met something untrusted offers nothing, but the request is still
 /// charged.
-fn suggested_text(done: Option<bravebot_agent::aside::Answered>) -> (Option<String>, u64) {
+fn suggested_text(
+    done: Option<bravebot_agent::aside::Answered>,
+) -> (Option<String>, bravebot_aichat::protocol::Usage) {
     match done {
         Some(answered) => (
             answered
                 .kept
                 .as_deref()
                 .and_then(bravebot_agent::aside::suggestion),
-            answered.usage.total(),
+            answered.usage,
         ),
-        None => (None, 0),
+        None => (None, Default::default()),
     }
 }
 
@@ -3044,7 +3049,7 @@ fn take_suggestion(
     match waiting.answer.try_recv() {
         Ok(done) => {
             *suggesting = None;
-            session.charge_suggestion(done.tokens);
+            session.charge_suggestion(done.usage);
             stored.append_audit(session.turns, &done.events);
             if let Some(text) = done.text {
                 session.offer_suggestion(text);
@@ -4589,7 +4594,7 @@ fn compact_ended(
 ) {
     match done {
         Ok(Some(summary)) => {
-            session.end_aside(summary.usage.total());
+            session.end_aside_of(summary.usage);
             session.compacted(room_won_back(&summary.usage), budget);
             session.note(t!(
                 compact_done,
@@ -4934,7 +4939,7 @@ fn commit_message_answered(
 ) {
     match done {
         Ok(drafted) => {
-            session.end_aside(drafted.usage.total());
+            session.end_aside_of(drafted.usage);
             session.propose_commit_message(&drafted.message);
             if let Some(written) = &drafted.substituted {
                 session.note(t!(processor_model_substituted, model = written));
@@ -4985,7 +4990,7 @@ fn handoff_answered(
 ) {
     match done {
         Ok(answered) if answered.kept.is_some() => {
-            session.end_aside(answered.usage.total());
+            session.end_aside_of(answered.usage);
             session.propose_handoff(&bravebot_agent::aside::handoff_prompt(
                 &answered.shown,
                 goal,
@@ -4993,7 +4998,7 @@ fn handoff_answered(
             session.note(t!(handoff_ready));
         }
         Ok(answered) => {
-            session.end_aside(answered.usage.total());
+            session.end_aside_of(answered.usage);
             session.note(t!(handoff_untrusted));
         }
         Err(Unanswered::Stopped) => {
@@ -5024,7 +5029,7 @@ fn aside_unanswered(session: &mut Session, why: Unanswered) {
 /// else. Apart from [`aside_animated`], which needs a terminal and a backend to reach, so that
 /// what an answer does to the session is somewhere a test can call.
 fn aside_answered(session: &mut Session, asked: String, answered: bravebot_agent::aside::Answered) {
-    session.end_aside(answered.usage.total());
+    session.end_aside_of(answered.usage);
     // The row and the view are the whole of it, and nothing joins the transcript. A line there
     // about an exchange the planner has read no part of is one a reader takes it to have had, and
     // what says afterwards that an aside happened is the hint line, which counts the rows and
@@ -5541,7 +5546,10 @@ fn goal_checked(
     done: Result<bravebot_agent::goal::Assessed, String>,
     stopped: bool,
 ) -> Option<String> {
-    session.end_aside(done.as_ref().map_or(0, |assessed| assessed.usage.total()));
+    session.end_aside_of(
+        done.as_ref()
+            .map_or_else(|_| Default::default(), |assessed| assessed.usage),
+    );
     match done {
         Err(_) if stopped => None,
         done => session.goal_judged(done.map(|assessed| assessed.verdict)),
@@ -6856,6 +6864,24 @@ fn refusal_note(clean: bool, standing: &[String], worked_around: usize) -> Optio
     }
 }
 
+/// Record a finished turn in the session, charging what it cost along with how that divides into
+/// what the model read and what it wrote, which only the worker's own count (`output_tokens`)
+/// says.
+///
+/// Split out from `fold_outcome` so a test can call it: that function takes a whole
+/// [`turn::Outcome`], which nothing outside the agent crate can build.
+fn complete_turn(
+    session: &mut Session,
+    reply: String,
+    trail: Vec<bravebot_session::audit::TrailLine>,
+    tokens: u64,
+    output_tokens: u64,
+    answered_as: Option<String>,
+) {
+    session.complete_as(reply, trail, tokens, answered_as);
+    session.charged_split(tokens, output_tokens);
+}
+
 /// Fold a finished turn into the session.
 #[allow(clippy::too_many_arguments)]
 fn fold_outcome(
@@ -6873,10 +6899,12 @@ fn fold_outcome(
     let carried = match outcome {
         Ok(outcome) => {
             let trail = sink.lines();
-            session.complete_as(
+            complete_turn(
+                session,
                 outcome.reply_for_display().to_string(),
                 trail,
                 outcome.tokens,
+                outcome.output_tokens,
                 outcome
                     .addressed
                     .as_ref()
@@ -26236,6 +26264,149 @@ mod tests {
         );
     }
 
+    /// Each request made beside the work reports what it read and wrote, and the session's split
+    /// has to hold both, whichever command made it: a caller that charged the total alone would
+    /// leave those tokens in neither column of `stats`.
+    #[test]
+    fn every_request_beside_the_work_is_charged_with_what_it_read_and_wrote() {
+        let usage = bravebot_aichat::protocol::Usage {
+            prompt_tokens: 70,
+            completion_tokens: 30,
+            ..Default::default()
+        };
+        let charged = |session: &Session| (session.tokens, session.split());
+        let expected = (
+            100,
+            bravebot_session::sessions::Split {
+                read: 70,
+                written: 30,
+            },
+        );
+
+        let mut compacted = having_sent(&["first question"]);
+        compacted.begin_aside();
+        let summary = bravebot_agent::compact::Compacted {
+            summarised: 4,
+            kept: 2,
+            model: "a-model".to_string(),
+            usage,
+        };
+        compact_ended(&mut compacted, 100_000, &Ok(Some(summary)), false);
+        assert_eq!(charged(&compacted), expected, "/compact");
+
+        let mut drafting = Session::new("none");
+        drafting.begin_aside();
+        let mut done = drafted("Fix it");
+        done.usage = usage;
+        commit_message_answered(&mut drafting, Ok(done));
+        assert_eq!(charged(&drafting), expected, "/commit-message");
+
+        let answered = |kept: Option<&str>| bravebot_agent::aside::Answered {
+            shown: "a brief".to_string(),
+            kept: kept.map(str::to_string),
+            usage,
+        };
+        let mut handed = Session::new("none");
+        handed.begin_aside();
+        handoff_answered(&mut handed, "port it", Ok(answered(Some("a brief"))));
+        assert_eq!(charged(&handed), expected, "/handoff");
+
+        let mut untrusted = Session::new("none");
+        untrusted.begin_aside();
+        handoff_answered(&mut untrusted, "port it", Ok(answered(None)));
+        assert_eq!(charged(&untrusted), expected, "/handoff, nothing kept");
+
+        let mut asked = Session::new("none");
+        asked.begin_aside();
+        aside_answered(&mut asked, "why?".to_string(), answered(Some("a brief")));
+        assert_eq!(charged(&asked), expected, "/btw");
+
+        let mut judged = having_sent(&["first question"]);
+        judged.begin_aside();
+        judged.start_goal("cargo test exits 0".to_string());
+        goal_checked(
+            &mut judged,
+            Ok(bravebot_agent::goal::Assessed {
+                verdict: bravebot_agent::goal::Verdict::NotMet {
+                    reason: "nothing above runs the tests".to_string(),
+                },
+                usage,
+            }),
+            false,
+        );
+        assert_eq!(charged(&judged), expected, "a goal check");
+
+        let mut suggesting = Session::new("none");
+        suggesting.charge_suggestion(usage);
+        assert_eq!(charged(&suggesting), expected, "a suggestion");
+    }
+
+    /// Turns that finish are where most of a session's tokens are charged, and the worker's own
+    /// count of what it wrote is the only figure that divides them. A fold that charged the total
+    /// alone, or divided it the wrong way round, leaves those tokens out of the Read and Written
+    /// columns of `stats` or puts them in the wrong one.
+    #[test]
+    fn a_finished_turn_is_charged_with_what_it_read_and_wrote() {
+        let mut session = Session::new("none");
+
+        for (prompt, tokens, written) in [("first", 100, 30), ("second", 250, 40)] {
+            type_line(&mut session, prompt);
+            handle_key(&mut session, key(KeyCode::Enter));
+            complete_turn(
+                &mut session,
+                "ok".to_string(),
+                Vec::new(),
+                tokens,
+                written,
+                None,
+            );
+        }
+
+        assert_eq!(session.tokens, 350);
+        assert_eq!(
+            session.split(),
+            bravebot_session::sessions::Split {
+                read: 280,
+                written: 70
+            },
+            "a finished turn was not charged with how its tokens divide"
+        );
+    }
+
+    /// The record is written from the session in several places, and all of them build it here, so
+    /// the split the session has counted is what reaches the record. A builder that left it out
+    /// would write every session with a total and no split.
+    #[test]
+    fn a_record_built_from_the_session_holds_the_split_it_has_counted() {
+        let mut session = Session::new("none");
+        session.begin_aside();
+        session.end_aside_of(bravebot_aichat::protocol::Usage {
+            prompt_tokens: 70,
+            completion_tokens: 30,
+            ..Default::default()
+        });
+
+        let standing = with_standing(
+            &session,
+            &Conversation::new(),
+            &TrustStore::new("/work"),
+            &TrustedPrograms::new(),
+            &workspace_for_test(),
+            |standing| (standing.tokens, standing.split),
+        );
+
+        assert_eq!(
+            standing,
+            (
+                100,
+                bravebot_session::sessions::Split {
+                    read: 70,
+                    written: 30
+                }
+            )
+        );
+    }
+
     /// The goal check is one request as well, and there is something behind it worth stopping: the
     /// goal that keeps putting turns out. Both keys take it off, say so, and stop the check with
     /// it, since a person pressing either at the ninth round is asking for the tenth not to go. No
@@ -28870,6 +29041,7 @@ mod tests {
                     history: Some(session.turn_history()),
                     turns: session.turns,
                     tokens: session.tokens,
+                    split: Default::default(),
                     spend: session.spend_by_turn(),
                     timing: session.timing_by_turn(),
                     model: None,
@@ -29385,6 +29557,7 @@ mod tests {
                 conversation: &conversation.snapshot(),
                 turns: session.turns,
                 tokens: session.tokens,
+                split: Default::default(),
                 spend: session.spend_by_turn(),
                 timing: session.timing_by_turn(),
                 model: None,
@@ -30289,6 +30462,7 @@ mod tests {
                 conversation: &conversation.snapshot(),
                 turns: session.turns,
                 tokens: session.tokens,
+                split: Default::default(),
                 spend: session.spend_by_turn(),
                 timing: session.timing_by_turn(),
                 model: None,
@@ -30860,6 +31034,7 @@ mod tests {
             conversation: Conversation::new().snapshot(),
             turns,
             tokens: 0,
+            split: Default::default(),
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             cached: None,
@@ -32844,6 +33019,7 @@ mod tests {
             session.submit().unwrap();
             let spent = bravebot_agent::Spent {
                 tokens: 37,
+                output_tokens: 12,
                 cached: bravebot_aichat::protocol::Cached {
                     read_tokens: 5,
                     ..Default::default()
@@ -32867,6 +33043,14 @@ mod tests {
             }
             finish_cancelled_turn(&mut session, "work", Some(1));
             assert_eq!(session.tokens, 37);
+            assert_eq!(
+                session.split(),
+                bravebot_session::sessions::Split {
+                    read: 25,
+                    written: 12
+                },
+                "the split was charged more than once, or not at all"
+            );
             assert_eq!(session.spend_by_turn().get(&1), Some(&37));
             assert_eq!(session.finished.unwrap().tokens, 37);
             assert_eq!(
@@ -32958,6 +33142,7 @@ mod tests {
         for tokens in [17, 43, 43] {
             session.progressed(bravebot_agent::Spent {
                 tokens,
+                output_tokens: tokens / 4,
                 cached: bravebot_aichat::protocol::Cached {
                     read_tokens: 7,
                     ..Default::default()
@@ -32998,6 +33183,14 @@ mod tests {
             &workspace_for_test(),
         );
         assert_eq!(session.tokens, 43);
+        assert_eq!(
+            session.split(),
+            bravebot_session::sessions::Split {
+                read: 33,
+                written: 10
+            },
+            "a failed turn's split was not the latest report's"
+        );
         assert_eq!(session.finished.unwrap().tokens, 43);
         assert_eq!(session.spend_by_turn().get(&1), Some(&43));
         assert_eq!(session.timing_total().inference_ms, 23);
@@ -33024,6 +33217,7 @@ mod tests {
                     history: Some(session.turn_history()),
                     turns: session.turns,
                     tokens: session.tokens,
+                    split: Default::default(),
                     spend: session.spend_by_turn(),
                     timing: session.timing_by_turn(),
                     model: None,
@@ -33176,14 +33370,25 @@ mod tests {
         let answer = |kept: Option<&str>| bravebot_agent::aside::Answered {
             shown: "run the tests again".to_string(),
             kept: kept.map(str::to_string),
-            usage: Default::default(),
+            usage: bravebot_aichat::protocol::Usage {
+                prompt_tokens: 70,
+                completion_tokens: 30,
+                ..Default::default()
+            },
         };
         assert_eq!(suggested_text(Some(answer(None))).0, None);
+        for kept in [None, Some("run the tests again")] {
+            assert_eq!(
+                suggested_text(Some(answer(kept))).1,
+                answer(kept).usage,
+                "the request was not charged for what it read and wrote"
+            );
+        }
         assert_eq!(
             suggested_text(Some(answer(Some("run the tests again")))).0,
             Some("run the tests again".to_string())
         );
-        assert_eq!(suggested_text(None), (None, 0));
+        assert_eq!(suggested_text(None), (None, Default::default()));
     }
 
     fn offered(text: &str) -> Session {
@@ -33307,9 +33512,21 @@ mod tests {
     #[test]
     fn a_suggestions_cost_is_charged_to_the_session() {
         let mut session = Session::new("none");
-        session.charge_suggestion(120);
+        session.charge_suggestion(bravebot_aichat::protocol::Usage {
+            prompt_tokens: 90,
+            completion_tokens: 30,
+            ..Default::default()
+        });
         assert_eq!(session.tokens, 120);
         assert_eq!(session.spend_by_turn().get(&0).copied(), Some(120));
+        assert_eq!(
+            session.split(),
+            bravebot_session::sessions::Split {
+                read: 90,
+                written: 30
+            },
+            "a suggestion's request was charged without how it divided"
+        );
     }
 
     fn a_store_for(name: &str) -> (std::path::PathBuf, bravebot_session::sessions::Handle) {
@@ -33328,10 +33545,15 @@ mod tests {
         (Some(Suggesting { answer }), worker)
     }
 
+    /// The request came to `tokens`, a quarter of them written.
     fn what_the_request_did(text: Option<&str>, tokens: u64) -> Suggested {
         Suggested {
             text: text.map(str::to_string),
-            tokens,
+            usage: bravebot_aichat::protocol::Usage {
+                prompt_tokens: tokens - tokens / 4,
+                completion_tokens: tokens / 4,
+                ..Default::default()
+            },
             events: vec![bravebot_session::audit::Stamped {
                 at: 1,
                 from: None,

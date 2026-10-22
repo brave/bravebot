@@ -73,7 +73,7 @@ Usage:
 | `bravebot sessions list [--json] [--limit <n>]` | print the sessions recorded for this directory, newest first ([Sessions](../using/sessions.md#picking-one-back-up)) |
 | `bravebot sessions delete <id>` | delete one session recorded for this directory, with its trail and search index ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot sessions purge [--dry-run] [-y]` | delete every session recorded for this directory, asking first unless `-y` is given ([Sessions](../using/sessions.md#deleting-a-session)) |
-| `bravebot stats [--days <n>] [--models] [--project [<dir>]]` | total the sessions, turns and tokens the recorded sessions spent, for every project or one ([below](#stats)) |
+| `bravebot stats [--days <n>] [--models] [--project [<dir>]]` | total the sessions, turns and tokens, read and written, the recorded sessions spent, for every project or one ([below](#stats)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
@@ -1056,17 +1056,17 @@ bravebot stats [--days <n>] [--models] [--project [<dir>]]
 ```
 
 Adds up what the session records under `~/.bravebot` hold and prints the number of sessions, turns
-and tokens, for every project unless `--project` narrows it. It writes nothing, and it runs under
-`--incognito`.
+and tokens, and how many of the tokens the model read and how many it wrote, for every project
+unless `--project` narrows it. It writes nothing, and it runs under `--incognito`.
 
 ```
 $ bravebot stats --days 7 --models
 Sessions last written in the last 7 days, in every project
 
-Model        Sessions  Turns  Tokens
-qwen-3-235b         2     10  214600
-unknown             1      2       0
-Total               3     12  214600
+Model        Sessions  Turns  Tokens    Read  Written  Unsplit
+qwen-3-235b         2     10  214600  198400    16200        0
+unknown             1      2       0       0        0        0
+Total               3     12  214600  198400    16200        0
 ```
 
 | Option | What it does |
@@ -1075,14 +1075,17 @@ Total               3     12  214600
 | `--models` | put a row for each model above the total, the one that spent the most first |
 | `--project [<dir>]` | count only the sessions that ran in this directory, or in `<dir>` when one follows. A word that starts with `-` is the next option, not a directory. An empty `<dir>` is refused, so quote a variable: an unquoted empty one leaves `--project` bare, which is this directory |
 
-The figures are tokens, not money, and a session's tokens are one total: the record keeps no split
-between tokens read and tokens written, and no price ([Sessions](../using/sessions.md#asking-what-it-has-cost)
-says why). A session is counted whole, under the day it was last written and the model that answered
-its last turn, so a session that ran over several days or changed model part way is not split between
-them. The `unknown` row holds sessions whose record names no model: ones written before the model
-was kept, ones whose turns never reached a server, and ones copied in from another program. A model
-name is shown with the characters a terminal would act on removed and cut to 60 characters, and
-names that read alike after that are one row.
+The figures are tokens, not money: the record keeps no price
+([Sessions](../using/sessions.md#asking-what-it-has-cost) says why). Read is what the model was
+sent, which is the total less what it wrote, so a prompt the service answered out of its own cache
+is counted as read. A session written before the split was kept has tokens and no split, so its
+tokens are in the Unsplit column and Read, Written and Unsplit add up to Tokens. A session is
+counted whole, under the day it was last written and the model that answered its last turn, so a
+session that ran over several days or changed model part way is not split between them. The
+`unknown` row holds sessions whose record names no model: ones written before the model was kept,
+ones whose turns never reached a server, and ones copied in from another program. A model name is
+shown with the characters a terminal would act on removed and cut to 60 characters, and names that
+read alike after that are one row.
 
 Each record is counted, and a record can hold spend another one holds. A session forked with
 `--fork` or `/branch` starts with the spend of the original, and one moved with `/cd` leaves its
