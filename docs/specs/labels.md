@@ -52,7 +52,7 @@ guards:
       - crates/core/src/policy.rs: 63
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 4
-      - crates/mcp/tests/stdio.rs: 6
+      - crates/mcp/tests/stdio.rs: 7
       - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
     sites:

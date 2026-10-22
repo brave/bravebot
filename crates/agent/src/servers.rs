@@ -2145,6 +2145,7 @@ fn handshake_local(
     server.set_bound(timeouts.tool());
     Ok(
         crate::mcp::Reached::new(Connection::Stdio(server), listing, declared)
+            .filtered_by(tools, exclude_tools)
             .confined_by(confined_by)
             .with_prompts(prompts)
             .noting(notes),

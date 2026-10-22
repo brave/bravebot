@@ -4368,3 +4368,230 @@ fn a_typed_line_names_a_prompt_only_of_a_server_this_session_reached() {
         "both servers begin the word, so it names neither"
     );
 }
+
+/// A local server that announces changes to its tools. It lists `before`, then `after_change`, then
+/// `third` on its first, second and later lists. A call to `before` makes it write the notice ahead
+/// of its answer, and its second list is followed by a notice of its own.
+const ANNOUNCING_SERVER: &str = r#"#!/bin/sh
+lists=0
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      lists=$((lists + 1))
+      case $lists in 1) name=before ;; 2) name=after_change ;; *) name=third ;; esac
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"%s","inputSchema":{"type":"object"}}]}}\n' "$id" "$name"
+      if [ "$lists" = 2 ]; then
+        printf '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n'
+      fi
+      ;;
+    *'"tools/call"'*'"name":"before"'*)
+      printf '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"announced"}]}}\n' "$id"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#;
+
+/// The announcing server after its handshake and its list, launched under confinement, or `None`
+/// where this machine confines nothing.
+fn reach_announcing(scratch: &Scratch, excluded: &[String]) -> Option<Reached> {
+    let sandbox = bravebot_sandbox::for_current_platform().ok()?;
+    let script = scratch.path.join("announcing.sh");
+    std::fs::write(&script, ANNOUNCING_SERVER).expect("write the script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let policy = ["/usr", "/bin", "/lib", "/lib64", "/tmp", "/var"]
+        .into_iter()
+        .filter(|path| Path::new(path).exists())
+        .fold(
+            bravebot_sandbox::policy::SandboxPolicy::strict()
+                .allow_network_egress()
+                .allow_subprocesses(),
+            bravebot_sandbox::policy::SandboxPolicy::allow_read,
+        );
+    let mut server = bravebot_mcp::StdioServer::launch(
+        "weather",
+        script.to_str().expect("path"),
+        &[],
+        bravebot_sandbox::Variables::new(),
+        sandbox.as_ref(),
+        &policy,
+        bravebot_sandbox::Stream::Null,
+    )
+    .ok()?;
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+    let listing = server.list_tools().expect("listed");
+    Some(
+        Reached::new(
+            Connection::Stdio(server),
+            listing.filtered(&[], excluded),
+            declaration(),
+        )
+        .filtered_by(&[], excluded),
+    )
+}
+
+/// A server that announced a change to its tools is asked about again at the next turn, with the
+/// list it gives now, and none of its tools reaches the planner before the person says yes to that
+/// list. The tool the first list had is not carried over by a comparison of the two.
+#[test]
+fn a_tool_list_the_server_announced_a_change_to_is_put_to_the_person_again_before_it_is_offered() {
+    let scratch = Scratch::new("list-changed");
+    let Some(reached) = reach_announcing(&scratch, &[]) else {
+        eprintln!("SKIPPED (no confinement here)");
+        return;
+    };
+    let session = Session::new(
+        vec![reached],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+
+    // The first turn vouches for `before`, and calls the tool that makes the server announce.
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request("mcp__weather__before", ""),
+        reply_with("done"),
+    ]);
+    let mut first = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("hello").with_mcp(Some(session.clone())),
+        &mut first,
+    );
+    drop(chat);
+    assert_eq!(first.lists.len(), 1);
+    assert!(format!("{:?}", first.lists[0]).contains("before"));
+
+    // The second turn is put the new list, and is offered it only because the person said yes.
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut second = Answering::new(Decision::Reject, CallDecision::approve());
+    let mut trail = RecordingSink::new();
+    let outcome = turns::run(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &Workspace::new(scratch.project()).expect("workspace"),
+        &Task::new("again").with_mcp(Some(session.clone())),
+        &mut second,
+        &mut trail,
+    )
+    .expect("the turn runs");
+    assert!(
+        trail.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "mcp_tools_changed", detail } if detail.contains("weather")
+        )),
+        "the change is not in the trail: {:?}",
+        trail.events()
+    );
+    let sent = rounds(&chat);
+    assert_eq!(second.lists.len(), 1, "the changed list was not put again");
+    let drawn = format!("{:?}", second.lists[0]);
+    assert!(drawn.contains("after_change"), "{drawn}");
+    assert!(!drawn.contains("before"), "{drawn}");
+    assert!(
+        outcome
+            .notices
+            .iter()
+            .any(|said| said.contains("weather changed its tools")),
+        "{:?}",
+        outcome.notices
+    );
+    for body in &sent {
+        assert!(!body.contains("after_change"), "offered unvouched: {body}");
+        assert!(!body.contains("__before"), "the old vouch was kept: {body}");
+    }
+    assert_eq!(
+        session.offering(),
+        vec![("weather".to_string(), Offering::Declined)]
+    );
+
+    // The change announced after that second list is put again although the last answer was no, and
+    // is offered once the person says yes.
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut third = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("once more").with_mcp(Some(session.clone())),
+        &mut third,
+    );
+    let [asked] = third.lists.as_slice() else {
+        panic!("{:?}", third.lists);
+    };
+    assert!(format!("{asked:?}").contains("third"), "{asked:?}");
+    assert!(
+        rounds(&chat)
+            .iter()
+            .all(|body| body.contains("mcp__weather__third"))
+    );
+
+    // Nothing was announced since, so a fourth turn asks nothing.
+    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let mut fourth = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("last").with_mcp(Some(session)),
+        &mut fourth,
+    );
+    assert!(fourth.lists.is_empty(), "{:?}", fourth.lists);
+}
+
+/// The list read again is held to the filters the declaration gave, as the first was: a tool the
+/// declaration excludes is withheld from the new list and does not reach the person or the planner.
+#[test]
+fn a_tool_list_read_again_after_a_change_is_held_to_the_declarations_filters() {
+    let scratch = Scratch::new("list-changed-filtered");
+    let Some(reached) = reach_announcing(&scratch, &["after_change".to_string()]) else {
+        eprintln!("SKIPPED (no confinement here)");
+        return;
+    };
+    let session = Session::new(
+        vec![reached],
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    );
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request("mcp__weather__before", ""),
+        reply_with("done"),
+    ]);
+    let mut first = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("hello").with_mcp(Some(session.clone())),
+        &mut first,
+    );
+
+    let (endpoint, chat) = serve_chat(vec![reply_with("done")]);
+    let mut second = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("again").with_mcp(Some(session)),
+        &mut second,
+    );
+
+    let [asked] = second.lists.as_slice() else {
+        panic!("{:?}", second.lists);
+    };
+    assert_eq!(asked.withheld, 1, "{asked:?}");
+    assert!(!format!("{asked:?}").contains("after_change"), "{asked:?}");
+    for body in rounds(&chat) {
+        assert!(!body.contains("after_change"), "offered: {body}");
+    }
+}

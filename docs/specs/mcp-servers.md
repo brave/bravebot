@@ -813,7 +813,7 @@ drawn above the list.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again. A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later process asks again about a list that is the
+asked again, unless the server announces that its tools changed ([MCP-12](mcp.md#MCP-12)). A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later process asks again about a list that is the
 same: the driver has no way to tell that it is, short of deciding from the server's bytes, and a
 decision taken from them is the one thing the driver may not do ([LABEL-8](labels.md#LABEL-8)). A
 `tools` line in `mcp-approved` is passed over and dropped the next time the file is written. The answer, a yes or a no, belongs to the MCP session the process started, so

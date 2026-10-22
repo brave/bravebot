@@ -331,6 +331,12 @@ scrolls a list longer than the screen.
 
 Answer 2 at the server question answers for the server and not for its list.
 
+A local server that says in its handshake that it announces changes to its tools is asked for its
+list again when it does. At the next turn you ask for, bravebot says the server changed its tools
+and puts the list it gives now to you as above. None of that server's tools is offered until you say
+yes to it, including the ones you had said yes to, and a no you gave earlier does not stand for the
+new list. A remote server is not read this way.
+
 The model sees each tool under a name like `mcp__weather__get_current_conditions`, with a sentence
 bravebot writes, saying which server it belongs to and that every call is put to you, before the
 server's own words. No built-in tool can be shadowed by one, since no built-in's name starts with
