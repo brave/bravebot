@@ -30181,6 +30181,19 @@ mod tests {
             "`/rewind 4` did not say how far back the session goes"
         );
 
+        // A number too large to fit a `usize` is still a number past what the session
+        // remembers, not a non-number: it takes the same path `/rewind 4` just did.
+        held.rewind_command("99999999999999999999");
+        assert_eq!(
+            held.session.turns, 3,
+            "`/rewind 99999999999999999999` went back as far as the session could"
+        );
+        assert_eq!(
+            held.session.transcript.last().expect("a note").text,
+            t!(session_rewind_goes_no_further, kept = 3),
+            "`/rewind 99999999999999999999` did not say how far back the session goes"
+        );
+
         held.rewind_command("2");
         assert_eq!(
             held.session.turns, 1,
