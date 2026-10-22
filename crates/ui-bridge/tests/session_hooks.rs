@@ -216,9 +216,8 @@ fn a_window_session_starts_with_its_first_turn_and_ends_when_it_is_closed() {
     );
 }
 
-/// A session that was opened and closed with no turn between began nothing, so it ends nothing, and
-/// closing it a second time fires nothing either. An end fired for every close would log a
-/// `session-ended` no `session-started` came before.
+/// A session that was opened and closed with no turn between began nothing, so it ends nothing. An
+/// end fired for every close would log a `session-ended` no `session-started` came before.
 #[test]
 fn a_window_session_closed_before_any_turn_fires_neither_moment() {
     if !test_profile::in_isolated_profile() {

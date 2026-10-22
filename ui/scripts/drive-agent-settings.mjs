@@ -79,7 +79,7 @@ try {
   await dialog.locator('[data-test="hook-when-0"]').click()
   await page.getByRole('option', { name: 'Question waiting', exact: true }).click()
   await placeholderBecomes('44')
-  // The two session moments are offered, and the form no longer says the desktop app does not fire them.
+  // The desktop app fires both session moments, so a hook on one carries no 'does not fire this moment yet' note.
   await dialog.locator('[data-test="hook-when-0"]').click()
   await page.getByRole('option', { name: 'Session ends', exact: true }).click()
   await placeholderBecomes('7')
