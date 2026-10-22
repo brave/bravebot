@@ -14589,11 +14589,12 @@ fn a_shell_init_with_no_script_to_print_is_refused_with_the_argument_status() {
     }
 }
 
-/// CLI-29. The npm launcher's word is what makes a copy an npm install, and the install script's
-/// recorded path is what makes one a script install. The regression this rejects is the two being
-/// interchangeable: an npm copy sent the curl line gains a second binary and updates the one that
-/// is not running, and a script copy sent the npm line is told to install a package manager's copy
-/// instead of replacing itself.
+/// CLI-29. The npm launcher's word is what makes a copy an npm install, the install script's
+/// recorded path what makes one a script install, and the PowerShell script's own record what makes
+/// one a PowerShell install. The regression this rejects is any two being interchangeable: an npm
+/// copy sent the curl line gains a second binary and updates the one that is not running, a script
+/// copy sent the npm line is told to install a package manager's copy instead of replacing itself,
+/// and a Windows copy sent the curl line is handed a command that cannot run there.
 #[test]
 fn update_says_the_command_for_the_way_this_copy_was_installed() {
     let scratch = Scratch::new("cli-running-update-npm");
@@ -14628,6 +14629,24 @@ fn update_says_the_command_for_the_way_this_copy_was_installed() {
     assert!(
         !stdout.contains("npm install"),
         "a script install was sent the npm command: {stdout}"
+    );
+
+    // A PowerShell script install is the binary its own record names. The shell script's record is
+    // absent, so the line has to come from the PowerShell record alone and not be the curl one.
+    let recorded = Scratch::new("cli-running-update-powershell").with_state(
+        "installed-by-powershell",
+        &format!("{}\n", env!("CARGO_BIN_EXE_bravebot")),
+    );
+    let output = bravebot(&recorded.path, &[], &["update"]);
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stdout.contains("install.ps1"),
+        "the PowerShell install script is missing: {stdout}"
+    );
+    assert!(
+        !stdout.contains("install.sh") && !stdout.contains("npm install"),
+        "a PowerShell install was sent another installation's command: {stdout}"
     );
 }
 

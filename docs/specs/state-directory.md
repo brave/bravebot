@@ -19,6 +19,7 @@ governs:
   - crates/lsp/src/server.rs
   - crates/ui-bridge/src/store.rs
   - install.sh
+  - install.ps1
 guards:
   - symbol: home::create_directory
   - symbol: home::write_file
@@ -166,6 +167,8 @@ the same absence of a fallback.
 `BRAVEBOT_HOME` moves what the program keeps and nothing else. The profile directory a leading `~`
 stands for is still the one `HOME` or `USERPROFILE` states, and the file the installer records where
 it installed to is kept in the directory the variable names.
+`install.sh` and `install.ps1` both read the variable the same way, and where no directory is stated
+at all they install and record nothing.
 
 **Why.** Inventing a location where the platform states none is worse than doing without: it would
 mean reading files from somewhere the user never chose, and this is the one directory whose contents
@@ -235,6 +238,8 @@ that invented a fallback would be the case above, whichever crate it happened in
 `verified-by: bravebot_cli::installer_state_directory::the_record_goes_under_home_where_no_directory_is_named`
 `verified-by: bravebot_cli::installer_state_directory::a_value_that_names_no_directory_is_passed_over`
 `verified-by: bravebot_cli::installer_state_directory::a_value_that_names_no_directory_leaves_no_state_directory_to_guess`
+`verified-by: bravebot_cli::installer_powershell::with_no_profile_directory_the_script_installs_and_records_nothing`
+`verified-by: bravebot_cli::installer_powershell::the_record_goes_in_the_directory_a_person_named`
 
 <a id="STATE-3"></a>
 ### STATE-3: a surface that only reads this directory does not write into it

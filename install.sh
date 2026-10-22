@@ -182,7 +182,7 @@ main() {
   case "$(uname -s)" in
     Darwin) OS_KEY="darwin" ;;
     Linux) OS_KEY="linux" ;;
-    *) fail "unsupported OS: $(uname -s). Windows installs with npm: npm install -g @brave/bravebot" ;;
+    *) fail "unsupported OS: $(uname -s). Windows installs with install.ps1 in PowerShell, or with npm: npm install -g @brave/bravebot" ;;
   esac
 
   case "$(uname -m)" in

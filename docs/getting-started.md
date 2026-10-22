@@ -29,13 +29,26 @@ curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | IN
 Running the line again is how an install made this way is updated: it remembers where the last
 one went, so a second run replaces that binary rather than leaving two on your PATH.
 
+On Windows there is a PowerShell script, for a machine with no Node on it:
+
+```powershell
+irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+```
+
+It checks the release against the published checksum and the binary's Authenticode signature, and
+puts `bravebot.exe` in `%LOCALAPPDATA%\Programs\bravebot`. `INSTALL_DIR` puts it somewhere else. It
+adds that directory to the end of your user PATH, and to the PowerShell session it ran in, so
+`bravebot` runs by name. Set `BRAVEBOT_NO_MODIFY_PATH` to anything first and it leaves your PATH
+alone and names the directory to add. Running the line again updates the copy the last run
+installed.
+
 To build from source instead, see [development/README.md](development/README.md).
 
 ## Staying current
 
 A session started on a version that has been superseded says so, once, under the trust question,
 and gives the line that updates the copy you are running: the npm command for an npm install and
-the script again for a script install. A build from source is left alone, since neither line would
+the script again for a script install, whichever of the two scripts installed it. A build from source is left alone, since neither line would
 update one.
 
 Nothing about that waits: the notice comes from an answer written down on an earlier launch, and
