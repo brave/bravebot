@@ -1389,7 +1389,11 @@ waiting `/clear` names the new session, and the line they wait behind is named u
 A waiting `/sandbox` line changes the sandbox mode and nothing else, so it holds back none of them but another `/sandbox`: a `/note` typed
 behind a waiting `/sandbox off` is written at once. `/issue` and `/pr` set a link on the session's record, which only `/clear`, `/handoff`,
 `/branch`, `/resume`, `/bg` and `/exit` replace, so they are carried out as you type them behind any other waiting line, a prompt
-included. `/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
+included. `/rename` and `/note` act on the name and the notes the session's record holds. A prompt, a command that sends a request, `/clear`,
+`/undo`, `/rewind`, `/hunks`, `/cd`, `/compact`, `/handoff`, `/branch`, `/resume`, `/bg` and `/exit` can change them, so they wait behind those. They are
+carried out as you type them behind a command line, behind `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`, `/pr`,
+`/sandbox`, `/model`, `/effort` and `/advisor`, and behind a waiting `/note` or `/rename`: a `/note` typed behind a waiting `!make` is written at once.
+`/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
 request or leaves for another session, and behind the other two. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
 `/reach`, `/branch`, `/add-dir`, `/cd`, `/mcp`, `/rename`, `/note`, `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox` they are carried
 out as you type them. What they say goes into the history as you type them,

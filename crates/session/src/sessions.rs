@@ -5790,6 +5790,51 @@ mod tests {
         );
     }
 
+    /// A command line typed during a turn is saved with the line as its title. A name and a note
+    /// given before that save are kept by it, so `/rename` and `/note` may be carried out ahead of
+    /// a waiting command line (CMD-8). The regression it rejects is a save that titles the record
+    /// from the line over a name already chosen, or writes the record without the notes held.
+    #[test]
+    fn a_save_for_a_command_line_keeps_the_name_and_the_notes_given_before_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-command-line-save");
+        let empty = bravebot_agent::Conversation::new().snapshot();
+        let (spend, timing, todos) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let trust = TrustStore::new("/work");
+        let programs = TrustedPrograms::default();
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        assert!(handle.rename("deploy watch"), "the name was refused");
+        assert_eq!(handle.add_note(1, "remember the deploy"), Noted::Kept);
+
+        handle.save(
+            "make",
+            Standing {
+                history: None,
+                conversation: &empty,
+                turns: 1,
+                tokens: 0,
+                spend: &spend,
+                timing: &timing,
+                model: None,
+                todos: &todos,
+                asides: &[],
+                trust: &trust,
+                programs: &programs,
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+        );
+
+        let record = load(&root, handle.id()).expect("the record");
+        assert_eq!(record.title, "deploy watch");
+        assert_eq!(record.notes.len(), 1);
+        assert_eq!(record.notes[0].text, "remember the deploy");
+    }
+
     /// A name somebody chose outlives the turn that was rewound: it was not the turn's to give, so
     /// dropping it would make the next prompt rename a session that had already been named.
     #[test]

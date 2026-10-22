@@ -361,8 +361,19 @@ session, and the three hold one another back, since the level a model reads depe
 command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`, `/reach`, `/branch`, `/add-dir`,
 `/cd` and `/mcp` read none of it and change none of it, nor does a waiting `/rename`, `/note`,
 `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox`, so behind any of those the three are
-carried out as they are typed. Every other waiting line holds `/rename`, `/note`, `/forget-trust`,
-`/style` and `/sandbox` back, whether it is a command, a prompt or a command line. A
+carried out as they are typed. `/rename` and `/note` act on the name and the notes the record holds. A
+note is stamped with the turn count it is typed at, and a rename gives up every rewind point and is
+undone by the commands that put one back, so a line that begins a turn changes what they act on:
+every prompt, every command that sends a request or begins a turn, `/clear`, `/undo`, `/rewind`,
+`/hunks`, `/cd`, `/compact`, `/handoff`, `/branch`, `/resume`, `/bg` and `/exit` hold them back, and
+they name it. A command line adds to the conversation and saves the record with the notes and the name
+it already holds, and `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`,
+`/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` write neither, so behind any of those, and
+behind a waiting `/note` for `/rename` and a waiting `/rename` for `/note`, they are carried out as
+they are typed. A `/note` typed behind a waiting `!make` is written at once and stamped with the turn
+the running turn is. Every other waiting line holds `/forget-trust`, `/style` and `/sandbox` back,
+whether it is a command, a prompt or a command line, since a command line may write the files `/style`
+looks its names up in. A
 command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
@@ -529,7 +540,10 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_a_request_waits_behind_it`
 `verified-by: bravebot_tui::app::a_choice_names_the_first_waiting_line_that_could_change_it`
 `verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_the_record_and_the_choice`
-`verified-by: bravebot_tui::app::a_name_a_note_a_style_or_a_forgotten_answer_waits_behind_a_prompt_and_a_command_line`
+`verified-by: bravebot_tui::app::a_style_or_a_forgotten_answer_waits_behind_a_prompt_and_a_command_line`
+`verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_leaves_the_record_alone_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_could_change_the_record_waits_behind_it`
+`verified-by: bravebot_session::sessions::a_save_for_a_command_line_keeps_the_name_and_the_notes_given_before_it`
 `verified-by: bravebot_tui::app::a_theme_or_config_typed_behind_a_waiting_line_is_carried_out_when_typed`
 `verified-by: bravebot_tui::app::a_language_typed_behind_a_waiting_line_is_carried_out_when_typed`
 `verified-by: bravebot_tui::render::a_command_waiting_behind_a_line_names_that_line_on_its_mark`
