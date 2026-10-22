@@ -1,4 +1,4 @@
-//! What the recorded sessions spent, totalled across the store (CLI-35).
+//! What the recorded sessions spent, totalled across the store (CLI-37).
 //!
 //! Reads the records under the sessions directory and adds up three numbers from each: how many
 //! turns it had, how many tokens it spent, and which model answered last. Nothing is written, and

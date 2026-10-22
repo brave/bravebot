@@ -1,5 +1,5 @@
 //! `bravebot stats [--days <n>] [--models] [--project [<dir>]]`: what the recorded sessions spent
-//! (CLI-35).
+//! (CLI-37).
 //!
 //! Totals the turns and tokens of the session records under the state directory, for every project
 //! or for one, and for the last `n` days or all of them. Nothing is written and no record is opened
