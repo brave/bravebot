@@ -1028,6 +1028,42 @@ fn doctor_names_a_pick_it_sets_aside() {
     );
 }
 
+/// NET-11 in the report: a client certificate that is named and cannot be read ends `doctor` on the
+/// configuration status, as an unusable root does. The in-crate test sees the lines of the report
+/// and not the status, which only the process gives.
+#[test]
+fn doctor_exits_on_the_configuration_status_for_a_client_certificate_it_cannot_read() {
+    let scratch = Scratch::new("cli-running-doctor-client-certificate")
+        .with_settings(A_GATEWAY_AND_ITS_MODEL);
+    let control = bravebot(&scratch.path, BRAVES_HOSTS_AND_A_GATEWAY_TOKEN, &["doctor"]);
+    let absent_certificate = scratch.path.join("absent.crt");
+    let absent_key = scratch.path.join("absent.key");
+    let mut environment = BRAVES_HOSTS_AND_A_GATEWAY_TOKEN.to_vec();
+    environment.push((
+        "BRAVEBOT_CLIENT_CERT",
+        absent_certificate.to_str().expect("a scratch path is text"),
+    ));
+    environment.push((
+        "BRAVEBOT_CLIENT_KEY",
+        absent_key.to_str().expect("a scratch path is text"),
+    ));
+
+    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_ne!(
+        control.status.code(),
+        Some(3),
+        "the same run without the certificate already ended on the configuration status: {}",
+        said(&control).0
+    );
+    assert!(
+        stdout.contains(&absent_certificate.display().to_string()),
+        "the report did not name the file: {stdout}{stderr}"
+    );
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+}
+
 /// SANDBOX: the lists a person writes reach the report through the process: one from the settings
 /// file, one from a flag, and one a checkout wrote and may not, each said with where it came from.
 ///
