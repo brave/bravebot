@@ -1015,13 +1015,14 @@ from naming a program to start, as [GIT-1](tools/read-git.md#GIT-1) does for the
 <a id="VIEW-33"></a>
 ### VIEW-33: `/thinking` shows the model's thinking as it arrives, for the screen only
 
-`/thinking` turns on drawing the thinking a service sends as it goes ([BACKEND-46](backends.md#BACKEND-46)),
-and typed again turns it off. It is off when a session opens, is a setting of that session alone, and
-says in the transcript which way it went. It is carried out as typed, while a turn runs as well. While
-it is on, the end of what the model has thought in the round now being written is drawn at the tail,
-above the reply taking shape ([VIEW-6](#VIEW-6)): under a heading of its own, dimmed and in italics,
-the last eight lines of it, as plain text and never as markdown. A control character in it is drawn
-as its visible picture, as [VIEW-4](#VIEW-4) does for any text. It goes where the reply's tail goes, when
+`/thinking` turns on drawing the thinking a service sends as it goes
+([BACKEND-46](backends.md#BACKEND-46), [BACKEND-59](backends.md#BACKEND-59)), and typed again turns
+it off. It is off when a session opens, is a setting of that session alone, and says in the
+transcript which way it went. It is carried out as typed, while a turn runs as well. While it is on,
+the end of what the model has thought in the round now being written is drawn at the tail, above the
+reply taking shape ([VIEW-6](#VIEW-6)): under a heading of its own, dimmed and in italics, the last
+eight lines of it, as plain text and never as markdown. A control character in it is drawn as its
+visible picture, as [VIEW-4](#VIEW-4) does for any text. It goes where the reply's tail goes, when
 the round's words arrive, the round ends, the turn ends or is stopped, or the request is sent again,
 and a delegate's thinking is not drawn. Only the last 4,096 bytes of it are kept, so a model that
 thinks for minutes costs the screen what a short think does. A service that sends no thinking, or a

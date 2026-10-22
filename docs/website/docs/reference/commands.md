@@ -759,8 +759,9 @@ says so and `/caffeinate` turns off.
 Shows the model's thinking as it arrives, and typed again hides it. It is off when a session opens
 and applies to this session only. While it is on, the last few lines of what the model has thought
 this round are drawn dimmed, under a heading, above the reply as it is written, and they go when the
-round's words arrive. Only a service that sends its thinking shows any; today that is Bedrock. The
-thinking is for the screen alone: it is not saved to the session, not exported, and not sent in a
+round's words arrive. Only a service that sends its thinking shows any: Bedrock sends it when asked,
+and Brave's endpoint or an OpenAI-compatible gateway shows what a model sends in `reasoning_content`.
+The thinking is for the screen alone: it is not saved to the session, not exported, and not sent in a
 later request, and turning it on changes nothing the model is asked.
 
 ## `/checkouts [apply <n> | remove <n>]`
