@@ -40,6 +40,45 @@ impl Session {
         self.note(t!(loop_armed_by_the_turn, number = number, after = after));
     }
 
+    /// Arm a line to be sent once, when the delay is up, and send nothing now.
+    ///
+    /// It takes a place among the loops, so it counts towards the cap, replaces a goal the way
+    /// `/loop` does and is ended by the same things: `/loop stop`, Ctrl-C, a cancelled turn,
+    /// `/clear`, and leaving. It is not written down, for the reason a loop is not. Unlike `/loop` it
+    /// may be typed while a turn runs, since nothing starts until the delay is up and the session is
+    /// idle.
+    pub fn start_after(&mut self, request: crate::loops::Request) {
+        if self.looping.is_full() {
+            self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
+            return;
+        }
+        if self.goal.take().is_some() {
+            self.note(t!(loop_replaces_goal));
+        }
+        self.end_watches_for_another_kind();
+        match request.adjusted {
+            Some(crate::loops::Held::Raised(delay)) => {
+                self.note(t!(after_delay_raised, delay = crate::loops::spell(delay)))
+            }
+            Some(crate::loops::Held::Capped(delay)) => {
+                self.note(t!(after_delay_capped, delay = crate::loops::spell(delay)))
+            }
+            None => {}
+        }
+        let pacing = request.pacing;
+        // Numbered before anything is said about it, so what is said is the number it has.
+        let number = self
+            .looping
+            .start(crate::loops::Running::after(request, Instant::now()));
+        if let crate::loops::Pacing::Once(delay) = pacing {
+            self.note(t!(
+                after_started,
+                number = number,
+                delay = crate::loops::spell(delay)
+            ));
+        }
+    }
+
     /// Say what is repeating and when each tick is due, or that nothing is.
     ///
     /// What the bare command answers. The line is part of it because a loop is announced once, at
@@ -58,15 +97,22 @@ impl Session {
         let lines: Vec<String> = self
             .looping
             .iter()
-            .map(|running| {
-                t!(
+            .map(|running| match running.once() {
+                true => t!(
+                    after_active,
+                    number = running.number(),
+                    prompt = &crate::render::one_line(running.prompt()),
+                    when = &running.when(now)
+                )
+                .to_string(),
+                false => t!(
                     loop_active,
                     number = running.number(),
                     prompt = &crate::render::one_line(running.prompt()),
                     pace = &running.pace(),
                     when = &running.when(now)
                 )
-                .to_string()
+                .to_string(),
             })
             .collect();
         for line in lines {
@@ -484,9 +530,12 @@ impl Session {
             return;
         };
         let number = running.number();
+        let once = running.once();
         if !running.ended(wakeup, Instant::now()) {
             self.looping.stop(number);
-            if wakeup.is_some_and(|wakeup| wakeup.stop) {
+            if once {
+                // Sent, and said so when it went: nothing is left to announce.
+            } else if wakeup.is_some_and(|wakeup| wakeup.stop) {
                 self.note(t!(loop_finished, number = number));
             } else {
                 self.note(t!(loop_unpaced, number = number));
@@ -517,7 +566,9 @@ impl Session {
         let quiet = running.quiet();
         // The loop's number is always said, the one `/loop stop` takes, so a tick count is never
         // mistaken for it.
-        if quiet > 0 {
+        if running.once() {
+            self.note(t!(after_sent));
+        } else if quiet > 0 {
             self.note(t!(
                 loop_tick_quiet,
                 number = number,

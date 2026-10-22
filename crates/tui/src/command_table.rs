@@ -132,6 +132,7 @@ pub(crate) const RECAP_LABEL: &str = "/recap";
 
 /// The line that repeats a prompt, taking the prompt and any interval as its argument.
 pub(crate) const LOOP_COMMAND: &str = "/loop";
+pub(crate) const AFTER_COMMAND: &str = "/after";
 
 /// The line that sets the condition a session works towards, taking that condition as its
 /// argument.
@@ -363,7 +364,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 54] {
+pub fn commands() -> [Command; 55] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -538,6 +539,12 @@ pub fn commands() -> [Command; 54] {
             argument: "[[interval] <prompt> | stop]",
             description: t!(command_loop),
             mid_turn: MidTurn::RunsUnlessItStarts,
+        },
+        Command {
+            name: AFTER_COMMAND,
+            argument: "<delay> <prompt>",
+            description: t!(command_after),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: GOAL_COMMAND,
@@ -902,6 +909,7 @@ const LEAVES_THE_CHOICE_ALONE: &[&str] = &[
     ISSUE_COMMAND,
     PR_COMMAND,
     SANDBOX_COMMAND,
+    AFTER_COMMAND,
 ];
 
 /// The commands that neither begin a turn, change the turn count, put a rewind point back nor
@@ -984,7 +992,10 @@ pub(crate) fn held_back_by<'a>(
             Bound::CarriedOut => command_typed(waiting),
             Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn | Bound::Run => None,
         };
-        word == Some(command.name) || (changes && could_change(goes, word, acts))
+        // `/after` takes a loop's slot, so a `/loop stop` ahead of it in the queue would find nothing
+        // to end and the line would be sent anyway.
+        let takes_the_slot = command.name == LOOP_COMMAND && word == Some(AFTER_COMMAND);
+        word == Some(command.name) || takes_the_slot || (changes && could_change(goes, word, acts))
     })
 }
 
@@ -1074,6 +1085,7 @@ mod tests {
             (EXIT_COMMAND, true, true, true),
             (MCP_COMMAND, false, false, false),
             (LOOP_COMMAND, false, true, true),
+            (AFTER_COMMAND, false, false, true),
             (GOAL_COMMAND, false, true, true),
             (MODEL_COMMAND, false, true, false),
             (EFFORT_COMMAND, false, true, false),

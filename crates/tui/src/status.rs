@@ -861,10 +861,13 @@ fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
         // one they pasted, and this panel spends one row per fact: the rest of a multi-line prompt
         // would land where the next fact goes.
         //
-        // Told apart by number where there are several, the number `/loop stop` takes.
-        let label = match several {
-            true => t!(status_loop_numbered, number = running.number()).to_string(),
-            false => t!(status_loop).to_string(),
+        // Told apart by number where there are several, the number `/loop stop` takes. A line
+        // `/after` holds is sent later, not repeated, and the label says so.
+        let label = match (running.once(), several) {
+            (true, true) => t!(status_after_numbered, number = running.number()).to_string(),
+            (true, false) => t!(status_after).to_string(),
+            (false, true) => t!(status_loop_numbered, number = running.number()).to_string(),
+            (false, false) => t!(status_loop).to_string(),
         };
         lines.push(
             Line::new(&label, crate::render::one_line(running.prompt()))
@@ -2081,6 +2084,36 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// An `/after` line is sent later and not repeated (LOOP-18), so the panel labels it that way.
+    /// A wrong implementation lists it under the loop's label.
+    #[test]
+    fn the_report_lists_an_after_line_as_sent_later_and_not_as_a_loop() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let running = crate::loops::Running::after(
+            crate::loops::request_after("5m tail the log"),
+            std::time::Instant::now(),
+        );
+
+        let mut facts = facts(&config, &trust);
+        facts.looping = std::slice::from_ref(&running);
+        let report = report(&facts);
+
+        assert!(
+            !report
+                .lines
+                .iter()
+                .any(|line| line.label.trim() == t!(status_loop)),
+            "an after line was listed as a loop"
+        );
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_after))
+            .expect("the after line is reported");
+        assert_eq!(line.value, "tail the log");
     }
 
     /// A loop a turn arranged is always self-paced, so its pacing says nothing about the work.

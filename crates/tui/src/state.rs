@@ -3963,6 +3963,8 @@ impl Session {
             crate::loops::Pacing::SelfPaced => {
                 self.note(t!(loop_started_self_paced, number = number))
             }
+            // Not started here: `/after` sends nothing now, and [`Session::start_after`] says so.
+            crate::loops::Pacing::Once(_) => {}
         }
 
         // Said before the first tick goes, because it is about every tick after it: somebody who
@@ -9359,6 +9361,47 @@ mod tests {
         );
     }
 
+    /// The line goes once, no earlier than the delay, as the prompt typed and never as a command, and
+    /// nothing is scheduled afterwards. Wrong implementations send at once, send before the delay is
+    /// up, run `/exit` as a command, or leave a loop behind that sends it again.
+    #[test]
+    fn an_after_line_is_sent_once_when_its_delay_is_up_and_leaves_no_schedule() {
+        let mut s = session();
+        s.start_after(match crate::loops::parse_after("5m /exit") {
+            crate::loops::Delayed::Start(request) => request,
+            _ => panic!("unread"),
+        });
+        assert_eq!(s.status, Status::Idle, "a turn started at once");
+        assert!(s.looping().is_some());
+
+        let early = Instant::now() + Duration::from_secs(5 * 60 - 5);
+        assert_eq!(s.loop_tick_at(early), None, "sent before the delay");
+
+        let due = Instant::now() + Duration::from_secs(5 * 60 + 1);
+        assert_eq!(s.loop_tick_at(due).as_deref(), Some("/exit"));
+        assert!(!s.is_quitting(), "the line ran as a command");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        assert!(s.looping().is_none(), "a schedule was left behind");
+        let much_later = Instant::now() + Duration::from_secs(3 * 60 * 60);
+        assert_eq!(s.loop_tick_at(much_later), None, "it was sent again");
+    }
+
+    /// A prompt typed while one is waiting is not what it waits for, and does not use it up.
+    #[test]
+    fn a_prompt_typed_while_an_after_line_waits_does_not_use_it_up() {
+        let mut s = session();
+        s.start_after(match crate::loops::parse_after("5m later") {
+            crate::loops::Delayed::Start(request) => request,
+            _ => panic!("unread"),
+        });
+        s.begin_turn("now".to_string(), (Vec::new(), Vec::new()), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        assert!(s.looping().is_some(), "an unrelated turn ended it");
+    }
+
     /// What a watch is armed with, for the tests below: a look that saw something, so the watch
     /// has a first token to compare a later one against.
     fn saw(token: &str) -> watch::Looked {
@@ -10790,6 +10833,49 @@ mod tests {
         assert_eq!(s.status, Status::Idle, "a refused loop began a turn");
         assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
         assert_eq!(s.looping().expect("a loop").prompt(), "watch 0");
+        assert_eq!(
+            said(&s),
+            [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]
+        );
+    }
+
+    /// LOOP-18: an `/after` line joins the loops under a number of its own and counts towards the
+    /// cap. A wrong implementation replaces the loop that is running, or lets a sixth line in.
+    #[test]
+    fn an_after_line_joins_the_loops_with_a_number_and_counts_towards_the_cap() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let after = |s: &mut Session, line: &str| match crate::loops::parse_after(line) {
+            crate::loops::Delayed::Start(request) => s.start_after(request),
+            _ => panic!("unread"),
+        };
+
+        after(&mut s, "5m tail the log");
+        let held: Vec<(usize, &str)> = s
+            .loops()
+            .iter()
+            .map(|running| (running.number(), running.prompt()))
+            .collect();
+        assert_eq!(
+            held,
+            [
+                (1, "check the deploy"),
+                (2, "check the pull request"),
+                (3, "tail the log")
+            ]
+        );
+        assert_eq!(
+            said(&s),
+            [t!(after_started, number = 3, delay = "5m").to_string()]
+        );
+
+        for n in 0..crate::loops::MAX_LIVE - 3 {
+            after(&mut s, &format!("5m later {n}"));
+        }
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        s.transcript.clear();
+        after(&mut s, "5m one too many");
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
         assert_eq!(
             said(&s),
             [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]

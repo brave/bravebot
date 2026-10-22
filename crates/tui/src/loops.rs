@@ -91,6 +91,8 @@ pub enum Pacing {
     Every(Duration),
     /// Nobody gave one, so each tick's turn says when the next is due.
     SelfPaced,
+    /// `/after`: one tick, once the delay is up, and then nothing.
+    Once(Duration),
 }
 
 /// What `/loop` was asked for.
@@ -213,14 +215,51 @@ fn interval(asked: Duration, prompt: &str) -> Asked {
     if let Some(which) = stop_of(prompt) {
         return Asked::Stop(which);
     }
+    let (held, adjusted) = bound(asked);
+    Asked::Start(Request {
+        pacing: Pacing::Every(held),
+        prompt: prompt.to_string(),
+        adjusted,
+    })
+}
+
+/// A wait the person gave, held to the bounds, and which way it moved where it did.
+fn bound(asked: Duration) -> (Duration, Option<Held>) {
     let held = asked.clamp(FLOOR, MAX_AGE);
     let adjusted = match held {
         _ if held == asked => None,
         _ if held == FLOOR => Some(Held::Raised(held)),
         _ => Some(Held::Capped(held)),
     };
-    Asked::Start(Request {
-        pacing: Pacing::Every(held),
+    (held, adjusted)
+}
+
+/// What `/after` was asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Delayed {
+    /// Send this line once, when the delay is up.
+    Start(Request),
+    /// No delay, or a delay with nothing after it, answered by saying what the command needs.
+    Unreadable,
+}
+
+/// Read the argument to `/after`: a delay at the front of the line, and the line to send once.
+///
+/// The delay is read the way [`leading_interval`] reads an interval, and only there: a line that
+/// does not begin with one is not a request, since a trailing `every` clause means repetition and
+/// this does not repeat. The rest of the line is sent unchanged, so `/after 5m /status` sends the
+/// seven characters `/status` and runs nothing.
+pub fn parse_after(argument: &str) -> Delayed {
+    let argument = argument.trim();
+    let Some((asked, prompt)) = leading_interval(argument) else {
+        return Delayed::Unreadable;
+    };
+    if prompt.is_empty() {
+        return Delayed::Unreadable;
+    }
+    let (held, adjusted) = bound(asked);
+    Delayed::Start(Request {
+        pacing: Pacing::Once(held),
         prompt: prompt.to_string(),
         adjusted,
     })
@@ -235,6 +274,15 @@ pub(crate) fn request(argument: &str) -> Request {
     parse(argument)
         .started()
         .unwrap_or_else(|| panic!("{argument:?} started no loop"))
+}
+
+/// The request in an argument that arms `/after`, for the tests of what a held line then does.
+#[cfg(test)]
+pub(crate) fn request_after(argument: &str) -> Request {
+    match parse_after(argument) {
+        Delayed::Start(request) => request,
+        Delayed::Unreadable => panic!("{argument:?} armed nothing"),
+    }
 }
 
 /// An interval written as the first word, and the rest of the line.
@@ -348,6 +396,8 @@ pub struct Running {
 
 impl Running {
     /// Start a loop, with nothing due: the caller dispatches the first tick straight away.
+    ///
+    /// Not for [`Pacing::Once`], whose one tick is the delay away: see [`Running::after`].
     pub fn begin(request: Request) -> Self {
         Self {
             number: 0,
@@ -363,6 +413,23 @@ impl Running {
             ticks: 0,
             quiet: 0,
         }
+    }
+
+    /// Start a loop that sends its line once, with that one tick due when the delay is up.
+    ///
+    /// Nothing is sent now, so unlike [`Running::begin`] the caller dispatches nothing.
+    pub fn after(request: Request, now: Instant) -> Self {
+        let mut running = Self::begin(request);
+        if let Pacing::Once(delay) = running.pacing {
+            running.began = now;
+            running.due = now.checked_add(delay);
+        }
+        running
+    }
+
+    /// Whether this sends its line once and goes, rather than repeating it.
+    pub fn once(&self) -> bool {
+        matches!(self.pacing, Pacing::Once(_))
     }
 
     /// Carry what the line named, for the first tick and no other.
@@ -442,8 +509,11 @@ impl Running {
     }
 
     /// What the turn running now needs to know about being a tick, where it is one.
+    ///
+    /// Nothing for a line sent once: that turn is the person's prompt arriving later, and telling it
+    /// it is inside a loop would send it looking for a way to say when to run again.
     pub fn tick(&self) -> Option<Tick> {
-        self.running.then_some(Tick {
+        (self.running && !self.once()).then_some(Tick {
             number: self.ticks,
             self_paced: self.self_paced(),
             unpaceable: false,
@@ -468,6 +538,7 @@ impl Running {
         match self.pacing {
             Pacing::Every(every) => t!(status_loop_every, every = spell(every)),
             Pacing::SelfPaced => t!(status_loop_self_paced).to_string(),
+            Pacing::Once(_) => t!(status_loop_once).to_string(),
         }
     }
 
@@ -485,8 +556,11 @@ impl Running {
     }
 
     /// Whether the loop has run longer than a loop may run.
+    ///
+    /// Never a line sent once: its delay is already held to [`MAX_AGE`], and it would otherwise end
+    /// at the very moment it was due.
     pub fn aged_out(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.began) >= MAX_AGE
+        !self.once() && now.saturating_duration_since(self.began) >= MAX_AGE
     }
 
     /// Whether a tick should be dispatched now.
@@ -542,9 +616,14 @@ impl Running {
         }
         self.running = false;
 
-        if let Pacing::Every(every) = self.pacing {
-            self.due = now.checked_add(every);
-            return true;
+        match self.pacing {
+            Pacing::Every(every) => {
+                self.due = now.checked_add(every);
+                return true;
+            }
+            // Sent, so removed.
+            Pacing::Once(_) => return false,
+            Pacing::SelfPaced => {}
         }
 
         match wakeup {
@@ -729,7 +808,7 @@ mod tests {
     fn every(request: &Request) -> Duration {
         match request.pacing {
             Pacing::Every(duration) => duration,
-            Pacing::SelfPaced => panic!("expected an interval"),
+            Pacing::SelfPaced | Pacing::Once(_) => panic!("expected an interval"),
         }
     }
 
@@ -1224,6 +1303,66 @@ mod tests {
         running.dispatching();
         running.ended(Some(Wakeup::asked(60, false)), now);
         assert_eq!(running.quiet(), 0);
+    }
+
+    /// The delay is the first word, as an interval is. A wrong reading takes an `every` clause at the
+    /// end for a delay, which would send a sentence with its last words missing; or reads nothing at
+    /// all and sends the whole line, delay and all.
+    #[test]
+    fn after_reads_a_delay_off_the_front_and_sends_the_rest_unchanged() {
+        let Delayed::Start(request) = parse_after("5m check the deploy every 20m") else {
+            panic!("a delay at the front was not read");
+        };
+        assert_eq!(request.pacing, Pacing::Once(Duration::from_secs(300)));
+        assert_eq!(request.prompt, "check the deploy every 20m");
+        assert_eq!(request.adjusted, None);
+    }
+
+    /// Without a delay in front there is nothing to wait for, and a trailing `every` is repetition,
+    /// which this does not do. A wrong reading sends the line at once or repeats it.
+    #[test]
+    fn after_without_a_leading_delay_is_not_a_request() {
+        for argument in [
+            "",
+            "5m",
+            "check the deploy every 20m",
+            "check the deploy",
+            "minutes of silence",
+        ] {
+            assert_eq!(parse_after(argument), Delayed::Unreadable, "{argument:?}");
+        }
+    }
+
+    /// The delay is held to the bounds a person's interval is, and says which way it moved. Without
+    /// the cap a delay of more than a loop's life would be a schedule that outlives the bound.
+    #[test]
+    fn an_after_delay_outside_the_bounds_is_held_and_reported() {
+        let Delayed::Start(fast) = parse_after("1s check") else {
+            panic!("unread");
+        };
+        assert_eq!(fast.pacing, Pacing::Once(FLOOR));
+        assert_eq!(fast.adjusted, Some(Held::Raised(FLOOR)));
+        let Delayed::Start(slow) = parse_after("30d check") else {
+            panic!("unread");
+        };
+        assert_eq!(slow.pacing, Pacing::Once(MAX_AGE));
+        assert_eq!(slow.adjusted, Some(Held::Capped(MAX_AGE)));
+    }
+
+    /// Not due before the delay, due at it, gone once the turn ends, and not a tick the planner is
+    /// told about. A wrong implementation arms another tick, is due at once, or tells the turn it is
+    /// inside a loop.
+    #[test]
+    fn a_line_sent_once_is_due_at_its_delay_and_is_gone_after_its_turn() {
+        let now = Instant::now();
+        let mut running = Running::after(request_after("5m check"), now);
+        assert!(!running.due(now + Duration::from_secs(299)));
+        assert!(running.due(now + Duration::from_secs(300)));
+        assert!(!running.aged_out(now + MAX_AGE + Duration::from_secs(1)));
+
+        running.dispatching();
+        assert!(running.tick().is_none(), "the turn was told it is a tick");
+        assert!(!running.ended(None, now + Duration::from_secs(301)));
     }
 
     /// A tick already running is not due again. Without this a turn that outlasts its interval

@@ -5900,6 +5900,45 @@ mod tests {
         );
     }
 
+    /// A line held by `/after` is not a loop, and the row under the box must not call it one. A wrong
+    /// implementation shares the loop's wording, which tells somebody a one-shot is repeating.
+    #[test]
+    fn the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_after(crate::loops::request_after("5m check the deploy"));
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains(t!(after_hint_next, next = "").trim()),
+            "{hint}"
+        );
+        assert!(!hint.contains(&t!(loop_hint).to_string()), "{hint}");
+    }
+
+    /// With a loop and an `/after` line both held, the row counts the loop and not the line that is
+    /// sent once. A wrong implementation counts both, and says two loops are repeating.
+    #[test]
+    fn the_hint_line_counts_loops_and_not_a_held_after_line() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_loop(
+            crate::loops::request("1h check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        session.complete("done", Vec::new(), 0);
+        session.loop_turn_ended(None);
+        session.start_after(crate::loops::request_after("5m tail the log"));
+        assert_eq!(session.loops().len(), 2);
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains(t!(loop_hint_next, next = "").trim()),
+            "{hint}"
+        );
+        assert!(
+            !hint.contains(t!(loop_hint_several, count = 2).trim()),
+            "{hint}"
+        );
+    }
+
     /// A word about a loop standing there in a session with none is a word nobody can account for,
     /// and this line is read at a glance.
     #[test]

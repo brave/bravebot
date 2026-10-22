@@ -2044,6 +2044,9 @@ status-loop-self-paced = cadencée par chaque tour
 status-loop-next = prochaine dans { $next }
 status-loop-running = en cours
 status-loop-unpaced = en attente que le tour dise quand
+status-loop-once = une fois
+status-after = Après
+status-after-numbered = Après { $number }
 status-goal = Objectif
 status-goal-paused = suspendu, /goal resume le réarme
 status-goal-usage = { $note } · { $elapsed } · { $tokens }
@@ -2379,6 +2382,7 @@ command-resume = Reprendre une autre session de ce répertoire, par identifiant 
 command-background = Confier cette session à un processus en arrière-plan et la laisser tourner
 command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour que les sessions suivantes ici demandent
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
+command-after = Envoyer une consigne une seule fois, après un délai
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
@@ -2740,6 +2744,16 @@ loop-not-armed-under-a-goal =
 loop-not-armed-under-a-watch =
     un regard plus tard a été demandé sans être lancé : cette session surveille déjà un fichier,
     et elle fait une chose à la fois
+after-needs-a-delay =
+    /after demande un délai et quelque chose à envoyer, comme dans /after 5m vérifie le déploiement
+after-started =
+    envoi unique dans { $delay }, boucle { $number } ; /loop stop { $number } l'annule, comme ctrl-c ou partir
+after-active = boucle { $number }, envoi différé : { $prompt } · { $when }
+after-sent = envoi de ce que /after retenait
+after-hint = envoi différé
+after-hint-next = envoi dans { $next }
+after-delay-raised = le délai a été relevé à { $delay }, ce qui est le plus court que /after accepte
+after-delay-capped = le délai a été plafonné à { $delay }, ce qui est le plus long que /after attend
 
 
 ## Travailler jusqu'à ce qu'une condition soit remplie

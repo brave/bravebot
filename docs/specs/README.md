@@ -56,7 +56,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [backends.md](backends.md) | `BACKEND` | 59 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 12 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama, LM Studio or llama-server serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 18 | shortening a long conversation into a summary of itself, in the request only |
-| [loop.md](loop.md) | `LOOP` | 17 | sending a prompt again and again until somebody stops it |
+| [loop.md](loop.md) | `LOOP` | 18 | sending a prompt again and again until somebody stops it, or once after a delay |
 | [goal.md](goal.md) | `GOAL` | 20 | one condition a person set, judged after every turn, until it holds |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
 | [sessions.md](sessions.md) | `SESSION` | 37 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |

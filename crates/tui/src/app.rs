@@ -660,6 +660,15 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             }
         };
     }
+    // Arms a prompt for later and sends nothing now: the line goes out once, from the loop's own
+    // clock, as a prompt and never as a command.
+    if let Some(argument) = argument_to(line, AFTER_COMMAND) {
+        match crate::loops::parse_after(argument) {
+            crate::loops::Delayed::Start(request) => session.start_after(request),
+            crate::loops::Delayed::Unreadable => session.note(t!(after_needs_a_delay)),
+        }
+        return Action::Redraw;
+    }
     // The command that sends nothing. A goal is a condition and not a prompt, so setting one arms it
     // and waits: what it keeps going is whatever the person asks for next.
     if let Some(argument) = argument_to(line, GOAL_COMMAND) {
@@ -10838,6 +10847,50 @@ mod tests {
             );
         }
 
+        /// `/after` sends its line from the loop's clock and not from the line that was typed, so
+        /// what the line named cannot travel with it: a picture becomes words saying it cannot be
+        /// shown, a dropped file becomes its name, and the person is told about the picture. A wrong
+        /// implementation holds the literal marker, which names a screenshot nothing is sent with.
+        #[test]
+        fn what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers() {
+            let mut session = Session::new("kernel-enforced");
+            let action = dispatch_command(
+                &mut session,
+                crate::state::Commanded {
+                    line: "/after 5m look at [Image #1] and [Image #2]".to_string(),
+                    pasted: vec![crate::state::AttachedImage {
+                        marker: "[Image #1]".to_string(),
+                        media_type: "image/png",
+                        bytes: b"pixels".to_vec(),
+                    }],
+                    attached: vec![crate::state::Attached {
+                        marker: "[Image #2]".to_string(),
+                        name: "shot.png".to_string(),
+                        shown: "/home/me/shot.png".to_string(),
+                        kind: bravebot_filetype::by_name::Kind::Attachment("image/png"),
+                    }],
+                },
+            );
+
+            assert_eq!(action, Action::Redraw);
+            let prompt = session
+                .looping()
+                .map(crate::loops::Running::prompt)
+                .expect("the line was not held");
+            assert_eq!(
+                prompt,
+                "look at ([Image #1] was pasted here, but it cannot be shown to you: a picture \
+                 cannot join that command. Ask for it again if you need to see it.) and shot.png"
+            );
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .any(|said| said.text.contains("does not go with that command")),
+                "nothing said the picture had stayed behind"
+            );
+        }
+
         /// Waiting changes nothing about what a command can carry, and by the time the queue reaches
         /// one nobody is there to be asked about it. So a command the box carries out itself is
         /// settled where it is carried out, and reads the same as one dispatched at rest.
@@ -17562,6 +17615,31 @@ mod tests {
         );
     }
 
+    /// The command sends nothing when Enter is pressed: the line is held for later. A wrong
+    /// implementation submits it at once, or reads a line with no delay as a request.
+    #[test]
+    fn the_after_command_holds_the_line_and_sends_nothing_now() {
+        let mut session = Session::new("none");
+        for c in "/after 5m check the deploy".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert_eq!(
+            session.looping().map(|running| running.prompt()),
+            Some("check the deploy")
+        );
+
+        let mut bare = Session::new("none");
+        for c in "/after check the deploy".chars() {
+            handle_key(&mut bare, key(KeyCode::Char(c)));
+        }
+        assert_eq!(handle_key(&mut bare, key(KeyCode::Enter)), Action::Redraw);
+        assert!(bare.looping().is_none(), "a line with no delay was held");
+    }
+
     /// The turn is sent the task and not the line, and it begins in plan mode (MODE-12). A wrong
     /// implementation sends `/plan fix the auth bug`, or starts the turn before the mode is set.
     #[test]
@@ -17740,6 +17818,41 @@ mod tests {
             session.transcript[0].text
         );
         assert_eq!(session.transcript[1].text, t!(loop_ends_with));
+    }
+
+    /// A held `/after` line is read as sending later, not as repeating (LOOP-18). A wrong
+    /// implementation answers "repeating: ...".
+    #[test]
+    fn the_bare_loop_command_says_an_after_line_is_sending_later() {
+        let mut session = Session::new("none");
+        for c in "/after 5m tail the log".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.transcript.clear();
+        for c in LOOP_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(session.transcript.len(), 2, "{:?}", session.transcript);
+        assert!(
+            session.transcript[0].text.contains("tail the log"),
+            "{}",
+            session.transcript[0].text
+        );
+        assert!(
+            session.transcript[0].text.starts_with(
+                t!(after_active, number = 1, prompt = "", when = "")
+                    .split(':')
+                    .next()
+                    .unwrap()
+            ),
+            "{}",
+            session.transcript[0].text
+        );
+        assert_eq!(session.transcript[1].text, t!(loop_ends_with));
+        assert_eq!(session.loops().len(), 1, "the report ended it");
     }
 
     /// The ending a person can reach without also stopping the turn that is in flight, which is
@@ -24197,6 +24310,23 @@ mod tests {
                 .any(|said| said.contains("behind /clear")),
             "{:?}",
             said_under_the_turn(&session)
+        );
+    }
+
+    /// `/loop stop` typed behind a waiting `/after` waits behind it, since both use the one slot. The
+    /// regression it rejects is a stop carried out first, finding nothing, and the line sent anyway.
+    #[test]
+    fn a_loop_stop_typed_behind_a_waiting_after_waits_behind_it() {
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "/after 5m check the deploy");
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/loop stop", key(KeyCode::Enter), beside)
+        });
+
+        assert_eq!(
+            waiting_prompts(&session),
+            vec!["/after 5m check the deploy", "/loop stop"]
         );
     }
 

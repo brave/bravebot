@@ -2340,6 +2340,9 @@ status-loop-self-paced = paced by each turn
 status-loop-next = next in { $next }
 status-loop-running = running now
 status-loop-unpaced = waiting for the turn to say when
+status-loop-once = once
+status-after = After
+status-after-numbered = After { $number }
 status-goal = Goal
 status-goal-paused = paused, /goal resume arms it
 status-goal-usage = { $note } · { $elapsed } · { $tokens }
@@ -2866,6 +2869,7 @@ command-recap = Recap where this session stands, without putting it in the conve
 command-clear = Start a new session here, keeping this one resumable
 command-forget-trust = Stop remembering that this directory is trusted, so later sessions here ask
 command-loop = Send a prompt again and again, say what is repeating, or stop it
+command-after = Send a prompt once, after a delay
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-jobs = List this turn's background jobs, and stop one by its name
@@ -3332,6 +3336,17 @@ loop-not-armed-under-a-goal =
 loop-not-armed-under-a-watch =
     a later look was asked for and not started: this session is already watching a file, and it
     does one thing at a time
+
+after-needs-a-delay =
+    /after needs a delay and something to send, as in /after 5m check the deploy
+after-started =
+    sending that once, in { $delay }, as loop { $number }; /loop stop { $number } cancels it, and so does ctrl-c or leaving
+after-active = loop { $number }, sending later: { $prompt } · { $when }
+after-sent = sending what /after held
+after-hint = sending later
+after-hint-next = sending in { $next }
+after-delay-raised = the delay was raised to { $delay }, which is as short as /after goes
+after-delay-capped = the delay was capped at { $delay }, which is as long as /after waits
 
 
 ## Working towards a condition
