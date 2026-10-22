@@ -4442,15 +4442,26 @@ fn reach_script(scratch: &Scratch, source: &str, excluded: &[String]) -> Option<
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     }
-    let policy = ["/usr", "/bin", "/lib", "/lib64", "/tmp", "/var"]
-        .into_iter()
-        .filter(|path| Path::new(path).exists())
-        .fold(
-            bravebot_sandbox::policy::SandboxPolicy::strict()
-                .allow_network_egress()
-                .allow_subprocesses(),
-            bravebot_sandbox::policy::SandboxPolicy::allow_read,
-        );
+    // The temporary directory is under `/private/var/folders` on macOS, where the sandbox matches
+    // the resolved path and `/var` does not cover it, and under `/tmp` on Linux. A path that is
+    // not on this machine is left out, since a backend may refuse the whole policy over it.
+    let policy = [
+        "/usr",
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/private/var/folders",
+        "/tmp",
+        "/var",
+    ]
+    .into_iter()
+    .filter(|path| Path::new(path).exists())
+    .fold(
+        bravebot_sandbox::policy::SandboxPolicy::strict()
+            .allow_network_egress()
+            .allow_subprocesses(),
+        bravebot_sandbox::policy::SandboxPolicy::allow_read,
+    );
     let mut server = bravebot_mcp::StdioServer::launch(
         "weather",
         script.to_str().expect("path"),
