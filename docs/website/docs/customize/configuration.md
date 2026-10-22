@@ -147,6 +147,41 @@ typing it would have. A model name the server does not recognise is reset to the
 rather than obeyed.
 :::
 
+### Moving the state directory
+
+`BRAVEBOT_HOME` names the state directory itself, so two accounts or a CI job can each keep their own
+settings, sessions, history, skills and imported subscription without changing `HOME` for everything
+else the process starts:
+
+```sh
+BRAVEBOT_HOME=/srv/ci/bravebot-state bravebot -p "summarize the failing tests"
+```
+
+It answers before `HOME`. What it names is the directory, not a profile directory to put `.bravebot`
+under, and the modes described above apply to it as they do to `~/.bravebot`: reachable by you
+alone, narrowing stops at the directory you named, and a link out of it is stepped over. Name a
+directory bravebot can keep to itself, since it is narrowed to you alone and its files are written
+beside whatever is there already; your home directory or a shared directory is a poor choice. A `~`
+in a path you write still means your home directory, which `HOME` still names.
+
+A value that is empty, or is not an absolute path, names nothing and is passed over, so the directory
+is the one `HOME` names, as though the variable were unset. A relative value would otherwise name a
+directory under wherever you happened to start. `bravebot doctor` prints the directory in use and the
+variable that named it, which settles which of the two is in force, and says when a value was passed over.
+
+The variable is read from the environment and from nothing else. This directory is trusted for being
+yours, and a settings file, which a checkout can supply, cannot move it. `install.sh` reads it too and
+records where it installed in that directory. The [shell hook](../reference/cli.md#shell-init) reads it
+as your shell sources the hook, so export it before the line in your shell's startup file that
+evaluates the hook, and the hook records in that directory.
+
+:::warning
+A program a `run` starts is refused `~/.bravebot`, where the gateway keys and the premium token are,
+and not a directory `BRAVEBOT_HOME` puts anywhere else
+([what a stage cannot reach](../security/security.md)). Keep it somewhere you would not mind a
+program a `run` starts reading, or leave the variable unset.
+:::
+
 ## Choosing a model
 
 ```
@@ -379,6 +414,7 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 | `BRAVEBOT_CONTEXT_BUDGET` | the token budget before a conversation is compacted |
 | `BRAVEBOT_OUTPUT_BUDGET` | how far one reply may run before the service cuts it off ([below](#how-long-a-reply-may-run)) |
 | `BRAVEBOT_LOCALE` | the language the interface is read in |
+| `BRAVEBOT_HOME` | the directory bravebot keeps its state in, in place of `~/.bravebot` ([below](#moving-the-state-directory)) |
 | `BRAVEBOT_SUBPROCESS_ENV_SCRUB` | `0` hands a program bravebot starts its own credentials ([`run.scrubEnv`](#runscrubenv)) |
 
 Six more name an AWS account rather than this build. See
@@ -398,8 +434,8 @@ one.
 so it has to be set in the environment.
 
 **Thirteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
-spelling: seven of the nine above, plus the six AWS ones. The two exceptions are `BRAVEBOT_LOCALE` and
-`BRAVEBOT_SUBPROCESS_ENV_SCRUB`, which are read from the environment alone. Exporting a name wins over
+spelling: seven of the ten above, plus the six AWS ones. The three exceptions are `BRAVEBOT_LOCALE`,
+`BRAVEBOT_SUBPROCESS_ENV_SCRUB` and `BRAVEBOT_HOME`, which are read from the environment alone. Exporting a name wins over
 the file, except where an [administrator pinned it](#pinned-by-an-administrator), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 

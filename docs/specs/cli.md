@@ -242,9 +242,11 @@ it fail rather than pass with a warning. Text it names from a settings file, suc
 or an environment name, is drawn with its control characters replaced ([LAYER-3](layering.md#LAYER-3)),
 because the project and local files belong to whoever made the checkout.
 
-The state directory is reported with the variable that named it, and on a platform where the files
-under it cannot be restricted to one account the report says which of them carry the permissions of
-the profile directory instead. Where there is no state directory, the report says which variables were
+The state directory is reported with the variable that named it. A `BRAVEBOT_HOME` that is set to
+something that is not an absolute path names no directory and is passed over; the report says so, naming
+the variable and not its value, which may carry a credential, and says nothing for one that is empty or
+unset. On a platform where the files under it cannot be restricted to one account the report says
+which of them carry the permissions of the profile directory instead. Where there is no state directory, the report says which variables were
 looked at, points the remedy at those same variables, names what is not kept without one, and says
 that a checkout's own settings, skills and instructions are read regardless. It is reported rather than failed on, and sits outside the
 configuration section, which a configuration error stops early.
@@ -271,6 +273,7 @@ installed. It also checks that `gh` can read the login it holds in the real home
 ssh keys pushes as ([SANDBOX-16](sandboxing.md#SANDBOX-16)). It takes at most one argument, and one
 that is not `<host>/<owner>` is refused with the status an argument error has.
 
+`verified-by: bravebot_cli::running::doctor_passes_over_a_relative_value_and_says_home_named_the_state_directory`
 `verified-by: bravebot_cli::doctor::doctor_development_checks_only_apply_to_the_source_tree`
 `verified-by: bravebot_cli::doctor::doctor_reports_agent_discovery_conflicts_without_changing_them`
 `verified-by: bravebot_cli::doctor::doctor_accepts_current_windows_copies_and_reports_stale_ones`

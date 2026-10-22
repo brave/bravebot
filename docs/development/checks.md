@@ -138,6 +138,10 @@ These are local checks, not a promise that every CI environment passes. Windows 
 cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
 CI's native Linux tests cover that gap. Release cross-builds remain separate.
 
+Most tests that touch the state directory point `HOME` at a scratch directory, and `BRAVEBOT_HOME`
+answers before `HOME`, so unset it in the shell that runs the tests: with it set, a test reaches the
+directory it names, which is yours.
+
 `make check` runs the whole suite and takes minutes. It is what to run before pushing a branch and
 what CI runs, not what to run between two edits to the same file, and never twice to confirm the
 same thing. Reaching for it out of caution is not free: it is the difference between a review that

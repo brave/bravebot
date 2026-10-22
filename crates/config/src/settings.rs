@@ -3881,14 +3881,38 @@ pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
 #[cfg(not(windows))]
 pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME"];
 
-/// The global state directory, or `None` when the platform names no profile directory to look in.
+/// The variable that names the state directory itself, ahead of the profile directory's.
+///
+/// Spelled here for the same reason as [`PROFILE_VARIABLES`]. It is read from the environment alone
+/// and never from a settings file, so a checkout cannot move the one directory whose contents are
+/// trusted. A value that is empty or not an absolute path names nothing and is passed over.
+pub(crate) const STATE_VARIABLE: &str = "BRAVEBOT_HOME";
+
+/// The global state directory, or `None` when nothing names a directory to look in.
 ///
 /// No fallback to a relative `.bravebot`, which is the project layer and reached deliberately rather
 /// than by a home directory going missing. Resolving the weakest layer to the strongest one's
 /// location would silently read a checkout's file as though a person had put it in their own
 /// directory.
 pub(crate) fn home() -> Option<PathBuf> {
-    home_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
+    state_named(
+        std::env::var_os(STATE_VARIABLE),
+        PROFILE_VARIABLES.iter().map(std::env::var_os),
+    )
+}
+
+/// The same answer from the values, `stated` being what [`STATE_VARIABLE`] holds.
+///
+/// The directory it names is the answer as it stands, and a value that names nothing falls through
+/// to the profile directory's, so no location is invented where none was stated.
+fn state_named(
+    stated: Option<std::ffi::OsString>,
+    named: impl IntoIterator<Item = Option<std::ffi::OsString>>,
+) -> Option<PathBuf> {
+    stated
+        .map(PathBuf::from)
+        .filter(|stated| stated.is_absolute())
+        .or_else(|| home_named(named))
 }
 
 /// The same answer, from the values rather than from the variables.
@@ -4106,6 +4130,62 @@ mod tests {
             home_named([named("/somebody"), named("C:\\Users\\someone")]),
             Some(PathBuf::from("/somebody/.bravebot"))
         );
+    }
+
+    /// STATE-2: a directory a person names in `BRAVEBOT_HOME` is the one the settings are read from,
+    /// answering before `HOME`, and is the directory itself. Joined onto, the settings of a job given
+    /// its own state would be looked for in a hidden directory nobody made, and where `HOME` answered
+    /// first they would be the person's own.
+    #[test]
+    fn a_directory_named_in_the_environment_is_the_one_settings_are_read_from() {
+        #[cfg(windows)]
+        const NAMED: &str = "C:\\srv\\ci\\state";
+        #[cfg(not(windows))]
+        const NAMED: &str = "/srv/ci/state";
+        assert_eq!(
+            state_named(named(NAMED), [named("/somebody")]),
+            Some(PathBuf::from(NAMED))
+        );
+    }
+
+    /// STATE-2: a directory a person names is the one settings are read from byte for byte, and one
+    /// whose name is not UTF-8 is not the directory its U+FFFD rendering spells. A resolver that went
+    /// through text would read the settings of the second, or pass the first over and read `HOME`'s,
+    /// and settings decide which model answers and which commands run without being asked about.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_text_is_the_one_settings_are_read_from_and_not_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = OsStr::from_bytes(b"/srv/state-\xff");
+        let lookalike = OsStr::new("/srv/state-\u{FFFD}");
+        let answer =
+            |stated: &OsStr| state_named(Some(stated.to_os_string()), [named("/somebody")]);
+
+        assert_eq!(answer(invalid), Some(PathBuf::from(invalid)));
+        assert_eq!(answer(lookalike), Some(PathBuf::from(lookalike)));
+        assert_ne!(answer(invalid), answer(lookalike));
+    }
+
+    /// STATE-2: a value that is empty or not an absolute path names nothing and is passed over, so
+    /// `HOME` answers as it would have, and a machine that names nothing else has no directory. A
+    /// relative value would otherwise read settings from under wherever the process started, which
+    /// can be a checkout that supplied them.
+    #[test]
+    fn a_value_that_names_no_directory_is_passed_over() {
+        for value in ["", "state", "./state", "../state", "~/state", "$HOME/state"] {
+            assert_eq!(
+                state_named(named(value), [named("/somebody")]),
+                Some(PathBuf::from("/somebody/.bravebot")),
+                "{value:?} was taken as a directory"
+            );
+            assert_eq!(
+                state_named(named(value), [None]),
+                None,
+                "{value:?} produced a location nothing stated"
+            );
+        }
     }
 
     /// The point of the file: a block copied from `~/.claude/settings.json` configures this agent

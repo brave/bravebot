@@ -1082,6 +1082,141 @@ fn doctor_names_each_filesystem_rule_with_where_it_came_from() {
     );
 }
 
+/// An imported subscription as the store keeps one, for a test that needs `doctor` to find it.
+const AN_IMPORTED_BATCH: &str = r#"{"version": 1,
+    "order_id": "aaaaaaaa-1111-4222-8333-444444444444",
+    "environment": "production",
+    "item_id": "b7114ccc-b3a5-4951-9a5d-8b7a28731111",
+    "issuer": "brave.com?sku=brave-leo-premium",
+    "credentials": [{"unblinded": "a-token", "valid_from": "2020-01-01T00:00:00Z",
+                     "valid_to": "2099-01-01T00:00:00Z", "spent": false, "rfc": true}]}"#;
+
+/// STATE-2: a directory named in `BRAVEBOT_HOME` is the state directory, and `doctor` says so. The
+/// settings and the imported subscription are read from it and not from `~/.bravebot`, which holds
+/// different ones here, so a crate that kept resolving the directory from `HOME` is the one the
+/// report would name a settings file or a subscription from the wrong place for.
+///
+/// A property of the process: the variable is read from the environment by three crates that cannot
+/// share a resolver, and only a run of the binary joins all three to one report. Each in-crate test
+/// holds one of them against a value handed in.
+#[test]
+fn doctor_reads_the_state_directory_a_person_named_and_says_which_variable_named_it() {
+    let scratch = Scratch::new("cli-running-doctor-relocated-state")
+        .with_settings(r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-the-profile"]}}}"#)
+        .with_file(
+            "moved/settings.json",
+            r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-the-named-directory"]}}}"#,
+        )
+        .with_file("moved/leo-premium.json", AN_IMPORTED_BATCH);
+    let moved = scratch.path.join("moved");
+    let mut environment = BRAVES_HOSTS_AND_A_GATEWAY_TOKEN.to_vec();
+    environment.push((
+        "BRAVEBOT_HOME",
+        moved.to_str().expect("a scratch path is text"),
+    ));
+
+    let output = bravebot(&scratch.path, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains(&format!(
+            "state directory {}, from BRAVEBOT_HOME",
+            moved.display()
+        )),
+        "the report did not name the directory or the variable that named it: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("denyRead ~/from-the-named-directory"),
+        "the settings in the named directory were not read: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("from-the-profile"),
+        "the settings under the profile directory were read as well: {stdout}"
+    );
+    assert!(
+        stdout.contains("subscription's credential"),
+        "the subscription imported into the named directory was not found: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("not an absolute path"),
+        "a directory that was used was reported as passed over: {stdout}"
+    );
+}
+
+/// STATE-2: a value that is not an absolute path names nothing and is passed over, so the profile
+/// directory answers and the report says `HOME` did. A relative value taken as a directory would
+/// keep a job's state under wherever it was started, and one that stopped the run would be a
+/// guessed location's opposite and as unasked for.
+#[test]
+fn doctor_passes_over_a_relative_value_and_says_home_named_the_state_directory() {
+    let scratch = Scratch::new("cli-running-doctor-relative-state")
+        .with_settings(r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-the-profile"]}}}"#)
+        .with_file(
+            "moved/settings.json",
+            r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-the-named-directory"]}}}"#,
+        );
+    let mut environment = BRAVES_HOSTS_AND_A_GATEWAY_TOKEN.to_vec();
+    environment.push(("BRAVEBOT_HOME", "moved"));
+
+    let output = bravebot_started_in(&scratch.path, &scratch.path, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    let passed_over = stdout
+        .lines()
+        .find(|line| line.contains("not an absolute path"))
+        .unwrap_or_else(|| panic!("the report did not say the value was passed over: {stdout}"));
+    assert!(
+        passed_over.contains("passed over") && passed_over.contains("BRAVEBOT_HOME"),
+        "the line does not name the variable and say what became of it: {passed_over}"
+    );
+    assert!(
+        !passed_over.contains("moved"),
+        "the line carries the value, which may hold a credential: {passed_over}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "state directory {}, from HOME",
+            scratch.path.join(".bravebot").display()
+        )),
+        "the relative value was not passed over: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("denyRead ~/from-the-profile")
+            && !stdout.contains("from-the-named-directory"),
+        "the relative value was taken as a directory under the working directory: {stdout}"
+    );
+}
+
+/// STATE-2: where `BRAVEBOT_HOME` names nothing and no profile directory is named either, there is
+/// no state directory, and the report says which variables were looked at, `BRAVEBOT_HOME` among
+/// them. Naming only the profile variables would send somebody to set the one that was not going to
+/// answer, and a fallback to the working directory would show a state directory here.
+#[test]
+fn doctor_names_the_variable_for_a_state_directory_where_nothing_names_one() {
+    let scratch = Scratch::new("cli-running-doctor-no-state");
+    let mut environment = BRAVES_HOSTS_AND_A_GATEWAY_TOKEN.to_vec();
+    environment.push(("BRAVEBOT_HOME", "moved"));
+    environment.push(("HOME", ""));
+    environment.push(("USERPROFILE", ""));
+
+    let output = bravebot_started_in(&scratch.path, &scratch.path, &environment, &["doctor"]);
+
+    let (stdout, stderr) = said(&output);
+    let variables = bravebot_agent::home::STATE_VARIABLES.join(" or ");
+    assert!(
+        stdout.contains(&format!("no state directory: {variables} names nothing")),
+        "the report did not name every variable it looked at: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains(&format!("set {variables} to a directory of your own")),
+        "the remedy did not name every variable it looked at: {stdout}{stderr}"
+    );
+    assert!(
+        !scratch.path.join("moved").exists(),
+        "a relative value was made into a directory"
+    );
+}
+
 /// `doctor --sandbox strict` names the flag as the sandbox choice in force rather than calling it
 /// the default (SANDBOX-22).
 ///
@@ -14718,6 +14853,155 @@ fn the_hook_steps_over_a_linked_directory_rather_than_narrowing_where_it_leads()
     a_bash_session(&linked_shell, &["echo recorded"]);
     assert_eq!(mode(&synced), 0o755, "the linked shell directory's target");
     assert_eq!(mode(&state), 0o700, "the state directory");
+}
+
+/// The permission bits of `path`, which must exist.
+#[cfg(unix)]
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o777
+}
+
+/// Make `path` a directory readable and enterable by everyone, as one an earlier build or another
+/// tool left behind may be.
+#[cfg(unix)]
+fn left_open(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path).expect("create");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+}
+
+/// SHELLINT-2, STATE-2. A shell started with `BRAVEBOT_HOME` set keeps its record in the directory
+/// that names, as the state directory itself, and neither creates nor narrows anything in the
+/// profile directory, which is where somebody who moved their state meant to keep it out of.
+#[cfg(unix)]
+#[test]
+fn the_hook_records_in_the_state_directory_a_person_named() {
+    let scratch = Scratch::new("cli-running-shell-init-named").with_state("history", "kept\n");
+    let profile_state = scratch.path.join(".bravebot");
+    left_open(&profile_state);
+    let named = scratch.path.join("moved-state");
+
+    let output = a_bash_session_after(
+        &scratch,
+        &format!("export BRAVEBOT_HOME='{}'", named.display()),
+        &[
+            "echo recorded",
+            "echo \"FILE:$__bravebot_file\"",
+            "@bravebot \"what did I run?\"",
+        ],
+    );
+
+    let file = output
+        .lines()
+        .find_map(|line| line.strip_prefix("FILE:"))
+        .unwrap_or_else(|| panic!("the hook named no file: {output}"));
+    assert!(
+        Path::new(file).starts_with(named.join("shell")),
+        "the record was kept in {file}, not in a shell directory of {named:?}"
+    );
+    let (_, given) = what_a_question_was_given(&output, 0);
+    assert!(
+        given.iter().any(|line| line == "echo recorded"),
+        "the question was given {given:?}"
+    );
+    assert_eq!(mode_of(&named), 0o700, "the named directory");
+    assert_eq!(mode_of(&named.join("shell")), 0o700, "the shell directory");
+    let left: Vec<_> = std::fs::read_dir(named.join("shell"))
+        .expect("the directory outlives the shell")
+        .collect();
+    assert!(left.is_empty(), "the terminal closed and left {left:?}");
+    assert_eq!(
+        mode_of(&profile_state),
+        0o755,
+        "the profile directory's state directory was narrowed"
+    );
+    assert!(
+        !profile_state.join("shell").exists(),
+        "a shell directory was made under the profile directory"
+    );
+}
+
+/// SHELLINT-2, STATE-1. A named directory that was left open is narrowed, with the shell directory
+/// under it, and the directory it lives in keeps its mode.
+#[cfg(unix)]
+#[test]
+fn the_hook_narrows_a_named_directory_and_nothing_above_it() {
+    let scratch = Scratch::new("cli-running-shell-init-named-narrowed");
+    let outer = scratch.path.join("outer");
+    let named = outer.join("state");
+    left_open(&named.join("shell"));
+    left_open(&named);
+    left_open(&outer);
+
+    a_bash_session_after(
+        &scratch,
+        &format!("export BRAVEBOT_HOME='{}'", named.display()),
+        &["echo recorded"],
+    );
+
+    assert_eq!(mode_of(&named), 0o700, "the named directory");
+    assert_eq!(mode_of(&named.join("shell")), 0o700, "the shell directory");
+    assert_eq!(mode_of(&outer), 0o755, "the directory above it");
+}
+
+/// SHELLINT-2, STATE-1. A named directory that is a link keeps the mode its owner set where it leads,
+/// and the shell directory in it is still narrowed.
+#[cfg(unix)]
+#[test]
+fn the_hook_steps_over_a_named_directory_that_is_a_link() {
+    let scratch = Scratch::new("cli-running-shell-init-named-linked");
+    let synced = scratch.path.join("synced");
+    left_open(&synced.join("shell"));
+    left_open(&synced);
+    let named = scratch.path.join("linked-state");
+    std::os::unix::fs::symlink(&synced, &named).expect("link the named directory");
+
+    a_bash_session_after(
+        &scratch,
+        &format!("export BRAVEBOT_HOME='{}'", named.display()),
+        &["echo recorded"],
+    );
+
+    assert_eq!(mode_of(&synced), 0o755, "the named directory's target");
+    assert_eq!(mode_of(&synced.join("shell")), 0o700, "the shell directory");
+}
+
+/// SHELLINT-2, STATE-2. A value that is empty or is not an absolute path names nothing, so the hook
+/// keeps its record under the profile directory as it does with the variable unset, and makes
+/// nothing at the place a relative value would have named.
+#[cfg(unix)]
+#[test]
+fn the_hook_passes_over_a_value_that_names_no_directory() {
+    for (case, value) in [("empty", ""), ("relative", "relative-state")] {
+        let scratch = Scratch::new(&format!("cli-running-shell-init-passed-over-{case}"));
+        let output = a_bash_session_after(
+            &scratch,
+            &format!(
+                "cd '{}'\nexport BRAVEBOT_HOME='{value}'",
+                scratch.path.display()
+            ),
+            &["echo recorded", "@bravebot \"what did I run?\""],
+        );
+
+        let (_, given) = what_a_question_was_given(&output, 0);
+        assert!(
+            given.iter().any(|line| line == "echo recorded"),
+            "{case}: the question was given {given:?}"
+        );
+        assert!(
+            scratch.path.join(".bravebot/shell").is_dir(),
+            "{case}: the profile directory has no shell directory"
+        );
+        assert!(
+            !scratch.path.join("relative-state").exists(),
+            "{case}: a relative value was taken as a directory"
+        );
+    }
 }
 
 /// SHELLINT-3. With the variable set, the shell records nothing, the run is started incognito, and

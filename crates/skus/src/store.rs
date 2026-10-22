@@ -206,13 +206,40 @@ const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
 #[cfg(not(windows))]
 const PROFILE_VARIABLES: &[&str] = &["HOME"];
 
+/// The variable that names the state directory itself, ahead of the profile directory's.
+///
+/// Spelled here for the same reason as [`PROFILE_VARIABLES`]. A value that is empty or not an
+/// absolute path names nothing and is passed over, so the credentials are never put under wherever
+/// the process happened to start.
+const STATE_VARIABLE: &str = "BRAVEBOT_HOME";
+
 /// The file holding the imported credentials.
 ///
 /// The variables are read directly rather than through a dependency, for the same reason and with
 /// the same absence of a fallback as everywhere else the directory is resolved: inventing one would
 /// put a bearer secret somewhere the user never chose.
 pub fn path() -> Result<PathBuf, StoreError> {
-    path_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
+    path_stated(
+        std::env::var_os(STATE_VARIABLE),
+        PROFILE_VARIABLES.iter().map(std::env::var_os),
+    )
+}
+
+/// The same answer from the values, `stated` being what [`STATE_VARIABLE`] holds.
+///
+/// The directory it names holds the file itself, and a value that names nothing falls through to
+/// the profile directory's.
+fn path_stated(
+    stated: Option<std::ffi::OsString>,
+    named: impl IntoIterator<Item = Option<std::ffi::OsString>>,
+) -> Result<PathBuf, StoreError> {
+    match stated
+        .map(PathBuf::from)
+        .filter(|stated| stated.is_absolute())
+    {
+        Some(stated) => Ok(stated.join(FILE)),
+        None => path_named(named),
+    }
 }
 
 /// The same answer, from the values rather than from the variables.
@@ -1201,11 +1228,12 @@ mod tests {
             std::fs::create_dir_all(dir).expect("scratch home");
         }
 
-        // Every variable the platform states a profile directory in, not `HOME` alone: one left set
-        // would answer where `HOME` does not, which would have `with_no_home` asking what happens
-        // when one variable is missing rather than when there is no home at all.
-        let previous: Vec<_> = PROFILE_VARIABLES
-            .iter()
+        // Every variable the state directory is stated in, not `HOME` alone: one left set would
+        // answer where `HOME` does not, which would have `with_no_home` asking what happens when one
+        // variable is missing rather than when there is no home at all, and a `BRAVEBOT_HOME` in the
+        // developer's environment would send every test to the credentials it names.
+        let previous: Vec<_> = std::iter::once(&STATE_VARIABLE)
+            .chain(PROFILE_VARIABLES)
             .map(|variable| (*variable, std::env::var_os(variable)))
             .collect();
         // SAFETY: single-threaded within the lock, and restored before returning.
@@ -2322,6 +2350,65 @@ mod tests {
     /// A profile directory as the environment hands one over.
     fn named(value: &str) -> Option<std::ffi::OsString> {
         Some(std::ffi::OsString::from(value))
+    }
+
+    /// STATE-2: a directory a person names in `BRAVEBOT_HOME` holds the credentials file itself,
+    /// answering before `HOME`. Joined onto, an import would write the bearer token into a hidden
+    /// directory inside the one the person named for their own account's state, and a second
+    /// account's session would not find the first one's.
+    #[test]
+    fn a_directory_named_in_the_environment_holds_the_credentials_itself() {
+        #[cfg(windows)]
+        const NAMED: &str = "C:\\srv\\ci\\state";
+        #[cfg(not(windows))]
+        const NAMED: &str = "/srv/ci/state";
+        assert_eq!(
+            path_stated(named(NAMED), [named("/somebody")]).expect("a state directory"),
+            PathBuf::from(NAMED).join(FILE)
+        );
+    }
+
+    /// STATE-2: a directory a person names holds the credentials file byte for byte, and one whose
+    /// name is not UTF-8 is not the directory its U+FFFD rendering spells. A resolver that went
+    /// through text would put the bearer token in the second, or pass the first over and put it under
+    /// `HOME`, and a second account's session would not find the first one's.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_text_holds_the_credentials_and_not_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = OsStr::from_bytes(b"/srv/state-\xff");
+        let lookalike = OsStr::new("/srv/state-\u{FFFD}");
+        let answer = |stated: &OsStr| {
+            path_stated(Some(stated.to_os_string()), [named("/somebody")])
+                .expect("a state directory")
+        };
+
+        assert_eq!(answer(invalid), PathBuf::from(invalid).join(FILE));
+        assert_eq!(answer(lookalike), PathBuf::from(lookalike).join(FILE));
+        assert_ne!(answer(invalid), answer(lookalike));
+    }
+
+    /// STATE-2: a value that is empty or not an absolute path names nothing and is passed over, so
+    /// the profile directory answers as it would have, and where nothing else is named the import is
+    /// reported rather than put under wherever the process started.
+    #[test]
+    fn a_value_that_names_no_directory_is_passed_over() {
+        for value in ["", "state", "./state", "../state", "~/state", "$HOME/state"] {
+            assert_eq!(
+                path_stated(named(value), [named("/somebody")]).expect("a profile directory"),
+                PathBuf::from("/somebody").join(DIRECTORY).join(FILE),
+                "{value:?} was taken as a directory"
+            );
+            assert!(
+                matches!(
+                    path_stated(named(value), [None]),
+                    Err(StoreError::Unusable { .. })
+                ),
+                "{value:?} produced a location nothing stated"
+            );
+        }
     }
 
     /// PREM-7: stock Windows sets no `HOME`, so the batch imported there belongs under the profile
