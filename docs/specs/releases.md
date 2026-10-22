@@ -550,14 +550,13 @@ stops naming each platform package the registry lacks.
 
 **Why.** A trusted publisher is a record on a package, and a package that has never been published
 has none. OIDC then has nothing to match, and the registry answers the workflow's publish with a
-404. The first dispatch of the per-platform packages failed that way on all six. The first version of
-a name has to come from somewhere other than the workflow. Making it a placeholder keeps every
-version with a binary on the path [RELEASE-11](#RELEASE-11) describes: published by the workflow,
-with provenance, after the environment's reviewer approves. The wrapper pins each platform package
-at its own exact version, and the placeholder is a prerelease of `0.0.0` under another tag, so no
-install of the wrapper resolves to it. The check runs where it fails in a second at the
-maintainer's terminal. Without it, the dispatch costs a second person's approval and six runner jobs
-before it fails on the 404.
+404. The first version of a name has to come from somewhere other than the workflow. Making it a
+placeholder keeps every version with a binary on the path [RELEASE-11](#RELEASE-11) describes:
+published by the workflow, with provenance, after the environment's reviewer approves. The wrapper
+pins each platform package at its own exact version, and the placeholder is a prerelease of `0.0.0`
+under another tag, so no install of the wrapper resolves to it. The check runs where it fails in a
+second at the maintainer's terminal. Without it, the dispatch costs a second person's approval and
+six runner jobs before it fails on the 404.
 
 `verified-by: by-construction (npm/tests/bootstrap-platform-packages.test.mjs runs the script against a fake npm: it publishes a placeholder for each name the registry answers 404 for and for none it holds, never one with more than a manifest and the licence, never at the version of a release or under latest, nothing without a login, and nothing when the registry does not answer with a package or a 404; the check names every missing package and publishes nothing; the script reads no environment value and starts npm alone; and the recipe of make publish-npm is held to run the check before gh workflow run. make check-npm runs it)`
 
