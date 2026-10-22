@@ -95,6 +95,7 @@ help:
 	@echo "Releasing:"
 	@echo "  make bump-version BUMP=bugfix|minor|major   Set the next version"
 	@echo "  make github-release                         Tag it; Jenkins and npm publish are later"
+	@echo "  make npm-bootstrap                          Create the name of each new platform package, before its first publish"
 	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
 	@echo "  make package-manifests TAG=v<version>       Write the Homebrew cask and WinGet manifests into dist/packages"
 	@echo "  make app-bundle                             Package the desktop application, release build"
@@ -1139,7 +1140,15 @@ github-release:
 	echo "then publish npm: make publish-npm TAG=$(TAG)"; \
 	echo "watch CI with: gh run watch --repo brave/bravebot"
 
+# Publishes a placeholder under each platform package name the registry has no package of, so
+# that package can be given a trusted publisher on npmjs.com. Needs npm login as a maintainer who
+# can publish @brave. Does nothing when every name exists. publish-npm refuses until it has run.
+.PHONY: npm-bootstrap
+npm-bootstrap:
+	node npm/scripts/bootstrap-platform-packages.js
+
 # Without TAG on the command line, the latest GitHub release: this tree may be bumped past it.
+# Refuses first when the registry has no package of a platform's name (make npm-bootstrap).
 .PHONY: publish-npm
 publish-npm:
 	@set -eu; \
@@ -1148,6 +1157,7 @@ publish-npm:
 	else \
 		tag="$$(gh release view --repo brave/bravebot --json tagName --jq .tagName)"; \
 	fi; \
+	node npm/scripts/bootstrap-platform-packages.js --check; \
 	echo "dispatching publish-npm.yml for $$tag"; \
 	gh workflow run publish-npm.yml --repo brave/bravebot --ref "$$tag" -f tag="$$tag"; \
 	echo "watch it with: gh run watch --repo brave/bravebot"

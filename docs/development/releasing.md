@@ -82,6 +82,16 @@ each of the seven packages. The publishing jobs wait on that environment's requi
 the dispatch is followed by an approval from a second maintainer
 ([branch-protection.md](branch-protection.md#the-npm-publish-environment)).
 
+A trusted publisher can be added only to a package that exists, so a platform package name the
+registry has never held is created first. Log in with `npm login` as a maintainer who can publish
+under `@brave`, then run `make npm-bootstrap`. It publishes a placeholder, `0.0.0-bootstrap` under
+the `bootstrap` tag, for each platform package the registry lacks, and prints the npmjs.com page
+for each. On each page add a trusted publisher: GitHub Actions, repository `brave/bravebot`,
+workflow `publish-npm.yml`, environment `npm-publish`. This is needed once per new package name, not
+once per release, and `make npm-bootstrap` does nothing when every name exists. `make publish-npm`
+stops before it dispatches when a platform package is missing
+([RELEASE-21](../specs/releases.md#RELEASE-21)).
+
 Each platform package is built by `npm/scripts/stage-platform-package.js` on a runner of that
 platform's own kind. It verifies the binary against its published `.sha256` before writing it, and
 then its signature: the `.sha256` on Linux, the code signature on macOS and Windows. `install.sh`
