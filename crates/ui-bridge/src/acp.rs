@@ -950,7 +950,7 @@ fn run_text(data: &Value) -> Option<String> {
         .flatten()
         .map(|stage| bravebot_approval::RunStep {
             written: text_of(stage, "display").to_string(),
-            binary: text_of(stage, "binary").to_string(),
+            binary: text_of(stage, "shownBinary").to_string(),
         })
         .collect();
     let confinement = data["confinement"].is_object().then(|| {
@@ -1305,6 +1305,25 @@ mod tests {
         }
     }
 
+    /// PROMPT-1: the editor is read the directory a line runs in and the file each step runs
+    /// spelled as the terminal spells them, so a binary ending in a space is not read as the one
+    /// without it.
+    #[test]
+    fn the_editor_is_read_the_directory_and_the_binary_spelled() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage, Steps};
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w\u{202e}");
+        let Steps::Pipeline(steps) = &mut run.plan.steps else {
+            panic!("a pipeline");
+        };
+        steps[0].resolved = "/usr/bin/tee ".into();
+        steps[0].started_as = "/usr/bin/tee ".into();
+        let read = run_text(&crate::wire::run_request(1, &run)).expect("a run reads");
+        assert!(read.contains("\n  \"/usr/bin/tee\u{2423}\"\n"), "{read}");
+        assert!(read.contains("in \"/w\\u{202e}\""), "{read}");
+    }
+
     /// Run, fetch, server, call and move read to the editor as `bravebot_approval` words them from
     /// the same typed requests the terminal holds, so a field the wire drops shows as a difference.
     #[test]
@@ -1321,7 +1340,7 @@ mod tests {
                 .iter()
                 .map(|stage| bravebot_approval::RunStep {
                     written: stage.as_written(),
-                    binary: stage.binary(),
+                    binary: bravebot_agent::confirm::shown_binary(stage),
                 })
                 .collect();
             let writes: Vec<String> = run
@@ -1514,7 +1533,8 @@ mod tests {
             (
                 "run",
                 json!({"plan": "ls", "directory": "/w", "summary": "list", "stages": [
-                    {"display": "ls", "resolved": "/bin/ls", "binary": "/bin/ls"}],
+                    {"display": "ls", "resolved": "/bin/ls", "binary": "/bin/ls",
+                     "shownBinary": "/bin/ls"}],
                     "writes": ["out"], "stdin": "file", "releasesPrivate": true,
                     "requestedScopes": ["aws"], "confinement": {"heading": "confined",
                     "directories": ["/w"], "sentences": ["it reads /w"]},

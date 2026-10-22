@@ -618,6 +618,13 @@ impl RunRequest {
     pub fn directory(&self) -> String {
         self.plan.directory.display().to_string()
     }
+
+    /// [`RunRequest::directory`] spelled as [`shown_path`] spells a path, which is what every front
+    /// end draws: a directory ending in whitespace, or holding a byte that is not text, does not
+    /// draw as another. The plan keeps the directory as a path and nothing is decided from this.
+    pub fn shown_directory(&self) -> String {
+        shown_path(&self.plan.directory)
+    }
     /// Whether approving this would hand the user's own data to a program.
     ///
     /// A second and independent reason to be careful, on confidentiality rather than integrity:
@@ -809,7 +816,7 @@ impl RunRequest {
         format!(
             "run {} in {}",
             tally(self.plan.steps().len(), "step", "steps"),
-            self.directory()
+            self.shown_directory()
         )
     }
 
@@ -1109,6 +1116,43 @@ pub fn shown_path(path: &std::path::Path) -> String {
         pieces.extend(chunk.invalid().iter().copied().map(Piece::Byte));
     }
     shown(&pieces)
+}
+
+/// The file a step runs, and the path that starts it where that is another, each spelled as
+/// [`shown_path`] spells a path.
+///
+/// What a run prompt draws under the step. The same text as [`bravebot_core::command::Step::binary`]
+/// for a path that needs no spelling, so the plain case reads as it always did.
+pub fn shown_binary(step: &bravebot_core::command::Step) -> String {
+    // Drawn rows only: the other fields are not part of the file a step runs, and naming them keeps
+    // a field a later change adds to a step from being missed here.
+    let bravebot_core::command::Step {
+        program: _,
+        resolved,
+        started_as,
+        args: _,
+        environment: _,
+        routes: _,
+    } = step;
+    shown_through(started_as, resolved)
+}
+
+/// A command a yes would vouch for, drawn as [`bravebot_core::programs::Command::display`] draws it
+/// with the program spelled as [`shown_binary`] spells a step's. The arguments are quoted as they
+/// always were.
+pub fn shown_command(command: &bravebot_core::programs::Command) -> String {
+    let program = shown_through(&command.started_as, &command.program);
+    bravebot_core::command::Stage::new(program, command.args.clone()).display()
+}
+
+/// `file`, and `started_as` before it with an arrow where the program is started through another
+/// path, each spelled as [`shown_path`] spells a path.
+fn shown_through(started_as: &std::path::Path, file: &std::path::Path) -> String {
+    if started_as == file {
+        shown_path(file)
+    } else {
+        format!("{} -> {}", shown_path(started_as), shown_path(file))
+    }
 }
 
 /// One thing a name holds: a character, or a byte that is not part of one.

@@ -968,7 +968,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `tokens` | `{ written }` | `Reporter::output_tokens`, **only when the figure changes** |
 | `audit` | `{ at, turn, event }` | the `Sink`, via `audit::as_json` |
 | `confirm.request` | see §8.1 | `Confirmer::confirm_write` |
-| `run.request` | `{ request, stages, directory, line, plan, writes, shownWrites, releasesPrivate, confinement, vouches, summary }` | command approval |
+| `run.request` | `{ request, stages, directory, shownDirectory, line, plan, writes, shownWrites, releasesPrivate, confinement, vouches, summary }` | command approval |
 | `output.request` | `{ request, command, reference, lines, hidden, hiddenNote, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
@@ -1385,7 +1385,9 @@ Still open:
   `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
   shownDirectories, sentences }` as the agent worded them. `writes` and `directories` are the paths as
   held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, with a byte
-  that is not UTF-8 written `\xNN`, for a client to draw in place of them.
+  that is not UTF-8 written `\xNN`, for a client to draw in place of them. `shownDirectory` spells
+  `directory` the same way, and each stage's `shownBinary` spells `startedAs` and `resolved`, joined
+  by ` -> ` where they differ.
 - `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and
   `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
   is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request

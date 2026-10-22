@@ -205,6 +205,8 @@ pub struct RunStep {
     /// the boundary between two.
     pub written: String,
     /// The file this step runs, because a name is not a program: `$PATH` decides what `grep` means.
+    /// Spelled as `bravebot_agent::confirm::shown_binary` spells it, so a path that would draw as
+    /// another is not drawn as one.
     pub binary: String,
 }
 
@@ -249,7 +251,7 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
     let mut lines = vec![printable(run.summary)];
     for step in run.steps {
         lines.push(printable(&step.written));
-        lines.push(format!("  {}", printable(&step.binary)));
+        lines.push(format!("  {}", step.binary));
     }
     if !run.writes.is_empty() {
         lines.push(t!(run_writes).to_string());

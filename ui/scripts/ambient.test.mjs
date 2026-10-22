@@ -55,8 +55,9 @@ const asked = (ambient) =>
   t.askedRun({
     request: 1,
     plan: 'docker ps',
-    stages: [{ program: 'docker', resolved: '/usr/bin/docker', args: ['ps'], display: 'docker ps' }],
+    stages: [{ program: 'docker', resolved: '/usr/bin/docker', shownBinary: '/usr/bin/docker', args: ['ps'], display: 'docker ps' }],
     directory: '/home/someone/project',
+    shownDirectory: '/home/someone/project',
     releasesPrivate: false,
     ambient,
     vouches: [{ program: '/usr/bin/docker', args: ['ps'], display: 'docker ps' }],

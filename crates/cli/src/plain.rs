@@ -1383,7 +1383,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         .iter()
         .map(|step| bravebot_approval::RunStep {
             written: step.as_written(),
-            binary: step.binary(),
+            binary: bravebot_agent::confirm::shown_binary(step),
         })
         .collect();
     let writes: Vec<String> = request
@@ -2980,6 +2980,43 @@ mod tests {
                 );
                 assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
             }
+        }
+    }
+
+    /// PROMPT-1: the plain question for a run names the directory the line runs in on its summary
+    /// row, and the file each step runs under it, spelled where the name would draw as another, so
+    /// a line in `/work ` is not read as one in `/work`.
+    #[test]
+    fn a_run_question_spells_the_directory_and_the_binary_that_would_draw_as_another() {
+        let drawn =
+            |directory: &str, binary: &str| {
+                let pipeline = bravebot_core::command::Pipeline::new(vec![
+                    bravebot_core::command::Stage::new("tee", Vec::new()),
+                ]);
+                let mut request =
+                    RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".to_string()], directory);
+                let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+                    panic!("a pipeline");
+                };
+                steps[0].resolved = binary.into();
+                steps[0].started_as = binary.into();
+                program(&request)
+            };
+        let plain = drawn("/work", "/usr/bin/tee");
+        assert_eq!(plain[0], "run 1 step in /work");
+        assert!(plain.contains(&"  /usr/bin/tee".to_string()), "{plain:?}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let in_directory = drawn(name, "/usr/bin/tee");
+            assert_eq!(in_directory[0], format!("run 1 step in {spelled}"));
+            let running = drawn("/work", name);
+            assert!(
+                running.contains(&format!("  {spelled}")),
+                "{name:?}: {running:?}"
+            );
+            assert!(
+                !running.contains(&format!("  {name}")),
+                "{name:?}: {running:?}"
+            );
         }
     }
 

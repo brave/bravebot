@@ -180,8 +180,9 @@ const CARDS = {
   run: {
     entry: () => t.askedRun({
       request: 1,
-      stages: [{ display: FORGED_CHROME, resolved: '/bin/cat' }],
+      stages: [{ display: FORGED_CHROME, resolved: '/bin/cat', shownBinary: '/bin/cat' }],
       directory: '/tmp/project',
+      shownDirectory: '/tmp/project',
       releasesPrivate: false,
       vouches: [{ program: 'cat', args: [], display: 'cat' }],
       summary: 'one command',
