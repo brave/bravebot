@@ -40331,6 +40331,86 @@ fn a_turn_does_not_answer_while_a_delegate_is_still_working() {
     );
 }
 
+/// DELEGATE-17: a turn that has run out of tool calls still waits for its delegate, and answers
+/// without being asked again.
+///
+/// The last request carries no tools, so the planner's reply to it is the turn's answer. A turn
+/// that reported itself finished at that reply would be reporting something untrue while the
+/// delegate still read the person's files, and a turn that asked again would put the report to a
+/// planner that was told it had no more calls.
+#[test]
+fn a_turn_out_of_tool_calls_waits_for_its_delegate_and_is_not_asked_again() {
+    let scratch = Scratch::new("delegate-out-of-calls");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "OUT-OF-CALLS",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"TAKE-YOUR-TIME"}"#,
+                    ),
+                    reply_with("the answer with the calls spent"),
+                    reply_with("ASKED-A-THIRD-TIME"),
+                ],
+            ),
+            (
+                "TAKE-YOUR-TIME",
+                vec![reply_with("THE-DELEGATE-FINISHED-LATE")],
+            ),
+        ],
+        Order::After {
+            held: "TAKE-YOUR-TIME",
+            after: "OUT-OF-CALLS",
+            asked: 2,
+        },
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("OUT-OF-CALLS").with_rounds(Some(1)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before the planner's last reply, so this proves nothing: {:?}",
+        reporter.lines()
+    );
+    assert!(
+        reporter
+            .position("delegate d1 finished failed=false")
+            .is_some(),
+        "the turn ended without collecting the delegate it started: {:?}",
+        reporter.lines()
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "the answer with the calls spent",
+        "a turn out of tool calls was asked again after its delegate reported"
+    );
+    let requests = every_request(&received);
+    assert!(
+        !requests
+            .iter()
+            .any(|body| body.contains("THE-DELEGATE-FINISHED-LATE")),
+        "what the delegate said reached a planner that had no calls left"
+    );
+}
+
 /// CMDLINE-4: a delegate resolves a `~` the way the turn that spawned it would.
 ///
 /// A delegate is that turn's own work done elsewhere, so a line it sends has to name the same
