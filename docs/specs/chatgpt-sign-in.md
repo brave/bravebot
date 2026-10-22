@@ -1,0 +1,595 @@
+---
+id: CHATGPT
+title: Signing in with a ChatGPT account
+status: proposed
+governs:
+  - crates/cli/src/auth.rs
+  - crates/config/src/provider.rs
+  - crates/agent/src/backend.rs
+  - crates/aichat/src/lib.rs
+documented-by:
+  - none (gap: a page on signing in with a ChatGPT account, owed until the design is built)
+---
+
+## Scope
+
+A person with a ChatGPT Plus or Pro subscription signs in to it in a browser, and the models the
+account may use are then offered in the picker beside every other roster. The sign-in is the OAuth 2.0
+authorization code flow with PKCE against OpenAI's authorization server, with a listener on the loopback
+address receiving the redirect. opencode and OpenAI's Codex CLI sign in this way.
+
+Reaching OpenAI with a pay-per-token API key is a different route, the `openai` entry that
+[backends.md](backends.md) describes. It needs none of this and this needs none of it.
+
+Nothing here is built, and nothing here has been tested against OpenAI. A clause in this spec reads
+`verified-by: none` until the work it describes lands. The spec is written to be argued about first, so
+the points where it changes a built spec are named in [What this changes elsewhere](#what-this-changes-elsewhere)
+and none of those specs is edited until the work lands.
+
+Two things have to be settled before any of it is built. The first is whose client identifier the sign-in
+presents, which [Decisions left open](#decisions-left-open) states. The second is what the exchange with
+the real service looks like. The token endpoint, the host that serves a subscription's models, the
+protocol it takes and the headers it wants are reported by other programs and have not been observed in a
+sign-in made here, so [What the exchange has to record](#what-the-exchange-has-to-record) lists them and
+no clause below states a host past the authorization server. The values a clause does state, from the
+issue's observed request or as this program's own choice, are on that list as things to confirm.
+
+The flow carries no workspace content and no model output. The rule that untrusted content never
+reaches the driver or the planner is [AGENTS.md](../../agents/AGENTS.md), and
+[CHATGPT-5](#CHATGPT-5) checks this flow against it. Where each part lives is
+[layering.md](layering.md). The other sign-in that stores a person's subscription is
+[premium-credentials.md](premium-credentials.md), what a credential owes is
+[credential-protection.md](credential-protection.md), and the command this extends is
+`auth login` in [cli.md](cli.md).
+
+The flow, as observed in a request another program made:
+
+1. A listener starts on the loopback address at port 1455, and the browser is opened at the
+   authorization endpoint on `auth.openai.com`. The request asks for `response_type=code`, a
+   `code_challenge` with method `S256`, a random `state`, and redirects to the listener's `/auth/callback`.
+2. The person signs in at OpenAI, in the browser, and approves the request.
+3. The browser is sent back to the listener with a `code` and the `state`. This program exchanges the code
+   and its PKCE verifier for an access token, an ID token and a refresh token.
+4. Requests to the model service carry the access token. It is replaced, using the refresh token, before
+   it expires, during a turn.
+
+## Clauses
+
+<a id="CHATGPT-1"></a>
+### CHATGPT-1: only a command a person types signs in
+
+`bravebot auth login chatgpt` is the way in, run by a person at a terminal. It is a fifth way on the list
+`auth login` prints, and `bravebot auth logout chatgpt` and `bravebot auth status chatgpt` are its partners
+([CHATGPT-11](#CHATGPT-11)). No tool the planner calls, no hook, no settings file, no environment variable
+and no slash command in a session starts the flow, and a line that arrives through a quarantined source and
+reads like the command is not the command.
+
+A turn whose model is named `chatgpt/<name>` on the command line or by a settings file, where no gateway
+entry has that id ([CHATGPT-9](#CHATGPT-9)), and that finds no usable sign-in, is refused before a request
+is sent. The refusal is a sentence from [CHATGPT-8](#CHATGPT-8), and it names the command.
+
+The way is named `chatgpt`. `openai` is the id of the gateway reached with `OPENAI_API_KEY`, and
+`auth status openai` would name two credentials.
+
+**Why.** The flow opens a browser, holds a port and ends with a credential on disk. Each is a decision
+about a person's machine and account, and a person's own typing is the one source for it that no content
+can author. A session signs in to AWS when it opens, because that sign-in is the AWS CLI's, run in the
+terminal the session already holds. This one has to bind a fixed port for minutes and show a URL a person
+acts on elsewhere. A session in an editor, a desktop window or a background run has nowhere to show the
+URL, and two sessions opening together would contend for the port. A session with no service configured
+already takes this road: it says the command to type and does not start the work.
+
+`verified-by: none`
+
+<a id="CHATGPT-2"></a>
+### CHATGPT-2: a token reaches only the hosts compiled in for it
+
+The authorization server, `auth.openai.com`, serves the authorization page. The token endpoint, which takes
+the code exchange and the refresh, and the serving host are named once
+[the exchange](#what-the-exchange-has-to-record) has recorded them. Each is a constant in the source. A
+page, a reply, a model, a settings file at any layer, an environment variable and a redirect name none of
+them, and none of them is looked up from anything fetched, as the backends spec holds for a gateway's known
+name. A test points the flow at a server of its own through a seam that exists only in test builds.
+
+The access token is sent to the serving host and to no other. The refresh token and the code are sent to
+the token endpoint and to no other. A request that carries one of them follows no redirect, whichever
+client makes it, the one in the crate that signs in or the one that sends a model request: a redirect in
+answer to it is a failure. A gateway key, including the `openai` gateway's, is never sent to these hosts,
+and the tokens of this account are never sent to a gateway.
+
+A model of this service is answered with the stored sign-in and with nothing else. `OPENAI_API_KEY`, a
+gateway key and any other variable are not looked for.
+
+**Why.** A settings file may name a destination, which is right where the credential is one the person
+typed for that destination. A checkout's settings file naming where an account's refresh token goes would
+send a person's subscription to whoever wrote the file, and a token whose host came from a reply would go
+wherever the reply said. Looking for no other credential keeps the two OpenAI routes from being mistaken
+for each other: a person who has a key and a subscription gets the one their model name selects
+([CHATGPT-9](#CHATGPT-9)). A redirect re-sends the request, and with it the token, to a host nobody
+compiled in.
+
+`verified-by: none`
+
+<a id="CHATGPT-3"></a>
+### CHATGPT-3: the values the request depends on are generated here, for one sign-in
+
+The authorization request asks for the code response type and the scopes the exchange records. It carries
+a `code_challenge` of method `S256` and never `plain`, a `state`, and the redirect URI of
+[CHATGPT-4](#CHATGPT-4). The PKCE verifier and the `state` are each 32 bytes from the operating system's
+random source, encoded without padding, and used for one sign-in: a second `auth login chatgpt` makes new
+ones, and a callback carrying an earlier flow's `state` is not the callback. The verifier leaves the process
+once, in the code exchange, and is cleared afterwards, as every credential buffer is.
+
+The URL the browser is opened at is built from those values and from constants. Nothing in it comes from a
+settings file, a model or a page. The `originator` it carries is the one [Decisions left
+open](#decisions-left-open) names.
+
+**Why.** A verifier or a state a reader could guess, or one reused, lets another program on the machine
+complete or replay a sign-in. The URL is passed to the program that opens the browser as an argument, which
+other accounts on the machine can read while it runs. It holds nothing that can complete a sign-in: the
+challenge is public by construction, and a `code` obtained with another program's challenge does not
+exchange against this verifier. It does hold the `state`, which a reader of the argument list could send to
+the listener to end a sign-in ([Known costs](#known-costs)).
+
+`verified-by: none`
+
+<a id="CHATGPT-4"></a>
+### CHATGPT-4: the listener takes the one callback that carries its state
+
+The listener binds `127.0.0.1` on port 1455, and `::1` as well where the registered redirect host is
+`localhost`, and nothing else. The client's registered redirect URI fixes the port and the path,
+`/auth/callback`, and the exchange records the host spelling in it. Where the port is in use, the sign-in
+says so, names the port, opens no browser and stops. It tries no other port, since the authorization server
+refuses a redirect it has not registered.
+
+A request is the callback only if it is a `GET` for `/auth/callback` whose `state` equals the one
+generated, compared in constant time. The first callback is the only one served, and the listener closes
+after it. It closes without one after five minutes, and says so. Any other request, whatever its method,
+path or `state`, is answered with a fixed status and a fixed page and is ignored, and the listener goes on
+waiting. A connection is read for at most five seconds and at most 8 KiB, and one that has not sent a
+complete request line by then is closed. Connections are served at the same time, so one that sends nothing delays no other. From the query
+it reads `code` and `state` and nothing else, and it reads no header. A callback with no `code` ends the
+sign-in, whatever else it carries, including an `error` the server put there. The reply to a callback is
+one fixed page that loads nothing and repeats nothing from the request.
+
+The query string and the values read from it are held in memory for the exchange and are written nowhere:
+not to a log, a trace, an error message or the terminal ([CHATGPT-8](#CHATGPT-8)).
+
+**Why.** A port on the loopback address is reachable by every program on the machine, and by a page in the
+person's browser that makes a request to it. The `state` is what tells the person's own redirect from
+those. A request that fails it is not the callback, and counting it as one would let a single request from
+a page or a program end every sign-in. A listener on all interfaces would take a callback from the
+network. A browser given `localhost` may try `::1` first, and a listener that is not there fails a sign-in
+the person did correctly. A page that repeated the query would put a `code` in a second place, and a log of
+it would keep a `code` and a `state` for as long as the log. Reading only the two named parameters keeps a
+callback, which is bytes a browser sent, down to a `code` to hand on and a `state` to compare.
+
+`verified-by: none`
+
+<a id="CHATGPT-5"></a>
+### CHATGPT-5: nothing the flow reads from outside reaches the driver or the planner
+
+The sign-in runs as a command before any session, so no planner exists whose context it could enter. The
+refresh of [CHATGPT-7](#CHATGPT-7) runs inside a turn, in the same crate, and its outcome reaches the agent.
+Both read bytes this program did not write: a callback from a browser and replies from the authorization
+server. The crate compares and parses them and hands none of them to a turn, a trace or a message to the
+planner. That is the argument [premium-credentials.md](premium-credentials.md) makes for its own flow. It
+is checked here against [reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md), shape by
+shape:
+
+- **A branch on untrusted bytes.** The comparisons are the `state` against the value generated here, and a
+  reply's status and the fields the next step needs. They decide this program's own sign-in. What crosses
+  into the driver is a token and a category, which is the class of a reply's status, as the failure
+  categories of the backends spec are for the reply of any other service. A refused refresh adds one value,
+  that the refresh token is no longer valid, chosen by comparing one field of the error body with the value
+  the exchange records. A turn already branches on the categories, and none is content anyone authored. The
+  rest of a reply's body, its error text and its claims stay in the crate. That is the ordinary case the
+  document's section on the inverse mistake describes, and the same footing as the fields of a model
+  listing the code already reads.
+- **The same branch moved into the kernel.** None is moved. The flow's code is in a crate that depends on
+  neither `bravebot-core` nor `bravebot-agent`, which [layering.md](layering.md) treats as one driver, so no
+  decision about a reply's content is taken in the driver.
+- **A `declassify` outside the gates.** The flow has none, since it holds no labelled value.
+- **A `Labelled` built by hand.** The flow builds none.
+
+Three conditions keep the argument true, and a change that breaks one is a change to this clause:
+
+1. The crate holds no `Labelled` and carries no workspace content and no model output, as `bravebot-skus`
+   does.
+2. What the agent receives from it is a token, in the secret type that
+   [credential-protection.md](credential-protection.md) describes, and a value from the closed set of
+   [CHATGPT-8](#CHATGPT-8). No string taken from a reply is part of either.
+3. The ID token's claims are read once, for the one identifier [CHATGPT-10](#CHATGPT-10) says a request
+   needs, and the identifier is checked, stored and sent. The access token's expiry is read from the field
+   of the reply that states it or, where the exchange shows only a claim states it, from that one claim, and
+   is compared with the clock. No other claim is read, displayed or compared. Claims such as an
+   organisation's name are text somebody else chose.
+
+No exception is added to [labels.md](labels.md), and no count it pins moves.
+
+**Why.** The rule protects the planner and the driver from content an attacker could write. A callback is
+the one place here where bytes from outside arrive, and whoever wrote them could reach a loopback port: any
+program on the machine, or a page in the browser. Nothing they could write reaches a turn, because the
+only things read from the callback are a value compared with one generated here and a value handed to the
+authorization server. A reply from that server is the other place, and what leaves the crate from it is a
+token that is never read, or a category computed from a status.
+
+`verified-by: none`
+
+<a id="CHATGPT-6"></a>
+### CHATGPT-6: the tokens are one file the account owns
+
+The sign-in is kept in `chatgpt-account.json` in the state directory. It holds a version, the access token, the
+refresh token, the instant the access token expires and the identifier of [CHATGPT-10](#CHATGPT-10), and not
+the ID token. The file is created before anything is written to it, reachable by the account that signed in
+and by no other, with the protection the Leo credentials file has: mode 0600 on Unix and an access-control
+list for one account on Windows, with nothing inherited. A platform with neither has the sign-in refused. It
+is written beside the file and renamed over it, so a write that stops part way leaves the last good file.
+No settings layer, `provider` block or environment variable holds a token or names one, and the file is not
+`settings.json`.
+
+A file that cannot be read, is empty, or holds the fields of another version is reported with the remedy
+and is not read as an absent sign-in, as a stored Leo batch that cannot be spent is.
+
+Each token is a credential at a tier, in the terms of [credential-protection.md](credential-protection.md):
+
+- **Both are Held.** The refresh token mints access tokens without asking anyone, so a value this program
+  renews without further authority is permanent whatever its stated lifetime.
+- **What would end each is recorded:** signing out of the ChatGPT account, or removing this program's
+  access in the account's settings, at OpenAI. This program cannot do either for the person.
+  `bravebot auth logout chatgpt` removes the copy here and ends nothing at OpenAI. Whether an access token
+  minted before a revocation survives it is a fact the exchange records.
+- **Neither is bound to its presenter.** Nothing asks the authorization server for a sender-constrained
+  form, so the record says bearer, with the answer `NotAttempted`, until the exchange records whether one
+  is offered.
+
+A token is held in the secret type that spec describes, so it is redacted wherever it is printed, and its
+buffers are cleared and kept out of crash artifacts. It reaches no program a turn starts, no prompt and no
+record, and it is never passed as a command-line argument.
+
+**Why.** A file of its own because the shape differs from the gateway keys, which are one string under an id
+with no expiry, and from the Leo batch, which is spent a credential at a time. Held because the arrangement
+is the one that spec names as the false pass, a short-lived token that the holder renews by itself. A record
+of what ends the credential is what a person who suspects a leak needs, and it can only be written down
+while the arrangement is understood.
+
+`verified-by: none`
+
+<a id="CHATGPT-7"></a>
+### CHATGPT-7: an access token is replaced before it expires
+
+A request to the serving host is built from an access token whose stated expiry is more than a minute away.
+Otherwise the refresh token is presented to the token endpoint, the reply is written to the file, and only
+then is the new access token used. No request is sent with a token past its stated expiry, and a reply that
+states no expiry this program can read is refused. A token the serving host refuses before its expiry,
+whether the clock here runs behind or the token was revoked early, is replaced in the same way once, and the
+request is sent once more. A second refusal ends the turn with a sentence from [CHATGPT-8](#CHATGPT-8). Where the refresh fails other
+than by ending the sign-in and the access token in hand has not yet passed its expiry, the request is sent
+with it.
+
+The refresh is taken under an exclusive claim on the file, as the Leo store takes one for a spend, and the
+file is read again once the claim is held. Every write of the file and its removal is made under the claim.
+A process that finds a token other than the one it was about to replace uses it and presents nothing. The
+refresh request has a deadline of thirty seconds, and a claim is judged abandoned only after sixty, so a
+refresh still waiting for its reply is never broken. A claim older than that belongs to a process that died
+holding it and is broken as the Leo store breaks one, by moving it aside and judging it there.
+
+A refresh the authorization server refuses as the refresh token no longer being valid, which the exchange
+records, ends the sign-in. The file is removed if it still holds the refresh token that was refused, and
+the turn says the sign-in has ended. Any other failure of the refresh, a connection that did not complete or
+a reply that says the service is busy or unavailable, leaves the file as it is and says which of the
+backends spec's failure categories it was. A write of the reply that fails is reported, the new tokens are
+used from memory for the rest of the process, and the process tries the write again before each later request, under the claim,
+and only if the file still holds the token this process replaced. Where it holds another, the tokens in
+memory are dropped.
+
+**Why.** An authorization server may replace the refresh token each time it is used, and then the copy a
+second process read before the first's reply is dead. A session, a background run and a one-shot run on one
+machine present it together as a matter of course, and the one that loses ends the sign-in for all of them.
+The claim is held across a network round trip, so it has an age longer than that trip's deadline: the Leo
+claim is judged abandoned after seconds because its hold is one local read and write. The reply is written
+first because a process that stops between receiving it and writing it has spent a refresh token it cannot
+present again. Whether this server replaces the refresh token on use is recorded by the exchange, and the
+clause holds either way: a server that does not replace it loses nothing to the claim. Removing the file
+on an ended sign-in leaves `auth status` and the picker saying what is true, and stops every later turn
+from presenting a token that cannot work.
+
+`verified-by: none`
+
+<a id="CHATGPT-8"></a>
+### CHATGPT-8: a failure names its step and quotes nothing
+
+Every refusal is one fixed sentence, chosen from the step that failed, the class of an HTTP status and,
+for a refused refresh, whether its error code is the one that ends the sign-in. None holds text taken from a
+reply, a request, a callback or a settings file. A request to either host that did not succeed reports one
+of the backends spec's failure categories: refused, rate-limited, unavailable, incomplete or a transport
+failure. The rest are these, each saying which it is:
+
+- **Signing in again is the remedy,** and the sentence names `bravebot auth login chatgpt`: not signed in,
+  the sign-in has ended, the service refused the token.
+- **The sign-in file** cannot be read, cannot be written, or has nowhere to be kept on this platform, with the
+  remedy the Leo store gives for a batch it cannot use.
+- **The command stopped,** and says so: the port is in use or the listener could not start, the browser
+  returned no code, the time bound passed, a `provider` entry named `chatgpt` is a gateway
+  ([CHATGPT-9](#CHATGPT-9)). The entry's name in that sentence is the constant `chatgpt`.
+- **The command completed,** and says what it leaves: the account reaches no model, or no model is named for
+  it where the service lists none ([CHATGPT-9](#CHATGPT-9)).
+
+The refusals of [CHATGPT-12](#CHATGPT-12), which are made before anything starts, are sentences of the
+command and quote nothing.
+
+No code, `state`, verifier, challenge, token, claim, identifier, reply body, header value or callback query
+reaches a trace, a log, an error message, a session record, a transcript, `doctor`, `auth status`, the
+terminal or the environment of a program a turn starts. The one exception is the authorization URL, which
+carries the `state` and the challenge, is written to the terminal once by [CHATGPT-13](#CHATGPT-13) and goes
+nowhere else. A test holds every secret the process held, in a run that signs in, refreshes and fails,
+against each of those outputs, as the trail's test does for the credentials the agent holds, and leaves out
+that one line.
+
+**Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
+to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
+Choosing from a closed set also keeps [CHATGPT-5](#CHATGPT-5) true: what the agent branches on is a value
+this crate computed from a step and a status class. The categories are the ones the other services'
+failures already use, so a rate limit here is waited out and reported as a rate limit is elsewhere, and a
+remedy that signing in again would not supply is not offered.
+
+`verified-by: none`
+
+<a id="CHATGPT-9"></a>
+### CHATGPT-9: the account's models are offered under the identifier `chatgpt`
+
+Once a usable sign-in is stored, the models the account may use appear in `/model` and in the desktop
+picker as a roster beside the others. They take no model away from another roster, and without a sign-in
+none is offered, since a name on the list promises that picking it works.
+
+Each is named `chatgpt/<name>`, with the identifier ahead of the name the service knows the model by, as a
+gateway's models are qualified by its id. A name without the identifier never selects this service, so the
+bare `<name>` keeps its meaning: the `openai` gateway's model of that name, or Brave's. The text after the
+identifier is what the request carries as the model. A row says which service answers it.
+
+A `provider` entry with the id `chatgpt` that states an endpoint is a gateway, as it is today, and keeps the
+name. While one exists no account model is offered and `auth login chatgpt` is refused, naming the entry,
+since one name cannot select two services.
+
+Where the roster comes from, in order:
+
+1. An entry named `chatgpt` that states no endpoint is read for its `models` and for nothing else. Where it
+   names models, those are what is offered and nothing is asked, as for a gateway. The person wrote that
+   list, so the service refuses at the first request a model it names that the account cannot reach, and no
+   listing is consulted to say so.
+2. Where it names none and the service lists what an account may use, the service is asked, and a model the
+   account cannot reach is not offered.
+3. Where it names none and the service has no listing, none is offered, and the sign-in says to name them in
+   the entry.
+
+The window, the output ceiling and which models can call tools come from the entry or the listing as they do
+for a gateway's, and the assumed low window applies where neither states one. No list of models is compiled
+in, so a new model is added by naming it in the entry, without a release.
+
+An account whose listing is empty, where the entry names no model, is signed in. The command completes,
+says the account reaches no model, and the picker has no row for it. Nothing is invented for a tier nobody named.
+
+**Why.** Where two services serve a model of one name they are billed differently, authenticate differently
+and answer on different terms, so a bare name cannot say which one a person chose, and a remembered choice
+would change service silently. An entry that already uses the id is not reinterpreted: refusing the sign-in
+and naming the entry is a message, where taking the id over would send a working gateway's requests to
+OpenAI's service with a person's subscription. No list is compiled in because the right list is a fact
+about an account and a date, and a list that waited for a release would offer a model the account cannot
+reach for weeks. Sign-in is about the account, so an account that reaches nothing today and something
+tomorrow is not signed out by it. The alternative is a sign-in that fails for an account that
+reaches no model.
+
+`verified-by: none`
+
+<a id="CHATGPT-10"></a>
+### CHATGPT-10: a request is made in the protocol the serving host takes, and carries what the sign-in stored
+
+The protocol is whichever the serving host takes, which [the exchange](#what-the-exchange-has-to-record)
+records. Where it is chat completions, the aichat client carries it as it carries a gateway's. Where it is
+the Responses API, the request, the streamed events, a tool call and its result, usage and cache figures and
+the effort level are those of the clause that adds that protocol for any provider entry (#2994), and this
+service adds no protocol of its own. The effort level maps to the service's reasoning field.
+
+The access token is sent as a bearer token in `authorization` and nowhere else. The headers the service
+requires beyond that are constants, and one identifier if the exchange shows the service asks for one. The
+identifier is taken from the ID token's claims at sign-in and is stored only if it has the shape the
+exchange records, which is a non-empty string of a bounded length holding letters, digits and hyphens. A
+claim of any other shape ends the sign-in with a sentence from [CHATGPT-8](#CHATGPT-8), since a header value
+is what it would become. A refresh does not read an ID token and keeps the identifier it has. The ID token's signature is not checked, because the claim is handed back to the
+service that issued it and is used for nothing else. Nothing else a reply, a model or a settings file says
+is added to a request to this host: a gateway's options are carried into its requests, and this service
+takes none.
+
+**Why.** The exchange decides the protocol, and a protocol written for one service is a second copy of the
+work for the next. A header a settings file could add would be a way to put a value, or another credential,
+on a request this clause promises carries only the token. A value from a reply that reached a header
+unchecked could carry a line break or a length no server accepts, and every later request would fail with
+an error that names nothing.
+
+`verified-by: none`
+
+<a id="CHATGPT-11"></a>
+### CHATGPT-11: logging out, status and doctor never print the sign-in
+
+`bravebot auth logout chatgpt` removes `chatgpt-account.json` and says what would end the credential at
+OpenAI, since the copy removed is not the credential. It is allowed in an incognito session and is not an
+error where nothing is stored, as forgetting an import is.
+
+`bravebot auth status chatgpt` prints one line. It says **signed in**, with the instant the access token
+expires, where the file holds a sign-in, **not signed in**, with the command, where it does not, or
+**unusable**, with the reason and the remedy, where the file cannot be read. An access token whose instant
+has passed is still signed in, since the next request replaces it. The command probes nothing and writes
+nothing. Its exit status is the one the other ways of that command give: 0 where the sign-in is usable. The
+line holds no token, claim, identifier, email or account name.
+
+`bravebot doctor` names the account as a held credential at its tier and says what would end it, and the
+expiry. The list `auth login` prints says **signed in** on this way's line where the file holds a sign-in.
+Signing in again over one asks first and replaces the tokens only on a yes.
+
+**Why.** Each is an answer about whether the next request will work, and none needs the secret to give it.
+A sign-in that OpenAI has ended is found out by a refresh and removed by it ([CHATGPT-7](#CHATGPT-7)), so
+the file that is there is the one that has not been found to fail. An identifier or an email on a status
+line is the one thing in a pasted report that says whose account it was.
+
+`verified-by: none`
+
+<a id="CHATGPT-12"></a>
+### CHATGPT-12: signing in is refused where it cannot be done
+
+`auth login chatgpt` is refused in an incognito session before the listener binds and before a browser
+opens, as importing a subscription is refused there: the sign-in is a write to `~/.bravebot` that the mode
+exists to decline. It is refused with the argument status where stderr is not a terminal, since the URL is shown there, and
+says to run it at one. Where a sign-in is already stored the command asks before replacing it
+([CHATGPT-11](#CHATGPT-11)), and is refused in the same way where stdin is not a terminal, since a run
+nobody is watching cannot answer.
+
+**Why.** Refusing the sign-in is the same argument as the import's: doing it and discarding the result
+would leave a session that was signed in once and never again.
+
+`verified-by: none`
+
+<a id="CHATGPT-13"></a>
+### CHATGPT-13: the URL is always printed, so a machine with no browser can finish the sign-in elsewhere
+
+The authorization URL is written to stderr, line by line as it is made, before the browser is asked to open
+it, whether or not one can be opened. The command waits for the callback in every case. A person with no
+browser on the machine opens the URL in one elsewhere.
+
+That works where the browser can reach this machine's port 1455: it is the same machine, or the port is
+forwarded. Where it cannot, the redirect fails in the browser, and the command ends at the time bound with
+the sentence of [CHATGPT-8](#CHATGPT-8) that says so.
+
+The browser is opened by the platform's own opener, started with the URL as one argument and no shell
+between them: `open` on macOS, `xdg-open` on Linux and `rundll32` with `url.dll,FileProtocolHandler` on
+Windows, where `start` is a shell builtin. It is started as the sandboxing spec says a program is started
+that bravebot looks up by name, resolved first and with the variables that spec removes from what an agent
+passes on left out. The opener failing is not the sign-in failing, and the command carries on waiting.
+
+**Why.** A sign-in that printed the URL only when the opener failed would show nothing on a machine where
+the opener exits successfully and opens nothing, which a machine reached over SSH may do. A shell between
+the program and the URL would read the `&` the query holds. The URL holds the `state` and the challenge,
+and the person needs it, so it is the one line [CHATGPT-8](#CHATGPT-8) lets reach the terminal.
+
+`verified-by: none`
+
+<a id="CHATGPT-14"></a>
+### CHATGPT-14: a refresh is still written in an incognito session
+
+A stored sign-in is spent in an incognito session as in any other. When the access token is replaced
+([CHATGPT-7](#CHATGPT-7)), the file is written, as the incognito spec writes the markers of a credential
+that was spent, and a sign-in that has ended is removed from it. What the file ends up holding is the tokens
+of a sign-in made before the session, and nothing about which project or which prompts.
+
+**Why.** A refresh that was not written would end the sign-in whenever the server replaces the refresh
+token on use, and the person would find out at the first turn of the next session.
+
+`verified-by: none`
+
+## Decisions left open
+
+These are a person's to decide, and no test can settle them.
+
+- **Whose client this is.** The sign-in presents a public client identifier that belongs to OpenAI's Codex
+  CLI. Whether another program may present it, and whether using a subscription this way is within
+  ChatGPT's terms, has to be decided before this ships. If OpenAI offers no client identifier for other
+  programs, this should not land as written. The identifier and the `originator` are two constants in one
+  place, so either answer is a change to them.
+- **Which `originator` this program sends**, once the above is settled. The proposal is its own name. A
+  request that names another tool says something untrue about which program is asking, and an
+  authorization server that rejects an unknown name is a fact the exchange records.
+- **A machine with no local browser.** [CHATGPT-13](#CHATGPT-13) supports a browser on the same machine and a
+  forwarded port. A device-code route avoids the listener, and whether OpenAI offers one for this client is
+  recorded by the exchange. None is specified here.
+
+## What the exchange has to record
+
+A sign-in made with a real ChatGPT Plus or Pro account, with the requests it makes observed, has to
+establish each of the following before a clause states it. What is recorded is a name, a shape, a status, a
+duration or a host. A token, code, state, challenge, verifier, identifier or claim value is never recorded,
+in this repository or in the tracker.
+
+- The redirect URIs the authorization server accepts for this client: the host spelling, the port and the
+  path. The clauses state port 1455 and `/auth/callback`, from the issue's observed request.
+- The scopes the client may ask for, and any parameter beyond the standard ones that the server requires
+  of this client. The clauses state `S256` and the code response type.
+- The token endpoint, the field names of the code exchange and of the refresh, whether a request to it is
+  ever answered with a redirect, and whether a refresh replaces the refresh token.
+- How the access token's expiry is stated: a field of the reply, a claim of the token, or neither.
+- The name and shape of the ID token claim that identifies the account to the serving host, if the serving
+  host asks for one.
+- The serving host and path, the protocol it takes, the headers it requires, and whether a listing of the
+  models an account may use exists, with the names of its fields. The clauses state a bearer token in
+  `authorization` as this program's own choice, to be confirmed.
+- What a refused refresh and a refused access token return: the status and the error code, and which code
+  means the refresh token is no longer valid.
+- What an account with no subscription reaches.
+- Whether an access token minted before a revocation survives it, and whether a sender-constrained form is
+  offered.
+- Whether a device-code route exists for this client.
+
+## What this changes elsewhere
+
+These are the places a built spec says something this spec would need to extend, each decided when the
+work lands, in the same commit as the code.
+
+- **Backends.** [BACKEND-3](backends.md#BACKEND-3) and [BACKEND-18](backends.md#BACKEND-18) gain the
+  `chatgpt/` identifier. [BACKEND-9](backends.md#BACKEND-9) gains a note that this service starts no
+  sign-in. [BACKEND-39](backends.md#BACKEND-39) names three ways to configure a service, and a stored
+  ChatGPT sign-in is a fourth. [BACKEND-13](backends.md#BACKEND-13), [BACKEND-17](backends.md#BACKEND-17)
+  and [BACKEND-5](backends.md#BACKEND-5) each gain the case of [CHATGPT-9](#CHATGPT-9): an entry named
+  `chatgpt` that states no endpoint is read for `models`, where today an entry with no endpoint configures
+  no service. [BACKEND-19](backends.md#BACKEND-19) gains this service's listing and its absence. The cases
+  of [CHATGPT-10](#CHATGPT-10) land in [BACKEND-3](backends.md#BACKEND-3) to
+  [BACKEND-6](backends.md#BACKEND-6), [BACKEND-20](backends.md#BACKEND-20) to
+  [BACKEND-22](backends.md#BACKEND-22), [BACKEND-31](backends.md#BACKEND-31) and
+  [BACKEND-52](backends.md#BACKEND-52) with the Responses protocol where the serving host takes it.
+- **The command line.** [CLI-18](cli.md#CLI-18) lists five ways and states `logout chatgpt`.
+  [CLI-23](cli.md#CLI-23) takes `chatgpt` as a way.
+- **Incognito.** [INCOG-7](incognito.md#INCOG-7) refuses the sign-in, and
+  [INCOG-8](incognito.md#INCOG-8) lists the refresh among what is still written.
+- **Credential protection.** [CRED-14](credential-protection.md#CRED-14) and the list of what is never read
+  at its strict form add `chatgpt-account.json`, and [CRED-25](credential-protection.md#CRED-25)'s `doctor`
+  account gains the credential.
+- **Sandboxing.** [SANDBOX-30](sandboxing.md#SANDBOX-30)'s list of programs started by name gains the
+  browser opener of [CHATGPT-13](#CHATGPT-13).
+- **Layering.** [LAYER-1](layering.md#LAYER-1) gains a row for the crate that runs the flow, named
+  `bravebot-chatgpt` here as a proposal. It is auth
+  only, holds no workspace content and no labelled value, and depends on `bravebot-config` for the secret
+  type, `bravebot-sandbox` for starting the opener and clearing buffers, and `bravebot-diag`. It depends on
+  neither `bravebot-core` nor `bravebot-agent`. Its files are added to this spec's `governs` when it is
+  created, since [CHATGPT-5](#CHATGPT-5) rests on that dependency set.
+- **Network egress.** [network-egress.md](network-egress.md) names no host for any service, so none is added.
+  The crate keeps a client of its own as `bravebot-skus` does, because a request here carries no labelled
+  value for the gate in `bravebot-net` to judge, so the register in its Known costs gains the crate, and the
+  client is configured to follow no redirect, which the register records as undecided for `bravebot-skus`.
+  The register's cost about a hop to any https host gains an exception: a request to the serving host that
+  carries the access token follows no redirect, since a person did not choose that host. Its scope is
+  requests that leave this process, so the listener, which receives one, is governed by
+  [CHATGPT-4](#CHATGPT-4).
+- **Labels.** Nothing changes. [CHATGPT-5](#CHATGPT-5) shows the flow holds the rule, and no exception is
+  added.
+
+## Known costs
+
+- The refresh token is a bearer secret in a file for as long as the account keeps the sign-in. Anything
+  running as the person can read it, as it can read the Leo credentials and the gateway keys. Nothing asks
+  for a form that binds it to this machine.
+- The callback puts a `code` and a `state` in the address bar and history of the person's own browser. The
+  `code` is single use and exchanges only with the verifier this process holds.
+- The `state` is in the argument list of the program that opens the browser. A local program that reads it
+  can send the listener a callback with no `code` and end the sign-in. It can end one as well by holding the
+  port first, and it cannot complete one.
+- The ID token's signature is not checked ([CHATGPT-10](#CHATGPT-10)). The claim read from it is a header
+  value the issuing service reads back.
+- A sign-in ends at OpenAI and this program learns of it at the next refresh, which is the first turn that
+  needs one. A turn can also be refused once for a token that a clock running behind made look valid.
+- A process that rotated the refresh token and could not write the file holds the only good copy in
+  memory. If another process finds the file's refresh token dead and removes it, and the first exits before
+  its write succeeds, the sign-in is gone and the person signs in again.
+- Port 1455 is shared with every program that signs in the same way. While another holds it, this one does
+  not sign in, and it says so.
+- One account is signed in at a time on one machine, as one subscription is imported at a time.
+- A person whose gateway entry already has the id `chatgpt` renames it to sign in.
+- Whether a third-party program may use a subscription this way is not this spec's to settle
+  ([Decisions left open](#decisions-left-open)). The design assumes a person is allowed to, and an answer of
+  no ends it.
