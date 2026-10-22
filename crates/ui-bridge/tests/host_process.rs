@@ -1490,3 +1490,86 @@ fn a_host_sweeps_the_state_directory_and_leaves_the_root_it_was_given() {
         "a record in the root the host was given was removed"
     );
 }
+
+/// A hooks file in the host's home where `session-started` and `session-ended` each append their
+/// word to the returned log, the end after two seconds so that a host that reported the session
+/// closed without waiting for it would be read before the hook had written.
+fn declared_session_hooks(scratch: &Scratch) -> PathBuf {
+    let log = scratch.project().join("session-log");
+    let hook = |moment: &str, wait: &str| {
+        json!({"on": moment, "run": ["/bin/sh", "-c",
+            format!("{wait}echo {moment} >> '{}'", log.display())]})
+    };
+    std::fs::write(
+        scratch.home().join(".bravebot/hooks.json"),
+        json!({"hooks": [hook("session-started", ""), hook("session-ended", "sleep 2; ")]})
+            .to_string(),
+    )
+    .unwrap();
+    log
+}
+
+fn session_log(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// A session the host closes has fired `session-ended` by the time the host says it is closed, and
+/// the close was answered without waiting for it. The end is one of the workers the close returns,
+/// so `session.closed` follows it: a host that ran the hook inside the close would answer late, and
+/// one that did not count it would say closed while the hook was still to write.
+#[test]
+fn a_hosted_session_is_reported_closed_only_after_its_end_hook_has_run() {
+    let scratch = Scratch::new();
+    let log = declared_session_hooks(&scratch);
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::start(&scratch, &endpoint);
+    let mut client = host.client();
+    let session = client.session_in(&scratch.project());
+    client.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    client.event("turn.done");
+
+    let closing = client.call("session.close", json!({"session": session}));
+    assert_eq!(closing["state"], "closing");
+    assert_eq!(
+        session_log(&log),
+        ["session-started"],
+        "the close was answered after the hook that ends the session had run"
+    );
+    client.event("session.closed");
+
+    assert_eq!(session_log(&log), ["session-started", "session-ended"]);
+    client.leave();
+}
+
+/// A host told to quit closes the sessions it holds and waits for the hook that ends each, so the
+/// end has been written when the process is gone. A host that stopped its sessions without
+/// returning their end would exit with the hook still to run.
+#[test]
+fn a_host_that_quits_ends_the_sessions_it_holds_before_it_exits() {
+    let scratch = Scratch::new();
+    let log = declared_session_hooks(&scratch);
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::start(&scratch, &endpoint);
+    let mut client = host.client();
+    let session = client.session_in(&scratch.project());
+    client.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    client.event("turn.done");
+
+    host.command("quit");
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if let Some(status) = host.child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the host did not stop");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    assert_eq!(session_log(&log), ["session-started", "session-ended"]);
+    client.leave();
+}

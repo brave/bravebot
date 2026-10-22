@@ -122,6 +122,11 @@ pub struct State {
     /// session opened from a record, and a fork, start with none, as `--resume` does in the
     /// terminal.
     pub question_answers: Arc<Mutex<bravebot_core::ask::AnswerMemo>>,
+    /// The session moments (HOOK-10): `None` until the session's first turn begins it, which reads
+    /// the hooks once, and the same ones fire when the session is closed. Held with the rest of the
+    /// state so that the end waits for the turn that is running, which holds the state for as long as
+    /// it runs. Not saved: a reopened session and a fork begin their own.
+    pub moments: Option<bravebot_agent::hooks::SessionMoments>,
 }
 
 /// The session's own directory outside the project, or why it has none.
@@ -202,6 +207,7 @@ impl State {
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
+            moments: None,
         }
     }
 
@@ -244,6 +250,7 @@ impl State {
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
+            moments: None,
         }
     }
 
@@ -306,6 +313,7 @@ impl State {
             scratch: Scratch::open(),
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
+            moments: None,
         }
     }
 }

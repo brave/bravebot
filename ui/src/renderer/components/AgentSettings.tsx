@@ -171,7 +171,6 @@ export function AgentSettings({ session, onChanged, onDirty }: {
             <Input value={hook.tool ?? ''} placeholder="All tools" disabled={busy || !editable}
               onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, tool: value.trim() || null }) }}>Tool filter (optional)</Input>}
           {!dirty && document?.hooks[index]?.firesForNothing && <Alert type="warning" role="alert">This hook fires for nothing: only a finished tool call carries a tool name. Clear the filter, or choose Tool finishes.</Alert>}
-          {(hook.on === 'session-started' || hook.on === 'session-ended') && <Alert type="info">The desktop app does not fire this moment yet. The terminal does.</Alert>}
           <Input value={hook.run[0]} placeholder="/path/to/program" disabled={busy || !editable} data-test={`hook-program-${index}`}
             onInput={(event) => { const value = fieldText(event); if (value !== null) change(index, { ...hook, run: [value, ...hook.run.slice(1)] }) }}>Program</Input>
           <Input type="number" min={document?.timeoutSeconds.min} max={document?.timeoutSeconds.max} step={1} value={hook.timeout === null || hook.timeout === undefined ? '' : String(hook.timeout)} placeholder={String(document?.timeoutSeconds.defaultFor[hook.on] ?? '')} disabled={busy || !editable} data-test={`hook-timeout-${index}`}

@@ -118,8 +118,15 @@ already have open and fire neither. A session you hand to the background with `/
 interface you left at one of the questions it opens with, began no session, so neither fires.
 
 The hooks file is read when the session begins, and the same hooks fire when it ends. Both run in the
-directory the session opened in. The desktop app does not fire either yet, so an entry for them
-fires in the terminal only.
+directory the session opened in.
+
+The desktop app, an editor that hosts bravebot over ACP and the local host fire them too, once for
+each session they hold. A session there begins with its first turn, so one you opened and sent
+nothing to fires neither, and ends when you close it, or when the app or the editor ends and the
+process waits up to ten seconds for the hook. `session-ended` runs after the turn that was running
+when you closed the session has ended. If a `session-started` hook cannot be started, the first turn
+says so. A `session-ended` hook that cannot be started has nowhere to say so, because the session is
+already closed.
 
 ## A hook is a program and its arguments
 

@@ -19,6 +19,12 @@ governs:
   - crates/agent/src/confirm.rs
   - crates/agent/src/permission_mode.rs
   - crates/ui-bridge/src/hooks.rs
+  - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/workers.rs
+  - crates/ui-bridge/src/running.rs
+  - crates/ui-bridge/src/acp.rs
+  - crates/ui-bridge/src/bin/bravebot-rpc.rs
+  - crates/ui-bridge/src/bin/bravebot-acp.rs
   - crates/ui-files/src/main.rs
   - ui/src/shared/agent-settings.ts
   - ui/src/main/agent-settings.ts
@@ -81,8 +87,8 @@ A declaration names one moment. These are the moments:
 | `prompt-shown` | just before a prompt or an `ask_user` question is put to a person who can answer it |
 | `checkout-made` | once the driver has written a checkout for a delegate, before that delegate's first request |
 | `compacted` | after a summary has been adopted in place of the older part of the conversation |
-| `session-started` | when an interface a person opened has begun a session, before it sends a turn |
-| `session-ended` | when that interface is left, however it ended |
+| `session-started` | when an interface a person opened has begun a session, before it sends a turn, or where a window, an editor or the local host holds the session, as its first turn begins |
+| `session-ended` | when that interface is left, however it ended, or where a window, an editor or the local host holds the session, when the session is closed |
 | `file-changed` | when the file the entry names has a different size or modification time at one look than at the one before, or appears or goes |
 
 A `tool-finished` entry may name a `tool`, and then fires for calls of that name alone; one that
@@ -450,6 +456,8 @@ A check is announced the same way, for the same reason.
 `verified-by: bravebot_ui_bridge::reporting::a_running_hook_crosses_as_a_pair_naming_the_moment_and_the_program`
 `verified-by: bravebot_tui::state::a_running_hook_names_the_indicator_and_gives_it_back`
 `verified-by: bravebot_tui::app::a_hook_running_after_a_summary_is_named_and_its_trouble_said`
+`verified-by: bravebot_agent::hooks::a_session_start_hook_is_announced_once_however_often_it_is_asked`
+`verified-by: bravebot_ui_bridge::session_hooks::a_start_hook_holding_the_first_turn_is_announced_while_it_runs`
 
 `prompt-shown` is the exception to the first sentence: it fires from the confirmer, which has no
 display to hand, and a running status drawn over the prompt it precedes would be gone before the
@@ -458,7 +466,9 @@ somewhere to say it, which is the end of the call the question came up in.
 
 `session-started` and `session-ended` are the other exception: the interface that owns the session
 fires them with no turn to hold open, so nothing is drawn while either runs. What they say when they
-go wrong is still said (HOOK-7).
+go wrong is still said (HOOK-7). A session a window, an editor or the local host holds is the one
+place a turn is running while `session-started` does, so there it is announced as a turn's hook is,
+and `session-ended` draws nothing.
 
 <a id="HOOK-10"></a>
 ### HOOK-10: a session moment belongs to the interface a person opened, and fires once for it
@@ -477,6 +487,23 @@ A turn fires neither moment, and neither does a delegate. `/resume` and `/clear`
 conversation in an interface that is already open and fire neither. A session a background process
 holds fires neither. The interface that handed a session to a background process with `/bg` does not
 fire `session-ended`, since the session goes on.
+
+A session the bridge holds, which is how the desktop interface, an editor over ACP and the local host
+hold theirs, begins with its first turn and ends when it is closed. Each session is its own: a window
+that holds two fires each moment twice, and a session opened from a record begins when it takes a
+turn, as any other does. `session-started` fires on the thread that runs that first turn, before
+anything else the turn does, so the request that sent the turn is answered at once and the turn sends
+nothing until the hook has ended. A turn sent to a session that has begun, a session opened or forked
+and closed without one, and a manifest run, which fires no hook, begin nothing. `session-ended` fires
+once, only for a session that began, after the turn that was running when it was closed has ended. A
+close is `session.close`, the host's `quit` or the end of its input, and the end of the input of the
+desktop and editor processes, which wait up to ten seconds for the hooks that end their sessions, a
+session closed a moment before included, as the host does
+([HOST-1](local-host.md#HOST-1)), and say nothing to the client that has gone while they close. It is one of the threads the close returns
+([HOST-6](local-host.md#HOST-6)), so a hook that holds the session open holds back the report that it
+is closed and nothing else. What `session-started` says when it goes wrong is carried by the notices
+that end that first turn, and `session-ended` has no turn and no window to say it to, so it says it to
+nobody (Known costs).
 
 The hooks are read once, when the session begins, and the same ones fire at its end. Both moments run
 in the directory the session opened in. A `session-ended` hook that states no `timeout` is held to 5
@@ -516,6 +543,24 @@ path in the hook that ends a session is the path its twin started from, whatever
 `verified-by: bravebot_tui::session_moments_tests::no_early_frame_is_drawn_where_no_start_hook_will_run`
 `verified-by: bravebot_tui::session_moments_tests::a_start_hook_that_could_not_run_is_noted_once_however_many_conversations_open`
 `verified-by: bravebot_cli::main::leaving_the_interface_ends_the_session_except_for_a_hand_over_to_the_background`
+`verified-by: bravebot_ui_bridge::session_hooks::a_window_session_starts_with_its_first_turn_and_ends_when_it_is_closed`
+`verified-by: bravebot_ui_bridge::session_hooks::a_window_session_closed_before_any_turn_fires_neither_moment`
+`verified-by: bravebot_ui_bridge::session_hooks::each_session_begins_and_ends_once_in_its_own_directory`
+`verified-by: bravebot_ui_bridge::session_hooks::a_start_hook_that_cannot_run_is_said_with_the_first_turn_alone`
+`verified-by: bravebot_ui_bridge::session_hooks::a_start_hook_that_cannot_run_is_said_when_the_first_turn_fails`
+`verified-by: bravebot_ui_bridge::session_hooks::a_start_hook_holding_the_first_turn_is_announced_while_it_runs`
+`verified-by: bravebot_ui_bridge::session_hooks::an_editor_session_ends_when_the_adapter_finishes`
+`verified-by: bravebot_ui_bridge::session_hooks::the_desktop_process_ends_its_open_sessions_before_it_exits`
+`verified-by: bravebot_ui_bridge::session_hooks::the_desktop_process_waits_for_the_end_of_a_session_closed_just_before_it_exits`
+`verified-by: bravebot_ui_bridge::closing_tests::a_bridge_shutting_down_waits_for_a_session_closed_just_before`
+`verified-by: bravebot_ui_bridge::closing_tests::a_bridge_shutting_down_says_nothing_about_the_views_it_closes`
+`verified-by: bravebot_ui_bridge::session_hooks::the_editor_process_ends_its_open_sessions_before_it_exits`
+`verified-by: bravebot_ui_bridge::host_process::a_hosted_session_is_reported_closed_only_after_its_end_hook_has_run`
+`verified-by: bravebot_ui_bridge::host_process::a_host_that_quits_ends_the_sessions_it_holds_before_it_exits`
+`verified-by: bravebot_ui_bridge::ending::worker::the_end_of_a_session_follows_the_turn_that_was_running_and_is_returned_with_it`
+`verified-by: bravebot_ui_bridge::ending::worker::a_session_whose_turn_panicked_still_ends`
+`verified-by: bravebot_ui_bridge::closing_tests::a_session_that_never_began_has_no_end_among_the_workers_a_close_returns`
+`verified-by: bravebot_ui_bridge::workers::a_worker_that_follows_the_rest_runs_after_them_and_is_counted_while_it_waits`
 
 ## The file
 
@@ -594,9 +639,21 @@ path in the hook that ends a session is the path its twin started from, whatever
   for up to that long.
 - **A delegate's compaction fires nothing.** The delegate's conversation is its own, so a person
   whose delegates compact does not hear of it.
-- **A session the bridge holds fires neither session moment.** The desktop interface, an editor
-  hosting a session over ACP and the local host fire no `session-started` and no `session-ended`
-  hook, so an entry for either fires in the terminal interface alone (#2925).
+- **A bridge-held session begins with its first turn.** A session a window, an editor or the local
+  host opened and used for no turn fires neither moment, and a command meant to run when the window
+  opens runs when the person first sends something. A session opened from a record fires
+  `session-started` for the turn that resumes it, so a command meant to run once for a conversation
+  runs once for each time the conversation is opened.
+- **A bridge-held session closed while its `session-started` hook runs is closed when that hook
+  ends.** The hook belongs to the first turn, which a stop does not reach, so `session.closed` waits
+  for the hook's bound (HOOK-7) and then for `session-ended`, and a process whose input ended in that
+  time may leave its ten second wait before `session-ended` has run.
+- **A `session-ended` hook that goes wrong on a bridge-held session is said to nobody.** The session
+  is closed when the hook runs, and no turn is left to carry a sentence. A hook that must be known to
+  have run writes a file.
+- **A bridge-held session ended by a process that is killed fires no `session-ended`.** The desktop
+  and editor processes wait ten seconds for the hooks that end their sessions when their input ends,
+  and a hook that outstays the wait is cut off with the process.
 - **`session-started` holds the first prompt back while it runs.** The hook runs before the first
   turn is sent, up to the bound in HOOK-7, so a slow one delays the session it announces. Starting one
   in the background is not offered, for the reason a hook that does not wait is not. A hook that

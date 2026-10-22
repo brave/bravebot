@@ -824,6 +824,36 @@ fn a_session_start_hook_fires_once_however_often_it_is_asked() {
     assert_eq!(told, "{\"event\":\"session-started\"}\n");
 }
 
+/// HOOK-9, HOOK-10: an interface that is told as the start hook runs hears one pair of edges, from
+/// before the process exists to after it has ended, and none from a later call, which fires
+/// nothing. The regressions it rejects are edges that are not told at all, which leaves a window
+/// with a first turn that looks slow, and a repeat call announcing a hook that never ran.
+#[test]
+fn a_session_start_hook_is_announced_once_however_often_it_is_asked() {
+    let scratch = Scratch::new("session-started-watched");
+    let keep = script(&scratch.path, "keep-it", "#!/bin/sh\ncat >> told.json\n");
+    let program = keep.to_str().expect("a path").to_string();
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(r#"{{"on": "session-started", "run": [{program:?}]}}"#),
+    );
+    let mut moments = hooks::SessionMoments::read(Some(&home), &scratch.path);
+    let mut edges = Vec::new();
+    let _held = starting();
+
+    for _ in 0..3 {
+        let said = moments.started_watched(&mut |edge| {
+            edges.push(match edge {
+                hooks::Watch::Starting { moment, program } => format!("{moment} {program}"),
+                hooks::Watch::Over => "over".to_string(),
+            })
+        });
+        assert!(said.is_empty());
+    }
+
+    assert_eq!(edges, [format!("session-started {program}"), "over".into()]);
+}
+
 /// HOOK-10: `session-ended` fires once however the interface is left, and never for a session that
 /// did not begin. The regressions it rejects are an end fired for a session nobody opened, which
 /// stops a service nothing started, and an end fired at every exit path the interface has.

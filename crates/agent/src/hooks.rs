@@ -242,14 +242,24 @@ impl SessionMoments {
     /// Once: a call after the first fires nothing, so an interface that begins another conversation
     /// inside the session it has open (`/resume`) cannot fire it a second time.
     pub fn started(&mut self) -> Vec<String> {
+        self.started_watched(&mut |_| {})
+    }
+
+    /// [`Self::started`], telling `watch` as each hook starts and ends (HOOK-9).
+    ///
+    /// For an interface whose first turn is running while the hook does, such as a window, so the
+    /// person is told what the turn is waiting on.
+    pub fn started_watched(&mut self, watch: &mut dyn FnMut(Watch<'_>)) -> Vec<String> {
         if std::mem::replace(&mut self.started, true) {
             return Vec::new();
         }
-        crate::turn::trouble_sentences(fire(
+        crate::turn::trouble_sentences(fire_watched(
             &self.hooks,
             Moment::SessionStarted,
             None,
             &self.directory,
+            default_limit(Moment::SessionStarted),
+            watch,
         ))
     }
 
