@@ -376,7 +376,8 @@ and naming the entry is a message, where taking the id over would send a working
 OpenAI's service with a person's subscription. No list is compiled in because the right list is a fact
 about an account and a date, and a list that waited for a release would offer a model the account cannot
 reach for weeks. Sign-in is about the account, so an account that reaches nothing today and something
-tomorrow is not signed out by it.
+tomorrow is not signed out by it. The alternative is a sign-in that fails for an account that
+reaches no model.
 
 `verified-by: none`
 
@@ -486,8 +487,7 @@ token on use, and the person would find out at the first turn of the next sessio
 
 ## Decisions left open
 
-The first three are a person's to decide, and no test can settle them. The fourth is decided by a clause
-and is listed so that it is argued about.
+These are a person's to decide, and no test can settle them.
 
 - **Whose client this is.** The sign-in presents a public client identifier that belongs to OpenAI's Codex
   CLI. Whether another program may present it, and whether using a subscription this way is within
@@ -500,8 +500,6 @@ and is listed so that it is argued about.
 - **A machine with no local browser.** [CHATGPT-13](#CHATGPT-13) supports a browser on the same machine and a
   forwarded port. A device-code route avoids the listener, and whether OpenAI offers one for this client is
   recorded by the exchange. None is specified here.
-- **An account that reaches no model.** [CHATGPT-9](#CHATGPT-9) decides that it is signed in and sees no
-  row. The alternative is a sign-in that fails.
 
 ## What the exchange has to record
 
