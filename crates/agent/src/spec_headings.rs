@@ -8,7 +8,7 @@
 pub struct Spec {
     /// The clause prefix from the frontmatter, such as `CMD`.
     pub prefix: String,
-    /// The frontmatter title.
+    /// The frontmatter title, or the clause prefix when the frontmatter has none.
     pub title: String,
     /// `normative` or `proposed`.
     pub status: String,
