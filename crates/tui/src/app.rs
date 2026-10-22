@@ -19694,6 +19694,22 @@ mod tests {
         assert_eq!(handle_key(&mut session, ctrl('c')), Action::Quit);
     }
 
+    /// LOOP-11: Ctrl-C ends every loop, not the lowest-numbered one, because a key that left one
+    /// running would send the next prompt as though nothing had been said.
+    #[test]
+    fn interrupting_ends_every_loop_when_several_are_live() {
+        let mut session = Session::new("none");
+        for line in ["5m check the deploy", "1h check the pull request"] {
+            session.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            session.complete("done", Vec::new(), 0);
+            session.loop_turn_ended(None);
+        }
+        assert_eq!(session.loops().len(), 2);
+
+        assert_eq!(handle_key(&mut session, ctrl('c')), Action::Redraw);
+        assert!(session.loops().is_empty(), "a loop survived the interrupt");
+    }
+
     /// A half-written line is nearer than the loop, so stopping the loop does not cost somebody
     /// the sentence they were in the middle of.
     #[test]

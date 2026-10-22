@@ -238,8 +238,8 @@ never has and tells the user it is missing. Both were observed before this claus
 key that left some loops running would send the next prompt as though nothing had been said. Ending
 one loop is what the command is for, and it is the only ending that takes a number.
 
-Every ending says which loop it ended where a number tells them apart, and the notes for all of them
-carry the loop's number.
+Every ending says so. The note for an ending the person chose by number carries that number, and
+the note for one that ends several carries how many.
 
 Ctrl-C reaches the loop before it reaches the session, so the key that stops a thing that keeps
 happening is not also the key that ends everything. It reaches the half-written line first,
@@ -260,6 +260,7 @@ arriving after its loop has gone would otherwise start a new loop on the line ju
 
 `verified-by: bravebot_tui::app::the_loop_command_ends_the_loop_when_asked_to_stop`
 `verified-by: bravebot_tui::app::asking_to_stop_a_loop_during_a_turn_ends_it_as_it_is_typed`
+`verified-by: bravebot_tui::app::interrupting_ends_every_loop_when_several_are_live`
 `verified-by: bravebot_tui::app::a_tick_whose_loop_was_stopped_mid_turn_starts_no_loop`
 `verified-by: bravebot_tui::app::asking_to_stop_a_loop_that_is_not_running_says_so`
 `verified-by: bravebot_tui::app::interrupting_stops_the_loop_before_it_leaves`
