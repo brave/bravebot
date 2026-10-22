@@ -526,11 +526,11 @@ Six things end a loop, and each says so:
 
 | What | When |
 |---|---|
-| you ask | `/loop stop`, which ends the loop and leaves the turn in flight running |
+| you ask | `/loop stop`, or `/loop stop <number>` where several are live, which ends the loop and leaves the turn in flight running |
 | you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving; it ends every loop |
 | a turn is stopped | any turn cancelled while a loop runs, tick or not; it ends every loop |
 | the turn says it is finished | a self-paced tick that calls `schedule_next` with `stop`, which ends the loop with no further tick |
-| the session moves on | `/clear`, and leaving |
+| the session moves on | `/clear`, and leaving, which end every loop; so does setting a goal |
 | age | seven days after it started |
 
 **A loop, a [goal](#goal-condition) and a [watch](#watch-stop-n) are never live together**, because a
