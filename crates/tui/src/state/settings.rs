@@ -664,7 +664,7 @@ impl Session {
     /// on a file with no end in view, and holding a laptop awake for that is holding it awake for
     /// as long as the session is open.
     pub fn work_pending(&self) -> bool {
-        self.status == Status::Working || self.looping.is_some()
+        self.status == Status::Working || !self.looping.is_empty()
     }
 
     /// Hold the machine awake where `/caffeinate` is on and work is pending, and release it

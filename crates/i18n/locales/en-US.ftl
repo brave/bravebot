@@ -2314,6 +2314,7 @@ status-server-policy-read-write = read, write
 status-server-policy-left-out = left out
 status-server-policy-left-out-reason = not on disk, and this platform grants no path that is not
 status-loop = Loop
+status-loop-numbered = Loop { $number }
 status-loop-every = every { $every }
 status-loop-self-paced = paced by each turn
 status-loop-next = next in { $next }
@@ -3252,40 +3253,47 @@ loop-needs-a-prompt =
     /loop needs something to repeat, as in /loop 5m check the deploy, or /loop watch the build to
     let each turn say when to run again
 loop-started-every =
-    repeating every { $every }; /loop stop ends it, and so does ctrl-c or leaving
+    loop { $number }: repeating every { $every }; /loop stop { $number } ends it, and so does ctrl-c or leaving
 loop-started-self-paced =
-    repeating at a pace each turn sets; /loop stop ends it, and so does ctrl-c or leaving
+    loop { $number }: repeating at a pace each turn sets; /loop stop { $number } ends it, and so does ctrl-c or leaving
 # The answer to the bare command. The line is in it because the note above scrolls away, and
 # somebody asking what is repeating has usually lost sight of what they set going.
-loop-active = repeating: { $prompt } · { $pace } · { $when }
-loop-ends-with = /loop stop ends it, and so does ctrl-c or leaving
+loop-active = loop { $number }, repeating: { $prompt } · { $pace } · { $when }
+loop-ends-with = /loop stop <number> ends one, /loop stop alone ends the only one, and ctrl-c or leaving ends them all
 loop-none =
     nothing is repeating. /loop 5m check the deploy sends a line every five minutes, /loop watch the
-    build lets each turn say when to run again, and /loop stop ends either of them
+    build lets each turn say when to run again, and /loop stop <number> ends one of them
 # The part of the row under the box that says a loop is live, which between ticks is the only thing
 # on the screen that does. Short on purpose: it shares that row with the mode and the readings, and
 # a part a narrow terminal has no room for is a part the row gives up.
 loop-hint = looping
 loop-hint-next = looping, next in { $next }
+loop-hint-several = { $count } loops
+loop-hint-several-next = { $count } loops, next in { $next }
 loop-interval-raised = the interval was raised to { $every }, which is as fast as a loop goes
 loop-interval-capped = the interval was capped at { $every }, which is as long as a loop lives
-loop-replaced = the loop that was running has been replaced
-loop-tick = loop { $count }
+loop-full = { $count } loops are already repeating, which is as many as a session holds; /loop stop <number> ends one
+loop-stop-which = { $count } loops are repeating, so /loop stop needs the number of the one to end; /loop lists them
+loop-no-such = no loop is numbered { $number }; /loop lists what is repeating
+loop-stopped-numbered = loop { $number } is stopped
+loop-stopped-all = all { $count } loops are stopped
+loop-cleared-all = all { $count } loops are stopped, because they belonged to the session that was cleared
+loop-tick = loop { $number }, tick { $count }
 loop-tick-quiet = { $quiet ->
-    [one] loop { $count }, after { $quiet } tick that found nothing
-   *[other] loop { $count }, after { $quiet } ticks that found nothing
+    [one] loop { $number }, tick { $count }, after { $quiet } tick that found nothing
+   *[other] loop { $number }, tick { $count }, after { $quiet } ticks that found nothing
     }
 loop-stopped = the loop is stopped
 loop-cleared = the loop is stopped, because it belonged to the session that was cleared
-loop-aged-out = the loop has run for a week and stopped itself
-loop-unpaced = that turn did not say when to run again, so the loop has stopped
-loop-finished = that turn said the loop is finished, so the loop has stopped
+loop-aged-out = loop { $number } has run for a week and stopped itself
+loop-unpaced = that turn did not say when to run again, so loop { $number } has stopped
+loop-finished = that turn said the loop is finished, so loop { $number } has stopped
 loop-busy = /loop starts with a turn of its own, so it waits until this one is done
 loop-replaces-goal =
     the goal that was set has been cleared: a session works towards one thing at a time
 loop-armed-by-the-turn =
-    looking again in { $after }, repeating what you asked; /loop stop ends it, and so does ctrl-c
-    or leaving
+    loop { $number }: looking again in { $after }, repeating what you asked; /loop stop { $number }
+    ends it, and so does ctrl-c or leaving
 loop-not-armed-under-a-goal =
     a later look was asked for and not started: this session is working towards a goal, and it
     does one thing at a time

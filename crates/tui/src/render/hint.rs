@@ -75,12 +75,18 @@ fn fitted(parts: &[String], expendable: &[usize], width: u16) -> Vec<usize> {
 /// a tick the session is not free to take yet, because a turn is running or the queue is holding
 /// something, and a row counting down to `0s` and sitting there reads as a loop that has stalled
 /// rather than one waiting its turn.
-pub(super) fn loop_part(until: Option<std::time::Duration>) -> String {
-    match until {
-        Some(until) if until >= std::time::Duration::from_secs(1) => {
+pub(super) fn loop_part(count: usize, until: Option<std::time::Duration>) -> String {
+    match (count, until) {
+        (1, Some(until)) if until >= std::time::Duration::from_secs(1) => {
             t!(loop_hint_next, next = crate::loops::spell(until))
         }
-        _ => t!(loop_hint).to_string(),
+        (1, _) => t!(loop_hint).to_string(),
+        (count, Some(until)) if until >= std::time::Duration::from_secs(1) => t!(
+            loop_hint_several_next,
+            count = count,
+            next = crate::loops::spell(until)
+        ),
+        (count, _) => t!(loop_hint_several, count = count),
     }
 }
 
@@ -169,9 +175,10 @@ mod ordinary {
 fn hint_facts(session: &Session) -> HintFacts {
     // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
     // the box is in, and shell mode is where somebody is least likely to be thinking about one.
-    let looping = session.looping().map_or_else(String::new, |running| {
-        loop_part(running.until(std::time::Instant::now()))
-    });
+    let looping = match session.loops().len() {
+        0 => String::new(),
+        count => loop_part(count, session.loops().soonest(std::time::Instant::now())),
+    };
 
     // Named only once a turn has left a trail to look at. Offering the key before that is a line
     // under the box inviting a press that changes nothing on screen, and what a person learns from

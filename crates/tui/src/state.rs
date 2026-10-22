@@ -1104,7 +1104,7 @@ pub struct Session {
     /// Not in [`bravebot_session::sessions::Standing`], so nothing about it is written down. A schedule that
     /// outlived the session that set it would start sending prompts at somebody who resumed a
     /// conversation to read it.
-    looping: Option<crate::loops::Running>,
+    looping: crate::loops::Loops,
     /// The condition this session is working towards, where the person set one.
     ///
     /// Private for the reason the loop is: the condition, the rounds spent and the last verdict
@@ -1491,7 +1491,7 @@ impl Session {
             turn_in_flight: false,
             stopping: false,
             ctrl_enter_arrives: false,
-            looping: None,
+            looping: crate::loops::Loops::default(),
             watches: watch::Watches::new(),
             driver_prompt_pending: false,
             goal: None,
@@ -1828,8 +1828,10 @@ impl Session {
         // nothing written about it looks like one that is live and has found nothing. Silent where
         // there was no loop, and after the transcript was emptied, so the line is the new
         // conversation's first.
-        if self.looping.take().is_some() {
-            self.note(t!(loop_cleared));
+        match self.looping.stop_all() {
+            0 => {}
+            1 => self.note(t!(loop_cleared)),
+            count => self.note(t!(loop_cleared_all, count = count)),
         }
         // The goal goes the same way, and for a sharper version of the same reason: a condition
         // judged against an exchange that has been thrown away is judged against nothing, and the
@@ -3811,9 +3813,15 @@ impl Session {
         Some(line)
     }
 
-    /// The loop repeating a prompt, where one is running.
+    /// The oldest loop repeating a prompt, where one is running: the only one in a session that
+    /// holds one, and some loop at all exactly when any is live.
     pub fn looping(&self) -> Option<&crate::loops::Running> {
-        self.looping.as_ref()
+        self.looping.oldest()
+    }
+
+    /// Every loop repeating a prompt, numbered and oldest first.
+    pub fn loops(&self) -> &crate::loops::Loops {
+        &self.looping
     }
 
     /// Start repeating a prompt, and give back the first tick to send now.
@@ -3839,8 +3847,11 @@ impl Session {
             self.note(t!(loop_busy));
             return None;
         }
-        if self.looping.is_some() {
-            self.note(t!(loop_replaced));
+        // Refused rather than replacing one: the person typed every loop that is live, and the
+        // cost of one more is the cost of another turn on every tick.
+        if self.looping.is_full() {
+            self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
+            return None;
         }
         // The other half of the rule `start_goal` states: one thing at a time, whichever of the
         // two was asked for second.
@@ -3852,29 +3863,9 @@ impl Session {
         // turn that silently took somebody's loop off would be ending work they are waiting on.
         self.end_watches_for_another_kind();
 
-        match request.adjusted {
-            Some(crate::loops::Held::Raised(every)) => {
-                self.note(t!(loop_interval_raised, every = crate::loops::spell(every)))
-            }
-            Some(crate::loops::Held::Capped(every)) => {
-                self.note(t!(loop_interval_capped, every = crate::loops::spell(every)))
-            }
-            None => {}
-        }
-        match request.pacing {
-            crate::loops::Pacing::Every(every) => {
-                self.note(t!(loop_started_every, every = crate::loops::spell(every)))
-            }
-            crate::loops::Pacing::SelfPaced => self.note(t!(loop_started_self_paced)),
-        }
-
-        // Said before the first tick goes, because it is about every tick after it: somebody who
-        // pasted a screenshot into a loop is owed the difference between the turn that sees it and
-        // the ones that read a sentence in its place.
+        let (adjusted, pacing) = (request.adjusted, request.pacing);
+        let pasted_a_picture = !pasted.is_empty();
         let mut running = crate::loops::Running::begin(request);
-        if !pasted.is_empty() {
-            self.note(t!(paste_with_the_first_tick));
-        }
         if !pasted.is_empty() || !attached.is_empty() {
             // Nothing is said about a dropped file, because a later tick is sent its name and a name
             // is something the turn can act on: it reads the file through the gate it reads any other
@@ -3886,8 +3877,36 @@ impl Session {
             );
             running = running.carrying(pasted, attached, settled);
         }
-        self.looping = Some(running);
-        self.dispatch_tick()
+        // Numbered before anything is said about it, so what is said is the number it has.
+        let number = self.looping.start(running);
+
+        match adjusted {
+            Some(crate::loops::Held::Raised(every)) => {
+                self.note(t!(loop_interval_raised, every = crate::loops::spell(every)))
+            }
+            Some(crate::loops::Held::Capped(every)) => {
+                self.note(t!(loop_interval_capped, every = crate::loops::spell(every)))
+            }
+            None => {}
+        }
+        match pacing {
+            crate::loops::Pacing::Every(every) => self.note(t!(
+                loop_started_every,
+                number = number,
+                every = crate::loops::spell(every)
+            )),
+            crate::loops::Pacing::SelfPaced => {
+                self.note(t!(loop_started_self_paced, number = number))
+            }
+        }
+
+        // Said before the first tick goes, because it is about every tick after it: somebody who
+        // pasted a screenshot into a loop is owed the difference between the turn that sees it and
+        // the ones that read a sentence in its place.
+        if pasted_a_picture {
+            self.note(t!(paste_with_the_first_tick));
+        }
+        self.dispatch_tick_of(number)
     }
 
     /// Start a turn on a person's task, addressed to the definition they named.
@@ -4052,7 +4071,7 @@ impl Session {
         // whose ticks were each held open by a goal is neither of the two things a person asked
         // for: the interval stops meaning anything, and the condition is judged against a turn
         // that was going to be repeated anyway.
-        if self.looping.take().is_some() {
+        if self.looping.stop_all() > 0 {
             self.note(t!(goal_replaces_loop));
         }
         self.end_watches_for_another_kind();
@@ -10146,7 +10165,7 @@ mod tests {
     #[test]
     fn a_due_tick_is_held_for_a_running_turn_and_a_queued_prompt_and_then_goes() {
         let mut s = session();
-        s.looping = Some(a_loop_that_is_due());
+        s.looping.start(a_loop_that_is_due());
 
         for c in "their own question".chars() {
             s.type_char(c);
@@ -10228,7 +10247,7 @@ mod tests {
     #[test]
     fn a_turn_that_begins_without_a_line_from_the_box_takes_down_the_mark() {
         let mut s = session();
-        s.looping = Some(a_loop_that_is_due());
+        s.looping.start(a_loop_that_is_due());
         for c in "exit".chars() {
             s.type_char(c);
         }
@@ -10317,7 +10336,7 @@ mod tests {
         s.keep_awake();
         assert!(s.caffeinate.holding(), "a pending wakeup held nothing");
 
-        s.stop_loop();
+        s.stop_loops();
         s.keep_awake();
         assert!(
             !s.caffeinate.holding(),
@@ -10385,22 +10404,28 @@ mod tests {
         }
         let mut s = session();
         s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
-        assert_eq!(last_note(&s), "loop 1");
+        assert_eq!(last_note(&s), "loop 1, tick 1");
 
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
         s.dispatch_tick();
-        assert_eq!(last_note(&s), "loop 2, after 1 tick that found nothing");
+        assert_eq!(
+            last_note(&s),
+            "loop 1, tick 2, after 1 tick that found nothing"
+        );
 
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
         s.dispatch_tick();
-        assert_eq!(last_note(&s), "loop 3, after 2 ticks that found nothing");
+        assert_eq!(
+            last_note(&s),
+            "loop 1, tick 3, after 2 ticks that found nothing"
+        );
 
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, false)));
         s.dispatch_tick();
-        assert_eq!(last_note(&s), "loop 4");
+        assert_eq!(last_note(&s), "loop 1, tick 4");
     }
 
     /// A turn that says the loop is finished ends it at once and the screen names that ending,
@@ -10422,7 +10447,7 @@ mod tests {
             .clone();
         assert_eq!(
             note,
-            "that turn said the loop is finished, so the loop has stopped"
+            "that turn said the loop is finished, so loop 1 has stopped"
         );
     }
 
@@ -10511,7 +10536,7 @@ mod tests {
         assert!(
             s.transcript
                 .iter()
-                .any(|entry| entry.text == t!(loop_aged_out)),
+                .any(|entry| entry.text == t!(loop_aged_out, number = 1)),
             "the ending was not announced"
         );
     }
@@ -10519,11 +10544,11 @@ mod tests {
     #[test]
     fn stopping_a_loop_says_so_and_says_nothing_when_there_was_none() {
         let mut s = session();
-        assert!(!s.stop_loop());
+        assert!(!s.stop_loops());
         assert!(s.transcript.is_empty());
 
         s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
-        assert!(s.stop_loop());
+        assert!(s.stop_loops());
         assert!(s.looping().is_none());
     }
 
@@ -10596,6 +10621,279 @@ mod tests {
         s.report_loop();
         assert_eq!(s.transcript.len(), 1);
         assert_eq!(s.transcript[0].text, t!(loop_none));
+    }
+
+    fn said(s: &Session) -> Vec<String> {
+        s.transcript
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::System)
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    /// Two loops over two lines, each started by the person, both live. Settled between ticks, so
+    /// neither has a tick in flight.
+    fn two_loops() -> Session {
+        let mut s = session();
+        s.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s.start_loop(
+            crate::loops::request("1h check the pull request"),
+            Vec::new(),
+            Vec::new(),
+        );
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s
+    }
+
+    /// LOOP-1: starting a second loop leaves the first running, each with the line its own
+    /// person typed, and says which number each one is.
+    #[test]
+    fn a_second_loop_leaves_the_first_running_and_has_a_number_of_its_own() {
+        let s = two_loops();
+        let lines: Vec<(usize, &str)> = s
+            .loops()
+            .iter()
+            .map(|running| (running.number(), running.prompt()))
+            .collect();
+        assert_eq!(
+            lines,
+            [(1, "check the deploy"), (2, "check the pull request")]
+        );
+        let said = said(&s);
+        assert!(
+            said.iter()
+                .any(|note| note.starts_with("loop 2: repeating every 1h")),
+            "{said:?}"
+        );
+    }
+
+    /// LOOP-16: a sixth is refused and nothing is dropped to make room.
+    #[test]
+    fn a_loop_past_the_cap_is_refused_and_no_loop_is_dropped() {
+        let mut s = session();
+        for n in 0..crate::loops::MAX_LIVE {
+            s.start_loop(
+                crate::loops::request(&format!("5m watch {n}")),
+                Vec::new(),
+                Vec::new(),
+            );
+            s.complete("done", Vec::new(), 0);
+            s.loop_turn_ended(None);
+        }
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        s.transcript.clear();
+
+        let sent = s.start_loop(
+            crate::loops::request("5m one too many"),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(sent, None);
+        assert_eq!(s.status, Status::Idle, "a refused loop began a turn");
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        assert_eq!(s.looping().expect("a loop").prompt(), "watch 0");
+        assert_eq!(
+            said(&s),
+            [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]
+        );
+    }
+
+    /// LOOP-15: a number ends that loop and no other, and the others keep their numbers.
+    #[test]
+    fn stopping_a_loop_by_number_ends_only_that_one() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        assert!(s.stop_loop(Some(1)));
+        let left: Vec<usize> = s.loops().iter().map(|running| running.number()).collect();
+        assert_eq!(left, [2]);
+        assert_eq!(
+            said(&s),
+            [t!(loop_stopped_numbered, number = 1).to_string()]
+        );
+    }
+
+    /// A number is not handed out twice, so `/loop stop 1` typed after loop 1 ended cannot end a
+    /// loop that began afterwards.
+    #[test]
+    fn a_number_that_was_used_is_not_given_to_a_later_loop() {
+        let mut s = two_loops();
+        assert!(s.stop_loop(Some(1)));
+        s.start_loop(crate::loops::request("5m a third"), Vec::new(), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s.transcript.clear();
+
+        assert!(!s.stop_loop(Some(1)));
+        assert_eq!(s.loops().len(), 2, "a stale number ended a live loop");
+        assert_eq!(said(&s), [t!(loop_no_such, number = 1).to_string()]);
+        let numbers: Vec<usize> = s.loops().iter().map(|running| running.number()).collect();
+        assert_eq!(numbers, [2, 3]);
+    }
+
+    /// Where several are live a bare `stop` does not pick one: it ends nothing and says what it
+    /// needs. With one live it still ends it.
+    #[test]
+    fn a_bare_stop_with_several_loops_ends_none_of_them() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        assert!(!s.stop_loop(None));
+        assert_eq!(s.loops().len(), 2);
+        assert_eq!(said(&s), [t!(loop_stop_which, count = 2).to_string()]);
+
+        assert!(s.stop_loop(Some(2)));
+        s.transcript.clear();
+        assert!(s.stop_loop(None));
+        assert!(s.looping().is_none());
+        assert_eq!(said(&s), [t!(loop_stopped).to_string()]);
+    }
+
+    /// What Ctrl-C and a stopped turn reach: every loop, in one sentence.
+    #[test]
+    fn stopping_every_loop_says_how_many_went() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        assert!(s.stop_loops());
+        assert!(s.looping().is_none());
+        assert_eq!(said(&s), [t!(loop_stopped_all, count = 2).to_string()]);
+    }
+
+    /// LOOP-17: due ticks go one at a time, soonest first, and a tick in flight is never
+    /// interrupted by another loop's.
+    #[test]
+    fn due_ticks_go_one_at_a_time_soonest_first() {
+        let mut s = session();
+        // Loop 1 is every hour and loop 2 every five minutes, so by an hour and a minute both are
+        // due and the younger loop became due first.
+        for line in ["1h check the pull request", "5m check the deploy"] {
+            s.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            s.complete("done", Vec::new(), 0);
+            s.loop_turn_ended(None);
+        }
+        let later = Instant::now() + Duration::from_secs(3_660);
+
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("check the deploy"));
+        assert_eq!(s.status, Status::Working);
+        assert_eq!(
+            s.loop_tick_at(later),
+            None,
+            "a second tick went in a busy session"
+        );
+        assert!(s.loops().in_flight().is_some_and(|r| r.number() == 2));
+
+        // Loop 2 ended and is armed another five minutes out, which is still before loop 1's hour,
+        // so it is the one that goes: the order is by moment and not by number or by turns.
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("check the deploy"));
+    }
+
+    /// The end of a tick arms the loop that sent it and leaves the others' clocks alone.
+    #[test]
+    fn a_turn_ending_arms_only_the_loop_whose_tick_it_was() {
+        let mut s = session();
+        for line in ["1h check the pull request", "5m check the deploy"] {
+            s.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            s.complete("done", Vec::new(), 0);
+            s.loop_turn_ended(None);
+        }
+        let hour_loop_before = s.loops().oldest().expect("loop 1").until(Instant::now());
+
+        // The tick that goes is loop 2's, the younger loop, because its five minutes are up first.
+        let later = Instant::now() + Duration::from_secs(301);
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("check the deploy"));
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+
+        let hour = s.loops().oldest().expect("loop 1");
+        let five = s.loops().iter().nth(1).expect("loop 2");
+        assert!(
+            !five.ticking(),
+            "the loop whose tick ended is still in flight"
+        );
+        assert!(
+            five.until(Instant::now()).is_some(),
+            "loop 2 was not re-armed"
+        );
+        assert!(
+            hour.until(Instant::now()) <= hour_loop_before,
+            "loop 1 was re-armed by loop 2's tick"
+        );
+        assert_eq!((hour.ticks(), five.ticks()), (1, 2));
+    }
+
+    /// LOOP-13: each tick says which loop it is, by the number `/loop stop` takes, as well as which
+    /// tick, so a tick count is never read as a loop's number.
+    #[test]
+    fn a_tick_names_its_loop_by_the_number_stop_takes() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let later = Instant::now() + Duration::from_secs(3_660);
+        s.loop_tick_at(later);
+        assert_eq!(said(&s), [t!(loop_tick, number = 1, count = 2).to_string()]);
+    }
+
+    /// LOOP-13: the bare command lists every loop under its number.
+    #[test]
+    fn the_report_lists_every_loop_with_its_number() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        s.report_loop();
+        let said = said(&s);
+        assert_eq!(said.len(), 3, "{said:?}");
+        assert!(
+            said[0].starts_with("loop 1, repeating: check the deploy"),
+            "{said:?}"
+        );
+        assert!(
+            said[1].starts_with("loop 2, repeating: check the pull request"),
+            "{said:?}"
+        );
+        assert_eq!(said[2], t!(loop_ends_with));
+    }
+
+    /// LOOP-11: a goal and a clear each end every loop, and say once that they did.
+    #[test]
+    fn a_goal_and_a_clear_end_every_loop() {
+        let mut s = two_loops();
+        s.start_goal("cargo test exits 0".to_string());
+        assert!(s.looping().is_none());
+        assert!(said(&s).contains(&t!(goal_replaces_loop).to_string()));
+
+        let mut s = two_loops();
+        s.transcript.clear();
+        s.clear();
+        assert!(s.looping().is_none());
+        assert!(said(&s).contains(&t!(loop_cleared_all, count = 2).to_string()));
+    }
+
+    /// LOOP-11: a loop ages out with its own note, naming it.
+    #[test]
+    fn every_loop_past_its_age_ends_and_says_which() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let at = Instant::now() + crate::loops::MAX_AGE;
+        assert_eq!(s.loop_tick_at(at), None);
+        assert!(s.looping().is_none(), "both began before the week was up");
+        let said = said(&s);
+        assert!(
+            said.contains(&t!(loop_aged_out, number = 1).to_string()),
+            "{said:?}"
+        );
+        assert!(
+            said.contains(&t!(loop_aged_out, number = 2).to_string()),
+            "{said:?}"
+        );
     }
 
     /// A goal is a stopping condition. Arming one that also started work would send a line
