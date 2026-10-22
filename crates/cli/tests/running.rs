@@ -7143,13 +7143,13 @@ fn nothing_is_asked_where_stdin_or_stdout_is_not_a_terminal() {
     }
 }
 
-/// IMPORT-4: a Claude Code user on an Anthropic API key sees that their setup was looked at, by
-/// name and never by value, before the three routes.
+/// IMPORT-4: a Claude Code user on a bearer token for Anthropic sees that their setup was looked
+/// at, by name and never by value, before the three routes.
 #[test]
 fn what_was_found_and_left_is_said_before_the_routes() {
     let scratch = Scratch::new("cli-running-import-left").with_file(
         ".claude/settings.json",
-        r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-api03-a-key-nobody-may-see"}}"#,
+        r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-oat01-a-token-nobody-may-see"}}"#,
     );
 
     let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["-p", "say something"]);
@@ -7157,15 +7157,47 @@ fn what_was_found_and_left_is_said_before_the_routes() {
     let (_, stderr) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{stderr}");
     let left = stderr
-        .find("ANTHROPIC_API_KEY")
+        .find("ANTHROPIC_AUTH_TOKEN")
         .unwrap_or_else(|| panic!("what was left was not said: {stderr}"));
     let routes = stderr.find("amazon-bedrock").expect("the routes");
     assert!(left < routes, "{stderr}");
     assert!(
-        !stderr.contains("a-key-nobody-may-see"),
+        !stderr.contains("a-token-nobody-may-see"),
         "the value was shown: {stderr}"
     );
     assert!(!stderr.contains("auth login import"), "{stderr}");
+}
+
+/// IMPORT-3, IMPORT-8: a Claude Code user on an Anthropic API key has something to import, so the
+/// refusal names the command that asks, says nothing about the key being left, and never shows it.
+#[test]
+fn a_claude_code_anthropic_key_is_importable_and_the_refusal_names_the_command() {
+    let scratch = Scratch::new("cli-running-import-anthropic-key").with_file(
+        ".claude/settings.json",
+        r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-api03-a-key-nobody-may-see"}}"#,
+    );
+
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["-p", "say something"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("Claude Code") && stderr.contains("bravebot auth login import"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("ANTHROPIC_API_KEY"),
+        "the key was said to be left: {stderr}"
+    );
+    assert!(
+        !stderr.contains("a-key-nobody-may-see"),
+        "the value was shown: {stderr}"
+    );
+    assert!(
+        !scratch.settings().exists(),
+        "a one-shot run wrote settings"
+    );
 }
 
 /// IMPORT-8: a one-shot run has nobody to ask, so it reads no answer and writes nothing, and its

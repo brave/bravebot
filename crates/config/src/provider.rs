@@ -54,6 +54,11 @@ const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
         "OPENROUTER_API_KEY",
     ),
     (OPENAI_ID, "https://api.openai.com/v1", "OPENAI_API_KEY"),
+    (
+        ANTHROPIC_ID,
+        "https://api.anthropic.com/v1",
+        "ANTHROPIC_API_KEY",
+    ),
 ];
 
 /// The id naming OpenAI, which is reached at the endpoint compiled in for it.
@@ -61,6 +66,26 @@ const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
 /// Named apart from the table because a reply from it is read differently: see
 /// [`Provider::answers_under_the_model_behind_an_alias`].
 const OPENAI_ID: &str = "openai";
+
+/// The id naming Anthropic, which is reached at the endpoint compiled in for it, in the Messages
+/// protocol rather than the chat completions one: see [`Provider::protocol`].
+pub(crate) const ANTHROPIC_ID: &str = "anthropic";
+
+/// The version of Anthropic's API every request to it states.
+///
+/// A header the service requires, and a date rather than a release: it names the shape of the
+/// request and reply, and a change to either is a new date. Compiled in because a request that left
+/// it to configuration could be sent in a shape the reader here does not parse.
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// The header an Anthropic key travels in, which the service takes in place of `authorization`.
+const ANTHROPIC_KEY_HEADER: &str = "x-api-key";
+
+/// How many models Anthropic's listing is asked for in one page, the most it allows.
+///
+/// Its default is twenty, and the lineup is longer than that once the models still served but no
+/// longer current are counted.
+const ANTHROPIC_PAGE: u32 = 1000;
 
 /// The id naming AWS Bedrock, which is reached by signing rather than by a bearer token.
 ///
@@ -137,6 +162,12 @@ pub struct Model {
     /// `None` reads as [`CONTEXT_WINDOW`]. Kept distinct from a stated figure so that
     /// `doctor` can say which models are running on the default.
     pub context_window: Option<u64>,
+    /// How long a reply this model may write, where the file stated it, out of the same `limit`
+    /// block the window comes from and under the same rule.
+    ///
+    /// Read for the service that states a ceiling in every request, which is Anthropic's. Nothing
+    /// else sends one, so for every other gateway it is carried and unused.
+    pub output_limit: Option<u64>,
     /// Whatever `options` held, merged into the request body and never interpreted.
     ///
     /// Opaque on purpose: a gateway's routing controls are its own invention, and a schema
@@ -252,12 +283,31 @@ pub struct Provider {
     /// Nothing for an AWS entry: its account is what a client reaches and carries its own
     /// ([`crate::bedrock::Bedrock::patience`]), so the figures have one home.
     pub patience: Patience,
+    /// A reply ceiling somebody exported, which outranks whatever the models state.
+    ///
+    /// Set where the account's own copy is, once the environment has been read: a block is parsed
+    /// with none to consult. Only a service whose requests state a ceiling reads it.
+    pub(crate) output_budget: Option<u64>,
+    /// The protocol this entry's requests are written in: see [`Provider::protocol`].
+    pub(crate) protocol: Protocol,
     /// The AWS account this entry reaches, where it names Bedrock rather than a gateway.
     ///
     /// Resolved here rather than by the caller because a request to Bedrock needs a region to sign
     /// for and a profile to resolve credentials from, and both are properties of this block.
     /// `None` for every other entry, which is reached as an OpenAI-compatible gateway.
     pub bedrock: Option<crate::bedrock::Bedrock>,
+}
+
+/// The wire protocol a provider's requests are written in.
+///
+/// Which one is a fact about the service and not about the model, so it is read from the entry's
+/// id: the endpoint compiled in for a name is the only place the protocol is known to match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    /// OpenAI's chat completions, which most gateways speak.
+    ChatCompletions,
+    /// Anthropic's Messages API.
+    Messages,
 }
 
 impl Provider {
@@ -297,6 +347,7 @@ impl Provider {
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|url| !url.is_empty());
+        let protocol = protocol_of(id, string(entry.get("npm")).as_deref());
         // A stated endpoint wins, so a block pointing a known name at a proxy or a private
         // deployment reaches the host it named rather than the one compiled in.
         let base_url = match stated {
@@ -305,6 +356,9 @@ impl Provider {
                 string(options.and_then(|options| options.get("project"))).as_deref(),
                 string(options.and_then(|options| options.get("location"))).as_deref(),
             )?,
+            // The table's address for this id is the one its own protocol is spoken at, so an entry
+            // that names another protocol has no address here and says where its service is.
+            None if id == ANTHROPIC_ID && protocol == Protocol::ChatCompletions => return None,
             None => known_endpoint(id)?.to_string(),
         };
 
@@ -320,6 +374,8 @@ impl Provider {
             models: models(entry.get("models")),
             context_window: options.and_then(|options| positive(options.get("contextWindow"))),
             patience: Patience::from_options(options),
+            output_budget: None,
+            protocol,
             bedrock: None,
         })
     }
@@ -350,6 +406,8 @@ impl Provider {
             models: Vec::new(),
             context_window: None,
             patience: Patience::default(),
+            output_budget: None,
+            protocol: Protocol::ChatCompletions,
             bedrock: None,
         })
     }
@@ -382,8 +440,20 @@ impl Provider {
             models,
             context_window: None,
             patience: Patience::default(),
+            output_budget: None,
+            protocol: Protocol::ChatCompletions,
             bedrock: Some(bedrock),
         })
+    }
+
+    /// The protocol this provider's requests are written in.
+    ///
+    /// Chat completions, except for an `anthropic` entry, which is reached in the Messages protocol
+    /// as opencode reaches it unless the entry names the OpenAI-compatible SDK. A block copied out of
+    /// opencode says which it is in the same field, and an entry that was a gateway of its own
+    /// under this name keeps that reading by naming the SDK.
+    pub fn protocol(&self) -> Protocol {
+        self.protocol
     }
 
     /// The URL one chat completion goes to.
@@ -391,9 +461,35 @@ impl Provider {
         format!("{}/chat/completions", self.base_url)
     }
 
+    /// The URL one request for a reply goes to, whichever protocol it is written in.
+    ///
+    /// The one a refusal is remembered against and a diagnostic names, so neither says a route this
+    /// service does not have.
+    pub fn completion_url(&self) -> String {
+        match self.protocol() {
+            Protocol::ChatCompletions => self.chat_completions_url(),
+            Protocol::Messages => format!("{}/messages", self.base_url),
+        }
+    }
+
     /// The URL that answers with what this gateway serves.
+    ///
+    /// Anthropic's states how many it returns in a page, and the page is as long as it allows: its
+    /// default would leave the later models out of the picker without a word.
     pub fn models_url(&self) -> String {
-        format!("{}/models", self.base_url)
+        match self.protocol() {
+            Protocol::ChatCompletions => format!("{}/models", self.base_url),
+            Protocol::Messages => format!("{}/models?limit={ANTHROPIC_PAGE}", self.base_url),
+        }
+    }
+
+    /// Whether this service answers a question about what the credential in use may reach.
+    ///
+    /// Not part of the shape every gateway implements, so [`Provider::account_models_url`] is a
+    /// route only a service that has it is asked. Anthropic has none: the request would carry the
+    /// key to be answered 404.
+    pub fn answers_for_an_account(&self) -> bool {
+        self.protocol() == Protocol::ChatCompletions
     }
 
     /// The URL that answers with what the credential in use may reach.
@@ -423,8 +519,22 @@ impl Provider {
     pub fn credential_header(&self, token: &str) -> (&'static str, String) {
         if self.id == GOOGLE_VERTEX_ID {
             (VERTEX_KEY_HEADER, token.to_string())
+        } else if self.protocol == Protocol::Messages {
+            (ANTHROPIC_KEY_HEADER, token.to_string())
         } else {
             ("authorization", format!("Bearer {token}"))
+        }
+    }
+
+    /// The headers this service takes on every request whatever the credential, with their values.
+    ///
+    /// Empty for every gateway but Anthropic, whose API requires the version of itself the request
+    /// is written for. Here beside [`Provider::credential_header`] so a request and a roster state
+    /// both and cannot disagree about either.
+    pub fn fixed_headers(&self) -> &'static [(&'static str, &'static str)] {
+        match self.protocol() {
+            Protocol::ChatCompletions => &[],
+            Protocol::Messages => &[("anthropic-version", ANTHROPIC_VERSION)],
         }
     }
 
@@ -438,12 +548,29 @@ impl Provider {
 
     /// Whether a reply names the model behind the name the request carried, not that name.
     ///
-    /// OpenAI only: a name such as `gpt-4o` is an alias, and the reply names the dated model it
-    /// resolved to. Every other gateway answers under the slug it was asked for, so a name that
-    /// comes back changed is a substitution there and the alias working here. OpenAI refuses a
-    /// name it does not serve, so there is no substitution for the comparison to find.
+    /// OpenAI and Anthropic only: a name such as `gpt-4o` or `claude-haiku-4-5` is an alias, and the
+    /// reply names the dated model it resolved to. Every other gateway answers under the slug it was
+    /// asked for, so a name that comes back changed is a substitution there and the alias working
+    /// here. Both refuse a name they do not serve, so there is no substitution for the comparison
+    /// to find.
     pub fn answers_under_the_model_behind_an_alias(&self) -> bool {
-        self.id == OPENAI_ID
+        self.id == OPENAI_ID || self.protocol == Protocol::Messages
+    }
+
+    /// The same provider with the reply ceiling somebody exported, which outranks every model's.
+    pub fn with_output_budget(mut self, budget: Option<u64>) -> Self {
+        self.output_budget = budget;
+        self
+    }
+
+    /// The reply ceiling somebody stated for `model`, exported or in its block, and `None` where
+    /// the one assumed for a request applies.
+    ///
+    /// An exported budget, then what the model's own block stated, which is the order the account
+    /// of AWS resolves its own in ([`crate::bedrock::Bedrock::stated_output_limit`]).
+    pub fn stated_output_limit(&self, model: &str) -> Option<u64> {
+        self.output_budget
+            .or_else(|| self.model(model).and_then(|model| model.output_limit))
     }
 
     /// What to show a person choosing this provider.
@@ -586,6 +713,19 @@ impl fmt::Debug for Credential {
     }
 }
 
+/// The protocol an entry's requests are written in, from its id and the SDK it names.
+///
+/// Only the `anthropic` id is reached in the Messages protocol, as opencode reaches it, and an entry
+/// under that id that names the OpenAI-compatible SDK is reached as any other gateway is. Any other
+/// SDK an entry names is not read: the id decides.
+fn protocol_of(id: &str, npm: Option<&str>) -> Protocol {
+    if id == ANTHROPIC_ID && npm != Some("@ai-sdk/openai-compatible") {
+        Protocol::Messages
+    } else {
+        Protocol::ChatCompletions
+    }
+}
+
 /// The OpenAI-compatible endpoint of Vertex AI for a project and location, without a trailing slash.
 ///
 /// `None` where there is no project, or where either value holds a character that would move the
@@ -675,6 +815,7 @@ fn models(value: Option<&serde_json::Value>) -> Vec<Model> {
             Model {
                 id: id.to_string(),
                 context_window: entry.and_then(|entry| window(entry.get("limit"))),
+                output_limit: entry.and_then(|entry| ceiling(entry.get("limit"))),
                 options: entry.and_then(|entry| match entry.get("options") {
                     Some(serde_json::Value::Object(options)) if !options.is_empty() => {
                         Some(options.clone())
@@ -1390,6 +1531,177 @@ mod tests {
             }}}"#);
         assert_eq!(provider.base_url, "https://proxy.example.invalid/openai/v1");
         assert_eq!(provider.host(), "proxy.example.invalid");
+    }
+
+    /// Anthropic is the one known name reached in another protocol, so everything that differs
+    /// from a gateway is stated by the entry: the route, the header the key is in, and the version
+    /// header the service requires beside it.
+    #[test]
+    fn an_anthropic_entry_is_reached_through_the_messages_api_at_anthropics_host() {
+        let provider = one(r#"{"provider": {"anthropic": {"env": ["ANTHROPIC_API_KEY"]}}}"#);
+        assert_eq!(provider.base_url, "https://api.anthropic.com/v1");
+        assert_eq!(provider.protocol(), Protocol::Messages);
+        assert_eq!(
+            provider.completion_url(),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            provider.models_url(),
+            "https://api.anthropic.com/v1/models?limit=1000"
+        );
+        assert_eq!(provider.host(), "api.anthropic.com");
+        assert_eq!(
+            provider.credential_header("a-key"),
+            ("x-api-key", "a-key".to_string())
+        );
+        assert_eq!(
+            provider.fixed_headers(),
+            [("anthropic-version", "2023-06-01")]
+        );
+        assert_eq!(provider.compiled_roster(), None);
+        assert!(!provider.takes_extra_content());
+        assert!(!provider.answers_for_an_account());
+        assert!(provider.answers_under_the_model_behind_an_alias());
+
+        let exported = |name: &str| (name == "ANTHROPIC_API_KEY").then(|| "a-key".to_string());
+        assert_eq!(token(&provider.credential(exported)), Some("a-key"));
+
+        let other =
+            one(r#"{"provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1"}}}}"#);
+        assert_eq!(other.protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            other.completion_url(),
+            "https://example.invalid/v1/chat/completions"
+        );
+        assert_eq!(other.models_url(), "https://example.invalid/v1/models");
+        assert!(other.fixed_headers().is_empty());
+        assert!(other.answers_for_an_account());
+        assert!(!other.answers_under_the_model_behind_an_alias());
+    }
+
+    /// A proxy in front of the API is reached by stating where it is, and is still spoken to in the
+    /// protocol the id names, since the table supplies only an address.
+    #[test]
+    fn a_stated_endpoint_beats_the_one_compiled_in_for_anthropic() {
+        let provider = one(r#"{"provider": {"anthropic": {
+                "env": ["ANTHROPIC_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/anthropic/v1"}
+            }}}"#);
+        assert_eq!(
+            provider.base_url,
+            "https://proxy.example.invalid/anthropic/v1"
+        );
+        assert_eq!(provider.host(), "proxy.example.invalid");
+        assert_eq!(provider.protocol(), Protocol::Messages);
+        assert_eq!(
+            provider.completion_url(),
+            "https://proxy.example.invalid/anthropic/v1/messages"
+        );
+    }
+
+    /// The id alone says which protocol an entry is reached in, except that an `anthropic` entry may
+    /// name the SDK opencode would use for it. One that names the OpenAI-compatible SDK is a gateway of
+    /// that kind which happens to be called this, as every such block was before the id was known: its
+    /// requests go to its own chat completions route with a bearer token, and with no address of its
+    /// own it has no service, since the address compiled in is the one the other protocol is spoken at.
+    #[test]
+    fn an_anthropic_entry_naming_the_openai_compatible_sdk_is_a_gateway_like_any_other() {
+        let provider = one(r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/openai-compatible",
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}
+            }}}"#);
+        assert_eq!(provider.protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            provider.completion_url(),
+            "https://proxy.example.invalid/v1/chat/completions"
+        );
+        assert_eq!(
+            provider.credential_header("a-key"),
+            ("authorization", "Bearer a-key".to_string())
+        );
+        assert!(provider.fixed_headers().is_empty());
+        assert!(provider.answers_for_an_account());
+        assert!(!provider.answers_under_the_model_behind_an_alias());
+
+        assert!(
+            parsed(r#"{"provider": {"anthropic": {"npm": "@ai-sdk/openai-compatible"}}}"#)
+                .is_empty(),
+            "an entry that names no address of its own was given Anthropic's"
+        );
+
+        for sdk in [
+            r#""npm": "@ai-sdk/anthropic""#,
+            r#""npm": "something-else""#,
+        ] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"anthropic": {{{sdk}, "env": ["A_KEY"]}}}}}}"#
+            ));
+            assert_eq!(provider.protocol(), Protocol::Messages, "{sdk}");
+        }
+    }
+
+    /// A block written while the id was an ordinary name for a gateway, with an endpoint and no SDK,
+    /// is read in the protocol the id has now, as opencode reads the same block, and the SDK it names
+    /// is the way back. An `@ai-sdk/anthropic` entry under another id is not reached in that protocol:
+    /// only the id says so, and the entry is a gateway like any other. Both are costs the spec records,
+    /// held here so a change to either shows in a test.
+    #[test]
+    fn what_decides_the_protocol_of_an_entry_is_its_id_and_the_sdk_it_names() {
+        let old_form = one(r#"{"provider": {"anthropic": {
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                "models": {"claude-via-the-gateway": {}}
+            }}}"#);
+        assert_eq!(old_form.protocol(), Protocol::Messages);
+
+        let opted_out = one(r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/openai-compatible",
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://litellm.example.invalid/v1"}
+            }}}"#);
+        assert_eq!(opted_out.protocol(), Protocol::ChatCompletions);
+
+        let elsewhere = one(r#"{"provider": {"claude-proxy": {
+                "npm": "@ai-sdk/anthropic",
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}
+            }}}"#);
+        assert_eq!(elsewhere.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// The table supplies an address and nothing else. A block naming no credential is somebody saying
+    /// none is needed, so an exported `ANTHROPIC_API_KEY` meant for another tool is not picked up on
+    /// the strength of the id.
+    #[test]
+    fn an_anthropic_block_naming_no_key_names_no_credential() {
+        let provider = one(r#"{"provider": {"anthropic": {}}}"#);
+        let exported = |name: &str| (name == "ANTHROPIC_API_KEY").then(|| "a-key".to_string());
+        assert!(matches!(
+            provider.credential(exported),
+            Credential::NotNeeded
+        ));
+    }
+
+    /// An exported budget outranks a model's own, which outranks the figure a request assumes. The
+    /// same order the AWS account resolves its ceiling in, so one setting means one thing.
+    #[test]
+    fn an_anthropic_reply_ceiling_is_the_exported_budget_then_the_models_own() {
+        let provider = one(r#"{"provider": {"anthropic": {"models": {
+                "claude-stated": {"limit": {"context": 200000, "output": 64000}},
+                "claude-half": {"limit": {"output": 64000}},
+                "claude-silent": {}
+            }}}}"#);
+        assert_eq!(provider.stated_output_limit("claude-stated"), Some(64_000));
+        // A `limit` naming only one half is not a `limit`, as opencode reads it.
+        assert_eq!(provider.stated_output_limit("claude-half"), None);
+        assert_eq!(provider.stated_output_limit("claude-silent"), None);
+        assert_eq!(provider.stated_output_limit("claude-unlisted"), None);
+
+        let exported = provider.with_output_budget(Some(48_000));
+        for model in ["claude-stated", "claude-half", "claude-unlisted"] {
+            assert_eq!(exported.stated_output_limit(model), Some(48_000), "{model}");
+        }
     }
 
     /// A trailing slash on the endpoint would otherwise produce a double slash in the path, which

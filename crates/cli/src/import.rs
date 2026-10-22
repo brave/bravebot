@@ -1222,6 +1222,39 @@ mod tests {
         );
     }
 
+    /// IMPORT-3, IMPORT-6: the key Claude Code holds for Anthropic's API is an `anthropic` entry with
+    /// a question of its own, which writes the key when approved and names the variable to export
+    /// when declined, and says nothing of the key being left.
+    #[test]
+    fn a_claude_code_anthropic_key_is_asked_about_and_written_as_an_entry() {
+        let settings = r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-a-held-key"}}"#;
+
+        let scratch = Scratch::new("cli-import-claude-anthropic-key");
+        scratch.write(".claude/settings.json", settings);
+        let (said, _) = asked(&scratch, "y\ny\n", &Managed::default());
+        assert!(said.contains("provider.anthropic"), "{said}");
+        assert!(said.contains("https://api.anthropic.com/v1"), "{said}");
+        assert!(said.contains("in plain text"), "{said}");
+        assert!(!said.contains("not carried over"), "{said}");
+        assert!(
+            !said.contains("sk-ant-a-held-key"),
+            "the key was drawn: {said}"
+        );
+        let file = written(&scratch);
+        assert!(file.contains(r#""apiKey":"sk-ant-a-held-key""#), "{file}");
+
+        let scratch = Scratch::new("cli-import-claude-anthropic-declined");
+        scratch.write(".claude/settings.json", settings);
+        let (said, _) = asked(&scratch, "y\nn\n", &Managed::default());
+        let file = written(&scratch);
+        assert!(file.contains(r#""env":["ANTHROPIC_API_KEY"]"#), "{file}");
+        assert!(
+            !file.contains("sk-ant-a-held-key"),
+            "a declined key was written"
+        );
+        assert!(said.contains("ANTHROPIC_API_KEY: export it"), "{said}");
+    }
+
     /// IMPORT-6: a `{file:path}` credential is not followed. The shown line names the path, no
     /// question about a key is asked, and the entry is written as a declined key is: with the
     /// variable opencode reads for that id, and a line saying to export it.

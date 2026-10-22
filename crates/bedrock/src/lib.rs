@@ -24,7 +24,7 @@ pub mod eventstream;
 pub mod protocol;
 
 use bravebot_aichat::protocol::{ChatRequest, Usage};
-use bravebot_aichat::{Completion, CutOff, OpenCall, Progress};
+use bravebot_aichat::{Completion, CutOff, OpenCall, Progress, reply_bound};
 use bravebot_config::bedrock::Bedrock;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -1334,24 +1334,6 @@ const WAKE: Duration = Duration::from_millis(50);
 
 /// How many chunks may sit between the thread reading them and the one taking them apart.
 const CHUNKS_AHEAD: usize = 16;
-
-/// The slowest a reply is taken to be written, in tokens a second.
-///
-/// Well under half the slowest rate measured on Bedrock, 69 tokens a second on Claude Opus 5.5, so
-/// a reply running to its ceiling on a slow day still finishes inside the bound.
-const SLOWEST_WRITING: u64 = 25;
-
-/// How long a reply may take to begin, reading the prompt, before the first token of it.
-const BEFORE_WRITING: Duration = Duration::from_secs(120);
-
-/// How long a reply that may run to `ceiling` tokens is given.
-///
-/// Never less than the bound the egress layer puts on a reply of unstated length, which stays the
-/// figure for a short reply.
-fn reply_bound(ceiling: u64) -> Duration {
-    (BEFORE_WRITING + Duration::from_secs(ceiling.div_ceil(SLOWEST_WRITING)))
-        .max(bravebot_net::Timeouts::default().reply)
-}
 
 /// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
 ///

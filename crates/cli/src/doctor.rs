@@ -1220,9 +1220,10 @@ fn report_aws_session(profile: Option<&str>) {
     );
 }
 
-/// The URL `doctor` gives for a gateway's chat endpoint, without the userinfo a `baseURL` may state.
+/// The URL `doctor` gives for a gateway's endpoint for a reply, without the userinfo a `baseURL` may
+/// state.
 fn gateway_endpoint(provider: &bravebot_config::provider::Provider) -> String {
-    bravebot_config::provider::without_userinfo(&provider.chat_completions_url())
+    bravebot_config::provider::without_userinfo(&provider.completion_url())
 }
 
 /// The URLs `doctor` gives for the Brave backend's free and premium endpoints, without the userinfo
@@ -3326,6 +3327,18 @@ mod tests {
         assert_eq!(
             gateway_endpoint(&provider),
             "https://gateway.invalid/v1/chat/completions"
+        );
+    }
+
+    /// An Anthropic entry is reached at the route its protocol has, so that is the endpoint `doctor`
+    /// names. Naming chat completions there would send somebody to look for a route that service does
+    /// not have.
+    #[test]
+    fn doctor_names_the_messages_route_an_anthropic_entry_is_reached_at() {
+        let provider = configured_gateway(r#"{"provider": {"anthropic": {"env": ["A_KEY"]}}}"#);
+        assert_eq!(
+            gateway_endpoint(&provider),
+            "https://api.anthropic.com/v1/messages"
         );
     }
 

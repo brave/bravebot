@@ -203,10 +203,7 @@ pub(super) fn provider_models(
             // A block names models and never their parameters, so the level goes out to be judged
             // at the far end and the judgment is the only description there is: read one where
             // this service has already refused the field for this model.
-            reads_effort: bravebot_aichat::reads_effort(
-                &provider.chat_completions_url(),
-                &model.id,
-            ),
+            reads_effort: bravebot_aichat::reads_effort(&provider.completion_url(), &model.id),
             // A block names models and describes none of them, so there is nothing to carry.
             advertised: bravebot_aichat::models::Advertised::default(),
         })

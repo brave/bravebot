@@ -16,6 +16,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod anthropic;
+pub mod conversation;
 pub mod llama_server;
 pub mod lm_studio;
 pub mod models;
@@ -72,6 +74,24 @@ pub enum ChatError {
     ///
     /// Never retried: it is the one error that says the answer is no longer wanted.
     Cancelled,
+    /// The service said it was not going to finish the reply, whether part way through it or by
+    /// the reason it stopped.
+    ///
+    /// Named by the failure the service reported rather than by a status: the status was sent and
+    /// accepted before the reply began, so this is the only thing that says why it stopped. The
+    /// failure is one of a closed set this crate holds, never the service's text.
+    Reported {
+        failure: anthropic::protocol::Failure,
+    },
+    /// The model was cut off at the token ceiling with nothing to show for it.
+    ///
+    /// Distinct from [`ChatError::Incomplete`], which is a connection that died: this reply ended
+    /// because it ran out of room, so sending it again unchanged produces the same result. Only
+    /// where the reply said nothing before it stopped, which is what a model that spent the whole
+    /// ceiling on reasoning leaves. A reply that wrote anything is returned as
+    /// [`Completion::cut_off`], because throwing away what it did say is the one outcome nobody
+    /// asked for.
+    TooLong(CutOff),
 }
 
 impl fmt::Display for ChatError {
@@ -85,6 +105,30 @@ impl fmt::Display for ChatError {
                 f.write_str("the reply stopped before the server said it was finished")
             }
             Self::Cancelled => f.write_str("the reply was stopped while it was being waited for"),
+            Self::Reported { failure } => {
+                write!(f, "the service stopped the reply and reported {failure}")
+            }
+            Self::TooLong(cut_off) => {
+                let ceiling = cut_off.ceiling;
+                write!(f, "the model reached its output limit of {ceiling} tokens ")?;
+                match (&cut_off.call, cut_off.thought) {
+                    (
+                        Some(OpenCall {
+                            tool: Some(tool), ..
+                        }),
+                        _,
+                    ) => write!(
+                        f,
+                        "while writing a call to {tool}, so the call was not made"
+                    )?,
+                    (Some(OpenCall { tool: None, .. }), _) => {
+                        f.write_str("while writing a tool call, so the call was not made")?
+                    }
+                    (None, true) => f.write_str("while thinking, and wrote nothing")?,
+                    (None, false) => f.write_str("before writing anything")?,
+                }
+                f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
+            }
             Self::Subscription(detail) => write!(
                 f,
                 "the Leo subscription could not be used: {detail}. Run `bravebot auth login leo` to \
@@ -134,9 +178,10 @@ pub struct Completion {
     /// A caller showing this to a person has to say so, and one continuing a conversation with it
     /// is continuing from a sentence that stops mid-word.
     ///
-    /// Always `None` from this backend, which states no ceiling: the request carries no
-    /// `max_tokens` field, so whatever bounds a reply here belongs to the service and is not
-    /// reported as this. Only [`bravebot_bedrock`] sets it.
+    /// Always `None` from the aichat endpoint and from an OpenAI-compatible gateway, which state
+    /// no ceiling: the request carries no `max_tokens` field, so whatever bounds a reply there
+    /// belongs to the service and is not reported as this. Set by [`bravebot_bedrock`] and by
+    /// [`anthropic::AnthropicClient`], whose requests state one.
     pub cut_off: Option<CutOff>,
 }
 
@@ -477,6 +522,7 @@ impl<'a> AichatClient<'a> {
                     caching: !self.breakpoints,
                     cache_ttl: !self.cache_ttl,
                     effort: !self.effort,
+                    ..Refusals::default()
                 },
             );
         }
@@ -1026,6 +1072,25 @@ const BACKOFF: Duration = Duration::from_secs(1);
 /// which only bounds the figure the network layer will carry.
 pub const LONGEST_WAIT: Duration = Duration::from_secs(120);
 
+/// The slowest a reply is taken to be written, in tokens a second.
+///
+/// Well under half the slowest rate measured on Bedrock, 69 tokens a second on Claude Opus 5.5, so
+/// a reply running to its ceiling on a slow day still finishes inside the bound.
+const SLOWEST_WRITING: u64 = 25;
+
+/// How long a reply may take to begin, reading the prompt, before the first token of it.
+const BEFORE_WRITING: Duration = Duration::from_secs(120);
+
+/// How long a reply that may run to `ceiling` tokens is given.
+///
+/// For a service whose requests state a ceiling, which is what says how long a reply can run.
+/// Never less than the bound the egress layer puts on a reply of unstated length, which stays the
+/// figure for a short reply.
+pub fn reply_bound(ceiling: u64) -> Duration {
+    (BEFORE_WRITING + Duration::from_secs(ceiling.div_ceil(SLOWEST_WRITING)))
+        .max(bravebot_net::Timeouts::default().reply)
+}
+
 /// How often a reply that has not started arriving looks up to see whether it should stop.
 ///
 /// The same interval the rest of the system waits on for the same question, and short enough that
@@ -1128,6 +1193,15 @@ pub struct Refusals {
     pub cache_ttl: bool,
     /// It will not take a request that names how hard to think.
     pub effort: bool,
+    /// It will not take a request that asks for a tool's arguments as they are written.
+    ///
+    /// Learned by the Messages client alone, the one service here that is asked for them in the
+    /// request.
+    pub arguments_as_written: bool,
+    /// It will not take the ceiling a request states where nobody stated one.
+    ///
+    /// Learned by the Messages client alone, the one service here whose every request states one.
+    pub ceiling: bool,
 }
 
 /// What each service-and-model pair has refused.
@@ -1489,6 +1563,7 @@ mod tests {
                 caching: true,
                 cache_ttl: false,
                 effort: true,
+                ..Refusals::default()
             },
         );
 

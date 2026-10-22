@@ -981,7 +981,7 @@ import-named-model = { $model } in provider.{ $id }, named by { $variable }
 import-pinned = Not offered, since { $file } sets them for every user of this machine:
 # Found and not imported, one line each, by name and reason and never by value.
 import-left-heading = Found in { $source } and not imported:
-import-left-anthropic-api = Anthropic's own API, whose wire format no service here speaks
+import-left-anthropic-api = a setting for Anthropic's own API, which is not carried over: add a provider.anthropic block that names where the key lives
 import-left-vertex = Google Vertex AI without a Google Cloud project, or through Google Cloud credentials, neither of which a service here reaches
 import-left-bearer-token =
     a Bedrock API key; bravebot signs Bedrock requests through the AWS credential chain instead

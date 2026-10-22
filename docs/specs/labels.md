@@ -21,6 +21,7 @@ guards:
       - crates/agent/src/workspace.rs: 14
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
+      - crates/aichat/src/anthropic.rs: 6
       - crates/aichat/src/lib.rs: 5
       - crates/bedrock/src/lib.rs: 6
       - crates/connector/src/lib.rs: 2
@@ -46,7 +47,7 @@ guards:
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 59
-      - crates/aichat/tests/client.rs: 2
+      - crates/aichat/tests/client.rs: 5
       - crates/bedrock/src/lib.rs: 2
       - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 63
@@ -175,6 +176,7 @@ guards:
       - crates/core/src/policy.rs: 7
   - symbol: Policy::decode_transport
     sites:
+      - crates/aichat/src/anthropic.rs: 2
       - crates/aichat/src/lib.rs: 2
       - crates/aichat/src/models.rs: 2
       - crates/aichat/src/ollama.rs: 1

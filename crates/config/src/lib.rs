@@ -1342,7 +1342,8 @@ impl Config {
             bedrock::Bedrock::from_lookup(&lookup).map(|it| it.with_output_budget(output_budget));
         let providers: Vec<provider::Provider> = providers
             .into_iter()
-            .map(|mut entry| {
+            .map(|entry| {
+                let mut entry = entry.with_output_budget(output_budget);
                 entry.bedrock = entry
                     .bedrock
                     .map(|account| account.with_output_budget(output_budget));
@@ -3138,6 +3139,52 @@ mod tests {
                     .expect("the tier account")
                     .output_limit("opus-arn"),
                 bedrock::OUTPUT_LIMIT,
+                "{typed:?} was read as a ceiling"
+            );
+        }
+    }
+
+    /// The exported reply ceiling reaches every `provider` entry, an `anthropic` one among them,
+    /// ahead of the figure the entry's model states, and is read as a figure or not at all. The
+    /// Messages request states its `max_tokens` from this, so a reading that kept the model's own
+    /// figure sends 64,000 where 48,000 was exported, and one that read a mistyped value as zero
+    /// sends none.
+    #[test]
+    fn an_exported_reply_ceiling_reaches_an_anthropic_entry_ahead_of_its_models_own() {
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "anthropic": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "models": {"claude-test": {"limit": {"context": 200000, "output": 64000}}}
+                },
+                "elsewhere": {
+                    "options": {"baseURL": "https://elsewhere.example.invalid/v1"},
+                    "models": {"a-model": {}}
+                }
+            }}"#,
+        );
+        let limit = |config: &Config, model: &str| {
+            let (provider, wire) = config.provider_for(model).expect("a configured entry");
+            provider.stated_output_limit(wire)
+        };
+
+        let config = resolved(&settings, |_| None, |_| None).expect("configured");
+        assert_eq!(limit(&config, "anthropic/claude-test"), Some(64_000));
+        assert_eq!(limit(&config, "anthropic/claude-other"), None);
+        assert_eq!(limit(&config, "elsewhere/a-model"), None);
+
+        let exported = |name: &str| (name == env_var::OUTPUT_BUDGET).then(|| "48000".to_string());
+        let config = resolved(&settings, exported, |_| None).expect("configured");
+        assert_eq!(limit(&config, "anthropic/claude-test"), Some(48_000));
+        assert_eq!(limit(&config, "anthropic/claude-other"), Some(48_000));
+        assert_eq!(limit(&config, "elsewhere/a-model"), Some(48_000));
+
+        for typed in ["0", "lots", "", "-1", "64_000"] {
+            let exported = |name: &str| (name == env_var::OUTPUT_BUDGET).then(|| typed.to_string());
+            let config = resolved(&settings, exported, |_| None).expect("configured");
+            assert_eq!(
+                limit(&config, "anthropic/claude-test"),
+                Some(64_000),
                 "{typed:?} was read as a ceiling"
             );
         }

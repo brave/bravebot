@@ -10,7 +10,7 @@
 use crate::Secret;
 use crate::bedrock::{Bedrock, Tier};
 use crate::env_var;
-use crate::provider::{self, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, Provider};
+use crate::provider::{self, ANTHROPIC_ID, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, Provider};
 use serde_json::{Map, Value};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -30,12 +30,15 @@ const CLAUDE_MODEL: &str = "ANTHROPIC_MODEL";
 /// The Bedrock API key Claude Code can sign in with, which bravebot does not: it signs through the
 /// AWS credential chain.
 const BEDROCK_BEARER: &str = "AWS_BEARER_TOKEN_BEDROCK";
-/// What Claude Code reaches Anthropic's own API with, in a wire format no service here speaks.
-const ANTHROPIC_NAMES: [&str; 3] = [
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-];
+/// The key Claude Code reaches Anthropic's own API with, which an `anthropic` provider block sends in
+/// the header that API reads it from.
+const ANTHROPIC_KEY: &str = "ANTHROPIC_API_KEY";
+/// The host Claude Code sends it to instead of Anthropic's.
+const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
+/// What else Claude Code reaches Anthropic's own API with. The first is sent as a bearer token and
+/// the second is a host written without the route this program appends, so neither is carried into
+/// a `provider` block.
+const ANTHROPIC_NAMES: [&str; 2] = ["ANTHROPIC_AUTH_TOKEN", ANTHROPIC_BASE_URL];
 /// The names a Claude Code Bedrock setup states that bravebot reads under the same spelling.
 const BEDROCK_NAMES: [&str; 5] = [
     env_var::AWS_REGION,
@@ -503,7 +506,8 @@ pub struct Left {
 /// Why something found is not imported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
-    /// Anthropic's own API, whose wire format no service here speaks.
+    /// A setting for Anthropic's own API that this import does not carry into a `provider` block: a
+    /// bearer token, a host, or a key stated for that host.
     AnthropicApi,
     /// Google Vertex AI with no usable project, or through Google Cloud credentials: neither is
     /// reached by a service here.
@@ -888,6 +892,26 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         .or_else(|| string(root.and_then(|root| root.get("model"))))
         .filter(|word| bedrock && Tier::from_alias(word).is_some_and(reached));
 
+    // A key stated beside a host was issued for that host, and the entry written here would send it
+    // to Anthropic's, so both are left.
+    let mut gateways = Vec::new();
+    let proxied = stated(ANTHROPIC_BASE_URL).is_some();
+    match (
+        stated(ANTHROPIC_KEY),
+        provider::known_endpoint(ANTHROPIC_ID),
+    ) {
+        (Some(key), Some(endpoint)) if !proxied => gateways.push(Gateway {
+            id: ANTHROPIC_ID.to_string(),
+            endpoint: endpoint.to_string(),
+            entry: Map::new(),
+            key: Key::Held(Secret::new(key)),
+        }),
+        (Some(_), _) => left.push(Left {
+            name: ANTHROPIC_KEY.to_string(),
+            reason: Reason::AnthropicApi,
+        }),
+        (None, _) => {}
+    }
     for name in ANTHROPIC_NAMES {
         if stated(name).is_some() {
             left.push(Left {
@@ -917,7 +941,7 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         env,
         model,
         model_gateway: None,
-        gateways: Vec::new(),
+        gateways,
         left,
     };
     (found.importable() || !found.left.is_empty()).then_some(found)
@@ -1080,27 +1104,26 @@ fn merge(into: &mut Map<String, Value>, from: Map<String, Value>) {
 }
 
 /// The ids opencode reaches through an SDK of their own where the entry names none, each in a
-/// protocol other than OpenAI's.
-const OWN_SDK_IDS: [&str; 5] = [
-    "anthropic",
-    "azure",
-    "cohere",
-    "google",
-    "google-vertex-anthropic",
-];
+/// protocol other than OpenAI's and none of them one this program sends.
+///
+/// `anthropic` is not here: it is reached in the Messages protocol, which this program does send.
+const OWN_SDK_IDS: [&str; 4] = ["azure", "cohere", "google", "google-vertex-anthropic"];
 
 /// Whether an entry's `npm` names an SDK speaking the protocol this entry is reached by.
 ///
-/// On top of [`Provider::all`], which ignores the field: an `@ai-sdk/anthropic` entry with a
-/// `baseURL` would be kept there and then sent requests in a protocol it does not speak. An entry
-/// naming no SDK gets the one opencode picks for its id.
+/// On top of [`Provider::all`], which ignores the field: an `@ai-sdk/anthropic` entry under any id
+/// but `anthropic`, with a `baseURL`, would be kept there and then sent requests in a protocol that
+/// id is not reached by. An entry naming no SDK gets the one opencode picks for its id.
 fn speaks_the_protocol(id: &str, npm: Option<&str>) -> bool {
     match npm {
         None => !OWN_SDK_IDS.contains(&id),
-        Some("@ai-sdk/openai-compatible") => true,
+        // Not for `anthropic`, which an entry written out here would then be read as reaching in the
+        // Messages protocol: the field that says otherwise is not written.
+        Some("@ai-sdk/openai-compatible") => id != ANTHROPIC_ID,
         Some("@openrouter/ai-sdk-provider") => id == "openrouter",
         Some("@ai-sdk/amazon-bedrock") => id == AWS_PROVIDER_ID,
         Some("@ai-sdk/google-vertex") => id == GOOGLE_VERTEX_ID,
+        Some("@ai-sdk/anthropic") => id == ANTHROPIC_ID,
         Some(_) => false,
     }
 }
@@ -1973,7 +1996,6 @@ mod tests {
                 "not-openrouter": {"npm": "@openrouter/ai-sdk-provider", "options": {"baseURL": "https://x.invalid/v1"}},
                 "compatible": {"npm": "@ai-sdk/openai-compatible", "options": {"baseURL": "https://y.invalid/v1"}},
                 "openrouter": {"npm": "@openrouter/ai-sdk-provider"},
-                "anthropic": {"options": {"baseURL": "https://anthropic-proxy.invalid"}},
                 "google": {"options": {"baseURL": "https://gemini-proxy.invalid"}}
             }}"#,
         );
@@ -1981,16 +2003,129 @@ mod tests {
         let found = one(&home.path, &[], Source::Opencode);
 
         assert_eq!(ids(&found), ["compatible", "openrouter"]);
-        // Naming no SDK, the two known ids get their own from opencode, and neither speaks OpenAI's.
+        // Naming no SDK, `google` gets its own from opencode, which does not speak OpenAI's, and
+        // `@ai-sdk/anthropic` is the Messages protocol, which only the `anthropic` id is reached by.
         assert_eq!(
             left(&found),
             [
-                ("anthropic", Reason::AnotherSdk),
                 ("anthropic-proxy", Reason::AnotherSdk),
                 ("google", Reason::AnotherSdk),
                 ("not-openrouter", Reason::AnotherSdk)
             ]
         );
+    }
+
+    /// IMPORT-3: opencode reads an `anthropic` entry naming no SDK through the Anthropic SDK, and
+    /// bravebot reaches the same host through the Messages API. The entry arrives naming the
+    /// variable opencode reads the key from, since this program reads only what an entry names.
+    #[test]
+    fn an_anthropic_entry_naming_no_sdk_is_offered_at_anthropics_endpoint() {
+        let home = Scratch::new("import-anthropic");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"anthropic": {"name": "Anthropic"}}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert_eq!(ids(&found), ["anthropic"]);
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://api.anthropic.com/v1");
+        assert_eq!(anthropic.variables(), ["ANTHROPIC_API_KEY"]);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
+    /// IMPORT-3: naming the Anthropic SDK is how opencode says the same thing, and a `baseURL` the
+    /// entry states is the one written, so a proxy in front of the API is reached as it was there.
+    #[test]
+    fn an_anthropic_entry_naming_its_own_sdk_keeps_the_endpoint_it_states() {
+        let home = Scratch::new("import-anthropic-sdk");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/anthropic",
+                "options": {"baseURL": "https://proxy.invalid/anthropic/v1", "apiKey": "{env:MY_CLAUDE_KEY}"}
+            }}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert_eq!(ids(&found), ["anthropic"]);
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://proxy.invalid/anthropic/v1");
+        assert_eq!(anthropic.variables(), ["MY_CLAUDE_KEY"]);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
+    /// IMPORT-3: an `anthropic` entry that names the OpenAI-compatible SDK is a gateway that happens to
+    /// be called that, and the entry written out would drop the field that says so and be read as
+    /// reaching Anthropic's own protocol. It is left rather than imported as something it is not.
+    #[test]
+    fn an_anthropic_entry_naming_the_openai_compatible_sdk_is_left_as_another_sdk() {
+        let home = Scratch::new("import-anthropic-compatible");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/openai-compatible",
+                "options": {"baseURL": "https://litellm.invalid/v1"}
+            }}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(left(&found), [("anthropic", Reason::AnotherSdk)]);
+    }
+
+    /// IMPORT-3: only the `anthropic` id is reached in the Messages protocol, so a proxy kept under
+    /// another id that names the Anthropic SDK would be written out as a gateway speaking chat
+    /// completions, which is not what it was there. It is left, and says why.
+    #[test]
+    fn an_anthropic_sdk_entry_under_another_id_is_left_as_another_sdk() {
+        let home = Scratch::new("import-anthropic-sdk-elsewhere");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"claude-proxy": {
+                "npm": "@ai-sdk/anthropic",
+                "options": {"baseURL": "https://proxy.invalid/anthropic/v1", "apiKey": "{env:MY_CLAUDE_KEY}"}
+            }}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(left(&found), [("claude-proxy", Reason::AnotherSdk)]);
+    }
+
+    /// IMPORT-3: `opencode auth login` keeps an Anthropic API key in `auth.json` and writes no
+    /// config entry. The endpoint is compiled in, so the key is a gateway rather than a
+    /// `NoEndpoint`, and a sign-in beside it is still left, since this program takes only a key.
+    #[test]
+    fn an_auth_json_key_for_anthropic_is_a_provider_and_its_sign_in_is_not() {
+        let home = Scratch::new("import-anthropic-auth");
+        home.write(
+            ".local/share/opencode/auth.json",
+            r#"{"anthropic": {"type": "api", "key": "a-held-key"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://api.anthropic.com/v1");
+        match &anthropic.key {
+            Key::Held(key) => assert_eq!(key.expose(), "a-held-key"),
+            other => panic!("the key was not held: {other:?}"),
+        }
+        assert_eq!(anthropic.fallback(), Some("ANTHROPIC_API_KEY"));
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+
+        home.write(
+            ".local/share/opencode/auth.json",
+            r#"{"anthropic": {"type": "oauth", "refresh": "r", "access": "a", "expires": 1}}"#,
+        );
+        let found = one(&home.path, &[], Source::Opencode);
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(left(&found), [("anthropic", Reason::SignIn)]);
     }
 
     /// IMPORT-3: opencode's own lists say what the person turned off there.
@@ -2272,6 +2407,64 @@ mod tests {
         for value in ["sk-ant-secret", "proxy.invalid", "bedrock-secret"] {
             assert!(!said.contains(value), "{value} is in {said}");
         }
+    }
+
+    /// IMPORT-3: a key Claude Code reaches Anthropic's API with is an `anthropic` entry at the
+    /// endpoint compiled in, holding the key for its own question, and is not also said as left.
+    #[test]
+    fn a_claude_code_anthropic_key_is_an_anthropic_provider() {
+        let home = Scratch::new("import-claude-anthropic-key");
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-secret"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::ClaudeCode);
+
+        assert!(found.importable());
+        assert_eq!(ids(&found), ["anthropic"]);
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://api.anthropic.com/v1");
+        match &anthropic.key {
+            Key::Held(key) => assert_eq!(key.expose(), "sk-ant-secret"),
+            other => panic!("the key was not held: {other:?}"),
+        }
+        assert_eq!(anthropic.fallback(), Some("ANTHROPIC_API_KEY"));
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+        assert!(!anthropic.shown().contains("sk-ant-secret"));
+    }
+
+    /// IMPORT-4: a key stated beside a host was issued for that host. Written as an entry it would be
+    /// sent to Anthropic's, so the key and the host are both left, and so is a bearer token, which
+    /// the header this API reads a key from does not carry.
+    #[test]
+    fn a_claude_code_anthropic_key_for_another_host_or_a_bearer_token_is_left() {
+        let home = Scratch::new("import-claude-anthropic-proxy");
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-secret",
+                        "ANTHROPIC_BASE_URL": "https://proxy.invalid"}}"#,
+        );
+        let found = one(&home.path, &[], Source::ClaudeCode);
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(
+            left(&found),
+            [
+                ("ANTHROPIC_API_KEY", Reason::AnthropicApi),
+                ("ANTHROPIC_BASE_URL", Reason::AnthropicApi),
+            ]
+        );
+
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "a-bearer-token"}}"#,
+        );
+        let found = one(&home.path, &[], Source::ClaudeCode);
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(
+            left(&found),
+            [("ANTHROPIC_AUTH_TOKEN", Reason::AnthropicApi)]
+        );
     }
 
     /// IMPORT-6: `{env:VAR}` is opencode's substitution, and bravebot makes none, so copied as it is
