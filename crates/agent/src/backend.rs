@@ -1104,12 +1104,14 @@ fn gateway_client<'a>(
                 .for_gateway(provider, wire_model, token)
                 .with_gateway_headers(headers),
         ),
-        Protocol::Messages => GatewayClient::Messages(AnthropicClient::new(
-            config, egress, provider, wire_model, token,
-        )),
-        Protocol::GenerateContent => GatewayClient::GenerateContent(GenerateContentClient::new(
-            egress, provider, wire_model, token,
-        )),
+        Protocol::Messages => GatewayClient::Messages(
+            AnthropicClient::new(config, egress, provider, wire_model, token)
+                .with_gateway_headers(headers),
+        ),
+        Protocol::GenerateContent => GatewayClient::GenerateContent(
+            GenerateContentClient::new(egress, provider, wire_model, token)
+                .with_gateway_headers(headers),
+        ),
     })
 }
 

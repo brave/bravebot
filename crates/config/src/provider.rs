@@ -463,9 +463,12 @@ impl Provider {
             || options
                 .and_then(|options| string(options.get("apiKey")))
                 .is_some();
-        let credential_name = match id == GOOGLE_VERTEX_ID {
-            true => VERTEX_KEY_HEADER,
-            false => "authorization",
+        let credential_name = if id == GOOGLE_VERTEX_ID {
+            VERTEX_KEY_HEADER
+        } else if protocol == Protocol::Messages {
+            ANTHROPIC_KEY_HEADER
+        } else {
+            "authorization"
         };
         let (headers, headers_refused) = header_entries(
             options.and_then(|options| options.get("headers")),
@@ -893,9 +896,12 @@ impl Provider {
         if self.stored_key.is_none() {
             return;
         }
-        let credential_name = match self.id == GOOGLE_VERTEX_ID {
-            true => VERTEX_KEY_HEADER,
-            false => "authorization",
+        let credential_name = if self.id == GOOGLE_VERTEX_ID {
+            VERTEX_KEY_HEADER
+        } else if self.protocol == Protocol::Messages {
+            ANTHROPIC_KEY_HEADER
+        } else {
+            "authorization"
         };
         if let Some(position) = self
             .headers
@@ -2566,6 +2572,30 @@ mod tests {
                 }
             }}}"#);
         assert_eq!(elsewhere.request_headers(|_| None).len(), 1);
+    }
+
+    /// An `anthropic` entry takes its key in `x-api-key`, so that is the name to refuse there and
+    /// not `authorization`, which is where every gateway but Vertex and Anthropic takes one.
+    #[test]
+    fn an_anthropic_block_refuses_the_header_its_key_goes_in() {
+        let provider = one(r#"{"provider": {"anthropic": {
+                "env": ["ANTHROPIC_API_KEY"],
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-api-key": "another", "authorization": "Bearer another"}
+                }
+            }}}"#);
+        let sent = provider.request_headers(|_| None);
+        assert_eq!(
+            sent.len(),
+            1,
+            "the key's own header was sent twice or the other was dropped: {sent:?}"
+        );
+        assert_eq!(sent[0].0, "authorization");
+        assert_eq!(
+            provider.headers_refused,
+            [("x-api-key".to_string(), HeaderFault::Reserved)]
+        );
     }
 
     /// A header a gateway wants is often a second credential, and a block reaches a person's

@@ -3960,6 +3960,71 @@ fn an_anthropic_request_carries_its_key_in_x_api_key_and_nowhere_else() {
     );
 }
 
+/// BACKEND-60 says a configured header goes on every request, the Messages protocol included, and
+/// that a name the credential goes in is refused where the block is read: `x-api-key` here, not
+/// `authorization`, since that is where an `anthropic` entry's key goes (BACKEND-57).
+#[test]
+fn a_header_the_block_asked_for_reaches_an_anthropic_request() {
+    let (endpoint, received) = serve(MESSAGES_REPLY);
+    let block = format!(
+        r#"{{"provider": {{"anthropic": {{
+            "env": ["ANTHROPIC_API_KEY"],
+            "options": {{
+                "baseURL": "{endpoint}/v1",
+                "headers": {{"X-Tenant-Id": "team-7", "x-api-key": "a-second-credential"}}
+            }}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    assert_eq!(
+        provider.headers_refused,
+        [(
+            "x-api-key".to_string(),
+            bravebot_config::provider::HeaderFault::Reserved
+        )],
+        "the credential's own header was not refused at the block"
+    );
+    let headers = provider.request_headers(|_| None);
+
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    AnthropicClient::new(
+        &config,
+        &egress,
+        &provider,
+        "claude-test",
+        Some(bravebot_config::Secret::new(ANTHROPIC_KEY)),
+    )
+    .with_gateway_headers(headers)
+    .complete(
+        &mut policy,
+        &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")]),
+    )
+    .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(
+        sent.header("x-tenant-id"),
+        Some("team-7"),
+        "the header the block asked for did not reach the request: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.header("x-api-key"),
+        Some(ANTHROPIC_KEY),
+        "a configured header replaced the credential: {:?}",
+        sent.headers
+    );
+}
+
 /// A block that names nowhere for a key to live is somebody saying none is needed, so none is sent:
 /// not a header with nothing in it, and not whatever an exported variable meant for another tool
 /// holds.
@@ -5233,6 +5298,68 @@ fn a_google_express_request_carries_its_key_in_x_goog_api_key_and_nowhere_else()
     assert_eq!(body["contents"][0]["parts"][0]["text"], "hello");
     assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be brief");
     assert!(body.get("model").is_none(), "{body}");
+}
+
+/// BACKEND-60 says a configured header goes on every request, the native `generateContent` API
+/// included, and that a name the credential goes in is refused where the block is read:
+/// `x-goog-api-key` here, which [BACKEND-51](../../../docs/specs/backends.md#BACKEND-51) already
+/// refuses.
+#[test]
+fn a_header_the_block_asked_for_reaches_a_google_express_request() {
+    let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+    let block = format!(
+        r#"{{"provider": {{"google-vertex": {{
+            "npm": "@ai-sdk/google-vertex",
+            "options": {{
+                "apiKey": "in-the-file",
+                "baseURL": "{endpoint}/v1",
+                "headers": {{"X-Tenant-Id": "team-7", "x-goog-api-key": "a-second-credential"}}
+            }}
+        }}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&block).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    assert_eq!(
+        provider.headers_refused,
+        [(
+            "x-goog-api-key".to_string(),
+            bravebot_config::provider::HeaderFault::Reserved
+        )],
+        "the credential's own header was not refused at the block"
+    );
+    let headers = provider.request_headers(|_| None);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    express_client(&egress, &provider, "google/gemini-test")
+        .with_gateway_headers(headers)
+        .complete(
+            &mut policy,
+            &ChatRequest::new(
+                "google-vertex/google/gemini-test",
+                vec![Message::user("hello")],
+            ),
+        )
+        .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(
+        sent.header("x-tenant-id"),
+        Some("team-7"),
+        "the header the block asked for did not reach the request: {:?}",
+        sent.headers
+    );
+    assert_eq!(
+        sent.header("x-goog-api-key"),
+        Some(GOOGLE_KEY),
+        "a configured header replaced the credential: {:?}",
+        sent.headers
+    );
 }
 
 /// A block that names nowhere for a key to live sends none: not a header with nothing in it.

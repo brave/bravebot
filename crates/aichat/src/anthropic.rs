@@ -81,6 +81,8 @@ pub struct AnthropicClient<'a> {
     /// service has never heard of.
     model: String,
     token: Option<Secret>,
+    /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
+    headers: Vec<(String, Secret)>,
     cancel: Option<Cancel>,
     /// Whether requests still carry cache breakpoints.
     ///
@@ -134,6 +136,7 @@ impl<'a> AnthropicClient<'a> {
             provider,
             model: model.into(),
             token,
+            headers: Vec::new(),
             cancel: None,
             breakpoints: true,
             cache_ttl: true,
@@ -170,6 +173,16 @@ impl<'a> AnthropicClient<'a> {
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
         self.cancel = Some(cancel);
+        self
+    }
+
+    /// Also send the headers the gateway's block asked for, already resolved (BACKEND-60).
+    ///
+    /// Separate from [`Self::new`] because a value may name a variable and this crate reads none:
+    /// the caller that resolved the token resolves these at the same moment, from the same
+    /// environment.
+    pub fn with_gateway_headers(mut self, headers: Vec<(String, Secret)>) -> Self {
+        self.headers = headers;
         self
     }
 
@@ -385,6 +398,12 @@ impl<'a> AnthropicClient<'a> {
             // layer, which does not know this header is a credential.
             let (name, value) = self.provider.credential_header(token);
             http = http.socket_header(name, value);
+        }
+        // After the credential, and never over it: a name this request already set is refused
+        // where the block is read, because `Request::header` appends and a second copy of one of
+        // these would be sent rather than replace the first.
+        for (name, value) in &self.headers {
+            http = http.header(name.clone(), value.expose());
         }
         // A stream's headers come at once and the model writes after them; a reply asked for whole
         // is written before any of it is sent.

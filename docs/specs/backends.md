@@ -2985,13 +2985,14 @@ A name the request's own framing or authentication depends on is refused when th
 and the block's other headers are still sent: `host`, `content-length`, `content-type`,
 `transfer-encoding`, `connection`, and the header this provider's credential goes in where the
 block names a credential, which is `x-goog-api-key` for `google-vertex`
-([BACKEND-51](#BACKEND-51)) and `authorization` for every other gateway. A block naming no
-credential may write `authorization` itself, because then nothing else is setting it. An entry
-naming AWS sends no configured header at all, Bedrock signing over the headers it sends. A name
-that is not a field name, a value holding a line ending or another character a header cannot carry,
-and a value holding `{env:` or `{file:` as part of something longer, are refused the same way. A
-name with nothing under it, and a `headers` that is not a map, configure no header and are not
-refusals.
+([BACKEND-51](#BACKEND-51)), `x-api-key` for an `anthropic` entry reached through the Messages API
+([BACKEND-57](#BACKEND-57)), and `authorization` for every other gateway, whichever protocol it
+answers in. A block naming no credential may write `authorization` itself, because then nothing
+else is setting it. An entry naming AWS sends no configured header at all, Bedrock signing over the
+headers it sends. A name that is not a field name, a value holding a line ending or another
+character a header cannot carry, and a value holding `{env:` or `{file:` as part of something
+longer, are refused the same way. A name with nothing under it, and a `headers` that is not a map,
+configure no header and are not refusals.
 
 A header value is a `Secret`: it is in no trace, no error text, and nothing a diagnostic prints
 ([CRED-23](credential-protection.md#CRED-23)).
@@ -3019,6 +3020,7 @@ credential into wherever the output goes.
 `verified-by: bravebot_config::provider::one_name_written_twice_sends_one_header`
 `verified-by: bravebot_config::provider::the_header_a_credential_goes_in_is_refused_only_where_one_is_named`
 `verified-by: bravebot_config::provider::a_vertex_block_refuses_the_header_its_key_goes_in`
+`verified-by: bravebot_config::provider::an_anthropic_block_refuses_the_header_its_key_goes_in`
 `verified-by: bravebot_config::provider::a_header_value_naming_a_variable_is_resolved_at_the_point_of_use`
 `verified-by: bravebot_config::provider::a_reference_inside_a_longer_header_value_is_refused`
 `verified-by: bravebot_config::provider::a_header_that_is_not_sendable_is_refused`
@@ -3027,6 +3029,8 @@ credential into wherever the output goes.
 `verified-by: bravebot_config::provider::printing_a_block_does_not_print_a_header_value`
 `verified-by: bravebot_aichat::client::a_header_the_block_asked_for_reaches_the_request`
 `verified-by: bravebot_aichat::client::a_header_the_block_asked_for_reaches_the_roster_request`
+`verified-by: bravebot_aichat::client::a_header_the_block_asked_for_reaches_an_anthropic_request`
+`verified-by: bravebot_aichat::client::a_header_the_block_asked_for_reaches_a_google_express_request`
 `verified-by: bravebot_agent::backend::a_header_naming_a_variable_is_read_where_the_token_is`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_add_a_request_header`
 `verified-by: bravebot_config::provider::a_stored_key_refuses_a_written_authorization_once_it_is_known`
