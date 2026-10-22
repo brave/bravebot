@@ -22,7 +22,7 @@ guards:
       - crates/agent/src/workspace.rs: 14
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
-      - crates/aichat/src/anthropic.rs: 6
+      - crates/aichat/src/anthropic.rs: 8
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
