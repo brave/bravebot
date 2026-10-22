@@ -1917,7 +1917,7 @@ The condition is recorded nowhere else, so `--resume` carries that conversation 
 The flag is refused with the status for an argument (CLI-6) before anything is sent when no
 condition follows it, when the condition is blank or is the next flag, with `--mode manifest`, which
 is planned once and has no conversation to send the work back into, with `--max-rounds` or
-`--max-tokens`, which count from nothing in each round (CLI-36), and where a background session
+`--max-tokens`, which count from nothing in each round (CLI-37), and where a background session
 is started, whose words after `--bg` are all its prompt. A model for the judge
 that cannot be used, because `summaryModel` names one that needs a sign-in this machine has not
 made or that the machine-level layer excludes ([COMPACT-15](compaction.md#COMPACT-15)), is refused

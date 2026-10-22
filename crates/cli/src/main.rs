@@ -1624,7 +1624,7 @@ fn limit_not_with_a_manifest(mode: Mode, limits: RunLimits) -> Option<String> {
 }
 
 /// The sentence that refuses a run limit given with `--goal`, whose rounds are each a turn that
-/// counts a limit from nothing, so a limit would bound each round and not the run (CLI-36).
+/// counts a limit from nothing, so a limit would bound each round and not the run (CLI-37).
 /// `None` for a run with no goal, and for a run given no limit.
 ///
 /// Refused by name for the reason a manifest run is: a script that capped a run would be given one
@@ -1635,7 +1635,7 @@ fn limit_not_with_a_goal(has_goal: bool, limits: RunLimits) -> Option<String> {
 }
 
 /// The flag that gave the run a limit, `--max-rounds` before `--max-tokens` where it gave both
-/// (CLI-36). `None` for a run given none.
+/// (CLI-37). `None` for a run given none.
 fn limit_flag(limits: RunLimits) -> Option<&'static str> {
     match limits {
         RunLimits {
