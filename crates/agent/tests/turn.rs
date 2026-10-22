@@ -36260,6 +36260,93 @@ fn a_recap_is_cut_to_its_limit_and_leaves_the_conversation_alone() {
     );
 }
 
+/// What the enhance key runs. The request holds the driver's instruction with the person's draft
+/// on the end of it and the exchange before it, offers no tools, and leaves the conversation as
+/// long as it was. The rewrite comes back whole for the box.
+#[test]
+fn an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_the_conversation_alone() {
+    let (endpoint, received) = serve_sequence(vec![reply_with(
+        "Fix the recursion in the parser's grammar.",
+    )]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let conversation = an_exchange_to_ask_beside();
+    let before = conversation.len();
+
+    let answered = turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::enhance(&conversation, "fix the recursion"),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("an enhancement must not be refused");
+
+    assert_eq!(
+        bravebot_agent::aside::enhancement(&answered.shown).as_deref(),
+        Some("Fix the recursion in the parser's grammar.")
+    );
+    assert!(
+        answered.kept.is_some(),
+        "a rewrite the planner could have held was withheld"
+    );
+    assert_eq!(
+        conversation.len(),
+        before,
+        "an enhancement changed the exchange"
+    );
+
+    let body = received.recv().expect("the enhancement's request");
+    assert!(
+        body.contains("port the parser to the new grammar"),
+        "the draft was enhanced without the exchange: {body}"
+    );
+    assert!(
+        body.contains("Rewrite it so that it is more specific")
+            && body.contains("fix the recursion"),
+        "the instruction or the draft did not reach the request: {body}"
+    );
+    assert!(
+        !body.contains("\"tools\""),
+        "the enhancement was sent with tools it could call: {body}"
+    );
+}
+
+/// Over an exchange that has read something untrusted the rewrite is not one the planner could have
+/// held, so it is not offered for the box: the person's reading it is not a gate.
+#[test]
+fn an_enhancement_over_an_untrusted_exchange_is_not_offered_for_the_box() {
+    let (endpoint, _received) = serve_sequence(vec![reply_with("Fix the parser.")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = an_exchange_to_ask_beside();
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+
+    let answered = turn::aside(
+        &config,
+        &egress,
+        bravebot_agent::aside::Question::enhance(&conversation, "fix the parser"),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("an enhancement must not be refused");
+
+    assert!(
+        answered.kept.is_none(),
+        "a rewrite the planner could not have held was offered"
+    );
+}
+
 /// A picture pasted beside the question goes with it, in the one message. A question about a
 /// screenshot is the commonest thing to ask beside the work, and answered without the screenshot it
 /// is answered about nothing: what is sent has to be what the words say it is.

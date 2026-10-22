@@ -1032,6 +1032,7 @@ pub fn definition_named(
 /// since a delegate only runs inside a turn, so a paste while watching reaches this handler.
 pub fn handle_paste_while_working(session: &mut Session, text: &str) -> Action {
     session.drop_a_wiped_handoff();
+    session.drop_a_wiped_enhancement();
     paste_into_box(session, text)
 }
 
@@ -1136,6 +1137,7 @@ fn pump_terminal(
 /// picture does not need telling every time they use the other one.
 pub fn handle_paste(session: &mut Session, text: &str) -> Action {
     session.drop_a_wiped_handoff();
+    session.drop_a_wiped_enhancement();
     paste_into_box(session, text)
 }
 
@@ -2922,6 +2924,7 @@ fn event_loop(
                 }
             }
             Action::Handoff(goal) => held.handoff(terminal, config, &goal)?,
+            Action::Enhance(line, draft) => held.enhance(terminal, config, &line, &draft)?,
             Action::Submit(prompt) => suggesting = held.submit(terminal, config, prompt)?,
             Action::Run(line) | Action::RunPrivately(line) => {
                 held.run_line(terminal, &line, private)?
@@ -4684,12 +4687,21 @@ enum Unanswered {
     Failed(String),
 }
 
-/// The request an aside and a handoff's brief share, drawn while it is answered.
+/// What a request asked beside the work is writing, where it is neither a question nor a recap.
+#[derive(Clone, Copy)]
+enum Writing<'a> {
+    /// The brief `/handoff` writes, for this goal.
+    Brief(&'a str),
+    /// The rewrite of this draft that the enhance key asks for (INPUT-48).
+    Enhancement(&'a str),
+}
+
+/// The request an aside, a handoff's brief and an enhancement share, drawn while it is answered.
 ///
 /// Hands back what came of it and leaves what that means to the caller: a question's answer is a
-/// row beside the transcript, and a brief goes into the box. A stop key walks away from the request
-/// and comes back as [`Unanswered::Stopped`] (INPUT-4). `handoff` is the goal the brief is for,
-/// which makes the request the brief's and not a question or a recap.
+/// row beside the transcript, and a brief or an enhancement goes into the box. A stop key walks
+/// away from the request and comes back as [`Unanswered::Stopped`] (INPUT-4). `writing` says what
+/// the request is for where it is not a question or a recap.
 #[allow(clippy::too_many_arguments)]
 fn ask_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -4699,7 +4711,7 @@ fn ask_animated(
     trust: &mut TrustStore,
     question: &str,
     recap: bool,
-    handoff: Option<&str>,
+    writing: Option<Writing<'_>>,
     pasted: &[crate::state::AttachedImage],
     attached: &[crate::state::Attached],
     workspace: &Workspace,
@@ -4726,12 +4738,13 @@ fn ask_animated(
     // The pictures go with the question, in the order the markers in it number them, the way they go
     // with a prompt: somebody asking about a screenshot beside the work is asking about the thing
     // they pasted, and pasting.md PASTE-2 is the whole of why it may be looked at.
-    let asking = if let Some(goal) = handoff {
-        bravebot_agent::aside::Question::handoff(conversation, goal)
-    } else if recap {
-        bravebot_agent::aside::Question::recap(conversation)
-    } else {
-        bravebot_agent::aside::Question::about(
+    let asking = match writing {
+        Some(Writing::Brief(goal)) => bravebot_agent::aside::Question::handoff(conversation, goal),
+        Some(Writing::Enhancement(draft)) => {
+            bravebot_agent::aside::Question::enhance(conversation, draft)
+        }
+        None if recap => bravebot_agent::aside::Question::recap(conversation),
+        None => bravebot_agent::aside::Question::about(
             conversation,
             question,
             pasted
@@ -4741,7 +4754,7 @@ fn ask_animated(
                     bytes: image.bytes.clone(),
                 })
                 .collect(),
-        )
+        ),
     };
     // The files dropped onto the line, as paths to read rather than as bytes: the read itself is the
     // worker's, so that it lands in the same trail as the request it travels in. Only what is carried
@@ -5017,6 +5030,52 @@ fn handoff_answered(
         Err(Unanswered::Failed(message)) => {
             session.end_aside(0);
             session.note(t!(handoff_failed, problem = message));
+        }
+    }
+}
+
+/// Take what the request for an enhancement of `line` came back with (INPUT-48).
+///
+/// Only a rewrite the planner could have held is offered, as a brief is: where the exchange has met
+/// something untrusted the answer is on no screen but a note, because a person reading it is not a
+/// gate. Whether it could have been held is [`bravebot_agent::aside::Answered::kept`] being
+/// present, which the aside's own policy decided from the labels, and what the rewrite says is not
+/// looked at. Only its length is: one that is empty or too long is not offered rather than cut.
+/// Apart from [`ask_animated`] so a test can call it without a backend.
+fn enhance_answered(
+    session: &mut Session,
+    line: &str,
+    done: Result<bravebot_agent::aside::Answered, Unanswered>,
+) {
+    match done {
+        Ok(answered) => {
+            session.end_aside(answered.usage.total());
+            if answered.kept.is_none() {
+                session.note(t!(enhance_untrusted));
+            } else if let Some(text) = session.clean_enhancement(&answered.shown) {
+                if session.propose_enhancement(line, text) {
+                    // Escape is vi's own in vi's style, so the line is put back with Ctrl-C there.
+                    session.note(match session.editing() {
+                        crate::vim::Editing::Ordinary => t!(enhance_ready),
+                        crate::vim::Editing::Vi => t!(enhance_ready_vi),
+                    });
+                } else {
+                    session.note(t!(enhance_line_changed));
+                }
+            } else {
+                session.note(t!(
+                    enhance_unusable,
+                    limit = bravebot_agent::aside::ENHANCE_LIMIT
+                ));
+            }
+        }
+        Err(Unanswered::Stopped) => {
+            session.end_aside(0);
+            session.note(t!(enhance_stopped));
+        }
+        Err(Unanswered::Failed(message)) => {
+            session.end_aside(0);
+            session.note(t!(enhance_failed, problem = message));
         }
     }
 }
@@ -25896,6 +25955,9 @@ mod tests {
             KeyCode::Char('g') if ctrl => {
                 Some("hands the screen the turn is drawing on to an editor")
             }
+            KeyCode::Char('p') if ctrl => {
+                Some("rewrites the line over the exchange, which a turn in flight holds")
+            }
             KeyCode::Char('!') => Some("arms a mode that changes what Enter does"),
             _ => None,
         }
@@ -34247,6 +34309,646 @@ mod tests {
         dispatch_command(&mut session, commanded(FILES_COMMAND));
         handle_key(&mut session, key(KeyCode::Esc));
         assert_eq!(bravebot_session::store::load_panel(), Some(true));
+    }
+
+    /// What a request for an enhancement comes back with over an exchange that met nothing
+    /// untrusted, which is the one the planner could have held.
+    fn an_answer_holding(text: &str) -> Result<bravebot_agent::aside::Answered, Unanswered> {
+        Ok(bravebot_agent::aside::Answered {
+            shown: text.to_string(),
+            kept: Some(text.to_string()),
+            usage: Default::default(),
+        })
+    }
+
+    /// A session with `draft` typed into the box and its enhancement written over it, as it is when
+    /// the request comes back.
+    fn enhanced_from(draft: &str, rewrite: &str) -> Session {
+        let mut session = Session::new("none");
+        type_line(&mut session, draft);
+        session.begin_aside();
+        enhance_answered(&mut session, draft, an_answer_holding(rewrite));
+        assert!(session.enhanced_pending(), "the enhancement was not placed");
+        session
+    }
+
+    /// INPUT-48. Rejects: the chord sending the line as a prompt, clearing the box or being typed
+    /// into it, any of which would leave the person with nothing asked for.
+    #[test]
+    fn the_enhance_chord_asks_for_the_line_and_sends_nothing() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "fix the parser bug");
+
+        assert_eq!(
+            handle_key(&mut session, ctrl('p')),
+            Action::Enhance(
+                "fix the parser bug".to_string(),
+                "fix the parser bug".to_string()
+            )
+        );
+        assert_eq!(
+            session.input(),
+            "fix the parser bug",
+            "the line left the box"
+        );
+        assert!(session.transcript.is_empty(), "the line was sent");
+    }
+
+    /// INPUT-48. Rejects: a request going out for nothing, and the chord typing a letter into a box
+    /// it found empty or into a command line.
+    #[test]
+    fn the_enhance_chord_has_nothing_to_rewrite_in_an_empty_box_or_a_shell_line() {
+        let mut session = Session::new("none");
+        assert_eq!(handle_key(&mut session, ctrl('p')), Action::None);
+        assert!(session.input().is_empty(), "the chord was typed");
+
+        type_line(&mut session, "  ");
+        assert_eq!(handle_key(&mut session, ctrl('p')), Action::None);
+
+        let mut session = Session::new("none");
+        type_line(&mut session, "!ls -l");
+        assert!(session.shell, "the line did not arm shell mode");
+        assert_eq!(handle_key(&mut session, ctrl('p')), Action::None);
+        assert_eq!(session.input(), "ls -l");
+    }
+
+    /// INPUT-48. Rejects: a command or a skill being rewritten into prose that is then sent as a
+    /// prompt, which would lose the command the person typed.
+    #[test]
+    fn a_line_written_like_a_command_or_a_skill_is_left_as_written_and_says_so() {
+        for line in [
+            "/review the diff",
+            "  /some-skill do the thing",
+            "/rename parser",
+        ] {
+            let mut session = Session::new("none");
+            type_line(&mut session, line);
+
+            assert_eq!(
+                handle_key(&mut session, ctrl('p')),
+                Action::Redraw,
+                "{line}"
+            );
+
+            assert_eq!(session.input(), line, "the line was changed");
+            assert_eq!(
+                last_note(&session),
+                t!(enhance_not_a_command, key = "ctrl-p"),
+                "{line}"
+            );
+        }
+    }
+
+    /// INPUT-48. Rejects: every line that begins with a slash being refused as a command, which
+    /// leaves a prompt that starts with an absolute path with no way to be rewritten.
+    #[test]
+    fn a_prompt_that_starts_with_a_path_is_rewritten_like_any_other() {
+        let line = "/Users/me/proj/src/parse.rs panics on empty input, fix it";
+        let mut session = Session::new("none");
+        type_line(&mut session, line);
+
+        assert_eq!(
+            handle_key(&mut session, ctrl('p')),
+            Action::Enhance(line.to_string(), line.to_string())
+        );
+    }
+
+    /// INPUT-48. Rejects: a request that is paid for and cannot be used, since a rewrite keeps what
+    /// the line says and one past the limit is not offered.
+    #[test]
+    fn a_line_too_long_to_be_rewritten_is_left_as_written_and_says_so() {
+        let limit = bravebot_agent::aside::ENHANCE_LIMIT;
+        let mut session = Session::new("none");
+        session.paste(&"x".repeat(limit + 1));
+
+        assert_eq!(handle_key(&mut session, ctrl('p')), Action::Redraw);
+
+        assert_eq!(
+            last_note(&session),
+            t!(enhance_too_long, key = "ctrl-p", limit = limit)
+        );
+
+        let mut session = Session::new("none");
+        session.paste(&"x".repeat(limit));
+        assert!(matches!(
+            handle_key(&mut session, ctrl('p')),
+            Action::Enhance(..)
+        ));
+    }
+
+    /// INPUT-48. Rejects: a rewrite of words alone going out for a line that holds a picture, whose
+    /// marker the rewrite would drop or invent, and the attachment going with it.
+    #[test]
+    fn a_line_holding_a_picture_is_left_as_written_and_says_so() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "what is in ");
+        session.attach(crate::clipboard::Image {
+            media_type: "image/png",
+            bytes: b"pixels".to_vec(),
+        });
+        assert_eq!(session.input(), "what is in [Image #1]");
+
+        assert_eq!(handle_key(&mut session, ctrl('p')), Action::Redraw);
+
+        assert_eq!(session.input(), "what is in [Image #1]");
+        assert_eq!(
+            last_note(&session),
+            t!(enhance_not_with_a_picture, key = "ctrl-p")
+        );
+    }
+
+    /// INPUT-48. Rejects: the request carrying the marker a long paste is folded behind, which says
+    /// nothing about the words, and not the words themselves.
+    #[test]
+    fn a_folded_paste_goes_to_the_request_as_its_words() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "explain ");
+        session.paste_text("one\ntwo\nthree\nfour\nfive");
+        assert!(
+            !session.input().contains("three"),
+            "the paste was not folded: {:?}",
+            session.input()
+        );
+
+        let Action::Enhance(line, words) = handle_key(&mut session, ctrl('p')) else {
+            panic!("the chord did not ask for the line");
+        };
+
+        assert_eq!(words, "explain one\ntwo\nthree\nfour\nfive");
+        assert_eq!(line, session.input(), "the line was not the box's own");
+        assert!(!line.contains("three"), "the folded line was sent as words");
+    }
+
+    /// INPUT-32, INPUT-48. Rejects: a moved chord that does not enhance, and the old one still
+    /// answering for an action the person moved away from it.
+    #[test]
+    fn a_moved_enhance_chord_enhances_and_the_old_one_does_not() {
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("enhance".to_string(), "alt-e".to_string());
+        let mut session = Session::new("none");
+        session.adopt_keybindings(&moved);
+        type_line(&mut session, "fix the parser bug");
+
+        assert_eq!(handle_key(&mut session, ctrl('p')), Action::None);
+        assert_eq!(
+            session.input(),
+            "fix the parser bug",
+            "the old chord was typed"
+        );
+        assert_eq!(
+            handle_key(&mut session, alt('e')),
+            Action::Enhance(
+                "fix the parser bug".to_string(),
+                "fix the parser bug".to_string()
+            )
+        );
+    }
+
+    /// INPUT-48. Rejects: the chord reaching only the ordinary box, so that vi's NORMAL mode took it
+    /// for one of its own keys and a person editing the way vi does had no way to ask.
+    #[test]
+    fn the_enhance_chord_answers_in_every_mode_of_vi_s_style() {
+        let mut session = Session::new("none");
+        session.choose_editing(crate::vim::Editing::Vi);
+        type_line(&mut session, "fix the parser bug");
+
+        assert_eq!(
+            handle_key(&mut session, ctrl('p')),
+            Action::Enhance(
+                "fix the parser bug".to_string(),
+                "fix the parser bug".to_string()
+            ),
+            "INSERT mode"
+        );
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal));
+        assert_eq!(
+            handle_key(&mut session, ctrl('p')),
+            Action::Enhance(
+                "fix the parser bug".to_string(),
+                "fix the parser bug".to_string()
+            ),
+            "NORMAL mode"
+        );
+        assert_eq!(session.input(), "fix the parser bug");
+    }
+
+    /// INPUT-9, INPUT-48. Rejects: a request over the conversation a running turn is writing to,
+    /// and the chord falling through to the ladder, which types a letter for a chord that carries
+    /// Alt: the one a settings file moved it to would write an `e` into the line.
+    #[test]
+    fn the_enhance_chord_does_nothing_while_a_turn_runs() {
+        let mut session = a_turn_running_on("first");
+        for c in "second".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+
+        assert_eq!(
+            handle_key_while_working(&mut session, ctrl('p')),
+            Action::None,
+            "the chord asked for a rewrite mid-turn"
+        );
+        assert_eq!(session.input(), "second");
+        assert!(session.queued.is_empty());
+
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("enhance".to_string(), "alt-e".to_string());
+        session.adopt_keybindings(&moved);
+        assert_eq!(
+            handle_key_while_working(&mut session, alt('e')),
+            Action::None,
+            "the moved chord reached the ladder"
+        );
+        assert_eq!(session.input(), "second", "the moved chord was typed");
+    }
+
+    /// INPUT-48. Rejects: the rewrite being sent to the turn loop when it arrives, which would make
+    /// a turn of words the person had not read, and one that is not put in the box at all.
+    #[test]
+    fn an_enhancement_is_placed_in_the_box_and_nothing_is_sent() {
+        let mut session = enhanced_from(
+            "fix the bug",
+            "  Fix the parser bug in src/parse.rs and add a test.\n",
+        );
+
+        assert_eq!(
+            session.input(),
+            "Fix the parser bug in src/parse.rs and add a test."
+        );
+        assert_eq!(last_note(&session), t!(enhance_ready));
+        assert_eq!(session.status, Status::Idle);
+        assert!(!session.a_turn_is_running());
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| entry.speaker != crate::state::Speaker::User),
+            "the rewrite joined the transcript as a prompt"
+        );
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("Fix the parser bug in src/parse.rs and add a test.".to_string())
+        );
+    }
+
+    /// INPUT-48. Rejects: Escape clearing the line, which would lose the one the person wrote, and
+    /// putting it back without keeping the rewrite for Up.
+    #[test]
+    fn escape_puts_back_what_was_written_and_the_next_escape_clears_it() {
+        let rewrite = "Fix the parser bug in src/parse.rs and add a test.";
+        let mut session = enhanced_from("fix the bug", rewrite);
+
+        handle_key(&mut session, key(KeyCode::Esc));
+
+        assert_eq!(session.input(), "fix the bug");
+        assert!(!session.enhanced_pending());
+        handle_key(&mut session, key(KeyCode::Up));
+        assert_eq!(
+            session.input(),
+            rewrite,
+            "the rewrite was lost with the restore"
+        );
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(session.input().is_empty(), "a second Escape did not clear");
+    }
+
+    /// INPUT-48. Rejects: the note saying Escape puts the line back in vi's style, where Escape
+    /// leaves INSERT and nothing is put back, which sends a person to a key that does not work.
+    #[test]
+    fn the_note_names_the_key_that_puts_the_line_back_in_each_style() {
+        for (editing, said) in [
+            (crate::vim::Editing::Ordinary, t!(enhance_ready)),
+            (crate::vim::Editing::Vi, t!(enhance_ready_vi)),
+        ] {
+            let mut session = Session::new("none");
+            session.choose_editing(editing);
+            type_line(&mut session, "fix the bug");
+            session.begin_aside();
+
+            enhance_answered(&mut session, "fix the bug", an_answer_holding("Fix it."));
+
+            assert_eq!(last_note(&session), said, "{editing:?}");
+        }
+    }
+
+    /// INPUT-48. Rejects: Ctrl-C clearing the box where Escape would have put the original back, and
+    /// Escape in vi's style putting it back where it belongs to the instructions.
+    #[test]
+    fn ctrl_c_puts_back_what_was_written_in_either_style() {
+        let rewrite = "Fix the parser bug in src/parse.rs and add a test.";
+        for editing in crate::vim::Editing::ALL {
+            let mut session = Session::new("none");
+            session.choose_editing(editing);
+            type_line(&mut session, "fix the bug");
+            session.begin_aside();
+            enhance_answered(&mut session, "fix the bug", an_answer_holding(rewrite));
+            assert!(session.enhanced_pending(), "{editing:?}");
+
+            if editing == crate::vim::Editing::Vi {
+                handle_key(&mut session, key(KeyCode::Esc));
+                assert_eq!(session.input(), rewrite, "Escape took vi's instruction");
+                assert!(session.enhanced_pending());
+            }
+            assert_eq!(
+                handle_key(&mut session, ctrl('c')),
+                Action::Redraw,
+                "{editing:?}"
+            );
+
+            assert_eq!(session.input(), "fix the bug", "{editing:?}");
+            assert!(!session.enhanced_pending());
+            assert!(
+                !session.offered_to_leave,
+                "{editing:?}: the press offered to leave"
+            );
+        }
+    }
+
+    /// INPUT-48. Rejects: Enter on a rewrite that begins with a slash carrying it out as a command,
+    /// which would run what a model wrote under the person's name. Typed by hand, the same line is
+    /// the command, so the difference is the rewrite's own.
+    #[test]
+    fn enter_on_an_enhancement_sends_it_as_a_prompt_whatever_it_begins_with() {
+        let mut typed = Session::new("none");
+        type_line(&mut typed, "/rename parser work");
+        assert_eq!(
+            handle_key(&mut typed, key(KeyCode::Enter)),
+            Action::Rename("parser work".to_string()),
+            "the line is not a command typed by hand"
+        );
+
+        let mut session = enhanced_from("rename it", "/rename parser work");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/rename parser work".to_string())
+        );
+        assert!(session.input().is_empty());
+        assert!(!session.enhanced_pending());
+    }
+
+    /// A turn running with an enhancement still in the box, as a loop tick or a queued prompt leaves
+    /// it: the rewrite arrives at rest and the turn begins without anyone pressing.
+    fn a_turn_running_over_an_enhancement(rewrite: &str) -> Session {
+        let mut session = a_turn_running_on("first");
+        session.status = Status::Idle;
+        type_line(&mut session, "rename it");
+        enhance_answered(&mut session, "rename it", an_answer_holding(rewrite));
+        session.status = Status::Working;
+        assert!(session.enhanced_pending() && session.a_turn_is_running());
+        session
+    }
+
+    /// INPUT-48. Rejects: the working path reading the rewrite's first word as a command, which
+    /// queued `/rename` to be carried out when the turn ended.
+    #[test]
+    fn enter_on_an_enhancement_mid_turn_queues_it_as_a_prompt_and_never_as_a_command() {
+        let mut session = a_turn_running_over_an_enhancement("/rename parser work");
+
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+
+        assert_eq!(
+            session.commands_waiting().count(),
+            0,
+            "it waits as a command"
+        );
+        assert!(
+            session
+                .queued_ahead(session.queued.len())
+                .any(|(_, line)| line == "/rename parser work"),
+            "it was not queued as a prompt"
+        );
+    }
+
+    /// INPUT-48. Rejects: a line typed after the box was emptied having the older line put back
+    /// over it by Escape, which would replace what the person had just written with what they had
+    /// written before. Each of the four places a box is emptied and typed into again ends the
+    /// enhancement, since a flag that outlived it is one an edit cannot see.
+    #[test]
+    fn a_line_typed_after_the_enhancement_was_wiped_out_is_a_new_line() {
+        let rewrite = "Fix the parser bug in src/parse.rs and add a test.";
+
+        // At rest, by a key and by a paste.
+        let mut session = enhanced_from("fix the bug", rewrite);
+        for _ in 0..rewrite.len() {
+            handle_key(&mut session, key(KeyCode::Backspace));
+        }
+        type_line(&mut session, "something else");
+        assert!(
+            !session.enhanced_pending(),
+            "a typed line was still an enhancement"
+        );
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(session.input().is_empty(), "Escape put the older line back");
+
+        let mut session = enhanced_from("fix the bug", rewrite);
+        for _ in 0..rewrite.len() {
+            handle_key(&mut session, key(KeyCode::Backspace));
+        }
+        handle_paste(&mut session, "something else");
+        assert!(
+            !session.enhanced_pending(),
+            "a pasted line was still an enhancement"
+        );
+
+        // While a turn runs, by a key and by a paste.
+        let mut session = a_turn_running_over_an_enhancement(rewrite);
+        handle_key_while_working(&mut session, ctrl('u'));
+        assert!(session.input().is_empty());
+        handle_key_while_working(&mut session, key(KeyCode::Char('s')));
+        assert!(
+            !session.enhanced_pending(),
+            "a line typed mid-turn was an enhancement"
+        );
+
+        let mut session = a_turn_running_over_an_enhancement(rewrite);
+        handle_key_while_working(&mut session, ctrl('u'));
+        handle_paste_while_working(&mut session, "something else");
+        assert!(
+            !session.enhanced_pending(),
+            "a line pasted mid-turn was an enhancement"
+        );
+    }
+
+    /// INPUT-48. Rejects: enhancing an enhancement leaving Escape on the rewrite before it, so
+    /// that the line the person wrote is a press further away each time.
+    #[test]
+    fn enhancing_an_enhancement_still_puts_back_the_line_the_person_wrote() {
+        let mut session = enhanced_from("fix the bug", "Fix the parser bug in src/parse.rs.");
+        let first = session.input().to_string();
+
+        session.begin_aside();
+        enhance_answered(
+            &mut session,
+            &first,
+            an_answer_holding("Fix the parser bug in src/parse.rs and add a regression test."),
+        );
+        assert_eq!(
+            session.input(),
+            "Fix the parser bug in src/parse.rs and add a regression test."
+        );
+
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert_eq!(session.input(), "fix the bug");
+    }
+
+    /// INPUT-48. Rejects: a rewrite the planner could not have held being put in the box because a
+    /// person reading it is a gate, and its words reaching the transcript.
+    #[test]
+    fn an_enhancement_from_an_exchange_that_met_something_untrusted_is_not_offered() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "fix the bug");
+        session.begin_aside();
+
+        enhance_answered(
+            &mut session,
+            "fix the bug",
+            Ok(bravebot_agent::aside::Answered {
+                shown: "a rewrite an attacker may have shaped".to_string(),
+                kept: None,
+                usage: Default::default(),
+            }),
+        );
+
+        assert_eq!(
+            session.input(),
+            "fix the bug",
+            "the rewrite replaced the line"
+        );
+        assert!(!session.enhanced_pending());
+        assert_eq!(last_note(&session), t!(enhance_untrusted));
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| !entry.text.contains("an attacker may have shaped")),
+            "the withheld rewrite was written to the transcript"
+        );
+    }
+
+    /// INPUT-48. Rejects: an empty answer wiping the line, and a long one cut to something the model
+    /// did not write and offered anyway.
+    #[test]
+    fn an_enhancement_that_is_empty_or_too_long_is_not_offered_and_says_so() {
+        let too_long = "x".repeat(bravebot_agent::aside::ENHANCE_LIMIT + 1);
+        // Nothing but characters that draw as nothing, which are taken out before the answer is
+        // counted, so one made of them is empty and does not wipe the line.
+        for answer in ["  \n ", "\u{200B}\u{200B} \u{E0041}", too_long.as_str()] {
+            let mut session = Session::new("none");
+            type_line(&mut session, "fix the bug");
+            session.begin_aside();
+
+            enhance_answered(&mut session, "fix the bug", an_answer_holding(answer));
+
+            assert_eq!(session.input(), "fix the bug", "{answer:?} wiped the line");
+            assert!(!session.enhanced_pending());
+            assert_eq!(
+                last_note(&session),
+                t!(
+                    enhance_unusable,
+                    limit = bravebot_agent::aside::ENHANCE_LIMIT
+                )
+            );
+        }
+    }
+
+    /// INPUT-48. Rejects: the rewrite landing over words typed while it was being written, which is
+    /// the line the person is looking at.
+    #[test]
+    fn an_enhancement_is_not_written_over_a_line_typed_since_the_request_went() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "fix the bug");
+        session.begin_aside();
+        for c in " in the lexer".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+
+        enhance_answered(
+            &mut session,
+            "fix the bug",
+            an_answer_holding("Fix the parser bug in src/parse.rs."),
+        );
+
+        assert_eq!(session.input(), "fix the bug in the lexer");
+        assert!(!session.enhanced_pending());
+        assert_eq!(last_note(&session), t!(enhance_line_changed));
+    }
+
+    /// INPUT-48. Rejects: a stopped or failed request changing the line, and one that says nothing.
+    #[test]
+    fn a_stopped_or_failed_request_leaves_the_line_and_says_so() {
+        for (done, said) in [
+            (Err(Unanswered::Stopped), t!(enhance_stopped).to_string()),
+            (
+                Err(Unanswered::Failed("offline".to_string())),
+                t!(enhance_failed, problem = "offline").to_string(),
+            ),
+        ] {
+            let mut session = Session::new("none");
+            type_line(&mut session, "fix the bug");
+            session.begin_aside();
+
+            enhance_answered(&mut session, "fix the bug", done);
+
+            assert_eq!(session.input(), "fix the bug");
+            assert!(!session.enhanced_pending());
+            assert_eq!(last_note(&session), said);
+            assert_eq!(session.status, Status::Idle, "the session stayed busy");
+        }
+    }
+
+    /// INPUT-48. Rejects: the request's cost going unrecorded, which is a spend the person never
+    /// sees, whether or not the answer was used.
+    #[test]
+    fn an_enhancements_cost_is_charged_to_the_session() {
+        for kept in [Some("Fix it."), None] {
+            let mut session = Session::new("none");
+            type_line(&mut session, "fix the bug");
+            session.begin_aside();
+            let before = session.tokens;
+
+            enhance_answered(
+                &mut session,
+                "fix the bug",
+                Ok(bravebot_agent::aside::Answered {
+                    shown: "Fix it.".to_string(),
+                    kept: kept.map(str::to_string),
+                    usage: bravebot_aichat::protocol::Usage {
+                        prompt_tokens: 120,
+                        completion_tokens: 30,
+                        ..Default::default()
+                    },
+                }),
+            );
+
+            assert_eq!(session.tokens, before + 150, "{kept:?}");
+        }
+    }
+
+    /// INPUT-48. Rejects: characters a terminal draws as nothing reaching the line the person is
+    /// about to send as their own, and being removed without a word.
+    #[test]
+    fn characters_that_draw_as_nothing_are_taken_out_of_an_enhancement_and_counted() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "fix the bug");
+        session.begin_aside();
+
+        enhance_answered(
+            &mut session,
+            "fix the bug",
+            an_answer_holding("Fix\u{200B} the parser\u{E0041} bug."),
+        );
+
+        assert_eq!(session.input(), "Fix the parser bug.");
+        assert!(
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text == t!(enhance_invisible_removed, count = 2)),
+            "the removal was not counted"
+        );
     }
 }
 

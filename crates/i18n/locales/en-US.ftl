@@ -3627,6 +3627,21 @@ commit-message-failed = the commit message could not be drafted: { $problem }
 commit-message-stopped = the commit message was stopped
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
+enhance-ready = the enhanced line is in the box. Edit it, then Enter sends it, or Esc puts back what you wrote
+enhance-ready-vi = the enhanced line is in the box. Edit it, then Enter sends it, or Ctrl-C puts back what you wrote
+enhance-invisible-removed = { $count ->
+    [one] removed { $count } invisible character from the enhanced line
+   *[other] removed { $count } invisible characters from the enhanced line
+    }
+enhance-untrusted = the enhancement was not offered: this conversation has met something untrusted, so the rewrite would not be words the planner could have held
+enhance-unusable = the enhancement was not offered: it came back empty or longer than { $limit } characters
+enhance-line-changed = the enhancement was not offered: the line changed while it was being written
+enhance-failed = the line could not be enhanced: { $problem }
+enhance-stopped = the enhancement was stopped
+enhance-not-a-command = { $key } rewrites a prompt, and a line that begins with / is a command or a skill, so it was left as written
+enhance-not-with-a-picture = { $key } rewrites words, and this line holds a picture or a dropped file, so it was left as written
+enhance-too-long = { $key } rewrites a line of up to { $limit } characters, and this one is longer, so it was left as written
+
 # What the session says about a manifest run started from it. The plan, each step and the reply are
 # shown as they happen, so what is left to say is that a run is starting, where it was written down,
 # and what went wrong where something did. That a run is not a turn of the conversation is what the

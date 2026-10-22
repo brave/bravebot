@@ -169,6 +169,7 @@ impl Session {
     /// `u` after a send would put back the prompt that had just gone.
     pub(super) fn set_input(&mut self, line: impl Into<String>) {
         self.handoff = false;
+        self.enhanced = None;
         self.put_in_the_box(line);
         self.undo.clear();
         self.inserting = None;

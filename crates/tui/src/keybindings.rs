@@ -198,6 +198,7 @@ pub struct Keybindings {
     /// Absent where the session cannot be suspended, which is Windows (INPUT-47).
     #[cfg(unix)]
     pub suspend: KeyChord,
+    pub enhance: KeyChord,
 }
 
 impl Default for Keybindings {
@@ -216,13 +217,15 @@ impl Default for Keybindings {
             undo: Keybindings::UNDO,
             #[cfg(unix)]
             suspend: KeyChord::ctrl('z'),
+            enhance: KeyChord::ctrl('p'),
         }
     }
 }
 
-/// How many actions a settings file can move. Twelve where the session can be suspended, and eleven
-/// where it cannot, since an action that does nothing has no chord to be moved off of (INPUT-47).
-const MOVABLE: usize = if cfg!(unix) { 12 } else { 11 };
+/// How many actions a settings file can move. Thirteen where the session can be suspended, and
+/// twelve where it cannot, since an action that does nothing has no chord to be moved off of
+/// (INPUT-47).
+const MOVABLE: usize = if cfg!(unix) { 13 } else { 12 };
 
 /// The spellings a terminal reports for the byte Ctrl-_ sends, which is 0x1f.
 ///
@@ -257,6 +260,7 @@ impl Keybindings {
         [
             ("background", &mut self.background),
             ("editor", &mut self.editor),
+            ("enhance", &mut self.enhance),
             ("history", &mut self.history),
             ("panel", &mut self.panel),
             ("paste", &mut self.paste),
@@ -363,12 +367,18 @@ impl Keybindings {
         self.suspend.matches(key)
     }
 
+    /// Whether this press asks for the line in the box to be rewritten to be more specific (INPUT-48).
+    pub fn is_enhance(&self, key: &KeyEvent) -> bool {
+        self.enhance.matches(key)
+    }
+
     /// Whether `chord` is what some other action currently answers to, whether that is still its
     /// default or a settings file moved it there.
     fn chord_taken_by_another_action(&self, chord: KeyChord) -> bool {
         [
             self.background,
             self.editor,
+            self.enhance,
             self.history,
             self.panel,
             self.paste,
@@ -452,6 +462,10 @@ impl Keybindings {
         self.suspend.display()
     }
 
+    pub fn enhance_name(&self) -> String {
+        self.enhance.display()
+    }
+
     /// Whether any of the configurable actions answers this key event.
     pub fn claims(&self, key: &KeyEvent) -> bool {
         let claimed = self.is_background(key)
@@ -464,7 +478,8 @@ impl Keybindings {
             || self.is_paste(key)
             || self.is_panel(key)
             || self.is_scope(key)
-            || self.is_undo(key);
+            || self.is_undo(key)
+            || self.is_enhance(key);
         #[cfg(unix)]
         let claimed = claimed || self.is_suspend(key);
         claimed
@@ -878,5 +893,48 @@ mod tests {
         let mut map = BTreeMap::new();
         map.insert("trail".to_string(), "ctrl-z".to_string());
         assert_eq!(Keybindings::from_map(&map).trail, KeyChord::ctrl('z'));
+    }
+
+    /// The enhance chord is Ctrl-P, which a person whose terminal already uses it can move, with the
+    /// old chord going dead. Another action asking for it, or it asking for another's, leaves both
+    /// on their defaults (INPUT-32).
+    #[test]
+    fn the_enhance_chord_is_ctrl_p_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.enhance, KeyChord::ctrl('p'));
+        assert_eq!(defaults.enhance_name(), "ctrl-p");
+        let pressed = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert!(defaults.is_enhance(&pressed) && defaults.claims(&pressed));
+
+        let mut map = BTreeMap::new();
+        map.insert("enhance".to_string(), "alt-e".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.enhance_name(), "alt-e");
+        let moved = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT);
+        assert!(bindings.is_enhance(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_enhance(&pressed) && !bindings.claims(&pressed));
+
+        let mut map = BTreeMap::new();
+        map.insert("enhance".to_string(), "ctrl-r".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        let mut map = BTreeMap::new();
+        map.insert("history".to_string(), "ctrl-p".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+    }
+
+    /// A chord moved onto one of the alternate spellings of Ctrl-_ is the moved action's, and that
+    /// holds for enhance as for every other action `chord_taken_by_another_action` reads.
+    #[test]
+    fn an_alternate_spelling_given_to_enhance_no_longer_answers_undo() {
+        let mut map = BTreeMap::new();
+        map.insert("enhance".to_string(), "ctrl-/".to_string());
+        let bindings = Keybindings::from_map(&map);
+        let pressed = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
+
+        assert!(bindings.is_enhance(&pressed));
+        assert!(
+            !bindings.is_undo(&pressed),
+            "undo answered a chord moved to enhance"
+        );
     }
 }

@@ -6706,6 +6706,26 @@ mod tests {
         );
     }
 
+    /// INPUT-48: the list names the chord that rewrites the line, and the one a settings file moved
+    /// it to, so the only place that says what the key does cannot go on naming a key that is dead.
+    #[test]
+    fn the_shortcuts_name_the_enhance_chord_in_force() {
+        let named = |bindings: &Keybindings| {
+            shortcuts(crate::vim::Editing::Ordinary, bindings)
+                .into_iter()
+                .find(|(_, meaning)| meaning.contains("more specific"))
+                .map(|(key, _)| key)
+        };
+        assert_eq!(named(&Keybindings::default()).as_deref(), Some("ctrl-p"));
+
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("enhance".to_string(), "alt-e".to_string());
+        assert_eq!(
+            named(&Keybindings::from_map(&moved)).as_deref(),
+            Some("alt-e")
+        );
+    }
+
     /// The list folds into columns, so it does not push the transcript off a short terminal the way
     /// one row per binding would.
     #[test]

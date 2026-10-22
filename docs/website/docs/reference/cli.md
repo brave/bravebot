@@ -1184,6 +1184,7 @@ one shell name and exits with status 2 for anything else.
 | Ctrl-G | Compose in `$VISUAL` or `$EDITOR` |
 | Ctrl-S | Stash the line, or bring back the stashed one |
 | Ctrl-V | Paste, including screenshots and copied files |
+| Ctrl-P | Rewrite the typed line to be more specific, and leave the rewrite in the box |
 | Shift-Tab | Choose how much the session asks before it acts |
 | Ctrl-T | Toggle the audit trail |
 | Ctrl-O | Open the scroller over the transcript |
