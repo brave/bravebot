@@ -4,13 +4,16 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  storybook: ^8.6.19
+
 importers:
 
   .:
     dependencies:
       '@brave/leo':
         specifier: github:brave/leo#3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d
-        version: https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(react@19.2.8)(storybook@8.6.18(supports-color@7.2.0))(typescript@5.9.3)
+        version: https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(react@19.2.8)(storybook@8.6.19(supports-color@7.2.0))(typescript@5.9.3)
       highlight.js:
         specifier: ^11.11.2
         version: 11.11.2
@@ -796,8 +799,8 @@ packages:
     resolution: {integrity: sha512-t09vSN3MdfsyCHoFcTRCH/iUtG7OJ0CsjzB8cjAmKc/va/kIgeDI/TxsigdncE/4be734m0cvIYwNaV4i2XqAw==}
     engines: {node: '>=10'}
 
-  '@storybook/core@8.6.18':
-    resolution: {integrity: sha512-dRBP2TnX6fGdS0T2mXBHjkS/3Nlu1ra1huovZVFuM67CYMzrhM/3hX/zru1vWSC5rqY93ZaAhjMciPW4pK5mMQ==}
+  '@storybook/core@8.6.19':
+    resolution: {integrity: sha512-o9TZn0YxSxjBOxkTlJWq9jFTZn53Wr83HNvX0k8YYxxA5evwt7kWubKs/RMTEIyXbsBKW7XUw7Cq9fLmhgJ3Bg==}
     peerDependencies:
       prettier: ^2 || ^3
     peerDependenciesMeta:
@@ -810,17 +813,17 @@ packages:
   '@storybook/instrumenter@8.6.15':
     resolution: {integrity: sha512-TvHR/+yyIAOp/1bLulFai2kkhIBtAlBw7J6Jd9DKyInoGhTWNE1G1Y61jD5GWXX29AlwaHfzGUaX5NL1K+FJpg==}
     peerDependencies:
-      storybook: ^8.6.15
+      storybook: ^8.6.19
 
   '@storybook/test@8.6.15':
     resolution: {integrity: sha512-EwquDRUDVvWcZds3T2abmB5wSN/Vattal4YtZ6fpBlIUqONV4o/cOBX39cFfQSUCBrIXIjQ6RmapQCHK/PvBYw==}
     peerDependencies:
-      storybook: ^8.6.15
+      storybook: ^8.6.19
 
-  '@storybook/theming@8.6.18':
-    resolution: {integrity: sha512-n6OEjEtHupa2PdTwWzRepr7cO8NkDd4rgF6BKLitRbujOspLxzMBEqdphs+QLcuiCIgf33SqmEA64QWnbSMhPw==}
+  '@storybook/theming@8.6.19':
+    resolution: {integrity: sha512-IRbIk5klNSnSqBye/0FgkkyyIbJjzW+p1qaKGOYI+yKRktLCInypl9bh5YFkaPpr0m4lk7wY/GzS0uXPL1gS3g==}
     peerDependencies:
-      storybook: ^8.2.0 || ^8.3.0-0 || ^8.4.0-0 || ^8.5.0-0 || ^8.6.0-0
+      storybook: ^8.6.19
 
   '@sveltejs/acorn-typescript@1.0.13':
     resolution: {integrity: sha512-wgKggnhZVL9Bfx1OaKKTrYY9BFRk6C8UAkQNUcIv1+llzYrIqy+RZm5HPKzn0NpEBvTVhTqB4kQyllZywsRBRQ==}
@@ -2529,8 +2532,8 @@ packages:
     resolution: {integrity: sha512-jH9EhtKIjuXZ2cWxmXS8ZP80XyC3iasQxMDV8jzhNJpfDb7VbQLVW4Wvsxz9QZvzV+G4YoSfBUVKDOyxLzi/sg==}
     engines: {node: '>= 6'}
 
-  storybook@8.6.18:
-    resolution: {integrity: sha512-p8seiSI6FiVY6P3V0pG+5v7c8pDMehMAFRWEhG5XqIBSQszzOjDnW2rNvm3odoLKfo3V3P6Cs6Hv9ILzymULyQ==}
+  storybook@8.6.19:
+    resolution: {integrity: sha512-m1kbDTwaF8mwx0VdarVCF9nAedbxsAylD5nmohfe0cWRLn2UZGOtk/JuayhNeSQAvOgVa8rzoN9UvbAt0jnuIg==}
     hasBin: true
     peerDependencies:
       prettier: ^2 || ^3
@@ -3009,9 +3012,9 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@brave/leo@https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(react@19.2.8)(storybook@8.6.18(supports-color@7.2.0))(typescript@5.9.3)':
+  '@brave/leo@https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(react@19.2.8)(storybook@8.6.19(supports-color@7.2.0))(typescript@5.9.3)':
     dependencies:
-      '@storybook/test': 8.6.15(storybook@8.6.18(supports-color@7.2.0))
+      '@storybook/test': 8.6.15(storybook@8.6.19(supports-color@7.2.0))
       svelte: 5.55.7
       svelte-preprocess: 6.0.3(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(svelte@5.55.7)(typescript@5.9.3)
       tailwindcss: 3.4.19
@@ -3499,9 +3502,9 @@ snapshots:
 
   '@sindresorhus/is@4.6.0': {}
 
-  '@storybook/core@8.6.18(storybook@8.6.18(supports-color@7.2.0))(supports-color@7.2.0)':
+  '@storybook/core@8.6.19(storybook@8.6.19(supports-color@7.2.0))(supports-color@7.2.0)':
     dependencies:
-      '@storybook/theming': 8.6.18(storybook@8.6.18(supports-color@7.2.0))
+      '@storybook/theming': 8.6.19(storybook@8.6.19(supports-color@7.2.0))
       better-opn: 3.0.2
       browser-assert: 1.2.1
       esbuild: 0.25.12
@@ -3520,26 +3523,26 @@ snapshots:
 
   '@storybook/global@5.0.0': {}
 
-  '@storybook/instrumenter@8.6.15(storybook@8.6.18(supports-color@7.2.0))':
+  '@storybook/instrumenter@8.6.15(storybook@8.6.19(supports-color@7.2.0))':
     dependencies:
       '@storybook/global': 5.0.0
       '@vitest/utils': 2.1.9
-      storybook: 8.6.18(supports-color@7.2.0)
+      storybook: 8.6.19(supports-color@7.2.0)
 
-  '@storybook/test@8.6.15(storybook@8.6.18(supports-color@7.2.0))':
+  '@storybook/test@8.6.15(storybook@8.6.19(supports-color@7.2.0))':
     dependencies:
       '@storybook/global': 5.0.0
-      '@storybook/instrumenter': 8.6.15(storybook@8.6.18(supports-color@7.2.0))
+      '@storybook/instrumenter': 8.6.15(storybook@8.6.19(supports-color@7.2.0))
       '@testing-library/dom': 10.4.0
       '@testing-library/jest-dom': 6.5.0
       '@testing-library/user-event': 14.5.2(@testing-library/dom@10.4.0)
       '@vitest/expect': 2.0.5
       '@vitest/spy': 2.0.5
-      storybook: 8.6.18(supports-color@7.2.0)
+      storybook: 8.6.19(supports-color@7.2.0)
 
-  '@storybook/theming@8.6.18(storybook@8.6.18(supports-color@7.2.0))':
+  '@storybook/theming@8.6.19(storybook@8.6.19(supports-color@7.2.0))':
     dependencies:
-      storybook: 8.6.18(supports-color@7.2.0)
+      storybook: 8.6.19(supports-color@7.2.0)
 
   '@sveltejs/acorn-typescript@1.0.13(acorn@8.18.0)':
     dependencies:
@@ -5639,9 +5642,9 @@ snapshots:
 
   stat-mode@1.0.0: {}
 
-  storybook@8.6.18(supports-color@7.2.0):
+  storybook@8.6.19(supports-color@7.2.0):
     dependencies:
-      '@storybook/core': 8.6.18(storybook@8.6.18(supports-color@7.2.0))(supports-color@7.2.0)
+      '@storybook/core': 8.6.19(storybook@8.6.19(supports-color@7.2.0))(supports-color@7.2.0)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
