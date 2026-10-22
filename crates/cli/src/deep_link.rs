@@ -137,8 +137,8 @@ pub(crate) struct Placement {
 /// is the answer a session there would have kept ([`bravebot_agent::trusted::honoured`]) and not
 /// something the link can supply. Otherwise the person's home directory, with a note, since a link
 /// that named a place nobody trusted would otherwise open a session in the one directory the page
-/// chose. A link naming no directory starts where the handler was started, which for a desktop
-/// launcher is the home directory and for a person at a shell is where they are.
+/// chose. A link naming no directory starts in the home directory and says nothing, since a
+/// handler run from a shell would otherwise load the settings and instructions of wherever it was.
 pub(crate) fn place(
     asked: Option<&Path>,
     home: Option<&Path>,
@@ -146,7 +146,7 @@ pub(crate) fn place(
 ) -> Placement {
     let Some(asked) = asked else {
         return Placement {
-            start_in: None,
+            start_in: home.map(Path::to_path_buf),
             note: None,
         };
     };
@@ -267,10 +267,10 @@ mod tests {
         assert_eq!(
             place(None, Some(home), |_| false),
             Placement {
-                start_in: None,
+                start_in: Some(home.to_path_buf()),
                 note: None
             },
-            "a link naming no directory moved the session"
+            "a link naming no directory did not start in home"
         );
 
         let unlisted = place(Some(&here), Some(home), |_| false);

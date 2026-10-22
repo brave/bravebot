@@ -19123,6 +19123,24 @@ fn a_link_that_asks_for_more_or_is_switched_off_starts_nothing() {
             "--handle-uri",
             "bravebot://open?prompt=hi",
         ][..],
+        &[
+            "--agent",
+            "reviewer",
+            "--handle-uri",
+            "bravebot://open?prompt=hi",
+        ][..],
+        &[
+            "--system-prompt",
+            "x",
+            "--handle-uri",
+            "bravebot://open?prompt=hi",
+        ][..],
+        &[
+            "--append-system-prompt",
+            "x",
+            "--handle-uri",
+            "bravebot://open?prompt=hi",
+        ][..],
     ] {
         let output = bravebot(&scratch.path, AT_A_GATEWAY, line);
         let (_, stderr) = said(&output);
