@@ -164,6 +164,7 @@ const READ_KEYS: &[&str] = &[
     "attribution",
     "awaySummaryEnabled",
     "awaySummaryIdleSeconds",
+    "deepLinks",
     "deferMcpToolsAbove",
     "download",
     "editorMode",
@@ -641,6 +642,9 @@ pub struct Settings {
     /// What `tui.mouse` said, if it said a boolean. `Some(false)` is the interface leaving the
     /// mouse to the terminal.
     tui_mouse: Option<bool>,
+    /// What `deepLinks` said, if it said a boolean. `Some(false)` is a `bravebot://` link being
+    /// refused by the handler (LINK-6).
+    deep_links: Option<bool>,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -1570,6 +1574,7 @@ impl Settings {
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
             tui_mouse: tui_mouse(root),
+            deep_links: root.get("deepLinks").and_then(serde_json::Value::as_bool),
             // The word one root states, there being no file to name. [`Settings::layered`]
             // overwrites it with what the layers come to.
             run_network: match network_word(root) {
@@ -2226,6 +2231,12 @@ impl Settings {
         self.tui_mouse
     }
 
+    /// Whether `deepLinks` said anything: `Some(false)` is a person who does not want a link to
+    /// open a session (LINK-6), and absent is on.
+    pub fn deep_links(&self) -> Option<bool> {
+        self.deep_links
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -2269,6 +2280,7 @@ impl Settings {
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
             && self.tui_mouse.is_none()
+            && self.deep_links.is_none()
             && self.run_network.is_none()
             && self.run_network_ignored.is_empty()
             && self.run_network_unreadable.is_empty()
@@ -2583,6 +2595,7 @@ impl Settings {
             .chain(self.sandbox_hosts.keys())
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.tui_mouse.is_some().then_some("tui.mouse"))
+            .chain(self.deep_links.is_some().then_some("deepLinks"))
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -4686,6 +4699,32 @@ mod tests {
             0,
             "the block was reported as a key nothing reads"
         );
+    }
+
+    /// LINK-6: only a real `false` stops a link opening a session, so a quoted `"false"` leaves the
+    /// handler registered and working.
+    #[test]
+    fn only_a_boolean_turns_deep_links_off() {
+        let off = Settings::parse(r#"{"deepLinks": false}"#);
+        assert_eq!(off.deep_links(), Some(false));
+        assert_eq!(off.names().collect::<Vec<_>>(), ["deepLinks"]);
+        assert_eq!(
+            off.unread_keys().count(),
+            0,
+            "the key was reported as unread"
+        );
+        for text in [
+            r#"{"deepLinks": "false"}"#,
+            r#"{"deepLinks": 0}"#,
+            r#"{"deepLinks": null}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).deep_links(),
+                None,
+                "{text:?} turned links off"
+            );
+        }
     }
 
     /// MOUSE-4: only a real `false` turns mouse capture off, so a quoted `"false"` or a misplaced key

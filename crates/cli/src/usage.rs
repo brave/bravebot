@@ -20,6 +20,7 @@ pub(crate) fn print_help() {
     for (form, description) in [
         ("bravebot", t!(cli_usage_interactive)),
         ("bravebot -i \"<prompt>\"", t!(cli_usage_interactive_prompt)),
+        ("bravebot --handle-uri <link>", t!(cli_usage_handle_uri)),
         ("bravebot --plain", t!(cli_usage_plain)),
         ("bravebot \"<task>\" [--file <path>]...", t!(cli_usage_task)),
         ("cat file | bravebot -p \"<task>\"", t!(cli_usage_piped)),

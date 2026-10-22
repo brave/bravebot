@@ -53,6 +53,10 @@ const THINKING_KEPT: usize = 4096;
 /// past what a prompt is meant to look like.
 const FOLD_AT_NEWLINES: usize = 3;
 
+/// Past this many characters the banner over a link's text says how many and asks for a scroll and a
+/// review, since that is more than the box shows (LINK-4).
+pub(crate) const LONG_LINK_PROMPT: usize = 1000;
+
 /// How many changes back `u` reaches, which is vim's `undolevels` as it ships.
 ///
 /// Each step is a copy of the line as it stood, so this is what bounds what undo holds: a thousand
@@ -623,6 +627,9 @@ pub struct Session {
     /// so a line typed after the enhancement was wiped out never has an older one put back over it.
     /// The line as the box held it, so a paste folded behind a marker comes back behind it.
     enhanced: Option<String>,
+    /// How many characters the text a link put in the box was, while the box still holds it
+    /// (LINK-4).
+    link_prompt: Option<usize>,
     /// The prompt a new session is to begin with, once the session [`Session::hand_over`] named has
     /// been set up, and the next pass of the loop sends it.
     handed_over: Option<String>,
@@ -1417,6 +1424,7 @@ impl Session {
             shell: false,
             handoff: false,
             enhanced: None,
+            link_prompt: None,
             handed_over: None,
             shell_private: false,
             shortcuts: false,
@@ -3183,7 +3191,35 @@ impl Session {
     pub fn drop_a_wiped_handoff(&mut self) {
         if self.input.trim().is_empty() {
             self.handoff = false;
+            self.link_prompt = None;
         }
+    }
+
+    /// Put the words a `bravebot://open` link carried in the box, as a paste puts them, and keep that
+    /// they came from a link (LINK-4).
+    ///
+    /// What a terminal draws as nothing comes out and is counted, as from a paste. Unlike a paste a long
+    /// one is not folded. Nothing here sends. The count is of the text as it was after that, which is
+    /// what the person is asked to read.
+    pub fn prefill_from_link(&mut self, text: &str) {
+        let (cleaned, removed) = crate::invisible::without_invisible(&normalised(text));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
+        if cleaned.trim().is_empty() {
+            return;
+        }
+        // Written whole rather than folded behind a marker, which `paste_text` does for a long
+        // paste: the point of the banner is that the person reads what is in the box, and a marker
+        // would hide the words a page chose behind a label that Enter then expands.
+        self.paste(&cleaned);
+        self.link_prompt = Some(cleaned.chars().count());
+    }
+
+    /// The length of the text a link put in the box, while the box holds anything: the banner under
+    /// the line is drawn for as long as this answers (LINK-4).
+    pub fn link_prompt(&self) -> Option<usize> {
+        self.link_prompt.filter(|_| !self.input.trim().is_empty())
     }
 
     /// Take the brief as the person left it, to start a new session from.

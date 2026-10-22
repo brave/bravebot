@@ -1449,6 +1449,9 @@ pub enum Start {
     /// answered, as the person's own line, under the model and level the command line named
     /// (CLI-31).
     Sending(String, AskedFor),
+    /// A new session with this text put in the box and not sent, and the sentence that says where
+    /// it started where that is not where a link asked (LINK-4).
+    Prefilling(String, Option<String>),
     /// Ask which of this directory's sessions to pick up, if there are any.
     Choose,
     /// The same, opened for the sessions linked to one pull request, given by number or address.
@@ -2397,13 +2400,21 @@ fn begin_session(
         Start::Sending(prompt, _) => Some(prompt.clone()),
         _ => None,
     };
+    let prefill = match &start {
+        Start::Prefilling(text, note) => Some((text.clone(), note.clone())),
+        _ => None,
+    };
 
     // Outlives every turn, which is the point: a turn begins with the exchange so far rather
     // than with nothing, so the user can say "try that again" and be understood. A resumed
     // session begins with an exchange that outlived the process it happened in.
     let (conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
-        Start::Fresh | Start::Sending(..) | Start::Choose | Start::ChooseFromPr(_) => (
+        Start::Fresh
+        | Start::Sending(..)
+        | Start::Prefilling(..)
+        | Start::Choose
+        | Start::ChooseFromPr(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -2557,6 +2568,15 @@ fn begin_session(
     // checks it.
     if let Some(prompt) = first_turn {
         session.hand_over_from_the_command_line(&prompt);
+    }
+
+    // Put in the box after every question is answered, and never handed over: Enter is the person's
+    // to press (LINK-4).
+    if let Some((text, note)) = prefill {
+        if let Some(note) = note {
+            session.note(note);
+        }
+        session.prefill_from_link(&text);
     }
 
     let run_settings = RunSettings::from_settings(&settings);
@@ -3957,9 +3977,11 @@ fn settle_under(
 fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
-        Start::Fresh | Start::Sending(..) | Start::Choose | Start::ChooseFromPr(_) => {
-            Beginning::New
-        }
+        Start::Fresh
+        | Start::Sending(..)
+        | Start::Prefilling(..)
+        | Start::Choose
+        | Start::ChooseFromPr(_) => Beginning::New,
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
@@ -17279,6 +17301,101 @@ mod tests {
             "the prompt is not in the transcript as the person's"
         );
         assert_eq!(queued_next(&mut session), None, "it was sent twice");
+    }
+
+    /// LINK-4: the words a link carries are in the box and nothing sends them. A start that handed
+    /// them over would send a prompt a page chose before anybody read it.
+    #[test]
+    fn the_words_a_link_carries_are_in_the_box_and_are_not_sent() {
+        let mut session = Session::new("none");
+        session.prefill_from_link("fix it\u{E0068}\r\nthen the suite");
+        assert_eq!(session.input(), "fix it\nthen the suite");
+        assert_eq!(
+            last_note(&session),
+            t!(paste_invisible_removed, count = 1),
+            "the removal was not counted"
+        );
+        assert_eq!(
+            queued_next(&mut session),
+            None,
+            "the link's words were sent unasked"
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| entry.speaker != crate::state::Speaker::User),
+            "the words reached the transcript as the person's, unsent"
+        );
+        assert_eq!(
+            session.link_prompt(),
+            Some("fix it\nthen the suite".chars().count())
+        );
+    }
+
+    /// LINK-4: the banner stays until the words are sent or the box is cleared, and does not come
+    /// back over something typed afterwards.
+    #[test]
+    fn the_banner_goes_when_the_words_are_sent_or_cleared_and_stays_gone() {
+        let mut session = Session::new("none");
+        session.prefill_from_link("fix it");
+        handle_key(&mut session, key(KeyCode::Char('!')));
+        assert!(
+            session.link_prompt().is_some(),
+            "an edit took the banner off the rest"
+        );
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("fix it!".to_string())
+        );
+        assert_eq!(session.link_prompt(), None, "the banner outlived the send");
+
+        session.prefill_from_link("again");
+        for _ in 0.."again".len() {
+            handle_key(&mut session, key(KeyCode::Backspace));
+        }
+        assert_eq!(session.link_prompt(), None);
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        assert_eq!(
+            session.link_prompt(),
+            None,
+            "typing after a clear brought the banner back"
+        );
+    }
+
+    /// LINK-4: a prompt of many lines is in the box as written, so what Enter sends is what was
+    /// there to read. Folded behind a marker it would be a label over words nobody saw, and a prompt
+    /// of only invisible characters says what was removed even though nothing is left.
+    #[test]
+    fn a_long_link_prompt_is_written_whole_and_not_folded() {
+        let mut session = Session::new("none");
+        let text = "one\ntwo\nthree\nfour\nfive";
+        session.prefill_from_link(text);
+        assert_eq!(
+            session.input(),
+            text,
+            "the words were folded behind a marker"
+        );
+        assert_eq!(session.link_prompt(), Some(text.chars().count()));
+
+        let mut hidden = Session::new("none");
+        hidden.prefill_from_link("\u{E0068}\u{E0069}");
+        assert_eq!(hidden.input(), "");
+        assert_eq!(
+            last_note(&hidden),
+            t!(paste_invisible_removed, count = 2),
+            "a prompt that was only invisible characters went unsaid"
+        );
+    }
+
+    /// LINK-4: a link with no words puts nothing in the box and no banner over it.
+    #[test]
+    fn a_link_with_no_words_leaves_the_box_empty() {
+        let mut session = Session::new("none");
+        session.prefill_from_link(" \n ");
+        assert_eq!(session.input(), "");
+        assert_eq!(session.link_prompt(), None);
     }
 
     /// Each way `/handoff` is refused says so and asks for nothing. Dropping the goal check, the

@@ -432,6 +432,18 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
         return;
     }
+    // Words an outside link put in the box stay named as such until they are sent or cleared, and
+    // the line says how long they are, because a long one runs past what the box shows (LINK-4).
+    if let Some(characters) = session.link_prompt() {
+        let said = if characters > crate::state::LONG_LINK_PROMPT {
+            t!(deep_link_banner_long, count = characters)
+        } else {
+            t!(deep_link_banner).to_string()
+        };
+        let line = crate::status::cut(&said, usize::from(area.width));
+        frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
+        return;
+    }
     let facts = hint_facts(session);
 
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a

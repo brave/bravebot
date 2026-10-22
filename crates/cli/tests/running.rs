@@ -19082,3 +19082,80 @@ fn stats_runs_under_incognito_and_counts_the_records_written_before() {
     assert_eq!(stats_total(&stdout), [1, 2, 20, 0, 0, 20], "{stdout}");
     assert_eq!(spending.records(), before);
 }
+
+/// LINK-1, LINK-2, LINK-6: a link that is not read, or asks for anything beyond a directory and some
+/// words, or arrives with the setting off, starts nothing, and what is said does not repeat the
+/// link. A property of the process: the decision is made before a terminal is looked for, so the
+/// test needs none.
+#[test]
+fn a_link_that_asks_for_more_or_is_switched_off_starts_nothing() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("done"));
+    let scratch =
+        Scratch::new("cli-running-handle-uri-refused").with_settings(&settings_for(&gateway));
+
+    for (link, says) in [
+        ("https://example.com/?prompt=hi", "bravebot://open"),
+        ("bravebot://open?prompt=hi&mode=bypass", "dir and prompt"),
+        (
+            "bravebot://open?dangerously-skip-permissions=1",
+            "dir and prompt",
+        ),
+        ("bravebot://open?dir=relative&prompt=hi", "absolute"),
+        ("bravebot://open?prompt=%ZZ", "percent-encoded"),
+    ] {
+        let output = bravebot(&scratch.path, AT_A_GATEWAY, &["--handle-uri", link]);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{link}: {stderr}");
+        assert!(stderr.contains(says), "{link}: {stderr}");
+        assert!(stdout.is_empty(), "{link}: {stdout}");
+        assert!(
+            !stderr.contains("mode=bypass") && !stderr.contains("relative"),
+            "{link}: the refusal repeated the link's own text: {stderr}"
+        );
+    }
+
+    // Nothing but the link: no second link, and no flag that composes with other ways of starting.
+    for line in [
+        &["--handle-uri"][..],
+        &["--handle-uri", "bravebot://open", "bravebot://open"][..],
+        &[
+            "--dangerously-skip-permissions",
+            "--handle-uri",
+            "bravebot://open?prompt=hi",
+        ][..],
+    ] {
+        let output = bravebot(&scratch.path, AT_A_GATEWAY, line);
+        let (_, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{line:?}: {stderr}");
+        assert!(
+            stderr.contains("one bravebot://open link"),
+            "{line:?}: {stderr}"
+        );
+    }
+
+    // A good link with no terminal to open it on is refused for that, after the link was read.
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--handle-uri", "bravebot://open?prompt=hi"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("terminal"), "{stderr}");
+
+    let off = Scratch::new("cli-running-handle-uri-off")
+        .with_settings(&settings_for(&gateway).replacen('{', r#"{"deepLinks": false,"#, 1));
+    let output = bravebot(
+        &off.path,
+        AT_A_GATEWAY,
+        &["--handle-uri", "bravebot://open?prompt=hi"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("deepLinks"), "{stderr}");
+
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a refused link sent a turn"
+    );
+}

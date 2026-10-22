@@ -559,6 +559,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `notificationMethod`, `notificationCondition` | how and when the terminal is told a turn ended or a question is waiting ([below](#notificationmethod-and-notificationcondition)) |
 | `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
+| `deepLinks` | `false` makes `bravebot --handle-uri` refuse every `bravebot://open` link ([below](#deeplinks)) |
 | `tui.mouse` | `false` stops the interface capturing the mouse, so the terminal's own selection works ([below](#tuimouse)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
@@ -1091,6 +1092,18 @@ The terminal's title names the session, as `bravebot · dependency audit`
 terminal or multiplexer that manages titles itself. Only the boolean `false` turns it off: `"false"`
 in quotes, or any other value, leaves it on. An incognito session leaves the title alone whatever this
 says.
+
+### `deepLinks`
+
+```json
+{ "deepLinks": false }
+```
+
+`false` makes `bravebot --handle-uri`, which the operating system runs for a `bravebot://open` link,
+refuse every link with the configuration status before it reads one. Only the boolean `false` does
+this: `"false"` in quotes or any other value leaves links on. It does not remove the registration the
+installer made; set `BRAVEBOT_NO_DEEP_LINKS=1` when running `install.sh` to leave that out, or delete
+`bravebot-handler.desktop` from `~/.local/share/applications`.
 
 ### `tui.mouse`
 

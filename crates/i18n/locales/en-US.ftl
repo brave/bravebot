@@ -4223,3 +4223,25 @@ agent-plan-approval-accept-edits-detail = Leave plan mode and carry the plan out
 agent-plan-approval-ask = Yes, ask before each edit
 agent-plan-approval-ask-detail = Leave plan mode and carry the plan out, asking before every write and command.
 agent-plan-approval-keep-planning = No, keep planning
+
+# What the handler for a bravebot:// link is, in the usage table and the option list.
+cli-usage-handle-uri = Open a session from a bravebot://open link, its prompt put in the box and not sent
+# Said where `--handle-uri` is given anything but the one link, or a flag that would change how the
+# session runs. A link carries a directory and words, and nothing else.
+deep-link-takes-one-link = --handle-uri takes one bravebot://open link and nothing else
+# Said where the `deepLinks` setting is false.
+deep-link-switched-off = Links that open a session are switched off by the deepLinks setting
+# Said where a link is read in a program with no terminal to open the session on.
+deep-link-needs-a-terminal = A link opens a session in a terminal, and this program has none
+# The ways a link is refused. None of them quotes the link: its text is somebody else's.
+deep-link-not-a-link = That is not a bravebot://open link
+deep-link-too-long = That link is longer than the { $limit } bytes read
+deep-link-parameter = A link may carry dir and prompt, each once, and nothing else
+deep-link-encoding = That link's text is not valid percent-encoded UTF-8
+deep-link-directory = The link's dir is not an absolute path
+# The first line of a session a link started in the home directory because of where it pointed. The
+# path is the link's own and arrives escaped.
+deep-link-started-in-home = The link named { $dir }, which is not a directory you have trusted here, so this session started in your home directory
+# Under the box while the words an outside link put there are still in it.
+deep-link-banner = Prompt from an external link, not sent yet  ·  read it, then Enter sends it
+deep-link-banner-long = Prompt from an external link, { $count } characters, not sent  ·  scroll and review it all first
