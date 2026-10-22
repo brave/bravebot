@@ -16587,3 +16587,857 @@ fn a_goal_is_refused_where_a_background_session_starts() {
     );
     assert!(stdout.is_empty(), "{stdout}");
 }
+
+/// A run reading `--input-format lines`, which a test feeds a line at a time and reads back a line
+/// at a time: what is under test is what the run does while it is going, so a test that wrote the
+/// whole input before starting it would not be exercising a steer or a stop at all.
+struct LinesRun {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    stdout: mpsc::Receiver<String>,
+    stderr: Arc<std::sync::Mutex<String>>,
+}
+
+impl LinesRun {
+    fn start(scratch: &Scratch, flags: &[&str]) -> Self {
+        Self::start_in(scratch, &scratch.path, flags)
+    }
+
+    fn start_in(scratch: &Scratch, cwd: &Path, flags: &[&str]) -> Self {
+        let mut arguments = vec!["--json-stream", "--input-format", "lines"];
+        arguments.extend_from_slice(flags);
+        Self::spawn(scratch, cwd, &arguments)
+    }
+
+    /// Started with exactly `arguments`, so a test can leave `--json-stream` off.
+    fn spawn(scratch: &Scratch, cwd: &Path, arguments: &[&str]) -> Self {
+        let mut child = prepared(&scratch.path, Some(cwd), AT_A_GATEWAY, arguments)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the built binary runs");
+        let (sender, stdout) = mpsc::channel();
+        let out = child.stdout.take().expect("the run's stdout");
+        std::thread::spawn(move || {
+            for line in BufReader::new(out).lines().map_while(Result::ok) {
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        // Read as it arrives, so a run that says more than a pipe holds is not left waiting on a
+        // test that is waiting on it.
+        let stderr = Arc::new(std::sync::Mutex::new(String::new()));
+        let err = child.stderr.take().expect("the run's stderr");
+        let kept = Arc::clone(&stderr);
+        std::thread::spawn(move || {
+            for line in BufReader::new(err).lines().map_while(Result::ok) {
+                let mut kept = kept.lock().expect("stderr is kept");
+                kept.push_str(&line);
+                kept.push('\n');
+            }
+        });
+        Self {
+            stdin: child.stdin.take(),
+            child,
+            stdout,
+            stderr,
+        }
+    }
+
+    fn send(&mut self, line: &str) {
+        let input = self.stdin.as_mut().expect("the input is open");
+        writeln!(input, "{line}").expect("write a line");
+        input.flush().expect("flush the line");
+    }
+
+    fn close_input(&mut self) {
+        self.stdin = None;
+    }
+
+    fn next(&self) -> serde_json::Value {
+        let line = self
+            .stdout
+            .recv_timeout(Duration::from_secs(60))
+            .unwrap_or_else(|_| {
+                panic!(
+                    "the run said nothing for a minute: {}",
+                    self.stderr.lock().expect("stderr is kept")
+                )
+            });
+        serde_json::from_str(&line).unwrap_or_else(|_| panic!("not an object: {line}"))
+    }
+
+    /// Every line up to and including the first that `wanted` says is the one.
+    fn until(&self, wanted: impl Fn(&serde_json::Value) -> bool) -> Vec<serde_json::Value> {
+        let mut seen = Vec::new();
+        loop {
+            let line = self.next();
+            let done = wanted(&line);
+            seen.push(line);
+            if done {
+                return seen;
+            }
+        }
+    }
+
+    /// Say a line the run refuses, then wait to hear it refused. The run reads its lines in
+    /// order, so by then every line sent before this one has been taken, which is the one thing a
+    /// test cannot otherwise know about a line it has only written.
+    fn sync(&mut self) {
+        self.send("not a line of the protocol");
+        self.until(|line| line["event"] == "input_refused");
+    }
+
+    /// Close the input, read everything the run still says, and wait for it to end.
+    fn finish(mut self) -> (Vec<serde_json::Value>, Option<i32>, String) {
+        self.close_input();
+        let mut rest = Vec::new();
+        while let Ok(line) = self.stdout.recv_timeout(Duration::from_secs(120)) {
+            rest.push(
+                serde_json::from_str(&line).unwrap_or_else(|_| panic!("not an object: {line}")),
+            );
+        }
+        let status = self.child.wait().expect("the run ends").code();
+        let stderr = self.stderr.lock().expect("stderr is kept").clone();
+        (rest, status, stderr)
+    }
+}
+
+impl Drop for LinesRun {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+/// The objects among `lines` that close a turn: a result carries no `event` field (CLI-24).
+fn results(lines: &[serde_json::Value]) -> Vec<&serde_json::Value> {
+    lines
+        .iter()
+        .filter(|line| line.get("event").is_none())
+        .collect()
+}
+
+/// One reply the model gives, as a gateway frames it.
+enum Model {
+    Words(&'static str),
+    Calls(&'static str, String),
+}
+
+/// A gateway that answers its Nth request with the Nth of `script`, and the last again after that.
+/// With `held`, the first request is not answered until the test says so, after telling it the
+/// request is in flight.
+fn a_gateway_following(
+    script: Vec<Model>,
+    held: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+) -> Gateway {
+    let asked = AtomicUsize::new(0);
+    let held = held.map(|(arrived, release)| (arrived, std::sync::Mutex::new(release)));
+    a_gateway(r#"["tools"]"#, move |_| {
+        let at = asked.fetch_add(1, Ordering::SeqCst);
+        if at == 0
+            && let Some((arrived, release)) = &held
+        {
+            let _ = arrived.send(());
+            let _ = release
+                .lock()
+                .expect("release")
+                .recv_timeout(Duration::from_secs(60));
+        }
+        match &script[at.min(script.len() - 1)] {
+            Model::Words(words) => streamed(words),
+            Model::Calls(tool, arguments) => {
+                let frame = serde_json::json!({"model":"reasons-only","choices":[{
+                    "index":0,"delta":{"role":"assistant","tool_calls":[{
+                        "index":0,"id":"call-1","type":"function","function":{
+                            "name":tool,"arguments":arguments}}]},
+                    "finish_reason":"tool_calls"}]});
+                let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+                format!(
+                    "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            }
+        }
+    })
+}
+
+/// A gateway whose Nth reply says that it is the Nth, so a result can be told from the one before.
+fn a_gateway_numbering_its_replies() -> Gateway {
+    let asked = AtomicUsize::new(0);
+    a_gateway(r#"["tools"]"#, move |_| {
+        streamed(&format!(
+            "reply {}",
+            asked.fetch_add(1, Ordering::SeqCst) + 1
+        ))
+    })
+}
+
+fn bodies(gateway: &Gateway) -> Vec<String> {
+    gateway.asked.try_iter().collect()
+}
+
+fn prompt_line(words: &str) -> String {
+    serde_json::json!({"type": "prompt", "text": words}).to_string()
+}
+
+/// CLI-36: one process runs the turns it is sent, each over the conversation the last one left,
+/// and each ends with a result object of its own. A run that gave every line a conversation of its
+/// own would answer the second prompt as though nothing had come before it.
+#[test]
+fn a_run_reading_lines_runs_each_prompt_as_a_turn_over_one_conversation() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-turns").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines"]);
+    run.send(&prompt_line("FIRST-WORDS"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("SECOND-WORDS"));
+    let (rest, status, stderr) = run.finish();
+
+    let first = results(&first)[0].clone();
+    let second = rest.last().expect("a second result").clone();
+    assert_eq!(first["ok"], true, "{stderr}");
+    assert_eq!(first["reply"], "reply 1");
+    assert_eq!(second["reply"], "reply 2", "{rest:?}");
+    assert_eq!(
+        first["tokens"]["total"], second["tokens"]["total"],
+        "the second turn's tokens are the first's added to its own and not its own: {second}"
+    );
+    assert_eq!(
+        first["session"], second["session"],
+        "the second turn wrote another record instead of adding to the first's"
+    );
+    assert!(first["session"].is_string());
+    assert_eq!(status, Some(0), "{stderr}");
+
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 2);
+    assert!(sent[0].contains("FIRST-WORDS") && !sent[0].contains("SECOND-WORDS"));
+    assert!(
+        sent[1].contains("FIRST-WORDS") && sent[1].contains("SECOND-WORDS"),
+        "the second request did not carry the conversation: {}",
+        sent[1]
+    );
+}
+
+/// The words on the command line are the first turn and are the person's own, and a prompt line
+/// after them is a second turn over the same conversation.
+#[test]
+fn the_command_lines_own_prompt_is_the_first_turn() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-command-line").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines", "-p", "COMMAND-WORDS"]);
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("LINE-WORDS"));
+    let (rest, status, _) = run.finish();
+
+    assert_eq!(results(&first)[0]["reply"], "reply 1");
+    assert_eq!(rest.last().expect("a second result")["reply"], "reply 2");
+    assert_eq!(status, Some(0));
+    let sent = bodies(&gateway);
+    assert!(sent[0].contains("COMMAND-WORDS"));
+    assert!(sent[1].contains("COMMAND-WORDS") && sent[1].contains("LINE-WORDS"));
+}
+
+/// CLI-3 and CLI-36: a line on a pipe is the launching program's words, so the planner is given a
+/// reference to them and never the words, until a person typed the flag that says they are theirs.
+/// The same prompt is sent both ways and only the flag differs, so what the request holds is what
+/// the flag decided.
+#[test]
+fn lines_nobody_vouched_for_never_reach_the_planner_and_vouched_ones_do() {
+    let words = "WORDS-A-PROGRAM-SENT";
+    let carried = |flags: &[&str], name: &str| {
+        let gateway = a_gateway_numbering_its_replies();
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut run = LinesRun::start(&scratch, flags);
+        run.send(&prompt_line(words));
+        let (lines, status, stderr) = run.finish();
+        assert_eq!(status, Some(0), "{stderr}");
+        assert_eq!(results(&lines).len(), 1, "{lines:?}");
+        bodies(&gateway)
+    };
+
+    let unvouched = carried(&[], "cli-lines-unvouched");
+    assert_eq!(unvouched.len(), 1);
+    assert!(
+        !unvouched[0].contains(words),
+        "words from a pipe reached the planner: {}",
+        unvouched[0]
+    );
+    assert!(
+        unvouched[0].contains("Piped input could not be shown to you"),
+        "the planner was not told a reference stood in for them: {}",
+        unvouched[0]
+    );
+
+    let vouched = carried(&["--trust-input-lines"], "cli-lines-vouched");
+    assert!(vouched[0].contains(words), "{}", vouched[0]);
+    assert!(!vouched[0].contains("Piped input could not be shown to you"));
+}
+
+/// CLI-36: a steer reaches the turn that is running at its next round boundary, so the request that
+/// follows the round carries it and the one already on the wire does not.
+#[test]
+fn a_steer_on_a_vouched_channel_reaches_the_turn_that_is_running() {
+    let (arrived, in_flight) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let gateway = a_gateway_following(
+        vec![
+            Model::Calls("list_files", r#"{"directory":"."}"#.to_string()),
+            Model::Words("changed course"),
+        ],
+        Some((arrived, held)),
+    );
+    let scratch = Scratch::new("cli-lines-steer").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines"]);
+    run.send(&prompt_line("LOOK-AROUND"));
+    in_flight
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the first request is in flight");
+    run.send(r#"{"type":"steer","text":"STEER-WORDS"}"#);
+    run.sync();
+    release.send(()).expect("release the first reply");
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(
+        results(&lines).len(),
+        1,
+        "a steer started a turn of its own: {lines:?}"
+    );
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(!sent[0].contains("STEER-WORDS"));
+    assert!(
+        sent[1].contains("STEER-WORDS"),
+        "the steer did not reach the turn at its next round: {}",
+        sent[1]
+    );
+}
+
+/// CLI-36: where nobody vouched for the channel a steer waits for a turn of its own. Handed to the
+/// running turn it would be a reference the planner cannot read, and the words themselves never
+/// reach it either way.
+#[test]
+fn a_steer_on_a_channel_nobody_vouched_for_waits_for_a_turn_and_is_never_shown() {
+    let (arrived, in_flight) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let gateway = a_gateway_following(
+        vec![
+            Model::Calls("list_files", r#"{"directory":"."}"#.to_string()),
+            Model::Words("first turn done"),
+            Model::Words("second turn done"),
+        ],
+        Some((arrived, held)),
+    );
+    let scratch = Scratch::new("cli-lines-steer-unvouched").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["-p", "LOOK-AROUND"]);
+    in_flight
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the first request is in flight");
+    run.send(r#"{"type":"steer","text":"STEER-WORDS"}"#);
+    run.sync();
+    release.send(()).expect("release the first reply");
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(
+        results(&lines).len(),
+        2,
+        "the steer did not start a turn: {lines:?}"
+    );
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert!(
+        sent.iter().all(|body| !body.contains("STEER-WORDS")),
+        "words from a pipe reached the planner"
+    );
+}
+
+/// CLI-36: a stop ends the turn that is running and leaves the prompts behind it to run, as it
+/// does in the interface that draws. A stop that cleared the queue would lose the second prompt.
+#[test]
+fn a_stop_ends_the_running_turn_and_the_prompt_behind_it_still_runs() {
+    let (arrived, in_flight) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let gateway = a_gateway_following(
+        vec![
+            Model::Words("never wanted"),
+            Model::Words("second turn done"),
+        ],
+        Some((arrived, held)),
+    );
+    let scratch = Scratch::new("cli-lines-stop").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines"]);
+    run.send(&prompt_line("FIRST-WORDS"));
+    in_flight
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the first request is in flight");
+    run.send(&prompt_line("SECOND-WORDS"));
+    run.send(r#"{"type":"stop"}"#);
+    run.sync();
+    release.send(()).expect("release the first reply");
+    let (lines, status, stderr) = run.finish();
+
+    let results = results(&lines);
+    assert_eq!(results.len(), 2, "{lines:?}");
+    assert_eq!(
+        results[0]["ok"], false,
+        "the stopped turn reported success: {lines:?}"
+    );
+    assert_eq!(results[1]["ok"], true, "{lines:?}");
+    assert_eq!(results[1]["reply"], "second turn done");
+    assert_eq!(
+        status,
+        Some(0),
+        "the exit status is the last turn's: {stderr}"
+    );
+}
+
+/// CLI-36 and CLI-35: a stop sent to a turn that works towards a condition ends it in the round it
+/// reaches. The judge says `NOT MET` after the first round, the stop arrives while the work sent
+/// back is in flight, and no second check is made. A stop that only reached the first round would
+/// let that one finish, ask the judge again and send the work back once more.
+#[test]
+fn a_stop_ends_the_rounds_of_a_goal_run_reading_lines() {
+    let (arrived, in_flight) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let held = std::sync::Mutex::new(held);
+    let answers = AtomicUsize::new(0);
+    let gateway = a_gateway(r#"["tools"]"#, move |body| {
+        if body.contains(THE_JUDGES_WORDS) {
+            return framed(
+                serde_json::json!({"role": "assistant", "content": "NOT MET\nnot yet"}),
+                "stop",
+                (7, 3),
+            );
+        }
+        // The planner's second request is the work sent back, which is the one held.
+        if answers.fetch_add(1, Ordering::SeqCst) == 1 {
+            let _ = arrived.send(());
+            let _ = held
+                .lock()
+                .expect("release")
+                .recv_timeout(Duration::from_secs(60));
+        }
+        framed(
+            serde_json::json!({"role": "assistant", "content": "a round done"}),
+            "stop",
+            (10, 2),
+        )
+    });
+    let scratch = Scratch::new("cli-lines-goal-stop").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--goal", A_CONDITION]);
+    run.send(&prompt_line("get the build green"));
+    in_flight
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the work sent back is in flight");
+    run.send(r#"{"type":"stop"}"#);
+    run.sync();
+    release.send(()).expect("release the second round");
+    let (lines, _status, stderr) = run.finish();
+
+    let results = results(&lines);
+    assert_eq!(results.len(), 1, "{lines:?}\n{stderr}");
+    assert_eq!(
+        results[0]["ok"], false,
+        "the stopped turn reported success: {lines:?}"
+    );
+    let requests = bodies(&gateway);
+    assert_eq!(
+        checks_among(&requests),
+        1,
+        "the judge was asked again after the stop: {stderr}"
+    );
+}
+
+fn a_gateway_asking_which_cache() -> Gateway {
+    a_gateway_following(
+        vec![
+            Model::Calls(
+                "ask_user",
+                serde_json::json!({"questions": [{
+                    "header": "Cache",
+                    "question": "Which cache?",
+                    "options": [{"label": "HTTP"}, {"label": "Query"}]
+                }]})
+                .to_string(),
+            ),
+            Model::Words("carried on"),
+        ],
+        None,
+    )
+}
+
+/// CLI-36: a question the planner asks is put to the program on the stream with an id, and what
+/// the program picks reaches the planner as the choice at that position. An answer naming another
+/// id is refused and leaves the question waiting.
+#[test]
+fn a_question_is_put_to_the_program_and_its_pick_reaches_the_planner() {
+    let gateway = a_gateway_asking_which_cache();
+    let scratch = Scratch::new("cli-lines-answer").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["-p", "set up the cache"]);
+    let heard = run.until(|line| line["event"] == "question");
+    let question = heard.last().expect("a question");
+    assert_eq!(question["id"], 1);
+    assert_eq!(question["questions"][0]["question"], "Which cache?");
+    assert_eq!(question["questions"][0]["choices"][1]["label"], "Query");
+
+    run.send(r#"{"type":"answer","id":2,"choices":[[0]]}"#);
+    let refused = run.until(|line| line["event"] == "input_refused");
+    assert_eq!(refused.last().unwrap()["reason"], "no_such_question");
+    run.send(r#"{"type":"answer","id":1,"choices":[[1]]}"#);
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(results(&lines).len(), 1, "{lines:?}");
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 2);
+    assert!(
+        sent[1].contains("The user chose: Query"),
+        "the pick did not reach the planner: {}",
+        sent[1]
+    );
+}
+
+/// CLI-36: a question nothing can answer, because the input ended, is declined and the turn goes
+/// on. A run that waited for an answer that cannot come would never end.
+#[test]
+fn a_question_is_declined_when_the_input_ends_without_an_answer() {
+    let gateway = a_gateway_asking_which_cache();
+    let scratch = Scratch::new("cli-lines-declined").with_settings(&settings_for(&gateway));
+
+    let run = LinesRun::start(&scratch, &["-p", "set up the cache"]);
+    run.until(|line| line["event"] == "question");
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    assert_eq!(results(&lines).len(), 1, "{lines:?}");
+    let sent = bodies(&gateway);
+    assert!(
+        sent[1].contains("The user declined to answer"),
+        "{}",
+        sent[1]
+    );
+}
+
+/// CLI-1 and CLI-36: nothing a program sends approves an effect. The write the planner asks for is
+/// refused as it is in any run nobody can ask, whatever the lines say, and an `answer` is not a
+/// way to approve it.
+#[test]
+fn a_line_does_not_approve_a_write() {
+    let gateway = a_gateway_following(
+        vec![
+            Model::Calls(
+                "write_file",
+                r#"{"path":"out.txt","contents":"hi"}"#.to_string(),
+            ),
+            Model::Words("all done"),
+        ],
+        None,
+    );
+    let scratch = Scratch::new("cli-lines-write").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines", "-p", "write out.txt"]);
+    // Sent before the turn could have asked anything, in every shape an approval could take.
+    run.send(r#"{"type":"answer","id":1,"choices":[[0]]}"#);
+    run.send(r#"{"type":"approve","id":1}"#);
+    let (lines, status, _) = run.finish();
+
+    assert!(
+        !scratch.path.join("out.txt").exists(),
+        "a line approved a write"
+    );
+    assert_eq!(status, Some(4), "the refused status: {lines:?}");
+    assert!(
+        lines.iter().any(|line| line["event"] == "refusal"),
+        "{lines:?}"
+    );
+}
+
+/// CLI-36: a command line that cannot go with the flag is refused with the argument status before
+/// anything is read, each saying which flag was the problem.
+#[test]
+fn input_lines_is_refused_beside_what_it_cannot_go_with() {
+    let scratch = Scratch::new("cli-lines-refused");
+    let cases: [(&[&str], &str); 6] = [
+        (
+            &["--json-stream", "--input-format", "csv"],
+            "--input-format takes lines",
+        ),
+        (
+            &["--json-stream", "--input-format"],
+            "--input-format takes lines",
+        ),
+        (
+            &["--json-stream", "--trust-input-lines", "-p", "x"],
+            "--trust-input-lines requires --input-format lines",
+        ),
+        (
+            &[
+                "--json-stream",
+                "--input-format",
+                "lines",
+                "--mode",
+                "manifest",
+            ],
+            "does not go with --mode manifest",
+        ),
+        (
+            &["--incognito", "--json-stream", "--input-format", "lines"],
+            "does not go with --incognito",
+        ),
+        (
+            &[
+                "--json-stream",
+                "--input-format",
+                "lines",
+                "--trust-input-lines",
+                "--incognito",
+            ],
+            "does not go with --incognito",
+        ),
+    ];
+    for (arguments, problem) in cases {
+        let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, arguments);
+        let (_, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stderr.contains(problem), "{arguments:?}: {stderr}");
+    }
+}
+
+/// CLI-36: a run that reads lines is a `--json-stream` run without being told so, since its
+/// questions are put and its results written on the stream. A run that required the flag would be
+/// refused, one that took the result object alone would write no `usage` event ahead of it, and one
+/// that took the events alone would write no result object at all.
+#[test]
+fn a_run_reading_lines_streams_without_being_given_the_stream_flag() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-implied-stream").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::spawn(
+        &scratch,
+        &scratch.path,
+        &["--input-format", "lines", "--trust-input-lines"],
+    );
+    run.send(&prompt_line("WORDS"));
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    let last = lines.last().expect("the run wrote its result");
+    assert!(last.get("event").is_none(), "no result object: {lines:?}");
+    assert_eq!(last["reply"], "reply 1", "{lines:?}");
+    assert!(
+        lines[..lines.len() - 1]
+            .iter()
+            .any(|line| line["event"] == "usage"),
+        "no event ahead of the result: {lines:?}"
+    );
+}
+
+/// CLI-36: a command line that fails to parse is answered with a result object when the run is
+/// one that reads lines, as it is for `--json-stream`, since a program that reads the run's stdout
+/// for objects has no other way to hear of it.
+#[test]
+fn a_failed_command_line_for_a_lines_run_is_a_result_object() {
+    let scratch = Scratch::new("cli-lines-implied-json");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--input-format", "lines", "--output-schema"],
+    );
+    let (stdout, stderr) = said(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    let result: serde_json::Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|_| panic!("not an object: {stdout}"));
+    assert_eq!(result["status"], 2, "{stdout}");
+}
+
+/// CLI-36: a run that was sent no prompt before its input ended has no task, and says so with the
+/// status for an argument and a result object, as a run with no task does everywhere else.
+#[test]
+fn a_run_that_reads_lines_and_is_sent_no_prompt_has_no_task() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-no-prompt").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &[]);
+    run.send(r#"{"type":"stop"}"#);
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(2), "{stderr}");
+    assert!(stderr.contains("no prompt line arrived"), "{stderr}");
+    let results = results(&lines);
+    assert_eq!(results.len(), 1, "{lines:?}");
+    assert_eq!(results[0]["status"], 2);
+    assert!(
+        bodies(&gateway).is_empty(),
+        "a request went out with no prompt"
+    );
+}
+
+/// CLI-36: what the command line attached belongs to the first turn. The conversation the second
+/// turn carries on already holds the file, so a file attached again would be in it twice.
+#[test]
+fn a_file_the_command_line_names_is_attached_to_the_first_turn_alone() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-file").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    std::fs::write(project.join("note.txt"), "FILE-WORDS\n").expect("a file to attach");
+
+    let mut run = LinesRun::start_in(
+        &scratch,
+        &project,
+        &[
+            "--trust-input-lines",
+            "--file",
+            "note.txt",
+            "-p",
+            "COMMAND-WORDS",
+        ],
+    );
+    run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("LINE-WORDS"));
+    let (_, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0].matches("FILE-WORDS").count(), 1, "{}", sent[0]);
+    assert_eq!(
+        sent[1].matches("FILE-WORDS").count(),
+        1,
+        "the second turn attached the file again: {}",
+        sent[1]
+    );
+}
+
+/// CLI-36 and CLI-25: a `--resume` on the command line names the record the first turn continues,
+/// and the turns after it carry on the same one.
+#[test]
+fn a_resume_on_the_command_line_names_the_record_the_first_turn_continues() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-resume").with_settings(&settings_for(&gateway));
+
+    let earlier = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--json", "-p", "EARLIER-WORDS"],
+    );
+    let (stdout, stderr) = said(&earlier);
+    let id = session_of(&stdout).unwrap_or_else(|| panic!("no session in {stdout}{stderr}"));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines", "--resume", &id]);
+    run.send(&prompt_line("LINE-WORDS"));
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    let results = results(&lines);
+    assert_eq!(results.len(), 1, "{lines:?}");
+    assert_eq!(results[0]["session"], id.as_str(), "{lines:?}");
+    let sent = bodies(&gateway);
+    let last = sent.last().expect("the line's turn reached the gateway");
+    assert!(
+        last.contains("EARLIER-WORDS") && last.contains("LINE-WORDS"),
+        "{last}"
+    );
+}
+
+/// CLI-36: a turn that answered and wrote no record leaves nothing for the next to carry on from,
+/// and the next says so and is not run. Started anyway it would answer as though nothing had come
+/// before it.
+#[test]
+fn a_turn_after_one_that_wrote_no_record_is_not_run_on_an_empty_conversation() {
+    let gateway = a_gateway_numbering_its_replies();
+    // A file where the directory of records belongs, so no record can be written.
+    let scratch = Scratch::new("cli-lines-unsaved")
+        .with_settings(&settings_for(&gateway))
+        .with_state("sessions", "not a directory");
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines"]);
+    run.send(&prompt_line("FIRST-WORDS"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("SECOND-WORDS"));
+    let (rest, status, stderr) = run.finish();
+
+    let first = results(&first)[0].clone();
+    assert_eq!(first["ok"], true, "{stderr}");
+    assert_eq!(first["session"], serde_json::Value::Null);
+    let second = rest.last().expect("a second result");
+    assert_eq!(second["ok"], false, "{rest:?}");
+    assert!(
+        second["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("wrote no session record"),
+        "{second}"
+    );
+    assert_eq!(status, Some(1), "{stderr}");
+    assert_eq!(
+        bodies(&gateway).len(),
+        1,
+        "the second turn went to the model"
+    );
+}
+
+/// CLI-36 and SESSION-19: each later turn of a run gets a rewind point that puts back what that
+/// turn wrote over, which is where the turn before left the file. A backup the first turn made and
+/// nothing took would be kept for the first write to the path, and the second turn's point would
+/// put the file back to where the run found it.
+#[test]
+fn a_later_turn_rewinds_to_where_the_turn_before_it_left_the_files() {
+    let gateway = a_gateway_doing_what_each_task_names();
+    let scratch = Scratch::new("cli-lines-rewind").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    std::fs::write(project.join("notes.txt"), "the person's notes\n").expect("write the notes");
+
+    let mut run = LinesRun::start_in(
+        &scratch,
+        &project,
+        &[
+            "--trust-input-lines",
+            "--dangerously-skip-permissions",
+            "--trust-workspace",
+        ],
+    );
+    run.send(&prompt_line("WRITE-NOTES"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("WRITE-NOTES"));
+    let (rest, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    let id = results(&first)[0]["session"]
+        .as_str()
+        .expect("a session")
+        .to_string();
+    assert_eq!(
+        rest.last().expect("a second result")["session"],
+        id.as_str()
+    );
+    let record = the_record(&scratch, &id);
+    assert_eq!(record["turns"], 2);
+    let points = record["rewind"].as_array().expect("a list of points");
+    assert_eq!(points.len(), 1, "{points:#?}");
+    let backups = points[0]["wrote_over"]
+        .as_array()
+        .expect("a list of backups");
+    assert_eq!(backups.len(), 1, "{backups:#?}");
+    assert_eq!(backups[0]["path"], "notes.txt");
+    // "the model's notes\n", which the first turn wrote, and not "the person's notes\n".
+    assert_eq!(
+        backups[0]["bytes"], "dGhlIG1vZGVsJ3Mgbm90ZXMK",
+        "{backups:#?}"
+    );
+}

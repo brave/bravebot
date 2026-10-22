@@ -7593,6 +7593,58 @@ fn a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input() {
     );
 }
 
+/// CLI-36: a line a program sends on a channel the person vouched for is the person's words and is
+/// recorded as that. Nobody typed it at a keyboard, so a trail that said so would be recording an
+/// input that did not happen, and a turn that took it would be accounted for wrongly.
+#[test]
+fn a_line_from_a_vouched_channel_is_recorded_as_vouched_for_and_not_as_typed() {
+    let scratch = Scratch::new("interject-vouched");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"a.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("what is in a.txt?").with_vouched_channel(),
+        &mut SaysOnce::new("look at b.txt instead"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let said = |wanted: &str| {
+        sink.events().iter().any(|event| {
+            matches!(
+                event,
+                Event::GatePassed { gate, detail }
+                    if *gate == "provenance" && detail.contains(wanted)
+            )
+        })
+    };
+    assert!(
+        said("channel the person vouched for"),
+        "a line from a vouched channel went in with nothing in the trail saying where it came from"
+    );
+    assert!(
+        !said("typed by the user"),
+        "the trail says a keyboard typed a line a program sent"
+    );
+    // The line is the person's words, so the planner reads it.
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(bodies[1].contains("look at b.txt instead"), "{}", bodies[1]);
+}
+
 /// A line typed while a delegate runs is aimed at the turn the person is watching, which is the
 /// only turn they know about: the delegate was a planner's idea and its work is not on the screen.
 /// Handed to the delegate it answers a turn nobody typed it at. Taken off the queue by one, it

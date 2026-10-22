@@ -167,6 +167,8 @@ pub(crate) fn print_help() {
         ("--trace", t!(cli_option_trace)),
         ("--json", t!(cli_option_json)),
         ("--json-stream", t!(cli_option_json_stream)),
+        ("--input-format <format>", t!(cli_option_input_format)),
+        ("--trust-input-lines", t!(cli_option_trust_input_lines)),
         ("--output-schema <path>", t!(cli_option_output_schema)),
         ("--goal <condition>", t!(cli_option_goal)),
         ("--incognito", t!(cli_option_incognito)),

@@ -17,6 +17,7 @@ governs:
   - crates/cli/src/exit.rs
   - crates/cli/src/goal_run.rs
   - crates/cli/src/json.rs
+  - crates/cli/src/lines.rs
   - crates/agent/src/output_schema.rs
   - crates/cli/src/permissions_check.rs
   - crates/cli/src/plain.rs
@@ -59,7 +60,8 @@ second answers the write prompt and no other, so a run, a fetch and a write the 
 found a value in are still refused, because nobody can be asked. The two are refused together, and
 `--accept-edits` is refused where the line starts no one-shot run, since a session has the mode key
 for the same thing. The planner's questions are declined in both modes, because they are not
-permissions.
+permissions. A run given `--input-format lines` puts them to the program sending its lines instead,
+which picks among the choices the planner offered and writes none of the words (CLI-36).
 
 **Why.** The alternative to a person is not a default, it is a guess made in their name. The
 planner is told a reply came from a person, so inventing one would be worse than not asking. A flag
@@ -95,7 +97,8 @@ answer. Writing stays refused without one of the flags above.
 ### CLI-2: unprompted, stdin is read only when it is not a terminal
 
 A terminal's stdin is left alone, so an interactive invocation does not sit waiting for input
-nobody is sending. Piped bytes are read when there are any.
+nobody is sending. Piped bytes are read when there are any. A run given `--input-format lines` reads
+stdin a line at a time until it closes, whatever stdin is (CLI-36).
 
 A question this run asked is the exception, and it is not the case this clause is about: the bytes
 are read because somebody was prompted for them a moment earlier, so they are input that is being
@@ -110,7 +113,8 @@ a pipe is never read for an answer.
 
 Nothing vouched for what a pipe carries: `gh pr diff` and `cat build-error.txt` both arrive the
 same way and neither passed through the trust map. So it is quarantined and the planner is given a
-reference, never the bytes.
+reference, never the bytes. The lines of CLI-36 are labelled the same way, unless a person typed
+`--trust-input-lines`.
 
 **Why.** A pipe has no path, so there is nothing for the trust map to have an opinion about. The
 pessimistic label is the only one that holds without knowing what fed it.
@@ -135,7 +139,9 @@ Progress, errors and the audit trail go to stderr, so a one-shot run is pipeable
 the trail on stderr beside it: which gate checked what, the label every value carried, and what
 was released. The one thing that may take the reply's place on that stream is the result object in
 CLI-12, and it is still the only thing on it. The events of CLI-24 are the second exception: a run
-given `--json-stream` writes them ahead of that object, and nothing else is on the stream.
+given `--json-stream` writes them ahead of that object, and nothing else is on the stream. A run
+given `--input-format lines` writes a result object for each turn it runs, and the two events of
+CLI-36 beside the others.
 
 **Why.** A progress line mixed into stdout would corrupt whatever the user piped the reply into.
 
@@ -713,6 +719,8 @@ Prompts are read only from a terminal because they are the trusted input, and wh
 that a pipe carries bytes nothing vouched for. A session reading prompts from a pipe would take its
 instructions from whatever fed it, and answer its own approval questions out of the same bytes,
 which is the whole guarantee inverted for the sake of a convenience `-p` already provides.
+`--input-format lines` (CLI-36) reads prompts from a pipe as well, and leaves the guarantee standing
+by labelling them as a pipe's until a person types the flag that says they are theirs.
 
 **What it does not have.** Everything that was a drawing: the scroller and its search, the key
 list, the slash commands, `@` naming a file, a picture on the clipboard, the audit trail under a
@@ -1332,7 +1340,9 @@ line, to stdout as each of these happens, in the order they happen:
   counts as they were is not an event.
 
 The last line is the result object of CLI-12, byte for byte what `--json` writes for the same run.
-It has no `event` field, so a caller tells it from an event by that. Every event carries the
+A run given `--input-format lines` runs several turns and writes one result object for each, after
+the events of that turn (CLI-36). It has no `event` field, so a caller tells it from an event by
+that. Every event carries the
 `schema` number of CLI-12 and its add-only rule: within one number a field may be added to an event,
 and an event kind may be added, and neither is removed, renamed or given a different meaning.
 
@@ -1965,3 +1975,180 @@ that broke, and from one that found nothing to connect to.
 `verified-by: bravebot_cli::progress::what_a_run_has_cost_adds_up_across_its_rounds_and_its_checks`
 `verified-by: bravebot_cli::progress::a_streamed_total_never_falls_when_the_next_round_starts`
 `verified-by: bravebot_cli::progress::a_notice_a_later_round_says_again_is_kept_once`
+
+<a id="CLI-36"></a>
+### CLI-36: `--input-format lines` reads turns, steers, answers and stops from stdin, a JSON object to a line
+
+A one-shot run given `--input-format lines` is a `--json-stream` run (CLI-24), since its questions are
+put and its results written there, and reads stdin a line at a time until it closes, where CLI-2
+reads it once. Each line is one JSON object with a `type`:
+
+- `prompt`, with `text`, starts a turn with those words. A prompt that arrives while a turn runs
+  waits, and starts a turn of its own when the turns before it have ended.
+- `steer`, with `text`, is delivered to the turn that is running at its next round boundary, as a
+  line typed while a turn runs is ([INPUT-10](terminal-input.md#INPUT-10)). A steer sent while no
+  turn runs, and one the turn ended without taking, starts a turn of its own, after the prompts
+  already waiting.
+- `answer`, with the `id` of a `question` event and `choices`, answers that question. `choices` holds
+  one array for each question, of the positions of the choices picked in the order the event listed
+  them, and an empty array declines that question.
+- `stop` ends the turn that is running, as Ctrl-Enter does ([INPUT-36](terminal-input.md#INPUT-36)),
+  and leaves the prompts waiting behind it to run. A `stop` sent while no turn runs does nothing.
+
+The run is as many turns as it is sent. The words on the command line, where there are any, are the
+first turn, and `--file` and `--session-ref` attach to it alone. Each later turn is one more turn
+over the session record the turn before wrote, as `-p` with `--resume` is (CLI-25), so the
+conversation is carried and each later turn adds a rewind point behind the ones the record held. A
+`--resume` or `--continue` on the command line names the record the first turn continues. Each turn ends with a
+result object of its own (CLI-12), after the events of that turn (CLI-24), whose `steps` and `tokens`
+count that turn alone. A turn that answered and wrote no record, because the record could not be
+written, leaves nothing for the next to carry on from: the turns after it are not run, and each ends
+with a result object that says so. The process exits once stdin has closed and every turn has
+ended, with the status of the last turn. A run that is sent no prompt before stdin closes has no task and exits with
+the status for an argument (CLI-6), writing a result object that says so.
+
+With `--goal` (CLI-35) each turn works towards the condition until the judge says it holds,
+and a `stop` ends it in the round it reaches, with no further round and no further check.
+
+**The words of a line.** A line on a pipe is the launching program's words, so they are labelled as
+piped input is (CLI-3), untrusted and private, and the planner is given a reference to them and never
+the words. A `prompt` is then a turn with no prompt of its own and those words as its piped input.
+Where the person typed `--trust-input-lines`, the lines are their own words: a `prompt` is the prompt
+of its turn, and a `steer` is an interjection that may not route, which the trail records as
+arriving on a channel the person vouched for and not as typed ([LABEL-8](labels.md#LABEL-8)). The
+flag is read from the command line and from nowhere else, as `--trust-workspace` is. It vouches for
+the words of the lines and for nothing else: it approves no effect (CLI-1), answers no trust
+question and vouches for no path.
+
+A `steer` on a channel nobody vouched for is held as a `prompt` is. Handed to the running turn it
+would be a reference to words the planner cannot read, which steers nothing.
+
+**What a line cannot do.** The one question put to the program is the planner's own
+([ASK-1](tools/ask-user.md#ASK-1)). Every other question stays refused for want of anybody to ask
+(CLI-1): a write, a run, a fetch, a path, a server, a vouch, and the question the trust map asks about
+the directory. An `answer` names positions among choices the planner offered and carries no words, so
+it puts none into the planner's context. It is refused when no question with that `id` is waiting,
+when it holds other than one array for each question, a position the question does not have or the
+same position twice, and more than one position for a question that takes one. A question takes the
+first answer that fits, and a second naming it finds nothing waiting. A `choices` of more than 16
+arrays, or with an array of more than 256 positions, is a field of another kind. A question still
+waiting when stdin closes, or when the turn is stopped, is declined as it is in any run nobody can
+ask ([ASK-7](tools/ask-user.md#ASK-7)).
+
+**What the stream carries.** The events of CLI-24 for each turn, and two more. A `question` event,
+with `id` and `questions`, is written when the planner asks. Each question holds `header`,
+`question`, `choices`, each with a `label` and a `detail` that is `null` where there is none, and
+`multiple`. It is the one event that holds words the result object does not hold, which are those the
+kernel released to put the question to somebody, the words a session draws. An `input_refused` event,
+with `line`, the number of the line in stdin counted from 1, and `reason`, is written for a line that
+was not taken. `reason` is one of `unreadable`, for a line over the cap of CLI-4 or not UTF-8;
+`not_json`, where it is not one JSON object; `unknown_type`; `bad_field`, where a field its type needs
+is missing, repeated, empty or of another kind; `no_such_question`; and `too_much_waiting`, for
+words that would take the bytes waiting for a turn past the cap of CLI-4. It holds nothing the line
+said. A blank line is nothing and is not refused.
+
+A line is read to its end whatever is wrong with it, so a line that is refused costs only itself. A
+field the line's type does not use is skipped, so a sender may add one. No line may hold more than
+the cap of CLI-4, and the words waiting for a turn may not hold more than that between them, so a
+file piped in whole fills no more memory than one piped to `-p` does. A read of stdin that fails
+ends the input as the end of it does.
+
+Refused with the status for an argument (CLI-6), before stdin is read: `--input-format` with a word
+other than `lines`; `--trust-input-lines` without `--input-format lines`;
+`--input-format lines` with `--mode manifest`, which has one task and no turns to add; and
+`--input-format lines` with `--incognito`, since each turn is carried on from the record the one
+before wrote and an incognito run writes none.
+
+**Why.** Without this, a program driving bravebot needs one process for each turn (CLI-25) and
+cannot steer, answer or stop a turn that is running. One process that it talks to for as long as it
+has something to say takes all of them, and the events of CLI-24 follow each turn.
+
+The launching program is not necessarily the person. A line on a pipe has no author the trust map
+could ask about, so its words take the pessimistic label CLI-3 gives a pipe, and the one thing that
+raises it is something a person typed on the command line, which is where every other instruction
+for a run nobody is watching is given (CLI-1). A flag that vouched for the lines and also answered
+the permission questions would turn one decision about whose words these are into a standing
+approval of effects, so it does not.
+
+An answer is a position and nothing else, so what a program can choose is among words the planner
+already wrote, and what it sends the driver to act on is ids and enumerated values. A free-text
+answer as well would let it write into the planner's context under the label of a person.
+
+Words past the cap are refused with an event and the read goes on. A read that paused until a turn
+had taken words would not see the `answer` or the `stop` that the turn in flight is waiting for.
+
+A steer and a stop reach a turn by the places a typed line and the stop key do
+([INPUT-10](terminal-input.md#INPUT-10), [INPUT-36](terminal-input.md#INPUT-36)), so a turn gains
+nothing for being driven this way and the guarantees of those clauses hold here unchanged.
+
+**Not an exception to [LABEL-5](labels.md#LABEL-5).** The program decides when turns begin and end
+and which of the choices the planner offered answers a question, from bytes it sent on a channel
+nobody vouched for as on one somebody did. That is not one of the places
+[Known costs](labels.md#known-costs) lists as deciding from untrusted bytes, and it is not added to
+them. The rule keeps untrusted content out of the driver ([LAYER-2](layering.md#LAYER-2)), and
+`lines.rs` is in `bravebot-cli`, which [LAYER-1](layering.md#LAYER-1) lists as presentation: it holds
+no labelled value and mints no witness. It reads the fixed words and the numbers listed here, which
+the envelope spells, and hands the driver what any front end does: the token that stops a turn, a
+position as the answer to a question, and a steer that is the person's own words only where they
+vouched for the channel. The `text` of a line is unescaped and seen to be there, and nothing in it
+is read: it is carried as the line spelt it, under the channel's label. Those decisions settle no
+effect and put no word of the program's into the planner's context. The program is also what
+launched the run, and its command line already gives the planner words as the person's own
+([LABEL-8](labels.md#LABEL-8)), which is more than a position among words the planner wrote.
+
+**A known cost.** A later turn is carried on from the record, as a resumed session is
+([SESSION-2](sessions.md#SESSION-2)), so a reference to quarantined content an earlier turn made
+names nothing on it and the planner is told so. On a channel nobody vouched for, whose every line is
+quarantined, a turn cannot work on the words of the line before it.
+
+**A known cost.** The planner is told that the user chose a position a program picked, since the
+words that report an answer come from the kernel and do not know who sent the line. The program is
+one the person chose to run with the flag.
+
+`verified-by: bravebot_cli::lines::each_kind_of_line_is_read_as_the_kind_it_names`
+`verified-by: bravebot_cli::lines::the_words_of_a_line_are_carried_as_the_line_spelt_them`
+`verified-by: bravebot_cli::lines::a_field_the_envelope_does_not_name_is_skipped_whatever_it_holds`
+`verified-by: bravebot_cli::lines::a_line_that_is_not_one_json_object_is_refused`
+`verified-by: bravebot_cli::lines::a_line_missing_what_its_type_needs_is_refused_by_name`
+`verified-by: bravebot_cli::lines::a_line_over_the_cap_is_dropped_and_the_next_is_read_whole`
+`verified-by: bravebot_cli::lines::prompts_start_turns_in_the_order_they_arrived`
+`verified-by: bravebot_cli::lines::a_steer_reaches_the_running_turn_only_on_a_vouched_channel`
+`verified-by: bravebot_cli::lines::a_steer_the_turn_ended_without_taking_starts_a_turn_of_its_own`
+`verified-by: bravebot_cli::lines::a_steer_sent_while_no_turn_runs_starts_a_turn_of_its_own`
+`verified-by: bravebot_cli::lines::a_stop_or_a_steer_right_behind_a_prompt_reaches_the_turn_that_prompt_starts`
+`verified-by: bravebot_cli::lines::a_second_answer_to_a_question_does_not_replace_the_first`
+`verified-by: bravebot_cli::lines::a_reader_that_panics_ends_the_input_and_leaves_nothing_waiting`
+`verified-by: bravebot_cli::lines::an_interrupted_read_is_read_again_and_not_taken_for_the_end`
+`verified-by: bravebot_cli::lines::a_pick_past_the_bounds_is_a_field_of_another_kind`
+`verified-by: bravebot_cli::lines::a_large_field_the_envelope_does_not_name_is_read_past`
+`verified-by: bravebot_cli::lines::a_stop_ends_the_running_turn_and_is_not_kept_for_the_next`
+`verified-by: bravebot_cli::lines::a_refused_line_is_said_by_number_and_cause_and_never_repeated`
+`verified-by: bravebot_cli::lines::the_words_waiting_for_a_turn_are_bounded_and_room_comes_back_as_they_are_taken`
+`verified-by: bravebot_cli::lines::an_answer_that_does_not_fit_the_question_is_refused_and_the_question_waits`
+`verified-by: bravebot_cli::lines::an_empty_pick_declines_one_question_and_no_question_waiting_takes_no_answer`
+`verified-by: bravebot_cli::lines::a_question_has_an_id_of_its_own`
+`verified-by: bravebot_cli::lines::a_question_nothing_can_answer_is_declined_when_the_input_ends_or_the_turn_stops`
+`verified-by: bravebot_cli::lines::an_answer_followed_by_the_end_of_the_input_is_still_the_answer`
+`verified-by: bravebot_cli::lines::the_reader_numbers_lines_as_they_were_written`
+`verified-by: bravebot_cli::json::a_question_is_an_event_a_program_can_answer_by_position`
+`verified-by: bravebot_cli::json::a_line_that_was_not_taken_is_named_by_number_and_cause`
+`verified-by: bravebot_cli::running::a_run_reading_lines_runs_each_prompt_as_a_turn_over_one_conversation`
+`verified-by: bravebot_cli::running::the_command_lines_own_prompt_is_the_first_turn`
+`verified-by: bravebot_cli::running::a_file_the_command_line_names_is_attached_to_the_first_turn_alone`
+`verified-by: bravebot_cli::running::a_resume_on_the_command_line_names_the_record_the_first_turn_continues`
+`verified-by: bravebot_cli::running::a_turn_after_one_that_wrote_no_record_is_not_run_on_an_empty_conversation`
+`verified-by: bravebot_cli::running::a_later_turn_rewinds_to_where_the_turn_before_it_left_the_files`
+`verified-by: bravebot_cli::running::lines_nobody_vouched_for_never_reach_the_planner_and_vouched_ones_do`
+`verified-by: bravebot_cli::running::a_steer_on_a_vouched_channel_reaches_the_turn_that_is_running`
+`verified-by: bravebot_cli::running::a_steer_on_a_channel_nobody_vouched_for_waits_for_a_turn_and_is_never_shown`
+`verified-by: bravebot_cli::running::a_stop_ends_the_running_turn_and_the_prompt_behind_it_still_runs`
+`verified-by: bravebot_cli::running::a_stop_ends_the_rounds_of_a_goal_run_reading_lines`
+`verified-by: bravebot_cli::running::a_question_is_put_to_the_program_and_its_pick_reaches_the_planner`
+`verified-by: bravebot_cli::running::a_question_is_declined_when_the_input_ends_without_an_answer`
+`verified-by: bravebot_cli::running::a_line_does_not_approve_a_write`
+`verified-by: bravebot_cli::running::input_lines_is_refused_beside_what_it_cannot_go_with`
+`verified-by: bravebot_cli::running::a_run_reading_lines_streams_without_being_given_the_stream_flag`
+`verified-by: bravebot_cli::running::a_failed_command_line_for_a_lines_run_is_a_result_object`
+`verified-by: bravebot_cli::running::a_run_that_reads_lines_and_is_sent_no_prompt_has_no_task`
+`verified-by: bravebot_core::policy::a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context`
+`verified-by: bravebot_agent::turn::a_line_from_a_vouched_channel_is_recorded_as_vouched_for_and_not_as_typed`

@@ -111,6 +111,8 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--json-stream` | write one event per line as the run goes, then the result object ([below](#--json-stream)) |
+| `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line, for as many turns as it is sent; implies `--json-stream` ([below](#--input-format-lines)) |
+| `--trust-input-lines` | with `--input-format lines`, treat the lines as your own words and not a program's ([below](#--input-format-lines)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
 | `--tools <a,b,c>` | offer the agent only the named tools; a tool a setting removed stays removed, and no MCP server's tools are offered ([below](#--tools-abc-and---no-shell)) |
@@ -552,6 +554,64 @@ The last line is the result object, exactly what `--json` writes for the same ru
 field. Nothing else is on stdout, and progress, the message and the audit trail stay on stderr. The
 schema rule of `--json` applies to each event: fields and event kinds may be added within one number,
 and none is removed or renamed.
+
+## `--input-format lines`
+
+```sh
+bravebot --input-format lines --trust-input-lines -p "review the diff" < turns.jsonl
+```
+
+One process that **reads JSON lines on stdin for as many turns as it is sent**. It is a
+[`--json-stream`](#--json-stream) run, writing the events and each turn's result object. Each line
+is one JSON object with a `type`:
+
+| `type` | other fields | what it does |
+|---|---|---|
+| `prompt` | `text` | starts a turn with those words; one that arrives while a turn runs waits for its turn |
+| `steer` | `text` | reaches the turn that is running at its next round, as a line typed mid-turn does; one sent while no turn runs, or that the turn ended without taking, starts a turn of its own |
+| `answer` | `id`, `choices` | answers the `question` event with that `id`; `choices` is one array of choice positions for each question, an empty array declining it |
+| `stop` | none | ends the turn that is running and leaves the prompts behind it to run |
+
+The words on the command line are the first turn, and `--file` and `--session-ref` attach to it
+alone. Each later turn carries on the session record the one before wrote, as `-p` with
+[`--resume`](#continuing-a-session-from-a-one-shot-run) does, and ends with a result object of its
+own, so `session` is the same id throughout. A turn that wrote no record, because the record could not
+be written, leaves nothing to carry on from, so the turns after it are not run and each says so. The
+process exits when stdin closes and the last turn has ended, with that turn's status. Stdin closing
+before any prompt arrived is a run with no task and exits on status 2.
+
+**A line is a program's words until you say otherwise.** Without `--trust-input-lines` the text of a
+`prompt` or `steer` is labelled as piped input is: untrusted and private, so the planner is given a
+reference to it and never the words, and a `steer` waits for a turn of its own. With the flag the
+lines are your words, a `prompt` is the prompt of its turn and a `steer` is delivered to the turn
+running. The flag vouches for the words and nothing else. A write, a command, a fetch and every
+other question are still refused, as in any run nobody is watching, and no line approves one.
+
+**Questions.** A question the planner asks is written as a `question` event and the turn waits for the
+answer:
+
+```json
+{"schema":1,"event":"question","id":1,"questions":[{"header":"Cache","question":"Which cache?","choices":[{"label":"HTTP","detail":null},{"label":"Query","detail":null}],"multiple":false}]}
+```
+
+```json
+{"type":"answer","id":1,"choices":[[1]]}
+```
+
+An answer is positions among the choices the planner offered and no words, sent after the `question`
+event it names. It is refused when no question with that `id` is waiting or the positions do not fit
+the question. A question still waiting
+when stdin closes, or when the turn is stopped, is declined.
+
+**A line that is not taken** is written as an `input_refused` event with `line`, its number counted
+from 1, and `reason`: `unreadable` (over the size cap of piped input, or not UTF-8), `not_json`,
+`unknown_type`, `bad_field`, `no_such_question` or `too_much_waiting` (the prompts waiting for a turn
+already hold as many bytes as that cap). The event holds nothing the line said. A blank
+line is ignored, and a field a line's type does not use is skipped.
+
+The flags are refused with status 2 before stdin is read when `--input-format` names anything but
+`lines`, with `--mode manifest` and with `--incognito`, and when `--trust-input-lines` comes without
+`--input-format lines`.
 
 ## Continuing a session from a one-shot run
 

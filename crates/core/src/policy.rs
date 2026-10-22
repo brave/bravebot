@@ -2379,6 +2379,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a line reached the turn from an input channel the person vouched for, while the
+    /// turn ran (CLI-36).
+    ///
+    /// The same footing as [`Policy::admit_interjection`] and for the same reason: the line carries
+    /// the person's words and may not route, and the trail records it as the person's own input.
+    /// What differs is the act that makes it theirs. Nobody typed this at a keyboard; the person
+    /// typed the flag that says the launching program's lines are theirs, and the trail says that.
+    ///
+    /// This must only ever be reached from a channel a flag the person typed on the command line
+    /// vouched for. A line from any other pipe is piped input, which is labelled by
+    /// [`Policy::label_piped_input`] and never reaches this.
+    pub fn admit_vouched_line(&mut self, characters: usize) {
+        self.allow(
+            "provenance",
+            format!(
+                "{characters} characters, sent on an input channel the person vouched for with a \
+                 flag they typed, while the turn was running; it may not route"
+            ),
+        );
+    }
+
     /// Transform content without exposing it, keeping its label.
     ///
     /// A tool often needs to reshape what it read, joining lines or adding a truncation notice, before
@@ -15694,6 +15715,31 @@ five
                 e,
                 Event::GatePassed { gate: "provenance", detail }
                     if detail.contains("31 characters") && detail.contains("typed by the user")
+            )),
+            "the provenance decision left no trace: {:?}",
+            sink.events()
+        );
+    }
+
+    /// CLI-36: a line from a channel the person vouched for is accounted for as that, and is a
+    /// decision about provenance only: it does not lower what the context has met, so the planner
+    /// is not quarantined from its own steering.
+    #[test]
+    fn a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = policy_trusting(&mut sink, &[]);
+            policy.admit_vouched_line(31);
+            assert_eq!(policy.context_integrity(), Integrity::Trusted);
+        }
+
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("31 characters")
+                        && detail.contains("channel the person vouched for")
+                        && !detail.contains("keyboard")
             )),
             "the provenance decision left no trace: {:?}",
             sink.events()
