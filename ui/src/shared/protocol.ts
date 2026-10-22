@@ -116,6 +116,16 @@ export interface TodoRow {
   status: TodoStatus
 }
 
+/** An `allow` rule a project's settings file wrote, which answers no question here. */
+export interface ProposedRule {
+  rule: string
+  /** `rule` spelled as text, so a character that draws as nothing is visible (PROMPT-1). Draw this and not `rule`. */
+  shownRule: string
+  file: string
+  /** `file` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). Draw this and not `file`. */
+  shownFile: string
+}
+
 /**
  * The permission rules a session opened under, read from the settings files when it opened.
  *
@@ -130,8 +140,8 @@ export interface SettingsRules {
   allow: string[]
   /** An entry nothing could read as a rule, and the agent's sentence about why. */
   unreadable: { rule: string; said: string }[]
-  /** An `allow` rule a project's settings file wrote. It answers no question here. */
-  proposed: { rule: string; file: string }[]
+  /** The `allow` rules a project's settings file wrote. They answer no question here. */
+  proposed: ProposedRule[]
   /** A directory a settings file asked to have opened. This app opens none of them. */
   directories: string[]
   /**
@@ -182,7 +192,11 @@ export interface SessionRecord {
 export interface KeptTrust {
   at: number
   path: string
+  /** `path` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). Draw this and not `path`. */
+  shownPath: string
   root?: string
+  /** `root` spelled the same way, present exactly when `root` is. Draw this and not `root`. */
+  shownRoot?: string
 }
 
 /** Why file backups may not account for everything a turn did (§7.1 `session.rewind`). */
@@ -218,6 +232,9 @@ export interface OpenedSession {
   remembered?: KeptTrust | null
   /** Where a yes would be kept, where the question is asked and the answer may be kept. */
   keeping?: string | null
+  /** `record.directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
+  shownDirectory: string
+  shownKeeping?: string | null
   /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
   confinedLines?: string | null
   branchNote: string | null
@@ -335,6 +352,9 @@ export interface ForkedSession {
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   remembered?: KeptTrust | null
   keeping?: string | null
+  /** `directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
+  shownDirectory: string
+  shownKeeping?: string | null
   confinedLines?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean

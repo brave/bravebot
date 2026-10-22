@@ -395,7 +395,7 @@ a turn.
 ```
 
 Returns `{ "session": "s2", "directory": "…", "branch": "main", "remembered": null,
-"keeping": "…" }`, the last two as §9 has them. The `Record` is not written until the first
+"keeping": "…", "shownDirectory": "…", "shownKeeping": "…" }`, the last four as §9 has them. The `Record` is not written until the first
 turn, matching `Session::begin` + `save`, so an opened-and-abandoned window leaves nothing
 behind.
 
@@ -1219,9 +1219,11 @@ default: defaulting either way is the mistake this design exists to avoid.
 directory, or about the root of the git worktree around it, a session the flow above would ask
 is not asked: it starts from the rule a yes
 writes, emits no `trust.request`, reports `trust.known: true` where its response has `trust`,
-and its response carries `remembered: { at, path }`, when
-the answer was given (seconds since the epoch) and the file it is kept in, for the client to
-say at the top of the conversation. Otherwise `remembered` is `null`. The record is the one
+and its response carries `remembered: { at, path, shownPath, root, shownRoot }`, when
+the answer was given (seconds since the epoch), the file it is kept in and the directory it is
+about, for the client to say at the top of the conversation. `shownPath` and `shownRoot` are `path`
+and `root` spelled as `shownPath` is on a request, and a client draws those. Otherwise `remembered`
+is `null`. The record is the one
 the terminal keeps, so an answer kept in either front end settles the other.
 
 Where the question is put and a yes may be kept, the response and the `trust.request`
@@ -1233,7 +1235,8 @@ the directory was made, or an incognito session.
 The `trust.request` event also carries `shownDirectory` and `shownKeeping`, which are `directory`
 and `keeping` spelled as `shownPath` is. A client that draws the question from the event draws
 those and never `directory` or `keeping`. `shownKeeping` is `null` exactly when `keeping` is. The
-responses of `session.new`, `session.open` and `session.fork` carry `keeping` and no spelling of it.
+responses of `session.new`, `session.open` and `session.fork` carry `shownDirectory` and
+`shownKeeping` the same way, for a client that puts the question from the response.
 
 ---
 
@@ -1528,8 +1531,10 @@ Still open:
 - `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
   `{ deny, ask, allow, unreadable, proposed, directories }`. The first three are the rules in
   force, as the files spelled them. `unreadable` holds `{ rule, said }` for each entry that is
-  not a rule, where `said` is the agent's sentence about why. `proposed` holds `{ rule, file }`
-  for each `allow` rule a checkout wrote, which is not in force. `directories` holds the names
+  not a rule, where `said` is the agent's sentence about why. `proposed` holds
+  `{ rule, shownRule, file, shownFile }` for each `allow` rule a checkout wrote, which is not in
+  force; `shownRule` is `rule` spelled as text and `shownFile` is `file` spelled as `shownPath`
+  is, and a client draws those. `directories` holds the names
   in `additionalDirectories`, none of which is opened.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.

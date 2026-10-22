@@ -8,30 +8,47 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildSync } from 'esbuild'
+import { build, buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 
-function load(path) {
-  const source = buildSync({
-    entryPoints: [path],
-    bundle: true,
-    write: false,
-    platform: 'node',
-    format: 'cjs',
-    jsx: 'automatic',
-    external: ['react', 'react-dom', 'react/jsx-runtime'],
-  }).outputFiles[0].text
+const options = (path) => ({
+  entryPoints: [path],
+  bundle: true,
+  write: false,
+  platform: 'node',
+  format: 'cjs',
+  jsx: 'automatic',
+  external: ['react', 'react-dom', 'react/jsx-runtime'],
+})
+
+function evaluate(source) {
   const module = { exports: {} }
   new Function('require', 'module', 'exports', source)(require, module, module.exports)
   return module.exports
 }
 
-const { Row } = load('src/renderer/components/Transcript.tsx')
-const { PathPermissions } = load('src/renderer/components/Permissions.tsx')
+const load = (path) => evaluate(buildSync(options(path)).outputFiles[0].text)
+
+const { Row, SessionNotices, RulesBanner } = load('src/renderer/components/Transcript.tsx')
+// The modal portals into `document.body`, which a server render has none of, so the question is
+// drawn inside a plain element: what is asserted is the question's own text.
+const withoutModal = {
+  name: 'without-modal',
+  setup(build) {
+    build.onResolve({ filter: /\/Modal$/ }, () => ({ path: 'modal', namespace: 'stub' }))
+    build.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
+      contents: 'import React from "react"; export const Modal = ({ children }) => React.createElement("div", null, children)',
+      loader: 'js',
+      resolveDir: process.cwd(),
+    }))
+  },
+}
+const { TrustPrompt } = evaluate((await build({ ...options('src/renderer/components/TrustPrompt.tsx'), plugins: [withoutModal] })).outputFiles[0].text)
+const { PathPermissions, RememberedHere } = load('src/renderer/components/Permissions.tsx')
 const t = load('src/renderer/transcript.ts')
 
 const draw = (entry) =>
@@ -145,4 +162,64 @@ test('the permissions list draws each rule as spelled, and the root as the proje
   assert.ok(!markup.includes(`<code>${ROOT_MARKUP}</code>`), markup)
   assert.ok(!markup.includes(`<code>${WRITTEN}</code>`), markup)
   assert.ok(!markup.includes('<code> </code>'), markup)
+})
+
+test('the startup question draws the directory and the file a yes is kept in as spelled', () => {
+  const markup = renderToStaticMarkup(React.createElement(TrustPrompt, {
+    directory: '"/work␣"',
+    keeping: '"/home/me/state␣/trusted"',
+    confinedLines: null,
+    onAnswer() {},
+  }))
+  assert.ok(markup.includes('<code class="path">&quot;/work␣&quot;</code>'), markup)
+  assert.ok(markup.includes('<code>&quot;/home/me/state␣/trusted&quot;</code>'), markup)
+})
+
+test('the notice that a yes was kept names the file as spelled', () => {
+  const markup = renderToStaticMarkup(React.createElement(SessionNotices, {
+    forkedFrom: null,
+    kept: { at: Math.floor(Date.now() / 1000), path: '/home/me/state /trusted', shownPath: '"/home/me/state␣/trusted"' },
+    vetting: false,
+    rules: null,
+    onOpenParent() {},
+    onManage() {},
+  }))
+  assert.ok(markup.includes('kept in &quot;/home/me/state␣/trusted&quot;'), markup)
+  assert.ok(!markup.includes('kept in /home/me/state /trusted'), markup)
+})
+
+test('the list of what is kept draws the file and the root as spelled', () => {
+  const markup = renderToStaticMarkup(React.createElement(RememberedHere, {
+    kept: {
+      at: Math.floor(Date.now() / 1000),
+      path: '/home/me/state /trusted',
+      shownPath: '"/home/me/state␣/trusted"',
+      root: '/work/repo ',
+      shownRoot: '"/work/repo␣"',
+    },
+    busy: false,
+    onForget() {},
+  }))
+  assert.ok(markup.includes('<code>&quot;/home/me/state␣/trusted&quot;</code>'), markup)
+  assert.ok(markup.includes('for &quot;/work/repo␣&quot;'), markup)
+  assert.ok(!markup.includes('/work/repo </span>'), markup)
+  assert.ok(!markup.includes('<code>/home/me/state /trusted</code>'), markup)
+})
+
+test('the list of rules a checkout proposed draws each rule and its file as spelled', () => {
+  const markup = renderToStaticMarkup(React.createElement(RulesBanner, {
+    rules: {
+      deny: [], ask: [], allow: [], unreadable: [], directories: [], filesystem: [], filesystemIgnored: [],
+      proposed: [{
+        rule: 'WebFetch(domain:exa\u200bmple.com)',
+        shownRule: '"WebFetch(domain:exa\\u{200b}mple.com)"',
+        file: '/work/proj /.bravebot/settings.json',
+        shownFile: '"/work/proj␣/.bravebot/settings.json"',
+      }],
+    },
+  }))
+  assert.ok(markup.includes('<code>&quot;WebFetch(domain:exa\\u{200b}mple.com)&quot;</code>'), markup)
+  assert.ok(markup.includes('<code>&quot;/work/proj␣/.bravebot/settings.json&quot;</code>'), markup)
+  assert.ok(!markup.includes('exa\u200bmple'), markup)
+  assert.ok(!markup.includes('/work/proj /.bravebot'), markup)
 })

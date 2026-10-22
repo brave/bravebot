@@ -255,8 +255,9 @@ export function App(): React.JSX.Element {
         contextTokens: opened.contextTokens,
         // A kept answer settles a record whose map does not, which is all it may settle: a
         // map the record carries is this session's own and comes first.
-        askingTrust: opened.trust.known ? null : opened.record.directory,
+        askingTrust: opened.trust.known ? null : opened.shownDirectory,
         keepingTrust: opened.keeping ?? null,
+        shownKeepingTrust: opened.shownKeeping ?? null,
         confinedLinesNotice: opened.confinedLines ?? null,
         trustRemembered: opened.remembered ?? null,
         // Looked up rather than carried: this session may have been forked in another launch
@@ -303,6 +304,8 @@ export function App(): React.JSX.Element {
         settingsRules?: SettingsRules | null
         remembered?: KeptTrust | null
         keeping?: string | null
+        shownDirectory: string
+        shownKeeping?: string | null
         confinedLines?: string | null
       }>('session.new', {
         directory: chosen,
@@ -322,8 +325,9 @@ export function App(): React.JSX.Element {
         entries: [],
         todos: [],
         contextTokens: 0,
-        askingTrust: made.remembered ? null : chosen,
+        askingTrust: made.remembered ? null : made.shownDirectory,
         keepingTrust: made.keeping ?? null,
+        shownKeepingTrust: made.shownKeeping ?? null,
         confinedLinesNotice: made.confinedLines ?? null,
         trustRemembered: made.remembered ?? null,
         forkedFrom: null,
@@ -349,22 +353,24 @@ export function App(): React.JSX.Element {
     if (!handle || answeringTrust.current) return
     answeringTrust.current = true
     const path = openedLives.current.get(handle)?.keepingTrust ?? null
+    const shownPath = openedLives.current.get(handle)?.shownKeepingTrust ?? null
     // Said back to the bridge only for a question that showed the sentence: the bridge takes the
     // answer to cover confined lines (RUN-5) from this and from nothing else.
     const confinedLines = !!openedLives.current.get(handle)?.confinedLinesNotice
     try {
       const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted, confinedLines })
-      const remembered = kept === true && path ? { at: Math.floor(Date.now() / 1000), path } : null
+      const remembered = kept === true && path && shownPath ? { at: Math.floor(Date.now() / 1000), path, shownPath } : null
       updateSession(handle, (old) => (old ? {
         ...old,
         askingTrust: null,
         keepingTrust: null,
+        shownKeepingTrust: null,
         confinedLinesNotice: null,
         trustRemembered: remembered ?? old.trustRemembered,
       } : old))
       // Still a yes, for this session. Said, because the next session here will ask after all.
       if (kept === false) {
-        setProblem(`Trusting this directory for this chat only: the answer could not be written to ${path}, so the next chat here will ask.`)
+        setProblem(`Trusting this directory for this chat only: the answer could not be written to ${shownPath ?? path}, so the next chat here will ask.`)
       }
     } catch (error) {
       setProblem(String(error))
@@ -872,8 +878,9 @@ export function App(): React.JSX.Element {
           entries: t.fromSaid(forked.said),
           todos: Object.values(forked.todos).flat(),
           contextTokens: forked.contextTokens,
-          askingTrust: forked.trust.known ? null : forked.directory,
+          askingTrust: forked.trust.known ? null : forked.shownDirectory,
           keepingTrust: forked.keeping ?? null,
+          shownKeepingTrust: forked.shownKeeping ?? null,
           confinedLinesNotice: forked.confinedLines ?? null,
           trustRemembered: forked.remembered ?? null,
           // A fork is a session and not a bot, even when it was cut out of a bot's. A bot is one
@@ -1266,7 +1273,7 @@ export function App(): React.JSX.Element {
           onCancel={cancelRewind} onConfirm={() => void confirmRewind()} />
       })()}
       {live?.askingTrust && (
-        <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} confinedLines={live.confinedLinesNotice} onAnswer={answerTrust} />
+        <TrustPrompt directory={live.askingTrust} keeping={live.shownKeepingTrust} confinedLines={live.confinedLinesNotice} onAnswer={answerTrust} />
       )}
       <TooltipLayer />
     </div>

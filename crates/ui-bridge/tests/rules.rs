@@ -494,7 +494,12 @@ fn an_allow_rule_a_checkout_wrote_answers_nothing_and_is_reported() {
     assert_eq!(rules["allow"], json!([]), "{rules}");
     assert_eq!(
         rules["proposed"],
-        json!([{"rule": THE_SITE, "file": run.scratch.checkout_file().display().to_string()}]),
+        json!([{
+            "rule": THE_SITE,
+            "shownRule": THE_SITE,
+            "file": run.scratch.checkout_file().display().to_string(),
+            "shownFile": run.scratch.checkout_file().display().to_string(),
+        }]),
         "{rules}"
     );
 

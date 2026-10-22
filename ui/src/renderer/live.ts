@@ -82,10 +82,12 @@ export interface Live {
   tokens: number
   contextTokens?: number
   running: boolean
-  /** Set when a fresh session needs the trust question answered before it can run. */
+  /** Set when a fresh session needs the trust question answered before it can run: the directory it asks about, spelled for a person (PROMPT-1). */
   askingTrust: string | null
   /** Where a yes would be kept, while the question is asked and the answer may be kept (TRUST-23). */
   keepingTrust: string | null
+  /** `keepingTrust` spelled for a person: what the question draws. Null exactly when `keepingTrust` is. */
+  shownKeepingTrust: string | null
   /** What a yes also grants, said on the question and answered with `confinedLines` (RUN-5). */
   confinedLinesNotice: string | null
   /** The yes kept about this directory, as last heard: said above the transcript while it lasts. */
