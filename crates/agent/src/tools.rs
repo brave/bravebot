@@ -14319,6 +14319,33 @@ mod tests {
         );
     }
 
+    /// A wait is a way to spend part of one turn watching, and a planner that took it for a way to
+    /// be told later would end its turn promising to report on a job nobody is watching. Both
+    /// places the tool is offered say the wait ends with the turn.
+    #[test]
+    fn job_output_says_its_wait_stays_inside_the_turn() {
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "job_output")
+        .expect("job_output is offered");
+
+        let said = &tool.function.description;
+        for stated in [
+            "still a wait inside this turn",
+            "cannot tell you about anything that happens after the turn ends",
+        ] {
+            assert!(
+                said.contains(stated),
+                "job_output's description no longer says '{stated}': {said}"
+            );
+        }
+    }
+
     /// `until_exit` turns a wait that output ends into one that only the exit, the bound, the token
     /// or a stop ends. A flag taken for `false` where it was not understood hands back a wait that
     /// output ends, one given with no `wait_seconds` has no bound to wait to, and one given with
