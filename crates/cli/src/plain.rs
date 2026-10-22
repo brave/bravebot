@@ -731,6 +731,7 @@ struct Kept {
     handle: bravebot_session::sessions::Handle,
     turns: usize,
     tokens: u64,
+    split: bravebot_session::sessions::Split,
     spend: std::collections::BTreeMap<usize, u64>,
     timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
     /// The model that last answered, kept across a turn that failed before any server did.
@@ -750,6 +751,7 @@ impl Kept {
                 handle: Handle::resuming(root, record, Front::Terminal, bravebot_stamp::BUILD),
                 turns: record.turns,
                 tokens: record.tokens,
+                split: record.split,
                 spend: record.spend.clone(),
                 timing: record.timing.clone(),
                 model: record.model.clone(),
@@ -763,6 +765,7 @@ impl Kept {
                 ),
                 turns: 0,
                 tokens: 0,
+                split: Default::default(),
                 spend: std::collections::BTreeMap::new(),
                 timing: std::collections::BTreeMap::new(),
                 model: None,
@@ -784,6 +787,10 @@ impl Kept {
     ) {
         self.turns += 1;
         self.tokens += outcome.tokens;
+        self.split.add(bravebot_session::sessions::Split::of(
+            outcome.tokens,
+            outcome.output_tokens,
+        ));
         *self.spend.entry(self.turns).or_insert(0) += outcome.tokens;
         self.timing
             .entry(self.turns)
@@ -801,6 +808,7 @@ impl Kept {
         let turn = self.turns + 1;
         let charged = bravebot_session::sessions::charge_failed_turn(
             &mut self.tokens,
+            &mut self.split,
             &mut self.spend,
             &mut self.timing,
             turn,
@@ -842,6 +850,7 @@ impl Kept {
                 history: None,
                 turns: self.turns,
                 tokens: self.tokens,
+                split: self.split,
                 spend: &self.spend,
                 timing: &self.timing,
                 model: self.model.as_deref(),
@@ -1719,6 +1728,7 @@ mod tests {
         let mut kept = Kept::opening(&root, "id", None, None);
         let spent = bravebot_agent::Spent {
             tokens: 107,
+            output_tokens: 40,
             timing: Timing {
                 wall_ms: 999_999,
                 inference_ms: 11,
@@ -1733,6 +1743,14 @@ mod tests {
 
         assert!(kept.charge_failure(spent, std::time::Duration::from_millis(500)));
         assert_eq!((kept.turns, kept.tokens), (1, 107));
+        assert_eq!(
+            kept.split,
+            bravebot_session::sessions::Split {
+                read: 67,
+                written: 40
+            },
+            "the failed turn's tokens were not divided as the report counted them"
+        );
         assert_eq!(kept.spend.get(&1), Some(&107));
         assert_eq!(
             kept.timing.get(&1),

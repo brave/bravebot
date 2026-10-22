@@ -18671,11 +18671,24 @@ impl Spending {
         (turns, tokens): (u64, u64),
         model: Option<&str>,
     ) {
+        self.record_split(project, id, hours_ago, (turns, tokens), None, model);
+    }
+
+    /// The same, from a build that kept how the tokens divided into read and written.
+    fn record_split(
+        &self,
+        project: &Path,
+        id: &str,
+        hours_ago: u64,
+        (turns, tokens): (u64, u64),
+        split: Option<(u64, u64)>,
+        model: Option<&str>,
+    ) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("a clock after the epoch")
             .as_secs();
-        let record = serde_json::json!({
+        let mut record = serde_json::json!({
             "id": id,
             "title": "work",
             "directory": project.display().to_string(),
@@ -18684,6 +18697,9 @@ impl Spending {
             "tokens": tokens,
             "model": model,
         });
+        if let Some((read, written)) = split {
+            record["split"] = serde_json::json!({ "read": read, "written": written });
+        }
         let store = self.store(project);
         std::fs::write(store.join(format!("{id}.json")), record.to_string())
             .expect("seed the record");
@@ -18732,7 +18748,8 @@ fn stats_rows(stdout: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// The figures on the last row of a `stats` table, which is the total: sessions, turns, tokens.
+/// The figures on the last row of a `stats` table, which is the total: sessions, turns, tokens,
+/// read, written and unsplit.
 fn stats_total(stdout: &str) -> Vec<u64> {
     let rows = stats_rows(stdout);
     let total = rows
@@ -18753,7 +18770,7 @@ fn stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_tota
     let spending = Spending::new("cli-running-stats-totals");
     let one = spending.checkout("one");
     let two = spending.checkout("two");
-    spending.record(&one, "a", 24, (3, 1_000), Some("big"));
+    spending.record_split(&one, "a", 24, (3, 1_000), Some((700, 300)), Some("big"));
     spending.record(&one, "b", 240, (5, 250), Some("small"));
     spending.record(&two, "c", 48, (7, 30), Some("big"));
     let before = spending.records();
@@ -18761,7 +18778,11 @@ fn stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_tota
     let everything = spending.stats(&one, &[]);
     let (stdout, stderr) = said(&everything);
     assert!(everything.status.success(), "{stderr}");
-    assert_eq!(stats_total(&stdout), [3, 15, 1_280], "{stdout}");
+    assert_eq!(
+        stats_total(&stdout),
+        [3, 15, 1_280, 700, 300, 280],
+        "{stdout}"
+    );
     assert!(
         stdout.starts_with("Every recorded session, in every project"),
         "{stdout}"
@@ -18784,25 +18805,33 @@ fn stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_tota
     let recent = spending.stats(&one, &["--days", "3"]);
     let (stdout, stderr) = said(&recent);
     assert!(recent.status.success(), "{stderr}");
-    assert_eq!(stats_total(&stdout), [2, 10, 1_030], "{stdout}");
+    assert_eq!(
+        stats_total(&stdout),
+        [2, 10, 1_030, 700, 300, 30],
+        "{stdout}"
+    );
     assert!(stdout.contains("last 3 days"), "{stdout}");
 
     // Bare, the project is the directory the command ran in.
     let here = spending.stats(&one, &["--project"]);
     let (stdout, stderr) = said(&here);
     assert!(here.status.success(), "{stderr}");
-    assert_eq!(stats_total(&stdout), [2, 8, 1_250], "{stdout}");
+    assert_eq!(
+        stats_total(&stdout),
+        [2, 8, 1_250, 700, 300, 250],
+        "{stdout}"
+    );
     assert!(stdout.contains(&one.display().to_string()), "{stdout}");
 
     // Named, it is that directory whatever the command ran in.
     let named = spending.stats(&one, &["--project", &two.display().to_string()]);
     let (stdout, stderr) = said(&named);
     assert!(named.status.success(), "{stderr}");
-    assert_eq!(stats_total(&stdout), [1, 7, 30], "{stdout}");
+    assert_eq!(stats_total(&stdout), [1, 7, 30, 0, 0, 30], "{stdout}");
 
     // Both narrowings at once leave what is in both.
     let both = spending.stats(&one, &["--days", "3", "--project"]);
-    assert_eq!(stats_total(&said(&both).0), [1, 3, 1_000]);
+    assert_eq!(stats_total(&said(&both).0), [1, 3, 1_000, 700, 300, 0]);
 
     assert_eq!(spending.records(), before, "a stats run changed a record");
 }
@@ -18826,12 +18855,81 @@ fn stats_by_model_has_a_row_for_each_model_and_one_for_a_record_that_names_none(
     assert_eq!(
         stats_rows(&stdout),
         [
-            words(&["unknown", "1", "8", "8000"]),
-            words(&["small", "1", "4", "400"]),
-            words(&["big", "2", "3", "30"]),
-            words(&["Total", "4", "15", "8430"]),
+            words(&["unknown", "1", "8", "8000", "0", "0", "8000"]),
+            words(&["small", "1", "4", "400", "0", "0", "400"]),
+            words(&["big", "2", "3", "30", "0", "0", "30"]),
+            words(&["Total", "4", "15", "8430", "0", "0", "8430"]),
         ],
         "{stdout}"
+    );
+}
+
+/// CLI-37, SESSION-11: the record a one-shot run writes says how its tokens divided, and `stats`
+/// adds the division up. The gateway reports two requests, 12 in and 5 out, then 30 in and 4 out,
+/// so the run spent 51 tokens of which 9 were written. A second turn carried on with `--continue`
+/// finds the refused write already in the conversation and is answered by the one request, 30 in and
+/// 4 out. It is added to the record it was read from, so the figures are those of both runs, and the
+/// rewind point the continued turn opens holds the split of what was spent before it.
+#[test]
+fn stats_reports_how_the_tokens_of_one_shot_runs_divided() {
+    let gateway = a_gateway_asking_for_a_write();
+    let scratch = Scratch::new("cli-running-stats-split").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(&project).expect("a project");
+    let stats = || {
+        let output = bravebot_started_in(&scratch.path, &project, &[], &["stats"]);
+        let (stdout, stderr) = said(&output);
+        assert!(output.status.success(), "{stderr}");
+        stats_total(&stdout)
+    };
+
+    let first = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["-p", "write out.txt"],
+    );
+    assert_eq!(first.status.code(), Some(4), "{:?}", said(&first));
+    assert_eq!(stats(), [1, 1, 51, 42, 9, 0], "the first run's split");
+
+    let second = bravebot_started_in(
+        &scratch.path,
+        &project,
+        AT_A_GATEWAY,
+        &["--continue", "-p", "write out.txt"],
+    );
+    assert!(second.status.success(), "{:?}", said(&second));
+    assert_eq!(
+        stats(),
+        [1, 2, 85, 72, 13, 0],
+        "the continued turn's split was not added to the record's"
+    );
+
+    // The point the continued turn opened stands before it, so undoing the turn in a session
+    // resumed next puts back the first run's tokens and the split they had.
+    let store = scratch
+        .path
+        .join(".bravebot/sessions")
+        .join(bravebot_agent::home::key_for(
+            &project.canonicalize().unwrap(),
+        ));
+    let record = std::fs::read_dir(&store)
+        .expect("the store")
+        .map(|entry| entry.expect("an entry").path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .expect("the record");
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(record).unwrap()).unwrap();
+    let point = record["rewind"].as_array().and_then(|points| points.last());
+    let point = point.unwrap_or_else(|| panic!("the continued turn opened no point: {record}"));
+    assert_eq!(point["tokens"], 51, "{point}");
+    assert_eq!(
+        point["split"],
+        serde_json::json!({"read": 42, "written": 9}),
+        "the point lost the split of the tokens before the turn: {point}"
     );
 }
 
@@ -18852,7 +18950,7 @@ fn stats_counts_a_record_it_cannot_read_without_naming_it() {
 
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "{stderr}");
-    assert_eq!(stats_total(&stdout), [1, 2, 20], "{stdout}");
+    assert_eq!(stats_total(&stdout), [1, 2, 20, 0, 0, 20], "{stdout}");
     assert!(
         stderr.contains(
             "2 entries in the sessions directory could not be read as records and are not counted."
@@ -18926,6 +19024,6 @@ fn stats_runs_under_incognito_and_counts_the_records_written_before() {
 
     let (stdout, stderr) = said(&output);
     assert!(output.status.success(), "{stderr}");
-    assert_eq!(stats_total(&stdout), [1, 2, 20], "{stdout}");
+    assert_eq!(stats_total(&stdout), [1, 2, 20, 0, 0, 20], "{stdout}");
     assert_eq!(spending.records(), before);
 }

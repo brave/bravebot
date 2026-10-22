@@ -1,13 +1,18 @@
 //! What the recorded sessions spent, totalled across the store (CLI-37).
 //!
-//! Reads the records under the sessions directory and adds up three numbers from each: how many
-//! turns it had, how many tokens it spent, and which model answered last. Nothing is written, and
+//! Reads the records under the sessions directory and adds up four numbers from each: how many
+//! turns it had, how many tokens it spent, how many of those the model read and how many it wrote,
+//! and which model answered last. Nothing is written, and
 //! nothing in a record is read for what it says: the figures are the ones the program itself wrote
 //! down, and the model name is the one the server reported.
 //!
 //! A record holds one total for the session, and the model that answered its last turn. A total
 //! cannot be split by day inside a session or by model across turns, so a session is counted
 //! whole, under the day it was last written and the model it last used.
+//!
+//! The split into read and written covers what the record kept it for. A record written before the
+//! split was kept has none, and a session that went on after one has it for the later turns only,
+//! so the two figures can total less than the tokens, and [`Spent::unsplit`] is the difference.
 
 use crate::sessions;
 use serde::Deserialize;
@@ -33,6 +38,9 @@ pub struct Spent {
     pub sessions: u64,
     pub turns: u64,
     pub tokens: u64,
+    /// Of `tokens`, those the model read and those it wrote, for the sessions that recorded the
+    /// split.
+    pub split: sessions::Split,
 }
 
 impl Spent {
@@ -42,7 +50,18 @@ impl Spent {
             sessions: 1,
             turns: counted.turns,
             tokens: counted.tokens,
+            // A record somebody edited by hand can name a split past its own total, which would make
+            // `unsplit` wrap; the split is cut to the total so a session never reads as more than it
+            // spent.
+            split: counted.split.within(counted.tokens),
         }
+    }
+
+    /// The tokens no split was recorded for: what the total holds beyond the two figures.
+    pub fn unsplit(&self) -> u64 {
+        self.tokens
+            .saturating_sub(self.split.read)
+            .saturating_sub(self.split.written)
     }
 
     /// Add another total to this one.
@@ -53,6 +72,7 @@ impl Spent {
         self.sessions = self.sessions.saturating_add(other.sessions);
         self.turns = self.turns.saturating_add(other.turns);
         self.tokens = self.tokens.saturating_add(other.tokens);
+        self.split.add(other.split);
     }
 }
 
@@ -95,6 +115,9 @@ struct Counted {
     /// Absent from a record written before spend was kept, which reads as none.
     #[serde(default)]
     tokens: u64,
+    /// Absent from a record written before the split was kept, which reads as none recorded.
+    #[serde(default)]
+    split: sessions::Split,
     /// Absent from a record written before the model was kept.
     #[serde(default)]
     model: Option<String>,
@@ -222,7 +245,20 @@ mod tests {
             tokens: u64,
             model: Option<&str>,
         ) {
-            let record = serde_json::json!({
+            self.session_split(project, id, updated, (turns, tokens), None, model);
+        }
+
+        /// The same, from a build that kept how the tokens divided.
+        fn session_split(
+            &self,
+            project: &Path,
+            id: &str,
+            updated: u64,
+            (turns, tokens): (u64, u64),
+            split: Option<(u64, u64)>,
+            model: Option<&str>,
+        ) {
+            let mut record = serde_json::json!({
                 "id": id,
                 "title": "t",
                 "directory": project.display().to_string(),
@@ -231,6 +267,9 @@ mod tests {
                 "tokens": tokens,
                 "model": model,
             });
+            if let Some((read, written)) = split {
+                record["split"] = serde_json::json!({ "read": read, "written": written });
+            }
             self.write(project, id, &record.to_string());
         }
     }
@@ -249,6 +288,15 @@ mod tests {
             sessions,
             turns,
             tokens,
+            split: sessions::Split::default(),
+        }
+    }
+
+    /// The same, for sessions that recorded how the tokens divided.
+    fn spent_split(sessions: u64, turns: u64, read: u64, written: u64) -> Spent {
+        Spent {
+            split: sessions::Split { read, written },
+            ..spent(sessions, turns, read + written)
         }
     }
 
@@ -453,6 +501,72 @@ mod tests {
         assert_eq!(totals.all, spent(2, u64::MAX, u64::MAX));
     }
 
+    /// The split is added over the records that kept it, and a record that did not is left out of
+    /// both figures. Counting its tokens as read would make the figures sum to the total while
+    /// saying something no record does.
+    #[test]
+    fn the_split_totals_the_records_that_kept_it_and_leaves_the_rest_unsplit() {
+        let store = Store::new("stats-split");
+        let here = Path::new("/w/one");
+        store.session_split(here, "a", NOW, (3, 1_000), Some((700, 300)), Some("m"));
+        store.session_split(here, "b", NOW, (1, 100), Some((60, 40)), Some("m"));
+        store.session(here, "old", NOW, 5, 400, Some("m"));
+
+        let totals = totals_under(&store.root, Scope::default());
+
+        assert_eq!(
+            totals.all,
+            Spent {
+                sessions: 3,
+                turns: 9,
+                tokens: 1_500,
+                split: sessions::Split {
+                    read: 760,
+                    written: 340,
+                },
+            }
+        );
+        assert_eq!(totals.all.unsplit(), 400);
+    }
+
+    /// A session picked up from a record written before the split was kept holds the split for the
+    /// turns after it, so what it leaves out is the older turns' tokens and not the whole session's.
+    #[test]
+    fn a_session_that_went_on_after_an_unsplit_record_is_split_for_the_later_turns_only() {
+        let store = Store::new("stats-split-resumed");
+        let here = Path::new("/w/one");
+        store.session_split(here, "a", NOW, (4, 1_000), Some((150, 50)), Some("m"));
+
+        let totals = totals_under(&store.root, Scope::default());
+
+        assert_eq!(totals.all.split.read + totals.all.split.written, 200);
+        assert_eq!(totals.all.unsplit(), 800);
+    }
+
+    /// A record somebody edited can name a split larger than its own total. The figures are cut to
+    /// the total, so the tokens a session is said not to have a split for never wrap past zero.
+    #[test]
+    fn a_split_past_the_total_is_cut_to_it() {
+        let store = Store::new("stats-split-past-total");
+        let here = Path::new("/w/one");
+        store.session_split(
+            here,
+            "a",
+            NOW,
+            (1, 100),
+            Some((u64::MAX, u64::MAX)),
+            Some("m"),
+        );
+        store.session_split(here, "b", NOW, (1, 100), Some((80, 20)), Some("m"));
+
+        let totals = totals_under(&store.root, Scope::default());
+
+        assert_eq!(totals.all.tokens, 200);
+        assert_eq!(totals.all.split.written, 120);
+        assert_eq!(totals.all.split.read, 80);
+        assert_eq!(totals.all.unsplit(), 0);
+    }
+
     /// A person with no sessions, and one asking about a project that has none, are told so with
     /// zeros, not with a failure.
     #[test]
@@ -572,6 +686,10 @@ mod tests {
                 conversation: &snapshot,
                 turns: 3,
                 tokens: 1_234,
+                split: sessions::Split {
+                    read: 1_000,
+                    written: 234,
+                },
                 spend: &BTreeMap::from([(1, 1_234)]),
                 timing: &BTreeMap::new(),
                 model: Some("a-model"),
@@ -591,10 +709,10 @@ mod tests {
             since: None,
         });
 
-        assert_eq!(totals.all, spent(1, 3, 1_234));
+        assert_eq!(totals.all, spent_split(1, 3, 1_000, 234));
         assert_eq!(
             totals.by_model[&Some("a-model".to_string())],
-            spent(1, 3, 1_234)
+            spent_split(1, 3, 1_000, 234)
         );
         assert_eq!(totals.unreadable, 0);
     }

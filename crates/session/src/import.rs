@@ -169,6 +169,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         },
         turns: 0,
         tokens: 0,
+        split: Default::default(),
         model: None,
         spend: Default::default(),
         timing: Default::default(),

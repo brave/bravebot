@@ -1466,6 +1466,7 @@ impl Bridge {
         state.conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
         state.turns = snapshot.turns;
         state.tokens = snapshot.tokens;
+        state.split = snapshot.split;
         state.spend = snapshot.spend;
         state.timing = snapshot.timing;
         // The snapshot's approvals that are still held. The terminal takes the snapshot's whole,
@@ -2556,6 +2557,10 @@ fn work(work: Work) {
                 }
             }
             state.tokens += outcome.tokens;
+            state.split.add(bravebot_session::sessions::Split::of(
+                outcome.tokens,
+                outcome.output_tokens,
+            ));
             // Added to rather than set: a turn that compacted part way through has already put
             // that cost here under the same number, and the breakdown has to add up to the total.
             *state.spend.entry(turn).or_insert(0) += outcome.tokens;
@@ -2617,6 +2622,7 @@ fn work(work: Work) {
             let charged = &mut *state;
             bravebot_session::sessions::charge_failed_turn(
                 &mut charged.tokens,
+                &mut charged.split,
                 &mut charged.spend,
                 &mut charged.timing,
                 turn,
@@ -2771,6 +2777,7 @@ fn open_rewind_point(state: &mut State, workspace: &Workspace, prompt: &str) {
         conversation: state.conversation.snapshot(),
         turns: state.turns,
         tokens: state.tokens,
+        split: state.split,
         spend: state.spend.clone(),
         timing: state.timing.clone(),
         cached: None,
@@ -2864,6 +2871,7 @@ pub(crate) fn save(
             conversation: &snapshot,
             turns: state.turns,
             tokens: state.tokens,
+            split: state.split,
             spend: &state.spend,
             timing: &state.timing,
             model: state.model.as_deref(),

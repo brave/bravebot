@@ -154,6 +154,7 @@ fn a_session_is_written_to_the_named_directory() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
