@@ -11957,6 +11957,133 @@ fn read_git<S: Sink, C: Confirmer>(
 
 #[cfg(test)]
 mod tests {
+    /// EDIT-8: a malformed cell argument is refused before the file is read, so nothing is written.
+    /// Each row is a call that is wrong in one way, with the words of the refusal that names it.
+    #[test]
+    fn a_malformed_cell_argument_is_refused() {
+        let refused = [
+            (json!({"cell_action": "delete"}), "go with 'cell'"),
+            (json!({"cell_type": "markdown"}), "go with 'cell'"),
+            (json!({"cell": 1.5, "new_text": "x"}), "whole number"),
+            (json!({"cell": -1, "new_text": "x"}), "whole number"),
+            (json!({"cell": "1", "new_text": "x"}), "whole number"),
+            (
+                json!({"cell": 1, "cell_action": "move", "new_text": "x"}),
+                "'cell_action' must be",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "insert_after", "cell_type": "raw", "new_text": "x"}),
+                "'cell_type' must be",
+            ),
+            (
+                json!({"cell": 1, "cell_type": "markdown", "new_text": "x"}),
+                "is for an insert_after",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "replace", "cell_type": "code", "new_text": "x"}),
+                "is for an insert_after",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "delete", "cell_type": "code"}),
+                "is for an insert_after",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "delete", "new_text": "x"}),
+                "takes no 'new_text'",
+            ),
+            (json!({"cell": 1}), "'new_text' is required"),
+            (
+                json!({"cell": 1, "cell_action": "insert_after"}),
+                "'new_text' is required",
+            ),
+            (json!({"cell": 1, "new_text": 7}), "'new_text' is required"),
+            (json!({"cell": 0, "new_text": "x"}), "numbered from 1"),
+            (
+                json!({"cell": 0, "cell_action": "delete"}),
+                "numbered from 1",
+            ),
+            (
+                json!({"cell": 1, "old_text": "a", "new_text": "x"}),
+                "cannot be given with",
+            ),
+            (
+                json!({"cell": 1, "edits": [], "new_text": "x"}),
+                "cannot be given with",
+            ),
+            (
+                json!({"cell": 1, "replace_all": true, "new_text": "x"}),
+                "cannot be given with",
+            ),
+        ];
+        for (arguments, words) in refused {
+            match cell_request(&arguments) {
+                Err(problem) => assert!(
+                    problem.contains(words),
+                    "{arguments} was refused with {problem:?}, which does not say {words:?}"
+                ),
+                Ok(_) => panic!("{arguments} was accepted"),
+            }
+        }
+    }
+
+    /// EDIT-8: the calls the table above sits beside are accepted, with the action, the cell
+    /// number and the cell type each mapped to the request they name. A call with no `cell` is not
+    /// a cell edit.
+    #[test]
+    fn a_well_formed_cell_argument_is_accepted_as_what_it_names() {
+        use crate::notebook::CellKind;
+        let accepted = [
+            (
+                json!({"cell": 2, "new_text": "x"}),
+                CellAction::Replace,
+                2,
+                CellKind::Code,
+            ),
+            (
+                json!({"cell": 2, "cell_action": "replace", "new_text": "x"}),
+                CellAction::Replace,
+                2,
+                CellKind::Code,
+            ),
+            (
+                json!({"cell": 0, "cell_action": "insert_after", "cell_type": "markdown", "new_text": "x"}),
+                CellAction::InsertAfter,
+                0,
+                CellKind::Markdown,
+            ),
+            (
+                json!({"cell": 3, "cell_action": "insert_after", "new_text": "x"}),
+                CellAction::InsertAfter,
+                3,
+                CellKind::Code,
+            ),
+            (
+                json!({"cell": 1, "cell_action": "delete"}),
+                CellAction::Delete,
+                1,
+                CellKind::Code,
+            ),
+        ];
+        for (arguments, action, cell, kind) in accepted {
+            let request = cell_request(&arguments)
+                .unwrap_or_else(|problem| panic!("{arguments} was refused: {problem}"))
+                .unwrap_or_else(|| panic!("{arguments} was not read as a cell edit"));
+            assert!(request.action == action, "{arguments}: wrong action");
+            assert_eq!(request.cell, cell, "{arguments}");
+            assert!(request.kind == kind, "{arguments}: wrong cell type");
+        }
+        assert!(
+            cell_request(&json!({"old_text": "a", "new_text": "b"}))
+                .is_ok_and(|request| request.is_none()),
+            "a passage edit was read as a cell edit"
+        );
+        assert!(
+            cell_request(&json!({"cell": null, "old_text": "a", "new_text": "b"}))
+                .is_ok_and(|request| request.is_none()),
+            "a null cell was read as a cell edit"
+        );
+    }
+
     /// WRITE-7: the editor is offered for the planner's own text in a trusted context and for
     /// nothing else. A body from a quarantined reference is never offered one, whatever its label
     /// says, and neither is text a planner wrote after it had met untrusted content: the person's
