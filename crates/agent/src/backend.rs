@@ -287,7 +287,9 @@ pub(crate) fn fallback_after(
 /// stopped reaches the turn loop only through a Bedrock client, which signs for and addresses AWS.
 #[cfg(test)]
 pub(crate) mod scripted {
-    use super::{BackendError, ChatRequest, Completion};
+    use super::{BackendError, ChatRequest, Completion, Progress};
+    use bravebot_core::label::Label;
+    use bravebot_core::value::Labelled;
     use std::cell::RefCell;
     use std::collections::VecDeque;
 
@@ -295,12 +297,21 @@ pub(crate) mod scripted {
         static REPLIES: RefCell<Option<VecDeque<Result<Completion, BackendError>>>> =
             const { RefCell::new(None) };
         static ASKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static THOUGHT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
     /// Answer the next requests on this thread with `replies`, and forget what was asked before.
     pub(crate) fn script(replies: Vec<Result<Completion, BackendError>>) {
         REPLIES.with(|scripted| *scripted.borrow_mut() = Some(replies.into()));
         ASKED.with(|asked| asked.borrow_mut().clear());
+        THOUGHT.with(|thought| thought.borrow_mut().clear());
+    }
+
+    /// Report `pieces` as the thinking a service streamed, one report each, ahead of every scripted
+    /// reply from here on, as a streamed Bedrock reply does. Forgotten by the next [`script`].
+    pub(crate) fn thinking_before_each_reply(pieces: &[&str]) {
+        THOUGHT
+            .with(|thought| *thought.borrow_mut() = pieces.iter().map(|p| p.to_string()).collect());
     }
 
     /// The body of each request a scripted reply answered, in order.
@@ -312,6 +323,21 @@ pub(crate) mod scripted {
     /// test on this thread.
     pub(crate) fn clear() {
         REPLIES.with(|scripted| *scripted.borrow_mut() = None);
+        THOUGHT.with(|thought| thought.borrow_mut().clear());
+    }
+
+    /// Hand `progress` the thinking scripted for each reply, with nothing else in the report.
+    pub(super) fn report_thinking(mut progress: impl FnMut(Progress)) {
+        for piece in THOUGHT.with(|thought| thought.borrow().clone()) {
+            progress(Progress {
+                written: Labelled::new("", Label::untrusted_public()),
+                output_tokens: 0,
+                calling: None,
+                thinking: Labelled::new(&piece, Label::untrusted_public()),
+                counted_by_server: false,
+                attempt: 1,
+            });
+        }
     }
 
     /// The scripted reply to `request`, where this thread has a script. A script that has run out
@@ -995,6 +1021,7 @@ impl<'a> Backend<'a> {
     ) -> Result<Completion, BackendError> {
         #[cfg(test)]
         if let Some(reply) = scripted::next(request) {
+            scripted::report_thinking(progress);
             return reply;
         }
         match self {

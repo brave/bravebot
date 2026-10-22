@@ -617,6 +617,7 @@ impl<'a> AnthropicClient<'a> {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
                         calling: None,
+                        thinking: Labelled::new("", Label::untrusted_public()),
                         counted_by_server: false,
                         attempt,
                     });
@@ -756,6 +757,7 @@ impl<'a> AnthropicClient<'a> {
                 written: Labelled::new(&reply.text[written_before..], label),
                 output_tokens: reply.output_so_far(),
                 calling: reply.calling().map(|name| Labelled::new(name, label)),
+                thinking: Labelled::new("", label),
                 counted_by_server: reply.counted,
                 attempt,
             });

@@ -40,6 +40,12 @@ pub use entry::{
 pub use scroller::{Laid, Scroller};
 pub use watching::Watching;
 
+/// How many bytes of the model's thinking are kept for the screen, counted from the end.
+///
+/// The thinking is split into lines and drawn again on every frame, so this bounds that work
+/// however long the model thinks.
+const THINKING_KEPT: usize = 4096;
+
 /// How many newlines a paste carries before it is folded behind a marker.
 ///
 /// Counted in newlines rather than in lines so that three lines with nothing after the last of
@@ -734,6 +740,9 @@ pub struct Session {
     pub status: Status,
     /// Whether the audit trail is shown alongside replies.
     pub show_trail: bool,
+    /// Whether the model's thinking is drawn as it arrives. For this session only, and a matter of
+    /// what is drawn: nothing the model is asked or sent depends on it.
+    show_thinking: bool,
     /// Whether the person has the info panel open, which the frame then draws only where it fits.
     panel: bool,
     /// The info panel's files state, while it is open (FILES-3).
@@ -1177,6 +1186,13 @@ pub struct Session {
     /// Held as it arrived. What is drawn from it is [`Session::reply_so_far`], since a model
     /// that has nowhere else to put its working writes it in here.
     streaming: String,
+    /// What the model has thought in the round now being written, as far back as is kept.
+    ///
+    /// Apart from `streaming` and from the transcript: it is no part of the reply, is never
+    /// written to the session record or sent in a later request, and goes when the round does. The
+    /// end of it only, since a model can think for minutes and every frame draws what is held.
+    /// Held whether or not it is being shown, so turning it on mid-round shows what has come so far.
+    thinking: String,
     /// What the command running right now has printed, as far as it has got and as far back as is
     /// kept (SHELL-7).
     ///
@@ -1411,6 +1427,7 @@ impl Session {
             ordinary_run_open: false,
             status: Status::Idle,
             show_trail: false,
+            show_thinking: false,
             panel: false,
             files: None,
             panel_width: crate::panel::WIDTH,
@@ -1505,6 +1522,7 @@ impl Session {
             pending: crate::remote_confirm::Interjections::new(),
             held: std::collections::VecDeque::new(),
             streaming: String::new(),
+            thinking: String::new(),
             command_output: String::new(),
             command_earlier: 0,
             said_while_working: Vec::new(),
@@ -1914,6 +1932,7 @@ impl Session {
         if self.attributed_to.is_none() {
             self.waiting_on = None;
             self.streaming.clear();
+            self.thinking.clear();
         }
         self.drop_composing();
     }
@@ -1985,6 +2004,45 @@ impl Session {
         self.streaming.push_str(text);
     }
 
+    /// Add what the model has thought since the last frame.
+    ///
+    /// Dropped for a delegate for the reason its half-written reply is: there is one model
+    /// thinking at a time, and a delegate's thought drawn at the turn's tail reads as the planner's.
+    /// Only the end is kept, however long the model thinks.
+    pub fn thinking(&mut self, text: &str) {
+        if text.is_empty() || self.attributed_to.is_some() {
+            return;
+        }
+        self.thinking.push_str(text);
+        if let Some(excess) = self.thinking.len().checked_sub(THINKING_KEPT) {
+            let mut cut = excess;
+            while !self.thinking.is_char_boundary(cut) {
+                cut += 1;
+            }
+            self.thinking.drain(..cut);
+        }
+    }
+
+    /// The thinking to draw at the tail: what the model has thought this round, while it is being
+    /// shown, and nothing otherwise.
+    pub fn thinking_so_far(&self) -> &str {
+        if self.show_thinking {
+            self.thinking.trim()
+        } else {
+            ""
+        }
+    }
+
+    /// Show the model's thinking as it arrives, or stop showing it, and say which.
+    pub fn toggle_thinking(&mut self) {
+        self.show_thinking = !self.show_thinking;
+        self.note(if self.show_thinking {
+            t!(thinking_on)
+        } else {
+            t!(thinking_off)
+        });
+    }
+
     /// Record the call the model is writing, or that an attempt thrown away took it back.
     ///
     /// A delegate's is dropped for the reason its half-written reply is: there is one model
@@ -2040,6 +2098,7 @@ impl Session {
         // has been showing, now on their way into the transcript, so leaving the tail up would
         // draw them twice; and a round that said nothing has nothing to leave up either.
         self.streaming.clear();
+        self.thinking.clear();
         self.drop_composing();
         let text = text.into();
         let text = crate::reasoning::spoken(&text);
@@ -2955,6 +3014,7 @@ impl Session {
         // them, so they come down with the stop as they do at every other ending a round has.
         // Left up they are an answer drawn above a prompt that has gone back to the box.
         self.streaming.clear();
+        self.thinking.clear();
         self.composing = None;
 
         self.forget_cancelled_prompt();
@@ -4550,6 +4610,7 @@ impl Session {
         self.started = None;
         self.clear_in_progress();
         self.streaming.clear();
+        self.thinking.clear();
         self.composing = None;
         // The driver says which jobs the turn stopped before it says the turn is over. A worker
         // that ended without saying so stopped them all the same, since none outlives its turn,
@@ -4729,6 +4790,7 @@ impl Session {
         // said it, which the planner has not: what an aside wrote is the aside's, and the row it
         // becomes is where it is drawn.
         self.streaming.clear();
+        self.thinking.clear();
         self.composing = None;
         // Read before the timer is cleared.
         let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -5007,6 +5069,23 @@ mod tests {
             });
             session.reporting_for(Some(id));
             id
+        }
+
+        /// One model thinks at a time, and a delegate's thought drawn at the turn's tail reads as
+        /// the planner's.
+        #[test]
+        fn a_delegates_thinking_is_not_the_turns() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            session.toggle_thinking();
+            spawn(&mut session, "explore", "look around");
+            session.thinking("a delegate's");
+            assert_eq!(
+                session.thinking_so_far(),
+                "",
+                "a delegate's thought was the turn's"
+            );
         }
 
         /// One model writes at a time, and a delegate's call named beside the turn's spinner reads
@@ -13843,6 +13922,36 @@ mod tests {
             s.checking(bravebot_core::vetting::Checking::Lines(3));
             s.complete("done", Vec::new(), 0);
             assert!(s.checking.is_none(), "a check outlived the turn");
+        }
+
+        /// The thinking is kept whether or not it is shown, shown only while asked for, and ends
+        /// with the round. A delegate's is not the turn's, and only the end of a long one is kept,
+        /// whole characters of it.
+        #[test]
+        fn thinking_is_held_shown_on_request_and_ends_with_the_round() {
+            let mut s = working();
+            s.thinking("first ");
+            s.thinking("second");
+            assert_eq!(s.thinking_so_far(), "", "shown without being asked for");
+            s.toggle_thinking();
+            assert_eq!(s.thinking_so_far(), "first second");
+
+            s.set_phase(Phase::Planning);
+            assert_eq!(s.thinking_so_far(), "", "the next round saw the last one's");
+
+            s.thinking("again");
+            s.narrate("an answer");
+            assert_eq!(s.thinking_so_far(), "", "the round's words left it up");
+
+            let long = "é".repeat(THINKING_KEPT);
+            s.thinking(&long);
+            s.thinking("end");
+            let kept = s.thinking_so_far();
+            assert!(
+                kept.ends_with("éend") && kept.len() <= THINKING_KEPT,
+                "{}",
+                kept.len()
+            );
         }
 
         /// A stop takes the word from everything else on the row and gives it up with the turn it

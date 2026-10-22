@@ -158,6 +158,11 @@ pub(crate) const FILES_COMMAND: &str = "/files";
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
 
+/// The line that shows or hides the model's thinking as it arrives.
+///
+/// Answered by the screen alone: it changes what is drawn and sends nothing to the model.
+pub(crate) const THINKING_COMMAND: &str = "/thinking";
+
 /// The line that lists the checkouts delegates kept, and removes one by its number.
 ///
 /// A checkout something was done in outlives its delegate, and nothing else removes it.
@@ -358,7 +363,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 53] {
+pub fn commands() -> [Command; 54] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -568,6 +573,12 @@ pub fn commands() -> [Command; 53] {
             name: CAFFEINATE_COMMAND,
             argument: "",
             description: t!(command_caffeinate),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: THINKING_COMMAND,
+            argument: "",
+            description: t!(command_thinking),
             mid_turn: MidTurn::Runs,
         },
         Command {

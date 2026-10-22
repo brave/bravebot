@@ -716,6 +716,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.toggle_files();
         return Action::Redraw;
     }
+    if line.trim() == THINKING_COMMAND {
+        session.toggle_thinking();
+        return Action::Redraw;
+    }
     if line.trim() == CAFFEINATE_COMMAND {
         session.toggle_caffeinate();
         return Action::Redraw;
@@ -4563,6 +4567,7 @@ fn compact_reported(session: &mut Session, message: crate::remote_confirm::ToMai
         crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
         crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
         crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
+        crate::remote_confirm::ToMain::Thinking(text) => session.thinking(&text),
         crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
         crate::remote_confirm::ToMain::HookStarted(moment, program) => {
             session.hook_running(moment, program)
@@ -6111,6 +6116,7 @@ fn run_turn_animated(
                 crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
                 crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
                 crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
+                crate::remote_confirm::ToMain::Thinking(text) => session.thinking(&text),
                 crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
                 crate::remote_confirm::ToMain::Started(activity) => {
                     session.start_activity(activity)
@@ -6434,6 +6440,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         | ToMain::Narration(_)
         | ToMain::Notice(_)
         | ToMain::Streaming(_)
+        | ToMain::Thinking(_)
         | ToMain::Composing(_)
         | ToMain::Started(_)
         | ToMain::Finished(_)
@@ -21888,9 +21895,36 @@ mod tests {
                 STATUS_COMMAND,
                 STYLE_COMMAND,
                 THEME_COMMAND,
+                THINKING_COMMAND,
                 WATCH_COMMAND,
             ]
         );
+    }
+
+    /// `/thinking` is carried out as typed, mid-turn included, since the thinking is most worth
+    /// seeing while it arrives, and it turns what is drawn on and off and nothing else.
+    #[test]
+    fn the_thinking_command_toggles_what_is_drawn_and_runs_mid_turn() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            commands()
+                .into_iter()
+                .find(|command| command.name == THINKING_COMMAND)
+                .map(|command| command.mid_turn),
+            Some(MidTurn::Runs)
+        );
+        session.thinking("the user wants a file");
+        assert_eq!(session.thinking_so_far(), "");
+        assert_eq!(
+            dispatch_command(&mut session, commanded(THINKING_COMMAND)),
+            Action::Redraw
+        );
+        assert_eq!(session.thinking_so_far(), "the user wants a file");
+        assert_eq!(
+            dispatch_command(&mut session, commanded(THINKING_COMMAND)),
+            Action::Redraw
+        );
+        assert_eq!(session.thinking_so_far(), "");
     }
 
     /// The key and the command are two ways to one toggle, and a moved key leaves the old chord

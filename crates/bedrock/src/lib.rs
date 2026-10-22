@@ -810,6 +810,7 @@ impl<'a> BedrockClient<'a> {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
                         calling: None,
+                        thinking: Labelled::new("", Label::untrusted_public()),
                         counted_by_server: false,
                         attempt,
                     });
@@ -945,10 +946,12 @@ impl<'a> BedrockClient<'a> {
                 }
             }
 
+            let thinking = std::mem::take(&mut reply.thinking);
             progress(Progress {
                 written: Labelled::new(&reply.text[written_before..], label),
                 output_tokens: reply.output_so_far(),
                 calling: reply.calling().map(|name| Labelled::new(name, label)),
+                thinking: Labelled::new(&thinking, label),
                 counted_by_server: reply.counted,
                 attempt,
             });
@@ -1164,6 +1167,9 @@ struct Reply {
     last_block: Option<usize>,
     /// Whether any reasoning arrived. Known from the key its delta arrives under.
     thought: bool,
+    /// The words of that reasoning not yet reported to the caller's screen. Taken at every report,
+    /// so it holds one frame's worth, and it is never part of `text`, which is what the reply is.
+    thinking: String,
     /// Whether a known content frame or block could not be decoded.
     ///
     /// Kept rather than failed on the spot so the stream is still drained: the reply is refused
@@ -1247,8 +1253,13 @@ impl Reply {
                         {
                             self.unreadable_content = true;
                         }
-                        if value.get(protocol::REASONING).is_some() {
+                        if let Some(reasoning) = value.get(protocol::REASONING) {
                             self.thought = true;
+                            if let Some(words) =
+                                reasoning.get("text").and_then(serde_json::Value::as_str)
+                            {
+                                self.thinking.push_str(words);
+                            }
                         }
                     }
                 }
@@ -3058,6 +3069,63 @@ mod tests {
             completion.usage.completion_tokens, 0,
             "the live tally was charged"
         );
+    }
+
+    /// The thinking a streamed reply carries is handed to the caller's screen as it arrives and is
+    /// no part of what the reply is: the words are the answer alone, and a signature or a
+    /// redacted piece, which carry no text, add nothing.
+    #[test]
+    fn thinking_reaches_progress_and_never_the_reply() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let model = "a-model-that-thinks";
+        let reply = streamed(vec![
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"The user "}}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"wants a file"}}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"c2ln"}}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":1,"delta":{"text":"Here it is."}}"#,
+            ),
+            eventstream::tests::frame("messageStop", br#"{"stopReason":"end_turn"}"#),
+        ]);
+        let config = config_for(model);
+        let egress = Egress::new();
+        let (http, _received) = scripted_with_silences(vec![(reply, false)]);
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+        let shown = policy.authorise_display_release("the reply as the model writes it");
+
+        let mut thought = String::new();
+        let result = client.complete_streaming(&mut policy, &writing_a_file(model), |progress| {
+            thought.push_str(progress.thinking.declassify(&shown));
+        });
+
+        let completion = result.expect("a reply that thought and then answered");
+        assert_eq!(thought, "The user wants a file");
+        assert_eq!(completion.content.declassify(&shown), "Here it is.");
     }
 
     /// Announcing a retry before a wait must not count it as sent when the caller cancels.

@@ -762,6 +762,7 @@ impl<'a> AichatClient<'a> {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
                         calling: None,
+                        thinking: Labelled::new("", Label::untrusted_public()),
                         counted_by_server: false,
                         attempt,
                     });
@@ -970,6 +971,7 @@ impl<'a> AichatClient<'a> {
                     |usage| usage.completion_tokens,
                 ),
                 calling: accumulated.calling().map(|name| Labelled::new(name, label)),
+                thinking: Labelled::new("", label),
                 counted_by_server: reported.is_some(),
                 attempt,
             });
@@ -1041,6 +1043,12 @@ pub struct Progress<'a> {
     /// then this is the only sign of what the model is doing through a silence that can last
     /// minutes.
     pub calling: Option<Labelled<&'a str>>,
+    /// What the model thought since the last report, still labelled, for a service that sends its
+    /// thinking as it goes (BACKEND-46).
+    ///
+    /// Carried for a screen and read by nothing else: it is not part of the reply, is never
+    /// recorded, and never reaches a later request. Empty from a service that sends none.
+    pub thinking: Labelled<&'a str>,
     /// Whether that figure is the server's rather than an estimate.
     ///
     /// Worth knowing at the point of display: an estimate presented as a billed figure would be
