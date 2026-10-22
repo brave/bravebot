@@ -41,6 +41,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
 | `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it from the next turn |
 | `/loop` | `[[interval] <prompt> \| stop [n]]` | Send a prompt again and again, say what is repeating, or stop it |
+| `/after` | `<delay> <prompt>` | Send a prompt once, after a delay |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
@@ -440,6 +441,19 @@ nor `closed` is read as `closed`, so it refuses `off` the same way. Otherwise th
 does, so `/sandbox workspace-write` replaces a checkout's `strict`. Only you can set it: no tool, skill, hook
 or `AGENTS.md` line can. The opening screen and `/status` name the mode in force. The desktop app has
 no such command yet.
+
+## `/after <delay> <prompt>`
+
+Sends one prompt once, after a delay, and then forgets it.
+
+```
+/after 45m check whether the integration tests passed
+```
+
+The delay is the first word: a number and `s`, `m`, `h` or `d`, from five seconds to seven days. The
+rest of the line is sent unchanged, as a prompt, when the delay is up and the session is idle. It
+takes the place of a loop, so `/loop stop`, Ctrl-C, `/clear` and leaving end it, `/loop` says what is
+pending, and it is not kept in the session record.
 
 ## `/loop [interval] <prompt>`
 

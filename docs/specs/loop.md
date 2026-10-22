@@ -465,6 +465,41 @@ one behind it for longer than its own turn.
 `verified-by: bravebot_tui::state::a_turn_ending_arms_only_the_loop_whose_tick_it_was`
 `verified-by: bravebot_tui::loops::the_soonest_due_loop_goes_next_and_a_tie_goes_to_the_older`
 
+<a id="LOOP-18"></a>
+### LOOP-18: `/after` sends a line once, after a delay, and keeps nothing
+
+`/after 5m check the deploy` sends `check the deploy` once, no sooner than five minutes after it was
+armed, which for one typed during a turn is when that turn ends, and when the session is idle
+([LOOP-6](#LOOP-6)), and then nothing is left. The delay is read
+off the front of the argument as [LOOP-3](#LOOP-3) reads an interval, and only there: an `every`
+clause at the end is repetition, which this is not, so a line without a leading delay, and a delay
+with nothing after it, start nothing and say what the command needs. The delay is held to the bounds
+of [LOOP-7](#LOOP-7) a person's interval is, and a person who wrote one outside them is told.
+
+The line is the one typed, so [LOOP-1](#LOOP-1) and [LOOP-2](#LOOP-2) carry over: `/after 5m /exit`
+sends the five characters `/exit` and runs nothing. It is one of the session's loops
+([LOOP-16](#LOOP-16)): it has a number, counts towards the five and is refused with a note when five
+are held, replaces a goal as `/loop` does, and ends on the same endings as one
+([LOOP-11](#LOOP-11)), including `/loop stop`, and is never written down ([LOOP-12](#LOOP-12)). It
+goes in the order [LOOP-17](#LOOP-17) gives. Its turn is a prompt like any other and is not told it
+is a tick ([LOOP-10](#LOOP-10)). It is listed beside a loop by `/status` and the bare `/loop`. The
+row under the box counts loops only, and says it is sending later and not that it is looping where
+an `/after` line is all that is held.
+
+**Why a place among the loops and not a kind of its own.** The cap, the numbers, the ordering and
+the endings are already the loops'. A second collection of pending lines would need a rule for which
+of them a tick belongs to, and the person asked for neither.
+
+`verified-by: bravebot_tui::loops::after_reads_a_delay_off_the_front_and_sends_the_rest_unchanged`
+`verified-by: bravebot_tui::loops::after_without_a_leading_delay_is_not_a_request`
+`verified-by: bravebot_tui::loops::an_after_delay_outside_the_bounds_is_held_and_reported`
+`verified-by: bravebot_tui::loops::a_line_sent_once_is_due_at_its_delay_and_is_gone_after_its_turn`
+`verified-by: bravebot_tui::state::an_after_line_is_sent_once_when_its_delay_is_up_and_leaves_no_schedule`
+`verified-by: bravebot_tui::state::a_prompt_typed_while_an_after_line_waits_does_not_use_it_up`
+`verified-by: bravebot_tui::app::the_after_command_holds_the_line_and_sends_nothing_now`
+`verified-by: bravebot_tui::render::the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping`
+`verified-by: bravebot_tui::app::a_loop_stop_typed_behind_a_waiting_after_waits_behind_it`
+
 ## Known costs
 
 - **A loop keeps spending.** Every tick is a turn, with the whole conversation re-sent, and

@@ -5900,6 +5900,20 @@ mod tests {
         );
     }
 
+    /// A line held by `/after` is not a loop, and the row under the box must not call it one. A wrong
+    /// implementation shares the loop's wording, which tells somebody a one-shot is repeating.
+    #[test]
+    fn the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_after(crate::loops::request_after("5m check the deploy"));
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains(t!(after_hint_next, next = "").trim()),
+            "{hint}"
+        );
+        assert!(!hint.contains(&t!(loop_hint).to_string()), "{hint}");
+    }
+
     /// A word about a loop standing there in a session with none is a word nobody can account for,
     /// and this line is read at a glance.
     #[test]

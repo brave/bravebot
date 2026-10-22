@@ -74,6 +74,7 @@
  - Added the `awaySummaryIdleSeconds` setting, which changes how long the terminal has to be unfocused after a turn before the automatic recap. ([#1580](https://github.com/brave/bravebot/issues/1580))
  - Added the context window a running Ollama holds a model with to the import question, with a warning when it is smaller than the window bravebot assumes. ([#1383](https://github.com/brave/bravebot/issues/1383))
  - Added a list of the modes `/sandbox` takes once the word is typed, and the same for the forms `/limit`, `/review` and `/reach` read.
+ - Added `/after <delay> <prompt>`, which sends a line once when the delay is up and then forgets it. `/loop stop` ends it early. ([#1394](https://github.com/brave/bravebot/issues/1394))
  - Changed `@brave/bravebot` on npm to ship the binary as per-platform packages with no install script, so it installs under `--ignore-scripts` and `--strict-allow-scripts`. ([#2569](https://github.com/brave/bravebot/issues/2569))
  - Changed the sandbox mode `read-only` to close the network and lend no remote, cloud, cluster or container credential, so `git push` and `gh pr create` fail under it. ([#2228](https://github.com/brave/bravebot/issues/2228))
  - Changed the limit on delegates in one turn from 32 started to 64 running at once. A delegate that has finished gives its place back to the next one the turn starts. ([#2819](https://github.com/brave/bravebot/issues/2819))

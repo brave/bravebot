@@ -660,6 +660,15 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
             }
         };
     }
+    // Arms a prompt for later and sends nothing now: the line goes out once, from the loop's own
+    // clock, as a prompt and never as a command.
+    if let Some(argument) = argument_to(line, AFTER_COMMAND) {
+        match crate::loops::parse_after(argument) {
+            crate::loops::Delayed::Start(request) => session.start_after(request),
+            crate::loops::Delayed::Unreadable => session.note(t!(after_needs_a_delay)),
+        }
+        return Action::Redraw;
+    }
     // The command that sends nothing. A goal is a condition and not a prompt, so setting one arms it
     // and waits: what it keeps going is whatever the person asks for next.
     if let Some(argument) = argument_to(line, GOAL_COMMAND) {
@@ -17423,6 +17432,31 @@ mod tests {
         );
     }
 
+    /// The command sends nothing when Enter is pressed: the line is held for later. A wrong
+    /// implementation submits it at once, or reads a line with no delay as a request.
+    #[test]
+    fn the_after_command_holds_the_line_and_sends_nothing_now() {
+        let mut session = Session::new("none");
+        for c in "/after 5m check the deploy".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert_eq!(
+            session.looping().map(|running| running.prompt()),
+            Some("check the deploy")
+        );
+
+        let mut bare = Session::new("none");
+        for c in "/after check the deploy".chars() {
+            handle_key(&mut bare, key(KeyCode::Char(c)));
+        }
+        assert_eq!(handle_key(&mut bare, key(KeyCode::Enter)), Action::Redraw);
+        assert!(bare.looping().is_none(), "a line with no delay was held");
+    }
+
     /// The turn is sent the task and not the line, and it begins in plan mode (MODE-12). A wrong
     /// implementation sends `/plan fix the auth bug`, or starts the turn before the mode is set.
     #[test]
@@ -24058,6 +24092,23 @@ mod tests {
                 .any(|said| said.contains("behind /clear")),
             "{:?}",
             said_under_the_turn(&session)
+        );
+    }
+
+    /// `/loop stop` typed behind a waiting `/after` waits behind it, since both use the one slot. The
+    /// regression it rejects is a stop carried out first, finding nothing, and the line sent anyway.
+    #[test]
+    fn a_loop_stop_typed_behind_a_waiting_after_waits_behind_it() {
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "/after 5m check the deploy");
+
+        nothing_beside(|beside| {
+            typed_during_a_turn(&mut session, "/loop stop", key(KeyCode::Enter), beside)
+        });
+
+        assert_eq!(
+            waiting_prompts(&session),
+            vec!["/after 5m check the deploy", "/loop stop"]
         );
     }
 

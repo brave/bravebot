@@ -90,6 +90,17 @@ pub(super) fn loop_part(count: usize, until: Option<std::time::Duration>) -> Str
     }
 }
 
+/// The same part for a line `/after` is holding, which is not looping and says what it is: a
+/// delayed send, with the moment counted down on the same terms as [`loop_part`].
+pub(super) fn after_part(until: Option<std::time::Duration>) -> String {
+    match until {
+        Some(until) if until >= std::time::Duration::from_secs(1) => {
+            t!(after_hint_next, next = crate::loops::spell(until))
+        }
+        _ => t!(after_hint).to_string(),
+    }
+}
+
 pub(crate) fn cache_hit_rate(session: &Session) -> Option<String> {
     let cached = session.cached().filter(|cached| cached.read_tokens > 0)?;
     let prompt_tokens = session
@@ -175,9 +186,17 @@ mod ordinary {
 fn hint_facts(session: &Session) -> HintFacts {
     // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
     // the box is in, and shell mode is where somebody is least likely to be thinking about one.
-    let looping = match session.loops().len() {
-        0 => String::new(),
-        count => loop_part(count, session.loops().soonest(std::time::Instant::now())),
+    // Loops are named first. A line `/after` holds is not looping, so it is named only where no loop
+    // is live to be counted.
+    let now = std::time::Instant::now();
+    let soonest = |once: bool| {
+        let held = || session.loops().iter().filter(move |running| running.once() == once);
+        (held().count(), held().filter_map(|running| running.until(now)).min())
+    };
+    let looping = match (soonest(false), soonest(true)) {
+        ((0, _), (0, _)) => String::new(),
+        ((0, _), (_, until)) => after_part(until),
+        ((count, until), _) => loop_part(count, until),
     };
 
     // Named only once a turn has left a trail to look at. Offering the key before that is a line

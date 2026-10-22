@@ -341,7 +341,8 @@ box edits in or what a later start reads (`/theme`, `/config` and `/language`), 
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
-were typed. A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
+were typed. `/loop` waits behind a waiting `/after` as well, since that takes the slot a loop takes.
+A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/sandbox`, `/model`, `/effort`, `/advisor` or `/style`, is carried out as it is
 typed unless a line waiting ahead of it could change what it acts on, and otherwise waits behind
 that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
