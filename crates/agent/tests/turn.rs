@@ -46488,7 +46488,10 @@ fn a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose() {
         &egress,
         &workspace,
         &Task::new("read the start page"),
-        &mut bravebot_agent::confirm::ApproveFetches,
+        &mut ApprovesFetchesAndWrites {
+            declines_hops: true,
+            ..Default::default()
+        },
         &mut sink,
         trusting_the_workspace(),
     )
@@ -46508,6 +46511,209 @@ fn a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose() {
     assert!(
         second.contains("approved for 127.0.0.1"),
         "the refusal did not say which host the fetch was for: {second}"
+    );
+}
+
+/// A page that answers on the second loopback address, which is a host of its own: the same
+/// machine and a different string, so a redirect to it leaves the host a fetch was approved for.
+/// `None` where the address is not bound to this machine (macOS has only 127.0.0.1), and the
+/// caller then has nothing to test. Detached: nothing needs it stopped, and the thread ends with
+/// the test binary.
+fn serve_a_page_on_the_second_loopback(reply: String) -> Option<(String, mpsc::Receiver<String>)> {
+    let listener = TcpListener::bind("127.0.0.2:0").ok()?;
+    let port = listener.local_addr().ok()?.port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut head = String::new();
+            let _ = reader.read_line(&mut head);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+            }
+            let _ = sender.send(head);
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    Some((format!("http://127.0.0.2:{port}"), receiver))
+}
+
+/// FETCH-4: a redirect off the approved host is put to the person, as the host it led to and the
+/// host they approved, and a yes sends the one request again with that host allowed. What the
+/// planner is told is the same sentence it is told of any fetch (FETCH-6): the host it names is the
+/// one that was approved, and the one the server chose is nowhere in what it reads.
+#[test]
+fn a_redirect_off_the_approved_host_is_put_to_the_person_and_followed_on_a_yes() {
+    let scratch = Scratch::new("fetch-hop-yes");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let Some((landing, landed)) = serve_a_page_on_the_second_loopback(page("the moved page"))
+    else {
+        return;
+    };
+    let (site, requests) = serve_pages(vec![moved_to(&format!("{landing}/landed"))]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/start"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the start page"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        confirmer.hops,
+        vec![("127.0.0.2".to_string(), "127.0.0.1".to_string())],
+        "the person was not asked about the host the redirect led to, or not as a redirect"
+    );
+    assert_eq!(
+        confirmer.hop_urls,
+        vec![format!("{site}/start")],
+        "the question carried something other than the URL that was approved"
+    );
+    assert_eq!(
+        confirmer.asked,
+        vec![format!("{site}/start")],
+        "the redirect was put as a fetch of its own"
+    );
+    assert!(
+        landed
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok(),
+        "a yes did not send the request to the host it approved"
+    );
+    let _first = requests.recv().expect("the approved host was asked");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("127.0.0.2"),
+        "the host the server chose reached the planner's context: {second}"
+    );
+    assert!(
+        second.contains("what 127.0.0.1 returned"),
+        "the result did not name the host that was approved: {second}"
+    );
+}
+
+/// The other answer. A no sends nothing to the host the redirect named, and the planner reads the
+/// refusal it was always given for a redirect, which names the approved host and not the other.
+#[test]
+fn a_redirect_off_the_approved_host_that_is_declined_sends_nothing_to_it() {
+    let scratch = Scratch::new("fetch-hop-no");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let Some((landing, landed)) = serve_a_page_on_the_second_loopback(page("never served")) else {
+        return;
+    };
+    let (site, _requests) = serve_pages(vec![moved_to(&format!("{landing}/landed"))]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/start"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ApprovesFetchesAndWrites {
+        declines_hops: true,
+        ..Default::default()
+    };
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the start page"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        confirmer.hops.len(),
+        1,
+        "the redirect was not put to the person"
+    );
+    assert!(
+        landed
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "a no still sent a request to the host the redirect named"
+    );
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains(&format!("error: fetching {site}/start failed"))
+            && second.contains("approved for 127.0.0.1")
+            && !second.contains("127.0.0.2"),
+        "{second}"
+    );
+}
+
+/// A `deny` rule is not a question. It refuses a hop before anyone is asked, so a person is never
+/// put a host their own settings file has already closed.
+#[test]
+fn a_redirect_to_a_denied_host_is_refused_without_asking() {
+    let scratch = Scratch::new("fetch-hop-denied");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let Some((landing, landed)) = serve_a_page_on_the_second_loopback(page("never served")) else {
+        return;
+    };
+    let (site, _requests) = serve_pages(vec![moved_to(&format!("{landing}/landed"))]);
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/start"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ApprovesFetchesAndWrites::default();
+    let task = Task::new("read the start page").with_permissions(rules(
+        &["WebFetch(domain:127.0.0.2)"],
+        &[],
+        &[],
+    ));
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(confirmer.hops.is_empty(), "{:?}", confirmer.hops);
+    assert!(
+        landed
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "a denied host was reached"
+    );
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("a rule in the settings file denies") && !second.contains("127.0.0.2"),
+        "{second}"
     );
 }
 
@@ -47243,6 +47449,13 @@ struct ApprovesFetchesAndWrites {
     writes: Vec<bravebot_agent::WriteRequest>,
     /// Declines every write instead of approving it.
     declines_writes: bool,
+    /// The questions about a host a redirect led to, as the host drawn and the host it was
+    /// approved for, kept apart from `asked` so a test about a planner's URL does not see them.
+    hops: Vec<(String, String)>,
+    /// Declines a redirect's host instead of approving it.
+    declines_hops: bool,
+    /// The URL each of those questions carried: the one that was approved, not where it led.
+    hop_urls: Vec<String>,
     /// Words sent with each answer to a write.
     note: Option<&'static str>,
 }
@@ -47298,6 +47511,15 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         &mut self,
         request: &bravebot_agent::confirm::FetchRequest,
     ) -> bravebot_agent::Decision {
+        if let Some(from) = &request.redirected_from {
+            self.hops.push((request.host.clone(), from.clone()));
+            self.hop_urls.push(request.url.clone());
+            return if self.declines_hops {
+                bravebot_agent::Decision::Reject
+            } else {
+                bravebot_agent::Decision::Approve
+            };
+        }
         self.asked.push(request.url.clone());
         self.hosts.push(request.host.clone());
         bravebot_agent::Decision::Approve

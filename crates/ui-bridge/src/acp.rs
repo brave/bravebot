@@ -1063,6 +1063,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
                 data["ambient"]
                     .as_array()
                     .is_some_and(|ambient| !ambient.is_empty()),
+                data["redirectedFrom"].as_str(),
             )
             .join("\n"),
         ),
@@ -1410,13 +1411,30 @@ mod tests {
         let fetch = FetchRequest {
             url: "http://169.254.169.254/latest".into(),
             host: "169.254.169.254".into(),
+            redirected_from: None,
         };
         let metadata = fetch.ambient_authority().is_some();
         assert!(metadata, "the fixture is not a metadata service");
         let (_, _, text) = shown("fetch", crate::wire::fetch_request(2, &fetch));
         assert_eq!(
             text,
-            bravebot_approval::fetch_lines(&fetch.host, &fetch.url, metadata).join("\n")
+            bravebot_approval::fetch_lines(&fetch.host, &fetch.url, metadata, None).join("\n")
+        );
+
+        let hop = FetchRequest {
+            redirected_from: Some("example.com".into()),
+            ..fetch
+        };
+        let (_, _, text) = shown("fetch", crate::wire::fetch_request(2, &hop));
+        assert_eq!(
+            text,
+            bravebot_approval::fetch_lines(&hop.host, &hop.url, metadata, Some("example.com"))
+                .join("\n")
+        );
+        assert_ne!(
+            text,
+            bravebot_approval::fetch_lines(&hop.host, &hop.url, metadata, None).join("\n"),
+            "the redirect row is missing from the question"
         );
 
         let server = ServerRequest {

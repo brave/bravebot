@@ -1513,6 +1513,7 @@ fn a_fetch_prompt_carries_the_host_beside_the_url_and_nothing_of_a_body() {
         &FetchRequest {
             url: "https://example.com@evil.test/docs".into(),
             host: "evil.test".into(),
+            redirected_from: None,
         },
     );
 
@@ -1522,10 +1523,29 @@ fn a_fetch_prompt_carries_the_host_beside_the_url_and_nothing_of_a_body() {
             "request": 3,
             "url": "https://example.com@evil.test/docs",
             "host": "evil.test",
+            "redirectedFrom": null,
             "ambient": [],
             "summary": "fetch from evil.test",
         })
     );
+}
+
+/// A fetch a redirect led to carries the host the person approved beside the one it led to, so a
+/// front end can say the question is about a hop (FETCH-4).
+#[test]
+fn a_fetch_a_redirect_led_to_names_the_host_that_was_approved() {
+    use bravebot_agent::confirm::FetchRequest;
+    let value = wire::fetch_request(
+        5,
+        &FetchRequest {
+            url: "https://docs.example.com/start".into(),
+            host: "cdn.example.net".into(),
+            redirected_from: Some("docs.example.com".into()),
+        },
+    );
+
+    assert_eq!(value["host"], "cdn.example.net");
+    assert_eq!(value["redirectedFrom"], "docs.example.com");
 }
 
 /// A metadata service is an ordinary host to everything between here and it, so the address alone
@@ -1539,6 +1559,7 @@ fn a_fetch_from_a_metadata_service_says_so_across_the_bridge() {
         &FetchRequest {
             url: "http://169.254.169.254/latest/meta-data/".into(),
             host: "169.254.169.254".into(),
+            redirected_from: None,
         },
     );
 

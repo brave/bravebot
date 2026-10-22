@@ -664,6 +664,7 @@ pub fn fetch_request(id: u64, request: &FetchRequest) -> Value {
         "request": id,
         "url": request.url,
         "host": request.host,
+        "redirectedFrom": request.redirected_from,
         "ambient": request
             .ambient_authority()
             .iter()

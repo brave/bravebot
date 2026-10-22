@@ -2106,6 +2106,9 @@ vet-picture-yes = let it see this
 fetch-title = fetch this?
 fetch-verb = Fetch
 fetch-host = talking to { $host }
+# Said under the host where the fetch was approved for another host and a redirect led here, so
+# the question reads as a hop the person was never shown and not as a fresh fetch.
+fetch-redirected = redirected from { $from }, which is the host this fetch was approved for
 # Said where the host is the metadata service of the machine this is running on, which is a host
 # like any other to everything in between: it asks for no credential and hands out the ones of
 # the role this machine runs as. A person shown the address alone has been shown a number.

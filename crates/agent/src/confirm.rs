@@ -995,6 +995,13 @@ pub struct FetchRequest {
     /// a person skimming it and reaches another, so what a person is answering about is put in
     /// front of them separately from the string it came out of.
     pub host: String,
+    /// The host the person approved this fetch for, where `host` is somewhere a redirect led it.
+    ///
+    /// `None` for the question about a URL the planner proposed. Set when the egress gate stopped
+    /// a hop for leaving the approved host and the person is asked about that one (FETCH-4), so
+    /// every front end words it as a redirect and not as a fresh fetch. `host` is then a server's
+    /// own bytes, drawn for the person to read, and `url` is the one that was approved.
+    pub redirected_from: Option<String>,
 }
 
 impl FetchRequest {

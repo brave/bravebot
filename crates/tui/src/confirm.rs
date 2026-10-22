@@ -648,6 +648,7 @@ mod tests {
                 "a".repeat(1_500)
             ),
             host: "169.254.169.254".to_string(),
+            redirected_from: None,
         }
     }
 
@@ -1392,9 +1393,33 @@ mod tests {
         let drawn = rendered_fetch(&FetchRequest {
             url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/".to_string(),
             host: "169.254.169.254".to_string(),
+            redirected_from: None,
         });
         assert!(drawn.contains("metadata service"), "{drawn}");
         assert!(drawn.contains("credentials of the role"), "{drawn}");
+    }
+
+    /// FETCH-4: a host a redirect led to is drawn as one, with the host that was approved beside it,
+    /// and a fetch that was not redirected says nothing of the sort.
+    #[test]
+    fn a_fetch_prompt_for_a_redirect_says_where_it_was_approved_for() {
+        let drawn = rendered_fetch(&FetchRequest {
+            url: "https://docs.example.com/start".to_string(),
+            host: "cdn.example.net".to_string(),
+            redirected_from: Some("docs.example.com".to_string()),
+        });
+        assert!(drawn.contains("talking to cdn.example.net"), "{drawn}");
+        assert!(
+            drawn.contains("redirected from docs.example.com"),
+            "{drawn}"
+        );
+
+        let plain = rendered_fetch(&FetchRequest {
+            url: "https://docs.example.com/start".to_string(),
+            host: "docs.example.com".to_string(),
+            redirected_from: None,
+        });
+        assert!(!plain.contains("redirected"), "{plain}");
     }
 
     /// An ordinary host is an ordinary question, and nothing of the kind is said about it.
@@ -1403,6 +1428,7 @@ mod tests {
         let drawn = rendered_fetch(&FetchRequest {
             url: "https://example.test/page".to_string(),
             host: "example.test".to_string(),
+            redirected_from: None,
         });
         assert!(!drawn.contains("metadata service"), "{drawn}");
     }
@@ -1415,6 +1441,7 @@ mod tests {
         let request = FetchRequest {
             url: format!("https://docs.example.invalid/{}", "section/".repeat(250)),
             host: "docs.example.invalid".to_string(),
+            redirected_from: None,
         };
         for width in [56, 64, 80] {
             let (rows, drawn) = fetch_screen(&request, (width, 24), 0);

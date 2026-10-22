@@ -2238,6 +2238,15 @@ function Card({
             <strong>Talking to:</strong> <code>{request.host}</code>
           </p>
 
+          {/* Where a server sent a fetch that was approved for another host: the hop is a
+              destination nobody was shown, so it is said to be one. */}
+          {request.redirectedFrom && (
+            <p className="permission-scope" data-deciding="all">
+              Redirected from <code>{request.redirectedFrom}</code>, which is the host this fetch
+              was approved for.
+            </p>
+          )}
+
           <AmbientNotice ambient={request.ambient} deciding />
 
           <p className="permission-scope">
