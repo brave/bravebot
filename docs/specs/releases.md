@@ -8,7 +8,9 @@ governs:
   - .github/workflows/publish-npm.yml
   - npm/bin/bravebot.js
   - npm/scripts/stage-platform-package.js
+  - npm/scripts/bootstrap-platform-packages.js
   - npm/tests/stage-platform-package.test.mjs
+  - npm/tests/bootstrap-platform-packages.test.mjs
   - npm/tests/launcher.test.mjs
   - npm/tests/package.test.mjs
   - install.sh
@@ -210,7 +212,8 @@ checksum, or the signature beside a Linux checksum, or when a Linux signature do
 against the key the tree carries. A macOS or Windows binary that is not signed by Brave is refused
 by the job for that platform, which can be after other platforms have been published. A package
 already on the registry at that version is left alone, so a dispatch after a partial failure
-publishes what is missing.
+publishes what is missing. A package name the registry has never held is created first, by
+[RELEASE-21](#RELEASE-21), and not by this workflow.
 
 **Why.** A platform package is built from the release, so it cannot exist before it. npm skips an
 optional dependency it cannot find without a message, so a wrapper published ahead of its packages
@@ -533,6 +536,31 @@ is in Known costs.
 `verified-by: bravebot_cli::installer_powershell::a_directory_a_path_would_misread_is_not_put_on_it`
 `verified-by: bravebot_cli::installer_powershell::a_refused_install_leaves_the_users_path_alone`
 
+<a id="RELEASE-21"></a>
+### RELEASE-21: a platform package's name exists on the registry before the workflow publishes to it
+
+`make npm-bootstrap` publishes a placeholder for each platform package the registry has no package
+of, so that a trusted publisher can be added to it on npmjs.com. The placeholder is version
+`0.0.0-bootstrap`, published under the `bootstrap` tag, and holds a manifest and the licence: no
+binary, no script and no dependency. The publish is made with the maintainer's own `npm login`, and
+nothing in the tree or in a workflow holds a credential for it. The target does nothing when every
+name exists, when npm is not logged in, or when the registry answers a lookup with anything but a
+package or a 404. `make publish-npm` runs the same script with `--check` before it dispatches, and
+stops naming each platform package the registry lacks.
+
+**Why.** A trusted publisher is a record on a package, and a package that has never been published
+has none. OIDC then has nothing to match, and the registry answers the workflow's publish with a
+404. The first dispatch of the per-platform packages failed that way on all six. The first version of
+a name has to come from somewhere other than the workflow. Making it a placeholder keeps every
+version with a binary on the path [RELEASE-11](#RELEASE-11) describes: published by the workflow,
+with provenance, after the environment's reviewer approves. The wrapper pins each platform package
+at its own exact version, and the placeholder is a prerelease of `0.0.0` under another tag, so no
+install of the wrapper resolves to it. The check runs where it fails in a second at the
+maintainer's terminal. Without it, the dispatch costs a second person's approval and six runner jobs
+before it fails on the 404.
+
+`verified-by: by-construction (npm/tests/bootstrap-platform-packages.test.mjs runs the script against a fake npm: it publishes a placeholder for each name the registry answers 404 for and for none it holds, never one with more than a manifest and the licence, never at the version of a release or under latest, nothing without a login, and nothing when the registry does not answer with a package or a 404; the check names every missing package and publishes nothing; the script reads no environment value and starts npm alone; and the recipe of make publish-npm is held to run the check before gh workflow run. make check-npm runs it)`
+
 ## Known costs
 
 - **The signature checks are pinned by a Rust test, and the package script and launcher by Node
@@ -637,8 +665,15 @@ is in Known costs.
 - **The trusted publisher is configured on npmjs.com, not here.** OIDC will refuse until that
   record names this repository and `publish-npm.yml` exactly. A mismatch looks like a 404 from
   the registry. Each of the seven package names has a record of its own, so a platform package
-  without one fails its job while the others publish. Enabling 2FA on maintainer npm accounts is
-  also outside this tree.
+  without one fails its job while the others publish. A record can be added only to a package that
+  exists, which is what [RELEASE-21](#RELEASE-21) creates. Enabling 2FA on maintainer npm accounts
+  is also outside this tree.
+
+- **A placeholder is published by a person, with no provenance.** `make npm-bootstrap` uses the
+  maintainer's own login and one-time password, so a maintainer who can publish under `@brave` can
+  create any package name there, and the placeholder carries no provenance. It holds no binary, and
+  every version that does is published by the workflow. Which accounts can publish under `@brave`
+  is set on npmjs.com, outside this tree.
 
 - **Two third party actions still run in each job holding the grant.** Checking out the tag and
   pointing npm at the registry is what those jobs are, so `actions/checkout` and
