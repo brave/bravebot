@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Hooks
-description: Run a command of your own when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, when a checkout is made for a delegate, or when a conversation is compacted.
+description: Run a command of your own when a session starts or ends, when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, when a checkout is made for a delegate, or when a conversation is compacted.
 ---
 
 # Hooks
@@ -30,7 +30,7 @@ inside a checkout, so a command named in one would be a command that arrived wit
 }
 ```
 
-## The six moments
+## The eight moments
 
 Each entry names one moment in `on`:
 
@@ -42,6 +42,8 @@ Each entry names one moment in `on`:
 | `prompt-shown` | just before a prompt or a question is put to you |
 | `checkout-made` | once a checkout has been made for a delegate, before that delegate's first request |
 | `compacted` | after a summary has replaced the older part of the conversation in the request |
+| `session-started` | when the interface you opened has begun a session, before it sends a turn |
+| `session-ended` | when you leave that interface, however it ended |
 
 `turn-finished` fires even when the turn was cancelled or failed on its first request, because the
 commonest thing to attach to it is telling somebody who walked away, and a turn that died is exactly
@@ -91,6 +93,19 @@ was nothing worth summarising, when the summary was refused or could not be made
 summarising its own conversation. It is told that a compaction happened and nothing of the summary
 or of what it replaced, like every hook, and what it prints does not reach the planner. It cannot
 undo the compaction, and one that fails is reported while the conversation stays shortened.
+
+`session-started` and `session-ended` are for a command that should run once for the session rather
+than at every turn, such as starting a local service or writing a log line. They belong to the
+interface you opened and fire once for it: the full-screen interface, a session in lines
+(`--plain`), and a one-shot run (`-p`), which is a session of one turn. A turn never fires them, and
+neither does a delegate. `/resume` and `/clear` begin another conversation in the interface you
+already have open and fire neither. A session you hand to the background with `/bg` goes on, so
+`session-ended` does not fire for it. A run that was refused before it could send anything, or an
+interface you left at one of the questions it opens with, began no session, so neither fires.
+
+The hooks file is read when the session begins, and the same hooks fire when it ends. Both run in the
+directory the session opened in. The desktop app does not fire either yet, so an entry for them
+fires in the terminal only.
 
 ## A hook is a program and its arguments
 
@@ -175,8 +190,8 @@ than from something a program read.
 
 ## How long a hook may run
 
-A hook is stopped after 30 seconds. An entry may set its own limit with `timeout`, in whole seconds
-from 1 to 600:
+A hook is stopped after 30 seconds, and a `session-ended` hook after 5, since you are leaving. An
+entry may set its own limit with `timeout`, in whole seconds from 1 to 600:
 
 ```json
 { "on": "turn-finished", "run": ["make", "test"], "timeout": 300 }
@@ -219,8 +234,6 @@ since you mistyped its path.
   line names only one of them.
 - **A hook that reaches its time limit is stopped alone.** The program it started is stopped and the
   programs that one started keep running.
-- **There is no moment for a session.** Something that should happen once when the program opens fires
-  per turn instead.
 - **`compacted` does not say who asked, and there is no moment before a compaction.** A compaction you
   asked for and one the budget forced run the same hooks with the same line. A command that has to
   save something while the full history is still in the request has no moment to attach to.

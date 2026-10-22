@@ -52521,6 +52521,76 @@ fn a_delegate_fires_neither_turn_moment() {
     assert_eq!(fired, "began\nended\n");
 }
 
+/// HOOK-10: a turn fires neither end of a session, so two turns and the delegate one of them spawns
+/// leave the session moments to the interface that owns the session. The regression it rejects is a
+/// turn firing `session-started` as it begins, which runs a command meant to run once as often as
+/// the person sends a prompt, and a delegate doing the same.
+#[cfg(unix)]
+#[test]
+fn a_turn_and_its_delegate_fire_neither_end_of_a_session() {
+    let scratch = Scratch::new("hooks-turn-session-moments");
+    std::fs::write(scratch.path.join("a.txt"), "body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let note = a_hook_script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            "{{\"on\": \"session-started\", \"run\": [{note}, \"opened\"]}},
+             {{\"on\": \"turn-started\", \"run\": [{note}, \"began\"]}},
+             {{\"on\": \"session-ended\", \"run\": [{note}, \"closed\"]}}"
+        ),
+    );
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"DO-THE-WORK"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request("read_file", r#"{"path":"a.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+        ("a second prompt", vec![reply_with("answered")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    for prompt in ["DELEGATE-THE-WORK", "a second prompt"] {
+        turns::run_cancellable(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new(prompt).with_home(Some(home.clone())),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+    }
+
+    assert!(
+        !reporter.delegated.is_empty(),
+        "no delegate ran, so this says nothing about one"
+    );
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("the hooks ran");
+    assert_eq!(fired, "began\nbegan\n");
+}
+
 /// HOOK-2: `turn-finished` fires however the turn ended, and a cancelled turn is one that ended.
 /// The commonest thing attached to it is telling somebody who walked away.
 #[cfg(unix)]

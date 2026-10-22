@@ -1483,6 +1483,7 @@ pub fn run(
     links: Links,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
+    moments: &mut bravebot_agent::hooks::SessionMoments,
 ) -> io::Result<Ended> {
     // Before the terminal is taken, because the request for no colour decides whether it is asked
     // about its background on the way in, and that question happens inside the takeover.
@@ -1564,6 +1565,7 @@ pub fn run(
                     std::mem::take(&mut links),
                     skip_permissions,
                     prompts.clone(),
+                    moments,
                     &mut switch,
                 );
                 match (ended, switch) {
@@ -2553,6 +2555,27 @@ fn begin_session(
     })
 }
 
+/// Fire `session-started` for the session that has just begun, before its first turn is sent
+/// (HOOK-10), and note in the transcript what a hook that went wrong said.
+///
+/// `draw` puts the opening screen up first where a hook will run, so the person is not left on a
+/// blank one while it holds the first prompt back, and is not called where none will. Said once
+/// however many conversations `/resume` opens in this interface, because `moments` has fired it
+/// already.
+fn start_the_session(
+    session: &mut Session,
+    moments: &mut bravebot_agent::hooks::SessionMoments,
+    draw: impl FnOnce(&mut Session) -> io::Result<()>,
+) -> io::Result<()> {
+    if moments.will_start_a_hook() {
+        draw(session)?;
+    }
+    for said in moments.started() {
+        session.note(said);
+    }
+    Ok(())
+}
+
 /// Concrete in the backend rather than generic: the loop is only ever driven by a real
 /// terminal, and a generic backend's error type carries no bounds to convert from.
 ///
@@ -2571,6 +2594,7 @@ fn event_loop(
     links: Links,
     skip_permissions: bool,
     prompts: bravebot_agent::turn::SystemPrompts,
+    moments: &mut bravebot_agent::hooks::SessionMoments,
     switch: &mut Option<Switch>,
 ) -> io::Result<Ended> {
     let Begun {
@@ -2599,6 +2623,10 @@ fn event_loop(
         Ok(begun) => begun,
         Err(ended) => return Ok(ended),
     };
+
+    // The session has begun and the first turn is not yet sent, which is where a hook on the start
+    // of a session runs (HOOK-10).
+    start_the_session(&mut session, moments, |session| redraw(terminal, session))?;
 
     // Drawn when something has changed rather than on every pass. A drag arrives as a stream of
     // positions, and a frame for each costs more than the whole gesture is worth: with a long
@@ -33278,3 +33306,7 @@ mod kept_jobs_tests;
 #[cfg(all(test, unix))]
 #[path = "suspend_tests.rs"]
 mod suspend_tests;
+
+#[cfg(all(test, unix))]
+#[path = "session_moments_tests.rs"]
+mod session_moments_tests;

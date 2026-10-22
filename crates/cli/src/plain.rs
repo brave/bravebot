@@ -470,6 +470,10 @@ fn run(
         asking.say(&t!(cli_notice, notice = t!(session_permissions_skipped)));
     }
 
+    // A background session's process has no interface a person opened and leaves, so it fires
+    // neither end of a session (HOOK-10).
+    let mut moments = (!hosted)
+        .then(|| bravebot_agent::hooks::SessionMoments::read(home.as_deref(), workspace.root()));
     let mut running = Running {
         config: &config,
         egress: bravebot_net::Egress::new(),
@@ -526,12 +530,23 @@ fn run(
         ),
     };
 
+    // Every question that precedes the first prompt is settled, so the session has begun and the
+    // first prompt is not yet read (HOOK-10). Run before the stderr lock is taken: the lock is for
+    // writing the sentences, not for the length of a hook.
+    if let Some(moments) = &mut moments {
+        let said = moments.started();
+        crate::finish::say_notices(&mut std::io::stderr().lock(), &said);
+    }
     // The streams themselves rather than a lock on each. A lock held for the length of the session
     // is a lock a delegate's thread waits on for ever: a turn lends its reporter to the delegates
     // it spawns, they write progress from threads of their own, and the first of those writes would
     // block on a lock this thread does not give back until the session ends. Each write takes the
     // lock for its own line, which is what the one-shot run does with the same two streams.
     lines(&mut asking, &mut reply, &mut running, &mut beside);
+    if let Some(moments) = &mut moments {
+        let said = moments.ended();
+        crate::finish::say_notices(&mut std::io::stderr().lock(), &said);
+    }
     ExitCode::SUCCESS
 }
 

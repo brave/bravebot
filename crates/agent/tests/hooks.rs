@@ -775,3 +775,331 @@ fn a_moment_with_no_hook_announces_nothing() {
 
     assert!(seen.is_empty());
 }
+
+/// A state directory under `at` holding a hooks file that declares `entries`, as a person writes one.
+fn a_home_declaring(at: &Path, entries: &str) -> PathBuf {
+    let home = at.join("state");
+    std::fs::create_dir_all(&home).expect("a state directory");
+    std::fs::write(
+        home.join("hooks.json"),
+        format!(r#"{{"hooks": [{entries}]}}"#),
+    )
+    .expect("a hooks file");
+    home
+}
+
+/// `session-started` for `moments`, under the gate [`STARTING`] describes.
+fn opened(moments: &mut hooks::SessionMoments) -> Vec<String> {
+    let _held = starting();
+    moments.started()
+}
+
+/// `session-ended` for `moments`, under the same gate.
+fn closed(moments: &mut hooks::SessionMoments) -> Vec<String> {
+    let _held = starting();
+    moments.ended()
+}
+
+/// HOOK-10, HOOK-5: `session-started` fires once for a session however often the interface asks, and
+/// the hook is told the moment and nothing else. The regression it rejects is firing at each turn or
+/// each conversation, which runs a command meant to run once as often as the person types.
+#[test]
+fn a_session_start_hook_fires_once_however_often_it_is_asked() {
+    let scratch = Scratch::new("session-started-once");
+    let keep = script(&scratch.path, "keep-it", "#!/bin/sh\ncat >> told.json\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            r#"{{"on": "session-started", "run": [{:?}]}}"#,
+            keep.to_str().expect("a path")
+        ),
+    );
+    let mut moments = hooks::SessionMoments::read(Some(&home), &scratch.path);
+
+    for _ in 0..3 {
+        assert!(opened(&mut moments).is_empty());
+    }
+
+    let told = std::fs::read_to_string(scratch.path.join("told.json")).expect("the hook was told");
+    assert_eq!(told, "{\"event\":\"session-started\"}\n");
+}
+
+/// HOOK-10: `session-ended` fires once however the interface is left, and never for a session that
+/// did not begin. The regressions it rejects are an end fired for a session nobody opened, which
+/// stops a service nothing started, and an end fired at every exit path the interface has.
+#[test]
+fn a_session_end_hook_fires_once_and_only_for_a_session_that_began() {
+    let scratch = Scratch::new("session-ended-once");
+    let keep = script(&scratch.path, "keep-it", "#!/bin/sh\ncat >> told.json\n");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            r#"{{"on": "session-ended", "run": [{:?}]}}"#,
+            keep.to_str().expect("a path")
+        ),
+    );
+    let mut never_began = hooks::SessionMoments::read(Some(&home), &scratch.path);
+    assert!(closed(&mut never_began).is_empty());
+    assert!(
+        !scratch.path.join("told.json").exists(),
+        "an end fired for a session that never began"
+    );
+
+    let mut moments = hooks::SessionMoments::read(Some(&home), &scratch.path);
+    opened(&mut moments);
+    assert!(closed(&mut moments).is_empty());
+    assert!(closed(&mut moments).is_empty());
+
+    let told = std::fs::read_to_string(scratch.path.join("told.json")).expect("the hook was told");
+    assert_eq!(told, "{\"event\":\"session-ended\"}\n");
+}
+
+/// HOOK-2, HOOK-10: each end fires the hooks written for it, in the order the session has them, and
+/// a hook written for a turn moment is not one of them.
+#[test]
+fn each_end_of_a_session_fires_the_hooks_written_for_it() {
+    let scratch = Scratch::new("session-each-end");
+    let note = script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let note = note.to_str().expect("a path");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            r#"{{"on": "session-ended", "run": [{note:?}, "closed"]}},
+               {{"on": "turn-started", "run": [{note:?}, "turn"]}},
+               {{"on": "session-started", "run": [{note:?}, "opened"]}}"#
+        ),
+    );
+    let mut moments = hooks::SessionMoments::read(Some(&home), &scratch.path);
+
+    opened(&mut moments);
+    closed(&mut moments);
+
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("both hooks ran");
+    assert_eq!(fired, "opened\nclosed\n");
+}
+
+/// HOOK-10: both run in the directory the session opened in, so a relative path in the hook that
+/// ends a session is the one its twin started from. The regression it rejects is the end running
+/// wherever the process happens to be, which is not where the person's files are.
+#[test]
+fn a_session_hook_runs_in_the_directory_the_session_opened_in() {
+    let scratch = Scratch::new("session-directory");
+    let say = script(&scratch.path, "say-where", "#!/bin/sh\npwd >> where.txt\n");
+    let say = say.to_str().expect("a path");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            r#"{{"on": "session-started", "run": [{say:?}]}},
+               {{"on": "session-ended", "run": [{say:?}]}}"#
+        ),
+    );
+    let mut moments = hooks::SessionMoments::read(Some(&home), &scratch.path);
+
+    opened(&mut moments);
+    closed(&mut moments);
+
+    let places = std::fs::read_to_string(scratch.path.join("where.txt")).expect("a directory");
+    let opened_in = scratch.path.canonicalize().expect("canonicalize");
+    assert_eq!(places.lines().count(), 2, "{places}");
+    for place in places.lines() {
+        assert_eq!(
+            PathBuf::from(place).canonicalize().expect("canonicalize"),
+            opened_in
+        );
+    }
+}
+
+/// HOOK-10: the hooks are read when the session begins and the same ones fire at its end, so a file
+/// edited halfway through does not give a session an end it did not begin with.
+#[test]
+fn the_hooks_a_session_began_with_are_the_ones_that_fire_at_its_end() {
+    let scratch = Scratch::new("session-read-once");
+    let note = script(
+        &scratch.path,
+        "note",
+        "#!/bin/sh\necho \"$1\" >> fired.txt\n",
+    );
+    let note = note.to_str().expect("a path");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(r#"{{"on": "session-ended", "run": [{note:?}, "the-first"]}}"#),
+    );
+    let mut moments = hooks::SessionMoments::read(Some(&home), &scratch.path);
+    opened(&mut moments);
+
+    a_home_declaring(
+        &scratch.path,
+        &format!(r#"{{"on": "session-ended", "run": [{note:?}, "the-second"]}}"#),
+    );
+    closed(&mut moments);
+
+    let fired = std::fs::read_to_string(scratch.path.join("fired.txt")).expect("the hook ran");
+    assert_eq!(fired, "the-first\n");
+}
+
+/// HOOK-7, HOOK-10: a hook that goes wrong at either end is said, naming the moment and the program,
+/// and neither end is held up by it.
+#[test]
+fn a_session_hook_that_goes_wrong_is_said_naming_the_moment_and_program() {
+    let scratch = Scratch::new("session-trouble");
+    let missing = scratch.path.join("not-installed");
+    let missing = missing.to_str().expect("a path");
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            r#"{{"on": "session-started", "run": [{missing:?}]}},
+               {{"on": "session-ended", "run": [{missing:?}]}}"#
+        ),
+    );
+    let mut moments = hooks::SessionMoments::read(Some(&home), &scratch.path);
+
+    let at_start = opened(&mut moments);
+    let at_end = closed(&mut moments);
+
+    assert_eq!(at_start.len(), 1, "{at_start:?}");
+    assert!(
+        at_start[0].contains("session-started") && at_start[0].contains(missing),
+        "{at_start:?}"
+    );
+    assert_eq!(at_end.len(), 1, "{at_end:?}");
+    assert!(
+        at_end[0].contains("session-ended") && at_end[0].contains(missing),
+        "{at_end:?}"
+    );
+}
+
+/// HOOK-7, HOOK-10: the bound of a `session-ended` hook that states no `timeout` is five seconds, a
+/// number the tests below do not state because they pass a short one in its place.
+#[test]
+fn the_default_bound_of_a_session_end_is_five_seconds() {
+    assert_eq!(hooks::SESSION_END_LIMIT, Duration::from_secs(5));
+    assert!(hooks::SESSION_END_LIMIT < hooks::LIMIT);
+}
+
+/// HOOK-7: the bound a hook that states no `timeout` is held to is chosen per moment in one place,
+/// and only a session end has a shorter one. The regression it rejects is a moment given the
+/// session end's bound or the turn's, which a front end that asks this function would then report as
+/// what is applied.
+#[test]
+fn only_a_session_end_has_a_shorter_default_bound_than_thirty_seconds() {
+    for moment in Moment::ALL {
+        let expected = Duration::from_secs(match moment {
+            Moment::SessionEnded => 5,
+            Moment::TurnStarted
+            | Moment::ToolFinished
+            | Moment::TurnFinished
+            | Moment::PromptShown
+            | Moment::CheckoutMade
+            | Moment::Compacted
+            | Moment::SessionStarted => 30,
+        });
+        assert_eq!(
+            hooks::default_limit(moment),
+            expected,
+            "{}",
+            moment.as_str()
+        );
+    }
+}
+
+/// HOOK-7, HOOK-10: a `session-ended` hook is stopped at the bound the end has, and not at the
+/// thirty seconds every other moment's default is, and a `session-started` hook is not held to the
+/// end's. The regressions it rejects are the end using the turn's default, which holds a person
+/// who is leaving for half a minute, and the start using the end's, which cuts a service short while
+/// it is still starting.
+#[test]
+fn a_session_end_hook_is_stopped_at_the_bound_the_end_has() {
+    let scratch = Scratch::new("session-end-bound");
+    let linger = script(&scratch.path, "linger", "#!/bin/sh\nsleep 30\n");
+    let pause = script(
+        &scratch.path,
+        "pause",
+        "#!/bin/sh\nsleep 1\ntouch started-fully\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            r#"{{"on": "session-ended", "run": [{:?}]}},
+               {{"on": "session-started", "run": [{:?}]}}"#,
+            linger.to_str().expect("a path"),
+            pause.to_str().expect("a path")
+        ),
+    );
+    let mut moments = hooks::SessionMoments::read(Some(&home), &scratch.path)
+        .ending_within(Duration::from_millis(200));
+
+    assert!(opened(&mut moments).is_empty());
+    assert!(
+        scratch.path.join("started-fully").exists(),
+        "the start was held to the end's bound"
+    );
+
+    let began = Instant::now();
+    let at_end = closed(&mut moments);
+
+    assert_eq!(at_end.len(), 1, "{at_end:?}");
+    assert!(at_end[0].contains("session-ended"), "{at_end:?}");
+    assert!(
+        began.elapsed() < Duration::from_secs(20),
+        "the end was held to the turn's bound"
+    );
+}
+
+/// HOOK-7, HOOK-10: a `session-ended` hook that states a `timeout` keeps it, longer than the end's
+/// default included. The regression it rejects is the end's bound overriding what the person wrote.
+#[test]
+fn a_session_end_hook_that_states_a_timeout_keeps_it() {
+    let scratch = Scratch::new("session-end-timeout");
+    let pause = script(
+        &scratch.path,
+        "pause",
+        "#!/bin/sh\nsleep 1\ntouch finished\n",
+    );
+    let home = a_home_declaring(
+        &scratch.path,
+        &format!(
+            r#"{{"on": "session-ended", "run": [{:?}], "timeout": 30}}"#,
+            pause.to_str().expect("a path")
+        ),
+    );
+    let mut moments = hooks::SessionMoments::read(Some(&home), &scratch.path)
+        .ending_within(Duration::from_millis(200));
+    opened(&mut moments);
+
+    assert!(closed(&mut moments).is_empty());
+
+    assert!(scratch.path.join("finished").exists());
+}
+
+/// HOOK-10: an interface is told whether a `session-started` hook will run, so it can draw what the
+/// person is waiting on before the hook holds the first prompt back. Not for a session with no such
+/// hook, which would be a frame drawn for nothing, and not once it has fired.
+#[test]
+fn an_interface_is_told_whether_a_start_hook_will_run() {
+    let scratch = Scratch::new("session-will-start");
+    let note = script(&scratch.path, "note", "#!/bin/sh\ntrue\n");
+    let note = note.to_str().expect("a path");
+    let with = a_home_declaring(
+        &scratch.path.join("with"),
+        &format!(r#"{{"on": "session-started", "run": [{note:?}]}}"#),
+    );
+    let without = a_home_declaring(
+        &scratch.path.join("without"),
+        &format!(r#"{{"on": "session-ended", "run": [{note:?}]}}"#),
+    );
+
+    let mut declared = hooks::SessionMoments::read(Some(&with), &scratch.path);
+    assert!(declared.will_start_a_hook());
+    opened(&mut declared);
+    assert!(
+        !declared.will_start_a_hook(),
+        "it will not fire a second time"
+    );
+
+    let undeclared = hooks::SessionMoments::read(Some(&without), &scratch.path);
+    assert!(!undeclared.will_start_a_hook());
+}
