@@ -167,7 +167,7 @@ exiting successfully with an explanation on stdout, and each of them has a statu
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` (CLI-28) asked for |
 | 7 | `BB1007` | worked towards the condition `--goal` (CLI-35) gave, and it did not hold |
-| 8 | `BB1008` | reached a limit `--max-rounds` or `--max-tokens` (CLI-37) gave it, and stopped before going past it |
+| 8 | `BB1008` | reached a limit `--max-rounds` or `--max-tokens` (CLI-38) gave it, and stopped before going past it |
 
 A status is never renumbered and never given a second meaning. A failure kind nothing here names
 is 1, and one worth telling apart takes the next number.
@@ -583,7 +583,7 @@ A failed run retains measured cumulative token usage from completed work. The la
 replaces earlier reports; a successful outcome is charged once. A goal run (CLI-35) adds the rounds
 before the latest, and the judge's checks, to the latest round's figure. Required numeric token fields
 remain zero when no measurement exists. Failure reports do not invent a model, reply or round
-count, except that a run stopped at a limit (CLI-37) reports the rounds it made, which it counted.
+count, except that a run stopped at a limit (CLI-38) reports the rounds it made, which it counted.
 
 The object takes the reply's place on stdout and nothing else goes there. Progress, the message and
 the trail stay on stderr, exactly as they are without the flag.
@@ -1917,7 +1917,7 @@ The condition is recorded nowhere else, so `--resume` carries that conversation 
 The flag is refused with the status for an argument (CLI-6) before anything is sent when no
 condition follows it, when the condition is blank or is the next flag, with `--mode manifest`, which
 is planned once and has no conversation to send the work back into, with `--max-rounds` or
-`--max-tokens`, which count from nothing in each round (CLI-37), and where a background session
+`--max-tokens`, which count from nothing in each round (CLI-38), and where a background session
 is started, whose words after `--bg` are all its prompt. A model for the judge
 that cannot be used, because `summaryModel` names one that needs a sign-in this machine has not
 made or that the machine-level layer excludes ([COMPACT-15](compaction.md#COMPACT-15)), is refused

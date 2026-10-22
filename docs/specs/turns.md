@@ -688,7 +688,7 @@ it, so a session that fails repeatedly holds one for each failure. A note is abo
 
 A task may carry limits from the person who started it: the most rounds of tool calls the run may
 make and the most tokens it may spend. `--max-rounds` and `--max-tokens` set them for a one-shot run
-([CLI-37](cli.md#CLI-37)), and nothing else does. A run that reaches one ends there. The turn returns
+([CLI-38](cli.md#CLI-38)), and nothing else does. A run that reaches one ends there. The turn returns
 which limit it was and the rounds the run made. The tokens it spent are reported as for any turn
 that stops ([TURN-5](#TURN-5)).
 

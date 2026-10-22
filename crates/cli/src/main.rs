@@ -1271,12 +1271,12 @@ struct Invocation {
     /// Whether the person typed `--trust-input-lines`, which makes those lines their own words
     /// where otherwise they are a program's (CLI-36).
     trust_input_lines: bool,
-    /// The limits the command line gave the run, which end it where they are reached (CLI-37).
+    /// The limits the command line gave the run, which end it where they are reached (CLI-38).
     limits: RunLimits,
 }
 
 /// The whole number after `--max-rounds` or `--max-tokens`, or `None` where the word is anything
-/// else (CLI-37).
+/// else (CLI-38).
 ///
 /// Digits and nothing else, so a sign, a fraction, an exponent or a space is refused as the
 /// mistake in a value a script computed that it is. Zero is refused as well, rather than read as no
@@ -1614,7 +1614,7 @@ fn input_lines_conflict(
 }
 
 /// The sentence that refuses a run limit given to a manifest run, which plans before it makes any
-/// round of tool calls and has none to count (CLI-37). `None` for a turn, and for a run given none.
+/// round of tool calls and has none to count (CLI-38). `None` for a turn, and for a run given none.
 ///
 /// Refused by name rather than taken and ignored: a script that capped a run and was given one
 /// with no cap would pay for the cost it asked to bound.
@@ -1624,7 +1624,7 @@ fn limit_not_with_a_manifest(mode: Mode, limits: RunLimits) -> Option<String> {
 }
 
 /// The sentence that refuses a run limit given with `--goal`, whose rounds are each a turn that
-/// counts a limit from nothing, so a limit would bound each round and not the run (CLI-37).
+/// counts a limit from nothing, so a limit would bound each round and not the run (CLI-38).
 /// `None` for a run with no goal, and for a run given no limit.
 ///
 /// Refused by name for the reason a manifest run is: a script that capped a run would be given one
@@ -1635,7 +1635,7 @@ fn limit_not_with_a_goal(has_goal: bool, limits: RunLimits) -> Option<String> {
 }
 
 /// The flag that gave the run a limit, `--max-rounds` before `--max-tokens` where it gave both
-/// (CLI-37). `None` for a run given none.
+/// (CLI-38). `None` for a run given none.
 fn limit_flag(limits: RunLimits) -> Option<&'static str> {
     match limits {
         RunLimits {
@@ -5316,7 +5316,7 @@ mod tests {
     }
 
     /// The two flags name a limit each, and a run that names neither has none, which leaves the
-    /// built-in bound to be the only one (CLI-37).
+    /// built-in bound to be the only one (CLI-38).
     #[test]
     fn the_limit_flags_name_the_most_rounds_and_tokens_a_run_may_spend() {
         let invocation = parse_invocation(&args(&[
