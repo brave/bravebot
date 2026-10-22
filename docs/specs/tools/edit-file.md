@@ -227,8 +227,8 @@ what a read of the notebook shows.
 `verified-by: bravebot_agent::turn::an_insert_at_zero_puts_a_markdown_cell_first`
 `verified-by: bravebot_agent::turn::an_insert_after_a_cell_defaults_to_a_code_cell_placed_after_it`
 `verified-by: bravebot_agent::turn::a_delete_removes_only_the_numbered_cell`
-`verified-by: bravebot_agent::tools::tests::a_malformed_cell_argument_is_refused`
-`verified-by: bravebot_agent::tools::tests::a_well_formed_cell_argument_is_accepted_as_what_it_names`
+`verified-by: bravebot_agent::tools::a_malformed_cell_argument_is_refused`
+`verified-by: bravebot_agent::tools::a_well_formed_cell_argument_is_accepted_as_what_it_names`
 `verified-by: bravebot_agent::notebook::a_replace_changes_one_cell_and_keeps_every_other_byte`
 `verified-by: bravebot_agent::notebook::a_replaced_code_cell_loses_its_outputs_and_keeps_its_metadata_and_id`
 `verified-by: bravebot_agent::notebook::a_replace_with_the_same_source_changes_nothing`
