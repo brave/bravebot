@@ -1286,17 +1286,29 @@ fn within(root: &Path, path: &Path) -> String {
 
 /// A path with the home directory written as `~`, which is shorter and less personal.
 pub(crate) fn abbreviate(path: &Path) -> String {
+    abbreviate_against(path, std::env::var_os("HOME").as_deref())
+}
+
+/// The logic of [`abbreviate`], with `HOME` taken as a value rather than read from the process
+/// environment, so a test can give it one without mutating a variable every thread of the test
+/// binary shares.
+///
+/// The prefix is stripped by path component, not by text: a directory whose name merely starts
+/// with the home directory's is not under it. `home` empty or the root abbreviates nothing,
+/// since every absolute path would otherwise read as `~`.
+fn abbreviate_against(path: &Path, home: Option<&std::ffi::OsStr>) -> String {
     let shown = path.display().to_string();
-    let Some(home) = std::env::var_os("HOME") else {
+    let Some(home) = home else {
         return shown;
     };
-    let home = Path::new(&home).display().to_string();
-    if home.is_empty() {
+    let home = Path::new(home);
+    if home.as_os_str().is_empty() || home == Path::new("/") {
         return shown;
     }
-    match shown.strip_prefix(&home) {
-        Some(rest) => format!("~{rest}"),
-        None => shown,
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => shown,
     }
 }
 
@@ -3937,5 +3949,40 @@ mod tests {
             "~/projects/bravebot"
         );
         assert_eq!(abbreviate(Path::new("/tmp/elsewhere")), "/tmp/elsewhere");
+    }
+
+    /// `/home/alice` is not inside `/home/al`; it only starts with the same characters. Stripping
+    /// the prefix as text would draw it as `~ice/data`.
+    #[test]
+    fn a_sibling_whose_name_starts_with_homes_is_not_abbreviated() {
+        assert_eq!(
+            abbreviate_against(
+                Path::new("/home/alice/data"),
+                Some(std::ffi::OsStr::new("/home/al"))
+            ),
+            "/home/alice/data"
+        );
+    }
+
+    /// A trailing slash on `HOME` is not a component of it.
+    #[test]
+    fn a_trailing_slash_on_home_does_not_change_the_abbreviation() {
+        assert_eq!(
+            abbreviate_against(
+                Path::new("/home/al/out"),
+                Some(std::ffi::OsStr::new("/home/al/"))
+            ),
+            "~/out"
+        );
+    }
+
+    /// `HOME` set to the root, as some containers and service accounts set it, abbreviates
+    /// nothing: every absolute path starts with `/`, so stripping it as a prefix would draw every
+    /// path as though it were inside home.
+    #[test]
+    fn home_set_to_the_root_abbreviates_nothing() {
+        let root = Some(std::ffi::OsStr::new("/"));
+        assert_eq!(abbreviate_against(Path::new("/usr/lib"), root), "/usr/lib");
+        assert_eq!(abbreviate_against(Path::new("/tmp"), root), "/tmp");
     }
 }
