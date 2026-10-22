@@ -14,6 +14,7 @@ governs:
   - crates/skus/src/chatgpt/encoding.rs
   - crates/skus/src/chatgpt/exchange.rs
   - crates/skus/src/chatgpt/listener.rs
+  - crates/skus/src/chatgpt/renew.rs
 documented-by:
   - none (gap: a page on signing in with a ChatGPT account, owed until the design is built)
 ---
@@ -260,8 +261,8 @@ shape:
   reply's status and the fields the next step needs. They decide this program's own sign-in. What crosses
   into the driver is a token and a category, which is the class of a reply's status, as the failure
   categories of the backends spec are for the reply of any other service. A refused refresh adds one value,
-  that the refresh token is no longer valid, chosen by comparing one field of the error body with the value
-  the exchange records. A refused model request adds one more, that the account may not be used this way,
+  that the refresh token is no longer valid, chosen by comparing one field of the error body with `invalid_grant`
+  ([CHATGPT-7](#CHATGPT-7)). A refused model request adds one more, that the account may not be used this way,
   chosen by comparing the error code of the body with a closed list of codes the exchange records
   ([CHATGPT-8](#CHATGPT-8)); that comparison is made in the client that sends the request, which is not the
   driver. A turn already branches on the categories, and none is content anyone authored. The
@@ -382,13 +383,16 @@ refresh request has a deadline of thirty seconds, and a claim is judged abandone
 refresh still waiting for its reply is never broken. A claim older than that belongs to a process that died
 holding it and is broken as the Leo store breaks one, by moving it aside and judging it there.
 
-A refresh the authorization server refuses as the refresh token no longer being valid, which the exchange
-records, ends the sign-in. The file is removed if it still holds the refresh token that was refused, and
-the turn says the sign-in has ended. Any other failure of the refresh, a connection that did not complete or
+A refresh the authorization server refuses as the refresh token no longer being valid ends the sign-in. That
+is a status of 400 or 401 whose error code is `invalid_grant`, which is RFC 6749 section 5.2's code for it and
+is not observed from this server: a refusal with any other code or status is a failure of the request and ends
+nothing. The file is removed, and the turn says the sign-in has ended, whether or not the file could be
+removed. The file was read with the claim held, so it holds the refresh token that was refused or one this
+process replaced and so killed. Any other failure of the refresh, a connection that did not complete or
 a reply that says the service is busy or unavailable, leaves the file as it is and says which of the
 backends spec's failure categories it was. A write of the reply that fails is reported, the new tokens are
 used from memory for the rest of the process, and the process tries the write again before each later request, under the claim,
-and only if the file still holds the token this process replaced. Where it holds another, the tokens in
+and only if the file still holds the token this process replaced. Where it holds another, or none, the tokens in
 memory are dropped.
 
 **Why.** An authorization server may replace the refresh token each time it is used, and then the copy a
@@ -402,7 +406,32 @@ clause holds either way: a server that does not replace it loses nothing to the 
 on an ended sign-in leaves `auth status` and the picker saying what is true, and stops every later turn
 from presenting a token that cannot work.
 
-`verified-by: none`
+**Not built:** the caller. Nothing sends a request to the serving host yet, so the refusal of a token before
+its expiry, the closed list of codes that says a new token would not help, and the sentence a turn ends with
+are not built. What is built is the renewal they use, `Renewer::access_token` for a request and
+`Renewer::replace_refused` for a token the host refused, which gives a token other than the refused one and
+never the refused one back.
+
+`verified-by: bravebot_skus::chatgpt::renew::a_token_with_more_than_a_minute_left_is_used_and_nothing_is_asked`
+`verified-by: bravebot_skus::chatgpt::renew::a_token_within_a_minute_of_its_expiry_or_past_it_is_replaced`
+`verified-by: bravebot_skus::chatgpt::renew::a_renewal_presents_the_stored_refresh_token_and_writes_what_it_is_given`
+`verified-by: bravebot_skus::chatgpt::renew::a_reply_with_no_refresh_token_leaves_the_stored_one`
+`verified-by: bravebot_skus::chatgpt::renew::no_stored_sign_in_is_not_signed_in`
+`verified-by: bravebot_skus::chatgpt::renew::a_refresh_refused_as_ended_removes_the_sign_in`
+`verified-by: bravebot_skus::chatgpt::renew::a_refresh_that_fails_otherwise_leaves_the_file_and_says_why`
+`verified-by: bravebot_skus::chatgpt::renew::a_failed_refresh_sends_a_token_that_has_not_expired_and_never_one_that_has`
+`verified-by: bravebot_skus::chatgpt::renew::a_refused_token_is_replaced_and_never_returned_when_the_refresh_fails`
+`verified-by: bravebot_skus::chatgpt::renew::a_refused_token_another_process_already_replaced_is_not_replaced_again`
+`verified-by: bravebot_skus::chatgpt::renew::a_token_made_after_the_refusal_is_sent_when_the_refresh_fails`
+`verified-by: bravebot_skus::chatgpt::renew::a_renewal_made_while_waiting_for_the_claim_is_used_and_not_made_again`
+`verified-by: bravebot_skus::chatgpt::renew::a_write_that_fails_is_reported_and_tried_again_before_the_next_request`
+`verified-by: bravebot_skus::chatgpt::renew::tokens_held_in_memory_are_dropped_where_the_file_holds_another`
+`verified-by: bravebot_skus::chatgpt::renew::an_ended_sign_in_removes_the_file_that_holds_the_token_this_process_replaced`
+`verified-by: bravebot_skus::chatgpt::renew::each_failure_is_named_by_its_step_and_class_alone`
+`verified-by: bravebot_skus::chatgpt::exchange::a_refresh_presents_the_refresh_token_under_the_client_and_the_resource`
+`verified-by: bravebot_skus::chatgpt::exchange::only_the_recorded_code_at_a_refusing_status_ends_the_sign_in`
+`verified-by: bravebot_skus::chatgpt::exchange::a_reply_without_a_refresh_token_keeps_the_one_presented`
+`verified-by: bravebot_skus::chatgpt::exchange::the_exchange_refuses_a_reply_that_grants_no_refresh_token`
 
 <a id="CHATGPT-8"></a>
 ### CHATGPT-8: a failure names its step and quotes nothing
@@ -639,7 +668,11 @@ of a sign-in made before the session, and nothing about which project or which p
 **Why.** A refresh that was not written would end the sign-in whenever the server replaces the refresh
 token on use, and the person would find out at the first turn of the next session.
 
-`verified-by: none`
+**Not built:** a session that asks for a token, so no test drives an incognito session through a renewal.
+What is built is the renewal, which takes no mode and writes the file whatever the caller is doing.
+
+`verified-by: bravebot_skus::chatgpt::renew::a_renewal_presents_the_stored_refresh_token_and_writes_what_it_is_given`
+`verified-by: bravebot_skus::chatgpt::renew::a_write_that_fails_is_reported_and_tried_again_before_the_next_request`
 
 ## What is built
 
@@ -652,12 +685,13 @@ holds by reading its manifest.
   [CHATGPT-13](#CHATGPT-13).
 - **Built in part,** each naming what is not: [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2),
   [CHATGPT-6](#CHATGPT-6), [CHATGPT-8](#CHATGPT-8) and [CHATGPT-11](#CHATGPT-11).
-- **Not built:** [CHATGPT-7](#CHATGPT-7) and [CHATGPT-14](#CHATGPT-14), the replacing of an access token;
-  [CHATGPT-9](#CHATGPT-9), the account's models in the picker; [CHATGPT-10](#CHATGPT-10), requests to the
+- **Built in part,** the replacing of an access token, which is the `renew` module and has no caller yet:
+  [CHATGPT-7](#CHATGPT-7) and [CHATGPT-14](#CHATGPT-14), each naming what is not.
+- **Not built:** [CHATGPT-9](#CHATGPT-9), the account's models in the picker; [CHATGPT-10](#CHATGPT-10), requests to the
   serving host, which wait on the Responses protocol of #2994 and on a zstd encoder; and the verification
   of the ID token of [CHATGPT-5](#CHATGPT-5).
 
-A sign-in made now is stored and not yet used by a turn, and the command says so.
+A sign-in made now is stored and can be renewed, and is not yet used by a turn: the command says so.
 
 ## Decisions left open
 
@@ -714,8 +748,8 @@ or claim value is never recorded, in this repository or in the tracker.
 
 **Not in any source this spec was written from:**
 
-- What a refused refresh and a refused access token return: the status and the error code, and which code
-  means the refresh token is no longer valid.
+- What a refused refresh and a refused access token return: the status and the error code. The renewal reads
+  `invalid_grant` at a 400 or 401 as ending the sign-in, from RFC 6749 and not from this server.
 - Whether a refresh replaces the refresh token.
 - Whether a request to the token endpoint is ever answered with a redirect.
 - What an account with no subscription reaches.
@@ -794,8 +828,11 @@ work lands, in the same commit as the code.
   refuses at the first request.
 - One account is signed in at a time on one machine, as one subscription is imported at a time.
 - A person whose gateway entry already has the id `chatgpt` renames it to sign in.
-- The sign-in is stored and no request is sent with it, and an access token that has expired is not
-  replaced, so a sign-in made now is a file that nothing reads until the clauses that use it are built.
+- The sign-in is stored and renewed and no request is sent with it, so a sign-in made now is a file that
+  nothing reads until the clauses that use it are built.
+- The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
+  server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
+  the dead refresh token and is told the refresh failed, until the person signs in again.
 - The ID token is not verified, so the `nonce` and the audience are not checked
   ([Decisions left open](#decisions-left-open)).
 - Whether a third-party program may use a subscription this way is not this spec's to settle
