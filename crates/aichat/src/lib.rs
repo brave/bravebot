@@ -965,6 +965,7 @@ impl<'a> AichatClient<'a> {
                 self.completed_usage = reported;
             }
 
+            let thinking = accumulated.take_thinking();
             progress(Progress {
                 written: Labelled::new(&accumulated.content()[written_before..], label),
                 output_tokens: reported.map_or_else(
@@ -972,7 +973,7 @@ impl<'a> AichatClient<'a> {
                     |usage| usage.completion_tokens,
                 ),
                 calling: accumulated.calling().map(|name| Labelled::new(name, label)),
-                thinking: Labelled::new("", label),
+                thinking: Labelled::new(&thinking, label),
                 counted_by_server: reported.is_some(),
                 attempt,
             });
@@ -1045,7 +1046,7 @@ pub struct Progress<'a> {
     /// minutes.
     pub calling: Option<Labelled<&'a str>>,
     /// What the model thought since the last report, still labelled, for a service that sends its
-    /// thinking as it goes (BACKEND-46).
+    /// thinking as it goes (BACKEND-46, BACKEND-59).
     ///
     /// Carried for a screen and read by nothing else: it is not part of the reply, is never
     /// recorded, and never reaches a later request. Empty from a service that sends none.

@@ -299,6 +299,13 @@ worse one it silently routes somewhere you did not intend.
 It cannot replace what the turn itself built. The settings file names a destination, not what was
 asked.
 
+### Showing a model's thinking
+
+A model that sends its working in a `reasoning_content` field beside its reply has that working drawn
+under [`/thinking`](../../reference/commands.md#thinking) while the reply is still arriving. Nothing in the
+request asks for it, so a model that sends none shows none, and a service that names the field
+differently shows nothing. It is not saved to the session and is not sent back in a later request.
+
 ### Retries and a reply gone quiet
 
 A request that fails because the connection gave out, or because the service said it was busy, is

@@ -209,6 +209,58 @@ fn serve_stream_paced(frames: Vec<String>, pause: std::time::Duration) -> String
     format!("http://127.0.0.1:{port}")
 }
 
+/// A gateway that sends the model's working in `reasoning_content` beside its text has that working
+/// handed to the caller as it arrives, labelled as the reply is, and the completion holds the text
+/// alone: what a turn records and sends on is the reply, whatever was thought before it.
+///
+/// Paced so the frames are separate reads. Joined, the pieces are the whole of the thinking: a
+/// client that handed over everything again at each report would repeat the first piece.
+#[test]
+fn the_thinking_a_gateway_sends_reaches_progress_and_never_the_reply() {
+    let endpoint = serve_stream_paced(
+        vec![
+            frame(
+                r#"{"model":"served-model","choices":[{"delta":{"role":"assistant","reasoning_content":"The user "}}]}"#,
+            ),
+            frame(r#"{"choices":[{"delta":{"reasoning_content":"wants a file."}}]}"#),
+            frame(r#"{"choices":[{"delta":{"content":"Here it"}}]}"#),
+            frame(r#"{"choices":[{"delta":{"content":" is."}}]}"#),
+            frame(
+                r#"{"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":40}}"#,
+            ),
+            frame("[DONE]"),
+        ],
+        Duration::from_millis(50),
+    );
+    let config = config_for(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let shown = policy.authorise_display_release("the reply as the model writes it");
+
+    let mut client = AichatClient::new(&config, &egress);
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    let mut thought = String::new();
+    let mut written = String::new();
+    let mut labels = std::collections::HashSet::new();
+    let completion = client
+        .complete_streaming(&mut policy, &request, |progress| {
+            labels.insert(progress.thinking.label());
+            thought.push_str(progress.thinking.declassify(&shown));
+            written.push_str(progress.written.declassify(&shown));
+        })
+        .expect("a reply that thought and then answered");
+
+    assert_eq!(thought, "The user wants a file.");
+    assert_eq!(written, "Here it is.");
+    assert_eq!(completion.content.declassify(&shown), "Here it is.");
+    assert_eq!(
+        labels,
+        std::collections::HashSet::from([Label::untrusted_public()]),
+        "the thinking was released under a label other than the reply's"
+    );
+}
+
 /// A server that takes the request and never answers it, holding the connection open.
 ///
 /// What an endpoint under load looks like from here: the request has gone, the socket is up, and

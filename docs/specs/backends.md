@@ -2936,6 +2936,34 @@ value, while which models read a budget at all is learned from a refusal as BACK
 `verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
 `verified-by: bravebot_agent::backend::a_failed_generate_content_call_keeps_its_attempts_and_what_the_service_counted`
 
+<a id="BACKEND-59"></a>
+### BACKEND-59: a streamed chat-completions reply hands the thinking it sends in `reasoning_content` to the screen and to nothing else
+
+A streamed reply from Brave's endpoint or from a gateway speaking the OpenAI-compatible protocol may
+carry the model's working in a `reasoning_content` field beside the reply's words. That text is
+handed to the caller as it arrives, in the order it arrives and once, under the label the reply's
+words carry, for a screen to draw on request ([VIEW-33](terminal-transcript.md#VIEW-33)) and for
+nothing else. None of it becomes the reply's words, the live count of what the reply wrote or its
+record in the conversation, and a reply that carried it is as readable as one that did not.
+
+Nothing in the request asks for it, so a model that sends none draws none, and what a model sends is
+all there is to show. A field that holds anything but text is read as nothing, and the rest of the
+chunk is read as it would have been without the field. A reply asked for whole shows none of it.
+
+**Why.** [BACKEND-46](#BACKEND-46) asks Bedrock to send the thinking because that service sends none
+unasked. A chat-completions service has no such ask, and several models sold through one put their
+working in this field on their own, so what is left to decide is whether to read it. Reading it
+leaves the request as it was, and a person who has not turned `/thinking` on sees what they saw
+before, since the screen draws it only on request. The words are model output and are carried on the
+reply's own footing, so the driver hands them on without reading them. A field in another shape is
+read past because a chunk refused for it fails a turn that ran before the field was read.
+
+`verified-by: bravebot_aichat::client::the_thinking_a_gateway_sends_reaches_progress_and_never_the_reply`
+`verified-by: bravebot_aichat::protocol::thinking_is_taken_once_in_the_order_it_arrived_and_is_no_part_of_the_reply`
+`verified-by: bravebot_aichat::protocol::reasoning_that_is_not_text_is_read_as_nothing_and_the_reply_still_arrives`
+`verified-by: bravebot_aichat::protocol::reasoning_in_its_own_field_is_no_part_of_the_reply`
+`verified-by: bravebot_aichat::protocol::a_reply_that_reasoned_in_its_own_field_answers_with_the_text_alone`
+
 ## Known costs
 
 - **Each change of mode costs a full prefix write.** BACKEND-27 and BACKEND-32 mark a cache prefix
@@ -3358,6 +3386,11 @@ value, while which models read a budget at all is learned from a refusal as BACK
   stream that goes quiet for longer than the idle bound ([NET-5](network-egress.md#NET-5)) while a
   model thinks, with neither a delta nor a keepalive, is ended as a request that did not get through,
   as BACKEND-46's cost says of Bedrock.
+
+- **Thinking is read under one name, and the count does not move while a model thinks.** Only
+  `reasoning_content` is read (BACKEND-59), so a service that sends its working under another name
+  draws nothing under `/thinking`. Before the service reports its own figure the live count is of the
+  reply's words and tool arguments, so a round spent thinking shows no count until the figure arrives.
 
 - **A `thinking` field in a model's `options` breaks a tool turn.** Options reach the body as written
   (BACKEND-15) and this build neither reads nor replays thinking, so a request that asks for it and

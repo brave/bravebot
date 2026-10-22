@@ -49,7 +49,7 @@ guards:
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 59
-      - crates/aichat/tests/client.rs: 6
+      - crates/aichat/tests/client.rs: 9
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 63
