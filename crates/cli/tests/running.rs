@@ -131,6 +131,11 @@ fn bravebot_started_in(
 /// running the suite may have one, which would put its models into every refusal asserted on.
 const NO_OLLAMA: &str = "127.0.0.1:1";
 
+/// The same for LM Studio, which has no address variable of its own, and for llama-server, which
+/// is asked at the port `LLAMA_ARG_PORT` names and at both of its default ports where it names
+/// none (IMPORT-12): a port nothing listens on, for the reason [`NO_OLLAMA`] is one.
+const NO_LLAMA_SERVER_PORT: &str = "1";
+
 fn run(
     home: &Path,
     cwd: Option<&Path>,
@@ -155,6 +160,8 @@ fn prepared(
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(environment.iter().copied())
         .args(arguments)
         // Not a terminal, and carrying nothing: a run that reads a pipe reads the end of the
@@ -3997,6 +4004,8 @@ fn in_a_terminal_command(
         .env("HOME", home)
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(environment.iter().copied())
         // `-q` leaves out the banner script would otherwise write into what is asserted on, `-e`
         // reports the status the binary exited with rather than script's own, and the transcript
@@ -8207,6 +8216,42 @@ const OLLAMA_LISTING: &str = r#"{"models": [
 /// An Ollama on loopback answering `/api/tags` with [`OLLAMA_LISTING`], as the `OLLAMA_HOST` that
 /// reaches it, and a count of the connections it has taken.
 fn an_ollama() -> (String, Arc<AtomicUsize>) {
+    a_server_listing("GET /api/tags ", OLLAMA_LISTING)
+}
+
+/// What LM Studio's `/api/v1/models` answers on a machine with one language model trained for tool
+/// use, one that is not, and an embedding model.
+const LM_STUDIO_LISTING: &str = r#"{"models": [
+    {"type": "llm", "key": "qwen/qwen3-coder-30b", "loaded_instances": [],
+     "capabilities": {"vision": false, "trained_for_tool_use": true}},
+    {"type": "llm", "key": "google/gemma-3-4b", "loaded_instances": [],
+     "capabilities": {"vision": true, "trained_for_tool_use": false}},
+    {"type": "embedding", "key": "text-embedding-nomic-embed-text-v1.5", "loaded_instances": []}
+]}"#;
+
+/// What llama-server's `/v1/models` answers, which lists the one model it was started with.
+const LLAMA_SERVER_LISTING: &str = r#"{"object": "list", "data": [
+    {"id": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf", "object": "model",
+     "created": 1735142223, "owned_by": "llamacpp", "meta": {"n_ctx_train": 131072}}
+]}"#;
+
+/// LM Studio on loopback answering `/api/v1/models` with [`LM_STUDIO_LISTING`], as the
+/// `BRAVEBOT_LM_STUDIO_HOST` that reaches it, and a count of the connections it has taken.
+fn an_lm_studio() -> (String, Arc<AtomicUsize>) {
+    a_server_listing("GET /api/v1/models ", LM_STUDIO_LISTING)
+}
+
+/// A llama-server on loopback answering `/v1/models` with [`LLAMA_SERVER_LISTING`], as the port
+/// `LLAMA_ARG_PORT` names, and a count of the connections it has taken.
+fn a_llama_server() -> (String, Arc<AtomicUsize>) {
+    let (address, taken) = a_server_listing("GET /v1/models ", LLAMA_SERVER_LISTING);
+    let port = address.rsplit(':').next().expect("a port").to_string();
+    (port, taken)
+}
+
+/// A server on loopback answering the request line that starts with `listed` with `listing`, and
+/// a 404 for any other, as `127.0.0.1:<port>`, and a count of the connections it has taken.
+fn a_server_listing(listed: &'static str, listing: &'static str) -> (String, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("addr").port();
     let asked = Arc::new(AtomicUsize::new(0));
@@ -8223,8 +8268,8 @@ fn an_ollama() -> (String, Arc<AtomicUsize>) {
                     break;
                 }
             }
-            let reply = match request.starts_with("GET /api/tags ") {
-                true => http(200, OLLAMA_LISTING),
+            let reply = match request.starts_with(listed) {
+                true => http(200, listing),
                 false => http(404, r#"{"error": "not found"}"#),
             };
             let _ = stream.write_all(reply.as_bytes());
@@ -8341,6 +8386,252 @@ fn a_one_shot_first_run_with_ollama_running_names_the_import_command() {
         !scratch.settings().exists(),
         "a one-shot run wrote settings"
     );
+}
+
+/// IMPORT-12: a first start on a machine where LM Studio runs and nothing else is configured
+/// asks whether to import it, showing the server and the model that would be written: one trained
+/// for tool use, and neither the one that is not nor the embedding model beside it.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_lm_studio_running_offers_to_import_it() {
+    let scratch = Scratch::new("cli-running-import-lm-studio");
+    let (lm_studio, _) = an_lm_studio();
+    let environment = [
+        NOTHING_CONFIGURED,
+        &[("BRAVEBOT_LM_STUDIO_HOST", lm_studio.as_str())],
+    ]
+    .concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let question = transcript
+        .find("Import this from LM Studio?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    let refusal = transcript
+        .find("no model service is configured yet")
+        .unwrap_or_else(|| panic!("the declined start was not refused: {transcript}"));
+    assert!(question < refusal, "{transcript}");
+    let before = &transcript[..question];
+    for shown in [
+        format!("LM Studio is running at http://{lm_studio}, serving models bravebot can use."),
+        format!("provider.lmstudio, reached at http://{lm_studio}/v1"),
+        r#"model: "lmstudio/qwen/qwen3-coder-30b""#.to_string(),
+    ] {
+        assert!(
+            before.contains(&shown),
+            "{shown} was not shown before the question: {transcript}"
+        );
+    }
+    assert!(
+        !before.contains("gemma") && !before.contains("embed"),
+        "{transcript}"
+    );
+    assert!(
+        !scratch.settings().exists(),
+        "a declined import wrote the file"
+    );
+}
+
+/// IMPORT-12: the same for a llama-server, which is found at the port `LLAMA_ARG_PORT` names, and
+/// which lists a path where the others list a name.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_llama_server_running_offers_to_import_it() {
+    let scratch = Scratch::new("cli-running-import-llama-server");
+    let (port, _) = a_llama_server();
+    let environment = [NOTHING_CONFIGURED, &[("LLAMA_ARG_PORT", port.as_str())]].concat();
+
+    let output = in_a_terminal(&scratch.path, &environment, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let question = transcript
+        .find("Import this from llama-server?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    let before = &transcript[..question];
+    for shown in [
+        format!(
+            "llama-server is running at http://127.0.0.1:{port}, serving models bravebot can use."
+        ),
+        format!("provider.llama-server, reached at http://127.0.0.1:{port}/v1"),
+        r#"model: "llama-server/../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf""#.to_string(),
+    ] {
+        assert!(
+            before.contains(&shown),
+            "{shown} was not shown before the question: {transcript}"
+        );
+    }
+    assert!(
+        !scratch.settings().exists(),
+        "a declined import wrote the file"
+    );
+}
+
+/// IMPORT-12: where nothing answers at the addresses LM Studio and llama-server are asked at,
+/// nothing is asked or said about either, and the ports llama-server defaults to are not asked once
+/// the variable names one.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_neither_listening_says_nothing_of_either() {
+    let scratch = Scratch::new("cli-running-import-servers-silent");
+
+    let output = in_a_terminal(&scratch.path, NOTHING_CONFIGURED, &["--plain"]);
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    for name in [
+        "Import this",
+        "auth login import",
+        "LM Studio",
+        "llama-server",
+    ] {
+        assert!(!transcript.contains(name), "{name}: {transcript}");
+    }
+    assert!(transcript.contains("amazon-bedrock"), "{transcript}");
+}
+
+/// IMPORT-8 and IMPORT-12: a one-shot run has nobody to ask, so a running LM Studio or llama-server
+/// puts the command that asks into the refusal, in the words for a server, and both running name
+/// both. A one-shot run that named only the first would leave the other to be found by trial.
+#[test]
+fn a_one_shot_first_run_with_a_server_running_names_the_import_command() {
+    let (lm_studio, _) = an_lm_studio();
+    let (port, _) = a_llama_server();
+    for (set, said_of) in [
+        (
+            vec![("BRAVEBOT_LM_STUDIO_HOST", lm_studio.as_str())],
+            "LM Studio is running here with models bravebot can use",
+        ),
+        (
+            vec![("LLAMA_ARG_PORT", port.as_str())],
+            "llama-server is running here with models bravebot can use",
+        ),
+        (
+            vec![
+                ("BRAVEBOT_LM_STUDIO_HOST", lm_studio.as_str()),
+                ("LLAMA_ARG_PORT", port.as_str()),
+            ],
+            "LM Studio and llama-server each have a model service bravebot can use",
+        ),
+    ] {
+        let scratch = Scratch::new("cli-running-import-servers-one-shot");
+        let environment = [NOTHING_CONFIGURED, set.as_slice()].concat();
+
+        let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(3), "{stderr}");
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(
+            stderr.contains(said_of) && stderr.contains("bravebot auth login import"),
+            "{said_of}: {stderr}"
+        );
+        assert!(!stderr.contains("Import this"), "{stderr}");
+        assert!(
+            !scratch.settings().exists(),
+            "a one-shot run wrote settings"
+        );
+    }
+}
+
+/// IMPORT-12, the ordinary half: a start with no service configured asks LM Studio and
+/// llama-server once each, one request apiece, and each at its own path. This is what gives the
+/// two silences below their meaning: the same run, the same addresses, and here the requests
+/// arrive.
+#[test]
+fn a_start_with_no_service_asks_lm_studio_and_llama_server_once_each() {
+    let scratch = Scratch::new("cli-running-servers-asked");
+    let (lm_studio, lm_studio_taken) = an_lm_studio();
+    let (port, llama_server_taken) = a_llama_server();
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            BRAVE_HOSTS.as_slice(),
+            &[
+                ("BRAVEBOT_LM_STUDIO_HOST", lm_studio.as_str()),
+                ("LLAMA_ARG_PORT", port.as_str()),
+            ],
+        ]
+        .concat(),
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(connections_to(&lm_studio_taken), 1, "{stderr}");
+    assert_eq!(connections_to(&llama_server_taken), 1, "{stderr}");
+}
+
+/// IMPORT-12: an incognito start opens no connection to LM Studio or llama-server, for the reason
+/// it opens none to Ollama. The run is the one above with the flag added and still ends on the
+/// refusal, so the silence is the mode and not a run that stopped earlier.
+#[test]
+fn an_incognito_start_opens_no_connection_to_lm_studio_or_llama_server() {
+    let scratch = Scratch::new("cli-running-servers-incognito");
+    let (lm_studio, lm_studio_taken) = an_lm_studio();
+    let (port, llama_server_taken) = a_llama_server();
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            BRAVE_HOSTS.as_slice(),
+            &[
+                ("BRAVEBOT_LM_STUDIO_HOST", lm_studio.as_str()),
+                ("LLAMA_ARG_PORT", port.as_str()),
+            ],
+        ]
+        .concat(),
+        &["--incognito", "-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert_eq!(connections_to(&lm_studio_taken), 0, "{stderr}");
+    assert_eq!(connections_to(&llama_server_taken), 0, "{stderr}");
+}
+
+/// IMPORT-12: a start with a service configured asks neither, though nothing configured serves the
+/// model in force and the start is refused, for the reason it asks Ollama nothing. The run ends on
+/// the refusal naming the `model` key, so the silence is the gate and not a run that stopped
+/// earlier.
+#[test]
+fn a_start_with_a_service_configured_asks_lm_studio_and_llama_server_nothing() {
+    let scratch = Scratch::new("cli-running-servers-configured").with_settings(
+        r#"{
+            "provider": {
+                "openrouter": {
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                    "models": {"z-ai/glm-4.6": {}}
+                }
+            }
+        }"#,
+    );
+    let (lm_studio, lm_studio_taken) = an_lm_studio();
+    let (port, llama_server_taken) = a_llama_server();
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            BRAVE_HOSTS.as_slice(),
+            &[
+                ("OPENROUTER_API_KEY", "a-token"),
+                ("BRAVEBOT_LM_STUDIO_HOST", lm_studio.as_str()),
+                ("LLAMA_ARG_PORT", port.as_str()),
+            ],
+        ]
+        .concat(),
+        &["-p", "say something"],
+    );
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("`model` key"), "{stderr}");
+    assert_eq!(connections_to(&lm_studio_taken), 0, "{stderr}");
+    assert_eq!(connections_to(&llama_server_taken), 0, "{stderr}");
 }
 
 /// SKILL-16's report, from the process that reads the file: a skill declaring a key nothing here
@@ -9397,6 +9688,8 @@ fn a_host_resumed_from_a_record_naming_a_definition(
         .env("HOME", &home.0)
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
         .args(["__bg-host", &id])
         .current_dir(&work)
@@ -11303,6 +11596,8 @@ fn a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle() {
         .env("HOME", &home.0)
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
         .args(["__bg-host", SESSION_ID])
         .current_dir(&work)
@@ -11557,6 +11852,8 @@ fn a_session_started_again_continues_the_conversation_it_stopped_with() {
         .env("HOME", &home.0)
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
         .args(["__bg-host", SESSION_ID])
         .current_dir(&work)
@@ -11650,6 +11947,8 @@ fn a_session_started_after_an_interruption_tells_the_planner_and_one_after_a_sto
             .env("HOME", &home.0)
             .env("BRAVEBOT_LOCALE", "en-US")
             .env("OLLAMA_HOST", NO_OLLAMA)
+            .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+            .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
             .envs(AT_A_GATEWAY.iter().copied())
             .args(["__bg-host", SESSION_ID])
             .current_dir(&work)
@@ -11898,6 +12197,8 @@ fn a_record_a_running_session_holds_is_not_resumed() {
         .env("HOME", &home.0)
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
         .args(["__bg-host", SESSION_ID])
         .current_dir(&work)
@@ -11962,6 +12263,8 @@ fn a_handed_over_session_runs_in_the_mode_it_was_given() {
             .env("HOME", &home.0)
             .env("BRAVEBOT_LOCALE", "en-US")
             .env("OLLAMA_HOST", NO_OLLAMA)
+            .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+            .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
             .envs(AT_A_GATEWAY.iter().copied())
             .args(["__bg-host", SESSION_ID, word])
             .current_dir(&work)
@@ -11998,6 +12301,8 @@ fn a_supervisor(home: &ShortHome) -> std::process::Child {
         .env("HOME", &home.0)
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
         .arg("__bg-supervisor")
         .current_dir(&home.0)
@@ -12391,6 +12696,8 @@ fn a_started_host(
         .env("HOME", &home.0)
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
         .args(["__bg-host", SESSION_ID])
         .current_dir(&work)
@@ -13515,6 +13822,8 @@ fn a_continued_run_is_never_shown_the_bytes_an_earlier_pipe_carried() {
         .env("HOME", &scratch.path)
         .env("BRAVEBOT_LOCALE", "en-US")
         .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
         .envs(AT_A_GATEWAY.iter().copied())
         .args(["--json", "-p", "summarise what was piped"])
         .stdin(Stdio::piped())

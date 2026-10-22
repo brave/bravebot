@@ -16,9 +16,16 @@
 
 #![forbid(unsafe_code)]
 
+pub mod llama_server;
+pub mod lm_studio;
 pub mod models;
 pub mod ollama;
 pub mod protocol;
+
+#[cfg(test)]
+mod local_servers;
+#[cfg(test)]
+mod stand_in;
 
 use bravebot_config::{CacheTtl, Config, Secret};
 use bravebot_core::cancel::Cancel;

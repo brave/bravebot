@@ -408,6 +408,26 @@ pub fn installed_on_ollama<S: Sink>(
     bravebot_aichat::ollama::installed(host, sink)
 }
 
+/// What the LM Studio at `host` has downloaded and loaded, for the import to offer:
+/// [`bravebot_aichat::lm_studio`]'s answer, reached from here for the reason
+/// [`installed_on_ollama`] is.
+pub fn installed_on_lm_studio<S: Sink>(
+    host: &str,
+    sink: &mut S,
+) -> Option<Vec<bravebot_config::import::Installed>> {
+    bravebot_aichat::lm_studio::installed(host, sink)
+}
+
+/// What the llama-server at `host` is serving, for the import to offer:
+/// [`bravebot_aichat::llama_server`]'s answer, reached from here for the reason
+/// [`installed_on_ollama`] is.
+pub fn installed_on_llama_server<S: Sink>(
+    host: &str,
+    sink: &mut S,
+) -> Option<Vec<bravebot_config::import::Installed>> {
+    bravebot_aichat::llama_server::installed(host, sink)
+}
+
 /// Whether the service answering for `model` has refused a level for it.
 ///
 /// The question BACKEND-22 leaves to the service wherever no listing answers it, asked of what has

@@ -28,9 +28,10 @@ block copied out of another tool names its models and names no default, so the m
 still the one the build came with. That case gets one line naming the [`model`](#model) key rather
 than the three routes.
 
-**If Claude Code or opencode already reaches a service on this machine, or Ollama is running on it,**
-the first run offers to copy that setup instead, showing everything it would write before it asks.
-See [Importing from Claude Code, opencode or Ollama](#importing-from-claude-code-opencode-or-ollama).
+**If Claude Code or opencode already reaches a service on this machine, or Ollama, LM Studio or
+llama-server is running on it,** the first run offers to copy that setup instead, showing everything
+it would write before it asks. See
+[Importing from Claude Code, opencode or a local model server](#importing-from-claude-code-opencode-or-a-local-model-server).
 
 Once a service is configured, the rest of this page is what else you can set. What will actually be
 used is reported by:
@@ -1814,12 +1815,14 @@ what its permissions are: somebody who can write that path can replace the binar
 any other layer, so a file that is missing, over 64 KB or unparseable pins nothing, and a blank or
 non-string value pins nothing under that name.
 
-## Importing from Claude Code, opencode or Ollama
+<a id="importing-from-claude-code-opencode-or-ollama"></a>
+
+## Importing from Claude Code, opencode or a local model server
 
 A first run with nothing configured, in a terminal, reads what Claude Code and opencode set up in your
-home directory, and asks a running Ollama what it serves, before it names the three routes. Where any
-of them reaches a service bravebot can use, it shows what it would add to `~/.bravebot/settings.json`
-and asks:
+home directory, and asks a running Ollama, LM Studio and llama-server what each serves, before it names
+the three routes. Where any of them reaches a service bravebot can use, it shows what it would add to
+`~/.bravebot/settings.json` and asks:
 
 ```
 Claude Code configures a model service bravebot can use, in /home/you/.claude/settings.json.
@@ -1867,8 +1870,34 @@ an entry for a server on the same port, under any name, Ollama is not offered ag
 A second request asks which models are loaded. For the model shown, the question gives the context
 window the server loaded it with. Where that is below the 131,072 tokens bravebot otherwise budgets
 against, the question says the server drops the earliest turns beyond it and names
-`OLLAMA_CONTEXT_LENGTH`. A model that is not loaded has no line. The figure is shown and never
-written to your settings.
+`OLLAMA_CONTEXT_LENGTH`, and the entry written carries the figure as `contextWindow`, so a
+conversation is kept within it. A model that is not loaded has no line.
+
+**A running LM Studio or llama-server.** Each is asked once, the way Ollama is, on this machine only,
+with no key, and says nothing where it does not answer. A server that answers is offered as a block
+of the same shape as Ollama's, under the id `lmstudio` or `llama-server`.
+
+- LM Studio is asked for its model list at `http://127.0.0.1:1234`. It reads no variable for where it
+  listens, so a server on another port is named in `BRAVEBOT_LM_STUDIO_HOST`, written as `OLLAMA_HOST`
+  is. Only a language model trained for tool use is offered, and the one written is the first that
+  LM Studio has loaded, or the first it lists where none is loaded. The context length it has the
+  model loaded with is shown, and written as `contextWindow` where it is below 131,072 tokens.
+- llama-server is asked at the port `LLAMA_ARG_PORT` names, which is the variable llama-server itself
+  reads, on the address `LLAMA_ARG_HOST` names. With no port named, bravebot asks at `9931`, the port
+  llama-server defaults to, and at `8080`, the one earlier releases and its container image use.
+  It reports no capabilities and no loaded context, so neither is checked or shown.
+
+```
+LM Studio is running at http://127.0.0.1:1234, serving models bravebot can use.
+Importing it adds these to /home/you/.bravebot/settings.json:
+  model: "lmstudio/qwen/qwen3-coder-30b"
+  provider.lmstudio, reached at http://127.0.0.1:1234/v1: {"name":"LM Studio (local)","options":{"baseURL":"http://127.0.0.1:1234/v1"}}
+Import this from LM Studio? [y/N]
+```
+
+A server that asks for a key is not offered, because the request carries none. Where more than one
+of Ollama, LM Studio and llama-server answers, each is asked about in that order, and one at a port an
+earlier answer already wrote is not offered again.
 
 **What can be imported.** A Claude Code Bedrock setup, under bravebot's own names, when a region is
 named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
@@ -1899,8 +1928,8 @@ bravebot import-providers
 ```
 
 That command asks the same questions at any time, whether or not a service is configured. It refuses
-without a terminal and in an incognito session. An incognito session asks no Ollama either, since it
-has nothing to write.
+without a terminal and in an incognito session. An incognito session asks none of the servers either,
+since it has nothing to write.
 
 ## Reaching a model through AWS Bedrock
 
