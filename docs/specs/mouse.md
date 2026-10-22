@@ -11,8 +11,8 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking things on the screen, a context menu and edge scrolling
-are proposed in
+drag selects is spelled out here. Clicking things on the screen, a context menu, edge scrolling and
+copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
 ## Clauses
@@ -117,3 +117,20 @@ an ordinary press. Terminals that keep shift for their own selection never repor
 
 `verified-by: bravebot_tui::app::a_shift_click_extends_the_selection_held`
 `verified-by: bravebot_tui::app::a_shift_click_in_another_pane_begins_a_new_selection`
+
+<a id="MOUSE-8"></a>
+### MOUSE-8: a wrapped line copies as one line
+
+A line the transcript is wider than is drawn over several rows. A copy that spans those rows reads
+them as the one line they are, so a wrapped paragraph is pasted as a paragraph and not with a line
+break at every row the screen cut it at. A row the wrap broke at a word is joined to the next with
+one space, even when the word ended in the last column and the blank after it was dropped, and a
+row cut inside a word with none. Lines
+the author broke are still separate lines. This holds in the transcript and in the scroller, and it is not applied to any other pane: the rows are screen rows, and the info
+panel is drawn on the same ones.
+
+`verified-by: bravebot_tui::select::a_wrapped_row_joins_the_row_below_it`
+`verified-by: bravebot_tui::select::a_blank_dropped_at_the_last_column_is_still_a_space`
+`verified-by: bravebot_tui::render::transcript::a_break_is_told_from_one_inside_a_word`
+`verified-by: bravebot_tui::select::a_wrap_in_the_transcript_does_not_join_the_rows_of_another_pane`
+`verified-by: bravebot_tui::app::a_wrapped_reply_copies_as_one_paragraph`

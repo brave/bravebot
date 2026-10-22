@@ -1328,7 +1328,8 @@ fn copy_selection(
 /// What `selection` covers on the drawn `buffer`, as it is put on the clipboard.
 ///
 /// The rows of the info panel that continue on the row below, as the two halves of the session id
-/// do, are joined without a line break.
+/// do, are joined without a line break, and so are the transcript's rows that one wrapped line
+/// was drawn over.
 fn selected_text(
     session: &Session,
     buffer: &ratatui::buffer::Buffer,
@@ -1341,7 +1342,7 @@ fn selected_text(
         .find(|(pane, _)| *pane == select::Pane::Panel)
         .map(|(_, rect)| crate::panel::continued_rows(session, *rect))
         .unwrap_or_default();
-    select::text_joining(buffer, selection, &joined)
+    select::text_wrapping(buffer, selection, &joined, &session.laid.continued)
 }
 
 /// The reply `/copy` was asked for: the latest when nothing follows the word, otherwise the one
@@ -8769,6 +8770,7 @@ mod tests {
                 prompts: Vec::new(),
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                continued: Vec::new(),
                 panes: Vec::new(),
             });
 
@@ -9415,6 +9417,7 @@ mod tests {
                 prompts: vec![0, 30, 60],
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                continued: Vec::new(),
                 panes: Vec::new(),
             });
             session
@@ -9969,6 +9972,7 @@ mod tests {
                 prompts: Vec::new(),
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                continued: Vec::new(),
                 panes: Vec::new(),
             });
             session.open_scroller();
@@ -9994,6 +9998,7 @@ mod tests {
                 prompts: vec![10, 40, 70],
                 matches: Vec::new(),
                 expandable: Vec::new(),
+                continued: Vec::new(),
                 panes: Vec::new(),
             });
             session.open_scroller();
@@ -10027,6 +10032,7 @@ mod tests {
                 prompts: Vec::new(),
                 matches: vec![20, 50, 80],
                 expandable: Vec::new(),
+                continued: Vec::new(),
                 panes: Vec::new(),
             });
             session.open_scroller();
@@ -11600,6 +11606,52 @@ mod tests {
         );
         let selection = session.selection.expect("selection");
         assert_eq!(super::selected_text(&session, &buffer, &selection), ID);
+    }
+
+    /// A reply the transcript wrapped is one paragraph, and copies as one: the wrap is the width of
+    /// the screen and no line break of the author's. That holds in the view at rest and in the
+    /// scroller, which are drawn by different code.
+    #[test]
+    fn a_wrapped_reply_copies_as_one_paragraph() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        const REPLY: &str = "the quick brown fox jumps over the lazy dog and then keeps on running \
+                             through the field until it reaches the far fence";
+        // The first row ends in the last column, so its blank is dropped and the next row starts
+        // with a word as one cut inside a word would.
+        const FLUSH: &str = "aaaaaaaaa bbbbbbbbb ccccccccc dddddddd next words follow after it";
+        const TURN_MARKER: &str = "\u{23fa}";
+        for (scrolling, reply, from, to) in [
+            (false, REPLY, "the quick", "far fence"),
+            (true, REPLY, "the quick", "far fence"),
+            (false, FLUSH, "aaaaaaaaa", "after it"),
+            (true, FLUSH, "aaaaaaaaa", "after it"),
+        ] {
+            let mut session = Session::new("none");
+            session.complete(reply.to_string(), Vec::new(), 0);
+            if scrolling {
+                session.open_scroller();
+            }
+            let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("terminal");
+            let mut laid = crate::state::Laid::default();
+            terminal
+                .draw(|frame| laid = render::draw(frame, &session))
+                .expect("draw");
+            session.note_layout(laid);
+            let buffer = terminal.backend().buffer().clone();
+            let (first, _) = find_on(&buffer, from);
+            let (last, _) = find_on(&buffer, to);
+            assert!(last > first, "the reply was not wrapped");
+            swept(&mut session, (first, 0), (last, 39));
+            let selection = session.selection.expect("selection");
+            let copied = super::selected_text(&session, &buffer, &selection);
+            assert_eq!(
+                copied,
+                format!("{TURN_MARKER} {reply}"),
+                "scrolling: {scrolling}"
+            );
+        }
     }
 
     /// Dragging past the bottom of the transcript stops at its last row, which is above the box.
