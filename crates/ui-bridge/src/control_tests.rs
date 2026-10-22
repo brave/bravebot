@@ -245,6 +245,12 @@ fn the_startup_question_carries_the_directory_and_the_record_spelled_for_a_perso
         );
         assert_eq!(bytes["directory"], json!("/work/pr\u{fffd}oj"));
         assert_eq!(bytes["shownDirectory"], json!("\"/work/pr\\xffoj\""));
+        // The name its replacement-character rendering spells holds the same `directory`, so the
+        // spelled field is what tells the two apart (PATH-003).
+        let lookalike = asked(Path::new("/work/pr\u{fffd}oj"), Path::new("/home/me/state"));
+        assert_eq!(lookalike["directory"], bytes["directory"]);
+        assert_eq!(lookalike["shownDirectory"], json!("/work/pr\u{fffd}oj"));
+        assert_ne!(lookalike["shownDirectory"], bytes["shownDirectory"]);
     }
 }
 
