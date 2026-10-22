@@ -11,6 +11,24 @@ docs/specs/background-sessions.md:BG-1: a background session is an ordinary sess
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
+docs/specs/bots.md:BOT-1: a bot's row has the fields the GUI's row has, and keeps them
+docs/specs/bots.md:BOT-2: a slug is lowercase letters and digits in runs joined by single hyphens
+docs/specs/bots.md:BOT-3: a name, a purpose, a model and an avatar are bounded text, and 100 bots is the ceiling
+docs/specs/bots.md:BOT-4: the rows are the file `~/.bravebot/bots.json`, which the terminal and the GUI read and write
+docs/specs/bots.md:BOT-5: one module of `bravebot-agent` reads and writes the rows, and both clients call it
+docs/specs/bots.md:BOT-6: the window reaches the writes of a bot only through the main process
+docs/specs/bots.md:BOT-7: the definition is written first, and the row only after it
+docs/specs/bots.md:BOT-8: deleting a bot removes its row and its history of memory versions, and nothing else
+docs/specs/bots.md:BOT-9: a bot's turn runs in its home folder, a folder a person moved to in this run, or a folder recorded for the bot
+docs/specs/bots.md:BOT-10: every turn of a bot's session in the terminal addresses the bot's definition
+docs/specs/bots.md:BOT-11: a conversation is recorded in the row, and either surface can continue it
+docs/specs/bots.md:BOT-12: a bot's session is refused with incognito
+docs/specs/bots.md:BOT-13: a bot's memory is the definition's, and the terminal shows it without trusting it
+docs/specs/bots.md:BOT-14: `/undo` in a bot's session is the terminal's `/undo`
+docs/specs/bots.md:BOT-15: the carry-over turn and the consolidation turn are one text in Rust
+docs/specs/bots.md:BOT-16: the terminal sends the consolidation turn after each compaction and after the migrating turn
+docs/specs/bots.md:BOT-17: the terminal has a second layout for bots, chosen by name
+docs/specs/bots.md:BOT-18: the terminal draws a bot's face beside its name and leaves its avatar as it is
 docs/specs/chatgpt-sign-in.md:CHATGPT-1: only a command a person types signs in
 docs/specs/chatgpt-sign-in.md:CHATGPT-2: a token reaches only the hosts compiled in for it
 docs/specs/chatgpt-sign-in.md:CHATGPT-3: the values the request depends on are generated here, for one sign-in

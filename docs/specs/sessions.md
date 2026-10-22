@@ -1514,7 +1514,10 @@ stay behind because they were given for work that the brief describes only in wo
   it comes back for the checkout at that path now, and such a line there runs unasked with the
   network closed for it. A fresh session at that path asks both
   ([TRUST-6](trust-map.md#TRUST-6), [RUN-9](tools/run.md#RUN-9)). A resume continues the session as
-  it was left, and the permissions it holds were given for the path, so this is accepted.
+  it was left, and the permissions it holds were given for the path, so this is accepted. A bot's row
+  records the folders its turns ran in, as paths ([BOT-9](bots.md#BOT-9)). A directory put at a
+  recorded path is a folder the bot may run in without a `/cd`, and a continued conversation there
+  takes its map from its record, as any resume does.
 
   Closing it means recording the project root's identity, as [TRUST-23](trust-map.md#TRUST-23)
   records it for a remembered answer (when the directory was made and its number on the volume), and
