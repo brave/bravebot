@@ -366,6 +366,7 @@ than the one in force at the time.
 `verified-by: bravebot_tui::state::a_resumed_session_keeps_the_recorded_model_until_a_turn_replaces_it`
 `verified-by: bravebot_session::sessions::a_failed_turn_is_charged_once_and_a_turn_with_no_request_not_at_all`
 `verified-by: bravebot_session::sessions::a_record_from_before_the_split_reads_it_as_none_recorded`
+`verified-by: bravebot_session::sessions::a_rewind_point_from_before_the_split_reads_it_as_none_recorded`
 `verified-by: bravebot_session::sessions::a_continued_turn_adds_its_split_to_the_record`
 `verified-by: bravebot_session::sessions::a_stored_rewind_point_keeps_the_split_of_the_tokens_before_its_turn`
 `verified-by: bravebot_session::sessions::a_failed_manifest_record_keeps_the_split_of_what_it_spent`
@@ -374,6 +375,7 @@ than the one in force at the time.
 `verified-by: bravebot_tui::state::clearing_forgets_the_split`
 `verified-by: bravebot_tui::state::restoring_the_spend_leaves_no_split_from_before_it`
 `verified-by: bravebot_tui::state::a_resumed_session_carries_on_counting_the_split_it_was_written_with`
+`verified-by: bravebot_tui::app::a_finished_turn_is_charged_with_what_it_read_and_wrote`
 `verified-by: bravebot_tui::app::every_request_beside_the_work_is_charged_with_what_it_read_and_wrote`
 `verified-by: bravebot_tui::app::a_record_built_from_the_session_holds_the_split_it_has_counted`
 `verified-by: bravebot_tui::undo_tests::undoing_a_turn_takes_its_split_back_with_its_tokens`

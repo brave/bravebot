@@ -6864,6 +6864,24 @@ fn refusal_note(clean: bool, standing: &[String], worked_around: usize) -> Optio
     }
 }
 
+/// Record a finished turn in the session, charging what it cost along with how that divides into
+/// what the model read and what it wrote, which only the worker's own count (`output_tokens`)
+/// says.
+///
+/// Split out from `fold_outcome` so a test can call it: that function takes a whole
+/// [`turn::Outcome`], which nothing outside the agent crate can build.
+fn complete_turn(
+    session: &mut Session,
+    reply: String,
+    trail: Vec<bravebot_session::audit::TrailLine>,
+    tokens: u64,
+    output_tokens: u64,
+    answered_as: Option<String>,
+) {
+    session.complete_as(reply, trail, tokens, answered_as);
+    session.charged_split(tokens, output_tokens);
+}
+
 /// Fold a finished turn into the session.
 #[allow(clippy::too_many_arguments)]
 fn fold_outcome(
@@ -6881,10 +6899,12 @@ fn fold_outcome(
     let carried = match outcome {
         Ok(outcome) => {
             let trail = sink.lines();
-            session.complete_as(
+            complete_turn(
+                session,
                 outcome.reply_for_display().to_string(),
                 trail,
                 outcome.tokens,
+                outcome.output_tokens,
                 outcome
                     .addressed
                     .as_ref()
@@ -6897,8 +6917,6 @@ fn fold_outcome(
             ) {
                 session.note(note);
             }
-            // How the cost divides, which only the worker's own count says.
-            session.charged_split(outcome.tokens, outcome.output_tokens);
             // Where the wall clock went, beside what the turn cost. The wall figure is the
             // session's own, taken from the moment Enter was pressed; this fills in the parts, which
             // only the worker saw.
@@ -26210,6 +26228,38 @@ mod tests {
         let mut suggesting = Session::new("none");
         suggesting.charge_suggestion(usage);
         assert_eq!(charged(&suggesting), expected, "a suggestion");
+    }
+
+    /// Turns that finish are where most of a session's tokens are charged, and the worker's own
+    /// count of what it wrote is the only figure that divides them. A fold that charged the total
+    /// alone, or divided it the wrong way round, leaves those tokens out of the Read and Written
+    /// columns of `stats` or puts them in the wrong one.
+    #[test]
+    fn a_finished_turn_is_charged_with_what_it_read_and_wrote() {
+        let mut session = Session::new("none");
+
+        for (prompt, tokens, written) in [("first", 100, 30), ("second", 250, 40)] {
+            type_line(&mut session, prompt);
+            handle_key(&mut session, key(KeyCode::Enter));
+            complete_turn(
+                &mut session,
+                "ok".to_string(),
+                Vec::new(),
+                tokens,
+                written,
+                None,
+            );
+        }
+
+        assert_eq!(session.tokens, 350);
+        assert_eq!(
+            session.split(),
+            bravebot_session::sessions::Split {
+                read: 280,
+                written: 70
+            },
+            "a finished turn was not charged with how its tokens divide"
+        );
     }
 
     /// The record is written from the session in several places, and all of them build it here, so

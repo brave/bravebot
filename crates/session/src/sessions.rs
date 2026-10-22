@@ -149,7 +149,8 @@ impl Split {
         }
     }
 
-    /// Add another split to this one.
+    /// Saturates like the token totals `stats` sums beside it: a figure read back from a record
+    /// can be any number, and adding two of them must not overflow.
     pub fn add(&mut self, other: Split) {
         self.read = self.read.saturating_add(other.read);
         self.written = self.written.saturating_add(other.written);
@@ -4730,6 +4731,31 @@ mod tests {
             StoredRewind::of(&point, Path::new("/work")).split,
             point.snapshot.split,
             "a point written back lost its split"
+        );
+    }
+
+    /// A rewind point written before the split was kept lacks the field, and it must still read,
+    /// with the split as not recorded rather than with an error that loses the point, as the
+    /// record's own field does.
+    #[test]
+    fn a_rewind_point_from_before_the_split_reads_it_as_none_recorded() {
+        let mut stored = a_stored_point(vec![]);
+        stored.tokens = 90;
+        stored.split = Split {
+            read: 60,
+            written: 20,
+        };
+        let mut written = serde_json::to_value(stored).expect("serialises");
+        let fields = written.as_object_mut().expect("an object");
+        fields.remove("split").expect("the split is written");
+
+        let old: StoredRewind = serde_json::from_value(written).expect("an older point reads");
+
+        assert_eq!(old.tokens, 90);
+        assert_eq!(old.split, Split::default());
+        assert_eq!(
+            old.into_point(Path::new("/work")).snapshot.split,
+            Split::default()
         );
     }
 
