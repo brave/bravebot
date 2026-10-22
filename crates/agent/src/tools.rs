@@ -21228,6 +21228,36 @@ mod tests {
         assert!(produced.failed, "a name one character out loaded a page");
     }
 
+    /// The regression it rejects: the list of specs or a spec's page being known to `help` and not
+    /// reachable through `load_skill`, or a spec's page answering as the list does.
+    #[cfg(unix)]
+    #[test]
+    fn a_spec_page_loads_by_the_name_the_list_gives_it() {
+        let fixture = SkillFixture::new("help-spec-loads");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+
+        let index = load_named(&mut policy, &catalogue, "bravebot-help");
+        assert!(index.contains("- bravebot-help/specs: "), "{index}");
+        let list = load_named(&mut policy, &catalogue, "bravebot-help/specs");
+        assert!(
+            list.contains("- bravebot-help/specs/commands: Slash commands (CMD, "),
+            "{list}"
+        );
+        let page = load_named(&mut policy, &catalogue, "bravebot-help/specs/commands");
+        assert!(page.contains("\nCMD-24: "), "{page}");
+        assert_ne!(page, list);
+
+        let produced = load_skill(
+            &mut policy,
+            &catalogue,
+            &json!({ "name": "bravebot-help/specs/command" }),
+        );
+        assert!(produced.failed, "a name one character out loaded a spec");
+    }
+
     /// The regression it rejects: a page answering for a skill of the user's own that took the
     /// place of the built-in index, which would hand the planner built-in text the user replaced.
     #[cfg(unix)]
@@ -21258,6 +21288,15 @@ mod tests {
         assert!(
             produced.failed,
             "a built-in page answered for the user's skill"
+        );
+        let produced = load_skill(
+            &mut policy,
+            &catalogue,
+            &json!({ "name": "bravebot-help/specs/commands" }),
+        );
+        assert!(
+            produced.failed,
+            "a built-in spec page answered for the user's skill"
         );
     }
 

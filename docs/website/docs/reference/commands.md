@@ -927,9 +927,10 @@ or the session's. Typed while a turn runs it waits for the turn to end.
 Asks the planner to answer a question about using bravebot from the documentation carried inside
 the program, so the answer comes from the version you are running and not from a checkout or the
 website: `/help how do I stop a background job`. The request names the built-in `bravebot-help`
-skill, whose pages the planner loads one at a time, only the ones the question needs. If the pages it
-loaded do not answer the question, it says so. Without the command, the planner loads the same skill
-on its own when a question is about using bravebot.
+skill, whose pages the planner loads one at a time, only the ones the question needs. The skill also
+holds the clause headings of the specifications, for a question about exactly what bravebot does. If
+the pages it loaded do not answer the question, it says so. Without the command, the planner loads
+the same skill on its own when a question is about using bravebot.
 
 The question is sent as you typed it, inside a sentence the program wrote, and the line you typed is
 not sent. It is a line you typed, so a file you name in it with `@` is read as it is in any prompt.
