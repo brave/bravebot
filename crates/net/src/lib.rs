@@ -1450,6 +1450,154 @@ mod tests {
         ));
     }
 
+    /// `url` as the client reads it, written out in full with the port it connects to, or `None`
+    /// where the client cannot read it, has no host to connect to, or has no default port for its
+    /// scheme.
+    fn as_the_client_reads(url: &str) -> Option<String> {
+        let uri: ureq::http::Uri = url.parse().ok()?;
+        let scheme = uri.scheme_str()?.to_ascii_lowercase();
+        let default = match scheme.as_str() {
+            "http" => 80,
+            "https" => 443,
+            _ => return None,
+        };
+        let port = uri.port_u16().unwrap_or(default);
+        let host = uri
+            .host()
+            .filter(|host| !host.is_empty())?
+            .to_ascii_lowercase();
+        Some(format!("{scheme}://{host}:{port}/"))
+    }
+
+    /// Whether a hop left the declared socket is decided by `socket_of`, and where the bytes go is
+    /// decided by the client's parser. The two have to read one port from one url, so each url
+    /// here is read by the client as well: a url the client reads a port from keeps that port in
+    /// its socket, and a url it reads none from, although a `:` follows the host, names no socket
+    /// for a comparison to find equal to another that names none.
+    #[test]
+    fn a_socket_is_the_one_the_client_connects_to() {
+        for url in [
+            "http://h/a",
+            "https://h/a",
+            "HTTP://H:00080/c",
+            "http://h:0080/a",
+            "http://h:65535/a",
+            "http://h:065535/b",
+            "https://[::1]/x",
+            "http://[::1]:8080/x",
+            "http://u@h:81/a",
+            "http://h:81@h2:82/a",
+            "http://h:80?x=1",
+        ] {
+            let read = as_the_client_reads(url).expect("the client reads the url");
+            let socket = bravebot_core::url::socket_of(url);
+            assert!(socket.is_some(), "{url}");
+            assert_eq!(
+                socket,
+                bravebot_core::url::socket_of(&read),
+                "{url} is not the socket the client connects to"
+            );
+        }
+
+        for url in [
+            "http://127.0.0.1:/a",
+            "https://127.0.0.1:/b",
+            "http://h:abc/a",
+            "http://h:99999/a",
+            "http://h:65536/a",
+            "http://h:-80/a",
+            "http://h: 80/a",
+            "http://h:8o/a",
+            "http://h:80:90/a",
+            "http://h:?x=1",
+            "http://[::1]:/a",
+            "http://[::1]:abc/a",
+            "http://[::1]:99999/a",
+            "http://[::1]8080/a",
+            "http://[::1/a",
+        ] {
+            let read = url
+                .parse::<ureq::http::Uri>()
+                .ok()
+                .and_then(|uri| uri.port_u16());
+            assert_eq!(read, None, "the client reads a port from {url}");
+            assert_eq!(bravebot_core::url::socket_of(url), None, "{url}");
+        }
+    }
+
+    /// The rows above are the ones that went wrong. This is every combination of the pieces an
+    /// authority is written from, so a url nobody thought to list is held to the same thing: where
+    /// the client reads a url and a socket is reported for it, they are the same socket, and a url
+    /// the client reads with no port or a plain one always has a socket.
+    #[test]
+    fn no_url_the_client_reads_is_given_a_socket_it_does_not_connect_to() {
+        let schemes = ["http", "HTTPS", "ws", "ftp"];
+        let users = ["", "u@", "u:p@", "u@v@"];
+        // Whether each piece is written plainly: a host with nothing after it but a port, and a
+        // port that is none or digits that fit. Only a url written that way is owed a socket.
+        let hosts = [
+            ("h", true),
+            ("H", true),
+            ("[::1]", true),
+            ("[::1", false),
+            ("::1", false),
+            ("", false),
+            ("[::1]x", false),
+            ("[]", false),
+            ("h%41", false),
+        ];
+        let ports = [
+            ("", true),
+            (":", false),
+            (":80", true),
+            (":0", true),
+            (":+1", false),
+            (":x", false),
+            (":65536", false),
+            (":1:2", false),
+            (":080", true),
+            (":443", true),
+        ];
+        let rests = ["", "/p", "?q@z:9", "#f"];
+
+        let (mut compared, mut owed) = (0, 0);
+        for scheme in schemes {
+            for user in users {
+                for (host, plain_host) in hosts {
+                    for (port, plain_port) in ports {
+                        for rest in rests {
+                            let plain = plain_host && plain_port;
+                            let url = format!("{scheme}://{user}{host}{port}{rest}");
+                            let socket = bravebot_core::url::socket_of(&url);
+                            if matches!(scheme, "ws" | "ftp") {
+                                assert_eq!(socket, None, "{url} is not one the client connects to");
+                            }
+                            let Some(read) = as_the_client_reads(&url) else {
+                                continue;
+                            };
+                            if plain {
+                                owed += 1;
+                                assert!(socket.is_some(), "{url} is read by the client");
+                            }
+                            if let Some(socket) = socket {
+                                compared += 1;
+                                assert_eq!(
+                                    Some(socket),
+                                    bravebot_core::url::socket_of(&read),
+                                    "{url} is not the socket the client connects to"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            compared > 100 && owed > 100,
+            "{compared} compared, {owed} owed a socket"
+        );
+    }
+
     /// Only a connection that ends here is waited on without bounds. A name that merely sounds
     /// local, or an address on the local network, is another machine that can go quiet for good.
     #[test]

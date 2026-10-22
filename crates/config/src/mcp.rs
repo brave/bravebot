@@ -214,7 +214,8 @@ pub enum Problem {
     Reads,
     /// `directory` is not an absolute path.
     Directory,
-    /// `url` is missing, is not a string, is not `http` or `https`, or names no host.
+    /// `url` is missing, is not a string, is not `http` or `https`, names no host, or writes a
+    /// port that is not a number up to 65535.
     Url,
     /// `url` carries a user or a password.
     Credentials,
@@ -1187,7 +1188,11 @@ fn absolute(directory: &str) -> Result<(), Problem> {
     }
 }
 
-/// A url to reach a server at: `http` or `https`, a host, and no user or password.
+/// A url to reach a server at: `http` or `https`, a host, a port where it writes one that is a
+/// number up to 65535, and no user or password.
+///
+/// A `:` with no port after it, or with something else, is refused. The client connects to the
+/// scheme's default there, which is not the socket the url spells.
 ///
 /// No credential in the url: the url is drawn wherever the declaration is, at the question and in
 /// `get`, so a token written into it is a token on the screen. A stored value is drawn only where it
@@ -1208,11 +1213,19 @@ fn remote(url: &str) -> Result<(), Problem> {
     if authority.contains('@') {
         return Err(Problem::Credentials);
     }
-    let host = match authority.strip_prefix('[') {
-        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
-        None => authority.split(':').next().unwrap_or_default(),
+    let (host, after) = match authority.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']').ok_or(Problem::Url)?,
+        None => authority.split_at(authority.find(':').unwrap_or(authority.len())),
     };
-    match host.is_empty() {
+    let port = match after.strip_prefix(':') {
+        Some(digits) => {
+            !digits.is_empty()
+                && digits.bytes().all(|b| b.is_ascii_digit())
+                && digits.parse::<u16>().is_ok()
+        }
+        None => after.is_empty(),
+    };
+    match host.is_empty() || !port {
         true => Err(Problem::Url),
         false => Ok(()),
     }
@@ -1990,6 +2003,66 @@ mod tests {
         ] {
             assert!(Declaration::http(url.into()).is_ok(), "{url}");
         }
+    }
+
+    /// The client connects to the scheme's default where a url writes a `:` and no port after it,
+    /// or one that is not a number up to 65535. A declaration like that would name a socket other
+    /// than the one it spells, and the person approving it would have read the wrong one.
+    #[test]
+    fn a_url_writing_a_port_that_is_not_one_is_refused() {
+        for url in [
+            "http://127.0.0.1:/mcp",
+            "https://127.0.0.1:/mcp",
+            "http://h:",
+            "http://h:?x=1",
+            "http://h:abc/mcp",
+            "http://h:99999/mcp",
+            "http://h:65536/mcp",
+            "http://h:+80/mcp",
+            "http://h:-80/mcp",
+            "http://h:80:90/mcp",
+            "http://[::1]:/mcp",
+            "http://[::1]:abc/mcp",
+            "http://[::1]:99999/mcp",
+            "http://[::1]8080/mcp",
+            "http://[::1/mcp",
+        ] {
+            assert_eq!(Declaration::http(url.into()), Err(Problem::Url), "{url}");
+        }
+        for url in [
+            "http://h/mcp",
+            "http://h:8080/mcp",
+            "http://h:0080/mcp",
+            "http://h:65535/mcp",
+            "http://h:80?x=1",
+            "http://[::1]/mcp",
+            "http://[::1]:65535/mcp",
+        ] {
+            assert!(Declaration::http(url.into()).is_ok(), "{url}");
+        }
+    }
+
+    /// A file an earlier version wrote can hold a url with a `:` and no port. The entry is no longer
+    /// a declaration, and it is listed with that and kept as it was written, so that editing the
+    /// url in the file is the way forward and nothing the person wrote is lost.
+    #[test]
+    fn a_stored_url_with_a_colon_and_no_port_is_reported_and_kept_as_written() {
+        let stored = r#"{"transport": "http", "url": "https://weather.example.com:/mcp"}"#;
+        let text = format!(r#"{{"servers": {{"weather": {stored}}}}}"#);
+        let mut declarations = Declarations::parse(&text).unwrap();
+        assert_eq!(
+            declarations.get("weather").unwrap().declaration,
+            Err(Problem::Url)
+        );
+
+        let other = Declaration::http("https://other.example.com".into()).unwrap();
+        declarations.insert("other", &other);
+        let rewritten = Declarations::parse(&declarations.to_text()).unwrap();
+        assert_eq!(
+            rewritten.servers.get("weather"),
+            Some(&serde_json::from_str::<serde_json::Value>(stored).unwrap())
+        );
+        assert_eq!(rewritten.get("other").unwrap().declaration, Ok(other));
     }
 
     #[test]

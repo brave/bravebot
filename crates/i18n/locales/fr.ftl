@@ -1025,7 +1025,7 @@ mcp-problem-twice =
     environnement
 mcp-problem-reads = reads n'est pas une liste de chemins absolus
 mcp-problem-directory = le répertoire n'est pas un chemin absolu
-mcp-problem-url = l'url n'est pas en http ou en https avec un hôte
+mcp-problem-url = l'url n'est pas en http ou en https avec un hôte et, si elle écrit un port, un nombre jusqu'à 65535
 mcp-problem-credentials =
     l'url porte un utilisateur ou un mot de passe, ce qui garderait un identifiant en clair
 mcp-problem-header = { $name } n'est pas un jeton d'en-tête HTTP valide
