@@ -120,6 +120,13 @@ a skill in a project you have not trusted is never listed, just as it is never s
 name a command already claims, such as `loop`, is not listed, and nothing is completed after a
 command's own word or in [shell mode](../using/shell-mode.md).
 
+## Keeping a skill applied
+
+`/mode <skill>` keeps a skill applied to every turn until `/mode off`, instead of naming it in each
+prompt. See [`/mode`](../reference/commands.md#mode-skill--off) for what it takes and how it is shown.
+Its instructions are put in the system prompt each turn, so they are not repeated in the
+conversation, and they are read again from the trusted source at the start of each turn.
+
 ## A skill only you can load
 
 A skill for a step with side effects, such as a release or a deploy, should run only when you ask

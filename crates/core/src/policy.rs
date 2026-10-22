@@ -1507,6 +1507,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a skill the person kept applied with `/mode` was put in the system prompt for
+    /// this turn, by its name and the size of what went (SKILL-21).
+    ///
+    /// Said per turn, since a mode stands without a line of its own in the transcript and the trail
+    /// is the only place a reader learns which skill's words a turn was given.
+    pub fn admit_skill_mode(&mut self, name: &str, characters: usize) {
+        self.allow(
+            "provenance",
+            format!(
+                "skill {name}, {characters} characters, kept in force by the user's /mode; the \
+                 planner was not offered it"
+            ),
+        );
+    }
+
     /// The directories of the user's own skills loaded this turn, which a read may land in.
     pub fn loaded_skill_directories(&self) -> &[std::path::PathBuf] {
         &self.skill_reach

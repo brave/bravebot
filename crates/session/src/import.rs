@@ -210,6 +210,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         server_children_may_run: false,
         checkouts: Vec::new(),
         agent: None,
+        skill_mode: None,
     }
 }
 

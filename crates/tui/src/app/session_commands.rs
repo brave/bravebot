@@ -375,6 +375,45 @@ pub(super) fn rename_session(
     }
 }
 
+/// Say which skill is the session's mode, put one in force by name, or leave it (SKILL-21).
+///
+/// A name is compared whole against the skills a turn starting now would resolve, read the way the
+/// box offers them: through the trust map and the rules, so a skill from a project nobody vouched
+/// for is no mode and is not named here. Nothing typed after `/mode` reaches a path or the prompt,
+/// and the choice is written to the record so a resume puts it back. The turn reads the skill again
+/// when it begins, under its own map.
+pub(super) fn set_mode(
+    session: &mut Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    workspace: &Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    word: &str,
+) {
+    let skills: Vec<String> = crate::skills::resolved(workspace, trust, permissions)
+        .into_iter()
+        .map(|skill| skill.name)
+        .collect();
+    let available = skills.join(", ");
+    if word.is_empty() {
+        let note = match session.skill_mode() {
+            Some(skill) => t!(session_mode_in_force, skill = skill, skills = available),
+            None => t!(session_mode_none, skills = available),
+        };
+        session.note(note.to_string());
+    } else if word == MODE_OFF {
+        session.choose_skill_mode(None);
+        stored.set_skill_mode(None);
+        session.note(t!(session_mode_cleared));
+    } else if let Some(name) = skills.iter().find(|name| name.as_str() == word) {
+        session.choose_skill_mode(Some(name.clone()));
+        stored.set_skill_mode(Some(name.clone()));
+        session.note(t!(session_mode_set, skill = name.as_str()));
+    } else {
+        session.note(t!(session_mode_unknown, skill = word, skills = available));
+    }
+}
+
 /// Write the transcript as it stands to a markdown file under the working directory, and say where
 /// (SESSION-17).
 ///

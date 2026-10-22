@@ -558,7 +558,49 @@ says not to run it, and a name that cannot be typed. A definition's
 `verified-by: bravebot_agent::conversation::the_cut_of_a_skill_says_who_can_read_the_rest`
 `verified-by: bravebot_agent::conversation::a_cut_never_falls_in_front_of_a_skill_the_person_named`
 
+<a id="SKILL-21"></a>
+### SKILL-21: a skill a person put in force as a mode is in the system prompt of every turn until they leave it
+
+`/mode <skill>` ([CMD-27](commands.md#CMD-27)) names one skill as the session's mode and `/mode off`
+leaves it. A turn built while a mode stands reads the skill again when it begins, from the set it
+found ([LOAD-2](tools/load-skill.md#LOAD-2)), by the whole name and no other comparison, and puts its
+instructions in the system prompt: after what this program says and ahead of the person's own
+`AGENTS.md`, so those words still have the last word over a skill. The words go through
+`Policy::present` with the label the skill was read with, as a skill the planner loads does, and the
+files beside the skill are reachable as they are for one a person names ([SKILL-20](#SKILL-20)).
+They are not a message in the conversation, so a session of many turns holds them once, and nothing
+a compaction keeps ([COMPACT-17](compaction.md#COMPACT-17)) has to carry them. A skill its file
+keeps from the planner can be a mode, since the person chose it, and is still not advertised to the
+planner. The trail records the skill by name with the size of what went, each turn.
+
+A mode that cannot be applied to a turn leaves the turn without it and says so in the turn's notices:
+a skill that is no longer found, a skill of a project the trust map no longer vouches for, a skill
+the gate would hold back, and a skill `permissions` denies reading. Nothing falls back to another skill.
+Nothing a file or a tool said sets or clears a mode, and `load_skill` cannot: the mode is a name the
+person's own command stored, compared whole against names the driver enumerated. A delegate is
+given none, and neither is a turn whose caller is not the terminal interface.
+
+The record stores the name, so a resume puts the mode back and says that it did, and a fork or a
+`/clear` keeps it. A record from before the mode was kept reads as in none. The skill's `model`
+and `effort` are not applied by a mode: only its instructions are ([SKILL-15](#SKILL-15)).
+
+**Why.** A skill that says how to work, a review checklist held across several files or a test-first
+playbook, is wanted for a span of the session and not for one message, and naming it in each prompt
+is what a person forgets to do. Putting it in the system prompt keeps it out of the history, where it
+would repeat each turn. Reading it again each turn, through the gate, is what stops a choice made while
+a project was vouched for from outliving the vouching.
+
+`verified-by: bravebot_agent::turn::a_skill_mode_is_in_the_system_prompt_of_every_turn_and_only_once`
+`verified-by: bravebot_agent::turn::a_skill_mode_that_the_gate_or_the_catalogue_does_not_hold_is_not_applied_and_is_said`
+`verified-by: bravebot_session::sessions::a_session_records_the_skill_mode_and_its_fork_and_resume_keep_it`
+`verified-by: bravebot_tui::app::a_resumed_session_is_in_the_mode_its_record_names`
+`verified-by: bravebot_tui::render::the_box_names_the_mode_while_one_is_in_force`
+
 ## Known costs
+
+- **A mode applies a skill's instructions and nothing else of it ([SKILL-21](#SKILL-21)).** Its
+  `model` and `effort` are not applied, since they take effect from the round after a load and a mode
+  has no load to follow. A person who wants them names the skill in a line as well.
 
 - **A skill kept from the planner is supplied only for a line the person sent as a prompt.** A
   `/name` typed while a turn runs is an interjection, which reaches the planner as words and brings

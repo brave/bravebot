@@ -26,6 +26,12 @@ pub(crate) const STYLE_COMMAND: &str = "/style";
 /// The word after `/style` that clears the session's pick.
 pub(crate) const STYLE_OFF: &str = "off";
 
+/// The line that lists the skills a session could be in as a mode, puts one in force, or leaves it.
+pub(crate) const MODE_COMMAND: &str = "/mode";
+
+/// The word after `/mode` that leaves the session's mode.
+pub(crate) const MODE_OFF: &str = "off";
+
 /// The line that reports the session's spend limit, sets it, or removes it.
 pub(crate) const LIMIT_COMMAND: &str = "/limit";
 
@@ -364,7 +370,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 55] {
+pub fn commands() -> [Command; 56] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -449,6 +455,12 @@ pub fn commands() -> [Command; 55] {
             argument: "[name | off]",
             description: t!(command_style),
             mid_turn: MidTurn::Changes,
+        },
+        Command {
+            name: MODE_COMMAND,
+            argument: "[skill | off]",
+            description: t!(command_mode),
+            mid_turn: MidTurn::Waits,
         },
         Command {
             name: LANGUAGE_COMMAND,
@@ -701,6 +713,10 @@ pub fn commands() -> [Command; 55] {
 
 /// The commands a half-typed line could still become, in the order they are offered.
 ///
+/// A command typed in full is offered first, ahead of the longer names that begin with it: with
+/// `/model` earlier in the table, Enter on `/mode` would otherwise complete to `/model` and never
+/// run the command that was typed (CMD-27).
+///
 /// Empty unless the line is a lone word starting with a slash: a command takes its argument after a
 /// space, so once there is one the command is settled and there is no command left to complete. A
 /// line that is not a command at all completes to nothing, which is what closes the list.
@@ -709,11 +725,14 @@ pub fn completions(line: &str) -> Vec<Command> {
     if !trimmed.starts_with('/') || trimmed.contains(char::is_whitespace) {
         return Vec::new();
     }
-    commands()
+    let mut offered: Vec<Command> = commands()
         .iter()
         .filter(|command| command.name.starts_with(trimmed))
         .copied()
-        .collect()
+        .collect();
+    // Stable, so the others keep the table's order.
+    offered.sort_by_key(|command| command.name != trimmed);
+    offered
 }
 
 /// The line `/effort ` or `/sandbox ` plus the start of one of its words becomes, or `None` where
@@ -1147,6 +1166,7 @@ mod tests {
             (RENAME_COMMAND, false, false, false, false),
             (NOTE_COMMAND, false, false, false, false),
             (STYLE_COMMAND, false, false, false, false),
+            (MODE_COMMAND, false, true, true, true),
             (FORGET_TRUST_COMMAND, false, false, false, false),
             (ISSUE_COMMAND, false, false, false, false),
             (PR_COMMAND, false, false, false, false),

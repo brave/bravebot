@@ -515,6 +515,15 @@ pub struct Record {
     /// `None` for a record written before this was kept, and for a session started without one.
     #[serde(default)]
     pub agent: Option<String>,
+    /// The skill the person put in force with `/mode` and had not left (SKILL-21).
+    ///
+    /// Only the name, written by the driver from the person's own command. A resume puts the mode
+    /// back and each turn reads the skill again, so an edit to the file is followed and a skill
+    /// that is gone or no longer trusted is reported rather than applied from this record.
+    ///
+    /// `None` for a record written before this was kept, and for a session in no mode.
+    #[serde(default)]
+    pub skill_mode: Option<String>,
 }
 
 /// A kept checkout as it is written down.
@@ -1822,6 +1831,8 @@ pub struct Handle {
     notes: Vec<Note>,
     /// The definition the person named on the command line, for the record to carry.
     agent: Option<String>,
+    /// The skill `/mode` has in force, for the record to carry (SKILL-21).
+    skill_mode: Option<String>,
     /// Whether a record for this id is on disk yet.
     ///
     /// An id exists from the first moment, but a session that was opened and abandoned leaves
@@ -1881,6 +1892,7 @@ impl Handle {
             handed_off_from: None,
             notes: Vec::new(),
             agent: None,
+            skill_mode: None,
             wrote: false,
             server_children_may_run: false,
             build: build.to_string(),
@@ -1906,6 +1918,7 @@ impl Handle {
             handed_off_from: record.handed_off_from.clone(),
             notes: record.notes.clone(),
             agent: record.agent.clone(),
+            skill_mode: record.skill_mode.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
             server_children_may_run: record.server_children_may_run(),
@@ -2061,6 +2074,17 @@ impl Handle {
     /// The definition the person named when the session began, if they named one.
     pub fn agent(&self) -> Option<&str> {
         self.agent.as_deref()
+    }
+
+    /// Record the skill the person put in force with `/mode`, or `None` once they left it
+    /// (SKILL-21). Written with the next save.
+    pub fn set_skill_mode(&mut self, name: Option<String>) {
+        self.skill_mode = name;
+    }
+
+    /// The skill the session is in as a mode, if it is in one.
+    pub fn skill_mode(&self) -> Option<&str> {
+        self.skill_mode.as_deref()
     }
 
     /// The link of this kind the person gave the session, if they gave one.
@@ -2240,6 +2264,7 @@ impl Handle {
                 )
                 .collect(),
             agent: self.agent.clone(),
+            skill_mode: self.skill_mode.clone(),
         };
 
         self.write(&directory, &record);
@@ -2315,6 +2340,7 @@ impl Handle {
         record.build = Some(self.build.clone());
         record.front = Some(self.front.recorded().to_string());
         record.agent = self.agent.clone();
+        record.skill_mode = self.skill_mode.clone();
         // The handle holds every note typed on this session, including ones added after the record
         // this continuation was read from.
         record.notes = self.notes.clone();
@@ -4530,6 +4556,48 @@ mod tests {
         assert_eq!(cleared.pull_request.as_deref(), Some(PULL));
     }
 
+    /// SKILL-21. The skill a person put in force with `/mode` is written with the record, kept by the
+    /// turns that follow, a resume and a fork, and cleared only by the driver. A record from before
+    /// it was kept reads as in no mode.
+    #[test]
+    fn a_session_records_the_skill_mode_and_its_fork_and_resume_keep_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-skill-mode");
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_skill_mode(Some("tdd-playbook".to_string()));
+        save_a_turn_session(&mut handle);
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(record.skill_mode.as_deref(), Some("tdd-playbook"));
+
+        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        assert_eq!(resumed.skill_mode(), Some("tdd-playbook"));
+        save_a_turn_session(&mut resumed);
+        let again = load(&root, resumed.id()).expect("the record is still there");
+        assert_eq!(
+            again.skill_mode.as_deref(),
+            Some("tdd-playbook"),
+            "the next turn's save dropped the mode"
+        );
+        let forked = fork(&root, handle.id()).expect("the session forks");
+        assert_eq!(forked.skill_mode.as_deref(), Some("tdd-playbook"));
+
+        resumed.set_skill_mode(None);
+        save_a_turn_session(&mut resumed);
+        assert_eq!(
+            load(&root, resumed.id()).expect("written").skill_mode,
+            None,
+            "leaving the mode left it on disk"
+        );
+
+        let mut old = serde_json::to_value(&record).expect("serialises");
+        old.as_object_mut().expect("an object").remove("skill_mode");
+        let old: Record = serde_json::from_value(old).expect("an old record still reads");
+        assert_eq!(old.skill_mode, None);
+    }
+
     /// ADDRESS-3. The name the driver set is written with the record, kept by the turns that follow
     /// it, a resume, a fork and a continuation, and replaced or cleared only by the driver. A
     /// record from before the name was kept reads as naming none.
@@ -5304,6 +5372,7 @@ mod tests {
             rewind: Vec::new(),
             checkouts: Vec::new(),
             agent: None,
+            skill_mode: None,
         }
     }
 

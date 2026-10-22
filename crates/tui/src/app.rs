@@ -441,6 +441,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if let Some(word) = argument_to(line, STYLE_COMMAND) {
         return Action::Style(word.to_string());
     }
+    if let Some(word) = argument_to(line, MODE_COMMAND) {
+        return Action::Mode(word.to_string());
+    }
     if let Some(word) = argument_to(line, LANGUAGE_COMMAND) {
         return Action::Language(word.to_string());
     }
@@ -2206,6 +2209,9 @@ fn restore_resumed(
     let recalled = bravebot_session::sessions::recall(workspace.root(), record);
     session.replay(&conversation, &record.title, &recalled);
     session.restore_accounts(record);
+    if let Some(name) = record.skill_mode.as_deref() {
+        session.resume_skill_mode(name);
+    }
     if conversation.last_request_tokens() > 0 {
         session.measured(
             conversation.last_request_tokens(),
@@ -2865,6 +2871,14 @@ fn event_loop(
             Action::SetEffort(level) => set_effort(held.session, &level),
             Action::Advisor(word) => set_advisor(held.session, config, &word),
             Action::Style(word) => set_style(held.session, held.workspace, &word),
+            Action::Mode(word) => set_mode(
+                held.session,
+                held.stored,
+                held.workspace,
+                held.answers.trust.clone(),
+                held.answers.rules.permissions.clone(),
+                &word,
+            ),
             Action::Language(word) => set_language(held.session, &word),
             Action::ChooseEditing => choose_editing(terminal, held.session),
             Action::AddDirectory(directory) => held.add_directory_command(&directory),
@@ -3896,6 +3910,7 @@ fn handle_after_clear(
         bravebot_stamp::BUILD,
     );
     handle.set_agent(session.standing_definition().map(|one| one.name.clone()));
+    handle.set_skill_mode(session.skill_mode().map(str::to_string));
     handle
 }
 
@@ -5848,6 +5863,7 @@ fn run_turn_animated(
     task = with_submitted_attachments(task, session);
     task = with_session_advisor(task, session);
     task = with_session_style(task, session);
+    task = with_session_skill_mode(task, session);
     task = with_session_limit(task, session);
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
@@ -6411,6 +6427,12 @@ fn with_firing_watch(task: Task, session: &Session) -> Task {
 /// The output style `/style` chose, carried on the turn so it opens the system prompt (CLI-19).
 fn with_session_style(task: Task, session: &Session) -> Task {
     task.with_style(session.style().cloned())
+}
+
+/// The skill `/mode` put in force, carried on the turn by name so it reads the skill again and puts
+/// it in its system prompt (SKILL-21).
+fn with_session_skill_mode(task: Task, session: &Session) -> Task {
+    task.with_skill_mode(session.skill_mode().map(str::to_string))
 }
 
 /// The session's spend limit and what the session had spent before this turn, carried on the turn
@@ -16106,6 +16128,187 @@ mod tests {
         }
     }
 
+    /// SKILL-21. `/mode` puts a skill in force by its whole name, among the skills a turn starting
+    /// now would resolve: a prefix, another case and a name nothing resolves keep the mode that was
+    /// there and say so, `off` leaves it, and the name reaches both the next turn's task and the
+    /// record. Taken on a project skill the map vouches for, since the home directory is global.
+    #[test]
+    fn the_mode_command_puts_a_skill_in_force_by_its_whole_name_and_off_leaves_it() {
+        let root = crate::testutil::scratch_dir("bravebot-app-mode-command");
+        let _ = std::fs::remove_dir_all(&root);
+        let at = root.join(".bravebot/skills/tdd-playbook");
+        std::fs::create_dir_all(&at).unwrap();
+        std::fs::write(
+            at.join("SKILL.md"),
+            "---\nname: tdd-playbook\ndescription: How tests come first.\n---\n\nWrite the test first.\n",
+        )
+        .unwrap();
+        let workspace = Workspace::new(&root).expect("workspace");
+        let trusting = || {
+            let mut trust = TrustStore::new(&root);
+            trust.trust(".");
+            trust
+        };
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let mut session = Session::new("none");
+        let run =
+            |session: &mut Session, stored: &mut bravebot_session::sessions::Handle, word: &str| {
+                set_mode(
+                    session,
+                    stored,
+                    &workspace,
+                    trusting(),
+                    bravebot_core::permissions::Permissions::default(),
+                    word,
+                );
+            };
+
+        for wrong in ["tdd", "TDD-PLAYBOOK", "tdd-playbook ", "no-such-skill"] {
+            run(&mut session, &mut stored, wrong);
+            assert_eq!(session.skill_mode(), None, "{wrong:?} was taken");
+        }
+        let said = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            said.contains("no skill called tdd; available: ") && said.contains("tdd-playbook"),
+            "{said}"
+        );
+
+        run(&mut session, &mut stored, "tdd-playbook");
+        assert_eq!(session.skill_mode(), Some("tdd-playbook"));
+        assert_eq!(
+            stored.skill_mode(),
+            Some("tdd-playbook"),
+            "the record was not told"
+        );
+        assert_eq!(
+            with_session_skill_mode(Task::new("p"), &session)
+                .skill_mode
+                .as_deref(),
+            Some("tdd-playbook"),
+            "the task did not carry the mode"
+        );
+
+        run(&mut session, &mut stored, "tdd");
+        assert_eq!(
+            session.skill_mode(),
+            Some("tdd-playbook"),
+            "a wrong name left the mode"
+        );
+
+        run(&mut session, &mut stored, "off");
+        assert_eq!(session.skill_mode(), None);
+        assert_eq!(
+            stored.skill_mode(),
+            None,
+            "the record kept a mode that was left"
+        );
+        assert_eq!(
+            with_session_skill_mode(Task::new("p"), &session).skill_mode,
+            None
+        );
+    }
+
+    /// SKILL-21. A mode is written to the record and a resume puts it back and says so, which is
+    /// what a person who closed the terminal in a mode finds again.
+    #[test]
+    fn a_resumed_session_is_in_the_mode_its_record_names() {
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-mode-resumed");
+        std::fs::create_dir_all(&root).expect("create");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let config = a_config_needing_no_sign_in();
+        let mut session = Session::new("none");
+        session.choose_skill_mode(Some("tdd-playbook".to_string()));
+
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        stored.set_skill_mode(session.skill_mode().map(str::to_string));
+        with_standing(
+            &session,
+            &Conversation::new(),
+            &TrustStore::new(&root),
+            &TrustedPrograms::new(),
+            &workspace,
+            |standing| stored.save("a session", standing),
+        );
+        let record = sessions::load(&root, stored.id()).expect("the record");
+        assert_eq!(record.skill_mode.as_deref(), Some("tdd-playbook"));
+
+        let mut resumed = Session::new("none");
+        restore_resumed(&mut resumed, &config, &mut workspace, &record);
+        assert_eq!(resumed.skill_mode(), Some("tdd-playbook"));
+        assert!(
+            resumed
+                .transcript
+                .iter()
+                .any(|entry| entry.text.contains("tdd-playbook")),
+            "the resume did not say it was back in the mode"
+        );
+    }
+
+    /// The words `/mode` takes: none says, a name puts one in force, `off` leaves. The handler tells
+    /// them apart, and a sentence that only mentions the word is still a prompt.
+    #[test]
+    fn the_mode_command_takes_a_name_or_nothing() {
+        for (line, word) in [("/mode", ""), ("/mode tdd", "tdd"), ("/mode off", "off")] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(line)),
+                Action::Mode(word.to_string()),
+                "{line}"
+            );
+        }
+        let mut session = Session::new("none");
+        for c in "use a /mode here".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("use a /mode here".to_string())
+        );
+    }
+
+    /// SKILL-21. `/mode` typed in full and sent with Enter runs `/mode`, though `/model` shares its
+    /// letters and sits earlier in the table: the list offers the command that was typed first, so
+    /// Enter does not take the longer name instead.
+    #[test]
+    fn enter_on_mode_typed_in_full_runs_mode_and_not_model() {
+        let mut session = Session::new("none");
+        for c in "/mode".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            session.highlighted_completion().map(|command| command.name),
+            Some(MODE_COMMAND),
+            "the list leads with the command that was typed"
+        );
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Mode(String::new())
+        );
+        assert_eq!(
+            completions("/mod")
+                .iter()
+                .map(|c| c.name)
+                .collect::<Vec<_>>(),
+            [MODEL_COMMAND, MODE_COMMAND],
+            "a half-typed word keeps the table's order"
+        );
+    }
+
     /// A sentence that mentions the word, or a longer word, is said to the planner.
     #[test]
     fn a_prompt_containing_the_style_command_or_a_longer_word_is_still_a_prompt() {
@@ -20389,7 +20592,7 @@ mod tests {
             ("review-pr", Source::Home),
             ("release-notes", Source::Workspace),
             ("retro", Source::Home),
-            ("mode", Source::Home),
+            ("mod", Source::Home),
         ]
         .into_iter()
         .map(|(name, source)| crate::skills::Skill {
@@ -20540,7 +20743,7 @@ mod tests {
         assert_eq!(session.input(), "/review ");
 
         let mut session = Session::new("none");
-        type_with_skills(&mut session, "/mode");
+        type_with_skills(&mut session, "/mod");
         assert_eq!(
             session.highlighted_completion().map(|command| command.name),
             Some(MODEL_COMMAND),
@@ -20548,7 +20751,7 @@ mod tests {
         );
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Enter)),
-            Action::Submit("/mode".to_string())
+            Action::Submit("/mod".to_string())
         );
     }
 
@@ -20564,10 +20767,10 @@ mod tests {
         assert_eq!(session.highlighted_completion(), None);
         assert_eq!(
             session.highlighted_skill().map(|skill| skill.name),
-            Some("mode".to_string())
+            Some("mod".to_string())
         );
         handle_key(&mut session, key(KeyCode::Tab));
-        assert_eq!(session.input(), "/mode ");
+        assert_eq!(session.input(), "/mod ");
     }
 
     /// Read once as the line first holds a slash word rather than once a key, and let go once it

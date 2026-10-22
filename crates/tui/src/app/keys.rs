@@ -55,6 +55,9 @@ pub enum Action {
     Advisor(String),
     /// Say which output style is in force, take one by name, or clear the pick. Empty says.
     Style(String),
+    /// Say which skill is the session's mode, put one in force by name, or leave it. Empty says.
+    /// Needs the workspace and the trust map to find the skill in, which the loop owns.
+    Mode(String),
     /// Say which language the interface is in, choose one for the next start, or give the choice
     /// back. Empty says.
     Language(String),

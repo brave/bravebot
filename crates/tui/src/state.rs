@@ -1334,6 +1334,12 @@ pub struct Session {
     ///
     /// Kept for the session only, as `advisor` is.
     style: Option<bravebot_agent::styles::Style>,
+    /// The skill `/mode` put in force, which every turn applies until it is left (SKILL-21).
+    ///
+    /// The name alone: each turn reads the skill again, so a file that moved or is no longer
+    /// trusted is not applied from what was read when the mode was chosen. Recorded with the
+    /// session, so a resume puts it back.
+    skill_mode: Option<String>,
     /// The names of the project's styles the trust map vouched for when `/style` was last typed.
     ///
     /// A pick of one of them is taken on this list, and the turn reads the file again under its own
@@ -1566,6 +1572,7 @@ impl Session {
             advisor: None,
             spend_limit: bravebot_agent::SpendLimit::default(),
             style: None,
+            skill_mode: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
             reference_sources: Vec::new(),

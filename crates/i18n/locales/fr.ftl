@@ -2369,6 +2369,14 @@ command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre
 command-advisor = Nommer le modèle que le planificateur peut consulter, dire lequel, ou abandonner le choix
 command-style = Choisir la manière dont le planificateur répond : lister les styles, en choisir un, ou effacer le choix
+command-mode = Garder une compétence appliquée à chaque tour : lister, choisir ou quitter
+session-mode-set = la compétence { $skill } est en vigueur dès le prochain tour, jusqu'à ce que vous la quittiez avec /mode off
+session-mode-in-force = mode : { $skill } ; disponibles : { $skills }
+session-mode-none = aucun mode ; disponibles : { $skills }
+session-mode-cleared = mode quitté
+session-mode-unknown = aucune compétence nommée { $skill } ; disponibles : { $skills }
+session-mode-resumed = cette session était dans le mode { $skill }, qui est de nouveau en vigueur
+input-skill-mode = mode : { $skill }
 command-config = Choisir le mode d'édition de la zone de saisie
 command-language = Choisir la langue de l'interface au prochain démarrage, ou abandonner le choix
 command-add-dir = Ouvrir un autre répertoire et l'approuver pour cette session, ou en fermer un
@@ -3060,6 +3068,9 @@ agent-model-outranked =
 agent-style-not-used =
     le style { $style } n'a pas été utilisé : son fichier n'est pas de confiance ou n'est plus un
     style, donc ce tour s'est ouvert avec les mots habituels
+agent-skill-mode-not-used =
+    le mode { $skill } n'a pas été appliqué : sa compétence est introuvable ou n'est pas de confiance,
+    donc ce tour s'est déroulé sans lui
 agent-checkout-not-applied =
     { $definition } demande une copie de travail à part, que seuls ses délégués reçoivent, donc ce
     tour travaille dans votre répertoire de travail

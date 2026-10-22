@@ -1522,6 +1522,38 @@ fn admit_named_skill<S: Sink>(
     }
 }
 
+/// The words of the skill `/mode` keeps applied, as the gate shows them, or `None` where it does not.
+///
+/// Shown through [`Policy::present`] with the label the skill was read with, as one a person named
+/// is ([`admit_named_skill`]), but returned for the system prompt instead of being added to the
+/// conversation, since a mode is in force every turn and a message of its own would be repeated in
+/// the history each time. A skill the gate would hold back is no mode for that turn.
+fn admit_mode_skill<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    skill: &crate::skills::Skill,
+) -> Result<Option<(String, String)>, TurnError> {
+    conversation.observed(policy.context_label());
+    let body = tools::opened_skill(policy, skill);
+    let slot = conversation.next_reference();
+    let presented = policy
+        .present(
+            "load_skill",
+            slot,
+            &skill.origin,
+            &body,
+            conversation.quarantine(),
+        )
+        .map_err(|d| TurnError::Precommit(d.to_string()))?;
+    Ok(match presented {
+        Presentation::Visible(text) => {
+            policy.admit_skill_mode(&skill.name, text.chars().count());
+            Some((skill.name.clone(), text.to_string()))
+        }
+        Presentation::Quarantined(_) => None,
+    })
+}
+
 /// Whose words a presented result holds, for the view of the request: what the kernel let through
 /// is named by what it is, and what it held back by the reference the planner was given in its place.
 fn provenance_of(presented: &Presentation, what: &'static str) -> Provenance {
@@ -3067,6 +3099,23 @@ where
         true => catalogue.named_in(&task.prompt),
         false => Vec::new(),
     };
+    // The skill `/mode` keeps applied, read again here so a skill whose file moved, or whose project
+    // the map no longer vouches for, is not applied on the strength of an earlier turn. Taken from
+    // the set the driver enumerated by its whole name and shown through the gate any skill's body
+    // goes through, so what reaches the system prompt is what `load_skill` would have returned
+    // (SKILL-21). Before the definition's `skills` line narrows the set, as a skill the person
+    // names is.
+    let mut skill_mode = None;
+    if let (None, Some(name)) = (&task.delegate, task.skill_mode.as_deref()) {
+        if let Some(skill) = catalogue.get(name).cloned() {
+            skill_mode = admit_mode_skill(policy, conversation, &skill)?;
+        }
+        if skill_mode.is_none() {
+            notices.push(crate::skills::Notice::from_message(
+                t!(agent_skill_mode_not_used, skill = name).to_string(),
+            ));
+        }
+    }
     let catalogue = match named {
         Some(named) => catalogue.only(named),
         None => catalogue,
@@ -3219,6 +3268,9 @@ where
         &delegates,
         addressed.as_ref(),
         style.as_ref(),
+        skill_mode
+            .as_ref()
+            .map(|(name, words)| (name.as_str(), words.as_str())),
         &preamble,
         started_in,
         memory,
