@@ -297,11 +297,11 @@ struct Watched {
     hook: Hook,
     path: PathBuf,
     seen: Token,
-    /// When the next look is due.
     next_look: Instant,
     /// A change seen and not yet run, because the entry ran too lately to run again.
     pending: bool,
-    /// The earliest the entry may run again.
+    /// Measured from the end of a run, so a command slower than the interval is not started again
+    /// the moment it finishes.
     not_before: Instant,
 }
 
@@ -323,9 +323,7 @@ impl FileChanged {
     /// now. A relative path is the file in that directory.
     pub fn read(home: Option<&Path>, directory: &Path, now: Instant) -> Self {
         let watched = in_force(home)
-            .declared()
-            .iter()
-            .filter(|hook| hook.moment() == Moment::FileChanged)
+            .firing(Moment::FileChanged, None)
             .filter_map(|hook| {
                 let path = directory.join(hook.path()?);
                 Some(Watched {
@@ -356,7 +354,6 @@ impl FileChanged {
         self
     }
 
-    /// Whether any entry is kept.
     pub fn is_empty(&self) -> bool {
         self.watched.is_empty()
     }

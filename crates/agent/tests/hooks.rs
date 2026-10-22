@@ -1278,6 +1278,23 @@ fn an_entry_for_another_moment_watches_no_file() {
     assert!(watched.is_empty());
 }
 
+/// HOOK-2: a tool named on a `file-changed` entry fires it for nothing, so the watch keeps no file
+/// for it. The regression it rejects is a filter on the moment alone, which watches and runs an
+/// entry the editor reports as never firing.
+#[test]
+fn a_tool_named_on_a_file_changed_entry_watches_no_file() {
+    let scratch = Scratch::new("file-changed-tool");
+    std::fs::write(scratch.path.join("moved"), "a").expect("a watched file");
+    let home = a_home_declaring(
+        &scratch.path,
+        r#"{"on": "file-changed", "path": "moved", "tool": "edit", "run": ["true"]}"#,
+    );
+
+    let watched = hooks::FileChanged::read(Some(&home), &scratch.path, std::time::Instant::now());
+
+    assert!(watched.is_empty());
+}
+
 /// HOOK-7: a hook that could not start is said, naming the moment and the program, and the watch
 /// goes on.
 #[test]
