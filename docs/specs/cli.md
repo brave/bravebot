@@ -23,6 +23,8 @@ governs:
   - crates/cli/src/plain.rs
   - crates/cli/src/sessions_list.rs
   - crates/cli/src/session_delete.rs
+  - crates/cli/src/stats.rs
+  - crates/session/src/stats.rs
   - crates/cli/src/update.rs
   - crates/config/src/keys.rs
   - crates/tui/src/hidden.rs
@@ -1148,7 +1150,7 @@ The flags are refused, with the status for an argument (CLI-6), when no words fo
 words are blank, and when they open with `-` and hold no whitespace, since that is the next flag:
 taken as the words, `--json` would be removed and the run would answer in the other format. A
 sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
-They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `import-leo-creds`,
+They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `stats`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task. A refusal writes the
 result object of CLI-12 if one was asked for, sends nothing, and says why through the catalogue
 ([LOCALE-2](localization.md#LOCALE-2)).
@@ -1464,7 +1466,7 @@ the status for an argument (CLI-6), when no list follows it, when the list is bl
 in it is not a tool, so a typo is not read as a smaller list than its author meant. If it is given
 twice, the last is used. Both are refused with `--mode manifest`, whose steps are planned and run
 from the plan, with `--bg`, which starts the session in another process that would not carry them,
-and with `doctor`, `auth`, `mcp`, `permissions`, `sessions`, `attach`, `reply`, `import-leo-creds`,
+and with `doctor`, `auth`, `mcp`, `permissions`, `sessions`, `stats`, `attach`, `reply`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task.
 
 **Why.** A harness running the agent on a shared machine needs to say what a run may reach without
@@ -2152,3 +2154,106 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::running::a_run_that_reads_lines_and_is_sent_no_prompt_has_no_task`
 `verified-by: bravebot_core::policy::a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context`
 `verified-by: bravebot_agent::turn::a_line_from_a_vouched_channel_is_recorded_as_vouched_for_and_not_as_typed`
+
+<a id="CLI-37"></a>
+### CLI-37: `stats` totals what the recorded sessions spent
+
+`bravebot stats [--days <n>] [--models] [--project [<dir>]]` prints how many sessions, turns and
+tokens the session records under the state directory hold. With no flag that is every record of
+every project. `--days <n>` keeps the sessions last written within the last `n` days, counted back
+from now in days of 24 hours. `--project` keeps the sessions that ran in the directory the command
+runs in, or in `<dir>` where a word follows it, and a word that opens with `-` is the next flag and
+not a directory. `--models` puts a row for each model above the total, the one that spent most
+first.
+
+The output is a sentence saying what the figures cover, then a table with a heading row, a row for
+each model when asked for, and a total row. Every figure is written out in full as a number, and the
+only words that are not fixed are a model's name and the directory, which have the characters a
+terminal would act on removed. A model's name is cut to 60 characters, and names that read alike
+after cleaning and cutting are one row. A name with nothing left after cleaning is the `unknown` row.
+The notes about what is not counted go to stderr, so stdout carries the table and nothing else
+(CLI-5): one says that an incognito session leaves no record and so is not counted, and one says how
+many entries under the sessions directory could not be read as a record, when any could. Such an
+entry is a `.json` file that does not parse as a record, or a directory or an entry that could not be
+listed. It is counted and never named, and adds to no figure. A directory that does not exist is not
+such an entry.
+
+It writes nothing and runs under `--incognito`, which only stops a session adding records. A file is
+a record when `sessions list` would list it as one, and is read for its directory, when it was last
+written, its turns, its tokens and the model that answered its last turn, and for nothing it says.
+Which records belong to a project is decided by the path inside each record and never by the name of
+the directory holding them, which two working directories can share. A project that is not a
+directory, an empty directory, a count of zero or above 9223372036854775807, a count that is not a
+number, a repeated flag and any other word are refused with the status for an argument (CLI-6) and
+print no figures.
+
+A session whose record names no model is its own row, named `unknown`: a record written before the
+model was kept, one whose turns never reached a server, and one copied in from another program. A
+record that holds no turns or tokens counts as a session with none.
+
+**Why.** `/cost` answers what one session spent, and nothing answers what a week of them spent,
+which models took it, or which project it went to without opening each record. The figures are the
+ones the program already wrote down, so nothing here is estimated, and a person asking is the one
+reading the answer, so none of it goes to a planner.
+
+**Known costs.**
+
+- The record keeps one token total for a session, so `stats` prints tokens, not tokens read and
+  tokens written separately, and nothing in money. [sessions.md](sessions.md) gives the reason a price
+  is not composed: no model listing carries one, and the record keeps no cache split. Printing the
+  split, or a price, needs the record to keep one.
+- A session is counted whole, under the day it was last written and the model that answered its last
+  turn. A session that ran over several days is counted when it was last written, and one that changed
+  model part way is counted under the model it ended on, because the record keeps neither a time nor
+  a model for each turn.
+- Each record is counted, and a record can hold spend another record holds. A session forked with
+  `--fork` or `/branch` starts with the spend of the original up to the fork, and one moved with
+  `/cd` leaves its record in the directory it came from beside the record it writes in the new one,
+  which holds the spend so far. Such a session is counted once for each record, so the totals can read
+  higher than what was spent. The record keeps no link from a copy to what it was copied from, so
+  nothing here can tell them apart.
+- The session count includes a session copied in from another program and one whose turns never
+  reached a server. Each spent nothing, so the count can read higher than the number of sessions that
+  ran here.
+- A record keeps its directory as the text `Path::display` gave, so a project whose name is not valid
+  UTF-8 is told from an ordinary directory spelled with that rendering only up to the rendering: the
+  first's exact bytes match no record, so its total is empty, and the second's matches what either
+  wrote. The same holds for `sessions list`.
+- A model's name is free text from the server. One cut to 60 characters is one row with every other
+  model that begins the same way, one named `unknown` shares the row of the sessions that name none,
+  and one named `Total` prints a row labelled like the total.
+- `--project` with no directory is this directory, so a script that passes an unquoted variable that
+  is empty asks about this directory. A quoted empty one is refused.
+- Every record is read whole to find the seven fields, so the time grows with the size of the store.
+
+`verified-by: bravebot_cli::stats::the_words_say_how_far_back_whether_to_split_by_model_and_where`
+`verified-by: bravebot_cli::stats::a_flag_after_project_is_a_flag_and_leaves_the_project_as_this_directory`
+`verified-by: bravebot_cli::stats::a_muddled_request_is_refused_rather_than_guessed_at`
+`verified-by: bravebot_cli::stats::the_most_days_that_can_be_printed_back_are_accepted_and_one_more_is_not`
+`verified-by: bravebot_cli::stats::an_empty_directory_after_project_is_refused_and_not_read_as_this_one`
+`verified-by: bravebot_cli::stats::a_table_without_models_is_the_total_alone`
+`verified-by: bravebot_cli::stats::a_table_with_models_lists_the_one_that_spent_most_first_and_the_total_last`
+`verified-by: bravebot_cli::stats::a_model_name_reaches_a_row_with_nothing_a_terminal_would_act_on`
+`verified-by: bravebot_cli::stats::a_model_name_with_nothing_left_after_cleaning_is_the_row_for_no_name`
+`verified-by: bravebot_cli::stats::a_model_name_of_wide_characters_keeps_the_figures_in_their_columns`
+`verified-by: bravebot_cli::stats::the_sentence_says_how_far_back_and_where`
+`verified-by: bravebot_cli::stats::a_directory_with_an_escape_in_its_name_is_not_drawn_raw`
+`verified-by: bravebot_session::stats::two_records_are_added_into_one_total`
+`verified-by: bravebot_session::stats::a_session_last_written_before_the_cut_is_left_out`
+`verified-by: bravebot_session::stats::a_project_total_holds_the_sessions_that_ran_there_and_no_others`
+`verified-by: bravebot_session::stats::a_record_in_a_shared_store_that_ran_elsewhere_is_not_the_projects`
+`verified-by: bravebot_session::stats::a_directory_that_is_not_utf8_is_told_from_an_ordinary_one_only_up_to_its_rendering`
+`verified-by: bravebot_session::stats::each_model_is_totalled_on_its_own_and_a_record_naming_none_is_kept_apart`
+`verified-by: bravebot_session::stats::a_file_that_is_not_a_record_is_counted_and_adds_to_nothing`
+`verified-by: bravebot_session::stats::the_trail_and_the_search_index_beside_a_record_are_not_records`
+`verified-by: bravebot_session::stats::a_store_that_cannot_be_listed_is_counted_and_not_read_as_empty`
+`verified-by: bravebot_session::stats::a_session_written_the_way_a_front_end_writes_one_is_totalled_as_it_was_written`
+`verified-by: bravebot_session::stats::a_record_from_before_spend_was_kept_counts_as_a_session_with_none`
+`verified-by: bravebot_session::stats::a_hand_edited_figure_cannot_wrap_or_panic_the_total`
+`verified-by: bravebot_session::stats::nothing_recorded_totals_to_nothing`
+`verified-by: bravebot_cli::running::stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_total`
+`verified-by: bravebot_cli::running::stats_by_model_has_a_row_for_each_model_and_one_for_a_record_that_names_none`
+`verified-by: bravebot_cli::running::stats_counts_a_record_it_cannot_read_without_naming_it`
+`verified-by: bravebot_cli::running::stats_draws_a_model_name_with_nothing_a_terminal_would_act_on`
+`verified-by: bravebot_cli::running::a_muddled_stats_request_is_refused_with_the_argument_status_and_no_figures`
+`verified-by: bravebot_cli::running::stats_runs_under_incognito_and_counts_the_records_written_before`
