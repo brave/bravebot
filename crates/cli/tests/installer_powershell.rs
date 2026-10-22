@@ -1042,6 +1042,60 @@ fn with_no_profile_directory_the_script_installs_and_records_nothing() {
     );
 }
 
+/// STATE-2: the directory a person names in `BRAVEBOT_HOME` is the one the record goes in, as it is
+/// the one the program reads `installed-by-powershell` from, and it answers before the profile
+/// directory, so it holds where no profile directory is named. A value that is not an absolute path
+/// names nothing: the profile directory answers, and no directory is made where the script started.
+#[test]
+fn the_record_goes_in_the_directory_a_person_named() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("named-home");
+    let install = Install::new(tools, "named-home");
+    let named = install.root.join("named-state");
+    let install = install.with_environment("BRAVEBOT_HOME", &named.display().to_string());
+    let outcome = install.run_release(&release);
+    assert_installed(&install, &outcome, &release);
+    assert_eq!(
+        read(&named.join("installed-by-powershell")),
+        Some(format!("{}\n", install.bin().join(BINARY).display()).into_bytes()),
+        "the named directory did not hold the record"
+    );
+    assert_eq!(
+        read(&install.record()),
+        None,
+        "the record went under the profile directory as well as the named one"
+    );
+
+    let install = Install::new(tools, "named-home-alone").with_profile(Profile::Neither);
+    let named = install.root.join("named-state");
+    let install = install.with_environment("BRAVEBOT_HOME", &named.display().to_string());
+    let outcome = install.run_release(&release);
+    assert_installed(&install, &outcome, &release);
+    assert!(
+        read(&named.join("installed-by-powershell")).is_some(),
+        "the named directory did not answer where no profile directory is named"
+    );
+
+    for passed_over in ["", "relative-state", "./relative-state"] {
+        let install = Install::new(tools, "named-home-relative")
+            .with_environment("BRAVEBOT_HOME", passed_over);
+        let outcome = install.run_release(&release);
+        assert_installed(&install, &outcome, &release);
+        assert_eq!(
+            read(&install.record()),
+            Some(format!("{}\n", install.bin().join(BINARY).display()).into_bytes()),
+            "{passed_over:?} was not passed over for the profile directory"
+        );
+        assert_eq!(
+            outcome.in_working_directory,
+            Vec::<PathBuf>::new(),
+            "{passed_over:?} was taken as a place to write, relative to where the script started"
+        );
+    }
+}
+
 /// RELEASE-13: nothing outside the script chooses where it downloads from. Every request is to
 /// the one repository, whatever the environment says and whatever it is called, and the script's
 /// source reads only the variables it is allowed to: reading any other is how an origin would be
@@ -1083,6 +1137,7 @@ fn nothing_the_environment_names_chooses_where_the_script_downloads_from() {
     let allowed = [
         "HOME",
         "USERPROFILE",
+        "BRAVEBOT_HOME",
         "INSTALL_DIR",
         "BRAVEBOT_NO_MODIFY_PATH",
         "LOCALAPPDATA",
