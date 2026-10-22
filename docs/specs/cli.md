@@ -2217,9 +2217,8 @@ reading the answer, so none of it goes to a planner.
 - Nothing is printed in money. [sessions.md](sessions.md) gives the reason a price is not composed:
   no model listing carries one, and the record keeps no cache split.
 - Read is the tokens the model was sent, which is the total less what it wrote, so a prompt the
-  service answered out of its own cache is counted as read. The split starts with the build that
-  first kept it: the sessions written before it have tokens and no split, and those tokens are the
-  unsplit column.
+  service answered out of its own cache is counted as read. A record that holds tokens and no
+  split counts all of those tokens in the unsplit column.
 - A session is counted whole, under the day it was last written and the model that answered its last
   turn. A session that ran over several days is counted when it was last written, and one that changed
   model part way is counted under the model it ended on, because the record keeps neither a time nor
