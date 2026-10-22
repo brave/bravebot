@@ -1027,11 +1027,13 @@ pub(crate) fn doctor() -> ExitCode {
     for line in network(transport, &settings) {
         println!("{line}");
     }
-    // Any of the three is a statement about this machine that the program is not honouring,
-    // which is what a report exits non-zero over: nothing is trusted, a named path holds nothing, or
-    // a proxy was named that requests are not taking. CLI-7 calls each of them a configuration
+    // Any of these is a statement about this machine that the program is not honouring,
+    // which is what a report exits non-zero over: nothing is trusted, a named path holds nothing, a
+    // client certificate was named that cannot be presented, or a proxy was named that requests are
+    // not taking. CLI-7 calls each of them a configuration
     // error rather than a finding, which is the status CLI-6 gives them.
     if !transport.trust_problems().is_empty()
+        || !transport.client_problems().is_empty()
         || transport.unusable_proxy().is_some()
         || !transport.unparseable_proxies().is_empty()
     {
@@ -1842,6 +1844,37 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
         ));
     }
 
+    // A certificate is reported only where one was named: most machines name none, and a row saying
+    // so would be noise on every report. The paths, never the key, and one line for each file that
+    // cannot be used, as the roots are, since the two files are two decisions.
+    let paths = transport.client_paths();
+    if let (Some(certificate), Some(key)) = (&paths.certificate, &paths.key)
+        && transport.presents_client_certificate()
+    {
+        lines.push(aligned(
+            t!(doctor_client_certificate),
+            t!(
+                doctor_client_certificate_loaded,
+                certificate = certificate.display().to_string(),
+                key = key.display().to_string()
+            ),
+            DETAIL,
+        ));
+    } else if !transport.client_problems().is_empty() {
+        lines.push(aligned(
+            t!(doctor_client_certificate),
+            t!(doctor_client_certificate_refused),
+            DETAIL,
+        ));
+        for problem in transport.client_problems() {
+            lines.push(aligned(
+                t!(doctor_client_certificate_unusable),
+                problem.to_string(),
+                DETAIL,
+            ));
+        }
+    }
+
     // Which hosts the proxy is not used for, since that is what decides whether a proxy in force
     // applies to the host that is failing, and `NO_PROXY=*` leaves one configured and used for
     // nothing.
@@ -2211,6 +2244,88 @@ mod tests {
         assert_eq!(named.len(), 2, "one line each: {lines:?}");
         assert!(named[0].contains("/etc/corp/absent.pem"), "{lines:?}");
         assert!(named[1].contains("/etc/corp/absent-dir"), "{lines:?}");
+    }
+
+    /// NET-11: a certificate that loaded is named by path and the key is never printed, and a report
+    /// of a machine that names none has no row for it.
+    #[test]
+    fn the_network_section_names_a_client_certificate_that_loaded_and_never_its_key() {
+        let root = scratch("doctor-client-loaded");
+        let certificate = root.join("client.crt");
+        let key = root.join("client.key");
+        let pem = |kind: &str, body: &[&str]| {
+            format!(
+                "-----BEGIN {kind}-----\n{}\n-----END {kind}-----\n",
+                body.join("\n")
+            )
+        };
+        std::fs::write(
+            &certificate,
+            pem(
+                "CERTIFICATE",
+                &[
+                    "MIIBmTCCAT+gAwIBAgIUGoEm4tLRujtRq+Z9SYoo7mpaVTgwCgYIKoZIzj0EAwIw",
+                    "ITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1jbGllbnQtYTAgFw0yNjEwMjIxNjQ5",
+                    "MjJaGA8yMTI2MDkyODE2NDkyMlowITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1j",
+                    "bGllbnQtYTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABC/GcNDcBgcN5ka3+sg2",
+                    "SitB1Hb2ewhYttjW1f288agg+KLdGhEfad2e7iq/fmlM4vlk+hPpbxkXi0S57YrN",
+                    "pbujUzBRMB0GA1UdDgQWBBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAfBgNVHSMEGDAW",
+                    "gBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49",
+                    "BAMCA0gAMEUCIQDV/pEMcyED9IfcGuf4pke2It4Kj4yubw6uM0lrqz5ymgIgRKEK",
+                    "slJ1+wh5R7cmgoS2bui3Umrk+r+pU9FokD8FYZM=",
+                ],
+            ),
+        )
+        .expect("certificate");
+        std::fs::write(
+            &key,
+            pem(
+                &format!("{} KEY", "PRIVATE"),
+                &[
+                    "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNI5exiW0VUAX6Zlh",
+                    "2xpQpP9Ul/tkSYnXIk0Ew/P6G1qhRANCAAQvxnDQ3AYHDeZGt/rINkorQdR29nsI",
+                    "WLbY1tX9vPGoIPii3RoRH2ndnu4qv35pTOL5ZPoT6W8ZF4tEue2KzaW7",
+                ],
+            ),
+        )
+        .expect("key");
+        let transport = Transport::stated_with_client_pair(Some(&certificate), Some(&key));
+
+        let report = network(&transport, &Default::default()).join("\n");
+
+        assert!(
+            report.contains(&certificate.display().to_string()),
+            "{report}"
+        );
+        assert!(report.contains(&key.display().to_string()), "{report}");
+        assert!(report.contains("loaded"), "{report}");
+        assert!(!report.contains("MIGHAgEAMBMGByqGSM49"), "{report}");
+        let bare = network(
+            &Transport::stated(TrustRoots::Bundled, None, None),
+            &Default::default(),
+        );
+        assert!(!bare.join("\n").contains("client certificate"), "{bare:?}");
+    }
+
+    /// NET-11: a named file that cannot be used is a line of its own, and ends the report on a
+    /// configuration error as an unusable root does.
+    #[test]
+    fn the_network_section_names_each_client_file_that_cannot_be_used() {
+        let transport = Transport::stated_with_client_pair(
+            Some(Path::new("/etc/corp/absent.crt")),
+            Some(Path::new("/etc/corp/absent.key")),
+        );
+
+        let lines = network(&transport, &Default::default());
+
+        let named: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.contains("/etc/corp/"))
+            .collect();
+        assert_eq!(named.len(), 2, "one line each: {lines:?}");
+        assert!(named[0].contains("absent.crt"), "{lines:?}");
+        assert!(named[1].contains("absent.key"), "{lines:?}");
+        assert!(lines.join("\n").contains("refused"), "{lines:?}");
     }
 
     /// A protocol this build cannot connect through is not the route requests take, so naming it as
