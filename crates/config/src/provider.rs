@@ -135,6 +135,17 @@ const VERTEX_MODELS: &[&str] = &[
 /// The location Vertex AI is reached in where none is stated.
 const VERTEX_DEFAULT_LOCATION: &str = "global";
 
+/// Where Vertex AI express mode is reached: the native API, which takes a key and no project.
+///
+/// The URL names no region, and Google chooses where the request is served.
+pub(crate) const VERTEX_EXPRESS_ENDPOINT: &str = "https://aiplatform.googleapis.com/v1";
+
+/// The SDK an entry names to say that its stated endpoint takes Vertex's own API.
+const VERTEX_SDK: &str = "@ai-sdk/google-vertex";
+
+/// The publisher a model named without one is taken to belong to.
+const VERTEX_PUBLISHER: &str = "google";
+
 /// The header a Vertex AI key travels in.
 ///
 /// The service refuses the same key as a bearer token, so this is where it goes instead of
@@ -308,6 +319,8 @@ pub enum Protocol {
     ChatCompletions,
     /// Anthropic's Messages API.
     Messages,
+    /// Google's native `generateContent` API, which Vertex AI express mode speaks.
+    GenerateContent,
 }
 
 impl Provider {
@@ -347,13 +360,28 @@ impl Provider {
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|url| !url.is_empty());
-        let protocol = protocol_of(id, string(entry.get("npm")).as_deref());
+        let npm = string(entry.get("npm"));
+        let mut protocol = protocol_of(id, npm.as_deref());
+        let project = string(options.and_then(|options| options.get("project")));
+        // A Vertex entry naming no project is the express mode of the native API, which needs the
+        // key alone. One that states an endpoint of its own keeps speaking chat completions there
+        // unless it names the SDK that says the endpoint takes Vertex's own API, so a proxy written
+        // for the OpenAI-compatible route is not sent a request it cannot read.
+        if id == GOOGLE_VERTEX_ID
+            && project.is_none()
+            && (stated.is_none() || npm.as_deref() == Some(VERTEX_SDK))
+        {
+            protocol = Protocol::GenerateContent;
+        }
         // A stated endpoint wins, so a block pointing a known name at a proxy or a private
         // deployment reaches the host it named rather than the one compiled in.
         let base_url = match stated {
             Some(url) => url.to_string(),
+            None if id == GOOGLE_VERTEX_ID && project.is_none() => {
+                VERTEX_EXPRESS_ENDPOINT.to_string()
+            }
             None if id == GOOGLE_VERTEX_ID => vertex_endpoint(
-                string(options.and_then(|options| options.get("project"))).as_deref(),
+                project.as_deref(),
                 string(options.and_then(|options| options.get("location"))).as_deref(),
             )?,
             // The table's address for this id is the one its own protocol is spoken at, so an entry
@@ -382,19 +410,28 @@ impl Provider {
 
     /// The Vertex AI service the environment names, where it names one.
     ///
-    /// The key and the project both have to hold a value, and neither is guessed: a key with no
-    /// project is a request the service refuses, and a project with no key is a service nobody
-    /// could sign in to. The entry names `GOOGLE_API_KEY` in `env`, so an exported key is read again
-    /// when a request needs it, and holds the value `lookup` found for the case where the key lives
-    /// only in a settings file.
+    /// The key has to hold a value, and a project that is set has to be one the service's host can
+    /// be built from. A key with no project is express mode, which the native API serves with the
+    /// key alone; a project with no key is a service nobody could sign in to. The entry names
+    /// `GOOGLE_API_KEY` in `env`, so an exported key is read again when a request needs it, and
+    /// holds the value `lookup` found for the case where the key lives only in a settings file.
     pub(crate) fn from_environment(lookup: &impl Fn(&str) -> Option<String>) -> Option<Self> {
         let filled = |name: &str| lookup(name).filter(|value| !value.trim().is_empty());
         let mut key = filled(crate::env_var::GOOGLE_API_KEY)?;
         let token = Secret::new(key.trim());
         crate::scrub(&mut key);
-        let project = filled(crate::env_var::GOOGLE_CLOUD_PROJECT)?;
-        let location = filled(crate::env_var::VERTEX_LOCATION);
-        let base_url = vertex_endpoint(Some(project.trim()), location.as_deref().map(str::trim))?;
+        let (base_url, protocol) = match filled(crate::env_var::GOOGLE_CLOUD_PROJECT) {
+            Some(project) => {
+                let location = filled(crate::env_var::VERTEX_LOCATION);
+                let base_url =
+                    vertex_endpoint(Some(project.trim()), location.as_deref().map(str::trim))?;
+                (base_url, Protocol::ChatCompletions)
+            }
+            None => (
+                VERTEX_EXPRESS_ENDPOINT.to_string(),
+                Protocol::GenerateContent,
+            ),
+        };
 
         Some(Self {
             id: GOOGLE_VERTEX_ID.to_string(),
@@ -407,7 +444,7 @@ impl Provider {
             context_window: None,
             patience: Patience::default(),
             output_budget: None,
-            protocol: Protocol::ChatCompletions,
+            protocol,
             bedrock: None,
         })
     }
@@ -469,7 +506,43 @@ impl Provider {
         match self.protocol() {
             Protocol::ChatCompletions => self.chat_completions_url(),
             Protocol::Messages => format!("{}/messages", self.base_url),
+            Protocol::GenerateContent => {
+                format!("{}/publishers/{VERTEX_PUBLISHER}/models", self.base_url)
+            }
         }
+    }
+
+    /// The URL one `generateContent` request for `model` goes to, or `None` where the model's name
+    /// holds a character that would move the request.
+    ///
+    /// `model` is the name the service knows it by, `<publisher>/<model>` or a bare model of the
+    /// `google` publisher. Both parts are written into the path, so one holding `/`, `?`, `#`,
+    /// `@` or `:` would send the key to another route than the one named; such a name has no URL.
+    /// `streaming` picks the route that answers as server-sent events.
+    pub fn generate_content_url(&self, model: &str, streaming: bool) -> Option<String> {
+        let (publisher, name) = match model.split_once('/') {
+            Some((publisher, name)) => (publisher, name),
+            None => (VERTEX_PUBLISHER, model),
+        };
+        // Dots alone are a step up or in place, which a client resolves before it sends.
+        let part_ok = |part: &str| {
+            !part.chars().all(|c| c == '.')
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        };
+        if !part_ok(publisher) || !part_ok(name) {
+            return None;
+        }
+        let route = if streaming {
+            "streamGenerateContent?alt=sse"
+        } else {
+            "generateContent"
+        };
+        Some(format!(
+            "{}/publishers/{publisher}/models/{name}:{route}",
+            self.base_url
+        ))
     }
 
     /// The URL that answers with what this gateway serves.
@@ -480,6 +553,7 @@ impl Provider {
         match self.protocol() {
             Protocol::ChatCompletions => format!("{}/models", self.base_url),
             Protocol::Messages => format!("{}/models?limit={ANTHROPIC_PAGE}", self.base_url),
+            Protocol::GenerateContent => self.completion_url(),
         }
     }
 
@@ -533,7 +607,7 @@ impl Provider {
     /// both and cannot disagree about either.
     pub fn fixed_headers(&self) -> &'static [(&'static str, &'static str)] {
         match self.protocol() {
-            Protocol::ChatCompletions => &[],
+            Protocol::ChatCompletions | Protocol::GenerateContent => &[],
             Protocol::Messages => &[("anthropic-version", ANTHROPIC_VERSION)],
         }
     }
@@ -902,6 +976,15 @@ mod tests {
 
     const PLACEHOLDER_PROJECT: &str = "example-project-1";
 
+    /// The `google-vertex` entry written as `entry`, which holds the whole block.
+    fn one_entry(entry: &str) -> Provider {
+        let text = format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#);
+        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+            panic!("not an object");
+        };
+        Provider::all(&root).pop().expect("one provider")
+    }
+
     fn vertex(options: &str) -> Vec<Provider> {
         parsed(&format!(
             r#"{{"provider": {{"google-vertex": {{"options": {options}}}}}}}"#
@@ -934,10 +1017,103 @@ mod tests {
     }
 
     #[test]
-    fn a_google_vertex_entry_without_a_project_configures_nothing() {
-        assert!(vertex("{}").is_empty());
-        assert!(vertex(r#"{"location": "us-central1"}"#).is_empty());
-        assert!(vertex(r#"{"project": "   "}"#).is_empty());
+    fn a_google_vertex_entry_without_a_project_is_reached_in_express_mode() {
+        for options in [
+            "{}",
+            r#"{"location": "us-central1"}"#,
+            r#"{"project": "   "}"#,
+        ] {
+            let all = vertex(options);
+            assert_eq!(all.len(), 1, "{options}");
+            assert_eq!(all[0].protocol(), Protocol::GenerateContent, "{options}");
+            assert_eq!(
+                all[0].base_url, "https://aiplatform.googleapis.com/v1",
+                "{options}"
+            );
+            assert_eq!(all[0].host(), "aiplatform.googleapis.com", "{options}");
+        }
+        let with_project = vertex(&format!(r#"{{"project": "{PLACEHOLDER_PROJECT}"}}"#));
+        assert_eq!(with_project[0].protocol(), Protocol::ChatCompletions);
+    }
+
+    #[test]
+    fn an_express_request_goes_to_the_publisher_and_model_it_names() {
+        let express = vertex("{}");
+        assert_eq!(
+            express[0].generate_content_url("google/gemini-2.5-flash", false),
+            Some(
+                "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            express[0].generate_content_url("gemini-2.5-flash", true),
+            Some(
+                "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+                    .to_string()
+            )
+        );
+    }
+
+    /// The model is written into the path, so a name that could change the route has no URL.
+    #[test]
+    fn a_model_name_that_would_move_an_express_request_has_no_url() {
+        let express = vertex("{}");
+        for model in [
+            "",
+            "google/",
+            "/gemini",
+            "google/gemini/extra",
+            "google/gemini?x=1",
+            "google/gemini#frag",
+            "google/gem@ini",
+            "google/gemini:other",
+            "evil.invalid/../x",
+            "../gemini",
+            "./gemini",
+            "google/..",
+            "google/.",
+            "google/ge mini",
+        ] {
+            assert_eq!(
+                express[0].generate_content_url(model, false),
+                None,
+                "{model:?}"
+            );
+        }
+    }
+
+    /// An entry stating an endpoint and no project keeps the route it had unless it names the SDK
+    /// that says the endpoint takes Vertex's own API.
+    #[test]
+    fn a_stated_endpoint_with_no_project_keeps_chat_completions_unless_the_sdk_says_otherwise() {
+        let plain = vertex(r#"{"baseURL": "https://proxy.example.invalid/v1"}"#);
+        assert_eq!(plain[0].protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            plain[0].completion_url(),
+            "https://proxy.example.invalid/v1/chat/completions"
+        );
+        let other_sdk = one_entry(
+            r#"{"npm": "@ai-sdk/openai-compatible",
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}}"#,
+        );
+        assert_eq!(other_sdk.protocol(), Protocol::ChatCompletions);
+    }
+
+    #[test]
+    fn a_stated_endpoint_is_where_an_express_entry_is_reached() {
+        let all = [one_entry(
+            r#"{"npm": "@ai-sdk/google-vertex",
+                "options": {"baseURL": "https://proxy.example.invalid/v1/"}}"#,
+        )];
+        assert_eq!(all[0].protocol(), Protocol::GenerateContent);
+        assert_eq!(
+            all[0].generate_content_url("google/gemini-2.5-flash", false),
+            Some(
+                "https://proxy.example.invalid/v1/publishers/google/models/gemini-2.5-flash:generateContent"
+                    .to_string()
+            )
+        );
     }
 
     /// Both values are written into the URL, so one that could change the host or the route

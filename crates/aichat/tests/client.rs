@@ -13,6 +13,7 @@ use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::RecordingSink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+use bravebot_core::value::Labelled;
 use bravebot_net::Egress;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -4906,4 +4907,922 @@ fn an_anthropic_key_does_not_follow_a_redirect_to_another_host() {
         None,
         "the key followed the redirect"
     );
+}
+
+// Google's native `generateContent` API, in Vertex AI express mode.
+//
+// The service is reached by a stated `baseURL` pointing at a server on this machine, which the
+// compiled-in host cannot be. Nothing here has been sent to aiplatform.googleapis.com: the bodies
+// and the pieces are what its reference states, and what a reply does there is something only a
+// request with a key can show.
+
+use bravebot_aichat::generate_content::GenerateContentClient;
+use bravebot_aichat::protocol::ToolCall;
+
+const GOOGLE_KEY: &str = "placeholder-google-key-7c2e41";
+
+/// A `google-vertex` entry naming no project, pointed at the local server.
+fn express_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    let text = format!(
+        r#"{{"provider": {{"google-vertex": {{"npm": "@ai-sdk/google-vertex", "options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+fn express_client<'a>(
+    egress: &'a Egress,
+    provider: &'a bravebot_config::provider::Provider,
+    model: &str,
+) -> GenerateContentClient<'a> {
+    GenerateContentClient::new(
+        egress,
+        provider,
+        model,
+        Some(bravebot_config::Secret::new(GOOGLE_KEY)),
+    )
+    .with_backoff(Duration::from_millis(1))
+}
+
+/// A whole reply as the reference shows one: a call with its signature after some text and a
+/// summary of the reasoning, and the figures with the cached part inside the prompt.
+const GENERATE_CONTENT_REPLY: &str = r#"{"candidates":[{"content":{"role":"model","parts":[
+        {"text":"weighing it up","thought":true},
+        {"text":"I will read it."},
+        {"functionCall":{"name":"read_file","args":{"path":"x"}},
+         "thoughtSignature":"opaque-signature"}]},"finishReason":"STOP"}],
+    "usageMetadata":{"promptTokenCount":400,"candidatesTokenCount":7,"thoughtsTokenCount":20,
+                     "cachedContentTokenCount":300,"totalTokenCount":427},
+    "modelVersion":"gemini-test-001"}"#;
+
+/// One streamed piece: a whole response holding the next parts.
+fn piece(
+    parts: serde_json::Value,
+    finish: Option<&str>,
+    usage: Option<serde_json::Value>,
+) -> String {
+    let mut candidate = serde_json::json!({"content": {"role": "model", "parts": parts}});
+    if let Some(finish) = finish {
+        candidate["finishReason"] = finish.into();
+    }
+    let mut piece = serde_json::json!({"candidates": [candidate]});
+    if let Some(usage) = usage {
+        piece["usageMetadata"] = usage;
+    }
+    frame(&piece.to_string())
+}
+
+/// The words of a labelled value, released for the test to read.
+fn revealed<T>(proof: &bravebot_core::policy::Declassification, value: Labelled<T>) -> T {
+    value.declassify(proof)
+}
+
+fn call_of(calls: &[ToolCall]) -> &ToolCall {
+    calls.first().expect("the reply made a call")
+}
+
+/// The request goes to the route of the model it names, with the key in `x-goog-api-key` and
+/// nowhere else: not as a bearer token, not in the path, not in the body.
+#[test]
+fn a_google_express_request_carries_its_key_in_x_goog_api_key_and_nowhere_else() {
+    let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    express_client(&egress, &provider, "google/gemini-test")
+        .complete(
+            &mut policy,
+            &ChatRequest::new(
+                "google-vertex/google/gemini-test",
+                vec![Message::system("be brief"), Message::user("hello")],
+            ),
+        )
+        .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(
+        sent.request_line,
+        "POST /v1/publishers/google/models/gemini-test:generateContent HTTP/1.1"
+    );
+    assert_eq!(sent.header("x-goog-api-key"), Some(GOOGLE_KEY));
+    assert_eq!(sent.header("authorization"), None);
+    assert_eq!(sent.header("content-type"), Some("application/json"));
+    assert!(!sent.body.contains(GOOGLE_KEY), "{}", sent.body);
+    assert!(!sent.request_line.contains(GOOGLE_KEY));
+    let body = json_of(&sent);
+    assert_eq!(body["contents"][0]["parts"][0]["text"], "hello");
+    assert_eq!(body["systemInstruction"]["parts"][0]["text"], "be brief");
+    assert!(body.get("model").is_none(), "{body}");
+}
+
+/// A block that names nowhere for a key to live sends none: not a header with nothing in it.
+#[test]
+fn a_google_express_request_without_a_key_sends_no_credential_header() {
+    let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    GenerateContentClient::new(&egress, &provider, "google/gemini-test", None)
+        .complete(
+            &mut policy,
+            &ChatRequest::new("google/gemini-test", vec![Message::user("hello")]),
+        )
+        .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(sent.header("x-goog-api-key"), None);
+    assert_eq!(sent.header("authorization"), None);
+}
+
+/// A reply the service refused is reported without the key it was sent with, on either path.
+#[test]
+fn a_refused_google_express_request_does_not_repeat_the_key() {
+    for streaming in [false, true] {
+        let (endpoint, received) = serve_attempts(vec![Attempt::Status(403)]);
+        let provider = express_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let request = ChatRequest::new("google/gemini-test", vec![Message::user("hello")]);
+        let mut client = express_client(&egress, &provider, "google/gemini-test");
+
+        let error = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        }
+        .expect_err("the service refused");
+
+        let sent = received.recv().expect("the request arrived");
+        assert_eq!(sent.header("x-goog-api-key"), Some(GOOGLE_KEY));
+        for said in [error.to_string(), format!("{error:?}")] {
+            assert!(
+                !said.contains(GOOGLE_KEY),
+                "streaming={streaming}: the key is in {said}"
+            );
+        }
+        let recorded = format!("{:?}", sink.events());
+        assert!(!recorded.contains(GOOGLE_KEY), "streaming={streaming}");
+    }
+}
+
+/// A model whose name could move the request is sent nowhere, so the key goes only where the
+/// entry names.
+#[test]
+fn a_model_name_that_would_move_an_express_request_sends_nothing() {
+    for model in [
+        "google/gemini?alt=x",
+        "google/../other",
+        "a/b/c",
+        "google/ge#mini",
+        "../gemini",
+        "google/..",
+    ] {
+        let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+        let provider = express_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut client = express_client(&egress, &provider, model);
+        let request = ChatRequest::new(model, vec![Message::user("hello")]);
+
+        for streaming in [false, true] {
+            let error = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            }
+            .expect_err("the model name was refused");
+            assert!(matches!(error, ChatError::Encode(_)), "{model}: {error:?}");
+        }
+        assert_eq!(client.attempts(), 0, "{model}");
+        assert!(
+            received.recv_timeout(Duration::from_millis(200)).is_err(),
+            "{model}: a request was sent"
+        );
+    }
+}
+
+/// A whole reply is read into text without the reasoning summary, the call with its arguments as
+/// the string the rest of the agent carries and its signature where the agent keeps it, the model
+/// the request named, and a prompt that counts the cached part inside it.
+#[test]
+fn a_whole_google_express_reply_is_read_into_text_calls_and_cost() {
+    let (endpoint, _received) = serve(GENERATE_CONTENT_REPLY);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let mut client = express_client(&egress, &provider, "google/gemini-test");
+    let completion = client
+        .complete(
+            &mut policy,
+            &ChatRequest::new("google/gemini-test", vec![Message::user("hello")])
+                .with_tools(reading_tool()),
+        )
+        .expect("the reply was read");
+
+    assert_eq!(client.attempts(), 1);
+    assert_eq!(completion.model, "google/gemini-test");
+    assert_eq!(completion.content.label(), Label::untrusted_public());
+    let shown = policy.authorise_display_release("the reply as the model wrote it");
+    assert_eq!(revealed(&shown, completion.content), "I will read it.");
+    let call = call_of(&completion.calls).clone();
+    assert_eq!(call.function.name, "read_file");
+    assert_eq!(call.function.arguments.as_deref(), Some(r#"{"path":"x"}"#));
+    assert!(call.id.is_some());
+    assert_eq!(
+        call.extra_content,
+        Some(serde_json::json!({"google": {"thought_signature": "opaque-signature"}}))
+    );
+    assert_eq!(completion.usage.prompt_tokens, 400);
+    assert_eq!(completion.usage.completion_tokens, 27);
+    assert_eq!(completion.usage.cached.read_tokens, 300);
+    assert_eq!(completion.context_tokens, 400);
+    assert!(completion.cut_off.is_none());
+}
+
+/// A stream is assembled from its pieces: text in order, a call that arrives whole with its
+/// signature, reasoning left out, and the reply's count from the last piece. The request went to
+/// the streaming route and asked for events.
+#[test]
+fn a_google_express_stream_is_assembled_from_its_pieces() {
+    let frames = vec![
+        piece(
+            serde_json::json!([{"text": "pondering", "thought": true}]),
+            None,
+            None,
+        ),
+        piece(serde_json::json!([{"text": "I will "}]), None, None),
+        piece(serde_json::json!([{"text": "read it."}]), None, None),
+        piece(
+            serde_json::json!([{"functionCall": {"name": "read_file", "args": {"path": "x"}},
+                                "thoughtSignature": "opaque-signature"}]),
+            Some("STOP"),
+            Some(
+                serde_json::json!({"promptTokenCount": 50, "candidatesTokenCount": 9,
+                                    "thoughtsTokenCount": 11, "cachedContentTokenCount": 40}),
+            ),
+        ),
+    ];
+    let (endpoint, received) = serve_stream(frames);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let shown = policy.authorise_display_release("the reply as the model writes it");
+    let mut written = String::new();
+    let mut calling = Vec::new();
+    let mut client = express_client(&egress, &provider, "google/gemini-test");
+    let completion = client
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("google/gemini-test", vec![Message::user("hello")])
+                .with_tools(reading_tool()),
+            |progress| {
+                written.push_str(revealed(&shown, progress.written));
+                if let Some(name) = progress.calling {
+                    calling.push(revealed(&shown, name).to_string());
+                }
+            },
+        )
+        .expect("the stream was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(
+        sent.request_line,
+        "POST /v1/publishers/google/models/gemini-test:streamGenerateContent?alt=sse HTTP/1.1"
+    );
+    assert_eq!(sent.header("accept"), Some("text/event-stream"));
+    assert_eq!(sent.header("x-goog-api-key"), Some(GOOGLE_KEY));
+    assert_eq!(revealed(&shown, completion.content), "I will read it.");
+    assert_eq!(written, "I will read it.");
+    assert_eq!(calling.last().map(String::as_str), Some("read_file"));
+    let call = call_of(&completion.calls).clone();
+    assert_eq!(call.function.arguments.as_deref(), Some(r#"{"path":"x"}"#));
+    assert_eq!(
+        call.extra_content,
+        Some(serde_json::json!({"google": {"thought_signature": "opaque-signature"}}))
+    );
+    assert_eq!(completion.usage.prompt_tokens, 50);
+    assert_eq!(completion.usage.completion_tokens, 20);
+    assert_eq!(completion.usage.cached.read_tokens, 40);
+}
+
+/// The signature a call arrived with comes back beside that call's part in the next request, on
+/// both paths: the reply is read, its call is replayed as the conversation holds it, and the body
+/// that goes out names the signature. A Gemini 3 model refuses the request without it.
+#[test]
+fn a_calls_signature_comes_back_with_it_in_the_next_request() {
+    for streaming in [false, true] {
+        let reply_frames = vec![piece(
+            serde_json::json!([{"functionCall": {"name": "read_file", "args": {"path": "x"}},
+                                "thoughtSignature": "opaque-signature"}]),
+            Some("STOP"),
+            Some(serde_json::json!({"promptTokenCount": 5, "candidatesTokenCount": 2})),
+        )];
+        let (endpoint, received) = if streaming {
+            serve_attempts(vec![
+                Attempt::Frames(reply_frames),
+                Attempt::Json(GENERATE_CONTENT_REPLY.to_string()),
+            ])
+        } else {
+            serve_attempts(vec![
+                Attempt::Json(
+                    r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file",
+                        "args":{"path":"x"}},"thoughtSignature":"opaque-signature"}]},
+                        "finishReason":"STOP"}],
+                        "usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}"#
+                        .to_string(),
+                ),
+                Attempt::Json(GENERATE_CONTENT_REPLY.to_string()),
+            ])
+        };
+        let provider = express_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut client = express_client(&egress, &provider, "google/gemini-test");
+
+        let first = ChatRequest::new("google/gemini-test", vec![Message::user("go")])
+            .with_tools(reading_tool());
+        let made = if streaming {
+            client.complete_streaming(&mut policy, &first, |_| {})
+        } else {
+            client.complete(&mut policy, &first)
+        }
+        .expect("the first reply was read");
+        let replayed = call_of(&made.calls)
+            .as_request()
+            .expect("a call with an id");
+        let call_id = replayed.id.clone();
+
+        let second = ChatRequest::new(
+            "google/gemini-test",
+            vec![
+                Message::user("go"),
+                Message::assistant_calling("", vec![replayed]),
+                Message::tool_result(call_id, "contents"),
+            ],
+        )
+        .with_tools(reading_tool());
+        client
+            .complete(&mut policy, &second)
+            .expect("the second reply was read");
+
+        let _first_sent = received.recv().expect("the first request arrived");
+        let sent = json_of(&received.recv().expect("the second request arrived"));
+        assert_eq!(
+            sent["contents"][1]["parts"][0]["thoughtSignature"], "opaque-signature",
+            "streaming={streaming}: {sent}"
+        );
+        assert_eq!(
+            sent["contents"][1]["parts"][0]["functionCall"]["name"],
+            "read_file"
+        );
+        assert_eq!(
+            sent["contents"][2]["parts"][0]["functionResponse"]["name"],
+            "read_file"
+        );
+    }
+}
+
+/// A model that refuses the thinking budget is asked again without it, and what answered is
+/// remembered, so the next request does not ask for it. A request that carried no level was not
+/// refused for it.
+#[test]
+fn a_model_that_refuses_the_thinking_budget_is_asked_again_without_it() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(400),
+        Attempt::Json(GENERATE_CONTENT_REPLY.to_string()),
+        Attempt::Json(GENERATE_CONTENT_REPLY.to_string()),
+    ]);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let model = "google/gemini-refuses-thinking";
+    let request =
+        ChatRequest::new(model, vec![Message::user("hello")]).with_effort(Some(Effort::High));
+
+    let mut client = express_client(&egress, &provider, model);
+    client
+        .complete(&mut policy, &request)
+        .expect("the retry without the level answered");
+    assert_eq!(client.attempts(), 2);
+    let refused = json_of(&received.recv().expect("the first request arrived"));
+    let retried = json_of(&received.recv().expect("the second request arrived"));
+    assert_eq!(
+        refused["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+        12288
+    );
+    assert!(retried.get("generationConfig").is_none(), "{retried}");
+
+    // The interface asks the same question by the service's route and the name it was sent, and is
+    // told the model reads no level.
+    assert!(!bravebot_aichat::reads_effort(
+        &provider.completion_url(),
+        model
+    ));
+
+    let mut next = express_client(&egress, &provider, model);
+    next.complete(&mut policy, &request).expect("answered");
+    assert_eq!(next.attempts(), 1);
+    let remembered = json_of(&received.recv().expect("the third request arrived"));
+    assert!(remembered.get("generationConfig").is_none(), "{remembered}");
+}
+
+/// A refusal of a request that carried no level is not blamed on one: it is the service's answer
+/// and is reported as it is, after the one request.
+#[test]
+fn a_refusal_of_a_request_asking_for_no_level_is_reported_after_one_request() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::Status(400)]);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let model = "google/gemini-refuses-everything";
+    let mut client = express_client(&egress, &provider, model);
+
+    client
+        .complete(
+            &mut policy,
+            &ChatRequest::new(model, vec![Message::user("hello")]),
+        )
+        .expect_err("the service refused");
+
+    assert_eq!(client.attempts(), 1);
+    received.recv().expect("the request arrived");
+    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+}
+
+/// A reply the service stopped for what it would have said is a refusal, not an empty answer, and
+/// is not asked for again: the same request says the same thing.
+#[test]
+fn a_google_express_reply_stopped_for_safety_is_a_refusal_on_both_paths() {
+    for streaming in [false, true] {
+        let (endpoint, received) = if streaming {
+            serve_attempts(vec![Attempt::Frames(vec![piece(
+                serde_json::json!([]),
+                Some("SAFETY"),
+                None,
+            )])])
+        } else {
+            serve_attempts(vec![Attempt::Json(
+                r#"{"candidates":[{"finishReason":"SAFETY"}]}"#.to_string(),
+            )])
+        };
+        let provider = express_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut client = express_client(&egress, &provider, "google/gemini-test");
+        let request = ChatRequest::new("google/gemini-test", vec![Message::user("hello")]);
+
+        let error = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        }
+        .expect_err("the reply was refused");
+
+        assert!(
+            matches!(
+                error,
+                ChatError::Reported {
+                    failure: Failure::Refusal
+                }
+            ),
+            "streaming={streaming}: {error:?}"
+        );
+        assert_eq!(client.attempts(), 1, "streaming={streaming}");
+        received.recv().expect("the request arrived");
+    }
+}
+
+/// A prompt the service refused names a reason and no candidate, and is a refusal too.
+#[test]
+fn a_prompt_the_service_blocked_is_a_refusal() {
+    let (endpoint, _received) = serve(r#"{"promptFeedback":{"blockReason":"PROHIBITED_CONTENT"}}"#);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let error = express_client(&egress, &provider, "google/gemini-test")
+        .complete(
+            &mut policy,
+            &ChatRequest::new("google/gemini-test", vec![Message::user("hello")]),
+        )
+        .expect_err("the prompt was refused");
+
+    assert!(
+        matches!(
+            error,
+            ChatError::Reported {
+                failure: Failure::Refusal
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// A reply that ran into its ceiling keeps what it wrote and says it was cut off. With nothing
+/// written it is the failure that names the ceiling. The ceiling is the one somebody stated.
+#[test]
+fn a_google_express_reply_cut_off_at_the_ceiling_keeps_what_it_wrote() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Json(
+            r#"{"candidates":[{"content":{"parts":[{"text":"half a sentence"}]},
+                "finishReason":"MAX_TOKENS"}],
+                "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":50}}"#
+                .to_string(),
+        ),
+        Attempt::Json(
+            r#"{"candidates":[{"content":{"parts":[{"text":"pondering","thought":true}]},
+                "finishReason":"MAX_TOKENS"}],
+                "usageMetadata":{"promptTokenCount":10,"thoughtsTokenCount":50}}"#
+                .to_string(),
+        ),
+    ]);
+    let text = format!(
+        r#"{{"provider": {{"google-vertex": {{"npm": "@ai-sdk/google-vertex", "options": {{"baseURL": "{endpoint}/v1"}},
+            "models": {{"gemini-capped": {{"limit": {{"context": 100000, "output": 777}}}}}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut client = express_client(&egress, &provider, "gemini-capped");
+    let request = ChatRequest::new("gemini-capped", vec![Message::user("hello")]);
+
+    let kept = client
+        .complete(&mut policy, &request)
+        .expect("what was written is kept");
+    let shown = policy.authorise_display_release("the reply as the model wrote it");
+    assert_eq!(revealed(&shown, kept.content), "half a sentence");
+    let cut_off = kept.cut_off.expect("the reply says it was cut off");
+    assert_eq!(cut_off.ceiling, 777);
+    assert!(!cut_off.thought);
+    let sent = json_of(&received.recv().expect("the request arrived"));
+    assert_eq!(sent["generationConfig"]["maxOutputTokens"], 777);
+
+    let nothing = client
+        .complete(&mut policy, &request)
+        .expect_err("nothing was written");
+    assert!(
+        matches!(&nothing, ChatError::TooLong(cut_off) if cut_off.thought && cut_off.ceiling == 777),
+        "{nothing:?}"
+    );
+}
+
+/// A stream that ends without a finish reason is a reply that stopped, and is asked for again like
+/// a connection that died.
+#[test]
+fn a_google_express_stream_with_no_finish_reason_is_an_incomplete_reply() {
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::Frames(vec![piece(
+            serde_json::json!([{"text": "half"}]),
+            None,
+            None,
+        )]),
+        Attempt::Frames(vec![piece(
+            serde_json::json!([{"text": "half"}]),
+            None,
+            None,
+        )]),
+        Attempt::Frames(vec![piece(
+            serde_json::json!([{"text": "half"}]),
+            None,
+            None,
+        )]),
+    ]);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut client = express_client(&egress, &provider, "google/gemini-test");
+
+    let error = client
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("google/gemini-test", vec![Message::user("hello")]),
+            |_| {},
+        )
+        .expect_err("the stream stopped early");
+
+    assert!(matches!(error, ChatError::Incomplete), "{error:?}");
+    assert!(client.attempts() > 1, "attempts: {}", client.attempts());
+}
+
+/// An error the service writes into the stream is reported as the failure its status word names,
+/// and one that is the request's own is not sent again.
+#[test]
+fn a_google_error_written_into_the_stream_is_reported_by_its_status() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::Frames(vec![frame(
+        r#"{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"bad"}}"#,
+    )])]);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut client = express_client(&egress, &provider, "google/gemini-test");
+
+    let error = client
+        .complete_streaming(
+            &mut policy,
+            &ChatRequest::new("google/gemini-test", vec![Message::user("hello")]),
+            |_| {},
+        )
+        .expect_err("the service reported an error");
+
+    assert!(
+        matches!(
+            error,
+            ChatError::Reported {
+                failure: Failure::InvalidRequest
+            }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(client.attempts(), 1);
+}
+
+/// A reply asked for in a schema carries it in `generationConfig`, as a JSON mime type beside the
+/// schema.
+#[test]
+fn a_schema_goes_to_the_service_as_a_json_mime_type_and_a_schema() {
+    let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let schema = serde_json::json!({"type": "object", "properties": {"n": {"type": "integer"}}});
+
+    express_client(&egress, &provider, "google/gemini-test")
+        .complete(
+            &mut policy,
+            &ChatRequest::new("google/gemini-test", vec![Message::user("hello")])
+                .with_response_format(Some(
+                    bravebot_aichat::protocol::ResponseFormat::json_schema(schema.clone()),
+                )),
+        )
+        .expect("the reply was read");
+
+    let sent = json_of(&received.recv().expect("the request arrived"));
+    assert_eq!(
+        sent["generationConfig"]["responseMimeType"],
+        "application/json"
+    );
+    assert_eq!(sent["generationConfig"]["responseJsonSchema"], schema);
+}
+
+/// A model's own options reach the body as written, and cannot replace what the turn built.
+#[test]
+fn a_models_options_reach_the_google_express_body_and_cannot_overwrite_what_the_turn_built() {
+    let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+    let text = format!(
+        r#"{{"provider": {{"google-vertex": {{"npm": "@ai-sdk/google-vertex", "options": {{"baseURL": "{endpoint}/v1"}},
+            "models": {{"gemini-options": {{"options": {{
+                "safetySettings": [{{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}}],
+                "contents": []
+            }}}}}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    express_client(&egress, &provider, "gemini-options")
+        .complete(
+            &mut policy,
+            &ChatRequest::new("gemini-options", vec![Message::user("hello")]),
+        )
+        .expect("the reply was read");
+
+    let body = json_of(&received.recv().expect("the request arrived"));
+    assert_eq!(body["safetySettings"][0]["threshold"], "BLOCK_NONE");
+    assert_eq!(body["contents"][0]["parts"][0]["text"], "hello");
+}
+
+/// A stop that lands before a request is built sends nothing: spending a key on a reply nobody
+/// wants is worse than slow.
+#[test]
+fn a_stop_before_a_google_express_request_is_sent_sends_nothing() {
+    let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+    let provider = express_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let mut client = express_client(&egress, &provider, "google/gemini-test").with_cancel(cancel);
+
+    for stream in [false, true] {
+        let request = ChatRequest::new("google/gemini-test", vec![Message::user("go")]);
+        let error = if stream {
+            client
+                .complete_streaming(&mut policy, &request, |_| {})
+                .expect_err("stopped")
+        } else {
+            client.complete(&mut policy, &request).expect_err("stopped")
+        };
+        assert!(matches!(error, ChatError::Cancelled), "{error:?}");
+        assert_eq!(client.attempts(), 0);
+    }
+    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+}
+
+/// A failure the service writes into the stream is asked for again where a second attempt could
+/// get past it: a busy service, a rate limit, a fault of its own.
+#[test]
+fn a_google_failure_reported_mid_stream_is_asked_again_where_a_second_attempt_could_pass_it() {
+    let answered = vec![piece(
+        serde_json::json!([{"text": "whole"}]),
+        Some("STOP"),
+        Some(serde_json::json!({"promptTokenCount": 3, "candidatesTokenCount": 1})),
+    )];
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    for status in [
+        "UNAVAILABLE",
+        "RESOURCE_EXHAUSTED",
+        "INTERNAL",
+        "DEADLINE_EXCEEDED",
+    ] {
+        let failing = vec![
+            piece(serde_json::json!([{"text": "partial"}]), None, None),
+            frame(&format!(
+                r#"{{"error":{{"code":503,"status":"{status}","message":"x"}}}}"#
+            )),
+        ];
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Frames(failing),
+            Attempt::Frames(answered.clone()),
+        ]);
+        let provider = express_at(&endpoint);
+        let mut client = express_client(&egress, &provider, "google/gemini-test");
+        client
+            .complete_streaming(
+                &mut policy,
+                &ChatRequest::new("google/gemini-test", vec![Message::user("go")]),
+                |_| {},
+            )
+            .unwrap_or_else(|error| {
+                panic!("{status}: the second attempt did not answer: {error:?}")
+            });
+        assert_eq!(client.attempts(), 2, "{status}");
+        assert_eq!(received.try_iter().count(), 2, "{status}");
+    }
+}
+
+/// The count an entry states is how many times a request is sent again, and zero sends it once.
+/// Both paths have a loop of their own, so both are asked.
+#[test]
+fn a_google_express_entry_stating_no_retries_is_asked_once() {
+    for streaming in [false, true] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Status(503),
+            Attempt::Json(GENERATE_CONTENT_REPLY.into()),
+        ]);
+        let text = format!(
+            r#"{{"provider": {{"google-vertex": {{"npm": "@ai-sdk/google-vertex",
+                "options": {{"baseURL": "{endpoint}/v1", "maxRetries": 0}}}}}}}}"#
+        );
+        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let request = ChatRequest::new("google/gemini-test", vec![Message::user("hello")]);
+        let mut client = express_client(&egress, &provider, "google/gemini-test");
+
+        let result = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        };
+
+        assert_eq!(client.attempts(), 1, "streaming {streaming}: {result:?}");
+        assert_eq!(received.try_iter().count(), 1, "streaming {streaming}");
+        assert!(
+            matches!(
+                result,
+                Err(ChatError::Egress(bravebot_net::EgressError::Status {
+                    status: 503,
+                    ..
+                }))
+            ),
+            "streaming {streaming}: {result:?}"
+        );
+    }
+}
+
+/// The generation settings are one object the turn also writes into. A setting a model's options
+/// add to it joins what the turn set, and one the turn set is not replaced.
+#[test]
+fn a_models_generation_settings_join_the_ones_the_turn_set_and_do_not_replace_them() {
+    let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+    let text = format!(
+        r#"{{"provider": {{"google-vertex": {{"npm": "@ai-sdk/google-vertex",
+            "options": {{"baseURL": "{endpoint}/v1"}},
+            "models": {{"gemini-settings": {{
+                "limit": {{"context": 100000, "output": 777}},
+                "options": {{"generationConfig": {{"temperature": 0.2, "maxOutputTokens": 1}}}}
+            }}}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    express_client(&egress, &provider, "gemini-settings")
+        .complete(
+            &mut policy,
+            &ChatRequest::new("gemini-settings", vec![Message::user("hello")])
+                .with_effort(Some(Effort::Low)),
+        )
+        .expect("the reply was read");
+
+    let body = json_of(&received.recv().expect("the request arrived"));
+    let settings = &body["generationConfig"];
+    assert_eq!(settings["temperature"], 0.2, "{body}");
+    assert_eq!(settings["maxOutputTokens"], 777, "{body}");
+    assert_eq!(settings["thinkingConfig"]["thinkingBudget"], 1024, "{body}");
+}
+
+/// A reply the ceiling stopped while the model was still reasoning writes nothing and returns no
+/// reasoning, so the count is what says it thought, and the bill is the figures the service stated
+/// even though it left out the reply's own count. With no ceiling stated, the one reported is what
+/// the model had written.
+#[test]
+fn a_reply_cut_off_while_reasoning_says_so_and_keeps_its_bill_on_both_paths() {
+    for streaming in [false, true] {
+        let usage = serde_json::json!({"promptTokenCount": 20, "thoughtsTokenCount": 40});
+        let (endpoint, _received) = if streaming {
+            serve_attempts(vec![Attempt::Frames(vec![piece(
+                serde_json::json!([]),
+                Some("MAX_TOKENS"),
+                Some(usage),
+            )])])
+        } else {
+            serve_attempts(vec![Attempt::Json(
+                serde_json::json!({"candidates": [{"finishReason": "MAX_TOKENS"}],
+                                   "usageMetadata": usage})
+                .to_string(),
+            )])
+        };
+        let provider = express_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut client = express_client(&egress, &provider, "google/gemini-test");
+        let request = ChatRequest::new("google/gemini-test", vec![Message::user("hello")]);
+
+        let error = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        }
+        .expect_err("nothing was written");
+
+        assert!(
+            matches!(&error, ChatError::TooLong(cut_off) if cut_off.thought && cut_off.ceiling == 40),
+            "streaming={streaming}: {error:?}"
+        );
+        let billed = client.completed_usage().expect("the bill was kept");
+        assert_eq!(billed.prompt_tokens, 20, "streaming={streaming}");
+        assert_eq!(billed.completion_tokens, 40, "streaming={streaming}");
+    }
 }

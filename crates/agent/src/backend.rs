@@ -1,10 +1,10 @@
 //! Which backend a request goes to.
 //!
 //! Three exist: the aichat endpoint Brave runs, AWS Bedrock, and a gateway somebody configured,
-//! which speaks the OpenAI-compatible protocol or, for Anthropic's own API, the Messages one. The
-//! choice is made from configuration, once, here, so the turn loop and
-//! everything beside it asks the same question of whichever one is in use rather than branching on
-//! the backend at every call.
+//! which speaks the OpenAI-compatible protocol, the Messages one for Anthropic's own API, or
+//! Google's `generateContent` for Vertex AI express mode. The choice is made from configuration,
+//! once, here, so the turn loop and everything beside it asks the same question of whichever one is
+//! in use rather than branching on the backend at every call.
 //!
 //! The choice is not content. It comes from [`bravebot_config::Config`], which is built from the
 //! environment and the user's own settings file before any turn starts, and nothing a model says can
@@ -13,6 +13,7 @@
 use crate::outcome::{Category, Diagnosis};
 use bravebot_aichat::anthropic::AnthropicClient;
 use bravebot_aichat::anthropic::protocol::Failure;
+use bravebot_aichat::generate_content::GenerateContentClient;
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{AichatClient, ChatError, Completion, CutOff, Progress, Subscription};
 pub use bravebot_bedrock::credentials::CredentialError;
@@ -424,8 +425,9 @@ pub enum Backend<'a> {
     /// A configured gateway.
     ///
     /// Speaks the same protocol as the aichat backend and is sent by the same client, differing in
-    /// host and credential, unless the provider is Anthropic's, whose Messages protocol has a client
-    /// of its own ([`Provider::protocol`](bravebot_config::provider::Provider::protocol)). A
+    /// host and credential, unless the provider is Anthropic's or Vertex AI express mode, whose
+    /// protocols have a client of their own
+    /// ([`Provider::protocol`](bravebot_config::provider::Provider::protocol)). A
     /// separate variant regardless, because which service a request went to is the thing worth being
     /// able to read at a dispatch site.
     Gateway {
@@ -1103,6 +1105,9 @@ fn gateway_client<'a>(
         Protocol::Messages => GatewayClient::Messages(AnthropicClient::new(
             config, egress, provider, wire_model, token,
         )),
+        Protocol::GenerateContent => GatewayClient::GenerateContent(GenerateContentClient::new(
+            egress, provider, wire_model, token,
+        )),
     })
 }
 
@@ -1113,6 +1118,7 @@ fn gateway_client<'a>(
 enum GatewayClient<'a> {
     Chat(AichatClient<'a>),
     Messages(AnthropicClient<'a>),
+    GenerateContent(GenerateContentClient<'a>),
 }
 
 /// The failure of a call to `client`, with the requests it took and what they cost.
@@ -1134,6 +1140,7 @@ impl GatewayClient<'_> {
         match self {
             Self::Chat(client) => Self::Chat(client.with_cancel(stop)),
             Self::Messages(client) => Self::Messages(client.with_cancel(stop)),
+            Self::GenerateContent(client) => Self::GenerateContent(client.with_cancel(stop)),
         }
     }
 
@@ -1145,6 +1152,7 @@ impl GatewayClient<'_> {
         match self {
             Self::Chat(client) => counted!(client, client.complete(policy, request)),
             Self::Messages(client) => counted!(client, client.complete(policy, request)),
+            Self::GenerateContent(client) => counted!(client, client.complete(policy, request)),
         }
     }
 
@@ -1159,6 +1167,9 @@ impl GatewayClient<'_> {
                 counted!(client, client.complete_streaming(policy, request, progress))
             }
             Self::Messages(client) => {
+                counted!(client, client.complete_streaming(policy, request, progress))
+            }
+            Self::GenerateContent(client) => {
                 counted!(client, client.complete_streaming(policy, request, progress))
             }
         }
@@ -1756,6 +1767,39 @@ mod tests {
         assert_eq!(provider.protocol(), Protocol::ChatCompletions);
     }
 
+    /// A `google-vertex` entry naming no project is reached in the `generateContent` protocol, and
+    /// the name a request carries is the one the route names. One naming a project stays a gateway
+    /// speaking chat completions.
+    #[test]
+    fn a_google_vertex_model_selects_the_protocol_its_entry_names_a_project_for() {
+        let express =
+            with_providers(r#"{"provider": {"google-vertex": {"env": ["A_TOKEN_VARIABLE"]}}}"#);
+        let egress = Egress::new();
+        let Backend::Gateway {
+            provider,
+            wire_model,
+            ..
+        } = Backend::select(&express, &egress, "google-vertex/google/gemini-2.5-flash")
+        else {
+            panic!("a vertex model did not select a gateway");
+        };
+        assert_eq!(provider.protocol(), Protocol::GenerateContent);
+        assert_eq!(wire_model, "google/gemini-2.5-flash");
+
+        let with_project = with_providers(
+            r#"{"provider": {"google-vertex": {"env": ["A_TOKEN_VARIABLE"],
+                "options": {"project": "example-project-1"}}}}"#,
+        );
+        let Backend::Gateway { provider, .. } = Backend::select(
+            &with_project,
+            &egress,
+            "google-vertex/google/gemini-2.5-flash",
+        ) else {
+            panic!("a vertex model did not select a gateway");
+        };
+        assert_eq!(provider.protocol(), Protocol::ChatCompletions);
+    }
+
     /// Anthropic names a model by an alias and answers with the dated model behind it, so the name
     /// that comes back differing is the alias working. Another gateway beside it is still compared.
     #[test]
@@ -1862,8 +1906,15 @@ mod tests {
         streamed: bool,
     ) -> (Result<Completion, BackendError>, Received) {
         let (endpoint, received) = answer_once(reply, content_type);
+        // A Vertex entry states an endpoint and no project, and says by its SDK that the endpoint
+        // takes Vertex's own API.
+        let sdk = if provider == "google-vertex" {
+            r#""npm": "@ai-sdk/google-vertex","#
+        } else {
+            ""
+        };
         let block = format!(
-            r#"{{"provider": {{"{provider}": {{
+            r#"{{"provider": {{"{provider}": {{{sdk}
                 "options": {{"baseURL": "{endpoint}/v1", "apiKey": "a-key"}},
                 "models": {{"a-model": {{}}}}
             }}}}}}"#
@@ -1926,6 +1977,13 @@ mod tests {
         "\"usage\":{\"output_tokens\":2}}\n\n",
         "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
     );
+    const GOOGLE_WHOLE: &str = r#"{"candidates":[{"content":{"parts":[{"text":"hi"}]},
+        "finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1}}"#;
+    const GOOGLE_STREAM: &str = concat!(
+        "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]},",
+        "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":3,",
+        "\"candidatesTokenCount\":1}}\n\n",
+    );
     const OPENAI_WHOLE: &str =
         r#"{"model":"served","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#;
     const OPENAI_STREAM: &str = concat!(
@@ -1959,6 +2017,26 @@ mod tests {
                     "a-key",
                 ),
                 (
+                    "google-vertex",
+                    if streamed {
+                        GOOGLE_STREAM
+                    } else {
+                        GOOGLE_WHOLE
+                    },
+                    if streamed {
+                        "text/event-stream"
+                    } else {
+                        "application/json"
+                    },
+                    if streamed {
+                        "POST /v1/publishers/google/models/a-model:streamGenerateContent?alt=sse HTTP/1.1"
+                    } else {
+                        "POST /v1/publishers/google/models/a-model:generateContent HTTP/1.1"
+                    },
+                    "x-goog-api-key",
+                    "a-key",
+                ),
+                (
                     "elsewhere",
                     if streamed {
                         OPENAI_STREAM
@@ -1981,6 +2059,9 @@ mod tests {
                 let said = format!("{provider}, streamed: {streamed}");
                 assert_eq!(received.0, route, "{said}");
                 assert_eq!(header(&received, name), Some(value), "{said}");
+                if provider == "google-vertex" {
+                    assert_eq!(header(&received, "authorization"), None, "{said}");
+                }
                 if provider == "anthropic" {
                     assert_eq!(header(&received, "authorization"), None, "{said}");
                     assert_eq!(
@@ -2017,6 +2098,50 @@ mod tests {
             (true, STREAM, "text/event-stream"),
         ] {
             let (outcome, _) = call_once("anthropic", reply, content_type, streamed);
+
+            let error = outcome.expect_err("the service declined");
+            let said = format!("streamed: {streamed}: {error:?}");
+            let BackendError::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                cause,
+            } = &error
+            else {
+                panic!("the failure carries no count: {said}");
+            };
+            assert_eq!(*attempts, 1, "{said}");
+            assert_eq!(usage.map(|usage| usage.prompt_tokens), Some(50), "{said}");
+            assert_eq!(*context_tokens, Some(50), "{said}");
+            assert!(
+                matches!(
+                    **cause,
+                    BackendError::Aichat(ChatError::Reported {
+                        failure: Failure::Refusal
+                    })
+                ),
+                "{said}"
+            );
+        }
+    }
+
+    /// A `generateContent` call the service answered with a refusal fails, and the failure carries
+    /// the one request it took and the prompt size the service reported, whether the reply was read
+    /// whole or as it arrived, so the turn charges what the request cost.
+    #[test]
+    fn a_failed_generate_content_call_keeps_its_attempts_and_what_the_service_counted() {
+        const WHOLE: &str = r#"{"candidates":[{"finishReason":"SAFETY"}],
+            "usageMetadata":{"promptTokenCount":50,"candidatesTokenCount":0}}"#;
+        const STREAM: &str = concat!(
+            "data: {\"candidates\":[{\"finishReason\":\"SAFETY\"}],",
+            "\"usageMetadata\":{\"promptTokenCount\":50,\"candidatesTokenCount\":0}}\n\n",
+        );
+
+        for (streamed, reply, content_type) in [
+            (false, WHOLE, "application/json"),
+            (true, STREAM, "text/event-stream"),
+        ] {
+            let (outcome, _) = call_once("google-vertex", reply, content_type, streamed);
 
             let error = outcome.expect_err("the service declined");
             let said = format!("streamed: {streamed}: {error:?}");

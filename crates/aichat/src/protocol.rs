@@ -375,6 +375,11 @@ struct NamedSchema {
 }
 
 impl ResponseFormat {
+    /// The schema a reply must match.
+    pub fn schema(&self) -> &serde_json::Value {
+        &self.json_schema.schema
+    }
+
     /// A reply that is one JSON value matching `schema`.
     pub fn json_schema(schema: serde_json::Value) -> Self {
         Self {

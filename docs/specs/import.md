@@ -190,12 +190,16 @@ from it would send it to Anthropic's, so the key and the host are both left
 An entry that names no variable is written with `OPENAI_API_KEY`, the variable opencode reads for
 this id.
 
-**A `google-vertex` entry naming a project is the exception.** The service it names is reached
-through its OpenAI-compatible endpoint ([BACKEND-49](backends.md#BACKEND-49)), so the entry is
-offered where it states `options.project`. One stating none is left ([IMPORT-4](#IMPORT-4)), because
-the endpoint cannot be built without a project and nothing here guesses one. The key is not copied
-from the environment: an entry naming no variable is written with `GOOGLE_API_KEY`, the variable
-opencode reads for this id.
+**A `google-vertex` entry is the exception.** One naming a project is reached through the service's
+OpenAI-compatible endpoint ([BACKEND-49](backends.md#BACKEND-49)), so it is offered where it states
+`options.project`. One naming no project and an `options.apiKey` is Vertex AI express mode
+([BACKEND-58](backends.md#BACKEND-58)), which opencode's SDK reaches with the key alone, and is offered
+at the host compiled in. So is an `auth.json` key for the id where no entry states a project. One
+stating neither a project nor a key is left ([IMPORT-4](#IMPORT-4)), since it relies on Google Cloud
+credentials this program does not read and nothing here guesses a project, and so is one stating a
+`baseURL` and no project, because opencode serves that through its own SDK and the host it states
+is not one this program knows how to address. The key is not copied from the environment: an entry
+naming no variable is written with `GOOGLE_API_KEY`, the variable opencode reads for this id.
 
 **A model's `limit` is copied where bravebot reads it.** That is where both `context` and `output`
 are present and at least one of them is above zero, so the written entry states the same window and
@@ -274,8 +278,8 @@ reason:
   reads a key from, and a host is written without the route this program appends, so the line says to
   add an entry;
 - `CLAUDE_CODE_USE_VERTEX`, which serves Claude models through Google Cloud credentials, and an
-  opencode `google-vertex` entry naming no project, which the service's endpoint cannot be built
-  without ([IMPORT-3](#IMPORT-3));
+  opencode `google-vertex` entry naming no project and no key, or a `baseURL` and no project, which
+  this program has nothing to reach the service with ([IMPORT-3](#IMPORT-3));
 - `AWS_BEARER_TOKEN_BEDROCK`, and an opencode `auth.json` key for `amazon-bedrock`, which is the
   same bearer token, since bravebot signs Bedrock requests through the AWS credential chain;
 - Bedrock switched on with no region;
@@ -299,7 +303,10 @@ bearer token or a host of their own would otherwise see the three routes and no 
 setup was looked at.
 
 `verified-by: bravebot_config::import::a_google_vertex_entry_naming_a_project_is_offered_with_its_project_and_location`
-`verified-by: bravebot_config::import::a_google_vertex_entry_naming_no_project_is_left_and_said`
+`verified-by: bravebot_config::import::a_google_vertex_entry_naming_a_key_and_no_project_is_offered_in_express_mode`
+`verified-by: bravebot_config::import::an_auth_json_key_for_google_vertex_is_offered_in_express_mode`
+`verified-by: bravebot_config::import::a_google_vertex_entry_naming_no_project_and_no_key_is_left_and_said`
+`verified-by: bravebot_config::import::a_google_vertex_entry_naming_a_base_url_and_no_project_is_left_and_said`
 `verified-by: bravebot_config::import::an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk`
 `verified-by: bravebot_config::import::an_api_key_helper_is_never_imported`
 `verified-by: bravebot_config::import::permissions_hooks_and_mcp_servers_are_never_imported`

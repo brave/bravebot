@@ -35,6 +35,8 @@ governs:
   - crates/aichat/src/lib.rs
   - crates/aichat/src/anthropic.rs
   - crates/aichat/src/anthropic/protocol.rs
+  - crates/aichat/src/generate_content.rs
+  - crates/aichat/src/generate_content/protocol.rs
   - crates/aichat/src/conversation.rs
   - crates/aichat/src/models.rs
   - crates/config/src/provider.rs
@@ -131,6 +133,7 @@ list they read, and a model's own output never reaches it.
 `verified-by: bravebot_agent::backend::a_configured_gateway_model_selects_the_gateway_backend`
 `verified-by: bravebot_agent::backend::a_gateway_reports_the_model_it_was_asked_for`
 `verified-by: bravebot_agent::backend::an_anthropic_model_selects_the_gateway_backend_in_the_messages_protocol`
+`verified-by: bravebot_agent::backend::a_google_vertex_model_selects_the_protocol_its_entry_names_a_project_for`
 
 <a id="BACKEND-4"></a>
 ### BACKEND-4: what a person may choose is every model any reachable service offers
@@ -706,6 +709,7 @@ service is sent the other's shape.
 | An OpenAI-compatible gateway | `reasoning_effort`, beside the model |
 | AWS Bedrock | `effort`, inside `output_config`, among the fields handed to the model unread |
 | Anthropic's Messages API | `effort`, inside `output_config`, a field of the request body |
+| Google's `generateContent` API | `thinkingBudget`, inside `thinkingConfig`, inside `generationConfig`, as a token count that rises with the level |
 
 This says where a level is sent, not what becomes of it. What a service does with the field is that
 service's own behaviour, observable only by measuring it, and one of them is known to discard it
@@ -719,6 +723,7 @@ certainly does not read.
 `verified-by: bravebot_aichat::protocol::a_level_is_sent_in_the_name_this_protocol_gives_the_field`
 `verified-by: bravebot_bedrock::protocol::a_level_is_sent_inside_the_object_this_api_states`
 `verified-by: bravebot_aichat::anthropic::protocol::a_level_is_sent_inside_the_object_this_api_states`
+`verified-by: bravebot_aichat::generate_content::protocol::a_ceiling_a_level_and_a_schema_go_in_the_generation_config`
 `verified-by: bravebot_agent::turn::a_chosen_effort_is_the_one_requested`
 
 
@@ -784,6 +789,10 @@ that reads one. Where the request that answered had given up both, both are reme
 naming no field: a service that reads a breakpoint and refuses a level gives up the caching as well
 for the life of the process.
 
+**On Vertex express mode, the level is the one concession.** The request carries no breakpoints, so
+a request refused on its contents is sent again once without the level and not again, and a request
+that carried no level is reported as it was refused.
+
 **On Bedrock, four fields are given up in order.** A Bedrock request carries cache breakpoints too, a
 streamed one asks for the model's thinking as it happens ([BACKEND-46](#BACKEND-46)), and a streamed
 one offering a tool asks for its arguments as they are written ([BACKEND-44](#BACKEND-44)). There
@@ -822,6 +831,8 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_aichat::client::a_level_refusal_the_retry_did_not_fix_is_not_remembered`
 `verified-by: bravebot_aichat::client::one_model_refusing_a_level_says_nothing_about_another_on_the_same_gateway`
 `verified-by: bravebot_aichat::client::a_level_a_block_wrote_down_is_not_given_up`
+`verified-by: bravebot_aichat::client::a_model_that_refuses_the_thinking_budget_is_asked_again_without_it`
+`verified-by: bravebot_aichat::client::a_refusal_of_a_request_asking_for_no_level_is_reported_after_one_request`
 `verified-by: bravebot_aichat::lib::a_model_whose_service_refused_a_level_is_reported_as_reading_none`
 `verified-by: bravebot_aichat::models::a_row_whose_service_refused_a_level_reads_none_however_silent_the_roster`
 `verified-by: bravebot_aichat::models::a_row_the_service_refused_reads_none_however_loudly_the_roster_advertises_it`
@@ -1453,8 +1464,8 @@ something reads:
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | the model the tier word `sonnet` names |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | the model the tier word `haiku` names |
 | `GOOGLE_API_KEY` | the key a request to Google Vertex AI is sent with |
-| `GOOGLE_CLOUD_PROJECT` | the Google Cloud project that request is made under |
-| `VERTEX_LOCATION` | the location it is made in, where that is not `global` |
+| `GOOGLE_CLOUD_PROJECT` | the Google Cloud project that request is made under, where there is one |
+| `VERTEX_LOCATION` | the location it is made in, where that is not `global`, and not read with no project |
 | `SSL_CERT_FILE` | a bundle of certificate authorities to trust in place of the built-in set |
 | `SSL_CERT_DIR` | a directory of them |
 | `ALL_PROXY` | the proxy every request is routed through, ahead of the two below |
@@ -2327,15 +2338,15 @@ which is one fewer model requested rather than a list that decides nothing.
 <a id="BACKEND-49"></a>
 ### BACKEND-49: a `google-vertex` entry is reached at a host built from its project and location
 
-A `provider` entry keyed `google-vertex` reaches Google Vertex AI through its OpenAI-compatible
-endpoint. It states `options.project`, and may state `options.location`, which is `global` where it
-does not. The endpoint is built from the two: `https://aiplatform.googleapis.com/v1/projects/<project>/locations/global/endpoints/openapi`
+A `provider` entry keyed `google-vertex` that states `options.project` reaches Google Vertex AI
+through its OpenAI-compatible endpoint, and may state `options.location`, which is `global` where it
+does not. An entry that states no project is reached in express mode ([BACKEND-58](#BACKEND-58)). The endpoint is built from the two: `https://aiplatform.googleapis.com/v1/projects/<project>/locations/global/endpoints/openapi`
 for `global`, and `https://<location>-aiplatform.googleapis.com/v1/projects/<project>/locations/<location>/endpoints/openapi`
 for any other. An `options.baseURL` the entry states is where its requests go regardless, as
 [BACKEND-17](#BACKEND-17) says of every known name.
 
-An entry stating neither a project nor an endpoint configures no service. So does one whose project or location holds a
-character outside the ones Google allows in it: a project is letters, digits, `_`, `.`, `:` and `-`
+An entry whose project or location holds a character outside the ones Google allows in it
+configures no service, and is not read as express mode for having a project: a project is letters, digits, `_`, `.`, `:` and `-`
 and starts with a letter or a digit, and a location is lowercase letters, digits and `-`.
 
 The entry is not asked for a roster, since the endpoint has no model listing a key can call. In
@@ -2351,9 +2362,10 @@ qualified, `bravebot doctor` names each of its ids qualified, and a model on no 
 qualified, as `google-vertex/google/gemini-3-flash-preview`, which [BACKEND-18](#BACKEND-18) routes
 to it.
 
-**Why.** The service requires a project, and a request without one is refused, so a guessed project
+**Why.** This endpoint requires a project, and a request without one is refused, so a guessed project
 is a request that fails somewhere far from the mistake, which is the argument [BACKEND-29](#BACKEND-29)
-makes about a region. The host carries the location, so it is built rather than stated, and that
+makes about a region. An entry naming no project does not guess one: it is the entry that
+[BACKEND-58](#BACKEND-58) reaches by another route. The host carries the location, so it is built rather than stated, and that
 is also why it is checked: a project or location is written into a URL, and one holding `/`, `@`, `?`
 or `#` would send the key to another host or another route than the one the person named. Refusing
 the entry is the only answer that cannot send it anywhere. The host is compiled in, with a stated
@@ -2371,7 +2383,7 @@ exactly what is offered, as for any other gateway.
 
 `verified-by: bravebot_config::provider::a_google_vertex_entry_is_reached_at_the_host_its_project_and_location_build`
 `verified-by: bravebot_config::provider::a_google_vertex_entry_in_a_region_is_reached_at_that_regions_host`
-`verified-by: bravebot_config::provider::a_google_vertex_entry_without_a_project_configures_nothing`
+`verified-by: bravebot_config::provider::a_google_vertex_entry_without_a_project_is_reached_in_express_mode`
 `verified-by: bravebot_config::provider::a_project_or_location_that_would_move_the_request_configures_nothing`
 `verified-by: bravebot_config::provider::the_compiled_vertex_list_is_the_four_answered_ids_and_no_preview`
 `verified-by: bravebot_config::provider::a_project_and_location_holding_only_allowed_characters_are_accepted`
@@ -2387,12 +2399,13 @@ exactly what is offered, as for any other gateway.
 <a id="BACKEND-50"></a>
 ### BACKEND-50: the environment names a Google Vertex service when no block does
 
-`GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`, with `VERTEX_LOCATION` where the location is not
-`global`, configure the `google-vertex` service of [BACKEND-49](#BACKEND-49), whether they are
-exported or set in the `env` block of a settings file. Both of the first two have to hold a value:
-either one missing or blank configures nothing, and a project or location
-that BACKEND-49 refuses configures nothing. The service it configures lists no models, so it is
-offered the list BACKEND-49 compiles in.
+`GOOGLE_API_KEY` configures the `google-vertex` service, whether it is exported or set in the `env`
+block of a settings file, and has to hold a value: a missing or blank key configures nothing. With
+`GOOGLE_CLOUD_PROJECT` beside it, and `VERTEX_LOCATION` where the location is not `global`, the
+service is the one of [BACKEND-49](#BACKEND-49), and a project or location that BACKEND-49 refuses
+configures nothing. With no project, or a blank one, it is the express service of
+[BACKEND-58](#BACKEND-58), and `VERTEX_LOCATION` is not read. The service it configures lists no
+models, so it is offered the list BACKEND-49 compiles in.
 
 The key is read from `GOOGLE_API_KEY` when a request needs it, as [BACKEND-16](#BACKEND-16) says of
 any variable a gateway names, so a key exported after the session opened is the one sent. A key set
@@ -2407,11 +2420,14 @@ sent to Google until a model named `google-vertex/...` is selected ([BACKEND-13]
 
 **Why.** `GOOGLE_API_KEY` is a name other Google clients read, and a key exported for one of them
 may be scoped to a service other than this one. What limits that is where the key goes and when: only
-to the compiled-in Google host, only once the person has chosen a model that names this service, and
-only when a project is set as well, which a shell exporting the key for another tool seldom does.
-The alternative, a name of this program's own, keeps the key away from every ambient reader and gives
-up the convenience of the name the other tool reads, which is why the ambient one is not required
-here: the block names any variable the person prefers.
+to the compiled-in Google host and only once the person has chosen a model that names this service.
+A project is not required, because express mode needs none, so the key alone names the service; a
+key scoped to another service is refused there as a failed request and not a leak, the host being
+Google's own. The alternative, a name of this program's own, keeps the key away from every ambient
+reader and gives up the convenience of the name the other tool reads, which is why the ambient one is
+not required here: the block names any variable the person prefers. A key that names the service
+also makes the name a gateway token, taken off the environment of every program this agent starts
+([RUN-12](tools/run.md#RUN-12)), so a `gemini` started from `run` does not inherit it.
 
 An entry replaces the route rather than merging with it, so that what a file says is not quietly
 completed by a variable the file does not mention. An entry that configures nothing, for want of a
@@ -2420,7 +2436,8 @@ project, is dropped as any such entry is, and leaves the route open. A managed l
 
 `verified-by: bravebot_config::lib::the_environment_names_a_google_vertex_service_when_no_block_does`
 `verified-by: bravebot_config::lib::a_google_vertex_service_from_the_environment_is_offered_the_compiled_models`
-`verified-by: bravebot_config::lib::the_environment_route_needs_both_a_key_and_a_project`
+`verified-by: bravebot_config::lib::the_environment_route_needs_a_key_and_a_project_the_host_can_be_built_from`
+`verified-by: bravebot_config::lib::a_key_alone_names_the_express_service_and_a_blank_project_is_no_project`
 `verified-by: bravebot_config::lib::a_key_set_only_in_the_env_block_reaches_the_google_vertex_service`
 `verified-by: bravebot_config::lib::an_exported_key_outranks_the_one_in_the_env_block`
 `verified-by: bravebot_config::lib::a_google_vertex_block_replaces_the_environment_route`
@@ -2802,6 +2819,123 @@ turning prompt caching off for the rest of the session.
 `verified-by: bravebot_agent::backend::a_failed_messages_call_keeps_its_attempts_and_what_the_service_counted`
 `verified-by: bravebot_agent::failure_categories::a_failure_anthropic_reports_keeps_its_actionable_category`
 
+<a id="BACKEND-58"></a>
+### BACKEND-58: a `google-vertex` entry naming no project is reached through the native `generateContent` API, with its key in `x-goog-api-key` and nowhere else
+
+A `provider` entry keyed `google-vertex` that states no `options.project`, and the environment's
+`GOOGLE_API_KEY` where no project is set ([BACKEND-50](#BACKEND-50)), reach Vertex AI express mode:
+Google's native `generateContent` API at `https://aiplatform.googleapis.com/v1`, which takes a key and
+no project. An entry that states a project is reached through the OpenAI-compatible endpoint
+([BACKEND-49](#BACKEND-49)), so the project is what picks the route. No region is part of the
+address, and Google chooses where a request is served, so neither `options.location` nor
+`VERTEX_LOCATION` is read here. An entry that states an `options.baseURL` and no project keeps the
+OpenAI-compatible route at that endpoint ([BACKEND-17](#BACKEND-17)) unless it names the SDK
+`@ai-sdk/google-vertex`, which says the endpoint takes Vertex's own API: the route below then
+follows the endpoint it states in place of the host and the `/v1` path.
+
+A request goes to `/publishers/<publisher>/models/<model>:generateContent`, or for a streamed reply
+`:streamGenerateContent?alt=sse`. The name after the id ([BACKEND-18](#BACKEND-18)) is
+`<publisher>/<model>`, as `google/gemini-2.5-flash`, and a name with no publisher is a model of
+`google`. Both parts are written into the path, so each holds only letters, digits, `-`, `_` and `.`,
+is not empty and is not dots alone, and a model whose name holds anything else is sent nowhere and fails the request
+with an error that names no key. The key travels as [BACKEND-51](#BACKEND-51) says, as a socket
+header ([NET-2](network-egress.md#NET-2)), so a redirect off the endpoint's host is sent the
+conversation and not the key. An entry that names no place for a key sends none. The key is in no
+trace, no error text a refused request produces, and no session record.
+
+The conversation is restated as turns of parts by the function a Bedrock and an Anthropic request
+use as well: the system prompt is `systemInstruction`, a tool result is a part on a `user` turn,
+the assistant's turns are `model` turns, turns of one role are merged, arguments cross as an object,
+and a request that offers no tool carries its calls and results as text. Tools are one
+`functionDeclarations` list with each schema in `parametersJsonSchema`. A call carries no id this
+agent can match a result by, so one is made up when a reply arrives, and a result is sent as a
+`functionResponse` named for the function of the call it follows. A result with no call before it in
+the conversation is sent as text, since the service refuses a response that answers nothing. An
+attachment is inline data where its media type is a picture, a PDF or another type the service takes
+inline, and is dropped otherwise.
+
+A `thoughtSignature` that arrives beside a call is kept with the call in the member of
+[BACKEND-52](#BACKEND-52), as `google.thought_signature`, from the streamed or whole reply through the
+stored conversation, and is sent back beside that call's part and no other. A call that arrived with
+none carries none. A reasoning summary the service marks as a thought is no part of the reply.
+
+A reply ceiling is sent as `maxOutputTokens` only where a person stated one ([BACKEND-15](#BACKEND-15),
+[BACKEND-41](#BACKEND-41)), the models differing in what they allow. The level of
+[BACKEND-21](#BACKEND-21) is a `thinkingBudget`, a schema a task states is `responseMimeType` with
+`responseJsonSchema`, and a model's own `options` reach the body as BACKEND-15 says without replacing
+what the turn built, the `generationConfig` among them joining the settings the turn wrote there. A reply is read whole or as server-sent events, each holding the next parts, and
+a stream is complete once a piece carries a finish reason: one that stops before is a reply that did
+not finish, which is sent again. A call arrives whole and is never assembled from fragments. A prompt
+the service blocked, and a reply it stopped for what it would have said, are refusals and are not
+asked for again. A call it wrote badly, a rate limit, an unavailable service, a fault of its own and
+a timeout are asked for again, a failure written into a stream being named from the closed set
+[BACKEND-57](#BACKEND-57) uses and never by what the service wrote. The retries an entry states and
+the wait a service asks for apply as [BACKEND-54](#BACKEND-54) and [BACKEND-55](#BACKEND-55) say. A
+reply that stopped at the ceiling is answered as [BACKEND-42](#BACKEND-42) says, with the ceiling
+a person stated or, where none was sent, what the reply had written, and with the model counted as
+having reasoned where the service states reasoning tokens, since it returns no reasoning unless it
+is asked to. The model a completion names is the one the request named, and its prompt is the
+figure the service states with the cached part inside it and its output the reply and the reasoning
+together. The service leaves out a count that is zero, so a reply that is over is billed what the
+service stated whether or not it stated an output figure.
+
+**Why.** A person holding only a Vertex API key has no project to build the OpenAI-compatible
+endpoint from, and express mode is the route Google gives that key. Making the project the choice
+between routes keeps the first route's behaviour for everyone who stated one. The path carries the
+model and the host carries the key, so the model name is held to the characters a path takes for the
+reason BACKEND-49 holds a project to its own: a name that could end the path early would send the
+key to another route. The conversation walk is shared for the reasons BACKEND-57 gives, and what
+differs is how a part is spelled, which this wire states. A result is matched to its call by
+position because the service gives a call no id: ids made up from a counter restart with the process,
+so one conversation can hold the same id twice. The signature is opaque and kept unread, as
+BACKEND-52 keeps it: the newer models refuse the next request with a 400 without it, and the older
+ones accept the call with or without it. No ceiling is sent by default because a figure above a
+model's own is refused, and a model that stops at its own ceiling is reported with the figure the
+reply reached, which says how long it was. The level goes out as a budget because it is the field
+every Gemini model reads and a figure within the smallest model's range is one none refuses on its
+value, while which models read a budget at all is learned from a refusal as BACKEND-22 learns it.
+
+`verified-by: bravebot_config::provider::a_google_vertex_entry_without_a_project_is_reached_in_express_mode`
+`verified-by: bravebot_config::provider::an_express_request_goes_to_the_publisher_and_model_it_names`
+`verified-by: bravebot_config::provider::a_model_name_that_would_move_an_express_request_has_no_url`
+`verified-by: bravebot_config::provider::a_stated_endpoint_is_where_an_express_entry_is_reached`
+`verified-by: bravebot_config::provider::a_stated_endpoint_with_no_project_keeps_chat_completions_unless_the_sdk_says_otherwise`
+`verified-by: bravebot_config::lib::a_key_alone_names_the_express_service_and_a_blank_project_is_no_project`
+`verified-by: bravebot_aichat::client::a_google_express_request_carries_its_key_in_x_goog_api_key_and_nowhere_else`
+`verified-by: bravebot_aichat::client::a_google_express_request_without_a_key_sends_no_credential_header`
+`verified-by: bravebot_aichat::client::a_refused_google_express_request_does_not_repeat_the_key`
+`verified-by: bravebot_aichat::client::a_model_name_that_would_move_an_express_request_sends_nothing`
+`verified-by: bravebot_aichat::client::a_whole_google_express_reply_is_read_into_text_calls_and_cost`
+`verified-by: bravebot_aichat::client::a_google_express_stream_is_assembled_from_its_pieces`
+`verified-by: bravebot_aichat::client::a_calls_signature_comes_back_with_it_in_the_next_request`
+`verified-by: bravebot_aichat::client::a_google_express_reply_stopped_for_safety_is_a_refusal_on_both_paths`
+`verified-by: bravebot_aichat::client::a_prompt_the_service_blocked_is_a_refusal`
+`verified-by: bravebot_aichat::client::a_google_express_reply_cut_off_at_the_ceiling_keeps_what_it_wrote`
+`verified-by: bravebot_aichat::client::a_google_express_stream_with_no_finish_reason_is_an_incomplete_reply`
+`verified-by: bravebot_aichat::client::a_google_error_written_into_the_stream_is_reported_by_its_status`
+`verified-by: bravebot_aichat::client::a_google_failure_reported_mid_stream_is_asked_again_where_a_second_attempt_could_pass_it`
+`verified-by: bravebot_aichat::client::a_google_express_entry_stating_no_retries_is_asked_once`
+`verified-by: bravebot_aichat::client::a_stop_before_a_google_express_request_is_sent_sends_nothing`
+`verified-by: bravebot_aichat::client::a_models_options_reach_the_google_express_body_and_cannot_overwrite_what_the_turn_built`
+`verified-by: bravebot_aichat::client::a_schema_goes_to_the_service_as_a_json_mime_type_and_a_schema`
+`verified-by: bravebot_aichat::client::a_models_generation_settings_join_the_ones_the_turn_set_and_do_not_replace_them`
+`verified-by: bravebot_aichat::client::a_reply_cut_off_while_reasoning_says_so_and_keeps_its_bill_on_both_paths`
+`verified-by: bravebot_aichat::generate_content::protocol::a_request_is_contents_of_parts_with_the_system_prompt_and_tools_beside_them`
+`verified-by: bravebot_aichat::generate_content::protocol::a_request_asking_nothing_extra_carries_no_generation_config`
+`verified-by: bravebot_aichat::generate_content::protocol::a_call_and_its_result_are_matched_by_the_functions_name`
+`verified-by: bravebot_aichat::generate_content::protocol::a_result_answers_the_call_it_follows_when_an_id_was_used_twice`
+`verified-by: bravebot_aichat::generate_content::protocol::a_result_with_no_call_in_the_conversation_is_sent_as_text`
+`verified-by: bravebot_aichat::generate_content::protocol::a_calls_thought_signature_is_sent_back_beside_its_part`
+`verified-by: bravebot_aichat::generate_content::protocol::a_request_offering_no_tools_sends_calls_and_results_as_text`
+`verified-by: bravebot_aichat::generate_content::protocol::an_attachment_is_inline_data_for_a_media_type_this_api_takes`
+`verified-by: bravebot_aichat::generate_content::protocol::a_whole_reply_is_read_into_text_calls_and_cost`
+`verified-by: bravebot_aichat::generate_content::protocol::a_call_naming_no_arguments_has_an_empty_object_and_each_call_its_own_id`
+`verified-by: bravebot_aichat::generate_content::protocol::a_reply_that_stopped_for_a_reason_is_a_failure_and_an_ordinary_stop_is_not`
+`verified-by: bravebot_aichat::generate_content::protocol::a_google_status_word_maps_to_a_failure_in_the_closed_set`
+`verified-by: bravebot_aichat::generate_content::protocol::a_streamed_piece_is_a_response_an_error_or_nothing_this_reads`
+`verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
+`verified-by: bravebot_agent::backend::a_failed_generate_content_call_keeps_its_attempts_and_what_the_service_counted`
+
 ## Known costs
 
 - **Each change of mode costs a full prefix write.** BACKEND-27 and BACKEND-32 mark a cache prefix
@@ -3088,14 +3222,36 @@ turning prompt caching off for the rest of the session.
 
 - **Vertex is reached by key alone, and a block does not read the environment's project.** A
   `provider.google-vertex` entry takes its project and location from itself, so somebody with
-  `GOOGLE_CLOUD_PROJECT` exported, as opencode reads it, still states a project in the block.
+  `GOOGLE_CLOUD_PROJECT` exported, as opencode reads it, still states a project in the block, and a
+  block that states none is reached in express mode whatever the environment holds.
   Signing in with Google Cloud credentials, a service account or application default credentials
   is not supported; a key is the one credential this reaches it with.
 
 - **`GOOGLE_API_KEY` is a name other tools read.** The route BACKEND-50 describes sends the key
-  somebody exported for another Google client to Vertex, once they have chosen a model that names it
-  and have a project set. A key scoped to another Google service is refused there, which is a failed
-  request rather than a leak, since the host is Google's own.
+  somebody exported for another Google client to Vertex, once they have chosen a model that names it.
+  A key scoped to another Google service is refused there, which is a failed request rather than a
+  leak, since the host is Google's own. The key alone names the service, so exporting it for any
+  other Google tool also takes it off the environment of the programs this agent starts.
+
+- **The compiled Gemini list was answered by the other route.** Each id on BACKEND-49's list was
+  answered by the OpenAI-compatible endpoint, and express mode serves the same ids under the native
+  API without that having been checked for each, so a row that express mode does not serve fails
+  when picked. A block naming models replaces the list, and any model is reachable named qualified.
+
+- **Express mode reports no thinking to `/thinking`.** The service returns a summary of the model's
+  reasoning only when the request asks for one, and this build does not ask, so the screen has none
+  to draw for a Vertex express reply and the reasoning is known only from its token count.
+
+- **Express mode has no region and reads no location.** Google chooses where a request is served, so
+  a person who needs a regional endpoint states a project, which is reached through BACKEND-49.
+
+- **Express mode states the level as a budget on every Gemini model.** The newer models read a named
+  level of their own and treat a budget as the older form of it, which may not rank the five levels
+  as that model would. A model that refuses the budget is sent none, as BACKEND-22 says.
+
+- **A schema and tools in one request is the service's to accept.** The request carries both where a
+  task states a schema and the turn offers tools, and a model that refuses the pair refuses the
+  request.
 
 - **The compiled Gemini list goes stale between releases.** A model Google retires stays offered to
   a `google-vertex` service until a release takes it off BACKEND-49's list, and a model Google adds is
