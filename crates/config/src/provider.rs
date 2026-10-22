@@ -474,6 +474,7 @@ impl Provider {
             options.and_then(|options| options.get("headers")),
             credential_name,
             names_a_credential,
+            Provider::fixed_header_names(protocol),
         );
         let base_url = match stated {
             Some(url) => url.to_string(),
@@ -722,6 +723,16 @@ impl Provider {
         match self.protocol() {
             Protocol::ChatCompletions | Protocol::GenerateContent => &[],
             Protocol::Messages => &[("anthropic-version", ANTHROPIC_VERSION)],
+        }
+    }
+
+    /// The names `Self::fixed_headers` sets for `protocol`, so `header_entries` can refuse a
+    /// block that also names one: attached unconditionally and before a configured header, a
+    /// second copy would go out beside it rather than in place of it.
+    fn fixed_header_names(protocol: Protocol) -> &'static [&'static str] {
+        match protocol {
+            Protocol::ChatCompletions | Protocol::GenerateContent => &[],
+            Protocol::Messages => &["anthropic-version"],
         }
     }
 
@@ -1065,10 +1076,15 @@ fn header_names(value: Option<&serde_json::Value>) -> impl Iterator<Item = Strin
 /// named somewhere for a credential to live: two things authenticating one request is a request
 /// nobody can read the authentication of, and which of them won would depend on the order headers
 /// were attached in.
+///
+/// `fixed_names` is `Provider::fixed_header_names` for this entry's protocol, refused the same
+/// way and for the same reason: those are attached before a configured header regardless of a
+/// credential, and a block naming one would go out beside it rather than in its place.
 fn header_entries(
     value: Option<&serde_json::Value>,
     credential_name: &str,
     names_a_credential: bool,
+    fixed_names: &[&str],
 ) -> (Vec<Header>, Vec<(String, HeaderFault)>) {
     // `content-type` and the framing names are this program's own: a body is encoded here and its
     // length and destination are properties of the request being sent, so a block restating any of
@@ -1092,6 +1108,7 @@ fn header_entries(
         let entry = if !a_field_name(&name) {
             fault(HeaderFault::NotAName)
         } else if FRAMING.contains(&name.as_str())
+            || fixed_names.contains(&name.as_str())
             || (names_a_credential && name == credential_name.to_ascii_lowercase())
             || kept.iter().any(|held| held.name == name)
         {
@@ -2595,6 +2612,45 @@ mod tests {
         assert_eq!(
             provider.headers_refused,
             [("x-api-key".to_string(), HeaderFault::Reserved)]
+        );
+    }
+
+    /// `Provider::fixed_headers` attaches `anthropic-version` to every Messages request before a
+    /// configured header is, whatever the block names: a second value under that name would go
+    /// out beside the first rather than in place of it, since `Request::header` appends.
+    #[test]
+    fn an_anthropic_block_refuses_the_version_header_the_api_requires() {
+        let provider = one(r#"{"provider": {"anthropic": {
+                "env": ["ANTHROPIC_API_KEY"],
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"Anthropic-Version": "2020-01-01"}
+                }
+            }}}"#);
+        assert!(
+            provider.request_headers(|_| None).is_empty(),
+            "a configured version header was sent beside the one this program sets"
+        );
+        assert_eq!(
+            provider.headers_refused,
+            [("Anthropic-Version".to_string(), HeaderFault::Reserved)]
+        );
+
+        let elsewhere = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"anthropic-version": "a-value"}
+                }
+            }}}"#);
+        let sent: Vec<(String, String)> = elsewhere
+            .request_headers(|_| None)
+            .into_iter()
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        assert_eq!(
+            sent,
+            [("anthropic-version".to_string(), "a-value".to_string())],
+            "a name only Messages sets fixed was refused on a gateway that does not set it"
         );
     }
 

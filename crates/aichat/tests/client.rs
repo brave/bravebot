@@ -2403,7 +2403,7 @@ fn a_gateways_roster_request_carries_no_brave_product_header() {
     }
 }
 
-/// BACKEND-59: the roster request carries `options.headers` the same way a chat request does. A
+/// BACKEND-60: the roster request carries `options.headers` the same way a chat request does. A
 /// gateway that needs a header to route a request needs it to answer a listing too, so a roster
 /// asked without one is a person seeing no models with nothing local to explain it. Dropping the
 /// loop that attaches `headers` in `list_from_gateway` would pass every other test here, since

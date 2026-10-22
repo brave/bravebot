@@ -1935,6 +1935,18 @@ mod tests {
         content_type: &'static str,
         streamed: bool,
     ) -> (Result<Completion, BackendError>, Received) {
+        call_once_with_options(provider, "", reply, content_type, streamed)
+    }
+
+    /// `call_once`, with `extra_options` as more of the entry's `options` object: a `headers`
+    /// block, for a test that wants one configured.
+    fn call_once_with_options(
+        provider: &str,
+        extra_options: &str,
+        reply: &'static str,
+        content_type: &'static str,
+        streamed: bool,
+    ) -> (Result<Completion, BackendError>, Received) {
         let (endpoint, received) = answer_once(reply, content_type);
         // A Vertex entry states an endpoint and no project, and says by its SDK that the endpoint
         // takes Vertex's own API.
@@ -1945,7 +1957,7 @@ mod tests {
         };
         let block = format!(
             r#"{{"provider": {{"{provider}": {{{sdk}
-                "options": {{"baseURL": "{endpoint}/v1", "apiKey": "a-key"}},
+                "options": {{"baseURL": "{endpoint}/v1", "apiKey": "a-key"{extra_options}}},
                 "models": {{"a-model": {{}}}}
             }}}}}}"#
         );
@@ -2101,6 +2113,52 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// BACKEND-60: a header a block names reaches the request whichever protocol the gateway
+    /// answers in, through the one path every call takes, `gateway_client`: the Messages API, the
+    /// native `generateContent` API, and chat completions alike. Each of the three builds the
+    /// header in separately, and a test that stopped at `gateway_request_parts` or called
+    /// `with_gateway_headers` by hand, as the aichat crate's own tests do, would still pass with
+    /// any one of those three calls removed.
+    #[test]
+    fn a_header_the_block_asked_for_reaches_the_request_whichever_protocol_it_answers_in() {
+        for (provider, reply, content_type, route) in [
+            (
+                "anthropic",
+                ANTHROPIC_WHOLE,
+                "application/json",
+                "POST /v1/messages HTTP/1.1",
+            ),
+            (
+                "google-vertex",
+                GOOGLE_WHOLE,
+                "application/json",
+                "POST /v1/publishers/google/models/a-model:generateContent HTTP/1.1",
+            ),
+            (
+                "elsewhere",
+                OPENAI_WHOLE,
+                "application/json",
+                "POST /v1/chat/completions HTTP/1.1",
+            ),
+        ] {
+            let (outcome, received) = call_once_with_options(
+                provider,
+                r#", "headers": {"X-Tenant-Id": "team-7"}"#,
+                reply,
+                content_type,
+                false,
+            );
+
+            outcome.expect("the reply was read");
+            assert_eq!(received.0, route, "{provider}");
+            assert_eq!(
+                header(&received, "x-tenant-id"),
+                Some("team-7"),
+                "{provider} did not carry the configured header"
+            );
         }
     }
 
