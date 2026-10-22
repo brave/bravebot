@@ -1100,7 +1100,16 @@ impl ServerRequest {
 /// so the plain case reads as it always did. Every front end that names a path in a prompt draws
 /// it through this, so the three cannot disagree about which names are marked.
 pub fn shown_name(name: &str) -> String {
-    shown(&name.chars().map(Piece::Char).collect::<Vec<_>>())
+    shown(&name.chars().map(Piece::Char).collect::<Vec<_>>(), true)
+}
+
+/// Text that is not a file name, such as the text of a rule, as a person is shown it.
+///
+/// Spelled as [`shown_name`] spells a name, except that a space is never marked: a space beside a
+/// `/` in `Bash(cat /etc/hosts)` is between two words, and only a name can end in one. The text is
+/// quoted only where it holds a character that draws as nothing, as a blank cell or as a control.
+pub fn shown_text(text: &str) -> String {
+    shown(&text.chars().map(Piece::Char).collect::<Vec<_>>(), false)
 }
 
 /// [`shown_name`] over a path held as one, for the prompts and lists that draw a path rather than
@@ -1115,7 +1124,7 @@ pub fn shown_path(path: &std::path::Path) -> String {
         pieces.extend(chunk.valid().chars().map(Piece::Char));
         pieces.extend(chunk.invalid().iter().copied().map(Piece::Byte));
     }
-    shown(&pieces)
+    shown(&pieces, true)
 }
 
 /// The file a step runs, and the path that starts it where that is another, each spelled as
@@ -1162,7 +1171,9 @@ enum Piece {
     Byte(u8),
 }
 
-fn shown(pieces: &[Piece]) -> String {
+/// `pieces` spelled for a person. `names` is whether they are a name, whose edges and empty text
+/// are marked, and not other text.
+fn shown(pieces: &[Piece], names: bool) -> String {
     let invisible = |c: char| {
         c.is_control()
             || (c.is_whitespace() && c != ' ')
@@ -1176,8 +1187,8 @@ fn shown(pieces: &[Piece]) -> String {
         Some(Piece::Char(c)) => std::path::is_separator(*c),
         Some(Piece::Byte(_)) => false,
     };
-    let spaced_at_an_edge = |at: usize| edge(at.checked_sub(1)) || edge(Some(at + 1));
-    let plain = !pieces.is_empty()
+    let spaced_at_an_edge = |at: usize| names && (edge(at.checked_sub(1)) || edge(Some(at + 1)));
+    let plain = (!names || !pieces.is_empty())
         && !pieces.iter().enumerate().any(|(at, piece)| match *piece {
             Piece::Byte(_) => true,
             Piece::Char(' ') => spaced_at_an_edge(at),
@@ -3161,6 +3172,31 @@ mod tests {
     #[test]
     fn a_space_after_a_backslash_is_part_of_the_name_where_a_backslash_is_not_a_separator() {
         assert_eq!(shown_name("a\\ b"), "a\\ b");
+    }
+
+    /// PROMPT-1: the text of a rule is spelled where it holds a character that draws as nothing, and
+    /// a space beside a `/` is not marked, since it is between two words and not the end of a name.
+    #[test]
+    fn a_space_in_the_text_of_a_rule_is_not_marked_as_the_edge_of_a_name() {
+        for plain in [
+            "Bash(cat /etc/hosts)",
+            "Bash(cat /etc/hosts /tmp/x)",
+            "Read(/work/notes.md)",
+            "Bash(ls )",
+            "",
+        ] {
+            assert_eq!(shown_text(plain), plain);
+        }
+        assert_eq!(
+            shown_text("Bash(cat /etc/ho\u{200b}sts)"),
+            "\"Bash(cat /etc/ho\\u{200b}sts)\""
+        );
+        assert_eq!(shown_text("Read( /a)\u{3000}"), "\"Read( /a)\\u{3000}\"");
+        // The same text as a name is marked, which is what a rule is not.
+        assert_eq!(
+            shown_name("Bash(cat /etc/hosts)"),
+            "\"Bash(cat\u{2423}/etc/hosts)\""
+        );
     }
 
     /// PROMPT-1, PATH-003: a path holding a byte that is not UTF-8 is drawn with that byte spelled,

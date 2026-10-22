@@ -472,7 +472,15 @@ impl Bridge {
             handle,
             json!({
                 "directory": open.project.display().to_string(),
+                // Spelled as a path in a prompt is (PROMPT-1), so a directory or a record that
+                // ends in whitespace or holds a byte that is not text is not drawn as another.
+                // A client draws these and never `directory` or `keeping`.
+                "shownDirectory": bravebot_agent::confirm::shown_path(&open.project),
                 "keeping": open.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+                "shownKeeping": open
+                    .keeping
+                    .as_ref()
+                    .map(|(store, _)| bravebot_agent::confirm::shown_path(store.path())),
                 // What a yes grants beyond the files (RUN-5), in the words every front end shows.
                 // A window that shows it answers with `confinedLines`, and a client that does not
                 // is not taken to have said it.

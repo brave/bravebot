@@ -100,6 +100,12 @@ describe('transcript rows', () => {
     expect(has(tree, 'approve')).toBe(false)
   })
 
+  it('names the file of a waiting write as the bridge spelled it, so a name ending in a space is not read as the one without', async () => {
+    const held = { ...changelogRequest, data: { ...(changelogRequest.data as object), path: 'note.md ', shownPath: '"note.md\u2423"' } } as Row
+    const tree = await render(<Transcript rows={[held]} status="waiting" decisions={new Map()} empty={null} />)
+    expect(textOf(byTestId(tree, 'row-approval-3'))).toContain('"note.md\u2423"')
+  })
+
   it('says what the person answered once the question is resolved', async () => {
     const rows = [...SESSIONS['update-changelog']!.rows.slice(0, 2), { ...changelogRequest, resolved: true }]
     const tree = await render(<Transcript rows={rows} status="running" decisions={new Map([[3, 'approved']])} empty={null} />)

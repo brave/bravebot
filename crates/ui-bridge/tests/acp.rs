@@ -763,6 +763,33 @@ fn a_refusal_at_the_trust_question_is_not_kept() {
     assert_eq!(second.questions, 1, "a refusal settled a later session");
 }
 
+/// PROMPT-1: the question names a directory that ends in a space as the terminal spells it, so the
+/// editor's person does not read it as the directory without the space.
+#[cfg(unix)]
+#[test]
+fn the_trust_question_names_a_directory_that_ends_in_a_space_as_the_terminal_does() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("trust-spaced ");
+    let (config, _requests, _server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let first = editor.prompt(&session, text("one"));
+    let asked = editor.answer_next(selected("reject-once"));
+    editor.response(first);
+
+    let held = project.display().to_string();
+    let spelled = format!(
+        "\"{}\u{2423}\"",
+        held.strip_suffix(' ').expect("a trailing space")
+    );
+    assert_eq!(
+        asked["params"]["toolCall"]["title"],
+        json!(format!("Trust {spelled}"))
+    );
+}
+
 /// Where a yes cannot be kept, the question says so and the option does not claim to remember.
 #[test]
 fn the_trust_question_says_when_a_yes_cannot_be_kept() {
