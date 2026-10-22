@@ -1993,7 +1993,8 @@ OpenAI-compatible one. [Anthropic](providers/anthropic.md) has the details, incl
 ceiling and which models `/model` offers.
 
 Google Vertex AI is reached by a block keyed `google-vertex`, or with no block by exporting
-`GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`. It has no model listing a key can call, so `/model`
+`GOOGLE_API_KEY`, with `GOOGLE_CLOUD_PROJECT` beside it for a particular project and none for express
+mode. It has no model listing a key can call, so `/model`
 offers a short list of Gemini models built into bravebot, and a block that lists `models` is offered
 those instead. A Vertex model, on the built-in list or off it, is named with the service's id in
 front, as `--model google-vertex/google/gemini-3-flash-preview` or the same value in the

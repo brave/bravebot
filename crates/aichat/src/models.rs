@@ -323,10 +323,13 @@ fn fetch_listing<S: Sink>(
     }
     if let Some(token) = token {
         let (name, value) = provider.credential_header(token);
-        // An Anthropic key stays on the socket the request was addressed to, as the request for a
-        // reply keeps it. The other credential headers are left as they were.
+        // An Anthropic or a Google key stays on the socket the request was addressed to, as the
+        // request for a reply keeps it. The other credential headers are left as they were.
         request = match provider.protocol() {
-            bravebot_config::provider::Protocol::Messages => request.socket_header(name, value),
+            bravebot_config::provider::Protocol::Messages
+            | bravebot_config::provider::Protocol::GenerateContent => {
+                request.socket_header(name, value)
+            }
             bravebot_config::provider::Protocol::ChatCompletions => request.header(name, value),
         };
     }

@@ -509,8 +509,8 @@ pub enum Reason {
     /// A setting for Anthropic's own API that this import does not carry into a `provider` block: a
     /// bearer token, a host, or a key stated for that host.
     AnthropicApi,
-    /// Google Vertex AI with no usable project, or through Google Cloud credentials: neither is
-    /// reached by a service here.
+    /// Google Vertex AI with no usable project and no key to reach it with, or through Google Cloud
+    /// credentials: neither is reached by a service here.
     Vertex,
     /// A Bedrock API key, where bravebot signs through the AWS credential chain.
     BearerToken,
@@ -1031,8 +1031,14 @@ fn opencode(configs: &[PathBuf], auth: Option<&Path>) -> Option<Found> {
                 } else if !speaks_the_protocol(id, None) {
                     Reason::AnotherSdk
                 } else if id == GOOGLE_VERTEX_ID {
-                    // A key with no project to build the endpoint from.
-                    Reason::Vertex
+                    // A key with no project is express mode, which needs nothing else.
+                    gateways.push(Gateway {
+                        id: id.clone(),
+                        endpoint: provider::VERTEX_EXPRESS_ENDPOINT.to_string(),
+                        entry: Map::new(),
+                        key: Key::Held(key),
+                    });
+                    continue;
                 } else if let Some(endpoint) = provider::known_endpoint(id) {
                     gateways.push(Gateway {
                         id: id.clone(),
@@ -1163,11 +1169,18 @@ fn gateway(
     }
     if id == GOOGLE_VERTEX_ID {
         // The OpenAI-compatible endpoint exists only for a stated project; a `baseURL` does not
-        // substitute for one, so an entry naming none is left regardless of what it states.
+        // substitute for one. An entry naming none is express mode, which needs the key the entry
+        // states and the host compiled in: one stating a `baseURL` or no key is left, since
+        // opencode serves it through an SDK route this program does not take.
         let options = entry.get("options").and_then(Value::as_object);
         let project = string(options.and_then(|options| options.get("project")));
         let location = string(options.and_then(|options| options.get("location")));
-        if provider::vertex_endpoint(project.as_deref(), location.as_deref()).is_none() {
+        let named = |name: &str| string(options.and_then(|options| options.get(name)));
+        let usable = match project {
+            Some(_) => provider::vertex_endpoint(project.as_deref(), location.as_deref()).is_some(),
+            None => named("baseURL").is_none() && named("apiKey").is_some(),
+        };
+        if !usable {
             return Err(Reason::Vertex);
         }
     }
@@ -1887,10 +1900,55 @@ mod tests {
         );
     }
 
-    /// IMPORT-3 and IMPORT-4: without a project the entry configures nothing, and a project that is
-    /// a reference opencode would have substituted names no project here.
+    /// IMPORT-3: the entry opencode writes for Vertex AI express mode names an API key and no
+    /// project, and is offered at the host compiled in with the key as IMPORT-6 says.
     #[test]
-    fn a_google_vertex_entry_naming_no_project_is_left_and_said() {
+    fn a_google_vertex_entry_naming_a_key_and_no_project_is_offered_in_express_mode() {
+        let home = Scratch::new("import-vertex-express");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"google-vertex": {
+                "npm": "@ai-sdk/google-vertex",
+                "options": {"apiKey": "{env:GOOGLE_VERTEX_API_KEY}"}
+            }}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert_eq!(ids(&found), ["google-vertex"]);
+        let vertex = gateway(&found, "google-vertex");
+        assert_eq!(vertex.endpoint, "https://aiplatform.googleapis.com/v1");
+        assert_eq!(vertex.variables(), ["GOOGLE_VERTEX_API_KEY"]);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
+    /// IMPORT-3: a key `opencode auth login` keeps for Vertex AI is express mode too, since it has
+    /// no project to name.
+    #[test]
+    fn an_auth_json_key_for_google_vertex_is_offered_in_express_mode() {
+        let home = Scratch::new("import-vertex-express-auth");
+        home.write(
+            ".local/share/opencode/auth.json",
+            r#"{"google-vertex": {"type": "api", "key": "a-vertex-key"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        let vertex = gateway(&found, "google-vertex");
+        assert_eq!(vertex.endpoint, "https://aiplatform.googleapis.com/v1");
+        match &vertex.key {
+            Key::Held(key) => assert_eq!(key.expose(), "a-vertex-key"),
+            other => panic!("the key was not held: {other:?}"),
+        }
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+        assert!(!format!("{found:?}").contains("a-vertex-key"));
+    }
+
+    /// IMPORT-3 and IMPORT-4: with no project and no key there is nothing to reach the service
+    /// with, and a project that is a reference opencode would have substituted names no project
+    /// here.
+    #[test]
+    fn a_google_vertex_entry_naming_no_project_and_no_key_is_left_and_said() {
         let home = Scratch::new("import-vertex-no-project");
         home.write(
             ".config/opencode/opencode.json",
@@ -1918,7 +1976,7 @@ mod tests {
         home.write(
             ".config/opencode/opencode.json",
             r#"{"provider": {"google-vertex": {
-                "options": {"baseURL": "https://vertex-proxy.example/v1"}
+                "options": {"baseURL": "https://vertex-proxy.example/v1", "apiKey": "a-key"}
             }}}"#,
         );
         let found = one(&home.path, &[], Source::Opencode);

@@ -3679,24 +3679,52 @@ mod tests {
     }
 
     #[test]
-    fn the_environment_route_needs_both_a_key_and_a_project() {
+    fn a_key_alone_names_the_express_service_and_a_blank_project_is_no_project() {
+        type Lookup = fn(&str) -> Option<String>;
+        let key_alone: [(&str, Lookup); 2] = [
+            ("a key alone", |k| {
+                (k == env_var::GOOGLE_API_KEY).then(|| PLACEHOLDER_KEY.to_string())
+            }),
+            ("a blank project", |k| match k {
+                env_var::GOOGLE_API_KEY => Some(PLACEHOLDER_KEY.into()),
+                env_var::GOOGLE_CLOUD_PROJECT => Some("".into()),
+                _ => None,
+            }),
+        ];
+        for (state, lookup) in key_alone {
+            let config = resolved(&Settings::default(), lookup, complete_env).expect("configured");
+            let vertex = vertex_of(&config).unwrap_or_else(|| panic!("{state} named no service"));
+            assert_eq!(
+                vertex.protocol(),
+                provider::Protocol::GenerateContent,
+                "{state}"
+            );
+            assert_eq!(vertex.host(), "aiplatform.googleapis.com", "{state}");
+            assert_eq!(
+                token_of(&vertex.credential(lookup)),
+                Some(PLACEHOLDER_KEY),
+                "{state}"
+            );
+        }
+        let with_project = resolved(&Settings::default(), google_env, complete_env).expect("ok");
+        assert_eq!(
+            vertex_of(&with_project).expect("a service").protocol(),
+            provider::Protocol::ChatCompletions
+        );
+    }
+
+    #[test]
+    fn the_environment_route_needs_a_key_and_a_project_the_host_can_be_built_from() {
         for (state, lookup) in [
             (
-                "a key alone",
-                (|k: &str| (k == env_var::GOOGLE_API_KEY).then(|| PLACEHOLDER_KEY.to_string()))
-                    as fn(&str) -> Option<String>,
+                "a project alone",
+                (|k: &str| {
+                    (k == env_var::GOOGLE_CLOUD_PROJECT).then(|| PLACEHOLDER_PROJECT.to_string())
+                }) as fn(&str) -> Option<String>,
             ),
-            ("a project alone", |k: &str| {
-                (k == env_var::GOOGLE_CLOUD_PROJECT).then(|| PLACEHOLDER_PROJECT.to_string())
-            }),
             ("a blank key", |k: &str| match k {
                 env_var::GOOGLE_API_KEY => Some("  ".into()),
                 env_var::GOOGLE_CLOUD_PROJECT => Some(PLACEHOLDER_PROJECT.into()),
-                _ => None,
-            }),
-            ("a blank project", |k: &str| match k {
-                env_var::GOOGLE_API_KEY => Some(PLACEHOLDER_KEY.into()),
-                env_var::GOOGLE_CLOUD_PROJECT => Some("".into()),
                 _ => None,
             }),
             ("a project that would move the request", |k: &str| match k {
@@ -3762,7 +3790,8 @@ mod tests {
         );
 
         // An entry that configures nothing is dropped like any other, so it leaves the route open.
-        let unusable = Settings::parse(r#"{"provider": {"google-vertex": {}}}"#);
+        let unusable =
+            Settings::parse(r#"{"provider": {"google-vertex": {"options": {"project": "p@x"}}}}"#);
         let config = resolved(&unusable, google_env, complete_env).expect("configured");
         assert!(vertex_of(&config).is_some());
     }
@@ -3801,7 +3830,7 @@ mod tests {
     }
 
     /// A Vertex AI service the environment names reads `GOOGLE_API_KEY`, so that variable is a
-    /// gateway token only while the service exists: a key alone is some other tool's.
+    /// gateway token only while the service exists, which a key alone is enough for.
     #[test]
     fn google_api_key_is_a_gateway_token_only_while_vertex_is_configured() {
         let configured = gateway_variables_under(
@@ -3820,7 +3849,15 @@ mod tests {
             key_alone,
             complete_env,
         );
-        assert!(alone.is_empty(), "a key with no service withheld {alone:?}");
+        assert_eq!(alone, vec![env_var::GOOGLE_API_KEY]);
+
+        let no_key = gateway_variables_under(
+            &Settings::default(),
+            &Managed::default(),
+            |_| None,
+            complete_env,
+        );
+        assert!(no_key.is_empty(), "no key withheld {no_key:?}");
 
         let none = managed::scratch("gateway-variables-no-vertex", r#"{"provider": {}}"#);
         let replaced =

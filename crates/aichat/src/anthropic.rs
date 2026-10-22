@@ -832,7 +832,7 @@ fn unfinished(stop: Option<&str>) -> Option<Failure> {
 ///
 /// Nothing written at all is returned as a failure. There is no reply to keep, so what is left is
 /// the ceiling that stopped it and what the reply was doing.
-fn what_was_written(
+pub(crate) fn what_was_written(
     content: String,
     label: Label,
     model: String,
