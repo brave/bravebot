@@ -17637,6 +17637,41 @@ mod tests {
         assert_eq!(session.transcript[1].text, t!(loop_ends_with));
     }
 
+    /// A held `/after` line is read as sending later, not as repeating (LOOP-18). A wrong
+    /// implementation answers "repeating: ...".
+    #[test]
+    fn the_bare_loop_command_says_an_after_line_is_sending_later() {
+        let mut session = Session::new("none");
+        for c in "/after 5m tail the log".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.transcript.clear();
+        for c in LOOP_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key(&mut session, key(KeyCode::Enter));
+
+        assert_eq!(session.transcript.len(), 2, "{:?}", session.transcript);
+        assert!(
+            session.transcript[0].text.contains("tail the log"),
+            "{}",
+            session.transcript[0].text
+        );
+        assert!(
+            session.transcript[0].text.starts_with(
+                t!(after_active, number = 1, prompt = "", when = "")
+                    .split(':')
+                    .next()
+                    .unwrap()
+            ),
+            "{}",
+            session.transcript[0].text
+        );
+        assert_eq!(session.transcript[1].text, t!(loop_ends_with));
+        assert_eq!(session.loops().len(), 1, "the report ended it");
+    }
+
     /// The ending a person can reach without also stopping the turn that is in flight, which is
     /// what Ctrl-C reaches first: a loop over a long turn is otherwise ended only by cancelling the
     /// work it has just started. Asked for at rest it takes effect on the press.

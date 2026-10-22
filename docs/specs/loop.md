@@ -328,6 +328,8 @@ to `next in 0s` and sitting there reads as a loop that has stalled rather than o
 **Why the count of quiet ticks.** It is the difference between a loop that is working and a loop
 that has nothing to do, and without it a long watch is twenty identical answers nobody reads.
 
+`verified-by: bravebot_tui::status::the_report_lists_an_after_line_as_sent_later_and_not_as_a_loop`
+`verified-by: bravebot_tui::app::the_bare_loop_command_says_an_after_line_is_sending_later`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live_in_shell_mode_too`
 `verified-by: bravebot_tui::render::the_loop_part_names_a_moment_only_while_one_is_still_ahead`
@@ -468,13 +470,13 @@ one behind it for longer than its own turn.
 <a id="LOOP-18"></a>
 ### LOOP-18: `/after` sends a line once, after a delay, and keeps nothing
 
-`/after 5m check the deploy` sends `check the deploy` once, no sooner than five minutes after it was
-armed, which for one typed during a turn is when that turn ends, and when the session is idle
-([LOOP-6](#LOOP-6)), and then nothing is left. The delay is read
-off the front of the argument as [LOOP-3](#LOOP-3) reads an interval, and only there: an `every`
-clause at the end is repetition, which this is not, so a line without a leading delay, and a delay
-with nothing after it, start nothing and say what the command needs. The delay is held to the bounds
-of [LOOP-7](#LOOP-7) a person's interval is, and a person who wrote one outside them is told.
+`/after 5m check the deploy` sends `check the deploy` once, when the delay has passed and the
+session is idle ([LOOP-6](#LOOP-6)), and then nothing is left. A line typed during a turn is sent
+after that turn ends. The delay is read off the front of the argument as [LOOP-3](#LOOP-3) reads an
+interval, and only there: an `every` clause at the end is repetition, which this is not, so a line
+without a leading delay, and a delay with nothing after it, start nothing and say what the command
+needs. The delay is held to the bounds [LOOP-7](#LOOP-7) sets for an interval, and a person who
+wrote one outside them is told.
 
 The line is the one typed, so [LOOP-1](#LOOP-1) and [LOOP-2](#LOOP-2) carry over: `/after 5m /exit`
 sends the five characters `/exit` and runs nothing. It is one of the session's loops

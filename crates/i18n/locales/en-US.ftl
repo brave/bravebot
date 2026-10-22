@@ -2341,6 +2341,8 @@ status-loop-next = next in { $next }
 status-loop-running = running now
 status-loop-unpaced = waiting for the turn to say when
 status-loop-once = once
+status-after = After
+status-after-numbered = After { $number }
 status-goal = Goal
 status-goal-paused = paused, /goal resume arms it
 status-goal-usage = { $note } · { $elapsed } · { $tokens }
@@ -3338,7 +3340,8 @@ loop-not-armed-under-a-watch =
 after-needs-a-delay =
     /after needs a delay and something to send, as in /after 5m check the deploy
 after-started =
-    sending that once, in { $delay }; /loop stop ends it, and so does ctrl-c or leaving
+    sending that once, in { $delay }, as loop { $number }; /loop stop { $number } cancels it, and so does ctrl-c or leaving
+after-active = loop { $number }, sending later: { $prompt } · { $when }
 after-sent = sending what /after held
 after-hint = sending later
 after-hint-next = sending in { $next }

@@ -65,11 +65,18 @@ impl Session {
             }
             None => {}
         }
-        if let crate::loops::Pacing::Once(delay) = request.pacing {
-            self.note(t!(after_started, delay = crate::loops::spell(delay)));
-        }
-        self.looping
+        let pacing = request.pacing;
+        // Numbered before anything is said about it, so what is said is the number it has.
+        let number = self
+            .looping
             .start(crate::loops::Running::after(request, Instant::now()));
+        if let crate::loops::Pacing::Once(delay) = pacing {
+            self.note(t!(
+                after_started,
+                number = number,
+                delay = crate::loops::spell(delay)
+            ));
+        }
     }
 
     /// Say what is repeating and when each tick is due, or that nothing is.
@@ -90,15 +97,22 @@ impl Session {
         let lines: Vec<String> = self
             .looping
             .iter()
-            .map(|running| {
-                t!(
+            .map(|running| match running.once() {
+                true => t!(
+                    after_active,
+                    number = running.number(),
+                    prompt = &crate::render::one_line(running.prompt()),
+                    when = &running.when(now)
+                )
+                .to_string(),
+                false => t!(
                     loop_active,
                     number = running.number(),
                     prompt = &crate::render::one_line(running.prompt()),
                     pace = &running.pace(),
                     when = &running.when(now)
                 )
-                .to_string()
+                .to_string(),
             })
             .collect();
         for line in lines {
