@@ -1,5 +1,5 @@
 ---
-sidebar_position: 11
+sidebar_position: 16
 title: Importing from another agent
 description: What a first run reads from Claude Code and opencode, what it asks a running Ollama, LM Studio or llama-server, and what it writes once you say yes.
 ---
