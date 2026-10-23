@@ -1,6 +1,9 @@
-import React from 'react';
+import React, {useState} from 'react';
 import clsx from 'clsx';
 import Layout from '@theme/Layout';
+import TabItem from '@theme/TabItem';
+import Tabs from '@theme/Tabs';
+import ThemedImage from '@theme/ThemedImage';
 import Link from '@docusaurus/Link';
 import useBaseUrl from '@docusaurus/useBaseUrl';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
@@ -48,13 +51,59 @@ const FEATURES = [
   },
 ];
 
-function Hero({repository}) {
-  const art = useBaseUrl('/img/bravebot-hero.svg');
-  const stars = useBaseUrl('/img/bravebot-stars.svg');
+// The commands the root README gives. The quickstart has the rest: a directory, a version, and
+// checking a download by hand.
+const INSTALL = [
+  {value: 'npm', label: 'npm', command: 'npm install -g @brave/bravebot'},
+  {
+    value: 'unix',
+    label: 'macOS and Linux',
+    command: 'curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh',
+  },
+  {
+    value: 'windows',
+    label: 'Windows (PowerShell)',
+    command: 'irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex',
+  },
+];
+
+function Command({command}) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // A browser that refuses the clipboard leaves the command to be selected by hand.
+    }
+  };
   return (
-    <header className={styles.hero} style={{backgroundImage: `url(${stars})`}}>
+    <div className={styles.command}>
+      <pre>
+        <code>{command}</code>
+      </pre>
+      <button type="button" className={styles.copy} onClick={copy}>
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  );
+}
+
+function Hero({repository}) {
+  const art = {
+    dark: useBaseUrl('/img/bravebot-hero.svg'),
+    light: useBaseUrl('/img/bravebot-hero-light.svg'),
+  };
+  // The stylesheet picks one of the two tiles for the colour mode.
+  const stars = {
+    '--stars-dark': `url(${useBaseUrl('/img/bravebot-stars.svg')})`,
+    '--stars-light': `url(${useBaseUrl('/img/bravebot-stars-light.svg')})`,
+  };
+  return (
+    <header className={styles.hero} style={stars}>
       <h1 className={styles.title}>
-        <img className={styles.art} src={art} width="1280" height="314" alt="bravebot" />
+        <ThemedImage className={styles.art} sources={art} width="1280" height="314" alt="bravebot" />
       </h1>
       <p className={styles.tagline}>{TAGLINE}</p>
       <div className={styles.buttons}>
@@ -68,9 +117,18 @@ function Hero({repository}) {
           GitHub
         </Link>
       </div>
-      <p className={styles.install}>
-        <code>npm install -g @brave/bravebot</code>
-      </p>
+      <div className={styles.install}>
+        <Tabs defaultValue="npm">
+          {INSTALL.map(({value, label, command}) => (
+            <TabItem key={value} value={value} label={label}>
+              <Command command={command} />
+            </TabItem>
+          ))}
+        </Tabs>
+        <p className={styles.more}>
+          <Link to="/quickstart#install">All install options</Link>
+        </p>
+      </div>
     </header>
   );
 }

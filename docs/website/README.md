@@ -39,10 +39,12 @@ From the repository root, `make check-docs` runs the same build the CI job runs,
 ### The landing page
 
 `src/pages/index.js` is the page at `/`, and the Overview doc is at `/overview`. The hero's bots
-and wordmark and its stars are `static/img/bravebot-hero.svg` and `bravebot-stars.svg`. Do not edit
-them: `ui/scripts/readme-art.mjs` writes them from the avatar generator the desktop app uses, and
-`node scripts/readme-art.mjs` run in `ui/` remakes them. The feature cards repeat claims from the
-root README, so check them against it and the specs when those change.
+and wordmark and its stars are `static/img/bravebot-hero.svg` and `bravebot-stars.svg`, each with a
+`-light` twin that the page shows in the light colour mode. Do not edit them:
+`ui/scripts/readme-art.mjs` writes them from the avatar generator the desktop app uses, and
+`node scripts/readme-art.mjs` run in `ui/` remakes them. The install commands and the feature cards
+repeat the root README, so check them against it and the specs when those change. The site opens in
+the dark colour mode whatever the system prefers (`colorMode` in `docusaurus.config.js`).
 
 ### Where the content comes from
 

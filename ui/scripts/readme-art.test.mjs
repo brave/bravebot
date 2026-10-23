@@ -98,5 +98,24 @@ test('the landing page shows each site picture, and its tagline is the banner ta
   const page = readFileSync(new URL('../../docs/website/src/pages/index.js', import.meta.url), 'utf8')
   for (const name of Object.keys(SITE_ART)) assert.ok(page.includes(`/img/${name}`), `index.js does not show ${name}`)
   assert.ok(page.includes(`'${TAGLINE}'`), 'index.js does not say the tagline the README banner says')
-  assert.match(page, /<img [^>]*src=\{art\}[^>]*alt="[^"]+"/, 'the hero image has no alt text')
+  assert.match(page, /<ThemedImage [^>]*alt="[^"]+"/, 'the hero image has no alt text')
+})
+
+test('every site picture has a light twin, so the landing page has art for both colour modes', () => {
+  const names = Object.keys(SITE_ART)
+  const dark = names.filter((name) => !name.endsWith('-light.svg'))
+  assert.ok(dark.length > 0)
+  for (const name of dark) assert.ok(names.includes(name.replace(/\.svg$/, '-light.svg')), `${name} has no light twin`)
+  assert.notEqual(SITE_ART['bravebot-hero.svg'](), SITE_ART['bravebot-hero-light.svg'](), 'the light hero is the dark one')
+  assert.notEqual(SITE_ART['bravebot-stars.svg'](), SITE_ART['bravebot-stars-light.svg'](), 'the light stars are the dark ones')
+})
+
+test('the landing page gives the install commands the README gives', () => {
+  const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8')
+  const page = readFileSync(new URL('../../docs/website/src/pages/index.js', import.meta.url), 'utf8')
+  for (const start of ['npm install', 'curl -fsSL', 'irm ']) {
+    const command = readme.split('\n').find((line) => line.startsWith(start) && !line.includes('INSTALL_DIR'))
+    assert.ok(command, `README.md has no ${start} command`)
+    assert.ok(page.includes(command), `index.js does not give ${command}`)
+  }
 })

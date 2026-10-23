@@ -398,9 +398,9 @@ AppKit takes the menu-bar name from the bundle's `CFBundleName`; changing
 ## The README and landing page pictures
 
 The pictures in the root `README.md`, `docs/assets/readme-banner.svg`,
-`docs/assets/readme-how-it-works.svg` and `docs/assets/readme-plan-first.svg`, and the two on the
-docs site's landing page, `docs/website/static/img/bravebot-hero.svg` and `bravebot-stars.svg`, are
-written by `scripts/readme-art.mjs`. The bots in them are the figures
+`docs/assets/readme-how-it-works.svg` and `docs/assets/readme-plan-first.svg`, and those on the docs
+site's landing page, `docs/website/static/img/bravebot-hero.svg` and `bravebot-stars.svg` with a
+`-light` twin of each, are written by `scripts/readme-art.mjs`. The bots in them are the figures
 `src/renderer/avatar/pixels.ts` builds for fixed seeds, so they are faces real bots have. After
 changing the script or the avatar generator, run it from `ui/` and commit the result:
 
