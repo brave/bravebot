@@ -217,7 +217,7 @@ pub fn continued_rows(session: &Session, area: Rect) -> Vec<u16> {
 /// Draw the panel over `area`, its border on the left, each shortened address a link to the
 /// address it stands for.
 pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
-    let (rows, links, _) = laid_out(session, area.width, area.height);
+    let (rows, links, ..) = laid_out(session, area.width, area.height);
     Clear.render(area, buffer);
     Paragraph::new(rows)
         .block(Block::default().borders(Borders::LEFT).border_style(dim()))
@@ -234,16 +234,45 @@ pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
     }
 }
 
-/// The rows [`lines`] gives, where among them the links are, and which of them continue on the
-/// row below.
-fn laid_out(
-    session: &Session,
-    width: u16,
-    height: u16,
-) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
+/// The rows of the panel, where the links are, which rows continue on the row below, and which rows
+/// a click acts on.
+type Body = (
+    Vec<Line<'static>>,
+    Vec<Link>,
+    Vec<usize>,
+    Vec<(usize, Target)>,
+);
+
+/// What a click on a row of the panel asks for (MOUSE-11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// The model row: the same question `/model` asks.
+    Model,
+    /// The effort row: the same question `/effort` asks.
+    Effort,
+}
+
+/// The target a press on screen row `row` of a panel drawn over `area` lands on, if any.
+///
+/// Read from the rows [`draw`] draws, so a row that is not drawn, or is cut for want of room, is
+/// not a target. The border column is the panel's handle and is never one (PANEL-6).
+pub fn target_at(session: &Session, area: Rect, row: u16, column: u16) -> Option<Target> {
+    if column <= area.x || column >= area.right() || row < area.y {
+        return None;
+    }
+    let at = usize::from(row - area.y);
+    laid_out(session, area.width, area.height)
+        .3
+        .into_iter()
+        .find_map(|(drawn, target)| (drawn == at).then_some(target))
+}
+
+/// The rows [`lines`] gives, where among them the links are, which of them continue on the row
+/// below, and which rows a click acts on.
+fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     let height = usize::from(height);
     if height == 0 {
-        return (Vec::new(), Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     }
     // None of the ordinary sections is drawn beside the files state (FILES-4).
     if let Some(state) = session.files_state() {
@@ -255,10 +284,10 @@ fn laid_out(
             width,
             height as u16,
         );
-        return (rows, Vec::new(), Vec::new());
+        return (rows, Vec::new(), Vec::new(), Vec::new());
     }
     let text = text_width(width);
-    let (mut body, mut links, mut continued) = head(session, text);
+    let (mut body, mut links, mut continued, mut targets) = head(session, text);
 
     let languages = session.language_servers().programs();
     if !languages.is_empty() {
@@ -325,7 +354,8 @@ fn laid_out(
     ));
     links.retain(|link| link.row < height - 1);
     continued.retain(|row| *row < height - 1);
-    (body, links, continued)
+    targets.retain(|(row, _)| *row < height - 1);
+    (body, links, continued, targets)
 }
 
 /// Whether a frame `columns` by `rows` draws the panel with its Context section whole.
@@ -353,7 +383,8 @@ fn text_width(width: u16) -> usize {
 /// The Session, Goal, Links and Context sections, each left out where it has nothing to say but for
 /// the context, which always has a reading, where in them the links are, and which rows continue on
 /// the row below.
-fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
+fn head(session: &Session, text: usize) -> Body {
+    let mut targets = Vec::new();
     let mut body: Vec<Line<'static>> = Vec::new();
     let mut links = Vec::new();
     let mut continued = Vec::new();
@@ -415,20 +446,31 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<u
     }
 
     let mut model = Vec::new();
+    // Where each row will land once the section is placed, which `section` decides.
+    let mut model_targets = Vec::new();
     if let Some(chosen) = session.model_label() {
+        model_targets.push((model.len(), Target::Model));
         model.push(row(
             ending(&crate::render::printable(chosen), text),
             Style::default(),
         ));
     }
     if let Some(level) = session.effort_in_force() {
+        model_targets.push((model.len(), Target::Effort));
         model.push(row(
             t!(panel_effort, level = level.as_str()).to_string(),
             dim(),
         ));
     }
     if !model.is_empty() {
+        let count = model.len();
         section(&mut body, t!(panel_model).to_string(), model);
+        let first = body.len() - count;
+        targets.extend(
+            model_targets
+                .into_iter()
+                .map(|(row, target)| (first + row, target)),
+        );
     }
 
     if let Some(goal) = session.goal() {
@@ -507,7 +549,7 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<u
         }
     }
     section(&mut body, t!(panel_context).to_string(), context);
-    (body, links, continued)
+    (body, links, continued, targets)
 }
 
 /// The mark of a row that no turn is working on and that was neither finished nor dropped.
@@ -652,6 +694,43 @@ mod tests {
             "the panel did not open at {width} columns"
         );
         session
+    }
+
+    /// MOUSE-11. Rejects: a target on the heading above the rows, one on the border column, one on
+    /// a row cut for want of room, and an effort row for a model that reads none.
+    #[test]
+    fn only_the_drawn_model_and_effort_rows_are_click_targets() {
+        let mut session = Session::new("none");
+        session.choose_model("claude-sonnet".to_string(), &model_config());
+        session.note_model_reads_effort(true);
+        session.choose_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let rows = lines(&session, area.width, area.height);
+        let at = |needle: &str| {
+            rows.iter()
+                .position(|line| line.to_string().contains(needle))
+                .expect(needle) as u16
+        };
+        let model = at("claude-sonnet");
+        let effort = at(&t!(panel_effort, level = "xhigh").to_string());
+        let inside = area.x + 3;
+
+        assert_eq!(
+            target_at(&session, area, area.y + model, inside),
+            Some(Target::Model)
+        );
+        assert_eq!(
+            target_at(&session, area, area.y + effort, inside),
+            Some(Target::Effort)
+        );
+        assert_eq!(target_at(&session, area, area.y + model - 1, inside), None);
+        assert_eq!(target_at(&session, area, area.y + model, area.x), None);
+        // Cut to fewer rows than the model's, it is not drawn and so is not a target.
+        let short = Rect::new(area.x, 0, WIDTH, model);
+        assert_eq!(target_at(&session, short, short.y + model, inside), None);
+
+        session.note_model_reads_effort(false);
+        assert_eq!(target_at(&session, area, area.y + effort, inside), None);
     }
 
     fn model_config() -> bravebot_config::Config {

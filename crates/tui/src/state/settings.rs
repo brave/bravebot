@@ -596,6 +596,20 @@ impl Session {
             })
     }
 
+    /// What a release at this cell acts on in the info panel, if the panel drew a row there. Read
+    /// against the panel's rectangle as the last frame recorded it.
+    pub fn panel_target_at(&self, row: u16, column: u16) -> Option<crate::panel::Target> {
+        if self.files.is_some() {
+            return None;
+        }
+        let (_, area) = self
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)?;
+        crate::panel::target_at(self, *area, row, column)
+    }
+
     /// Begin dragging the panel's border where the button went down, and say whether it was
     /// there. A press that is not leaves the session untouched.
     pub fn begin_panel_drag(&mut self, row: u16, column: u16) -> bool {

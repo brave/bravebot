@@ -406,20 +406,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         return Action::Quit;
     }
     if line.trim() == MODEL_COMMAND {
-        // Every turn asks for the definition's model, so a pick would change what `/status` says
-        // and not what any turn asks for (CLI-17).
-        if let Some(refused) = session.standing_definition().and_then(|standing| {
-            let model = standing.model.as_ref()?;
-            Some(t!(
-                session_model_is_the_definitions,
-                definition = &standing.name,
-                model = model
-            ))
-        }) {
-            session.note(refused);
-            return Action::Redraw;
-        }
-        return Action::ChooseModel;
+        return ask_which_model(session);
     }
     if let Some(name) = argument_to(line, THEME_COMMAND) {
         return if name.is_empty() {
@@ -2096,6 +2083,25 @@ pub(crate) fn coverage_causes(
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// What asking for the model picker does: the picker, or the note that the definition in force
+/// has already named the model. Shared by `/model` and a click on the panel's model row.
+pub(crate) fn ask_which_model(session: &mut Session) -> Action {
+    // Every turn asks for the definition's model, so a pick would change what `/status` says
+    // and not what any turn asks for (CLI-17).
+    if let Some(refused) = session.standing_definition().and_then(|standing| {
+        let model = standing.model.as_ref()?;
+        Some(t!(
+            session_model_is_the_definitions,
+            definition = &standing.name,
+            model = model
+        ))
+    }) {
+        session.note(refused);
+        return Action::Redraw;
+    }
+    Action::ChooseModel
 }
 
 /// What the idle loop does with one event it has read.
@@ -11860,6 +11866,143 @@ mod tests {
         session.toggle_scroller_help();
         click(&mut session, row, column);
         assert!(session.watching().is_none());
+    }
+
+    /// A session with the info panel drawn, a model chosen and an effort in force, and the frame
+    /// drawn after both so the panel's rows are the ones recorded.
+    fn panel_with_a_model() -> (Session, ratatui::buffer::Buffer) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (mut session, _) = two_panes();
+        let config = bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com".into()),
+            _ => None,
+        })
+        .expect("config");
+        session.choose_model("claude-sonnet".to_string(), &config);
+        session.note_model_reads_effort(true);
+        session.choose_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, &session))
+            .expect("draw");
+        session.note_layout(laid);
+        let buffer = terminal.backend().buffer().clone();
+        (session, buffer)
+    }
+
+    /// MOUSE-11: a click on the panel's model row asks for the model picker and one on its effort
+    /// row for the effort picker, and neither leaves a selection behind.
+    #[test]
+    fn a_click_on_the_panels_model_or_effort_row_opens_that_picker() {
+        let (mut session, buffer) = panel_with_a_model();
+        let (row, column) = find_on(&buffer, "claude-sonnet");
+        assert_eq!(click(&mut session, row, column), Action::ChooseModel);
+        assert!(session.selection.is_none());
+
+        let (row, column) = find_on(&buffer, "effort");
+        assert_eq!(click(&mut session, row, column), Action::ChooseEffort);
+        assert!(session.selection.is_none());
+    }
+
+    /// A click on any other row of the panel, or on the transcript, is the copy it always was, and
+    /// a click on the border column is the resize handle.
+    #[test]
+    fn a_click_off_the_models_rows_asks_for_no_picker() {
+        let (mut session, buffer) = panel_with_a_model();
+        let (row, column) = find_on(&buffer, "PANELMARK");
+        assert_eq!(click(&mut session, row, column), Action::Copy);
+        let (row, column) = find_on(&buffer, "TRANSCRIPTMARK");
+        assert_eq!(click(&mut session, row, column), Action::Copy);
+
+        let (row, column) = find_on(&buffer, "claude-sonnet");
+        let border = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1
+            .x;
+        press(&mut session, row, border, KeyModifiers::NONE);
+        assert!(session.dragging_panel(), "the border press began no resize");
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, border);
+        assert_eq!(handle_mouse(&mut session, up), Action::Redraw);
+        assert!(!session.dragging_panel());
+        assert_eq!(session.panel_target_at(row, border), None);
+        assert_eq!(
+            session.panel_target_at(row, column),
+            Some(crate::panel::Target::Model)
+        );
+    }
+
+    /// A drag that began on the model row, a drag that ended on it, and a double click on it are
+    /// selections, so the picker is not opened and the copy is.
+    #[test]
+    fn a_drag_or_a_double_click_over_the_model_row_opens_no_picker() {
+        let (mut session, buffer) = panel_with_a_model();
+        let (row, column) = find_on(&buffer, "claude-sonnet");
+        swept(&mut session, (row, column), (row, column + 4));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 4);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        let (other, other_column) = find_on(&buffer, "PANELMARK");
+        swept(&mut session, (other, other_column), (row, column));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        press(&mut session, row, column, KeyModifiers::NONE);
+        handle_mouse(
+            &mut session,
+            drag(MouseEventKind::Up(MouseButton::Left), row, column),
+        );
+        press(&mut session, row, column, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+    }
+
+    /// The commands are typed at the plain prompt, so a click over the scroller asks for no picker.
+    #[test]
+    fn a_click_on_the_model_row_over_the_scroller_opens_no_picker() {
+        let (mut session, buffer) = panel_with_a_model();
+        let (row, column) = find_on(&buffer, "claude-sonnet");
+        session.open_scroller();
+        assert_ne!(click(&mut session, row, column), Action::ChooseModel);
+    }
+
+    /// A press that began in the transcript and was let go over the model row is not a click on it.
+    #[test]
+    fn a_press_elsewhere_let_go_on_the_model_row_opens_no_picker() {
+        let (mut session, buffer) = panel_with_a_model();
+        let (row, column) = find_on(&buffer, "claude-sonnet");
+        press(&mut session, 0, 0, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+    }
+
+    /// With a definition in force that names the model, a click on the row is refused as `/model`
+    /// is (CLI-17): the note, and no picker whose pick no turn would ask for.
+    #[test]
+    fn a_click_on_the_model_row_under_a_standing_definition_is_refused_as_the_command_is() {
+        let (mut session, buffer) = panel_with_a_model();
+        let (row, column) = find_on(&buffer, "claude-sonnet");
+        session.work_under(crate::state::Addressed {
+            model: Some("the-definitions-model".to_string()),
+            ..standing()
+        });
+
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(
+            said_in_the_transcript(&session)
+                .last()
+                .is_some_and(|said| said.contains("/model has nothing to change")),
+            "{:?}",
+            said_in_the_transcript(&session)
+        );
     }
 
     /// The row and column where `needle` is drawn in the session's own frame.
