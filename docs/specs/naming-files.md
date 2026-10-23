@@ -76,6 +76,10 @@ it would name another file. Tab completes without disturbing the rest of the sen
 directory completes so typing can continue into it, and the arrows and Enter choose among what is
 offered.
 
+[CONSULT-3](consulting-a-bot.md#CONSULT-3) proposes, not built, that the list offer the bots the
+session resolved before the workspace, and [CONSULT-2](consulting-a-bot.md#CONSULT-2) that a word
+matching a bot's name be a consult of it rather than a file, with `@./name` naming the file.
+
 **Why.** A path typed blind is a path the user did not really choose.
 
 `verified-by: bravebot_tui::references::an_at_sign_offers_the_workspace`

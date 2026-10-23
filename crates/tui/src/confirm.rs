@@ -30,11 +30,13 @@ mod write;
 pub(crate) use chrome::scroll_hint;
 #[cfg(test)]
 use chrome::{centred, indented};
-pub use grants::{ask_exposure, ask_fetch, ask_host, ask_manifest, ask_path, ask_remove_checkout};
+pub use grants::{
+    ask_consult, ask_exposure, ask_fetch, ask_host, ask_manifest, ask_path, ask_remove_checkout,
+};
 #[cfg(test)]
 use grants::{
-    draw_exposure, draw_fetch, draw_host, draw_manifest, draw_path, draw_remove_checkout,
-    manifest_answer_for,
+    draw_consult, draw_exposure, draw_fetch, draw_host, draw_manifest, draw_path,
+    draw_remove_checkout, manifest_answer_for,
 };
 pub use mcp::{CallAnswer, ask_mcp_call, ask_move, ask_server, ask_to_start, ask_tool_list};
 #[cfg(test)]
@@ -129,6 +131,10 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
         _request: &bravebot_agent::confirm::MessageRequest,
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    fn confirm_consult(&mut self, request: &bravebot_agent::confirm::ConsultRequest) -> Decision {
+        ask_consult(self.terminal, request).decision()
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -911,6 +917,55 @@ mod tests {
             box_rows(&rows).iter().any(|row| row.contains("p0000")),
             "{}",
             rows.join("\n")
+        );
+    }
+
+    fn a_consult(refused: Option<&str>) -> bravebot_agent::confirm::ConsultRequest {
+        bravebot_agent::confirm::ConsultRequest {
+            bot: "reviewer".into(),
+            definition: ".bravebot/agents/reviewer.md".into(),
+            model: "haiku".into(),
+            rounds: 8,
+            budget: None,
+            brief: "Is the parser safe?".into(),
+            label: bravebot_core::label::Label::trusted_public(),
+            refused: refused.map(str::to_string),
+        }
+    }
+
+    /// CONSULT-10, CONSULT-12: a proposed consult whose bot's model cannot run here is put on the
+    /// card with the refusal, naming the model, and the card takes no yes, so nothing is sent.
+    /// Without the refusal drawn the person would approve a consult that then never runs, and
+    /// without the key guard a yes would read as sent.
+    #[test]
+    fn a_refused_consult_card_names_the_model_and_takes_no_yes() {
+        let refusal = "reviewer asked for haiku, which needs a sign-in first, so it did not run";
+        let request = a_consult(Some(refusal));
+        let (rows, _) = pinned_screen((160, 24), |frame| {
+            draw_consult(frame, &request, 0, &mut Seen::default())
+        });
+        let screen = box_rows(&rows).concat();
+        assert!(screen.contains(refusal), "{}", rows.join("\n"));
+        assert!(
+            screen.contains("Nothing is sent to reviewer"),
+            "{}",
+            rows.join("\n")
+        );
+        assert!(!screen.contains(t!(consult_yes)), "{}", rows.join("\n"));
+
+        let yes = press(KeyCode::Char('y'));
+        let no = press(KeyCode::Char('n'));
+        assert_eq!(
+            grants::consult_answer(&request, yes, &Drawn::taking_yes()),
+            None
+        );
+        assert_eq!(
+            grants::consult_answer(&request, no, &Drawn::taking_yes()),
+            Some(Response::Answer(Answer::Reject))
+        );
+        assert_eq!(
+            grants::consult_answer(&a_consult(None), yes, &Drawn::taking_yes()),
+            Some(Response::Answer(Answer::Approve))
         );
     }
 
@@ -6004,7 +6059,7 @@ mod tests {
 
     kinds!(
         Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
-        Move, Path, Host, Ask,
+        Move, Path, Host, Consult, Ask,
     );
 
     /// What a question remembers between its draws: the rows of each kind that have been shown.
@@ -6408,6 +6463,29 @@ mod tests {
                     refusing: 'n',
                     grants: Vec::new(),
                     deciding: hosts,
+                })
+            }
+            Kind::Consult => {
+                let rows = numbered('c', 40);
+                let request = bravebot_agent::confirm::ConsultRequest {
+                    bot: "reviewer".into(),
+                    definition: ".bravebot/agents/reviewer.md".into(),
+                    model: "claude-sonnet-5".into(),
+                    rounds: 8,
+                    budget: Some(20_000),
+                    brief: rows.join("\n"),
+                    label: bravebot_core::label::Label::trusted_public(),
+                    refused: None,
+                };
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_consult(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: rows,
                 })
             }
             // Every answer goes to the planner as an answer, and none of them approves anything.

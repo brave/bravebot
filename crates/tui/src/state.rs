@@ -152,6 +152,18 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
             bravebot_agent::messages::heading(false, to, name, label),
             Some(text),
         ),
+        // Drawn as the bot's own reply, under its name, as the live session drew it (CONSULT-15).
+        Said::Composed {
+            why: Composed::Consulted { bot, text, .. },
+            ..
+        } => Entry::assistant(
+            text.as_deref()
+                .map_or_else(bravebot_agent::consult::kept, |text| {
+                    crate::reasoning::spoken(text).to_string()
+                }),
+            Vec::new(),
+        )
+        .answered_as(Some(bot.clone())),
         Said::User(text) | Said::Composed { text, .. } => Entry::user(text),
         Said::Assistant(text) => {
             let text = crate::reasoning::spoken(text);
@@ -289,6 +301,29 @@ pub struct Addressed {
     pub model: Option<String>,
 }
 
+/// A consult's brief, by the line that asked for it and the bot it is for (CONSULT-5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Brief {
+    /// The line the person sent, which goes back into the box when the brief is declined.
+    pub line: String,
+    /// The bot the driver matched in that line.
+    pub bot: String,
+    /// Whether the host drafted it from private content, so the consult starts out holding that
+    /// too (CONSULT-6).
+    pub private: bool,
+    /// The bots the line named after this one, in its order, whose briefs are drafted once this
+    /// consult has replied (CONSULT-9).
+    pub then: Vec<String>,
+}
+
+/// The bots a line named that are still to be consulted once the consult running now replies,
+/// in the order the line names them (CONSULT-9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsultsLeft {
+    pub line: String,
+    pub bots: Vec<String>,
+}
+
 /// Everything the interface needs to draw itself.
 #[derive(Debug)]
 pub struct Session {
@@ -329,6 +364,19 @@ pub struct Session {
     /// by [`Session::propose_handoff`], and dropped the moment the box is replaced or found empty,
     /// so a prompt typed after the brief was wiped out is never the one that starts a session.
     handoff: bool,
+    /// The consult the brief in the box is for, which Enter sends to that bot and Esc declines.
+    ///
+    /// A mode over the line as `handoff` is, set only by [`Session::propose_brief`] and dropped
+    /// with the line, so a prompt typed after the brief was wiped out goes to the host.
+    brief: Option<Brief>,
+    /// The consult the turn starting now is, taken by that turn so no later one inherits it.
+    briefed: Option<Brief>,
+    /// The bots still to be consulted after the turn running now, set by every turn so none is
+    /// carried past a turn that consulted nothing.
+    consults_left: Option<ConsultsLeft>,
+    /// The bots a line had still to consult when a brief after an earlier bot's reply was drafted,
+    /// so that line, put back and sent again, consults none that already replied (CONSULT-9).
+    resuming: Option<ConsultsLeft>,
     /// The line the box held before the enhancement now in it replaced it, which the box puts back
     /// on Escape or Ctrl-C (INPUT-48).
     ///
@@ -1026,6 +1074,11 @@ pub struct Session {
     /// is. Nothing outlives a turn here: the driver clears it when a delegate finishes, and a
     /// delegate cannot outlive the turn that started it.
     attributed_to: Option<bravebot_agent::report::DelegateId>,
+    /// The bot a consult the person sent from its card is running, whose words arrive now.
+    ///
+    /// Set and cleared by the driver, as `attributed_to` is: the consult runs inside the host's
+    /// turn, so nothing in its lines says whose they are (CONSULT-12).
+    consulting: Option<String>,
     /// Answers the user has already given this session, keyed by the question.
     ///
     /// A repeated question is answered from here rather than put to them again, since a planner
@@ -1170,6 +1223,8 @@ pub struct Session {
     /// Held and let go as [`Session::skills`] are, so that offering the list reads no directory
     /// per frame and constructing a session reads none at all.
     past_sessions: Option<Vec<bravebot_mentions::Entry>>,
+    /// The bots an `@` could consult, held while a reference is typed as the past sessions are.
+    bots: Option<Vec<bravebot_mentions::Entry>>,
     /// What [`Session::offered`] last answered, so a frame and the callers behind a key press ask
     /// the disk once between them.
     offered_memo: Kept<completion::OfferedFor>,
@@ -1220,6 +1275,10 @@ impl Session {
             stashed: None,
             shell: false,
             handoff: false,
+            brief: None,
+            briefed: None,
+            consults_left: None,
+            resuming: None,
             enhanced: None,
             link_prompt: None,
             handed_over: None,
@@ -1375,6 +1434,7 @@ impl Session {
             said_while_working: Vec::new(),
             composing: None,
             attributed_to: None,
+            consulting: None,
             answers: bravebot_core::ask::AnswerMemo::default(),
             pasted: Vec::new(),
             previews: Vec::new(),
@@ -1401,6 +1461,7 @@ impl Session {
             project_styles: Vec::new(),
             project_styles_read: false,
             past_sessions: None,
+            bots: None,
             offered_memo: Kept::default(),
             offered_epoch: 0,
             attached: Vec::new(),
@@ -1998,7 +2059,36 @@ impl Session {
         if text.trim().is_empty() {
             return;
         }
-        self.transcript.push(Entry::assistant(text, Vec::new()));
+        self.transcript
+            .push(Entry::assistant(text, Vec::new()).answered_as(self.consulting.clone()));
+    }
+
+    /// A consult the person sent from its card has begun, so what the turn says until it ends is
+    /// the bot's, drawn under its name (CONSULT-12).
+    pub fn consult_began(&mut self, bot: String) {
+        self.streaming.clear();
+        self.drop_composing();
+        self.consulting = Some(bot);
+    }
+
+    /// The consult last begun is over: its reply goes into the transcript under the bot's name,
+    /// where it had one, and what follows is the host's again (CONSULT-12).
+    pub fn consult_ended(&mut self, bot: String, reply: Option<String>) {
+        self.streaming.clear();
+        self.drop_composing();
+        self.consulting = None;
+        let Some(reply) = reply else { return };
+        let text = crate::reasoning::spoken(&reply);
+        if text.trim().is_empty() {
+            return;
+        }
+        self.transcript
+            .push(Entry::assistant(text, Vec::new()).answered_as(Some(bot)));
+    }
+
+    /// The bot a consult is running, while one is.
+    pub fn consulting(&self) -> Option<&str> {
+        self.consulting.as_deref()
     }
 
     /// What a command printed, kept for the view.
@@ -2706,7 +2796,100 @@ impl Session {
     pub fn drop_a_wiped_handoff(&mut self) {
         if self.input.trim().is_empty() {
             self.handoff = false;
+            self.brief = None;
             self.link_prompt = None;
+        }
+    }
+
+    /// Put the brief a host drafted for `brief.bot` in the box, for the person to read, edit and
+    /// send to that bot (CONSULT-5).
+    ///
+    /// The line that asked for it is in the brief and goes back into the box when the brief is
+    /// declined, so the box is replaced rather than kept as a draft unless it holds something else.
+    /// What a terminal draws as nothing is taken out, as a paste's is (PASTE-10), since the draft
+    /// is model output a person is about to send as their own.
+    pub fn propose_brief(&mut self, brief: Brief, text: &str) {
+        if self.status != Status::Idle {
+            return;
+        }
+        let (text, removed) = crate::invisible::without_invisible(&normalised(text));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
+        let held = self.input.trim();
+        if !held.is_empty() && held != brief.line.trim() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(text);
+        self.shell = false;
+        self.handoff = false;
+        self.brief = Some(brief);
+    }
+
+    /// The consult the brief in the box is for, where the box holds one.
+    pub fn brief_pending(&self) -> Option<&Brief> {
+        self.brief
+            .as_ref()
+            .filter(|_| !self.input.trim().is_empty())
+    }
+
+    /// Decline the brief in the box: nothing is sent, and the line that asked for it is put back.
+    pub fn decline_brief(&mut self) {
+        if let Some(brief) = self.brief.take() {
+            self.set_input(brief.line);
+        }
+    }
+
+    /// Send the brief as the person left it, as their line, to the bot it is for.
+    ///
+    /// The turn it begins takes the consult with [`Session::take_briefed`].
+    pub fn send_brief(&mut self) -> Option<String> {
+        if self.brief_pending().is_none() || self.status != Status::Idle {
+            return None;
+        }
+        let brief = self.brief.take()?;
+        let prompt = self.submit()?;
+        self.briefed = Some(brief);
+        Some(prompt)
+    }
+
+    /// The consult a sent brief started, taken by the turn it started.
+    pub fn take_briefed(&mut self) -> Option<Brief> {
+        self.briefed.take()
+    }
+
+    /// Say which bots are still to be consulted once the turn running now replies.
+    pub fn leave_consults(&mut self, left: Option<ConsultsLeft>) {
+        self.consults_left = left;
+        self.resuming = None;
+    }
+
+    /// Say which bots `left.line` has still to consult, should it be put back unsent.
+    pub fn resume_consults(&mut self, left: ConsultsLeft) {
+        self.resuming = Some(left);
+    }
+
+    /// The bots `line` has still to consult, where it is the line a later brief was drafted from.
+    pub fn consults_to_resume(&mut self, line: &str) -> Option<Vec<String>> {
+        self.resuming
+            .take()
+            .filter(|left| left.line == line)
+            .map(|left| left.bots)
+    }
+
+    /// The bots still to be consulted, where the turn that just ended replied. A consult that
+    /// failed or was stopped ends the rest, and they are dropped here either way (CONSULT-9).
+    pub fn carry_on_consulting(&mut self) -> Option<ConsultsLeft> {
+        let left = self.consults_left.take()?;
+        let replied = self.finished.is_some_and(|turn| !turn.ending.unanswered());
+        (replied && !self.is_quitting()).then_some(left)
+    }
+
+    /// Put back the line a brief that was not sent was drafted from, where the box is empty.
+    pub fn keep_line_unsent(&mut self, line: &str) {
+        if self.input.trim().is_empty() {
+            self.set_input(line);
         }
     }
 
@@ -3824,6 +4007,7 @@ impl Session {
         // finished did not finish.
         self.roster.turn_ended();
         self.sync_delegates();
+        self.consulting = None;
         // The driver says which jobs the turn stopped before it says the turn is over. A worker
         // that ended without saying so stopped them all the same, since none outlives its turn,
         // except where the session keeps them: those are still running (RUN-15).
@@ -13574,6 +13758,38 @@ mod tests {
             assert_eq!(entry.text, "Let me look at the config first.");
         }
 
+        /// CONSULT-12: what a proposed consult says while it runs, and the reply it ends on, are
+        /// drawn under the bot's name, and the host's words after it are the host's again.
+        /// Without the driver's events, or with `narrate` ignoring them, the bot's words would
+        /// read as the host's.
+        #[test]
+        fn a_proposed_consults_words_are_drawn_under_the_bot() {
+            let mut s = working();
+            s.consult_began("reviewer".into());
+            assert_eq!(s.consulting(), Some("reviewer"));
+            s.narrate("Reading the parser.");
+            s.consult_ended("reviewer".into(), Some("It is safe.".into()));
+            s.narrate("The reviewer says it is safe.");
+
+            let drawn: Vec<_> = s
+                .transcript
+                .iter()
+                .rev()
+                .take(3)
+                .rev()
+                .map(|entry| (entry.text.as_str(), entry.answered_as.as_deref()))
+                .collect();
+            assert_eq!(
+                drawn,
+                vec![
+                    ("Reading the parser.", Some("reviewer")),
+                    ("It is safe.", Some("reviewer")),
+                    ("The reviewer says it is safe.", None),
+                ]
+            );
+            assert_eq!(s.consulting(), None);
+        }
+
         /// The words arrive a fragment at a time and are one reply, so they accumulate rather
         /// than replace. Replacing left the screen showing whatever the last frame happened to
         /// carry, which for a long answer is the last three characters of it.
@@ -14254,6 +14470,34 @@ mod tests {
                 sent.text,
                 "message to session 22222222 (build) \u{b7} (T,priv)\n> run it"
             );
+        }
+
+        /// CONSULT-15: a bot's reply to a line a person sent it is drawn as a reply under the bot's
+        /// name, from the tag's fields and not from the note the host was given. One the host was
+        /// given only a reference to is drawn with its words absent and says so.
+        #[test]
+        fn a_resumed_consult_is_drawn_as_the_bots_reply() {
+            use bravebot_agent::conversation::{Composed, Said};
+
+            let consulted = |text: Option<&str>| Said::Composed {
+                why: Composed::Consulted {
+                    bot: "reviewer".into(),
+                    definition: ".bravebot/agents/reviewer.md".into(),
+                    model: "claude-sonnet-5".into(),
+                    label: "(T,pub)".into(),
+                    text: text.map(str::to_string),
+                },
+                text: "That line was not sent to you. NOTE".into(),
+            };
+            let shown = recalled_entry(&consulted(Some("It is safe."))).expect("drawn");
+            assert_eq!(shown.speaker, Speaker::Assistant);
+            assert_eq!(shown.text, "It is safe.");
+            assert_eq!(shown.answered_as.as_deref(), Some("reviewer"));
+
+            let kept = recalled_entry(&consulted(None)).expect("drawn");
+            assert_eq!(kept.answered_as.as_deref(), Some("reviewer"));
+            assert!(!kept.text.contains("NOTE"), "{}", kept.text);
+            assert!(kept.text.contains("kept from the planner"), "{}", kept.text);
         }
 
         /// The record holds a reply whole, so a model with no channel of its own for its working
@@ -18744,5 +18988,113 @@ mod tests {
                 (31, 13, 7)
             );
         }
+    }
+
+    fn ended(session: &mut Session, ending: bravebot_agent::Ending) {
+        session.finished = Some(Finished {
+            turn: session.turns,
+            tokens: 0,
+            took: Duration::ZERO,
+            ending,
+        });
+    }
+
+    fn left() -> ConsultsLeft {
+        ConsultsLeft {
+            line: "ask @test-writer and @rule-reviewer if this is safe".to_string(),
+            bots: vec!["rule-reviewer".to_string()],
+        }
+    }
+
+    /// CONSULT-9. Once a consult has replied, the line and the bots it named after that one are
+    /// handed on, once, for the next bot's brief to be drafted from. Carrying on whatever the ending
+    /// would go on past a consult the person stopped.
+    #[test]
+    fn the_next_bot_is_consulted_only_once_the_one_before_replied() {
+        let mut session = Session::new("none");
+        session.leave_consults(Some(left()));
+        ended(&mut session, bravebot_agent::Ending::Done);
+        let carried = session.carry_on_consulting().expect("the line carries on");
+        assert_eq!(
+            carried.line,
+            "ask @test-writer and @rule-reviewer if this is safe"
+        );
+        assert_eq!(carried.bots, vec!["rule-reviewer".to_string()]);
+        assert!(
+            session.carry_on_consulting().is_none(),
+            "what was left is consulted once"
+        );
+
+        for ending in [
+            bravebot_agent::Ending::Stopped { attempts: None },
+            bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                bravebot_agent::Category::Transport,
+            )),
+        ] {
+            let mut session = Session::new("none");
+            session.leave_consults(Some(left()));
+            ended(&mut session, ending);
+            assert!(session.carry_on_consulting().is_none(), "{ending:?}");
+            ended(&mut session, bravebot_agent::Ending::Done);
+            assert!(
+                session.carry_on_consulting().is_none(),
+                "the rest were not dropped"
+            );
+        }
+    }
+
+    /// CONSULT-9. A line put back after an earlier bot replied, sent again as it was, consults
+    /// only the bots still to reply. Edited, or after a turn has started, it is a new line.
+    #[test]
+    fn a_line_put_back_after_a_reply_resumes_at_the_next_bot() {
+        let mut session = Session::new("none");
+        session.resume_consults(left());
+        assert_eq!(
+            session.consults_to_resume("ask @test-writer if this is safe"),
+            None,
+            "an edited line resumed"
+        );
+        session.resume_consults(left());
+        assert_eq!(
+            session.consults_to_resume(&left().line),
+            Some(vec!["rule-reviewer".to_string()])
+        );
+        assert_eq!(
+            session.consults_to_resume(&left().line),
+            None,
+            "resumed twice"
+        );
+        session.resume_consults(left());
+        session.leave_consults(None);
+        assert_eq!(
+            session.consults_to_resume(&left().line),
+            None,
+            "a turn started and the line still resumed"
+        );
+    }
+
+    /// CONSULT-9. The bots after the one a brief is for go with the brief to the turn it starts,
+    /// and Esc on the brief drops them with it.
+    #[test]
+    fn the_bots_after_a_brief_go_with_it_and_esc_drops_them() {
+        let brief = Brief {
+            line: "ask @test-writer and @rule-reviewer if this is safe".to_string(),
+            bot: "test-writer".to_string(),
+            private: false,
+            then: vec!["rule-reviewer".to_string()],
+        };
+        let mut session = Session::new("none");
+        session.propose_brief(brief.clone(), "the brief");
+        assert!(session.send_brief().is_some());
+        assert_eq!(
+            session.take_briefed().map(|brief| brief.then),
+            Some(vec!["rule-reviewer".to_string()])
+        );
+
+        let mut session = Session::new("none");
+        session.propose_brief(brief, "the brief");
+        session.decline_brief();
+        assert!(session.send_brief().is_none());
+        assert!(session.take_briefed().is_none());
     }
 }

@@ -66,6 +66,11 @@ The task is composed by the run that spawns the delegate and is the whole of wha
 run whose own context has met untrusted bytes composes tasks that are a function of them.
 Delegating from one is refused outright rather than narrowed.
 
+[CONSULT-6](consulting-a-bot.md#CONSULT-6) proposes, not built, that a consult of a bot from such a
+run not be refused: the brief it drafts is quarantined, and a person sends it only through a
+promotion prompt that has checked the whole brief. What makes that different is that a person reads
+every word of it first.
+
 Private content is refused too, on either the task or the kind: the user's data may not become
 another planner's prompt. That refusal reads the task's own label, and a task the planner writes is
 read as routing, as a path is. So a task written after the planner was shown private content is not

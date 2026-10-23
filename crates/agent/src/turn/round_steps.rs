@@ -1380,6 +1380,7 @@ pub(super) fn tools_for_a_call<'a>(
                 ledger: &mut state.messages_sent,
             }),
         delegated: task.delegate.is_some(),
+        consulting: task.consulting,
         confined_to: plan.addressed.as_ref().map(|addressed| addressed.tools()),
         servers: state.servers.as_deref_mut(),
         mcp: state.mcp.as_ref().map(|(offer, _)| offer),
@@ -1418,6 +1419,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     call: &ToolCall,
     took: std::time::Duration,
     stalled: std::time::Duration,
+    consulted: &crate::outcome::Spent,
     output: &mut tools::Output,
 ) where
     S: Sink + ?Sized + Send,
@@ -1486,6 +1488,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         &state.turn_model,
         state.effort,
     );
+    let stalled = stalled + std::time::Duration::from_millis(consulted.timing.stalled_ms);
     state.spent.stalled += stalled;
     // What the model waited for inside the call, which is not what the call spent working:
     // a processor is a request, and its seconds belong with the other requests'.
@@ -1495,7 +1498,8 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
             interval.duration()
         }
         None => std::time::Duration::ZERO,
-    };
+    } + std::time::Duration::from_millis(consulted.timing.inference_ms);
+    state.account.add_spent(consulted);
     state.spent.inference += waited;
     // Both taken off, so the four figures partition the turn rather than double-count the
     // parts of it that nest. Saturating because they are separate clocks: a measure of the
@@ -1543,6 +1547,150 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
             (&skill, &runs_as),
             plan.pinned_by.as_deref(),
         );
+    }
+}
+
+/// Run the consult a person sent from a `propose_consult` card, and make its reply the call's
+/// result (CONSULT-11, CONSULT-12).
+///
+/// A turn of its own under the bot's definition, narrowed by the host's (CONSULT-7), on a
+/// conversation that holds only the brief. It is told it is a consult, so it is offered no way to
+/// propose another (CONSULT-8). Its reply keeps the label its own context gave it, and the round's
+/// gate shows it to the host or hands the host a reference.
+///
+/// The handles are passed on as trait objects, so a consult's rounds are the same instance of the
+/// turn rather than one more wrapped each time.
+///
+/// Returns what the consult spent, for the host's turn to count as its own: the consult ran inside
+/// the call.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy and the lent confirmer, reporter and sink are the round's own borrows, which a bundle would have to hold together"
+)]
+pub(super) fn consult_proposed<P, S, C, R>(
+    proposed: &crate::tools::Proposed,
+    output: &mut crate::tools::Output,
+    policy: &mut Policy<'_, P>,
+    confirming: &crate::shared::Lent<'_, C>,
+    reporting: &crate::shared::Lent<'_, R>,
+    recording: &crate::shared::Lent<'_, S>,
+    config: &Config,
+    egress: &Egress,
+    workspace: &crate::workspace::Workspace,
+    task: &Task,
+    cancel: &Cancel,
+    wallet: Option<&dyn crate::shared::Spends>,
+) -> crate::outcome::Spent
+where
+    P: Sink,
+    S: Sink + ?Sized + Send,
+    C: Confirmer + ?Sized + Send,
+    R: Reporter + ?Sized + Send,
+{
+    let mut consult = task
+        .clone()
+        .addressing(Some(proposed.bot.clone()))
+        .consulted_from(task.addressing.clone())
+        .consulting(true)
+        .written_by_the_driver();
+    // Given none of what the host's turn carried beside its prompt: a consult is given its brief
+    // and nothing else (CONSULT-13).
+    consult.prompt = proposed.brief.clone();
+    consult.composed = None;
+    consult.files.clear();
+    consult.attachments.clear();
+    consult.images.clear();
+    consult.dropped_text.clear();
+    consult.session_excerpts.clear();
+    consult.piped = None;
+    consult.mcp_prompt = None;
+    consult.tick = None;
+    consult.arming = crate::watch::Arming::Unavailable;
+    consult.looking_again = false;
+    consult.working_towards = None;
+    consult.courier = None;
+    consult.inbox = None;
+    consult.output_schema = None;
+    consult.jobs = None;
+
+    // The person answering the consult's questions is the host's, so what they settle there stays
+    // settled for the host: file decisions through the authority both share, and the rest taken
+    // back below, on either ending, as a delegate's are.
+    consult.file_authority = Some(policy.file_authority());
+    consult.asked_about = policy.asked().clone();
+    consult.exposed = policy.exposed().clone();
+    let since = policy.vouched();
+    let mut decisions =
+        super::Decisions::initial(&consult, since.trust.clone(), since.programs.clone());
+
+    let mut conversation = Conversation::new();
+    conversation.observed(proposed.label);
+    let mut confirmer = confirming.turn();
+    let mut reporter = reporting.consult();
+    let mut sink = recording.turn();
+    // What follows on the screen is the bot's, until it ends.
+    reporter.consult_started(proposed.bot.clone());
+    let ran = super::run_inner::<dyn Sink + Send, dyn Confirmer + Send, dyn Reporter + Send>(
+        config,
+        egress,
+        workspace,
+        &consult,
+        &mut conversation,
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        since.trust.clone(),
+        since.programs.clone(),
+        None,
+        cancel,
+        Some(&mut decisions),
+        super::Handback {
+            lent_wallet: wallet,
+            ..Default::default()
+        },
+    );
+    policy.adopt_from_consult(
+        &since,
+        &bravebot_core::policy::Vouched {
+            trust: decisions.trust,
+            programs: decisions.programs,
+        },
+        decisions.asked_about,
+        decisions.exposed,
+    );
+    match ran {
+        Ok(outcome) => {
+            reporter.consult_finished(
+                proposed.bot.clone(),
+                Some(outcome.reply_for_display().to_string()),
+            );
+            let label = outcome.answer.label();
+            // The gate below shows a trusted reply and holds no confidentiality, so a private one
+            // the host is shown leaves it holding private content, as a typed consult's does.
+            if label.is_trusted() {
+                policy.heard_from_consult(label);
+            }
+            let spent = crate::outcome::Spent {
+                tokens: outcome.tokens,
+                output_tokens: outcome.output_tokens,
+                context_tokens: outcome.context_tokens,
+                cached: outcome.cached,
+                timing: outcome.timing,
+            };
+            output.text = outcome.answer;
+            output.origin = format!("the reply of the bot {}", proposed.bot);
+            output.content = true;
+            spent
+        }
+        Err(_) => {
+            reporter.consult_finished(proposed.bot.clone(), None);
+            output.text = bravebot_core::value::Labelled::trusted(format!(
+                "error: the consult with {} ended without a reply",
+                proposed.bot
+            ));
+            // What its completed requests cost, which a failed run has spent all the same.
+            reporter.last_spent()
+        }
     }
 }
 

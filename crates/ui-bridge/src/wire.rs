@@ -386,6 +386,27 @@ fn said(said: &Said) -> Value {
             "label": label,
             "text": text,
         }),
+        // A bot's reply, drawn under the bot's name from the fields the record keeps (CONSULT-11).
+        // `text` is null where the host was given a reference, and no content is held for it.
+        Said::Composed {
+            why:
+                Composed::Consulted {
+                    bot,
+                    definition,
+                    model,
+                    label,
+                    text,
+                },
+            ..
+        } => json!({
+            "kind": "consulted",
+            "bot": bot,
+            "definition": definition,
+            "model": model,
+            "label": label,
+            "text": text,
+            "kept": text.is_none().then(bravebot_agent::consult::kept),
+        }),
         // Written for the planner and left out of a projection by `Conversation::recounted`, so
         // none reaches here. A tag added without a row is drawn as its words, never dropped.
         Said::Composed {
@@ -911,6 +932,26 @@ pub fn host_request(id: u64, request: &HostRequest) -> Value {
     json!({
         "request": id,
         "hosts": request.hosts,
+    })
+}
+
+/// A consult the host proposed, as the card a person sends it from draws it (CONSULT-10,
+/// CONSULT-12).
+///
+/// `brief` is the host's own words and is everything a yes sends, so a front end draws it whole and
+/// as text. `label` is the brief's, said as the terminal says it. `refused` is why the bot cannot be
+/// consulted on this machine, where it cannot, and a card carrying it offers no yes.
+pub fn consult_request(id: u64, request: &bravebot_agent::confirm::ConsultRequest) -> Value {
+    json!({
+        "request": id,
+        "bot": request.bot,
+        "definition": request.definition,
+        "model": request.model,
+        "rounds": request.rounds,
+        "budget": request.budget,
+        "brief": request.brief,
+        "label": request.label.to_string(),
+        "refused": request.refused,
     })
 }
 

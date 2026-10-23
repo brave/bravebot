@@ -1484,6 +1484,63 @@ fn a_host_request_is_put_to_the_window_and_takes_no_answer_but_its_own() {
     );
 }
 
+fn a_proposal() -> bravebot_agent::confirm::ConsultRequest {
+    bravebot_agent::confirm::ConsultRequest {
+        bot: "reviewer".into(),
+        definition: "~/.bravebot/agents".into(),
+        model: "haiku".into(),
+        rounds: 8,
+        budget: None,
+        brief: "Read src/lib.rs.".into(),
+        label: bravebot_core::label::Label::trusted_public(),
+        refused: None,
+    }
+}
+
+/// CONSULT-12: a proposed consult is put to the window as `consult.request`, and only a yes to it
+/// sends it. A yes to any other question waiting is a yes about something else, and nobody to ask
+/// sends nothing.
+#[test]
+fn a_proposed_consult_is_put_to_the_window_and_sent_only_on_its_own_yes() {
+    let mut nobody = harness();
+    drop(nobody.running);
+    assert_eq!(
+        nobody.confirmer.confirm_consult(&a_proposal()),
+        Decision::Reject
+    );
+
+    for other in [
+        Reply::Write(Decision::Approve),
+        Reply::Host(Decision::Approve),
+        Reply::Fetch(Decision::Approve),
+    ] {
+        let mut h = harness();
+        h.running.answers.send(other.clone()).unwrap();
+        assert_eq!(
+            h.confirmer.confirm_consult(&a_proposal()),
+            Decision::Reject,
+            "{other:?} sent a consult"
+        );
+    }
+
+    let mut h = harness();
+    h.running
+        .answers
+        .send(Reply::Consult(Decision::Approve))
+        .unwrap();
+    assert_eq!(
+        h.confirmer.confirm_consult(&a_proposal()),
+        Decision::Approve
+    );
+    let events = h.events.lock().unwrap();
+    let [asked] = events.as_slice() else {
+        panic!("one question was expected, and the window was sent {events:?}");
+    };
+    assert_eq!(asked.name, "consult.request");
+    assert_eq!(asked.data["bot"], "reviewer");
+    assert_eq!(asked.data["brief"], "Read src/lib.rs.");
+}
+
 /// A host answer settles a waiting host request and no other question.
 #[test]
 fn a_host_answer_answers_no_other_question() {

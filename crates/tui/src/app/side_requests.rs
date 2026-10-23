@@ -301,6 +301,15 @@ pub(super) enum Writing<'a> {
     Brief(&'a str),
     /// The rewrite of this draft that the enhance key asks for (INPUT-48).
     Enhancement(&'a str),
+    /// The brief a host that is a definition writes for the bot a person's line names (CONSULT-5).
+    Consult { bot: &'a str, line: &'a str },
+}
+
+/// Say the host is drafting a brief for `bot`, naming its model and bound from `row`, before the
+/// draft is asked for: a brief the host could have held is sent with no card to name them on
+/// (CONSULT-10).
+pub(super) fn note_drafting(session: &mut Session, bot: &str, row: &str) {
+    session.note(t!(consult_drafting, bot = bot, bound = row.to_string()));
 }
 
 /// The request an aside, a handoff's brief and an enhancement share, drawn while it is answered.
@@ -354,6 +363,9 @@ pub(super) fn ask_animated(
         Some(Writing::Enhancement(draft)) => {
             bravebot_agent::aside::Question::enhance(conversation, draft)
         }
+        Some(Writing::Consult { bot, line }) => {
+            bravebot_agent::aside::Question::brief(conversation, bot, line)
+        }
         None if recap => bravebot_agent::aside::Question::recap(conversation),
         None => bravebot_agent::aside::Question::about(
             conversation,
@@ -385,6 +397,16 @@ pub(super) fn ask_animated(
         .collect();
     session.begin_aside();
 
+    // A brief the host could not have held is put to the person before it comes back (CONSULT-6),
+    // so the brief's worker is the one with a confirmer, and the prompt is the only reply it waits
+    // on.
+    let (answer_tx, answer_rx) = mpsc::channel::<crate::remote_confirm::Reply>();
+    let briefing = match writing {
+        Some(Writing::Consult { bot, .. }) => Some(bot.to_string()),
+        _ => None,
+    };
+    let confirm_to_main = to_main.clone();
+
     let worker = thread::spawn(move || {
         let mut sink = Trail::new();
         let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
@@ -409,21 +431,40 @@ pub(super) fn ask_animated(
         };
         // Reduced to what a person can be told before it crosses back, since the error types are
         // the kernel's and this thread is the only place they mean anything.
-        let done = turn::aside(
-            &worker_config,
-            &egress,
-            &account,
-            asking,
-            model.as_deref(),
-            &mut reporter,
-            &mut sink,
-            worker_trust.clone(),
-            // Taken and dropped. An answer has to be released to be looked at, and the one place
-            // this side could draw it as it arrives is the tail the turn's own half-written reply
-            // fills, which is among the turn's own lines.
-            |_written| {},
-            &worker_cancel,
-        )
+        let done = match briefing {
+            Some(bot) => turn::brief(
+                &worker_config,
+                &egress,
+                &account,
+                asking,
+                &bot,
+                model.as_deref(),
+                &mut crate::remote_confirm::RemoteConfirmer::new(
+                    confirm_to_main,
+                    answer_rx,
+                    crate::remote_confirm::Interjections::new(),
+                ),
+                &mut reporter,
+                &mut sink,
+                worker_trust.clone(),
+                &worker_cancel,
+            ),
+            None => turn::aside(
+                &worker_config,
+                &egress,
+                &account,
+                asking,
+                model.as_deref(),
+                &mut reporter,
+                &mut sink,
+                worker_trust.clone(),
+                // Taken and dropped. An answer has to be released to be looked at, and the one
+                // place this side could draw it as it arrives is the tail the turn's own
+                // half-written reply fills, which is among the turn's own lines.
+                |_written| {},
+                &worker_cancel,
+            ),
+        }
         .map_err(|e| e.to_string());
         (done, sink, Some(worker_trust))
     });
@@ -434,7 +475,27 @@ pub(super) fn ask_animated(
         &from_worker,
         // The same shape as a summary's keys, and the same function reads them.
         |session, key| one_request_key(session, key, &cancel),
-        |_, session, message| aside_reported(session, message),
+        |terminal, session, message| match message {
+            crate::remote_confirm::ToMain::Vet(request) if !cancel.is_cancelled() => {
+                let answer = crate::confirm::ask_vet(terminal, &request);
+                reply_to(
+                    session,
+                    &cancel,
+                    &answer_tx,
+                    answer,
+                    note_vetting_turned_on,
+                    crate::remote_confirm::Reply::Vet,
+                );
+            }
+            other => match refusal(&other) {
+                // Nothing else is asked here, and nothing is once the request is stopped; a
+                // question that is gets no.
+                Some(reply) => {
+                    let _ = answer_tx.send(reply);
+                }
+                None => aside_reported(session, other),
+            },
+        },
     )?;
 
     let (done, sink, vouched) = worker.join().unwrap_or_else(|_| {
@@ -626,6 +687,61 @@ pub(super) fn handoff_answered(
             session.note(t!(handoff_failed, problem = message));
         }
     }
+}
+
+/// Take what the request for a consult's brief came back with (CONSULT-5).
+///
+/// Only a brief the planner could have held, or one a person promoted at the prompt the check was
+/// drawn on (CONSULT-6), reaches the box, and which it was is
+/// [`bravebot_agent::aside::Answered::kept`] being present. The words put in the box are `kept`,
+/// never the copy released for the screen. `row` is the bot's model and bound, which the note
+/// names so a person knows what Enter starts (CONSULT-10).
+///
+/// A brief the host could have held, that is neither private nor promoted, is sent at once, and
+/// the brief to send is returned: sending the line was the grant (CONSULT-5).
+pub(super) fn brief_answered(
+    session: &mut Session,
+    mut brief: crate::state::Brief,
+    row: &str,
+    done: Result<bravebot_agent::aside::Answered, Unanswered>,
+) -> Option<String> {
+    let bot = brief.bot.clone();
+    match done {
+        Ok(bravebot_agent::aside::Answered {
+            kept: Some(kept),
+            private,
+            promoted,
+            usage,
+            ..
+        }) => {
+            session.end_aside(usage.total());
+            brief.private = private;
+            let text = bravebot_agent::aside::brief_prompt(&brief.line, &kept);
+            session.propose_brief(brief, &text);
+            if !private && !promoted {
+                return session.send_brief();
+            }
+            session.note(t!(consult_brief_ready, bot = bot, bound = row.to_string()));
+        }
+        // The line goes back where it is not there already: a brief drafted after an earlier bot
+        // replied was asked for with the box empty (CONSULT-9).
+        Ok(answered) => {
+            session.end_aside(answered.usage.total());
+            session.keep_line_unsent(&brief.line);
+            session.note(t!(consult_brief_declined, bot = bot));
+        }
+        Err(Unanswered::Stopped) => {
+            session.end_aside(0);
+            session.keep_line_unsent(&brief.line);
+            session.note(t!(consult_brief_stopped, bot = bot));
+        }
+        Err(Unanswered::Failed(message)) => {
+            session.end_aside(0);
+            session.keep_line_unsent(&brief.line);
+            session.note(t!(consult_brief_failed, bot = bot, problem = message));
+        }
+    }
+    None
 }
 
 /// Take what the request for an enhancement of `line` came back with (INPUT-48).

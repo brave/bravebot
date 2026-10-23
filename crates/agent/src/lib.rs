@@ -23,6 +23,7 @@ pub mod commit_message;
 pub mod compact;
 pub mod confine;
 pub mod confirm;
+pub mod consult;
 pub mod conversation;
 pub mod delegate;
 pub mod diff;

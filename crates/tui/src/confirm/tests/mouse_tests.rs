@@ -240,6 +240,20 @@ fn questions_of(kind: Kind) -> Vec<Row> {
             };
             format!("{:?}", ask_host(terminal, &request))
         })],
+        // A short header, so the brief has more rows on the screen than a notch of the wheel moves.
+        Kind::Consult => vec![row("consult", vec![interrupt()], |terminal| {
+            let request = bravebot_agent::confirm::ConsultRequest {
+                bot: "r".into(),
+                definition: "r.md".into(),
+                model: "m".into(),
+                rounds: 8,
+                budget: None,
+                brief: "look at the parser\n".repeat(20),
+                label: bravebot_core::label::Label::trusted_public(),
+                refused: None,
+            };
+            format!("{:?}", ask_consult(terminal, &request))
+        })],
         Kind::Ask => vec![
             row(
                 "a question the planner puts",

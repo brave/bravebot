@@ -420,6 +420,18 @@ pub struct Task {
     /// routing table, and the kernel matches it against the set this turn resolves, so a name
     /// matching nothing ends the turn before anything is sent.
     pub addressing: Option<String>,
+    /// The definition the consult this turn is was sent from, where its host is one.
+    ///
+    /// Set only beside [`Task::addressing`], from a brief card a person sent. The kernel narrows
+    /// the turn by it before the addressed definition narrows it further (CONSULT-7).
+    pub consulted_from: Option<String>,
+    /// Whether this turn is a consult, which is never offered a tool to propose another
+    /// (CONSULT-8).
+    pub consulting: bool,
+    /// Whether the front end draws the card a proposed consult is sent from, which is what offers
+    /// the planner `propose_consult` (CONSULT-12). A front end that would only decline it is not
+    /// offering a person anything to answer.
+    pub draws_consult_cards: bool,
     /// Whether [`Task::model`] outranks the model an addressed definition names.
     ///
     /// Set only by a caller whose model was named on its own command line. CLI-9 ranks that flag
@@ -581,6 +593,9 @@ impl Task {
             skill_mode: None,
             delegate: None,
             addressing: None,
+            consulted_from: None,
+            consulting: false,
+            draws_consult_cards: false,
             model_outranks_a_definition: false,
             servers: Vec::new(),
             mcp: None,
@@ -756,6 +771,25 @@ impl Task {
     /// Address a definition by the name a person typed, or `None` for the session's own planner.
     pub fn addressing(mut self, name: Option<String>) -> Self {
         self.addressing = name;
+        self
+    }
+
+    /// Narrow the consult this turn is by the definition it was sent from, where it was sent from
+    /// one.
+    pub fn consulted_from(mut self, host: Option<String>) -> Self {
+        self.consulted_from = host;
+        self
+    }
+
+    /// Say that this turn is a consult, so it is not offered a way to propose one (CONSULT-8).
+    pub fn consulting(mut self, consulting: bool) -> Self {
+        self.consulting = consulting;
+        self
+    }
+
+    /// Say that the front end draws the card a proposed consult is sent from (CONSULT-12).
+    pub fn drawing_consult_cards(mut self, draws: bool) -> Self {
+        self.draws_consult_cards = draws;
         self
     }
 

@@ -479,12 +479,15 @@ other line of the file as it is, so a `tools:` line somebody added by hand survi
 a form that does not show it. What is written is held to the terms [MEMORY-8](#MEMORY-8) holds a
 new bot to.
 
+The form also shows whether the bot may be consulted with `@name`, and an edit rewrites the
+`consult:` line too ([CONSULT-16](consulting-a-bot.md#CONSULT-16)).
+
 **Why not the whole file.** The file is the person's as much as the desktop's. A form that wrote the
 whole file back would undo whatever it does not show, such as a narrowing somebody made by hand.
 
 The rewrite is built: `bravebot_agent::agents::rewrite_definition` takes a definition's text, the
-purpose and the model, and returns the text with the description, the `model:` line and the body
-replaced and every other line as it was. It writes the description and the model in single quotes
+purpose, the model and whether it may be consulted, and returns the text with the description, the
+`model:` line, the `consult:` line and the body replaced and every other line as it was. It writes the description and the model in single quotes
 and reads the result back, refusing a text that would not read back as what was given.
 `bravebot_agent::agents::redefine` applies it to the file [MEMORY-8](#MEMORY-8) wrote, and the
 desktop asks for it through the bridge method `bot.redefine` when a bot's purpose or model is
@@ -495,6 +498,7 @@ edited. The row is saved only if the file was rewritten.
 `verified-by: bravebot_agent::agents::a_purpose_or_model_typed_as_yaml_is_written_as_text_and_reads_back`
 `verified-by: bravebot_agent::agents::an_edit_that_cannot_be_written_as_asked_is_refused`
 `verified-by: bravebot_agent::agents::a_wrapped_description_is_replaced_whole`
+`verified-by: bravebot_agent::agents::turning_consults_off_writes_the_line_and_turning_them_on_removes_it`
 
 <a id="MEMORY-10"></a>
 ### MEMORY-10: every turn in a bot's conversation addresses the bot's definition

@@ -2713,6 +2713,16 @@ fn event_loop(
         });
         // The same for the sessions an `@` offers after the files.
         session.settle_sessions(|| past_sessions_offered(workspace.root(), stored.id()));
+        // And the bots it offers before the files, resolved as a line consulting one resolves them.
+        session.settle_bots(|| {
+            bots_offered(&bravebot_agent::agents::resolved(
+                &workspace,
+                bravebot_agent::home::directory().as_deref(),
+                answers.trust.clone(),
+                answers.rules.permissions.clone(),
+                &mut Trail::new(),
+            ))
+        });
         // A picture decoded since the last pass is drawn on this one rather than at the next key.
         needs_draw |= session.settle_previews();
         // The rows of a model picker still being listed are drawn on the pass they arrive.
@@ -2979,6 +2989,11 @@ fn event_loop(
             Action::Handoff(goal) => held.handoff(terminal, config, &goal)?,
             Action::Enhance(line, draft) => held.enhance(terminal, config, &line, &draft)?,
             Action::Submit(prompt) => suggesting = held.submit(terminal, config, prompt)?,
+            Action::Brief => {
+                if let Some(prompt) = held.brief(terminal, config)? {
+                    suggesting = held.submit(terminal, config, prompt)?;
+                }
+            }
             Action::Run(line) | Action::RunPrivately(line) => {
                 held.run_line(terminal, &line, private)?
             }
@@ -3456,6 +3471,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::Move(_) => Reply::Move(Decision::Reject),
         ToMain::Path(_) => Reply::Path(Decision::Reject),
         ToMain::Host(_) => Reply::Host(Decision::Reject),
+        ToMain::Consult(_) => Reply::Consult(Decision::Reject),
         ToMain::Ask(_) => Reply::Ask(Vec::new()),
         ToMain::PromptRecorded(_)
         | ToMain::RequestBuilt(_)
@@ -3484,6 +3500,8 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         | ToMain::DelegateWaiting(_)
         | ToMain::DelegateStarted(_)
         | ToMain::DelegateFinished { .. }
+        | ToMain::ConsultStarted(_)
+        | ToMain::ConsultFinished { .. }
         | ToMain::ReportingFor(_) => return None,
     })
 }
@@ -21731,6 +21749,8 @@ mod tests {
             Ok(bravebot_agent::aside::Answered {
                 shown: "a brief an attacker may have shaped".to_string(),
                 kept: None,
+                private: false,
+                promoted: false,
                 usage: Default::default(),
             }),
         );
@@ -21764,6 +21784,8 @@ mod tests {
             Ok(bravebot_agent::aside::Answered {
                 shown: "where things stand".to_string(),
                 kept: Some("where things stand".to_string()),
+                private: false,
+                promoted: false,
                 usage: Default::default(),
             }),
         );
@@ -21927,6 +21949,8 @@ mod tests {
             bravebot_agent::aside::Answered {
                 shown: "because the grammar nests".to_string(),
                 kept: Some("because the grammar nests".to_string()),
+                private: false,
+                promoted: false,
                 usage: Default::default(),
             },
         );
@@ -22581,7 +22605,7 @@ mod tests {
             "the reason was not quoted, so nothing here could name a file: {carrying_on}"
         );
         assert!(
-            files_named_in(&carrying_on, wrote, std::path::Path::new("."), &[]).is_empty(),
+            files_named_in(&carrying_on, wrote, std::path::Path::new("."), &[], &[]).is_empty(),
             "a sentence this program wrote opened a file"
         );
     }
@@ -22612,7 +22636,7 @@ mod tests {
 
         assert!(!judged, "the goal was judged before the person's line went");
         assert_eq!(
-            files_named_in(&queued, wrote, std::path::Path::new("."), &[]),
+            files_named_in(&queued, wrote, std::path::Path::new("."), &[], &[]),
             vec!["crates/core/src/policy.rs".to_string()],
             "a line the person typed stopped naming its files"
         );
@@ -22632,7 +22656,8 @@ mod tests {
                 line,
                 Wrote::ThePerson,
                 std::path::Path::new("/work"),
-                &sources
+                &sources,
+                &[]
             ),
             vec![
                 "/refs/parser/src/lexer.rs".to_string(),
@@ -22644,7 +22669,8 @@ mod tests {
                 line,
                 Wrote::TheDriver,
                 std::path::Path::new("/work"),
-                &sources
+                &sources,
+                &[]
             )
             .is_empty()
         );
@@ -23185,6 +23211,733 @@ mod tests {
             Some("rule-reviewer asked for haiku, which needs a sign-in first, so it did not run")
         );
         assert!(session.take_addressing().is_none(), "a turn started anyway");
+    }
+
+    /// CONSULT-2. A word naming a bot the session resolved consults that bot, and the turn is
+    /// addressed to its definition, so it is narrowed and given its model as a `/agent` line's is.
+    #[test]
+    fn a_line_naming_a_bot_consults_it() {
+        let consult = consult_among(
+            &a_config_needing_no_sign_in(),
+            &a_resolved_set(None),
+            "@rule-reviewer is this safe?",
+        )
+        .into_iter()
+        .next()
+        .expect("a bot was named")
+        .1
+        .expect("and may be consulted");
+
+        assert_eq!(consult.addressed.name, "rule-reviewer");
+        assert_eq!(consult.definition, "~/.bravebot/agents");
+        assert!(
+            consult_among(
+                &a_config_needing_no_sign_in(),
+                &a_resolved_set(None),
+                "look at @README.md"
+            )
+            .is_empty()
+        );
+    }
+
+    /// CONSULT-3. The `@` list offers the bots a word could become ahead of the files, each row
+    /// marked as a bot with its model and bound, and taking one writes its name and nothing runs.
+    #[test]
+    fn a_bot_is_offered_ahead_of_the_files_and_taking_it_writes_its_name() {
+        let root = crate::testutil::scratch_dir("bravebot-bot-offered-test");
+        std::fs::create_dir_all(&root).expect("scratch");
+        std::fs::write(root.join("rule-reviewer.md"), "notes").expect("file");
+        let mut session = Session::new("none").in_workspace(&root);
+        for c in "@rule".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        session.settle_bots(|| bots_offered(&a_resolved_set(Some("haiku"))));
+
+        let crate::state::Offered::Files(entries) = session.offered() else {
+            panic!("nothing was offered");
+        };
+        assert!(entries[0].is_bot, "{entries:?}");
+        assert_eq!(entries[0].path, "rule-reviewer");
+        assert_eq!(
+            entries[0].note.as_deref(),
+            Some("bot \u{b7} haiku \u{b7} up to 60 rounds")
+        );
+        assert!(
+            entries[1..]
+                .iter()
+                .any(|entry| !entry.is_bot && entry.path == "rule-reviewer.md"),
+            "{entries:?}"
+        );
+        session.accept_completion();
+        assert_eq!(session.input(), "@rule-reviewer ");
+        assert_eq!(session.status, Status::Idle, "taking the row ran something");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// CONSULT-5. Enter on a line with an `@` in it asks for the host's brief and starts no turn,
+    /// whether or not the session's turns address a definition; a line without one goes to the
+    /// host. Gating the brief on a definition would send a plain session's bot the bare line.
+    #[test]
+    fn a_line_naming_a_bot_asks_the_host_for_a_brief() {
+        for under_a_definition in [false, true] {
+            let mut session = Session::new("none");
+            if under_a_definition {
+                session.work_under(standing());
+            }
+            type_line(&mut session, "@rule-reviewer is this safe?");
+            assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Brief);
+            assert_eq!(session.input(), "@rule-reviewer is this safe?");
+            assert_eq!(session.status, Status::Idle, "a turn began");
+
+            let mut session = Session::new("none");
+            if under_a_definition {
+                session.work_under(standing());
+            }
+            type_line(&mut session, "is this safe?");
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit("is this safe?".to_string())
+            );
+        }
+    }
+
+    /// CONSULT-5. A line that reaches a turn without its brief, as a queued one does, goes to the
+    /// host and consults nothing, whether or not the session's turns address a definition.
+    #[test]
+    fn a_line_consults_only_through_its_brief() {
+        for under_a_definition in [false, true] {
+            let mut session = Session::new("none");
+            if under_a_definition {
+                session.work_under(standing());
+            }
+            assert!(
+                consult_for(
+                    &session,
+                    &a_config_needing_no_sign_in(),
+                    &workspace_for_test(),
+                    &TrustStore::new("/work"),
+                    &Permissions::default(),
+                    Wrote::ThePerson,
+                    None,
+                )
+                .is_none(),
+                "{under_a_definition}"
+            );
+        }
+    }
+
+    /// How the host's brief came back: whether it was private, and whether a person's yes on the
+    /// promotion card is what kept it.
+    #[derive(Clone, Copy)]
+    struct Came {
+        private: bool,
+        promoted: bool,
+    }
+
+    const CLEAN: Came = Came {
+        private: false,
+        promoted: false,
+    };
+    const PROMOTED: Came = Came {
+        private: false,
+        promoted: true,
+    };
+    const PRIVATE: Came = Came {
+        private: true,
+        promoted: false,
+    };
+
+    /// The session the host's brief for `@rule-reviewer` came back to, and the brief it sent at
+    /// once, where it sent one.
+    fn a_session_offered_a_brief(kept: Option<&str>, came: Came) -> (Session, Option<String>) {
+        let mut session = Session::new("none");
+        session.work_under(standing());
+        offer_a_brief(session, kept, came)
+    }
+
+    /// A session addressing no definition, offered the host's brief for `@rule-reviewer`.
+    fn a_plain_session_offered_a_brief(
+        kept: Option<&str>,
+        came: Came,
+    ) -> (Session, Option<String>) {
+        offer_a_brief(Session::new("none"), kept, came)
+    }
+
+    fn offer_a_brief(
+        mut session: Session,
+        kept: Option<&str>,
+        came: Came,
+    ) -> (Session, Option<String>) {
+        type_line(&mut session, "@rule-reviewer is this safe?");
+        session.begin_aside();
+        let sent = brief_answered(
+            &mut session,
+            crate::state::Brief {
+                line: "@rule-reviewer is this safe?".to_string(),
+                bot: "rule-reviewer".to_string(),
+                private: false,
+                then: Vec::new(),
+            },
+            "bot \u{b7} haiku \u{b7} up to 60 rounds",
+            Ok(bravebot_agent::aside::Answered {
+                shown: "the diff touches the parser".to_string(),
+                kept: kept.map(str::to_string),
+                private: came.private,
+                promoted: came.promoted,
+                usage: Default::default(),
+            }),
+        );
+        (session, sent)
+    }
+
+    /// CONSULT-6. A brief that was private before it was promoted marks the consult private, so
+    /// the consult's conversation holds private content and nothing it writes leaves as public.
+    /// Dropping the flag would let a promoted private brief reach a public sink.
+    #[test]
+    fn a_private_brief_sends_a_consult_that_holds_private_content() {
+        let (mut session, sent) =
+            a_session_offered_a_brief(Some("the diff touches the parser"), PRIVATE);
+        assert_eq!(sent, None, "a private brief went without being read");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(
+            session
+                .take_briefed()
+                .expect("the consult was not set")
+                .private
+        );
+
+        let (mut session, _) =
+            a_session_offered_a_brief(Some("the diff touches the parser"), CLEAN);
+        assert!(
+            !session
+                .take_briefed()
+                .expect("the consult was not set")
+                .private
+        );
+    }
+
+    /// The brief the host drafted for `@rule-reviewer` over "the diff touches the parser".
+    const A_BRIEF: &str = "@rule-reviewer is this safe?\n\nthe diff touches the parser";
+
+    /// CONSULT-5. A brief the host could have held, neither private nor promoted, is sent as the
+    /// person's line the moment it is drafted, with the consult it starts set on the session:
+    /// sending the line was the grant. Nothing waits in the box, and no note says something does.
+    #[test]
+    fn a_brief_the_host_could_have_held_is_sent_at_once() {
+        let (mut session, sent) =
+            a_session_offered_a_brief(Some("the diff touches the parser"), CLEAN);
+        assert_eq!(sent.as_deref(), Some(A_BRIEF));
+        assert_eq!(session.input(), "");
+        assert!(session.brief_pending().is_none());
+        assert_ne!(
+            last_note(&session),
+            t!(
+                consult_brief_ready,
+                bot = "rule-reviewer",
+                bound = "bot \u{b7} haiku \u{b7} up to 60 rounds"
+            )
+        );
+        let briefed = session.take_briefed().expect("the consult was not set");
+        assert_eq!(briefed.bot, "rule-reviewer");
+        assert_eq!(briefed.line, "@rule-reviewer is this safe?");
+    }
+
+    /// CONSULT-5, CONSULT-10. A brief a person's yes promoted goes into the box under the line,
+    /// with a note naming the bot and its bound, and only Enter sends it as the person's line with
+    /// the consult it starts set on the session. Sending it at once would let the draft go further
+    /// than the card it was read on.
+    #[test]
+    fn a_promoted_brief_is_offered_and_enter_sends_it() {
+        let (mut session, sent) =
+            a_session_offered_a_brief(Some("the diff touches the parser"), PROMOTED);
+        assert_eq!(sent, None, "a promoted brief went without being sent");
+        assert_eq!(session.input(), A_BRIEF);
+        assert!(session.brief_pending().is_some());
+        assert_eq!(
+            last_note(&session),
+            t!(
+                consult_brief_ready,
+                bot = "rule-reviewer",
+                bound = "bot \u{b7} haiku \u{b7} up to 60 rounds"
+            )
+        );
+
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit(A_BRIEF.to_string())
+        );
+        let briefed = session.take_briefed().expect("the consult was not set");
+        assert_eq!(briefed.bot, "rule-reviewer");
+        assert_eq!(briefed.line, "@rule-reviewer is this safe?");
+    }
+
+    /// CONSULT-10. While its brief is drafted, the note names the bot with its model and bound,
+    /// since a brief the host could have held goes with no card to name them on.
+    #[test]
+    fn the_drafting_note_names_the_bots_model_and_bound() {
+        let mut session = Session::new("none");
+        let row = "bot \u{b7} haiku \u{b7} up to 60 rounds";
+        note_drafting(&mut session, "rule-reviewer", row);
+        let note = last_note(&session);
+        assert!(note.contains("rule-reviewer"), "{note}");
+        assert!(
+            note.contains("haiku") && note.contains("up to 60 rounds"),
+            "{note}"
+        );
+    }
+
+    /// CONSULT-5. A private brief waits in the box, and no consult is set until Enter sends it.
+    /// Sending it at once would hand the bot private content nobody chose to give it.
+    #[test]
+    fn a_private_brief_waits_in_the_box_to_be_sent() {
+        let (mut session, sent) =
+            a_session_offered_a_brief(Some("the diff touches the parser"), PRIVATE);
+        assert_eq!(sent, None);
+        assert_eq!(session.input(), A_BRIEF);
+        assert!(session.brief_pending().is_some());
+        assert!(
+            session.take_briefed().is_none(),
+            "the consult was set unsent"
+        );
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit(A_BRIEF.to_string())
+        );
+        assert!(session.take_briefed().is_some());
+    }
+
+    /// CONSULT-5. Esc on a brief waiting in the box puts the person's line back, and Enter then
+    /// asks again.
+    #[test]
+    fn esc_on_a_brief_puts_the_line_back() {
+        for came in [PROMOTED, PRIVATE] {
+            let (mut session, _) =
+                a_session_offered_a_brief(Some("the diff touches the parser"), came);
+            handle_key(&mut session, key(KeyCode::Esc));
+            assert_eq!(session.input(), "@rule-reviewer is this safe?");
+            assert!(session.brief_pending().is_none());
+            assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Brief);
+        }
+    }
+
+    /// CONSULT-5. A session addressing no definition sends its host's brief as one addressing a
+    /// definition does: a brief the host could have held at once, and a promoted one only from the
+    /// box, where Esc puts the line back.
+    #[test]
+    fn a_plain_session_sends_its_hosts_brief_as_a_definitions_does() {
+        let (mut session, sent) =
+            a_plain_session_offered_a_brief(Some("the diff touches the parser"), CLEAN);
+        assert_eq!(sent.as_deref(), Some(A_BRIEF));
+        assert_eq!(
+            session.take_briefed().map(|briefed| briefed.bot).as_deref(),
+            Some("rule-reviewer")
+        );
+
+        let (mut session, sent) =
+            a_plain_session_offered_a_brief(Some("the diff touches the parser"), PROMOTED);
+        assert_eq!(sent, None);
+        assert_eq!(session.input(), A_BRIEF);
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert_eq!(session.input(), "@rule-reviewer is this safe?");
+        assert!(session.brief_pending().is_none());
+        assert!(session.take_briefed().is_none(), "Esc sent the brief");
+    }
+
+    /// CONSULT-6. A brief nobody kept, because the check failed or the person said no, is not put
+    /// in the box, and the line stays as it was typed. Removing the `kept` guard would offer text
+    /// untrusted content may have shaped.
+    #[test]
+    fn a_declined_brief_is_not_offered() {
+        let (session, sent) = a_session_offered_a_brief(None, CLEAN);
+        assert_eq!(sent, None);
+        assert_eq!(session.input(), "@rule-reviewer is this safe?");
+        assert!(session.brief_pending().is_none());
+        assert_eq!(
+            last_note(&session),
+            t!(consult_brief_declined, bot = "rule-reviewer")
+        );
+        assert!(
+            session
+                .transcript
+                .iter()
+                .all(|entry| !entry.text.contains("touches the parser")),
+            "the withheld brief was written to the transcript"
+        );
+
+        let mut session = Session::new("none");
+        type_line(&mut session, "@rule-reviewer is this safe?");
+        session.begin_aside();
+        brief_answered(
+            &mut session,
+            crate::state::Brief {
+                line: "@rule-reviewer is this safe?".to_string(),
+                bot: "rule-reviewer".to_string(),
+                private: false,
+                then: Vec::new(),
+            },
+            "",
+            Err(Unanswered::Stopped),
+        );
+        assert_eq!(session.input(), "@rule-reviewer is this safe?");
+        assert_eq!(
+            last_note(&session),
+            t!(consult_brief_stopped, bot = "rule-reviewer")
+        );
+    }
+
+    /// CONSULT-14. A bot that opted out is a word like any other, and names a file.
+    #[test]
+    fn a_bot_that_opted_out_is_not_consulted() {
+        let mut definitions = bravebot_core::delegate::Definitions::default();
+        definitions.insert(
+            bravebot_core::delegate::Definition::from_file(
+                "rule-reviewer",
+                "Checks a diff.",
+                bravebot_core::delegate::Kind::Reader,
+                None,
+                "REVIEW",
+                "~/.bravebot/agents",
+            )
+            .without_consults(),
+        );
+
+        assert!(
+            consult_among(
+                &a_config_needing_no_sign_in(),
+                &definitions,
+                "@rule-reviewer is this safe?"
+            )
+            .is_empty()
+        );
+    }
+
+    /// CONSULT-10. A bot whose model needs a sign-in is refused by name, with the model it asked
+    /// for, and nothing is consulted in its place.
+    #[test]
+    fn a_bot_whose_model_needs_a_sign_in_is_refused_and_not_consulted() {
+        use bravebot_config::env_var;
+        let bedrock = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_HAIKU_MODEL => Some("haiku-arn".into()),
+            env_var::AWS_PROFILE => Some("a-profile-no-machine-has".into()),
+            _ => None,
+        })
+        .expect("config");
+
+        let refused = consult_among(
+            &bedrock,
+            &a_resolved_set(Some("haiku")),
+            "@rule-reviewer is this safe?",
+        )
+        .into_iter()
+        .next()
+        .expect("a bot was named")
+        .1;
+
+        assert_eq!(
+            refused.err().as_deref(),
+            Some("rule-reviewer asked for haiku, which needs a sign-in first, so it did not run")
+        );
+    }
+
+    /// Two bots, `rule-reviewer` and `test-writer`, both runnable without a sign-in.
+    fn two_bots() -> bravebot_core::delegate::Definitions {
+        let mut definitions = a_resolved_set(None);
+        definitions.insert(bravebot_core::delegate::Definition::from_file(
+            "test-writer",
+            "Writes tests.",
+            bravebot_core::delegate::Kind::Reader,
+            None,
+            "TESTS",
+            "~/.bravebot/agents",
+        ));
+        definitions
+    }
+
+    /// CONSULT-9. A line naming two bots consults the first it names now and leaves the other
+    /// for after, and the turn that carries the line on consults only the bots left. Taking the
+    /// first of the list each time would consult the same bot twice.
+    #[test]
+    fn bots_named_together_are_consulted_in_the_order_the_line_names_them() {
+        let config = a_config_needing_no_sign_in();
+        let line = "ask @test-writer and @rule-reviewer if this is safe";
+        let picked = pick(consult_among(&config, &two_bots(), line), None).expect("named");
+        assert_eq!(picked.now.expect("allowed").addressed.name, "test-writer");
+        assert_eq!(picked.left, vec!["rule-reviewer".to_string()]);
+        assert!(picked.skipped.is_empty());
+
+        let left = ["rule-reviewer".to_string()];
+        let picked = pick(consult_among(&config, &two_bots(), line), Some(&left)).expect("named");
+        assert_eq!(picked.now.expect("allowed").addressed.name, "rule-reviewer");
+        assert!(picked.left.is_empty(), "nothing is left after the last");
+    }
+
+    /// CONSULT-9, CONSULT-10. A bot that may not be consulted is skipped with the reason it was
+    /// refused, and the bot after it is consulted. Where none may be, the last refusal is what the
+    /// line ends on. Stopping at the first refusal would leave the others unasked.
+    #[test]
+    fn a_refused_bot_is_skipped_and_the_next_is_consulted() {
+        let allowed = consult_among(
+            &a_config_needing_no_sign_in(),
+            &two_bots(),
+            "@test-writer is this safe?",
+        )
+        .into_iter()
+        .next()
+        .expect("named");
+        let refused = (
+            "rule-reviewer".to_string(),
+            Err("rule-reviewer needs a sign-in".to_string()),
+        );
+        let picked = pick(vec![refused, allowed], None).expect("named");
+        assert_eq!(
+            picked.skipped,
+            vec!["rule-reviewer needs a sign-in".to_string()]
+        );
+        assert_eq!(picked.now.expect("allowed").addressed.name, "test-writer");
+
+        let picked = pick(
+            vec![
+                ("a".to_string(), Err("a was refused".to_string())),
+                ("b".to_string(), Err("b was refused".to_string())),
+            ],
+            None,
+        )
+        .expect("named");
+        assert_eq!(picked.now.err().as_deref(), Some("b was refused"));
+        assert_eq!(picked.skipped, vec!["a was refused".to_string()]);
+    }
+
+    /// CONSULT-9. A brief drafted after an earlier bot replied is asked for with the box empty,
+    /// so one that is not sent puts the line back there. Without it the note would say the line
+    /// is back while the box stays empty.
+    #[test]
+    fn a_later_brief_that_is_not_sent_puts_the_line_back() {
+        let mut session = Session::new("none");
+        session.work_under(standing());
+        session.begin_aside();
+        brief_answered(
+            &mut session,
+            crate::state::Brief {
+                line: "ask @test-writer and @rule-reviewer if this is safe".to_string(),
+                bot: "rule-reviewer".to_string(),
+                private: false,
+                then: Vec::new(),
+            },
+            "",
+            Err(Unanswered::Stopped),
+        );
+        assert_eq!(
+            session.input(),
+            "ask @test-writer and @rule-reviewer if this is safe"
+        );
+    }
+
+    /// CONSULT-4. Only a line a person sent consults: a brief carried on a line the driver wrote
+    /// names no bot, whatever its words say.
+    #[test]
+    fn only_a_line_a_person_sent_to_the_host_consults() {
+        let brief = crate::state::Brief {
+            line: "@rule-reviewer is this safe?".to_string(),
+            bot: "rule-reviewer".to_string(),
+            private: false,
+            then: Vec::new(),
+        };
+        assert!(
+            consult_for(
+                &Session::new("none"),
+                &a_config_needing_no_sign_in(),
+                &workspace_for_test(),
+                &TrustStore::new("/work"),
+                &Permissions::default(),
+                Wrote::TheDriver,
+                Some(&brief),
+            )
+            .is_none()
+        );
+    }
+
+    /// CONSULT-2. A word that consults a bot names no file, so the bot is not handed a file of
+    /// its own name as context.
+    #[test]
+    fn a_word_that_consults_a_bot_names_no_file() {
+        assert_eq!(
+            files_named_in(
+                "@rule-reviewer read @notes.md",
+                Wrote::ThePerson,
+                std::path::Path::new("/work"),
+                &[],
+                &["rule-reviewer"],
+            ),
+            vec!["notes.md".to_string()]
+        );
+    }
+
+    /// CONSULT-2. A comma or colon straight after a bot's name still consults the bot, and the
+    /// word is not read as a file. Without the trim, `@rule-reviewer,` would be refused as a file
+    /// that is not there.
+    #[test]
+    fn a_bots_name_followed_by_punctuation_consults_it() {
+        for line in ["@rule-reviewer, is this safe?", "ask @rule-reviewer: why?"] {
+            let (bot, consult) =
+                consult_among(&a_config_needing_no_sign_in(), &a_resolved_set(None), line)
+                    .into_iter()
+                    .next()
+                    .expect("a bot was named");
+            assert_eq!(bot, "rule-reviewer", "{line}");
+            assert_eq!(
+                consult.expect("may be consulted").addressed.name,
+                "rule-reviewer"
+            );
+            assert!(
+                files_named_in(
+                    line,
+                    Wrote::ThePerson,
+                    std::path::Path::new("/work"),
+                    &[],
+                    &["rule-reviewer"],
+                )
+                .is_empty(),
+                "{line}"
+            );
+        }
+    }
+
+    /// CONSULT-15. A consult that was stopped or failed hands the host nothing: the host's
+    /// conversation is the one that carries on, as it was, and the consult's goes.
+    #[test]
+    fn a_stopped_consult_leaves_the_host_as_it_was() {
+        let mut host = Conversation::new();
+        host.push(bravebot_aichat::protocol::Message::user("earlier"));
+        let mut consulted = Conversation::new();
+        consulted.push(bravebot_aichat::protocol::Message::user("the brief"));
+        let consult = consult_among(
+            &a_config_needing_no_sign_in(),
+            &a_resolved_set(None),
+            "@rule-reviewer is this safe?",
+        )
+        .into_iter()
+        .next()
+        .expect("named")
+        .1
+        .expect("allowed");
+
+        let finished = handed_back(
+            "@rule-reviewer is this safe?",
+            &consult,
+            "a-model",
+            host,
+            FinishedTurn {
+                decisions: None,
+                outcome: Err(turn::TurnError::Cancelled { attempts: None }),
+                conversation: consulted,
+                sink: Trail::new(),
+                servers: None,
+            },
+        );
+
+        let said = finished.conversation.recounted();
+        assert!(
+            matches!(&said[..], [bravebot_agent::conversation::Said::User(line)] if line == "earlier"),
+            "{said:?}"
+        );
+    }
+
+    /// CONSULT-1. A consult runs over a conversation of its own, and the host's is set aside whole
+    /// to be handed the reply. Running it over the host's would show the bot everything the host
+    /// was shown, and a host turn that set its conversation aside would forget the session.
+    #[test]
+    fn a_consult_runs_over_its_own_conversation_and_the_hosts_is_set_aside() {
+        let mut host = Conversation::new();
+        host.push(bravebot_aichat::protocol::Message::user(
+            "what the host was told",
+        ));
+
+        let (running, set) = set_aside(host, true, false);
+        assert!(
+            running.recounted().is_empty(),
+            "the consult holds the host's conversation"
+        );
+        let set = set.expect("the host's conversation was dropped");
+        assert!(
+            matches!(&set.recounted()[..], [bravebot_agent::conversation::Said::User(line)] if line == "what the host was told"),
+            "{:?}",
+            set.recounted()
+        );
+
+        let mut host = Conversation::new();
+        host.push(bravebot_aichat::protocol::Message::user(
+            "what the host was told",
+        ));
+        let (running, set) = set_aside(host, false, false);
+        assert_eq!(
+            running.recounted().len(),
+            1,
+            "a host turn lost its conversation"
+        );
+        assert!(set.is_none());
+    }
+
+    /// CONSULT-13. A consult is aimed at no goal, may arm no watch and asks for no later look, so
+    /// nothing it starts outlasts its reply, while the host's turn in the same session may do all
+    /// three. Giving a consult any of them would leave the bot working after it had answered.
+    #[test]
+    fn a_consult_leaves_nothing_running_after_its_reply() {
+        let session = Session::new("none");
+        let consulting = outlasting(&session, Wrote::ThePerson, true);
+        assert_eq!(
+            consulting.arming,
+            bravebot_agent::watch::Arming::Unavailable
+        );
+        assert!(!consulting.looking_again);
+        let host = outlasting(&session, Wrote::ThePerson, false);
+        assert_ne!(host.arming, bravebot_agent::watch::Arming::Unavailable);
+        assert!(host.looking_again);
+
+        let mut session = Session::new("none");
+        session.start_goal("the tests pass".to_string());
+        assert_eq!(
+            outlasting(&session, Wrote::ThePerson, true).working_towards,
+            None
+        );
+        assert_eq!(
+            outlasting(&session, Wrote::ThePerson, false)
+                .working_towards
+                .as_deref(),
+            Some("the tests pass")
+        );
+    }
+
+    /// CONSULT-13. Once a consult has replied, the session holds nothing that sends the next line
+    /// to the bot, and the box holds what the person typed while it ran, untouched. A consult that
+    /// stayed would need a rule for what the next line means, and one that wrote to the box would
+    /// change a line the person was in the middle of.
+    #[test]
+    fn a_consult_lasts_one_reply_and_leaves_the_box_alone() {
+        let (mut session, sent) =
+            a_plain_session_offered_a_brief(Some("the diff touches the parser"), CLEAN);
+        assert!(sent.is_some());
+        assert!(session.take_briefed().is_some());
+        type_line(&mut session, "@rule-reviewer and the tests");
+        session.complete("It is safe.", Vec::new(), 0);
+
+        assert_eq!(session.input(), "@rule-reviewer and the tests");
+        let briefed = session.take_briefed();
+        assert!(
+            consult_for(
+                &session,
+                &a_config_needing_no_sign_in(),
+                &workspace_for_test(),
+                &TrustStore::new("/work"),
+                &Permissions::default(),
+                Wrote::ThePerson,
+                briefed.as_ref(),
+            )
+            .is_none(),
+            "the next turn went to the bot without a brief of its own"
+        );
     }
 
     /// The definition a session started under `--agent` works under, as the command line leaves
@@ -31850,6 +32603,8 @@ mod tests {
         let answered = |kept: Option<&str>| bravebot_agent::aside::Answered {
             shown: "a brief".to_string(),
             kept: kept.map(str::to_string),
+            private: false,
+            promoted: false,
             usage,
         };
         let mut handed = Session::new("none");
@@ -40625,6 +41380,8 @@ mod tests {
         let answer = |kept: Option<&str>| bravebot_agent::aside::Answered {
             shown: "run the tests again".to_string(),
             kept: kept.map(str::to_string),
+            private: false,
+            promoted: false,
             usage: bravebot_aichat::protocol::Usage {
                 prompt_tokens: 70,
                 completion_tokens: 30,
@@ -41207,6 +41964,8 @@ mod tests {
         Ok(bravebot_agent::aside::Answered {
             shown: text.to_string(),
             kept: Some(text.to_string()),
+            private: false,
+            promoted: false,
             usage: Default::default(),
         })
     }
@@ -41698,6 +42457,8 @@ mod tests {
             Ok(bravebot_agent::aside::Answered {
                 shown: "a rewrite an attacker may have shaped".to_string(),
                 kept: None,
+                private: false,
+                promoted: false,
                 usage: Default::default(),
             }),
         );
@@ -41805,6 +42566,8 @@ mod tests {
                 Ok(bravebot_agent::aside::Answered {
                     shown: "Fix it.".to_string(),
                     kept: kept.map(str::to_string),
+                    private: false,
+                    promoted: false,
                     usage: bravebot_aichat::protocol::Usage {
                         prompt_tokens: 120,
                         completion_tokens: 30,

@@ -61,6 +61,8 @@ pub enum Kind {
     McpMove,
     /// Whether programs may reach more hosts through the session proxy for this session (SANDBOX-24).
     Host,
+    /// Whether to send a consult the host proposed (CONSULT-12).
+    Consult,
     Ask,
 }
 
@@ -104,6 +106,7 @@ pub enum Reply {
     McpCall(CallDecision),
     McpMove(Decision),
     Host(Decision),
+    Consult(Decision),
     /// One answer per question, in the order they were asked. Empty means nobody could be
     /// asked — see [`Confirmer::ask_user`].
     Ask(Vec<Answer>),
@@ -126,6 +129,7 @@ impl Reply {
             Reply::McpCall(_) => Kind::McpCall,
             Reply::McpMove(_) => Kind::McpMove,
             Reply::Host(_) => Kind::Host,
+            Reply::Consult(_) => Kind::Consult,
             Reply::Ask(_) => Kind::Ask,
         }
     }
@@ -148,7 +152,8 @@ impl Reply {
             | Reply::Exposure(decision)
             | Reply::McpTools(decision)
             | Reply::McpMove(decision)
-            | Reply::Host(decision) => Some(*decision),
+            | Reply::Host(decision)
+            | Reply::Consult(decision) => Some(*decision),
             Reply::Run(_) | Reply::McpServer(_) | Reply::McpCall(_) | Reply::Ask(_) => None,
         }
     }
@@ -179,6 +184,7 @@ impl Kind {
             Kind::McpCall => Reply::McpCall(CallDecision::reject()),
             Kind::McpMove => Reply::McpMove(Decision::Reject),
             Kind::Host => Reply::Host(Decision::Reject),
+            Kind::Consult => Reply::Consult(Decision::Reject),
             // No answers at all, which is how this question says nobody was asked.
             Kind::Ask => Reply::Ask(Vec::new()),
         }
@@ -868,6 +874,13 @@ impl Confirmer for BridgeConfirmer {
         _request: &bravebot_agent::confirm::MessageRequest,
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    /// Ask whether to send a consult the host proposed. Only a yes runs it (CONSULT-12).
+    fn confirm_consult(&mut self, request: &bravebot_agent::confirm::ConsultRequest) -> Decision {
+        self.yes_or_no(Kind::Consult, "consult.request", |id| {
+            wire::consult_request(id, request)
+        })
     }
 
     /// Ask whether a remote MCP server moved where its reply pointed (SERVERS-11).

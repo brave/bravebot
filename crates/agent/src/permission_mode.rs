@@ -647,6 +647,19 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Refused where every check is being bypassed, and asked in every other.
+    ///
+    /// No mode answers this one yes: sending the card is the grant, and a mode that answers in a
+    /// person's place has not read the brief (CONSULT-12).
+    fn confirm_consult(&mut self, request: &crate::confirm::ConsultRequest) -> Decision {
+        match self.mode.get() {
+            PermissionMode::Bypass => Decision::Reject,
+            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
+                self.asking().confirm_consult(request)
+            }
+        }
+    }
+
     /// Refused where every check is being bypassed, the one prompt that mode answers no, and asked
     /// in every other. SERVERS-13.
     ///
@@ -776,6 +789,13 @@ mod tests {
             crate::confirm::MessageDecision::Decline
         }
 
+        fn confirm_consult(
+            &mut self,
+            _request: &crate::confirm::ConsultRequest,
+        ) -> crate::confirm::Decision {
+            crate::confirm::Decision::Reject
+        }
+
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
         }
@@ -803,6 +823,13 @@ mod tests {
             _request: &crate::confirm::MessageRequest,
         ) -> crate::confirm::MessageDecision {
             crate::confirm::MessageDecision::Decline
+        }
+
+        fn confirm_consult(
+            &mut self,
+            _request: &crate::confirm::ConsultRequest,
+        ) -> crate::confirm::Decision {
+            crate::confirm::Decision::Reject
         }
         fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
             Unattended.confirm_write(request)
@@ -867,6 +894,13 @@ mod tests {
         ) -> crate::confirm::MessageDecision {
             self.0 += 1;
             crate::confirm::MessageDecision::ForTheTurn
+        }
+
+        fn confirm_consult(
+            &mut self,
+            _request: &crate::confirm::ConsultRequest,
+        ) -> crate::confirm::Decision {
+            crate::confirm::Decision::Reject
         }
         fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
             Unattended.confirm_write(request)
@@ -983,6 +1017,13 @@ mod tests {
             _request: &crate::confirm::MessageRequest,
         ) -> crate::confirm::MessageDecision {
             crate::confirm::MessageDecision::Decline
+        }
+
+        fn confirm_consult(
+            &mut self,
+            _request: &crate::confirm::ConsultRequest,
+        ) -> crate::confirm::Decision {
+            crate::confirm::Decision::Reject
         }
         fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
             Unattended.confirm_write(request)
@@ -1396,6 +1437,13 @@ mod tests {
             crate::confirm::MessageDecision::Decline
         }
 
+        fn confirm_consult(
+            &mut self,
+            _request: &crate::confirm::ConsultRequest,
+        ) -> crate::confirm::Decision {
+            crate::confirm::Decision::Reject
+        }
+
         fn confirm_move(&mut self, _request: &crate::confirm::MoveRequest) -> Decision {
             self.0 += 1;
             Decision::Approve
@@ -1465,6 +1513,13 @@ mod tests {
             request: &crate::confirm::MessageRequest,
         ) -> crate::confirm::MessageDecision {
             Unattended.confirm_message(request)
+        }
+
+        fn confirm_consult(
+            &mut self,
+            request: &crate::confirm::ConsultRequest,
+        ) -> crate::confirm::Decision {
+            Unattended.confirm_consult(request)
         }
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
             Unattended.confirm_move(request)
@@ -1973,6 +2028,13 @@ mod tests {
             _request: &crate::confirm::MessageRequest,
         ) -> crate::confirm::MessageDecision {
             crate::confirm::MessageDecision::Decline
+        }
+
+        fn confirm_consult(
+            &mut self,
+            _request: &crate::confirm::ConsultRequest,
+        ) -> crate::confirm::Decision {
+            crate::confirm::Decision::Reject
         }
 
         fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {

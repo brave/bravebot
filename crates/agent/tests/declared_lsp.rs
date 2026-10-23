@@ -104,6 +104,13 @@ impl Confirmer for Asked {
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
     }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
     fn ask_user(&mut self, _: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         Vec::new()
     }

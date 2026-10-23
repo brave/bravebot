@@ -480,6 +480,68 @@ pub(super) fn run_turn_animated(
     // other turn carries the definition the session was started under, if any (CLI-17). Kept past
     // the turn as well, because a stop puts the line back as it was typed, name and all.
     let addressed = session.take_addressing();
+    let briefed = session.take_briefed();
+
+    // A drafted brief goes to its bot as a turn addressed to it (CONSULT-5, CONSULT-7).
+    let picked = consult_for(
+        session,
+        config,
+        workspace,
+        &trust,
+        permissions,
+        wrote,
+        briefed.as_ref(),
+    );
+    let left = picked
+        .as_ref()
+        .zip(briefed.as_ref())
+        .and_then(|(_, brief)| {
+            (!brief.then.is_empty()).then(|| crate::state::ConsultsLeft {
+                line: brief.line.clone(),
+                bots: brief.then.clone(),
+            })
+        });
+    // Set on every turn, so a line that stopped leaves nothing for a turn that consults nothing
+    // (CONSULT-9).
+    session.leave_consults(left);
+    let consult = match picked.map(|picked| {
+        for refused in picked.skipped {
+            session.note(refused);
+        }
+        picked.now
+    }) {
+        None => None,
+        Some(Ok(consult)) => Some(consult),
+        // Refused before anything runs, and the host's model is not put in its place (CONSULT-10).
+        Some(Err(refused)) => {
+            let retained = RetainedTurn {
+                files: bravebot_core::file_authority::FileAuthority::new(trust.clone()),
+                programs,
+                asked: asked_about,
+                exposed,
+                began: conversation.mark(),
+            };
+            let finished = FinishedTurn {
+                decisions: None,
+                outcome: Err(turn::TurnError::Precommit(refused)),
+                conversation,
+                sink: Trail::new(),
+                servers,
+            };
+            let line = Line {
+                text: prompt,
+                addressed: addressed.as_ref(),
+                offered_a_later_look: false,
+            };
+            return Ok(finish_turn(
+                session, config, workspace, line, finished, retained,
+            ));
+        }
+    };
+    let addressed = match &consult {
+        Some(consult) => Some(consult.addressed.clone()),
+        None => addressed,
+    };
 
     // Before the worker starts, because a sign-in needs the terminal and this is the thread that
     // has it. Left to the worker, the URL and code the AWS CLI prints would land in a frame this
@@ -529,18 +591,11 @@ pub(super) fn run_turn_animated(
     // goal carries it, the first one included: the round that sets the direction is the one that
     // most needs to know what it is aiming at.
     // A goal the person has held still is not aimed at: the turn is told nothing about it.
-    let working_towards = session
-        .goal_in_force()
-        .map(|goal| goal.condition().to_string());
-    // And whether this turn may arm a standing watch. Read here for the reason the mode is read
-    // here: only the session can count what is live, and a tool answering out of a stale count
-    // would tell the planner about a watch the session then refused.
-    let arming = session.arming();
-    // And whether a wait this turn asks for would become a later look at this line, which decides
-    // whether it is offered a way to ask for one. Read here for the reason `arming` is: only the
-    // session knows what it is already doing, and a tool answering out of a stale reading would
-    // tell the planner a watch exists that the session then declines to keep.
-    let looking_again = will_look_again(session, wrote);
+    let Outlasting {
+        working_towards,
+        arming,
+        looking_again,
+    } = outlasting(session, wrote, consult.is_some());
     // The session's own handle rather than a copy of its value: the person may press the key while
     // this turn runs, and the planner, the tools and the confirmer all read what they pressed last
     // (MODE-8).
@@ -555,6 +610,15 @@ pub(super) fn run_turn_animated(
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(stored.id().to_string()))
         .addressing(addressed.as_ref().map(|addressed| addressed.name.clone()))
+        .consulted_from(
+            briefed
+                .as_ref()
+                .and(session.standing_definition())
+                .map(|host| host.name.clone()),
+        )
+        // A consult is offered no way to propose another (CONSULT-8).
+        .consulting(consult.is_some())
+        .drawing_consult_cards(true)
         // The words `--system-prompt` and `--append-system-prompt` named, on every turn the session
         // sends, ticks and goal rounds included (CLI-19).
         .with_system_prompts(session.system_prompts().clone())
@@ -575,12 +639,23 @@ pub(super) fn run_turn_animated(
     // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
     // line. Read back out of the prompt rather than tracked while it is typed, so the line that was
-    // sent and the files that came with it cannot disagree.
+    // sent and the files that came with it cannot disagree. A brief's files are the ones the
+    // person's own line named, since the rest of it is the host's words.
+    let line = briefed.as_ref().map_or(prompt, |brief| brief.line.as_str());
+    // A bot's name is never a file, on the host's turns as on a consult's: a queued line naming
+    // one goes to the host, and would otherwise be refused for a file that is not there.
+    let bots = match &consult {
+        Some(consult) => consult.bots.clone(),
+        None if line.contains('@') => bot_names(workspace, &trust, permissions),
+        None => Vec::new(),
+    };
+    let consulted: Vec<&str> = bots.iter().map(String::as_str).collect();
     for file in files_named_in(
-        prompt,
+        line,
         wrote,
         workspace.root(),
         &workspace.reference_sources(),
+        &consulted,
     ) {
         task = task.with_file(file);
     }
@@ -610,6 +685,15 @@ pub(super) fn run_turn_animated(
         exposed: exposed.clone(),
         began: conversation.mark(),
     };
+    let (conversation, host) = set_aside(
+        conversation,
+        consult.is_some(),
+        briefed.as_ref().is_some_and(|brief| brief.private),
+    );
+    let answering = addressed
+        .as_ref()
+        .and_then(|addressed| addressed.model.clone())
+        .unwrap_or_else(|| session.model().unwrap_or(&config.default_model).to_string());
 
     let worker = thread::spawn(move || {
         let mut sink = Trail::new();
@@ -993,6 +1077,17 @@ pub(super) fn run_turn_animated(
                         crate::remote_confirm::Reply::Host,
                     );
                 }
+                crate::remote_confirm::ToMain::Consult(request) => {
+                    let answer = crate::confirm::ask_consult(terminal, &request);
+                    reply_to(
+                        session,
+                        &cancel,
+                        &answer_tx,
+                        answer,
+                        |_, _| {},
+                        crate::remote_confirm::Reply::Consult,
+                    );
+                }
                 crate::remote_confirm::ToMain::Ask(asking) => {
                     let idle = session.ask_idle_for(&asking);
                     let answers = crate::ask::put(session, &asking, |outstanding| {
@@ -1046,6 +1141,10 @@ pub(super) fn run_turn_animated(
             servers: None,
         }
     });
+    let finished = match (host, &consult) {
+        (Some(host), Some(consult)) => handed_back(line, consult, &answering, host, finished),
+        _ => finished,
+    };
 
     Ok(finish_turn(
         session,
@@ -1059,6 +1158,234 @@ pub(super) fn run_turn_animated(
         finished,
         retained,
     ))
+}
+
+/// The bot a line consults: the definition its turn is addressed to, where that definition was
+/// read from, and every bot the session resolved, whose names are not files in the line.
+pub(super) struct Consult {
+    pub(super) addressed: crate::state::Addressed,
+    pub(super) definition: String,
+    pub(super) bots: Vec<String>,
+    /// The bot's model and bound, as its row in the `@` list says them.
+    pub(super) row: String,
+}
+
+/// The bot a person's line consults now, with the bots it named after that one and the refusals
+/// of those skipped before it.
+///
+/// `None` for every line that is not one a person sent at the box: a loop's tick, a prompt the
+/// driver wrote and a watch's fire start nothing (CONSULT-4). Only a brief the host drafted and the
+/// person sent consults, and it consults the bot the brief is for (CONSULT-5), so a line queued
+/// behind a turn goes to the host whatever it names.
+///
+/// Resolved now rather than once for the session, as a `/agent` line's name is, so the set a word
+/// is matched against is the set the turn resolves.
+pub(super) fn consult_for(
+    session: &Session,
+    config: &Config,
+    workspace: &Workspace,
+    trust: &TrustStore,
+    permissions: &Permissions,
+    wrote: Wrote,
+    briefed: Option<&crate::state::Brief>,
+) -> Option<Picked> {
+    let ticking = session
+        .looping()
+        .and_then(|running| running.tick())
+        .is_some();
+    if wrote != Wrote::ThePerson || ticking || session.driver_prompt_is_pending() {
+        return None;
+    }
+    let brief = briefed?;
+    let definitions = resolved_definitions(workspace, trust, permissions);
+    pick(
+        consult_among(config, &definitions, &brief.line),
+        Some(std::slice::from_ref(&brief.bot)),
+    )
+}
+
+fn resolved_definitions(
+    workspace: &Workspace,
+    trust: &TrustStore,
+    permissions: &Permissions,
+) -> bravebot_core::delegate::Definitions {
+    bravebot_agent::agents::resolved(
+        workspace,
+        bravebot_agent::home::directory().as_deref(),
+        trust.clone(),
+        permissions.clone(),
+        &mut Trail::new(),
+    )
+}
+
+/// The name of every bot an `@` could consult here.
+fn bot_names(workspace: &Workspace, trust: &TrustStore, permissions: &Permissions) -> Vec<String> {
+    let definitions = resolved_definitions(workspace, trust, permissions);
+    bravebot_agent::agents::bots(&definitions)
+        .map(|definition| definition.name().to_string())
+        .collect()
+}
+
+/// Every bot `prompt` names among `definitions`, in the order it names them, each with the consult
+/// it starts or why it cannot be consulted.
+pub(super) fn consult_among(
+    config: &Config,
+    definitions: &bravebot_core::delegate::Definitions,
+    prompt: &str,
+) -> Vec<(String, Result<Consult, String>)> {
+    let bots: Vec<String> = bravebot_agent::agents::bots(definitions)
+        .map(|definition| definition.name().to_string())
+        .collect();
+    let names: Vec<&str> = bots.iter().map(String::as_str).collect();
+    bravebot_mentions::consulted(prompt, &names)
+        .into_iter()
+        .filter_map(|named| {
+            let found = definitions.get(&named)?;
+            let definition = found.origin().to_string();
+            let row = bravebot_agent::agents::bot_row(found);
+            let consult = definition_named(config, definitions, &named)
+                .map(|addressed| Consult {
+                    addressed,
+                    definition,
+                    bots: bots.clone(),
+                    row,
+                })
+                .map_err(Unusable::into_message);
+            Some((named, consult))
+        })
+        .collect()
+}
+
+/// The consult to start now out of the bots a line named, in its order.
+pub(super) struct Picked {
+    /// The first bot that may be consulted, or where none may, why the last one cannot be.
+    pub(super) now: Result<Consult, String>,
+    /// Why each bot before it cannot be consulted. They are noted and skipped (CONSULT-10).
+    pub(super) skipped: Vec<String>,
+    /// The bots named after it, to be consulted once it replies (CONSULT-9).
+    pub(super) left: Vec<String>,
+}
+
+/// Pick the consult to start now out of `named`, keeping only the bots in `only` where it is given.
+pub(super) fn pick(
+    named: Vec<(String, Result<Consult, String>)>,
+    only: Option<&[String]>,
+) -> Option<Picked> {
+    let mut named = named
+        .into_iter()
+        .filter(|(bot, _)| only.is_none_or(|only| only.contains(bot)));
+    let mut skipped = Vec::new();
+    let mut last = None;
+    for (_, consult) in named.by_ref() {
+        match consult {
+            Ok(consult) => {
+                skipped.extend(last.take());
+                return Some(Picked {
+                    now: Ok(consult),
+                    skipped,
+                    left: named.map(|(bot, _)| bot).collect(),
+                });
+            }
+            Err(refused) => skipped.extend(last.replace(refused)),
+        }
+    }
+    last.map(|refused| Picked {
+        now: Err(refused),
+        skipped,
+        left: Vec::new(),
+    })
+}
+
+/// The host's conversation, given the line and the consult's reply, in place of the consult's.
+///
+/// Only a reply hands anything over. A consult that failed or was stopped leaves the host as it
+/// was, so a stopped line goes back into the box with nothing of it in the host.
+pub(super) fn handed_back(
+    line: &str,
+    consult: &Consult,
+    model: &str,
+    mut host: Conversation,
+    finished: FinishedTurn,
+) -> FinishedTurn {
+    let FinishedTurn {
+        decisions,
+        mut outcome,
+        conversation: _,
+        mut sink,
+        servers,
+    } = finished;
+    if let Ok(replied) = &outcome {
+        let answered = bravebot_agent::consult::Answered {
+            bot: &consult.addressed.name,
+            definition: &consult.definition,
+            model,
+            answer: &replied.answer,
+        };
+        if let Err(denied) = bravebot_agent::consult::record(line, &answered, &mut host, &mut sink)
+        {
+            outcome = Err(turn::TurnError::Precommit(denied.to_string()));
+        }
+    }
+    FinishedTurn {
+        decisions,
+        outcome,
+        conversation: host,
+        sink,
+        servers,
+    }
+}
+
+/// The conversation a turn runs over, and the host's, where the turn is a consult.
+///
+/// A consult's context is its brief and what it reads, never the host's conversation, which is
+/// set aside here and given the reply when the consult ends (CONSULT-1, CONSULT-15). A brief
+/// drafted from private content leaves the consult holding it (CONSULT-6).
+pub(super) fn set_aside(
+    conversation: Conversation,
+    consulting: bool,
+    private: bool,
+) -> (Conversation, Option<Conversation>) {
+    if !consulting {
+        return (conversation, None);
+    }
+    let mut fresh = Conversation::new();
+    if private {
+        fresh.observed(bravebot_core::label::Label::trusted_private());
+    }
+    (fresh, Some(conversation))
+}
+
+/// What a turn may leave running once it has replied.
+pub(super) struct Outlasting {
+    /// What the session is working towards, where a person set a condition and has not held it.
+    pub(super) working_towards: Option<String>,
+    /// Whether the turn may arm a standing watch.
+    pub(super) arming: bravebot_agent::watch::Arming,
+    /// Whether a wait the turn asks for would become a later look at its line.
+    pub(super) looking_again: bool,
+}
+
+/// What the turn starting now may leave running once it replies.
+///
+/// Read here for the reason the mode is: only the session can count what is live, and a tool
+/// answering out of a stale reading would tell the planner about a watch or a later look the
+/// session then refused. A consult is given none of the three: it lasts one reply, and what the
+/// session is doing without anybody typing is the host's (CONSULT-13).
+pub(super) fn outlasting(session: &Session, wrote: Wrote, consulting: bool) -> Outlasting {
+    if consulting {
+        return Outlasting {
+            working_towards: None,
+            arming: bravebot_agent::watch::Arming::Unavailable,
+            looking_again: false,
+        };
+    }
+    Outlasting {
+        working_towards: session
+            .goal_in_force()
+            .map(|goal| goal.condition().to_string()),
+        arming: session.arming(),
+        looking_again: will_look_again(session, wrote),
+    }
 }
 
 /// Adopt decisions before classifying the joined result or handing state back for saving.
@@ -1291,15 +1618,18 @@ pub(super) fn will_look_again(session: &Session, wrote: Wrote) -> bool {
 /// for the path, so a sentence this program wrote has nothing to vouch with: an `@` a judge
 /// happened to put in a reason would otherwise open a file on its own say-so, wearing an
 /// endorsement nobody gave.
+///
+/// A word naming one of `bots` consults it and names no file (CONSULT-2).
 pub(super) fn files_named_in(
     prompt: &str,
     wrote: Wrote,
     root: &std::path::Path,
     sources: &bravebot_mentions::Sources,
+    bots: &[&str],
 ) -> Vec<String> {
     match wrote {
         // A name under a reference's alias is the file in that directory (REFER-6).
-        Wrote::ThePerson => bravebot_mentions::referenced(prompt)
+        Wrote::ThePerson => bravebot_mentions::files_named(prompt, bots)
             .into_iter()
             .map(|name| {
                 // A reference directory with no text spelling leaves the name as typed. Nothing
@@ -1310,6 +1640,21 @@ pub(super) fn files_named_in(
             .collect(),
         Wrote::TheDriver => Vec::new(),
     }
+}
+
+/// A row for each bot an `@` could consult, marked as a bot and naming its model and the most it
+/// may spend (CONSULT-3).
+pub(super) fn bots_offered(
+    definitions: &bravebot_core::delegate::Definitions,
+) -> Vec<bravebot_mentions::Entry> {
+    bravebot_agent::agents::bots(definitions)
+        .map(|definition| {
+            bravebot_mentions::bot_entry(
+                definition.name(),
+                bravebot_agent::agents::bot_row(definition),
+            )
+        })
+        .collect()
 }
 
 /// A row of the `@` list for each earlier session of this directory but the open one, newest first.

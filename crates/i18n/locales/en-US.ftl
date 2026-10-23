@@ -969,6 +969,10 @@ session-message-sent-heading = message to session { $to } ({ $name }) · { $labe
 # content for it.
 session-message-kept = its words were kept from the planner and are not in this record
 
+# In place of a bot's reply to a line a person sent it, where the reply's label was not trusted:
+# the host was given a reference, and the record keeps no content for it.
+consult-reply-kept = its reply was kept from the planner and is not in this record
+
 # Said when a reply reached the output limit and the model is asked again rather than the turn
 # ending. Which one follows from what the reply was doing when it stopped: a call it was writing
 # was never made, so the work is asked for in parts, and a reply that wrote nothing is asked again.
@@ -1854,6 +1858,24 @@ host-explained =
     Nothing is written to disk, so the next session asks again.
 host-yes = Yes, for this session
 host-no = No
+
+## A consult the planner proposed, asked before anything is sent (CONSULT-10, CONSULT-12)
+
+consult-title = consult { $bot }?
+consult-proposed = the planner proposes asking the bot { $bot }, defined in { $definition }
+consult-bound = it answers on { $model }, up to { $rounds } rounds
+consult-bound-with-budget = it answers on { $model }, up to { $rounds } rounds and { $tokens } tokens
+consult-brief-labelled = the brief, labelled { $label }, which is all the bot is given:
+consult-explained =
+    Nothing is sent unless you say yes. The bot's reply comes back to the planner as the result of
+    its proposal, shown or kept as a reference by what the bot read while answering.
+consult-yes = Yes, send it
+consult-no = No
+# A proposed consult whose bot's model cannot run on this machine. The card is drawn so the person
+# sees what was asked for, and takes no yes.
+consult-refused-explained =
+    Nothing is sent to { $bot }, whatever you answer, and no other model is asked in its place.
+consult-close = Close
 
 ## A message to another background session, asked before it is sent
 
@@ -4246,6 +4268,21 @@ agent-no-such-definition = there is no definition called { $name }; this session
 # Drawn above a reply from an addressed turn. The name is the one the driver matched, never
 # anything the reply says about itself.
 agent-answered = { $name } answered
+# Beside a bot's row in the @ list (CONSULT-3): what marks it as a bot, the model it answers on and
+# the most a consult of it may spend.
+consult-row = bot · { $model } · up to { $rounds } rounds
+consult-row-with-budget = bot · { $model } · up to { $rounds } rounds and { $tokens } tokens
+# In place of a model, for a bot whose definition names none.
+consult-row-session-model = the session's model
+# Said while the host drafts the brief for a bot the person's line named, which may be sent the
+# moment it is drafted, so this is where the bot's model and bound are named (CONSULT-10).
+consult-drafting = drafting a brief for { $bot } ({ $bound }) from this conversation
+# Said when the host drafted the brief for a bot the person's line named (CONSULT-5). The bound is
+# the bot's row in the @ list.
+consult-brief-ready = the brief for { $bot } ({ $bound }) is in the box. Enter sends it to { $bot }, or Esc puts your line back
+consult-brief-declined = the brief for { $bot } was not sent, and your line is back in the box
+consult-brief-failed = the brief for { $bot } could not be written: { $problem }
+consult-brief-stopped = the brief for { $bot } was stopped
 # Said when a session started with --agent opens, after the directory's trust is settled (CLI-17).
 session-working-under =
     every turn is addressed to { $definition }; /agent <name> <task> addresses another for one turn

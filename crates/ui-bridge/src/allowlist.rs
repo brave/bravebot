@@ -164,6 +164,9 @@ pub const DENIED: &[&str] = &[
     "server.reply",
     "exposure.reply",
     "host.reply",
+    "consult.reply",
+    // A brief the host drafts for a bot a line named (CONSULT-5), which is the window's composer.
+    "consult.brief",
     "mcp-server.reply",
     "mcp-tools.reply",
     "mcp-call.reply",

@@ -26,9 +26,9 @@ use super::records::{
     carry_out_hunks, list_rewind_points, rewind, rewind_point, save_compacted, with_standing,
 };
 use super::side_requests::{
-    compact_animated, goal_check_animated, handoff_answered, handoff_refusal,
+    brief_answered, compact_animated, goal_check_animated, handoff_answered, handoff_refusal,
 };
-use super::turns::{Continued, Wrote, next_after_a_turn, run_turn_animated};
+use super::turns::{Continued, Wrote, consult_among, next_after_a_turn, pick, run_turn_animated};
 use super::{
     BACKGROUND_LOSES, Ended, RunSettings, Suggesting, Switch, branch_session,
     handed_to_the_background, left_behind, opened_scratch, record_to_resume, run_command,
@@ -37,6 +37,16 @@ use super::{
 use crate::state::{Attached, AttachedImage, Servers, Session};
 
 type Tty = Terminal<CrosstermBackend<io::Stdout>>;
+
+/// What asking the host for a brief came to.
+enum Drafted {
+    /// The line names no bot that is left to consult.
+    NoBot,
+    /// The brief, the line or a note is in the box, and nothing was sent.
+    Offered,
+    /// A brief the host could have held, sent as the person's line (CONSULT-5).
+    Send(String),
+}
 
 /// The locals `event_loop` keeps from its startup, borrowed for one pass of its loop.
 ///
@@ -759,6 +769,101 @@ impl Held<'_> {
         Ok(())
     }
 
+    /// Have the host draft the brief for the bot the box's line names (CONSULT-5).
+    ///
+    /// Returns the line to send to the host as it is where it names no bot, and the brief where
+    /// it is sent at once; otherwise the line stays in the box until the brief takes its place.
+    pub(super) fn brief(
+        &mut self,
+        terminal: &mut Tty,
+        config: &Config,
+    ) -> io::Result<Option<String>> {
+        let line = self.session.input().trim().to_string();
+        let only = self.session.consults_to_resume(&line);
+        Ok(
+            match self.draft_brief(terminal, config, line, only.as_deref())? {
+                Drafted::NoBot => self.session.submit(),
+                Drafted::Offered => None,
+                Drafted::Send(brief) => Some(brief),
+            },
+        )
+    }
+
+    /// Have the host draft the brief for the first bot `line` names, among `only` where it is
+    /// given, that may be consulted. A bot that may not is noted and skipped (CONSULT-10), and
+    /// the bots named after the one briefed go with the brief (CONSULT-9).
+    ///
+    /// [`Drafted::NoBot`] where the line names no such bot at all.
+    fn draft_brief(
+        &mut self,
+        terminal: &mut Tty,
+        config: &Config,
+        line: String,
+        only: Option<&[String]>,
+    ) -> io::Result<Drafted> {
+        let definitions = bravebot_agent::agents::resolved(
+            self.workspace,
+            bravebot_agent::home::directory().as_deref(),
+            self.answers.trust.clone(),
+            self.answers.rules.permissions.clone(),
+            &mut Trail::new(),
+        );
+        let Some(picked) = pick(consult_among(config, &definitions, &line), only) else {
+            return Ok(Drafted::NoBot);
+        };
+        if let Some(only) = only {
+            self.session.resume_consults(crate::state::ConsultsLeft {
+                line: line.clone(),
+                bots: only.to_vec(),
+            });
+        }
+        for refused in picked.skipped {
+            self.session.note(refused);
+        }
+        let consult = match picked.now {
+            Err(refused) => {
+                self.session.note(refused);
+                self.session.keep_line_unsent(&line);
+                return Ok(Drafted::Offered);
+            }
+            Ok(consult) => consult,
+        };
+        let bot = consult.addressed.name.clone();
+        // Closed for the reason an aside closes it: the request is charged to a turn the snapshot
+        // predates.
+        self.session.rewind.close();
+        super::note_drafting(self.session, &bot, &consult.row);
+        let (done, events) = super::ask_animated(
+            terminal,
+            self.session,
+            config,
+            self.conversation,
+            &mut self.answers.trust,
+            "",
+            false,
+            Some(super::Writing::Consult {
+                bot: &bot,
+                line: &line,
+            }),
+            &[],
+            &[],
+            self.workspace,
+        )?;
+        self.stored.append_audit(self.session.turns, &events);
+        let sent = brief_answered(
+            self.session,
+            crate::state::Brief {
+                line,
+                bot,
+                private: false,
+                then: picked.left,
+            },
+            &consult.row,
+            done,
+        );
+        Ok(sent.map_or(Drafted::Offered, Drafted::Send))
+    }
+
     /// Rewrite the line in the box to be more specific, and put the rewrite in the box (INPUT-48).
     ///
     /// Asked beside the work, as a brief is: the conversation is read and not written to, the cost
@@ -891,6 +996,21 @@ impl Held<'_> {
             // woke. Best-effort, like everything else under ~/.bravebot.
             self.save(&prompt);
             self.stored.append_audit(self.session.turns, &events);
+
+            // The next bot a line named, once the one before it replied, ahead of anything queued
+            // behind the line (CONSULT-9). Its brief is drafted, and goes at once where the host
+            // could have held it; otherwise the person sending it is what starts the turn, and the
+            // queue waits behind it.
+            if let Some(left) = self.session.carry_on_consulting() {
+                match self.draft_brief(terminal, config, left.line, Some(&left.bots))? {
+                    Drafted::Send(brief) => {
+                        sending = Some((brief, Wrote::ThePerson));
+                        continue;
+                    }
+                    Drafted::Offered => return Ok(None),
+                    Drafted::NoBot => {}
+                }
+            }
 
             sending = next_after_a_turn(self.session, |session| {
                 let (carrying_on, checked) = goal_check_animated(

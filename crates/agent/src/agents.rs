@@ -253,6 +253,12 @@ fn read_definition(text: &str, origin: &str) -> Read {
         }
     }
 
+    // Only `off` opts out, so a value written for some other reading leaves the definition a bot
+    // and costs a person nothing they did not choose (CONSULT-14).
+    if declared.get("consult").map(|c| c.trim()) == Some("off") {
+        definition = definition.without_consults();
+    }
+
     Read::Definition {
         definition: Box::new(definition),
         declares_servers,
@@ -287,10 +293,14 @@ pub enum Refused {
 /// typed into a form becomes a key or a block indicator, and the result is read back before it
 /// is returned, so a text that would not read back as what was given is refused rather than
 /// written.
+///
+/// `consult` of `Some(false)` writes `consult: off`, `Some(true)` removes any `consult:` line, and
+/// `None` leaves the line as it is ([CONSULT-16](../../../docs/specs/consulting-a-bot.md#CONSULT-16)).
 pub fn rewrite_definition(
     text: &str,
     purpose: &str,
     model: Option<&str>,
+    consult: Option<bool>,
 ) -> Result<String, Refused> {
     let description = purpose
         .lines()
@@ -322,6 +332,7 @@ pub fn rewrite_definition(
     let mut out = String::from(lines[0]);
     let mut wrote_description = false;
     let mut wrote_model = false;
+    let mut wrote_consult = consult.is_none();
 
     let mut at = 0;
     while at < block.len() {
@@ -351,6 +362,12 @@ pub fn rewrite_definition(
                 }
                 wrote_model = true;
             }
+            Some("consult") if consult.is_some() => {
+                if !wrote_consult && consult == Some(false) {
+                    out.push_str("consult: off\n");
+                }
+                wrote_consult = true;
+            }
             _ => {
                 out.push_str(line);
                 for kept in &block[at..end] {
@@ -373,6 +390,9 @@ pub fn rewrite_definition(
     if let (false, Some(model)) = (wrote_model, model) {
         out.push_str(&format!("model: {}\n", quoted(model)));
     }
+    if !wrote_consult && consult == Some(false) {
+        out.push_str("consult: off\n");
+    }
 
     out.push_str(lines[close].trim_end_matches(['\r', '\n']));
     out.push_str("\n\n");
@@ -388,6 +408,8 @@ pub fn rewrite_definition(
     let declared = crate::skills::declarations(&out).ok_or(Refused::WouldNotReadBack)?;
     let reads_back = declared.get("description").map(String::as_str) == Some(description)
         && declared.get("model").map(|m| m.trim()) == model
+        && consult
+            .is_none_or(|on| (declared.get("consult").map(|c| c.trim()) != Some("off")) == on)
         && crate::skills::body_after_frontmatter(&out) == expected_body;
     if reads_back {
         Ok(out)
@@ -556,6 +578,37 @@ pub fn resolved<S: Sink>(
         return Definitions::default();
     };
     discover(&mut policy, workspace, home).0
+}
+
+/// The definitions in `definitions` a person may consult with `@name` (CONSULT-2, CONSULT-14).
+///
+/// Those whose name is a slug and is not a kind's own, and that did not opt out with
+/// `consult: off`. The set is one [`resolved`] read, so a file a `deny` rule covers is not in it.
+pub fn bots(definitions: &Definitions) -> impl Iterator<Item = &Definition> {
+    definitions.iter().filter(|definition| {
+        definition.may_be_consulted()
+            && Definitions::may_be_named(definition.name())
+            && crate::memory::is_a_slug(definition.name())
+    })
+}
+
+/// What a bot's row and its brief card say of it: that it is a bot, the model it answers on and
+/// the bound it runs under (CONSULT-3, CONSULT-10).
+pub fn bot_row(definition: &Definition) -> String {
+    let model = definition
+        .model()
+        .map_or_else(|| t!(consult_row_session_model).to_string(), str::to_string);
+    let rounds = definition.rounds().to_string();
+    match definition.budget() {
+        Some(tokens) => t!(
+            consult_row_with_budget,
+            model = model,
+            rounds = rounds,
+            tokens = tokens.to_string()
+        ),
+        None => t!(consult_row, model = model, rounds = rounds),
+    }
+    .to_string()
 }
 
 /// Where each definition that keeps a memory keeps it, and what the map says of it ([MEMORY-12]).
@@ -733,6 +786,27 @@ fn discover_workspace<S: Sink>(
             notices,
         );
     }
+}
+
+/// The set these reader definition files, each a name and its further front-matter lines, make
+/// once admitted in order.
+#[cfg(test)]
+pub(crate) fn admitted(files: &[(&str, &str)]) -> Definitions {
+    let mut definitions = Definitions::default();
+    let mut notices = Vec::new();
+    for (at, (name, lines)) in files.iter().enumerate() {
+        let origin = format!("source-{at}/{name}.md");
+        admit(
+            read_definition(
+                &format!("---\nname: {name}\ndescription: d\nkind: reader\n{lines}---\n"),
+                &origin,
+            ),
+            &origin,
+            &mut definitions,
+            &mut notices,
+        );
+    }
+    definitions
 }
 
 /// Put what a file turned out to be into the set, or say why it is not there.
@@ -1266,16 +1340,18 @@ pub fn redefine(
     name: &str,
     purpose: &str,
     model: Option<&str>,
+    consult: Option<bool>,
 ) -> Result<(), RedefineRefused> {
     if !crate::memory::is_a_slug(name) {
         return Err(RedefineRefused::Name);
     }
     let file = home.join(AGENTS).join(format!("{name}.md"));
     let text = std::fs::read_to_string(&file).map_err(|_| RedefineRefused::Missing)?;
-    let rewritten = rewrite_definition(&text, purpose, model).map_err(|refused| match refused {
-        Refused::NotADefinition => RedefineRefused::Missing,
-        other => RedefineRefused::Refused(other),
-    })?;
+    let rewritten =
+        rewrite_definition(&text, purpose, model, consult).map_err(|refused| match refused {
+            Refused::NotADefinition => RedefineRefused::Missing,
+            other => RedefineRefused::Refused(other),
+        })?;
     if rewritten == text {
         return Ok(());
     }
@@ -1303,8 +1379,13 @@ mod tests {
         let before = "---\nname: helper\ndescription: Old purpose.\nkind: worker\ntools: \
                       read_file, list_files\nmodel: old-model\nmemory: project\nmcpServers: \
                       alpha\ncolour: teal\n---\n\nOld purpose.\nMore.\n";
-        let after = rewrite_definition(before, "New purpose.\nSecond line.", Some("new-model"))
-            .expect("rewritten");
+        let after = rewrite_definition(
+            before,
+            "New purpose.\nSecond line.",
+            Some("new-model"),
+            None,
+        )
+        .expect("rewritten");
 
         assert_eq!(
             after,
@@ -1325,10 +1406,10 @@ mod tests {
     #[test]
     fn editing_a_definition_adds_a_model_it_lacked_and_drops_one_no_longer_chosen() {
         let bare = "---\nname: helper\ndescription: d\nkind: worker\n---\nbody\n";
-        let with = rewrite_definition(bare, "d", Some("m")).expect("rewritten");
+        let with = rewrite_definition(bare, "d", Some("m"), None).expect("rewritten");
         assert_eq!(definition_of(&with).model(), Some("m"));
 
-        let without = rewrite_definition(&with, "d", None).expect("rewritten");
+        let without = rewrite_definition(&with, "d", None, None).expect("rewritten");
         assert_eq!(definition_of(&without).model(), None);
         assert!(!without.contains("model:"));
     }
@@ -1349,7 +1430,7 @@ mod tests {
             "tools: *\nsecond",
             "---\nnot a close",
         ] {
-            let after = rewrite_definition(before, purpose, Some("a: b")).expect("rewritten");
+            let after = rewrite_definition(before, purpose, Some("a: b"), None).expect("rewritten");
             let read = definition_of(&after);
             assert_eq!(read.kind(), Kind::Worker, "{purpose}");
             assert_eq!(
@@ -1367,24 +1448,47 @@ mod tests {
     fn an_edit_that_cannot_be_written_as_asked_is_refused() {
         let before = "---\nname: helper\ndescription: d\nkind: worker\n---\nb\n";
         assert_eq!(
-            rewrite_definition(before, " \n\n ", None),
+            rewrite_definition(before, " \n\n ", None, None),
             Err(Refused::NoDescription)
         );
         for model in ["", "two\nlines", "inherit"] {
             assert_eq!(
-                rewrite_definition(before, "d", Some(model)),
+                rewrite_definition(before, "d", Some(model), None),
                 Err(Refused::Model),
                 "{model:?}"
             );
         }
         assert_eq!(
-            rewrite_definition("no front matter\n", "d", None),
+            rewrite_definition("no front matter\n", "d", None, None),
             Err(Refused::NotADefinition)
         );
         assert_eq!(
-            rewrite_definition("---\nname: helper\nkind: worker\n---\nb\n", "d", None),
+            rewrite_definition("---\nname: helper\nkind: worker\n---\nb\n", "d", None, None),
             Err(Refused::NotADefinition)
         );
+    }
+
+    #[test]
+    fn turning_consults_off_writes_the_line_and_turning_them_on_removes_it() {
+        let bare = "---\nname: helper\ndescription: d\nkind: worker\ncolour: teal\n---\nbody\n";
+        let off = rewrite_definition(bare, "d", None, Some(false)).expect("rewritten");
+        assert!(!definition_of(&off).may_be_consulted());
+        assert!(off.contains("colour: teal\n"));
+        assert_eq!(off.matches("consult:").count(), 1);
+
+        let again = rewrite_definition(&off, "d", None, Some(false)).expect("rewritten");
+        assert_eq!(again, off);
+        let kept = rewrite_definition(&off, "d", None, None).expect("rewritten");
+        assert_eq!(kept, off);
+
+        let on = rewrite_definition(&off, "d", None, Some(true)).expect("rewritten");
+        assert!(definition_of(&on).may_be_consulted());
+        assert!(!on.contains("consult:"));
+        assert!(on.contains("colour: teal\n"));
+
+        let other = "---\nname: helper\ndescription: d\nconsult: maybe\nkind: worker\n---\nb\n";
+        let turned_off = rewrite_definition(other, "d", None, Some(false)).expect("rewritten");
+        assert!(turned_off.contains("consult: off\nkind: worker\n"));
     }
 
     /// A description wrapped over several lines is one value, so replacing it replaces every line
@@ -1393,7 +1497,7 @@ mod tests {
     fn a_wrapped_description_is_replaced_whole() {
         let before = "---\nname: helper\ndescription: >\n  first half\n  second half\nkind: \
                       worker\n---\nb\n";
-        let after = rewrite_definition(before, "fresh", None).expect("rewritten");
+        let after = rewrite_definition(before, "fresh", None, None).expect("rewritten");
         assert_eq!(
             after,
             "---\nname: helper\ndescription: 'fresh'\nkind: worker\n---\n\nfresh\n"
@@ -2021,6 +2125,60 @@ mod tests {
         );
     }
 
+    /// The bots a set holds once each of these definition files, named by name and front-matter
+    /// lines, is admitted in order.
+    fn bots_after(files: &[(&str, &str)]) -> Vec<String> {
+        bots(&admitted(files))
+            .map(|d| d.name().to_string())
+            .collect()
+    }
+
+    /// CONSULT-2, CONSULT-14: a bot is a definition named with a slug that did not write
+    /// `consult: off`. Any other value leaves it one, and the three kinds never are.
+    #[test]
+    fn a_bot_is_a_slug_named_definition_that_did_not_opt_out() {
+        assert_eq!(
+            bots_after(&[
+                ("reviewer", ""),
+                ("Rule Reviewer", ""),
+                ("README.md", ""),
+                ("helper", "consult: off\n"),
+                ("spaced", "consult:   off  \n"),
+                ("lenient", "consult: no\n"),
+                ("upper", "consult: OFF\n"),
+                ("plain-2", "consult: on\n"),
+            ]),
+            ["reviewer", "lenient", "upper", "plain-2"]
+        );
+    }
+
+    /// CONSULT-14: a later definition of the same name decides the key, whichever way it goes.
+    #[test]
+    fn a_later_definition_of_a_name_decides_whether_it_is_a_bot() {
+        assert_eq!(
+            bots_after(&[("reviewer", "consult: off\n"), ("reviewer", "")]),
+            ["reviewer"]
+        );
+        assert!(bots_after(&[("reviewer", ""), ("reviewer", "consult: off\n")]).is_empty());
+    }
+
+    /// CONSULT-14: opting out leaves the definition in the set, for `/agent` and for delegation.
+    #[test]
+    fn a_definition_that_opted_out_is_still_a_definition() {
+        let mut definitions = Definitions::default();
+        admit(
+            read_definition(
+                "---\nname: helper\ndescription: d\nkind: reader\nconsult: off\n---\n",
+                "test",
+            ),
+            "test",
+            &mut definitions,
+            &mut Vec::new(),
+        );
+        assert!(definitions.get("helper").is_some());
+        assert_eq!(bots(&definitions).count(), 0);
+    }
+
     /// What a file with one `memory:` line is admitted as, and what its author is told of it.
     fn admitted_with_memory(name: &str, line: &str) -> (Option<bool>, Vec<String>) {
         let origin = format!(".bravebot/agents/{name}.md");
@@ -2613,6 +2771,7 @@ mod tests {
             "editor",
             "Audits the parser.\nSecond.",
             Some("new-model"),
+            None,
         )
         .expect("rewritten");
 
@@ -2631,7 +2790,7 @@ mod tests {
     fn editing_a_bot_whose_definition_is_gone_or_whose_purpose_is_blank_writes_nothing() {
         let home = Home::new("redefine-refuses");
         assert!(matches!(
-            redefine(&home.0, "gone", "Purpose.", None),
+            redefine(&home.0, "gone", "Purpose.", None, None),
             Err(RedefineRefused::Missing)
         ));
         assert!(
@@ -2645,7 +2804,7 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            redefine(&home.0, "../outside", "Purpose.", None),
+            redefine(&home.0, "../outside", "Purpose.", None, None),
             Err(RedefineRefused::Name)
         ));
         assert_eq!(
@@ -2656,11 +2815,11 @@ mod tests {
         make_definition(&home.0, "kept", "Original.", None).expect("made");
         let before = std::fs::read_to_string(home.file("kept")).unwrap();
         assert!(matches!(
-            redefine(&home.0, "kept", "  \n", None),
+            redefine(&home.0, "kept", "  \n", None, None),
             Err(RedefineRefused::Refused(Refused::NoDescription))
         ));
         assert!(matches!(
-            redefine(&home.0, "kept", "Purpose.", Some("a\nb")),
+            redefine(&home.0, "kept", "Purpose.", Some("a\nb"), None),
             Err(RedefineRefused::Refused(Refused::Model))
         ));
         assert_eq!(std::fs::read_to_string(home.file("kept")).unwrap(), before);

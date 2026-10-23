@@ -69,6 +69,8 @@ pub(crate) fn show_in_a_turn(
             failed,
             reported,
         } => session.delegate_finished(id, note, failed, reported),
+        ToMain::ConsultStarted(bot) => session.consult_began(bot),
+        ToMain::ConsultFinished { bot, reply } => session.consult_ended(bot, reply),
         shown @ (ToMain::RequestBuilt(_)
         | ToMain::Written(_)
         | ToMain::Phase(_)
@@ -100,7 +102,8 @@ pub(crate) fn show_in_a_turn(
         | ToMain::Move(_)
         | ToMain::Path(_)
         | ToMain::Host(_)
-        | ToMain::Ask(_)) => return Some(question),
+        | ToMain::Ask(_)
+        | ToMain::Consult(_)) => return Some(question),
     }
     None
 }

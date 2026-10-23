@@ -1247,6 +1247,56 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(Labelled::new(text, label))
     }
 
+    /// Fix a check over the brief a host drafted for `bot`, before a person is asked to send it.
+    ///
+    /// The fifth prompt CHECK-10 puts a check in front of (CONSULT-6). It reads the whole brief,
+    /// which is the whole of what a yes covers.
+    pub fn before_vetting_a_brief(
+        &mut self,
+        bot: &str,
+        brief: Labelled<String>,
+    ) -> crate::vetting::VettingSpec {
+        self.fix_check(
+            brief,
+            format!("the brief drafted for {bot}"),
+            crate::vetting::Origin::Recorded(format!(
+                "what the host drafted from its conversation for {bot}"
+            )),
+            None,
+            None,
+        )
+    }
+
+    /// Record that a person read the brief drafted for `bot` and said it may be sent.
+    pub fn endorse_brief(&mut self, bot: &str) {
+        self.issue_grant("consult_brief", "bot", bot.to_string());
+    }
+
+    /// Take a person's word for the brief drafted for `bot`, once (CONSULT-6).
+    ///
+    /// A promotion road of its own (LABEL-8). What is promoted is the brief as it was drawn, and
+    /// its integrity only: a brief drafted from private content stays private (CHECK-7).
+    pub fn promote_a_brief(
+        &mut self,
+        bot: &str,
+        brief: &Labelled<String>,
+        by: crate::vetting::Endorsed,
+    ) -> Gated<Labelled<String>> {
+        self.consume_grant("consult_brief", "bot", bot)?;
+        let was = brief.label();
+        let proof = Declassification::authorise("a brief a person read and sent");
+        let text = brief.clone().declassify(&proof);
+        let label = Label::new(Integrity::Trusted, was.confidentiality);
+        self.allow(
+            "consult_brief",
+            format!(
+                "the brief for {bot} was {was}; {}, so the consult is given it at {label}",
+                by.describe()
+            ),
+        );
+        Ok(Labelled::new(text, label))
+    }
+
     /// Record that a capability produced an observation, returning the label it must
     /// carry. The label comes from the capability, never from the data.
     pub fn observe(&mut self, capability: Capability) -> Gated<Label> {
@@ -1726,6 +1776,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.hold(
             report.confidentiality,
             "the planner was given a delegate's private report",
+        );
+    }
+
+    /// Take in the confidentiality of a consulted bot's reply the planner is shown (CONSULT-11).
+    pub fn heard_from_consult(&mut self, reply: Label) {
+        self.hold(
+            reply.confidentiality,
+            "the planner was given a consulted bot's private reply",
         );
     }
 
@@ -4371,6 +4429,48 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         };
 
+        // A consult sent from a host that is a definition holds no more than that host does, so a
+        // bot of a wider kind gets the host's reach and no tool the host was not offered
+        // (CONSULT-7). Read before the bot's own list narrows the delegates the host is among.
+        let host = match self.routing.get(crate::delegate::CONSULTED_FROM) {
+            None => None,
+            Some(host) => match self.delegates.get(host).cloned() {
+                Some(definition) => Some(definition),
+                None => {
+                    let host = host.to_string();
+                    return Err(self.deny(
+                        "address",
+                        Principle::Capability,
+                        format!(
+                            "{name} was consulted from '{host}', which this session did not \
+                             resolve, so it does not run"
+                        ),
+                    ));
+                }
+            },
+        };
+        if let Some(host) = &host {
+            let reach = host.held_out_of(&self.capabilities);
+            let given_up: Vec<String> = self
+                .capabilities
+                .iter()
+                .filter(|capability| !reach.contains(capability))
+                .map(|capability| capability.to_string())
+                .collect();
+            if !given_up.is_empty() {
+                self.allow(
+                    "address",
+                    format!(
+                        "{name} was consulted from {}, which is a {}, so it runs without {}",
+                        host.name(),
+                        host.kind(),
+                        given_up.join(", ")
+                    ),
+                );
+            }
+            self.capabilities = reach;
+        }
+
         // The addressed definition's own list, so the turn it now runs starts the delegates the
         // file names and the ones those start are held to it (DELEGATE-30).
         if let Some(only) = selected.spawns() {
@@ -4446,6 +4546,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 crate::delegate::gating_capability(tool)
                     .is_none_or(|needs| self.capabilities.contains(&needs))
                     && named.is_none_or(|named| named.iter().any(|written| written == *tool))
+                    && host
+                        .as_ref()
+                        .and_then(|host| host.tools())
+                        .is_none_or(|named| named.iter().any(|written| written == *tool))
                     && (may_delegate || **tool != "spawn_agent")
             })
             .map(|tool| tool.to_string())
@@ -4527,6 +4631,35 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// File decisions are already shared and must never be merged from snapshots. Capabilities,
     /// routing grants, quarantines and prompt history remain local to each policy.
     pub fn adopt_from_delegate(&mut self, since: &Vouched, ended: &Vouched) {
+        let vouched = self.adopt_programs(since, ended);
+        self.allow(
+            "delegate",
+            format!("what a person vouched for inside a delegate is kept: {vouched} commands"),
+        );
+    }
+
+    /// Adopt what a person settled inside a consult this turn ran (CONSULT-12).
+    ///
+    /// Commands are taken as a delegate's are. The prompt history and the reads agreed to despite a
+    /// finding replace this policy's, since the consult was seeded with them and only adds; neither
+    /// grants anything a gate reads. File decisions are already shared.
+    pub fn adopt_from_consult(
+        &mut self,
+        since: &Vouched,
+        ended: &Vouched,
+        asked: crate::programs::AskedAbout,
+        exposed: crate::credentials::Exposed,
+    ) {
+        let vouched = self.adopt_programs(since, ended);
+        self.asked = asked;
+        self.exposed = exposed;
+        self.allow(
+            "consult",
+            format!("what a person vouched for inside a consult is kept: {vouched} commands"),
+        );
+    }
+
+    fn adopt_programs(&mut self, since: &Vouched, ended: &Vouched) -> usize {
         let mut vouched = 0;
         for command in ended.programs.iter() {
             if since.programs.contains(
@@ -4540,11 +4673,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             self.programs.trust(command.clone());
             vouched += 1;
         }
-
-        self.allow(
-            "delegate",
-            format!("what a person vouched for inside a delegate is kept: {vouched} commands"),
-        );
+        vouched
     }
 
     /// Assemble a processor's input from the slots its spec names.
@@ -10977,6 +11106,38 @@ five
         assert_eq!(
             promoted.into_trusted().expect("trusted"),
             "[{\"name\":\"lookup\"}]"
+        );
+    }
+
+    /// CONSULT-6. A brief reaches a consult through an endorsement for that bot, once, and keeps
+    /// its confidentiality: only its integrity is a person's to vouch for.
+    #[test]
+    fn a_brief_is_promoted_once_for_the_bot_it_was_endorsed_for_and_stays_private() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let brief = Labelled::new("the diff".to_string(), Label::untrusted_private());
+
+        assert!(
+            policy
+                .promote_a_brief("rule-reviewer", &brief, Endorsed::ByAPerson)
+                .is_err()
+        );
+        policy.endorse_brief("asker");
+        assert!(
+            policy
+                .promote_a_brief("rule-reviewer", &brief, Endorsed::ByAPerson)
+                .is_err()
+        );
+        policy.endorse_brief("rule-reviewer");
+        let promoted = policy
+            .promote_a_brief("rule-reviewer", &brief, Endorsed::ByAPerson)
+            .expect("endorsed");
+        assert_eq!(promoted.label(), Label::trusted_private());
+        assert!(
+            policy
+                .promote_a_brief("rule-reviewer", &brief, Endorsed::ByAPerson)
+                .is_err(),
+            "one yes promoted the brief twice"
         );
     }
 
@@ -19192,6 +19353,40 @@ five
             );
         }
 
+        /// CONSULT-12: a consult sent from its card runs inside the host's turn, so what a person
+        /// answered inside it is the host's afterwards: a command they let run, and a read they
+        /// allowed despite what the scan found. Without the handback the host would
+        /// put the same questions up again once the consult ended.
+        #[test]
+        fn what_a_person_decided_inside_a_proposed_consult_is_kept() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let build =
+                crate::programs::Command::new("/usr/bin/make", vec!["build".to_string()], "/work");
+
+            let seeded = policy.vouched();
+            let mut ended = seeded.clone();
+            ended.programs.trust(build.clone());
+            let asked = policy.asked().clone();
+            let mut exposed = policy.exposed().clone();
+            exposed.allow("secrets/token.txt");
+            policy.adopt_from_consult(&seeded, &ended, asked, exposed);
+
+            assert!(
+                policy.programs().contains(
+                    &build.program,
+                    &build.started_as,
+                    &build.args,
+                    &build.directory
+                ),
+                "a command a person let a consult run was thrown away with it"
+            );
+            assert!(
+                policy.exposed().holds("secrets/token.txt"),
+                "a read a person allowed inside a consult was thrown away with it"
+            );
+        }
+
         /// The commands half of the record. A person answering 'always' at a run prompt inside a
         /// delegate has said the build may run, not that it may run in the delegate, so taking
         /// only the trust map back would leave the command list where it was and put the same
@@ -19534,6 +19729,49 @@ five
                     "spawns {spawns:?}"
                 );
             }
+        }
+
+        /// CONSULT-7. A worker consulted from a reader holds what the reader holds, and is offered
+        /// no tool the reader's file left out, so consulting is never a way to a wider reach.
+        #[test]
+        fn a_consult_holds_no_more_than_the_definition_it_was_consulted_from() {
+            let mut sink = RecordingSink::new();
+            let mut policy = addressing("narrow", all_capabilities(), &mut sink);
+            policy
+                .routing
+                .insert_trusted(crate::delegate::CONSULTED_FROM, "asker");
+
+            let addressed = policy
+                .address(&OFFERED)
+                .expect("a resolved host is consulted from")
+                .expect("the line named a definition");
+            assert_eq!(addressed.name(), "narrow");
+            for refused in [Capability::FileWrite, Capability::ShellExec] {
+                assert!(
+                    policy.before_capability(refused.clone()).is_err(),
+                    "a worker consulted from a reader still holds {refused}"
+                );
+            }
+            assert!(policy.before_capability(Capability::FileRead).is_ok());
+            assert_eq!(addressed.tools(), ["read_file"]);
+            let trail = trail(&sink);
+            assert!(
+                trail.contains("narrow was consulted from asker, which is a reader"),
+                "the trail does not say what the host cost: {trail}"
+            );
+        }
+
+        /// CONSULT-7. A host the session did not resolve narrows nothing it could be checked
+        /// against, so the consult does not run rather than running at the session's reach.
+        #[test]
+        fn a_consult_from_a_host_the_session_did_not_resolve_does_not_run() {
+            let mut sink = RecordingSink::new();
+            let mut policy = addressing("narrow", all_capabilities(), &mut sink);
+            policy
+                .routing
+                .insert_trusted(crate::delegate::CONSULTED_FROM, "nobody");
+
+            assert!(policy.address(&OFFERED).is_err());
         }
 
         /// ADDRESS-7. A definition is a person choosing which of their own capabilities to work

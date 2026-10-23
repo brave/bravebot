@@ -177,6 +177,11 @@ impl Request {
             .and_then(Value::as_bool)
             .unwrap_or(default)
     }
+
+    /// An optional boolean parameter, `None` where it is absent or not a boolean.
+    pub fn optional_flag(&self, name: &str) -> Option<bool> {
+        self.params.get(name).and_then(Value::as_bool)
+    }
 }
 
 /// The answer to one request.

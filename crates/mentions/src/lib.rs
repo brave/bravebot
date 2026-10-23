@@ -45,6 +45,8 @@ pub struct Entry {
     pub note: Option<String>,
     /// What a typed word is looked for in besides the reference itself: a past session's title.
     pub title: Option<String>,
+    /// Whether it is a bot a sent line would consult rather than a file or a session (CONSULT-3).
+    pub is_bot: bool,
 }
 
 /// What follows the `@` of a reference to a past session, in place of a path: `@session:<id>`.
@@ -60,7 +62,41 @@ pub fn session_entry(id: &str, title: &str, note: String) -> Entry {
         is_directory: false,
         note: Some(note),
         title: Some(title.to_string()),
+        is_bot: false,
     }
+}
+
+/// A row offering a bot, which completes to `@name ` and runs nothing (CONSULT-3).
+///
+/// `name` is one the session resolved as a bot, so it is a slug and is written as it is. `note` says
+/// it is a bot, and the model and the bound it runs under.
+pub fn bot_entry(name: &str, note: String) -> Entry {
+    Entry {
+        path: name.to_string(),
+        is_directory: false,
+        note: Some(note),
+        title: None,
+        is_bot: true,
+    }
+}
+
+/// The bots out of `held` a half-typed reference could still become, best match first, offered
+/// before the files and the past sessions (CONSULT-3).
+///
+/// Matched as a name the walk finds is, by [`closeness`]. Nothing is offered once the word holds a
+/// slash or names a session, since no bot's name holds either.
+pub fn bots_matching(typed: &str, held: &[Entry]) -> Vec<Entry> {
+    if typed.contains('/') || typed.starts_with(SESSION_PREFIX) {
+        return Vec::new();
+    }
+    let wanted: String = typed.chars().flat_map(char::to_lowercase).collect();
+    let mut found: Vec<(u8, &Entry)> = held
+        .iter()
+        .filter(|row| row.is_bot)
+        .filter_map(|row| closeness(&wanted, row.path.chars()).map(|close| (close, row)))
+        .collect();
+    found.sort_by_key(|(close, _)| *close);
+    found.into_iter().map(|(_, row)| row.clone()).collect()
 }
 
 /// The directories the person's settings named as references, each with the alias it is written
@@ -288,6 +324,7 @@ fn in_one_directory(
                 is_directory: named.is_directory,
                 note: None,
                 title: None,
+                is_bot: false,
             })
         })
         .collect();
@@ -302,6 +339,7 @@ fn in_one_directory(
                     is_directory: true,
                     note: None,
                     title: None,
+                    is_bot: false,
                 });
             }
         }
@@ -440,6 +478,7 @@ fn found_beneath(root: &Path, typed: &str, offered: &[Entry], most_read: usize) 
             is_directory: found.is_directory,
             note: None,
             title: None,
+            is_bot: false,
         })
         .collect()
 }
@@ -634,6 +673,78 @@ pub fn referenced_sessions(line: &str) -> Vec<String> {
         }
     }
     ids
+}
+
+/// Every bot a line consults: each `@word` that is one of `bots`, in the order written and without
+/// repeats (CONSULT-2).
+///
+/// `bots` is the set the session resolved when the line was sent. A word naming none of them is a
+/// file or a session, and `@./name` is always a file, since no bot's name holds a slash.
+pub fn consulted(line: &str, bots: &[&str]) -> Vec<String> {
+    let mut named: Vec<String> = Vec::new();
+    for word in words_after_at(line) {
+        if let Some(bot) = bot_in(&word, bots)
+            && !named.iter().any(|seen| seen == bot)
+        {
+            named.push(bot.to_string());
+        }
+    }
+    named
+}
+
+/// Every file named with `@` in a line, as [`referenced`] reads them, less the words that consult
+/// one of `bots` (CONSULT-2).
+pub fn files_named(line: &str, bots: &[&str]) -> Vec<String> {
+    referenced(line)
+        .into_iter()
+        .filter(|path| bot_in(path, bots).is_none())
+        .collect()
+}
+
+/// The bot `word` consults: the word itself, or the word less the sentence punctuation that ends
+/// it, where either is one of `bots` (CONSULT-2).
+fn bot_in<'a>(word: &str, bots: &[&'a str]) -> Option<&'a str> {
+    let bare = bare(word);
+    bots.iter()
+        .find(|bot| **bot == word || **bot == bare)
+        .copied()
+}
+
+/// `word` less the sentence punctuation that may end it.
+fn bare(word: &str) -> &str {
+    word.trim_end_matches(|c: char| {
+        matches!(
+            c,
+            ',' | ':'
+                | ';'
+                | '.'
+                | '!'
+                | '?'
+                | ')'
+                | ']'
+                | '}'
+                | '"'
+                | '\''
+                | '\u{201d}'
+                | '\u{2019}'
+        )
+    })
+}
+
+/// Whether any `@word` in `line` could name a bot: a slug, less the sentence punctuation that may
+/// end it (CONSULT-2). What the box can ask before the session's bots are resolved.
+pub fn could_consult(line: &str) -> bool {
+    words_after_at(line).any(|word| is_slug(bare(&word)))
+}
+
+fn is_slug(word: &str) -> bool {
+    word.len() <= 64
+        && word.split('-').all(|run| {
+            !run.is_empty()
+                && run
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
 }
 
 fn is_a_session(word: &str) -> bool {
@@ -971,6 +1082,7 @@ mod tests {
                 is_directory: false,
                 note: None,
                 title: None,
+                is_bot: false,
             }],
             "the list offers a symlink as a file, following nothing"
         );
@@ -1883,5 +1995,126 @@ mod tests {
             0,
             &sources
         ));
+    }
+
+    fn bot_rows(names: &[&str]) -> Vec<Entry> {
+        names
+            .iter()
+            .map(|name| bot_entry(name, format!("bot · {name}")))
+            .collect()
+    }
+
+    /// CONSULT-2: a word naming a bot is consulted and is not a file; one naming none is a file as
+    /// before, and `@./name` is always the file.
+    #[test]
+    fn a_word_naming_a_bot_consults_it_and_names_no_file() {
+        let bots = ["reviewer", "planner"];
+        let line = "@reviewer look at @src/lib.rs and @./reviewer then @reviewer again @nobody";
+        assert_eq!(consulted(line, &bots), ["reviewer"]);
+        assert_eq!(
+            files_named(line, &bots),
+            ["src/lib.rs", "./reviewer", "nobody"]
+        );
+        assert_eq!(
+            files_named("@reviewer and @README.md", &[]),
+            ["reviewer", "README.md"]
+        );
+        assert!(consulted("mail me@reviewer.io", &bots).is_empty());
+        assert_eq!(
+            consulted("@planner then @reviewer", &bots),
+            ["planner", "reviewer"]
+        );
+    }
+
+    /// CONSULT-2: sentence punctuation after a bot's name is not part of it, so the bot is
+    /// consulted and no file is named. Without the trim, `@reviewer,` would be read as a file.
+    /// A word naming no bot keeps its punctuation, and a name that runs on past a dot is a file.
+    #[test]
+    fn punctuation_after_a_bots_name_is_not_part_of_it() {
+        let bots = ["rule-reviewer", "reviewer"];
+        for line in [
+            "@rule-reviewer, is this safe?",
+            "ask @rule-reviewer: why?",
+            "is this safe @rule-reviewer?",
+            "(ask @rule-reviewer).",
+            "said @rule-reviewer\u{201d} then",
+        ] {
+            assert_eq!(consulted(line, &bots), ["rule-reviewer"], "{line}");
+            assert!(files_named(line, &bots).is_empty(), "{line}");
+        }
+        assert_eq!(consulted("@reviewer, then @reviewer.", &bots), ["reviewer"]);
+        assert!(consulted("@reviewer.md", &bots).is_empty());
+        assert_eq!(files_named("@reviewer.md", &bots), ["reviewer.md"]);
+        assert_eq!(files_named("@notes.md, then", &bots), ["notes.md,"]);
+        assert_eq!(files_named("@src/lib.rs", &bots), ["src/lib.rs"]);
+        assert!(consulted("@session:abc,", &bots).is_empty());
+        assert_eq!(referenced_sessions("@session:abc"), ["abc"]);
+    }
+
+    /// CONSULT-2, CONSULT-5: a line could consult only where an `@word` is a slug, so a line
+    /// naming only files, directories or sessions is sent without asking for a brief.
+    #[test]
+    fn only_a_slug_after_an_at_could_consult() {
+        for line in [
+            "@rule-reviewer, is this safe?",
+            "ask @dev-bot2: why?",
+            "@notes",
+        ] {
+            assert!(could_consult(line), "{line}");
+        }
+        for line in [
+            "look at @README.md",
+            "@src/main.rs ",
+            "@session:abc",
+            "@Notes",
+            "@a--b",
+            "@-a",
+            "mail@dev-bot",
+            "no tag at all",
+        ] {
+            assert!(!could_consult(line), "{line}");
+        }
+        assert!(!could_consult(&format!("@{}", "a".repeat(65))));
+    }
+
+    /// CONSULT-2: a session reference is never a bot, since a bot's name holds no colon.
+    #[test]
+    fn a_session_reference_is_never_consulted() {
+        let line = "@session:abc @reviewer";
+        assert_eq!(consulted(line, &["reviewer"]), ["reviewer"]);
+        assert_eq!(referenced_sessions(line), ["abc"]);
+        assert!(files_named(line, &["reviewer"]).is_empty());
+    }
+
+    /// CONSULT-3: the bots a word could become are offered best match first, marked as bots, and
+    /// none once the word holds a slash or names a session.
+    #[test]
+    fn the_bots_a_word_could_become_are_offered_marked_as_bots() {
+        let held = bot_rows(&["rule-reviewer", "reviewer", "planner"]);
+        let offered: Vec<String> = bots_matching("rev", &held)
+            .into_iter()
+            .map(|row| row.path)
+            .collect();
+        assert_eq!(offered, ["reviewer", "rule-reviewer"]);
+        assert_eq!(bots_matching("", &held).len(), 3);
+        assert!(bots_matching("", &held).iter().all(|row| row.is_bot));
+        assert!(bots_matching("./rev", &held).is_empty());
+        assert!(bots_matching("session:", &held).is_empty());
+        assert!(bots_matching("zzz", &held).is_empty());
+    }
+
+    /// CONSULT-3: Enter on a bot typed in full sends the line, and on a half-typed one completes it.
+    #[test]
+    fn a_bot_typed_in_full_sends_rather_than_completes() {
+        let scratch = Scratch::new("bot-enter");
+        let offered = bot_rows(&["reviewer"]);
+        assert!(!enter_completes(
+            &scratch.path,
+            "reviewer",
+            &offered,
+            0,
+            &[]
+        ));
+        assert!(enter_completes(&scratch.path, "rev", &offered, 0, &[]));
     }
 }
