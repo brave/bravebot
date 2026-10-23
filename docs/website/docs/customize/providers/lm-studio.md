@@ -1,5 +1,5 @@
 ---
-sidebar_position: 5
+sidebar_position: 8
 title: LM Studio
 description: Reach a model served by LM Studio's local server with no key, what the first run writes for you, and the block to write yourself.
 ---
@@ -39,9 +39,8 @@ Only a yes writes. A decline is not remembered, so the next start asks again.
 - **Where more than one local server answers**, each is asked about in turn: Ollama, then LM Studio,
   then llama-server.
 
-[Importing from Claude Code, opencode or a local model
-server](../configuration.md#importing-from-claude-code-opencode-or-a-local-model-server) covers the
-same question for the other sources.
+[Importing from Claude Code, opencode or a local model server](../importing.md) covers the same
+question for the other sources.
 
 ## Write it yourself
 

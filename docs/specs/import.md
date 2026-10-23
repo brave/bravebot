@@ -17,6 +17,7 @@ governs:
   - crates/cli/src/background.rs
 documented-by:
   - docs/website/docs/customize/configuration.md
+  - docs/website/docs/customize/importing.md
   - docs/website/docs/customize/providers/ollama.md
   - docs/website/docs/customize/providers/lm-studio.md
   - docs/website/docs/customize/providers/llama-server.md

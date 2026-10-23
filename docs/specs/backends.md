@@ -50,6 +50,9 @@ documented-by:
   - docs/website/docs/customize/providers/ollama.md
   - docs/website/docs/customize/providers/lm-studio.md
   - docs/website/docs/customize/providers/llama-server.md
+  - docs/website/docs/customize/providers/openai.md
+  - docs/website/docs/customize/providers/google-vertex.md
+  - docs/website/docs/customize/providers/openrouter.md
 ---
 
 ## Scope

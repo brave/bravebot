@@ -1,5 +1,5 @@
 ---
-sidebar_position: 4
+sidebar_position: 7
 title: Ollama
 description: Reach a model served by a local Ollama with no key, what the first run writes for you, and the block to write yourself.
 ---
@@ -38,9 +38,8 @@ Only a yes writes. A decline is not remembered, so the next start asks again.
 - **An Ollama already in your settings is not offered again.** That holds where the file has an entry
   for a server on the same port, under any name.
 
-[Importing from Claude Code, opencode or a local model
-server](../configuration.md#importing-from-claude-code-opencode-or-a-local-model-server) covers the
-same question for the other sources.
+[Importing from Claude Code, opencode or a local model server](../importing.md) covers the same
+question for the other sources.
 
 ## Write it yourself
 
