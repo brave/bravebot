@@ -134,6 +134,13 @@ impl Held<'_> {
         } else {
             match turns.parse::<usize>() {
                 Ok(steps) if steps > 0 => self.rewind_steps(steps),
+                // A run of digits too large for `usize` is a number past what any session
+                // remembers, not a non-number: `rewind_steps` only ever compares `steps`
+                // against how many points the stack holds, so the furthest-back value takes
+                // the same "no further" path `/rewind 4` over three turns does.
+                Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => {
+                    self.rewind_steps(usize::MAX)
+                }
                 _ => self.session.note(t!(session_rewind_needs_a_number)),
             }
         }
