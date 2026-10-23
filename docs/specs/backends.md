@@ -3047,8 +3047,8 @@ credential into wherever the output goes.
 
 A request is made in the Responses protocol where the service is the ChatGPT account of
 [CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10), and where a `provider` entry, or a model under one, names
-`@ai-sdk/openai` in `npm`, as opencode names the SDK that speaks it. Every other service is spoken to as
-it is today, in chat completions, and an entry naming no SDK stays one. The ChatGPT account is always spoken
+`@ai-sdk/openai` in `npm`, as opencode names the SDK that speaks it. Every other service is spoken to in
+chat completions, and an entry naming no SDK stays one. The ChatGPT account is always spoken
 to in this protocol, and no request is made to its host in another. A model's own `npm` outranks its
 entry's, so one entry may offer models in both protocols. The SDK an entry names decides over its id: an
 `anthropic` entry that names `@ai-sdk/openai` is reached in this protocol, and states an endpoint of its own,
