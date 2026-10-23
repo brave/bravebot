@@ -28,6 +28,7 @@ documented-by:
   - docs/website/docs/using/sessions.md
   - docs/website/docs/using/manifest-mode.md
   - docs/website/docs/using/rewind.md
+  - docs/website/docs/customize/theme.md
 ---
 
 ## Scope
