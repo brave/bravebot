@@ -557,10 +557,20 @@ since one name cannot select two services.
 
 Where the roster comes from, in order:
 
-1. An entry named `chatgpt` that states no endpoint is read for its `models` and for nothing else. Where it
-   names models, those are what is offered and nothing is asked, as for a gateway. The person wrote that
-   list, so the service refuses at the first request a model it names that the account cannot reach, and no
-   listing is consulted to say so.
+1. An entry named `chatgpt` that states no endpoint is read for its `models` and for nothing else, and it is
+   not a gateway: it names no destination, so the account stays reachable. A model's window is the one its
+   own `limit` states, read by the rule a gateway's model follows, under which `context` and `output` both
+   have to be stated and the output is read for nothing else. No other field of the entry or of a model is
+   read, the entry's `options.contextWindow` included, since a request to the account carries nothing a
+   settings file says ([CHATGPT-10](#CHATGPT-10)). A name is trimmed, a name with nothing left is dropped,
+   and two names that trim to the same text make one row. The entry is part of the `provider` block, so a
+   machine-level `provider` block replaces it, as it replaces the gateways. Where it names
+   models, those are what is offered and nothing is asked, as for a gateway: no listing is requested and the
+   access token is not renewed, so the roster is the same offline. They are offered where a sign-in is
+   stored, since none of the account's rows is offered without one, and a stored sign-in that has ended and
+   has not been found out yet is stored, so the first request says it has ended
+   ([CHATGPT-8](#CHATGPT-8)). The person wrote that list, so the service refuses at the first request a model
+   it names that the account cannot reach, and no listing is consulted to say so.
 2. Where it names none, the serving host is asked for its listing, `GET /models` with the access token as a
    bearer and nothing else, and a redirect in answer is a failure ([CHATGPT-2](#CHATGPT-2)). The body is an
    object whose `models` key holds the rows, and a body of another shape is one that cannot be read. A row of
@@ -574,9 +584,10 @@ Where the roster comes from, in order:
    the shape above, a compiled list of model names is offered instead, and the picker says the listing could
    not be read. A listing that is read and is empty offers nothing, and the compiled list is not used.
 
-The window, the output ceiling and which models can call tools come from the entry or the listing as they do
-for a gateway's, and the assumed low window applies where neither states one. The compiled list is a
-constant of the source that names models only and takes nothing from a reply.
+The window comes from the entry or the listing as it does for a gateway's, and the assumed low window applies
+where neither states one. An output ceiling is not read from the entry, for the reason above, and no model is
+left out for what it can call, since neither source says. The compiled list is a constant of the source that
+names models only and takes nothing from a reply.
 
 An account whose listing is empty, where the entry names no model, is signed in. The command completes,
 says the account reaches no model, and the picker has no row for it. Nothing is invented for a tier nobody named.
@@ -584,14 +595,14 @@ says the account reaches no model, and the picker has no row for it. Nothing is 
 The roster is asked of the one function both pickers call, so the terminal and the desktop offer the same
 rows. It is asked each time a picker opens, and otherwise only for the window of a model in force that is the
 account's, so a session on another model sends the stored token nowhere. No row is offered where no sign-in is
-stored, and nothing is asked of the service then. A stored sign-in
-whose token cannot be had, or whose listing cannot be read, offers no row. The desktop picker says so in a
-warning beside the other rosters', and the terminal picker says nothing, as it says nothing for a gateway
-whose listing fails. A listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s closed list is warned of by
-the desktop picker in that clause's sentence, which does not send the person to sign in again, and the
-terminal picker says nothing of it.
+stored, and nothing is asked of the service then. A stored sign-in whose token cannot be had, or whose listing
+cannot be read, offers no row, except that the models an entry names need neither the token nor the listing,
+only that the file can be read. The desktop picker says so in a warning beside the other rosters', and the
+terminal picker says nothing, as it says nothing for a gateway whose listing fails. A listing refused with a
+code of [CHATGPT-8](#CHATGPT-8)'s closed list is warned of by the desktop picker in that clause's sentence,
+which does not send the person to sign in again, and the terminal picker says nothing of it.
 
-**Not built:** the entry's `models` (source 1, #3133), and the compiled list (source 3) with the terminal
+**Not built:** the compiled list (source 3) with the terminal
 picker's saying that the listing could not be read (#3134). Where the listing cannot be read nothing is
 offered, and a person names the model as `chatgpt/<name>`. A listing the service refuses for its token with a
 401 is asked for again once with a replacement, as a turn's request is, and a second refusal ends it, as does
@@ -633,6 +644,16 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_agent::chatgpt::a_listing_refused_for_a_listed_code_is_not_replaced_or_asked_again`
 `verified-by: bravebot_aichat::client::the_accounts_listing_refused_for_a_listed_code_says_so_and_any_other_keeps_its_status`
 `verified-by: bravebot_agent::chatgpt::a_gateway_entry_named_chatgpt_keeps_the_name_and_the_account_is_not_asked_about`
+`verified-by: bravebot_agent::chatgpt::the_models_an_entry_names_are_offered_in_place_of_the_listing_and_need_no_token`
+`verified-by: bravebot_agent::chatgpt::the_models_an_entry_names_are_offered_only_where_somebody_is_signed_in`
+`verified-by: bravebot_aichat::models::the_models_an_entry_names_are_rows_under_the_accounts_identifier_with_the_window_it_states`
+`verified-by: bravebot_config::provider::a_chatgpt_entry_without_an_endpoint_names_the_accounts_models_and_is_not_a_gateway`
+`verified-by: bravebot_config::provider::a_chatgpt_entry_with_a_blank_endpoint_still_names_the_accounts_models`
+`verified-by: bravebot_config::provider::only_a_chatgpt_entry_that_states_no_endpoint_names_the_accounts_models`
+`verified-by: bravebot_config::lib::the_models_a_chatgpt_entry_names_reach_the_configuration_and_the_account_stays_reachable`
+`verified-by: bravebot_config::lib::the_models_a_chatgpt_entry_names_are_not_carried_where_a_gateway_holds_the_id`
+`verified-by: bravebot_config::lib::a_machine_level_provider_block_replaces_the_models_a_chatgpt_entry_names`
+`verified-by: bravebot_config::settings::only_the_layers_a_provider_block_is_read_from_choose_the_accounts_models`
 `verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none`
 `verified-by: bravebot_tui::app::a_caller_on_a_model_that_is_not_the_accounts_never_asks_the_account`
 `verified-by: bravebot_tui::app::a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists`
@@ -804,13 +825,13 @@ not take for the rest of it.
 - **Built in part,** each naming what is not: [CHATGPT-2](#CHATGPT-2), [CHATGPT-7](#CHATGPT-7),
   [CHATGPT-8](#CHATGPT-8), [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and
   [CHATGPT-14](#CHATGPT-14).
-- **Not built:** the entry's `models` and the compiled list of [CHATGPT-9](#CHATGPT-9) (#3133, #3134); the
+- **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); the
   zstd body of [CHATGPT-10](#CHATGPT-10); and the verification of the ID token of
   [CHATGPT-5](#CHATGPT-5).
 
-A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models
-the serving host's listing offers. The command tells the person to pick one in `/model` or to name one, and
-does not ask the listing itself.
+A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
+`chatgpt` entry names, or where it names none, the models the serving host's listing offers. The command tells
+the person to pick one in `/model` or to name one, and does not ask the listing itself.
 
 ## Decisions left open
 
@@ -986,6 +1007,9 @@ work lands, in the same commit as the code.
   no device-code route is available to this program.
 - The compiled list ([CHATGPT-9](#CHATGPT-9)) can name a model the account cannot reach, which the service
   refuses at the first request.
+- Where an entry names models ([CHATGPT-9](#CHATGPT-9)), a model named directly that the entry does not name
+  has no row, so a turn on it compacts against the assumed window and not the one the listing would give.
+  Stating the model in the entry, with its `limit`, gives it one.
 - One account is signed in at a time on one machine, as one subscription is imported at a time.
 - A person whose gateway entry already has the id `chatgpt` renames it to sign in.
 - A reply that names another model than the one asked for is not reported as a substitution for the account,

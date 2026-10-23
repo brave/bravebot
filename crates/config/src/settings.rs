@@ -646,6 +646,9 @@ pub struct Settings {
     /// refused by the handler (LINK-6).
     deep_links: Option<bool>,
     providers: Vec<crate::provider::Provider>,
+    /// The models a `provider` entry named `chatgpt` names where it states no endpoint, which is
+    /// the ChatGPT account's roster rather than a gateway's.
+    chatgpt_models: Vec<crate::provider::AccountModel>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
 }
@@ -1606,6 +1609,7 @@ impl Settings {
             git_identities_ignored: Vec::new(),
             git_identities_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
+            chatgpt_models: crate::provider::account_models(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
             provider_ignored: Vec::new(),
@@ -2294,6 +2298,7 @@ impl Settings {
             && self.git_identities_ignored.is_empty()
             && self.git_identities_misshapen.is_empty()
             && self.providers.is_empty()
+            && self.chatgpt_models.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
             // settings.json" one line above the path of the file that holds it.
@@ -2338,6 +2343,14 @@ impl Settings {
     /// The gateways these settings configured, in the order they were listed.
     pub fn providers(&self) -> &[crate::provider::Provider] {
         &self.providers
+    }
+
+    /// The models the ChatGPT account is offered as, where a `provider` entry named `chatgpt`
+    /// states no endpoint and names some ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+    ///
+    /// Read from the layers a `provider` block is read from, since it is the same block.
+    pub fn chatgpt_models(&self) -> &[crate::provider::AccountModel] {
+        &self.chatgpt_models
     }
 
     /// The files that named a `provider` block from a layer not entitled to, weakest first.
@@ -6085,6 +6098,36 @@ mod tests {
             "a checkout picked a backend and a credential with it"
         );
         assert_eq!(settings.providers_ignored().count(), 1);
+    }
+
+    /// CHATGPT-9: the models an entry named `chatgpt` offers the account are read from the layers a
+    /// `provider` block is read from and no others, since it is the same block. A checkout arrives
+    /// with its files, so it does not choose which of the account's models a person is offered.
+    #[test]
+    fn only_the_layers_a_provider_block_is_read_from_choose_the_accounts_models() {
+        let block = r#"{"provider": {"chatgpt": {"models": {"gpt-5": {}}}}}"#;
+        let settings = Layers::new("provider-chatgpt-project")
+            .project(block)
+            .local(block)
+            .read();
+        assert!(
+            settings.chatgpt_models().is_empty(),
+            "a checkout chose the account's models"
+        );
+        assert_eq!(settings.providers_ignored().count(), 2);
+
+        for settings in [
+            Layers::new("provider-chatgpt-home").global(block).read(),
+            Layers::new("provider-chatgpt-named").named(block).read(),
+        ] {
+            let ids: Vec<&str> = settings
+                .chatgpt_models()
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect();
+            assert_eq!(ids, ["gpt-5"]);
+            assert_eq!(settings.providers_ignored().count(), 0);
+        }
     }
 
     /// The home layer may name a provider and the variables read as its credential, which is the

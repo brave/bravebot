@@ -593,8 +593,9 @@ sent to it, and it is also what a reply's name is compared against. A name no co
 claims reaches the service that does recognise it, as before.
 
 The ChatGPT account of [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) is named the same way, by the identifier
-`chatgpt`, and a `provider` entry with that id keeps it: the entry's models go to its gateway and none is the
-account's.
+`chatgpt`, and a `provider` entry with that id that states an endpoint keeps it: the entry's models go to its
+gateway and none is the account's. An entry with that id that states no endpoint is no gateway, and its models
+are the ones the account is offered as.
 
 **Why.** One model is reachable through more than one service, billed and credentialled differently,
 and a bare name cannot say which was chosen. That mattered less while a gateway served only what a
