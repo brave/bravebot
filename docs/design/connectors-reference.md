@@ -315,8 +315,8 @@ Permission rules do not name the connector capability. The change amends
 [MANIFEST-1](../specs/manifest.md#MANIFEST-1), -5, -6 and -10,
 [MODE-3](../specs/permission-modes.md#MODE-3), [LABEL-6](../specs/labels.md#LABEL-6),
 [LABEL-8](../specs/labels.md#LABEL-8) and [ROUTE-5](../specs/routing.md#ROUTE-5), and adds two
-clauses: MANIFEST-12, a connector act's content is released only to the place its plan fixed, and
-MANIFEST-13, an authority's detail about a call reaches only the margin. Each ships with the code it
+clauses: MANIFEST-13, an authority's detail about a call reaches only the margin, and MANIFEST-14,
+a connector act's content is released only to the place its plan fixed. Each ships with the code it
 describes.
 
 ## Limits
