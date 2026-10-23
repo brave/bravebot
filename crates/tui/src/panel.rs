@@ -1103,6 +1103,27 @@ mod tests {
         );
     }
 
+    /// The panel stops above the hint line, so the note the line draws at its right edge is at the
+    /// terminal's right edge, under the panel, and not at the right edge of the transcript's columns.
+    #[test]
+    fn the_hint_line_runs_under_the_panel_to_the_right_edge() {
+        let mut session = opened_at(100);
+        session.offered_to_leave = true;
+        let rows = screen(&mut session, 100, 30);
+        let note = "ctrl-c again to exit";
+        let hint = &rows[29];
+        assert_eq!(
+            hint.trim_end().chars().count(),
+            100 - 2,
+            "the note does not end at the right edge of the terminal: {hint:?}"
+        );
+        assert!(hint.trim_end().ends_with(note), "{hint:?}");
+        assert!(
+            rows[28].chars().nth(usize::from(100 - WIDTH)) == Some('│'),
+            "the panel's border is gone above the hint line: {rows:#?}"
+        );
+    }
+
     /// The panel speaks in the interface's own voice, so a reply or anything a tool returned drawn
     /// in it would read as the interface saying it.
     #[test]
