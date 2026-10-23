@@ -71,7 +71,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-turn-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-turn-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -27240,7 +27241,7 @@ fn a_refused_write_inside_the_workspace_is_not_pointed_at_the_unconfined_line() 
         FRONT_END_CAN_ASK_ABOUT_UNCONFINED.set(front_end_asks);
         let name = format!("write-inside-{}-{front_end_asks}", mode.name());
         let in_full = std::env::temp_dir()
-            .join(format!("bravebot-turn-{name}"))
+            .join(format!("bravebot-turn-{}-{name}", std::process::id()))
             .join("fresh.txt");
         let call = [(
             "write_file",
@@ -27558,7 +27559,10 @@ fn a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so
     );
     let shown = message_from(&control.second, "Result of run");
     assert!(
-        shown.contains("bravebot-turn-audited-control"),
+        shown.contains(&format!(
+            "bravebot-turn-{}-audited-control",
+            std::process::id()
+        )),
         "the audited control's output was not shown, so the label checks below prove nothing: {shown}"
     );
     assert_eq!(
@@ -27595,7 +27599,10 @@ fn a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so
         let last = run.second.rfind("Result of run").expect("a result");
         let said = message_from(&run.second[last..], "Result of run");
         assert!(said.contains("[ref:"), "{request}: {said}");
-        assert!(!said.contains("bravebot-turn-audited"), "{request}: {said}");
+        assert!(
+            !said.contains(&format!("bravebot-turn-{}-audited", std::process::id())),
+            "{request}: {said}"
+        );
         assert_eq!(
             labels_stated_for_runs(&run.trail),
             vec![Label::untrusted_private().to_string(); stated],
@@ -68379,7 +68386,10 @@ fn under_bypass_a_directory_inside_the_project_is_not_opened() {
         return;
     }
     let places = PathPlaces::new("bypass-inside");
-    let inside = std::env::temp_dir().join("bravebot-turn-path-bypass-inside/sub");
+    let inside = std::env::temp_dir().join(format!(
+        "bravebot-turn-{}-path-bypass-inside/sub",
+        std::process::id()
+    ));
     let mut asked =
         AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
     let turn = path_turn_in(
@@ -68511,7 +68521,10 @@ fn under_bypass_a_directory_holding_the_project_says_it_ends_checkouts() {
         return;
     }
     let places = PathPlaces::new("bypass-holds");
-    let holder = std::env::temp_dir().join("bravebot-turn-path-bypass-holds");
+    let holder = std::env::temp_dir().join(format!(
+        "bravebot-turn-{}-path-bypass-holds",
+        std::process::id()
+    ));
     let mut asked =
         AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
     let turn = path_turn_in(

@@ -40,7 +40,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-workspace-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-workspace-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -7757,7 +7758,10 @@ fn a_destination_outside_the_workspace_is_refused() {
 #[test]
 fn a_destination_reached_through_a_symlink_out_of_the_workspace_is_refused() {
     let scratch = Scratch::new("confines-symlink");
-    let outside = std::env::temp_dir().join("bravebot-workspace-confines-target");
+    let outside = std::env::temp_dir().join(format!(
+        "bravebot-workspace-confines-target-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).expect("target directory");
     std::os::unix::fs::symlink(&outside, scratch.path.join("link")).expect("symlink");
@@ -7776,7 +7780,10 @@ fn a_destination_reached_through_a_symlink_out_of_the_workspace_is_refused() {
 #[test]
 fn a_destination_reached_through_a_dangling_symlink_out_of_the_workspace_is_refused() {
     let scratch = Scratch::new("confines-dangling");
-    let outside = std::env::temp_dir().join("bravebot-workspace-confines-dangling-target");
+    let outside = std::env::temp_dir().join(format!(
+        "bravebot-workspace-confines-dangling-target-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).expect("target directory");
     std::os::unix::fs::symlink(outside.join("out.txt"), scratch.path.join("link.txt"))
@@ -7795,7 +7802,10 @@ fn a_destination_reached_through_a_dangling_symlink_out_of_the_workspace_is_refu
 #[test]
 fn a_destination_inside_a_directory_the_user_added_is_confined() {
     let scratch = Scratch::new("confines-added");
-    let other = std::env::temp_dir().join("bravebot-workspace-confines-added-other");
+    let other = std::env::temp_dir().join(format!(
+        "bravebot-workspace-confines-added-other-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&other);
     std::fs::create_dir_all(&other).expect("other directory");
 

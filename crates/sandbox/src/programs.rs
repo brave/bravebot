@@ -993,7 +993,8 @@ mod tests {
     #[test]
     fn the_system_temp_directory_counts_as_writable() {
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let temporary = std::env::temp_dir().join("bravebot-programs-temp");
+        let temporary =
+            std::env::temp_dir().join(format!("bravebot-programs-temp-{}", std::process::id()));
         executable(&temporary, "aws");
         let found = find_in(OsStr::new("aws"), &path_of(&[&temporary]), &[]);
         let _ = std::fs::remove_dir_all(&temporary);

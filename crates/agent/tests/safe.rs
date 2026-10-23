@@ -37,7 +37,8 @@ fn policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
 /// A project whose `pkg` holds an `AGENTS.md` and a skill, after the session worked in `pkg`.
 fn worked_in_a_package(name: &str) -> Workspace {
     bravebot_core::safe::engage();
-    let project = std::env::temp_dir().join(format!("bravebot-agent-safe-{name}"));
+    let project =
+        std::env::temp_dir().join(format!("bravebot-agent-safe-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&project);
     let skill = project.join("pkg/.bravebot/skills/only");
     std::fs::create_dir_all(&skill).unwrap();
@@ -107,7 +108,8 @@ fn a_safe_session_reads_no_nested_agents_file() {
 #[test]
 fn a_safe_session_reads_no_rule_file() {
     bravebot_core::safe::engage();
-    let project = std::env::temp_dir().join("bravebot-agent-safe-rules");
+    let project =
+        std::env::temp_dir().join(format!("bravebot-agent-safe-rules-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&project);
     std::fs::create_dir_all(project.join(".bravebot/rules")).unwrap();
     std::fs::write(project.join(".bravebot/rules/always.md"), "ALWAYS-RULE").unwrap();
@@ -118,7 +120,10 @@ fn a_safe_session_reads_no_rule_file() {
     .unwrap();
     // Beside the project and not in it, so that the person's own directory is one an ordinary
     // session reads.
-    let home = std::env::temp_dir().join("bravebot-agent-safe-rules-home");
+    let home = std::env::temp_dir().join(format!(
+        "bravebot-agent-safe-rules-home-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(home.join("rules")).unwrap();
     std::fs::write(home.join("rules/mine.md"), "HOME-RULE").unwrap();

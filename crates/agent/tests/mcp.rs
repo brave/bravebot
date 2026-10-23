@@ -42,7 +42,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-mcp-turn-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-mcp-turn-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join("project")).expect("create scratch");
         std::fs::create_dir_all(path.join("state")).expect("create scratch");

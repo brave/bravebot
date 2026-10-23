@@ -38,7 +38,10 @@ fn one_at_a_time() -> MutexGuard<'static, ()> {
 
 /// Write a fake MCP server that replies to each request by id.
 fn fake_server(name: &str, script: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("bravebot-mcp-fake-{name}.sh"));
+    let path = std::env::temp_dir().join(format!(
+        "bravebot-mcp-fake-{}-{name}.sh",
+        std::process::id()
+    ));
     let mut file = std::fs::File::create(&path).expect("create script");
     file.write_all(script.as_bytes()).expect("write script");
     // Closed before the mode is set, and well before anything tries to execute it.

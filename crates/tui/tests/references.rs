@@ -15,7 +15,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-references-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-references-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join("src")).expect("create");
         std::fs::write(path.join("Cargo.toml"), "[package]").expect("write");
