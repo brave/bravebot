@@ -300,7 +300,7 @@ except one whose own settings name an [`effort`](../customize/configuration.md#e
 outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
 is recorded. Picking the row for none removes the record, so from the next session your own file's
 level answers again. See
-[Choosing how hard to think](../customize/configuration.md#choosing-how-hard-to-think), which is also
+[Choosing how hard to think](../customize/effort.md), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.
 

@@ -32,9 +32,10 @@ macro_rules! page {
 }
 
 /// Every page, in path order. A test holds this to the files under `docs/website/docs`.
-const PAGES: [Page; 43] = [
+const PAGES: [Page; 44] = [
     page!("customize/agents"),
     page!("customize/configuration"),
+    page!("customize/effort"),
     page!("customize/hooks"),
     page!("customize/instructions"),
     page!("customize/managed-settings"),

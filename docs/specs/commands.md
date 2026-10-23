@@ -23,6 +23,7 @@ guards:
 documented-by:
   - docs/website/docs/reference/commands.md
   - docs/website/docs/customize/model.md
+  - docs/website/docs/customize/effort.md
 ---
 
 ## Scope
