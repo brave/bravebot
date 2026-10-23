@@ -341,8 +341,9 @@ fn entry_extras(
         lines.extend(quarantined_lines(shown, width as usize));
     }
 
-    // The plan the turn worked to, kept next to what it produced.
-    lines.extend(todo_lines(&entry.todos));
+    // The plan the turn worked to, kept next to what it produced. The turn that reported it has
+    // already ended, so a row still outstanding is drawn left open rather than as work going on.
+    lines.extend(todo_lines(&entry.todos, true));
 
     if session.show_trail && !entry.trail.is_empty() {
         for recorded in &entry.trail {
