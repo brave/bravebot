@@ -7872,6 +7872,35 @@ mod tests {
         );
     }
 
+    /// CHATGPT-9: the account's rows are met in the order a fetched gateway roster is, the model in
+    /// force first and the rest by name, and a listing that could not be had, or an account nobody
+    /// signed in to, adds none.
+    #[test]
+    fn the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none() {
+        use bravebot_agent::chatgpt::AccountModels;
+        let rows = || {
+            vec![
+                listed("chatgpt/gpt-a", None),
+                listed("chatgpt/gpt-b", None),
+                listed("chatgpt/gpt-c", None),
+            ]
+        };
+
+        let keys = |rows: Vec<bravebot_aichat::models::Model>| -> Vec<String> {
+            rows.into_iter().map(|row| row.key).collect()
+        };
+        assert_eq!(
+            keys(account_rows(
+                AccountModels::Offered(rows()),
+                "chatgpt/gpt-c"
+            )),
+            ["chatgpt/gpt-c", "chatgpt/gpt-a", "chatgpt/gpt-b"]
+        );
+        assert!(account_rows(AccountModels::Unreadable, "chatgpt/gpt-c").is_empty());
+        assert!(account_rows(AccountModels::Absent, "chatgpt/gpt-c").is_empty());
+        assert!(account_rows(AccountModels::Offered(Vec::new()), "chatgpt/gpt-c").is_empty());
+    }
+
     /// A gateway's models need no network to know, so a Brave listing that could not be fetched must
     /// not withdraw them: that is the position somebody offline is most likely to be in.
     #[test]

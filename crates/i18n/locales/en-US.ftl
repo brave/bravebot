@@ -1216,7 +1216,7 @@ chatgpt-replace = Replace it?
 chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
 chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
 chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
-chatgpt-use-by-name = Name one of the account's models to use this sign-in, as in bravebot --model chatgpt/<model>. /model does not list them yet
+chatgpt-use-by-name = Pick one of the account's models in /model to use this sign-in, or name one, as in bravebot --model chatgpt/<model>
 chatgpt-forgotten =
     forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings
 chatgpt-nothing-to-forget = no ChatGPT sign-in is stored

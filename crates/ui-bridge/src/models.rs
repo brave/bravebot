@@ -9,7 +9,7 @@ use bravebot_net::Egress;
 use serde_json::{Value, json};
 
 pub fn list(config: &Config) -> Value {
-    let (rows, warnings) = roster(config);
+    let (rows, warnings) = roster(config, true);
     catalogue(config, rows, warnings)
 }
 
@@ -21,7 +21,9 @@ pub fn list(config: &Config) -> Value {
 /// budget is the default until this says otherwise. A model whose row states no window, or that no
 /// row describes, or a listing that could not be fetched, leaves the default in place.
 pub fn adopt_window(config: &mut Config, model: Option<&str>) {
-    let rows = roster(config).0;
+    // The account is asked only for a turn on one of its own models, as the terminal does: a turn on
+    // any other model has no use for the account's listing, and its token goes nowhere for it.
+    let rows = roster(config, config.runs_on_chatgpt_account(model)).0;
     config.adopt_window_of_model_in_force(model, |in_force| {
         rows.iter()
             .find(|row| row.key == in_force)
@@ -31,7 +33,7 @@ pub fn adopt_window(config: &mut Config, model: Option<&str>) {
 
 /// The rows every service this window reaches offers, and what could not be asked of the ones that
 /// failed.
-fn roster(config: &Config) -> (Vec<Model>, Vec<String>) {
+fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<String>) {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     if let Some(bedrock) = &config.bedrock {
@@ -95,6 +97,14 @@ fn roster(config: &Config) -> (Vec<Model>, Vec<String>) {
             )),
         }
     }
+    // Additive like a gateway: a stored ChatGPT sign-in adds its models and takes none away.
+    if account {
+        let listed = bravebot_agent::chatgpt::account_models(
+            config,
+            &mut bravebot_session::audit::Trail::new(),
+        );
+        with_account(&mut rows, &mut warnings, listed);
+    }
     if config.serves_aichat() {
         let mut routing = Routing::new();
         routing.insert_trusted("models", config.models_url());
@@ -113,6 +123,29 @@ fn roster(config: &Config) -> (Vec<Model>, Vec<String>) {
         }
     }
     (rows, warnings)
+}
+
+/// Add what the ChatGPT account offers (CHATGPT-9) to the rows, or say that its listing could not
+/// be had.
+///
+/// Split from the request so it is testable without a server. A person who never signed in is told
+/// nothing about it, and a listing that could not be had adds no row, as a gateway's does.
+fn with_account(
+    rows: &mut Vec<Model>,
+    warnings: &mut Vec<String>,
+    account: bravebot_agent::chatgpt::AccountModels,
+) {
+    match account {
+        bravebot_agent::chatgpt::AccountModels::Offered(models) => rows.extend(models),
+        bravebot_agent::chatgpt::AccountModels::Unreadable => {
+            warnings.push(
+                "Could not load models from ChatGPT. Try again, or sign in again with \
+                 `bravebot auth login chatgpt`."
+                    .into(),
+            );
+        }
+        bravebot_agent::chatgpt::AccountModels::Absent => {}
+    }
 }
 
 /// The rows an AWS account offers, keyed by the bare id the Bedrock backend is reached by.
@@ -350,6 +383,61 @@ mod tests {
             config.models = bravebot_config::Managed::at(&path).models().clone();
         }
         config
+    }
+
+    fn account_row(key: &str) -> Model {
+        Model {
+            key: key.to_string(),
+            display_name: key.to_string(),
+            premium: false,
+            reads_effort: true,
+            provider: Some("ChatGPT".into()),
+            conversation_tokens: Some(272_000),
+            advertised: Advertised::default(),
+        }
+    }
+
+    /// CHATGPT-9 in the window: the account's models are added beside the rows already there and
+    /// take none away, a listing that could not be had says so and adds nothing, and an account
+    /// nobody signed in to is not mentioned. The row reaches the window under the account's name.
+    #[test]
+    fn the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more() {
+        use bravebot_agent::chatgpt::AccountModels;
+        let elsewhere = Model {
+            provider: Some("openrouter".into()),
+            ..account_row("openrouter/z-ai/glm-4.6")
+        };
+
+        let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
+        with_account(
+            &mut rows,
+            &mut warnings,
+            AccountModels::Offered(vec![account_row("chatgpt/gpt-5.5")]),
+        );
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(keys, ["openrouter/z-ai/glm-4.6", "chatgpt/gpt-5.5"]);
+        assert!(warnings.is_empty());
+
+        let result = catalogue(&configured("the-configured-model", None), rows, warnings);
+        let row = result["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .find(|row| row["id"] == "chatgpt/gpt-5.5")
+            .expect("the account's row reached the window");
+        assert_eq!(row["provider"], "ChatGPT");
+        assert_eq!(row["contextWindow"], 272_000);
+
+        let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
+        with_account(&mut rows, &mut warnings, AccountModels::Unreadable);
+        assert_eq!(rows, std::slice::from_ref(&elsewhere));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("Could not load models from ChatGPT."));
+
+        let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
+        with_account(&mut rows, &mut warnings, AccountModels::Absent);
+        assert_eq!(rows, [elsewhere]);
+        assert!(warnings.is_empty());
     }
 
     #[test]

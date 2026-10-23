@@ -433,6 +433,7 @@ impl Provider {
     /// and lists no model: its token is the account's and its models are the account's.
     pub fn chatgpt_account() -> Self {
         let entry = serde_json::json!({
+            "name": "ChatGPT",
             "npm": RESPONSES_SDK,
             "options": {"baseURL": CHATGPT_SERVING_HOST},
         });
@@ -2017,6 +2018,7 @@ mod tests {
     fn the_chatgpt_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own() {
         let account = Provider::chatgpt_account();
         assert_eq!(account.id, "chatgpt");
+        assert_eq!(account.display_name(), "ChatGPT");
         assert_eq!(account.protocol(), Protocol::Responses);
         assert_eq!(
             account.completion_url(),

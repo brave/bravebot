@@ -8,6 +8,9 @@ governs:
   - crates/agent/src/backend.rs
   - crates/agent/src/chatgpt.rs
   - crates/aichat/src/lib.rs
+  - crates/aichat/src/models.rs
+  - crates/tui/src/app/models.rs
+  - crates/ui-bridge/src/models.rs
   - crates/cli/src/chatgpt.rs
   - crates/skus/src/chatgpt/mod.rs
   - crates/skus/src/chatgpt/account.rs
@@ -132,9 +135,8 @@ and the tokens of this account are never sent to a gateway.
 A model of this service is answered with the stored sign-in and with nothing else. `OPENAI_API_KEY`, a
 gateway key and any other variable are not looked for.
 
-**Not built:** the key set, and the listing the serving host also takes ([CHATGPT-9](#CHATGPT-9)). The
-sign-in sends to the authorization page and the token endpoint, and a turn sends model requests to the serving
-host.
+**Not built:** the key set. The sign-in sends to the authorization page and the token endpoint, and a turn and
+the pickers send requests to the serving host: the models, and the listing of [CHATGPT-9](#CHATGPT-9).
 
 **Why.** A settings file may name a destination, which is right where the credential is one the person
 typed for that destination. A checkout's settings file naming where an account's refresh token goes would
@@ -534,15 +536,18 @@ Where the roster comes from, in order:
    names models, those are what is offered and nothing is asked, as for a gateway. The person wrote that
    list, so the service refuses at the first request a model it names that the account cannot reach, and no
    listing is consulted to say so.
-2. Where it names none, the serving host is asked for its listing, `GET /models` with the access token. The
-   body is an object whose `models` key holds the rows, and a body of another shape is one that cannot be read.
-   A row of the listing is offered if its `visibility` is `list` and `supported_in_api` is true, and a model
-   the account cannot reach is not offered. The row's `slug` is the model name, `display_name` its label,
+2. Where it names none, the serving host is asked for its listing, `GET /models` with the access token as a
+   bearer and nothing else, and a redirect in answer is a failure ([CHATGPT-2](#CHATGPT-2)). The body is an
+   object whose `models` key holds the rows, and a body of another shape is one that cannot be read. A row of
+   the listing is offered if its `visibility` is `list` and `supported_in_api` is true, and a model the
+   account cannot reach is not offered. The row's `slug` is the model name, `display_name` its label,
    `context_window` its window, `input_modalities` whether it takes images, and `supported_reasoning_levels`
-   the effort levels it takes.
-3. Where the listing cannot be read, because the request failed or its body is not the shape above, a
-   compiled list of model names is offered instead, and the picker says the listing could not be read. A
-   listing that is read and is empty offers nothing, and the compiled list is not used.
+   the effort levels it takes: a row that lists none reads no effort level, and one that does not mention the
+   field is not one claiming none. A row in a form the reader does not expect, such as a window that is not a
+   whole number, costs that row its place and keeps the rest.
+3. Where the listing cannot be read, because the token could not be had, the request failed or its body is not
+   the shape above, a compiled list of model names is offered instead, and the picker says the listing could
+   not be read. A listing that is read and is empty offers nothing, and the compiled list is not used.
 
 The window, the output ceiling and which models can call tools come from the entry or the listing as they do
 for a gateway's, and the assumed low window applies where neither states one. The compiled list is a
@@ -551,10 +556,21 @@ constant of the source that names models only and takes nothing from a reply.
 An account whose listing is empty, where the entry names no model, is signed in. The command completes,
 says the account reaches no model, and the picker has no row for it. Nothing is invented for a tier nobody named.
 
-**Not built:** the roster: the entry's `models`, the listing, the compiled list, the rows in the pickers and the
-refusal of `auth login chatgpt` where an entry has the id. A model named `chatgpt/<name>` on the command line or
-in a settings file is built: it selects the account, the request carries the part after the identifier, and an
-entry with the id keeps it.
+The roster is asked of the one function both pickers call, so the terminal and the desktop offer the same
+rows. It is asked each time a picker opens, and otherwise only for the window of a model in force that is the
+account's, so a session on another model sends the stored token nowhere. No row is offered where no sign-in is
+stored, and nothing is asked of the service then. A stored sign-in
+whose token cannot be had, or whose listing cannot be read, offers no row. The desktop picker says so in a
+warning beside the other rosters', and the terminal picker says nothing, as it says nothing for a gateway
+whose listing fails.
+
+**Not built:** the entry's `models` (source 1, #3133), and the compiled list (source 3) with the terminal
+picker's saying that the listing could not be read (#3134). Where the listing cannot be read nothing is
+offered, and a person names the model as `chatgpt/<name>`. A listing the service refuses for its token with a
+401 is asked for again once with a replacement, as a turn's request is, and a second refusal ends it. A model
+named `chatgpt/<name>` on the command line or in a settings file is built: it selects the account, the request
+carries the part after the identifier, and an entry with the id keeps it, and none of the account's models is
+offered then.
 
 **Why.** Where two services serve a model of one name they are billed differently, authenticate differently
 and answer on different terms, so a bare name cannot say which one a person chose, and a remembered choice
@@ -574,6 +590,21 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_agent::backend::a_chatgpt_model_selects_the_account_and_a_bare_name_selects_nothing_of_it`
 `verified-by: bravebot_agent::backend::a_gateway_entry_named_chatgpt_keeps_its_name_and_no_model_is_the_accounts`
 `verified-by: bravebot_agent::backend::the_account_answers_for_its_own_models_and_for_nothing_a_credential_of_another_service_is_for`
+`verified-by: bravebot_aichat::models::only_a_row_the_account_lists_and_takes_in_the_api_is_offered_under_the_accounts_identifier`
+`verified-by: bravebot_aichat::models::a_window_the_account_states_is_taken_and_a_missing_or_malformed_one_is_the_assumed_one`
+`verified-by: bravebot_aichat::models::an_account_row_reads_an_effort_level_only_where_the_listing_does_not_say_it_takes_none`
+`verified-by: bravebot_aichat::models::an_account_row_in_an_unexpected_form_is_dropped_alone_and_the_rest_is_still_offered`
+`verified-by: bravebot_aichat::client::the_accounts_listing_is_asked_for_at_the_serving_host_with_the_token_and_nothing_else`
+`verified-by: bravebot_aichat::client::a_redirect_in_answer_to_the_accounts_listing_is_a_failure_and_goes_nowhere`
+`verified-by: bravebot_aichat::client::a_reply_that_is_not_the_accounts_listing_cannot_be_read_and_an_empty_one_can`
+`verified-by: bravebot_agent::chatgpt::a_machine_nobody_signed_in_on_offers_nothing_and_asks_the_service_nothing`
+`verified-by: bravebot_agent::chatgpt::an_account_whose_token_cannot_be_had_is_unreadable_and_asks_the_service_nothing`
+`verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
+`verified-by: bravebot_agent::chatgpt::an_unreadable_listing_is_told_apart_from_an_empty_one`
+`verified-by: bravebot_agent::chatgpt::a_listing_refused_for_its_token_is_asked_again_once_with_a_replacement`
+`verified-by: bravebot_agent::chatgpt::a_gateway_entry_named_chatgpt_keeps_the_name_and_the_account_is_not_asked_about`
+`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none`
+`verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more`
 
 <a id="CHATGPT-10"></a>
 ### CHATGPT-10: a request to the serving host is made in the Responses protocol and carries the token and the session's identifiers
@@ -738,12 +769,13 @@ not take for the rest of it.
 - **Built in part,** each naming what is not: [CHATGPT-2](#CHATGPT-2), [CHATGPT-7](#CHATGPT-7),
   [CHATGPT-8](#CHATGPT-8), [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and
   [CHATGPT-14](#CHATGPT-14).
-- **Not built:** the roster of [CHATGPT-9](#CHATGPT-9), so the account's models are not in the pickers; the
+- **Not built:** the entry's `models` and the compiled list of [CHATGPT-9](#CHATGPT-9) (#3133, #3134); the
   zstd body of [CHATGPT-10](#CHATGPT-10); and the verification of the ID token of
   [CHATGPT-5](#CHATGPT-5).
 
-A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and no picker lists a model of the
-account: the command says to name one.
+A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models
+the serving host's listing offers. The command tells the person to pick one in `/model` or to name one, and
+does not ask the listing itself.
 
 ## Decisions left open
 
@@ -923,8 +955,14 @@ work lands, in the same commit as the code.
   since whether the host answers under the name asked or under a dated one is not observed.
 - A turn on the account sends its body uncompressed and refuses one over 1 MiB, so a long conversation is
   shortened sooner than the service would need, and the limit has not been observed.
-- No picker lists the account's models, so a person types `chatgpt/<name>` and a name the account cannot reach
-  is refused at the first request.
+- Where the listing cannot be read no picker lists the account's models, so a person types `chatgpt/<name>`,
+  and a name the account cannot reach is refused at the first request. The terminal picker does not say the
+  listing failed.
+- A picker asks the serving host for the listing each time it opens, so a signed-in person who opens one sends
+  the access token to the serving host for a request that is not a turn. A test that opens a picker's roster
+  on a machine with a stored sign-in sends it too.
+- A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,
+  since the renewal that finds it removes the file. The next turn on a `chatgpt/` model says so.
 - Every request of a process carries one session identifier, so two sessions of a process share a cache
   affinity.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
