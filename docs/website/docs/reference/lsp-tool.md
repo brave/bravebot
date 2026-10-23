@@ -95,12 +95,12 @@ What does not turn on your answer is the label on what comes back, and that is t
 matters. Hover text is quarantined, and nothing a server reads out of a file reaches the planner as
 something bravebot said.
 
-**A filename is the exception, and it is bounded rather than denied.** A location is a path and a
-position, and a path is the answer to the question you asked, so it is reported whatever the trust
-map says about the file. A file can be named to read like an instruction, so the name is shown with
-its control characters replaced by pictures (`␊` for a newline), one location is always one line,
-and an answer stops at two hundred locations and says that it did. What that leaves is a name out of
-your tree, read as a name.
+**A filename is content, and a name that is shown is bounded.** An answer is labelled by the files it
+names, as [below](#a-position-is-structure-a-name-and-the-text-at-it-are-content) describes. A file
+can be named to read like an instruction, so where every file an answer names is one you vouched for,
+the name is shown with its control characters replaced by pictures (`␊` for a newline), one location
+is always one line, and an answer stops at two hundred locations and says that it did. What that
+leaves is a name out of a tree you vouched for, read as a name.
 
 A server is started by the first question that needs it, so a session that asks nothing about a
 language starts nothing.
@@ -159,12 +159,18 @@ question is put to you again.
 A declared server is settled once the progress it reported has ended. One that reports no progress
 is waited on for twenty seconds once, and every answer after that says it may be short.
 
-## A location is structure; the text at it is content
+## A position is structure; a name and the text at it are content
 
-A location is a path, a line, a column and the kind of symbol. **Those reach the planner whatever the
-trust map says about the file they name**, exactly as a line count does for a file it may not read.
-There is nowhere in a path and two integers for prose to sit, so somebody who owns `vendor/lib.js`
-cannot use `goToDefinition` to put a sentence in front of the planner.
+A location is a path, a line, a column and the kind of symbol. **The line and the column are
+structure**, as a line count is for a file the planner may not read: there is nowhere in two integers
+for prose to sit. **The name is content.** It is bytes out of the tree the server indexed, so an
+answer is labelled by the files it names. Each path is looked up in the trust map. An answer that
+names only files you vouched for is read as written. An answer that names any file you did not vouch
+for comes back whole as a reference, with none of its locations in front of the planner, so somebody
+who owns `vendor/lib.js` cannot use `goToDefinition` to put a sentence in front of the planner
+through its name. A `goToDefinition` into a dependency's source, or a `workspaceSymbol` that matches
+a vendored file, is such an answer where you have not vouched for that tree, and vouching for it is
+the way to see the locations. An answer that names nothing carries no taint.
 
 The **text** at a location takes the ordinary treatment, because it is bytes the file chose. A
 signature or a source excerpt from a file nobody vouched for comes back as a reference, so one result
@@ -180,8 +186,8 @@ tool's value is, which makes this its sharpest cost.
 
 A location is not made routing by having been returned. A read of a path that came back from here is
 gated as it would be had the planner guessed the path, and a write to it is put to you as a diff like
-any other. What somebody who owns a file in your tree gains is a say in which path and line the
-planner is told about, by arranging their code so a symbol resolves where they like. That costs at
+any other. What somebody who owns a file in a tree you vouched for gains is a say in which path and
+line the planner is told about, by arranging their code so a symbol resolves where they like. That costs at
 worst a wasted read of a file the planner could already read.
 
 ## An answer says which kind of nothing it is
