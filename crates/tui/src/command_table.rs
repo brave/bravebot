@@ -894,7 +894,8 @@ enum Acts {
     /// which `/forget-trust` withdraws (TRUST-24). A line that starts a session here reads the
     /// answer, and one that moves the directory or leaves the session changes what is withdrawn. So
     /// does a prompt or a command line, which can run a program that makes the `.git` entry that
-    /// moves the root around the directory.
+    /// moves the root around the directory, and a command that starts a server or puts files back,
+    /// which has not been shown unable to.
     KeptAnswer,
     /// The sandbox mode: `/sandbox`. Every waiting line could change it but a waiting `/sandbox`,
     /// which moves the mode the next turn is built with and writes nothing else (SANDBOX-22). The
@@ -1046,8 +1047,8 @@ const LEAVES_THE_STYLE_ALONE: &[&str] = &[
 ];
 
 /// The commands that neither start a turn, start, switch to or leave a session, move the working
-/// directory nor write the file the kept answer is in. A command not named here holds
-/// `/forget-trust` back, as does a command line.
+/// directory, write the file the kept answer is in, start a server nor put files back. A command
+/// not named here holds `/forget-trust` back, as does a command line.
 ///
 /// Each command named was read against what `/forget-trust` acts on. `/compact`, `/btw` and
 /// `/recap` send a request and run no program, and none of the three touches the file the answer is
@@ -1057,17 +1058,25 @@ const LEAVES_THE_STYLE_ALONE: &[&str] = &[
 /// withdrawn answer leaves this session's own trust map as it is, and a pick is looked up in no
 /// file the answer is kept in. `/after` arms a prompt that goes out later, after the lines waiting
 /// have been carried out, so what it starts runs under the answer as `/forget-trust` left it either
-/// way. `/clear`, `/branch`, `/undo`, `/rewind`, `/hunks`, `/add-dir`, `/cd`, `/reach` and `/mcp`
-/// are not named: `/clear` starts a session here and reads the answer, and each of the others
-/// replaces or reopens part of what the session's directories are made of or puts files back, which
-/// has not been shown unable to make or remove the `.git` entry that moves the root around the
-/// directory. A command added to the table is placed against this list by
-/// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
+/// way. `/add-dir` opens a directory and records a rule in the session's own trust map, and closing
+/// one withdraws the rule. It starts no program, leaves the working directory where it is and writes
+/// neither the answer nor a `.git` entry. `/reach` writes `reach.jsonl` or changes the workspace's
+/// list of paths programs may reach, and compiles the line it is given without running it. `/clear`
+/// and `/branch` are not named: `/clear` starts a session here and reads the answer, and `/branch`
+/// replaces the session's record and its reach and has not been read against the answer. `/cd` moves
+/// the directory the answer is about. `/undo`, `/rewind` and `/hunks` put back files a file tool wrote,
+/// and a write the person approved into an added directory that holds the working directory may have
+/// made the `.git` entry there, which a rewind removes. `/mcp` starts a server that may write the
+/// directory its declaration names. Neither has been shown unable to make or remove the `.git`
+/// entry that moves the root around the directory. A command added to the table is placed against
+/// this list by `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
 const LEAVES_THE_KEPT_ANSWER_ALONE: &[&str] = &[
     COMPACT_COMMAND,
     BTW_COMMAND,
     RECAP_COMMAND,
     MEMORY_COMMAND,
+    ADD_DIR_COMMAND,
+    REACH_COMMAND,
     AFTER_COMMAND,
     RENAME_COMMAND,
     NOTE_COMMAND,
@@ -1202,10 +1211,10 @@ mod tests {
         // holds: begin a turn, change the turn count, put a rewind point back, or move or replace
         // the record, whether it could change the style `/style` picks: begin a turn, replace the
         // session, or move or end the reach, and whether it could change the answer
-        // `/forget-trust` withdraws: begin a turn, replace the session, or touch the directories
-        // it is made of or put files back, without being read against it.
+        // `/forget-trust` withdraws: begin a turn, replace the session, move the directory, put
+        // files back or start a server, without being read against it.
         const PLACED: &[(&str, bool, bool, bool, bool, bool)] = &[
-            (ADD_DIR_COMMAND, false, false, false, true, true),
+            (ADD_DIR_COMMAND, false, false, false, true, false),
             (CD_COMMAND, false, false, true, true, true),
             (COMPACT_COMMAND, false, true, true, false, false),
             (BTW_COMMAND, false, true, true, false, false),
@@ -1215,7 +1224,7 @@ mod tests {
             (BRANCH_COMMAND, true, false, true, true, true),
             (RESUME_COMMAND, true, true, true, true, true),
             (BACKGROUND_COMMAND, true, true, true, true, true),
-            (REACH_COMMAND, false, false, false, true, true),
+            (REACH_COMMAND, false, false, false, true, false),
             (CHECKOUTS_COMMAND, false, true, true, true, true),
             (PLAN_COMMAND, false, true, true, true, true),
             (MANIFEST_COMMAND, false, true, true, true, true),

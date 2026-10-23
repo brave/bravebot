@@ -25636,10 +25636,10 @@ mod tests {
     /// The answer kept about the directory is read by a line that starts a session there and
     /// changed by one that moves the directory or leaves the session, and a prompt or a command line
     /// can run a program that makes the `.git` entry that moves the root around the directory. A
-    /// request that is not a turn, and a write to the record or the session's own choices, do none
-    /// of those, so behind them `/forget-trust` is carried out when it is typed. The regression it
-    /// rejects is every line holding it back, which leaves an answer a person withdrew in place
-    /// until the turn ends.
+    /// request that is not a turn, a write to the record or the session's own choices, a directory
+    /// opened or closed and a reach granted do none of those, so behind them `/forget-trust` is
+    /// carried out when it is typed. The regression it rejects is every line holding it back, which
+    /// leaves an answer a person withdrew in place until the turn ends.
     #[test]
     fn a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed() {
         if !crate::test_profile::in_isolated_profile() {
@@ -25650,6 +25650,10 @@ mod tests {
             "/btw what is this",
             "/recap",
             "/memory",
+            "/add-dir ../other",
+            "/add-dir close ../other",
+            "/reach",
+            "/reach docker -- docker build .",
             "/after 5m check the deploy",
             "/rename deploy watch",
             "/note a thought",
@@ -25676,10 +25680,11 @@ mod tests {
 
     /// A prompt and a command line can run a program that makes a `.git` entry, which changes which
     /// answers `/forget-trust` withdraws. A line that starts a session here reads the answer, one
-    /// that moves the directory or leaves the session changes what is withdrawn, and a command not
-    /// read against the file the answer is kept in is held back like them, so the answer is kept and
-    /// the command waits, naming the line. The regression it rejects is a command line or a prompt
-    /// added to the lines that leave the answer alone.
+    /// that moves the directory or leaves the session changes what is withdrawn, one that starts a
+    /// server or puts files back has not been shown unable to make or remove the `.git` entry, and a
+    /// command not read against the file the answer is kept in is held back like them, so the answer
+    /// is kept and the command waits, naming the line. The regression it rejects is a command line,
+    /// a prompt, or one of those commands added to the lines that leave the answer alone.
     #[test]
     fn a_forgotten_answer_typed_behind_a_line_that_could_change_it_waits_behind_it() {
         if !crate::test_profile::in_isolated_profile() {
@@ -25694,8 +25699,6 @@ mod tests {
             BACKGROUND_COMMAND,
             EXIT_COMMAND,
             "/cd crates/tui",
-            "/add-dir ../other",
-            "/reach",
             "/mcp",
             "/branch",
             "/undo",
@@ -29918,6 +29921,85 @@ mod tests {
             "the line did not name the root"
         );
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// `/forget-trust` withdraws the answers kept about the working directory and about the root of
+    /// the git worktree around it. A directory opened or closed, one that holds the working
+    /// directory included, writes neither answer and leaves the root where it was, so the line says
+    /// the same and withdraws the same whether it is carried out before the directory is opened,
+    /// while it is open or after it is closed. That is what lets `/forget-trust` typed behind a
+    /// waiting `/add-dir` be carried out as it is typed. The regression it rejects is `/add-dir`
+    /// making a `.git` entry nearer the working directory, which names another root and leaves the
+    /// answer kept about the first.
+    #[test]
+    fn opening_or_closing_a_directory_does_not_change_what_forgetting_trust_withdraws() {
+        use bravebot_agent::trusted::{Identity, Store};
+
+        for forgotten_before in 0..=2 {
+            let scratch = crate::testutil::scratch_dir(&format!(
+                "bravebot-app-forget-trust-around-add-dir-{forgotten_before}"
+            ));
+            let _ = std::fs::remove_dir_all(&scratch);
+            let home = scratch.join("home");
+            let root = scratch.join("repo");
+            let package = root.join("packages/api");
+            let notes = scratch.join("notes");
+            for directory in [root.join(".git"), package.clone(), notes.clone()] {
+                std::fs::create_dir_all(directory).expect("create");
+            }
+            let Some(identity) = Identity::of(&root) else {
+                let _ = std::fs::remove_dir_all(&scratch);
+                return;
+            };
+            let store = Store::new(&home, &root);
+            assert!(
+                store.keep(&identity, "1-2", 7, false),
+                "the answer was not kept"
+            );
+            let mut workspace = Workspace::new(&package).expect("workspace");
+            let working = workspace.root().to_path_buf();
+            let mut trust = TrustStore::new(&working);
+            let mut session = Session::new("none");
+            let named = [&notes, &root].map(|directory| directory.display().to_string());
+
+            let mut said = None;
+            for step in 0..=2 {
+                if step == forgotten_before {
+                    said = Some(forget_trust(Some(&home), workspace.root()));
+                }
+                for directory in &named {
+                    match step {
+                        0 => add_directory(&mut session, &mut workspace, &mut trust, directory),
+                        1 => assert!(
+                            close_directory(&mut session, &mut workspace, &mut trust, directory),
+                            "{directory} was not closed"
+                        ),
+                        _ => {}
+                    }
+                }
+            }
+
+            assert_eq!(
+                workspace.root(),
+                working,
+                "the working directory moved when forgotten before step {forgotten_before}"
+            );
+            assert_eq!(
+                said,
+                Some(t!(
+                    session_trust_forgotten_root,
+                    directory = working.display(),
+                    root = root.canonicalize().expect("resolved").display()
+                )),
+                "forgotten before step {forgotten_before}"
+            );
+            assert_eq!(
+                store.kept(&identity),
+                None,
+                "the root's answer survived when forgotten before step {forgotten_before}"
+            );
+            let _ = std::fs::remove_dir_all(&scratch);
+        }
     }
 
     /// With nothing kept there is nothing to take back, and the line says that rather than
