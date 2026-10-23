@@ -214,6 +214,12 @@ pub fn change(change: &Change) -> Value {
 /// null rather than an absent key: a client reading an absent key as "finished, no note"
 /// would draw every in-flight call as complete.
 ///
+/// `shownTarget` is `target` spelled as [`Activity::shown_target`] spells it, so a file's name that
+/// is blank or ends in whitespace is visible where a window draws the line (PROMPT-1). `target`
+/// stays what a window matches a call to its confirmation on. `shownFile` is the same name for a
+/// list of files, with the slot a reference was drawn under and a leading `./` taken off and then
+/// spelled, so a window lists a file once and draws it as the confirmation for it does.
+///
 /// `waitedSeconds` is what the call spent at a model of its own, null for the nearly all of
 /// them that asked none. Whole seconds, as `remainingSeconds` is: what it answers is whether a
 /// slow call was slow because a model was, and that question is not decided in milliseconds.
@@ -221,6 +227,8 @@ pub fn activity(activity: &Activity) -> Value {
     json!({
         "verb": activity.verb,
         "target": activity.target,
+        "shownTarget": activity.shown_target(),
+        "shownFile": activity.shown_file(),
         "why": activity.why,
         "note": activity.note,
         "failed": activity.failed,

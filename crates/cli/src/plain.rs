@@ -279,8 +279,8 @@ fn run(
     for rule in bravebot_agent::permissions::proposed(&settings, profile.as_deref()) {
         asking.say(&t!(
             session_permission_allow_ignored,
-            rule = shown(&rule.rule),
-            path = crate::progress::printable_path(&rule.path)
+            rule = bravebot_agent::confirm::shown_text(&rule.rule),
+            path = bravebot_agent::confirm::shown_path(&rule.path)
         ));
     }
 

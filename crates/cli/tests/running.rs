@@ -4851,8 +4851,8 @@ fn a_session_in_lines_draws_a_checkouts_settings_as_pictures_before_the_startup_
         "the session did not draw the rule it ignored as pictures: {report}"
     );
     assert!(
-        report.contains("not granting the allow rule Bash(echo \u{241b}[8mallow-rule)"),
-        "the session did not draw the allow rule it dropped as pictures: {report}"
+        report.contains("not granting the allow rule \"Bash(echo \u{241b}[8mallow-rule)\""),
+        "the session did not draw the allow rule it dropped as pictures, quoted as a spelled rule is: {report}"
     );
 }
 

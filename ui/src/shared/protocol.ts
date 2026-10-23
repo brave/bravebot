@@ -36,6 +36,10 @@ export type Change =
 export interface Activity {
   verb: string
   target: string
+  /** `target` spelled so a file's name that is blank or ends in whitespace is visible (PROMPT-1). Draw this and not `target`; match a call to its confirmation on `target`. */
+  shownTarget: string
+  /** `shownTarget` of the file a call names without the slot a reference was drawn under or a leading `./`, which is what the lists of files draw. */
+  shownFile: string
   /** Why the planner made the call, in its own words. Empty where it gave no reason. */
   why: string
   /** `null` while the call is still running. Absent-vs-null matters: see the Rust doc. */

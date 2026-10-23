@@ -123,8 +123,10 @@ FILES-2.
 A row is the path as the call row draws it, then the file's added and removed counts at the right
 edge, `+{a}` in the colour of an added row and `-{r}` in that of a removed row. A count of nothing is
 left out, so a file that only had lines removed shows `-{r}` alone. A path longer than its room is cut
-from the left with an ellipsis, since the end of a path is what tells two apart. Control characters
-in a path are drawn as visible characters, as they are wherever the interface draws text.
+from the left with an ellipsis, since the end of a path is what tells two apart. A path is drawn
+spelled as a name is in a prompt ([PROMPT-1](prompting.md#PROMPT-1)): one that is empty, is only
+whitespace, ends in a space, or holds a control character or one that draws as nothing is quoted with
+each such character made visible, so it cannot read as another name.
 
 The state opens with the last file written highlighted. Up, Down, `k` and `j` move the highlight and
 stop at each end. Home and End, or `g` and `G`, go to the first and last. Where there are more files
@@ -132,6 +134,7 @@ than rows, the rows drawn are the ones around the highlight, and the first and l
 are left out above and below (`↑ 1 more above`, `↓ 8 more below`).
 
 `verified-by: bravebot_tui::files_mode::a_row_has_the_path_and_the_counts_of_its_edits`
+`verified-by: bravebot_tui::files_mode::a_name_that_ends_in_a_space_is_listed_spelled`
 `verified-by: bravebot_tui::files_mode::a_long_path_keeps_its_end`
 `verified-by: bravebot_tui::files_mode::a_control_character_in_a_path_is_drawn_as_a_picture`
 `verified-by: bravebot_tui::files_mode::the_state_opens_on_the_last_file_written`

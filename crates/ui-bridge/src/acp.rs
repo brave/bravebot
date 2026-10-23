@@ -727,6 +727,9 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
         "tool.started" => {
             let verb = data["verb"].as_str().unwrap_or_default().to_string();
             let target = data["target"].as_str().unwrap_or_default().to_string();
+            // What the editor is shown, spelled so a file name that is blank or ends in whitespace
+            // is visible. Calls are matched on `target`, as the finished event carries it.
+            let shown = data["shownTarget"].as_str().unwrap_or(&target).to_string();
             let Some(held) = shared.sessions.get_mut(&session) else {
                 return;
             };
@@ -742,7 +745,7 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
                 json!({
                     "sessionUpdate": "tool_call",
                     "toolCallId": id,
-                    "title": plain(&format!("{verb} {target}")),
+                    "title": plain(&format!("{verb} {shown}")),
                     "kind": "other",
                     "status": "in_progress",
                 }),
@@ -1780,6 +1783,42 @@ mod tests {
             ),
         );
         assert_eq!(shared.lock().unwrap().unasked.get("t"), Some(&None));
+    }
+
+    /// PROMPT-1: the title of a call in the editor is the bridge's spelling of the file it names,
+    /// while the end of the call is matched on the name as held, so a title that ends in a space
+    /// is not read as the one without and the call still closes.
+    #[test]
+    fn a_call_is_titled_with_the_file_as_spelled_and_closed_on_the_name_as_held() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::from([("s".to_string(), Session::default())]),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        let data = json!({
+            "verb": "Write",
+            "target": "note.md ",
+            "shownTarget": "\"note.md\u{2423}\"",
+        });
+        on_event(&shared, Event::new("tool.started", "s", data.clone()));
+        on_event(&shared, Event::new("tool.finished", "s", data));
+
+        let written = written.lock().unwrap();
+        assert_eq!(
+            written[0]["params"]["update"]["title"],
+            "Write \"note.md\u{2423}\""
+        );
+        assert_eq!(written[1]["params"]["update"]["status"], "completed");
+        assert_eq!(
+            written[1]["params"]["update"]["toolCallId"],
+            written[0]["params"]["update"]["toolCallId"]
+        );
     }
 
     #[test]
