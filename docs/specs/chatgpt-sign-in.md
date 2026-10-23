@@ -33,14 +33,14 @@ Reaching OpenAI with a pay-per-token API key is a different route, the `openai` 
 
 The command is built: `auth login chatgpt` signs in and stores the tokens, `auth logout chatgpt` forgets
 them, and `auth status` and the list of ways report them. [What is built](#what-is-built) says which parts of
-which clauses that is. Nothing here has been observed in a sign-in made with a real account. A clause reads
+which clauses that is. [What the exchange has to record](#what-the-exchange-has-to-record) lists what a sign-in made with a real account has observed and what it has not. A clause reads
 `verified-by: none` until the work it describes lands, and a clause built in part says which part is not. The
 points where the unbuilt work changes a built spec are named in
 [What this changes elsewhere](#what-this-changes-elsewhere), and those specs are edited when it lands.
 
 The hosts, parameters, field names and headers the clauses state are read from opencode's source
 (`packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`), which is another program's code.
-Each is a value to confirm with a sign-in, and [What the exchange has to record](#what-the-exchange-has-to-record)
+Each is a value to confirm with a sign-in unless the list below marks it observed, and [What the exchange has to record](#what-the-exchange-has-to-record)
 lists them beside what no source states. Whether OpenAI's terms allow a program to use a subscription this
 way, and whether OpenAI registers a client for this program, are
 [decisions left open](#decisions-left-open). The command is built on the values as stated, and a release
@@ -407,8 +407,8 @@ machine present it together as a matter of course, and the one that loses ends t
 The claim is held across a network round trip, so it has an age longer than that trip's deadline: the Leo
 claim is judged abandoned after seconds because its hold is one local read and write. The reply is written
 first because a process that stops between receiving it and writing it has spent a refresh token it cannot
-present again. Whether this server replaces the refresh token on use is recorded by the exchange, and the
-clause holds either way: a server that does not replace it loses nothing to the claim. Removing the file
+present again. This server replaces the refresh token on use, which a refresh against it has shown, so
+the claim and the early write are required here. A server that did not replace it would lose nothing to them. Removing the file
 on an ended sign-in leaves `auth status` and the picker saying what is true, and stops every later turn
 from presenting a token that cannot work.
 
@@ -520,8 +520,9 @@ Where the roster comes from, in order:
    names models, those are what is offered and nothing is asked, as for a gateway. The person wrote that
    list, so the service refuses at the first request a model it names that the account cannot reach, and no
    listing is consulted to say so.
-2. Where it names none, the serving host is asked for its listing, `GET /models` with the access token. A
-   row of the listing is offered if its `visibility` is `list` and `supported_in_api` is true, and a model
+2. Where it names none, the serving host is asked for its listing, `GET /models` with the access token. The
+   body is an object whose `models` key holds the rows, and a body of another shape is one that cannot be read.
+   A row of the listing is offered if its `visibility` is `list` and `supported_in_api` is true, and a model
    the account cannot reach is not offered. The row's `slug` is the model name, `display_name` its label,
    `context_window` its window, `input_modalities` whether it takes images, and `supported_reasoning_levels`
    the effort levels it takes.
@@ -732,25 +733,38 @@ establish each of the following before a clause states it as observed. What is r
 a status, a duration or a host. A token, code, state, nonce, challenge, verifier, client or host identifier
 or claim value is never recorded, in this repository or in the tracker.
 
+**Observed, in a sign-in made on 2026-10-23 with a real ChatGPT account on this program's own build:**
+
+- The authorization endpoint and token endpoint on `auth.openai.com`, with the paths of
+  [CHATGPT-2](#CHATGPT-2), and the sign-in that ran on them: the browser was sent to the loopback listener on
+  a port the operating system chose, and the exchange completed.
+- That the authorization server registers a client for the placeholder client and `agent_name_hint`: a
+  `client_id` came back on the callback and was stored, and the refresh that followed accepted it.
+- The scopes and the `resource`, `nonce` and `ext_agent_host_id` parameters were accepted, and the reply's
+  `scope` held `chatgpt.tokens.use.direct`, since the command refuses a reply that lacks it and completed.
+- The field names of the code exchange and of the refresh, both form encoded. A reply to a refresh has a new
+  `access_token` and `refresh_token`, and an expiry 3600 seconds out, which is `expires_in` or the default
+  the renewal assumes where it is absent. The two are not told apart.
+- **A refresh replaces the refresh token.** The one stored before a refresh is not the one stored after it,
+  and the client and host identifiers are unchanged. The claim and the write-before-use of
+  [CHATGPT-7](#CHATGPT-7) are therefore required and not a precaution.
+- The listing, `GET /models` on `https://api.openai.com/v1` with the access token as the only header, is
+  answered 200. The body is an object with one key, `models`, holding the rows, and is about half a megabyte
+  for nine rows, since a row carries long instruction text the picker does not read. Each row has `slug`,
+  `display_name`, `visibility` (`list` or `hide`), `supported_in_api`, `context_window`, `input_modalities`
+  (a list of words) and `supported_reasoning_levels` (a list of objects with an `effort` and a
+  `description`). The account's listing had nine rows and seven of them were `list`. The efforts offered
+  go beyond `low`, `medium` and `high`, up to `max` and `ultra` on some rows.
+
 **Stated by the clauses from opencode's source, to confirm:**
 
-- The authorization endpoint, token endpoint and key set on `auth.openai.com`, with the paths of
-  [CHATGPT-2](#CHATGPT-2).
-- That the authorization server registers a client for the placeholder client and `agent_name_hint`, returns
-  its `client_id` on the callback, and accepts a redirect to `http://127.0.0.1:<port>/auth/callback` for any
-  port.
-- The scopes `openid profile email offline_access resource.invoke chatgpt.tokens.use.direct` and the
-  `resource`, `nonce` and `ext_agent_host_id` parameters.
-- The field names of the code exchange (`grant_type`, `client_id`, `code`, `code_verifier`, `redirect_uri`,
-  `resource`) and of the refresh (`grant_type`, `client_id`, `refresh_token`, `resource`), both form
-  encoded, and of the reply (`access_token`, `refresh_token`, `id_token`, `expires_in`, `scope`).
-- That the reply's `scope` contains `chatgpt.tokens.use.direct` when the person allowed the use, and that
-  its absence means the sign-in cannot serve this program.
+- The key set on `auth.openai.com`, with its path in [CHATGPT-2](#CHATGPT-2).
+- That the authorization server accepts a redirect to `http://127.0.0.1:<port>/auth/callback` for any port:
+  one port was tried.
+- The `id_token` field of the code exchange's reply, which the command drops unread.
 - The ID token's algorithm, issuer, audience, required claims and the nonce match.
-- The serving host `https://api.openai.com/v1`, the Responses protocol, the bearer token, the three session
-  headers, the zstd body, and that there is no native compaction and no change of effort in a session.
-- The listing, `GET /models` on the serving host, with `slug`, `display_name`, `visibility`,
-  `supported_in_api`, `context_window`, `input_modalities` and `supported_reasoning_levels`.
+- The serving host's Responses protocol, the three session headers, the zstd body, and that there is no
+  native compaction and no change of effort in a session. The bearer token is accepted by the listing.
 - The error codes that end the use of a subscription: `subscription_sharing_usage_limit_exceeded`,
   `subscription_sharing_user_not_eligible`, `subscription_sharing_unsupported_capability`,
   `subscription_sharing_route_not_supported`, `subscription_sharing_invalid_user`,
@@ -760,7 +774,6 @@ or claim value is never recorded, in this repository or in the tracker.
 
 - What a refused refresh and a refused access token return: the status and the error code. The renewal reads
   `invalid_grant` at a 400 or 401 as ending the sign-in, from RFC 6749 and not from this server.
-- Whether a refresh replaces the refresh token.
 - Whether a request to the token endpoint is ever answered with a redirect.
 - What an account with no subscription reaches.
 - Whether an access token minted before a revocation survives it, and whether a sender-constrained form is
