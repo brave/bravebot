@@ -355,7 +355,7 @@ pub(super) fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
     let room = (area.height as usize).saturating_sub(1);
     let mut lines = vec![indicator];
     if working {
-        lines.extend(todo_lines(&session.todos).into_iter().take(room));
+        lines.extend(todo_lines(&session.todos, false).into_iter().take(room));
     }
     // Fit the reason below the status; the transcript and export retain the full text.
     lines.extend(
