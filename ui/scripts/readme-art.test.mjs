@@ -1,13 +1,15 @@
-// The README's pictures are generated, and GitHub shows an SVG only when it is a closed,
-// self-contained document. These tests hold the generator to what that needs, to the rule that
-// motion stops for a person who asked for less of it, and to the pixel figures being the app's.
+// The pictures in the README and on the docs landing page are generated, and GitHub shows an SVG
+// only when it is a closed, self-contained document. These tests hold the generator to what that
+// needs, to the rule that motion stops for a person who asked for less of it, and to the pixel
+// figures being the app's.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { buildSprite } from '../src/renderer/avatar/pixels.ts'
-import { ART, CAST, GLYPHS, bot, wordmark } from './readme-art.mjs'
+import { ART, CAST, GLYPHS, SITE_ART, TAGLINE, bot, wordmark } from './readme-art.mjs'
 
-const pictures = Object.entries(ART).map(([name, draw]) => [name, draw()])
+const everything = { ...ART, ...SITE_ART }
+const pictures = Object.entries(everything).map(([name, draw]) => [name, draw()])
 const css = (text) => text.match(/<style>([\s\S]*?)<\/style>/)[1]
 
 /** Why an SVG's tags do not nest and close, or null when they do. */
@@ -50,7 +52,7 @@ test('every animation stops under prefers-reduced-motion and leaves the eyes ope
 })
 
 test('the same pictures come out on every run, so regenerating changes only what was edited', () => {
-  for (const [name, draw] of Object.entries(ART)) assert.equal(draw(), draw(), name)
+  for (const [name, draw] of Object.entries(everything)) assert.equal(draw(), draw(), name)
 })
 
 test('the pictures hold no em-dash, which the repository forbids everywhere', () => {
@@ -84,5 +86,36 @@ test('the README shows every picture, each with a description for a reader who c
     const tag = readme.match(new RegExp(`<img [^>]*src="docs/assets/${name}"[^>]*>`))
     assert.ok(tag, `README.md does not show ${name}`)
     assert.match(tag[0], /alt="[^"]{20,}"/, name)
+  }
+})
+
+test('the hero and the stars have no background of their own, so the landing page shows behind them', () => {
+  assert.match(ART['readme-banner.svg'](), /rx="24"/, 'the README banner keeps its own background')
+  for (const [name, draw] of Object.entries(SITE_ART)) assert.doesNotMatch(draw(), /rx="/, name)
+})
+
+test('the landing page shows each site picture, and its tagline is the banner tagline', () => {
+  const page = readFileSync(new URL('../../docs/website/src/pages/index.js', import.meta.url), 'utf8')
+  for (const name of Object.keys(SITE_ART)) assert.ok(page.includes(`/img/${name}`), `index.js does not show ${name}`)
+  assert.ok(page.includes(`'${TAGLINE}'`), 'index.js does not say the tagline the README banner says')
+  assert.match(page, /<ThemedImage [^>]*alt="[^"]+"/, 'the hero image has no alt text')
+})
+
+test('every site picture has a light twin, so the landing page has art for both colour modes', () => {
+  const names = Object.keys(SITE_ART)
+  const dark = names.filter((name) => !name.endsWith('-light.svg'))
+  assert.ok(dark.length > 0)
+  for (const name of dark) assert.ok(names.includes(name.replace(/\.svg$/, '-light.svg')), `${name} has no light twin`)
+  assert.notEqual(SITE_ART['bravebot-hero.svg'](), SITE_ART['bravebot-hero-light.svg'](), 'the light hero is the dark one')
+  assert.notEqual(SITE_ART['bravebot-stars.svg'](), SITE_ART['bravebot-stars-light.svg'](), 'the light stars are the dark ones')
+})
+
+test('the landing page gives the install commands the README gives', () => {
+  const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8')
+  const page = readFileSync(new URL('../../docs/website/src/pages/index.js', import.meta.url), 'utf8')
+  for (const start of ['npm install', 'curl -fsSL', 'irm ']) {
+    const command = readme.split('\n').find((line) => line.startsWith(start) && !line.includes('INSTALL_DIR'))
+    assert.ok(command, `README.md has no ${start} command`)
+    assert.ok(page.includes(command), `index.js does not give ${command}`)
   }
 })

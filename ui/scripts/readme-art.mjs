@@ -1,8 +1,10 @@
-// The pictures in the README, drawn from the pixel figures the desktop app gives each bot.
+// The pictures in the README and on the docs site's landing page, drawn from the pixel figures
+// the desktop app gives each bot.
 //
 // A bot's face is a function of its seed (src/renderer/avatar/pixels.ts), so the bots here are
 // faces real bots have, not a redrawing of them. `node scripts/readme-art.mjs` writes
-// docs/assets/readme-banner.svg, readme-how-it-works.svg and readme-plan-first.svg.
+// docs/assets/readme-banner.svg, readme-how-it-works.svg and readme-plan-first.svg, and
+// docs/website/static/img/bravebot-hero.svg, bravebot-stars.svg and their -light twins.
 //
 // GitHub serves a repository's SVG as an image, so each file is self-contained: no script, no
 // external reference, no web font and no foreignObject. The motion is CSS, and it stops under
@@ -44,6 +46,9 @@ const CHECK = ['......#', '.....##', '#...##.', '##.##..', '.###...', '..#....']
 /** One colour per row of a letter, from the top of an ascender down to the baseline. */
 const WORDMARK_ROWS = ['#ffd24a', '#ffb02e', '#ff8a14', '#ff6a06', '#ff5601', '#ff3a01', '#ff1f01']
 const WORDMARK_SHADOW = '#2d0d1b'
+/** The same wordmark for a light page, where the pale rows at the top would fade into it. */
+const WORDMARK_ROWS_LIGHT = ['#ff9a1f', '#ff8a14', '#ff7a0a', '#ff6a06', '#ff5601', '#f03a01', '#d92000']
+const WORDMARK_SHADOW_LIGHT = '#dcd2d6'
 
 const CSS = `
 .march{animation:march 4s steps(1,end) infinite}
@@ -65,14 +70,15 @@ const CSS = `
 
 const escape = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-function svg({ width, height, title, description, body }) {
+/** A picture on its own dark rounded background, or with none when `frame` is false and the page behind it is the background. */
+function svg({ width, height, title, description, body, frame = true }) {
+  const back = frame ? `<rect width="${width}" height="${height}" rx="24" fill="${BACKGROUND}"/>\n` : ''
+  const edge = frame ? `\n<rect x="1" y="1" width="${width - 2}" height="${height - 2}" rx="23" fill="none" stroke="#ffffff" stroke-opacity=".09" stroke-width="2"/>` : ''
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="t d" shape-rendering="crispEdges">
 <title id="t">${escape(title)}</title>
 <desc id="d">${escape(description)}</desc>
 <style>${CSS}</style>
-<rect width="${width}" height="${height}" rx="24" fill="${BACKGROUND}"/>
-${body}
-<rect x="1" y="1" width="${width - 2}" height="${height - 2}" rx="23" fill="none" stroke="#ffffff" stroke-opacity=".09" stroke-width="2"/>
+${back}${body}${edge}
 </svg>
 `
 }
@@ -124,8 +130,8 @@ export function wordmark(text, { x, y, cell, fill = (row) => WORDMARK_ROWS[row] 
   return { rects: rects.join(''), width: width * cell }
 }
 
-function stars(count, keepOut, width, height) {
-  const next = stream('readme-banner-stars')
+function stars(count, keepOut, width, height, { seed = 'readme-banner-stars', colour = '#ffffff' } = {}) {
+  const next = stream(seed)
   const out = []
   while (out.length < count) {
     const x = Math.floor((next() * width) / CELL) * CELL
@@ -135,39 +141,48 @@ function stars(count, keepOut, width, height) {
     const twinkles = next() < 0.2
     const delay = (next() * 3).toFixed(1)
     if (keepOut.some((box) => x + size > box.x && x < box.x + box.width && y + size > box.y && y < box.y + box.height)) continue
-    out.push(`<rect${twinkles ? ` class="tw" style="--d:-${delay}s"` : ''} x="${x}" y="${y}" width="${size}" height="${size}" fill="#ffffff" fill-opacity="${opacity}"/>`)
+    out.push(`<rect${twinkles ? ` class="tw" style="--d:-${delay}s"` : ''} x="${x}" y="${y}" width="${size}" height="${size}" fill="${colour}" fill-opacity="${opacity}"/>`)
   }
   return out.join('')
 }
 
 export const TAGLINE = 'A general-purpose agent that a web page cannot redirect.'
 
-export function banner() {
-  const width = 1280
-  const height = 448
+/**
+ * The row of bots marching above the wordmark, centred in a picture `width` wide, with the bots
+ * standing on `baseline` and the wordmark's top at `wordY`. `word` is where the wordmark sits.
+ */
+function lockup(width, { baseline, wordY, rows = WORDMARK_ROWS, shadowColour = WORDMARK_SHADOW }) {
   const botCell = 9
   const pitch = 10 * botCell + 44
   const bots = CAST.map((seed, i) => {
     const centre = width / 2 + (i - (CAST.length - 1) / 2) * pitch
-    return bot(seed, { centre, baseline: 150, cell: botCell, n: i % 2, d: (i * 1.7) % 6, t: 5 + (i % 3), g: (i * 2.3) % 9 })
+    return bot(seed, { centre, baseline, cell: botCell, n: i % 2, d: (i * 1.7) % 6, t: 5 + (i % 3), g: (i * 2.3) % 9 })
   }).join('')
 
   const cell = 18
   const letters = wordmark('bravebot', { x: 0, y: 0, cell })
   const wordX = (width - letters.width) / 2
-  const wordY = 186
-  const shadow = wordmark('bravebot', { x: wordX + cell, y: wordY + cell, cell, fill: () => WORDMARK_SHADOW })
-  const face = wordmark('bravebot', { x: wordX, y: wordY, cell })
+  const shadow = wordmark('bravebot', { x: wordX + cell, y: wordY + cell, cell, fill: () => shadowColour })
+  const face = wordmark('bravebot', { x: wordX, y: wordY, cell, fill: (row) => rows[row] })
+  return {
+    markup: `<g class="march">${bots}</g>\n${shadow.rects}\n${face.rects}`,
+    word: { x: wordX, y: wordY, width: letters.width, height: 7 * cell, cell },
+  }
+}
+
+export function banner() {
+  const width = 1280
+  const height = 448
+  const { markup, word } = lockup(width, { baseline: 150, wordY: 186 })
 
   const keepOut = [
-    { x: wordX - 16, y: wordY - 16, width: letters.width + 48, height: 7 * cell + 48 },
+    { x: word.x - 16, y: word.y - 16, width: word.width + 48, height: word.height + 48 },
     { x: 140, y: 340, width: width - 280, height: 64 },
     { x: 40, y: 36, width: width - 80, height: 124 },
   ]
   const body = `${stars(90, keepOut, width, height)}
-<g class="march">${bots}</g>
-${shadow.rects}
-${face.rects}
+${markup}
 <text x="${width / 2}" y="388" text-anchor="middle" font-family="${SANS}" font-size="30" font-weight="600" fill="${INK}">${escape(TAGLINE)}</text>`
 
   return svg({
@@ -178,6 +193,41 @@ ${face.rects}
     body,
   })
 }
+
+/** The bots and the wordmark with nothing behind them, for the landing page to put on its own background. */
+function heroPicture(options) {
+  const width = 1280
+  const { markup } = lockup(width, { baseline: 120, wordY: 156, ...options })
+  return svg({
+    width,
+    height: 314,
+    frame: false,
+    title: 'bravebot',
+    description: 'A row of nine pixel-art bots above the name bravebot.',
+    body: markup,
+  })
+}
+
+/** The hero for a dark page, and for a light one. */
+export const hero = () => heroPicture({})
+export const heroLight = () => heroPicture({ rows: WORDMARK_ROWS_LIGHT, shadowColour: WORDMARK_SHADOW_LIGHT })
+
+/** Stars on a transparent square that repeats, for the landing page to tile behind the hero. Both colours place them alike. */
+function starPicture(colour) {
+  const size = 640
+  return svg({
+    width: size,
+    height: size,
+    frame: false,
+    title: 'Stars',
+    description: 'Stars scattered on a transparent background.',
+    body: stars(64, [], size, size, { seed: 'docs-landing-stars', colour }),
+  })
+}
+
+/** White stars for a dark page, and soft grey-blue ones for a light page. */
+export const starfield = () => starPicture('#ffffff')
+export const starfieldLight = () => starPicture('#6b7089')
 
 const words = (x, y, content, { size = 22, colour = INK, anchor = 'middle', mono = false, weight = 600 } = {}) =>
   `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="${mono ? MONO : SANS}" font-size="${size}" font-weight="${weight}" fill="${colour}">${escape(content)}</text>`
@@ -320,12 +370,28 @@ export const ART = {
   'readme-plan-first.svg': planFirst,
 }
 
+/**
+ * The pictures for the docs site's landing page, which docs/website/src/pages/index.js shows.
+ * Each has a `-light` twin for the light colour mode.
+ */
+export const SITE_ART = {
+  'bravebot-hero.svg': hero,
+  'bravebot-hero-light.svg': heroLight,
+  'bravebot-stars.svg': starfield,
+  'bravebot-stars-light.svg': starfieldLight,
+}
+
 function main() {
-  const out = new URL('../../docs/assets/', import.meta.url)
-  mkdirSync(out, { recursive: true })
-  for (const [name, draw] of Object.entries(ART)) {
-    writeFileSync(new URL(name, out), draw())
-    console.log(`wrote: ${fileURLToPath(new URL(name, out))}`)
+  const outputs = [
+    [new URL('../../docs/assets/', import.meta.url), ART],
+    [new URL('../../docs/website/static/img/', import.meta.url), SITE_ART],
+  ]
+  for (const [out, art] of outputs) {
+    mkdirSync(out, { recursive: true })
+    for (const [name, draw] of Object.entries(art)) {
+      writeFileSync(new URL(name, out), draw())
+      console.log(`wrote: ${fileURLToPath(new URL(name, out))}`)
+    }
   }
 }
 
