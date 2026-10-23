@@ -105,8 +105,10 @@ HOST = {
 CONTAINERS = {"rust": ("check-msrv", "check-windows", "check-linux")}
 
 
-def classify(path, desktop):
-    """The areas a change to `path` could affect, where `desktop` is desktop_crates()."""
+def classify(path, desktop, status="M"):
+    """The areas a change to `path` could affect, where `desktop` is desktop_crates() and
+    `status` is the git status the change happened with (A, M, D, ...), defaulting to a content
+    edit for callers that do not track it."""
     if path in DECIDES or path.startswith(DECIDES_UNDER):
         return EVERYTHING
     if path in ("Cargo.toml", "Cargo.lock"):
@@ -152,7 +154,14 @@ def classify(path, desktop):
     for under, area in (("docs/website/", "docs"), ("ui/", "ui"), ("mobile/", "mobile")):
         if path.startswith(under):
             lockfile = path[len(under):] in PACKAGE_FILES
-            return frozenset({area, "npm"} if lockfile else {area})
+            found = {area, "npm"} if lockfile else {area}
+            # The agent crate compiles each page of docs/website/docs into a fixed table, and a
+            # test holds the table to the files on disk. A page added, removed or renamed (a
+            # rename is a delete and an add once renames are disabled) changes that table; a
+            # page whose content merely changed cannot fail the test that checks it.
+            if area == "docs" and status in ("A", "D") and path.startswith("docs/website/docs/"):
+                found |= {"rust"}
+            return frozenset(found)
     if path in PACKAGE_FILES or path.startswith("npm/"):
         return frozenset({"npm"})
     if path in QUIET or path.startswith(QUIET_UNDER):
@@ -208,14 +217,16 @@ def listed(output):
 
 
 def changed(root, base, head=None, env=None):
-    """Every path that differs, with a rename counted at both ends so a move out of crates/ is
-    still a change to crates/."""
-    return listed(git(root, "diff", "--no-renames", "--name-only", "-z", base,
-                      *([head] if head else []), env=env))
+    """Every path that differs, paired with the status (A, M, D, ...) it changed with, and a
+    rename counted at both ends so a move out of crates/ is still a change to crates/."""
+    fields = listed(git(root, "diff", "--no-renames", "--name-status", "-z", base,
+                        *([head] if head else []), env=env))
+    return list(zip(fields[0::2], fields[1::2]))
 
 
 def pull_request_paths(root, env=None):
-    """What the pull request changes, or None where this checkout cannot say.
+    """What the pull request changes, each with its status, or None where this checkout cannot
+    say.
 
     A pull request is checked out as the commit merging it into its base, so its first parent is
     the base as it now is and the diff against that is the change as it would land.
@@ -229,18 +240,19 @@ def pull_request_paths(root, env=None):
 
 
 def branch_paths(root, base, env=None):
-    """What this branch changes against `base`: its commits, its uncommitted edits, and files
-    git has not been told about yet."""
+    """What this branch changes against `base`, each with its status: its commits, its
+    uncommitted edits, and files git has not been told about yet, which are additions by
+    definition."""
     fork = git(root, "merge-base", base, "HEAD", env=env).strip()
     untracked = listed(git(root, "ls-files", "--others", "--exclude-standard", "-z", env=env))
-    return sorted(set(changed(root, fork, env=env)) | set(untracked))
+    return sorted(set(changed(root, fork, env=env)) | {("A", path) for path in untracked})
 
 
 def needed(paths, desktop):
     """Each area some path needs, with the first path that needs it."""
     because = {}
-    for path in paths:
-        for area in classify(path, desktop):
+    for status, path in paths:
+        for area in classify(path, desktop, status):
             because.setdefault(area, path)
     return because
 
@@ -359,6 +371,17 @@ CASES = (
     ("SECURITY.md", NOTHING),
 )
 
+# A page added, removed or renamed under docs/website/docs changes the fixed table help.rs
+# compiles pages into, and the test holding that table to the files on disk; a page whose
+# content merely changed cannot fail it. A lockfile under docs/website/ but outside docs/ is
+# unaffected whatever its status, since it is no page of that table.
+STATUS_CASES = (
+    ("docs/website/docs/using/new.md", "A", {"docs", "rust"}),
+    ("docs/website/docs/using/removed.md", "D", {"docs", "rust"}),
+    ("docs/website/docs/using/watches.md", "M", {"docs"}),
+    ("docs/website/package-lock.json", "A", {"docs", "npm"}),
+)
+
 # One crate reached each way a manifest can name another, one reached only through another, and
 # one nothing names.
 FIXTURE_MANIFESTS = {
@@ -421,6 +444,11 @@ def selftest():
         got = classify(path, FIXTURE_DESKTOP)
         checks.append((f"{path} needs {sorted(wanted)}", got == frozenset(wanted), sorted(got)))
 
+    for path, status, wanted in STATUS_CASES:
+        got = classify(path, FIXTURE_DESKTOP, status)
+        checks.append((f"{path} as {status} needs {sorted(wanted)}",
+                       got == frozenset(wanted), sorted(got)))
+
     real = desktop_crates(ROOT)
     for crate in (*DESKTOP, "core"):
         checks.append((f"the desktop app builds {crate}", crate in real, sorted(real)))
@@ -450,11 +478,22 @@ def selftest():
         run("init", "-q", "-b", "main")
         write("crates/tui/src/moved.rs", "fn moved() {}\n")
         write("docs/development/checks.md", "old\n")
+        write("docs/website/docs/using/existing.md", "old\n")
         run("add", ".")
         run("commit", "-q", "-m", "base")
         run("checkout", "-q", "-b", "prose")
         write("docs/development/checks.md", "new\n")
         run("commit", "-q", "-am", "prose only")
+        run("checkout", "-q", "-b", "docs-add", "main")
+        write("docs/website/docs/using/new.md", "new\n")
+        run("add", ".")
+        run("commit", "-q", "-m", "a new page")
+        run("checkout", "-q", "-b", "docs-edit", "main")
+        write("docs/website/docs/using/existing.md", "edited\n")
+        run("commit", "-q", "-am", "edited a page")
+        run("checkout", "-q", "-b", "docs-remove", "main")
+        run("rm", "-q", "docs/website/docs/using/existing.md")
+        run("commit", "-q", "-m", "removed a page")
         run("checkout", "-q", "-b", "move", "main")
         run("mv", "crates/tui/src/moved.rs", "docs/moved.rs")
         run("commit", "-q", "-m", "a move out of crates/")
@@ -464,7 +503,15 @@ def selftest():
         run("commit", "-q", "-m", "base moves on")
 
         pull_request = dict(env, GITHUB_EVENT_NAME="pull_request")
-        for branch, wanted in (("prose", NOTHING), ("move", {"rust"})):
+        # A page added, edited or removed under docs/website/docs between docs-add/-edit/-remove
+        # here, with "move" kept last so the assertions below it still read the merge they name.
+        for branch, wanted in (
+            ("prose", NOTHING),
+            ("docs-add", {"docs", "rust"}),
+            ("docs-edit", {"docs"}),
+            ("docs-remove", {"docs", "rust"}),
+            ("move", {"rust"}),
+        ):
             run("checkout", "-q", "--detach", "main")
             run("merge", "-q", "--no-ff", "-m", "merge", branch)
             got = frozenset(needed(pull_request_paths(root, pull_request), NOTHING))
@@ -495,9 +542,9 @@ def selftest():
         write("docs/development/checks.md", "edited, not committed\n")
         write("ui/new.ts", "untracked\n")
         got = branch_paths(root, "main", env=env)
-        wanted = ["docs/development/checks.md", "ui/new.ts"]
-        checks.append(("a branch is its commits, its edits and its new files, not the base's",
-                       got == wanted, got))
+        wanted = [("A", "ui/new.ts"), ("M", "docs/development/checks.md")]
+        checks.append(("a branch is its commits, its edits and its new files, not the base's, "
+                       "each with its status", got == wanted, got))
 
     for area in set(AREAS) - {"build", "installers"}:
         runs = targets({area}, HOST) + targets({area}, CONTAINERS)
