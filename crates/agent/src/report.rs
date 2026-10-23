@@ -212,6 +212,19 @@ impl Activity {
         }
     }
 
+    /// The file this call is about as a list of files names it: [`Activity::shown_target`] of the
+    /// target with the slot a reference was drawn under and a leading `./` taken off, so a file
+    /// the planner named two ways is one row, spelled as the confirmation for it is.
+    ///
+    /// For a screen only, as [`Activity::shown_target`] is. A call that names no file comes back
+    /// as it is.
+    pub fn shown_file(&self) -> String {
+        match self.names_a_file && !self.target.is_empty() {
+            true => crate::confirm::shown_name(without_reference_slot(&self.target)),
+            false => self.target.clone(),
+        }
+    }
+
     /// The line as one string, for a display with nowhere to put the parts separately.
     pub fn line(&self) -> String {
         if self.target.is_empty() {
@@ -220,6 +233,28 @@ impl Activity {
             format!("{}({})", self.verb, self.shown_target())
         }
     }
+}
+
+/// A target without the `ref:N(label):` a reference is drawn under, and without a leading `./`.
+///
+/// Both come off one time, the slot first, as a list of files has always matched a call to the
+/// path it was confirmed for. Only the way the name is drawn is decided here, on text already
+/// released to a screen.
+fn without_reference_slot(target: &str) -> &str {
+    let after_slot = || -> Option<&str> {
+        let rest = target.strip_prefix("ref:")?;
+        let after_digits = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        if after_digits.len() == rest.len() {
+            return None;
+        }
+        let rest = after_digits.strip_prefix('(')?;
+        let rest = rest.strip_prefix(['T', 'U'])?.strip_prefix(',')?;
+        rest.strip_prefix("pub")
+            .or_else(|| rest.strip_prefix("priv"))?
+            .strip_prefix("):")
+    };
+    let target = after_slot().unwrap_or(target);
+    target.strip_prefix("./").unwrap_or(target)
 }
 
 /// What the kernel counted when it made the diff behind a write's [`Activity::changes`].
@@ -1405,6 +1440,41 @@ mod tests {
         // A call that named nothing has no target to spell, so nothing is drawn for it.
         assert_eq!(read("").shown_target(), "");
         assert_eq!(read("").line(), "Read");
+    }
+
+    /// A list of files names a file once however the planner named it, and spells the name as a
+    /// prompt about it does (PROMPT-1): the slot a reference was drawn under and a leading `./`
+    /// come off, once each and in that order, and what is left is spelled. Anything that is not
+    /// a file's name keeps its target whole.
+    #[test]
+    fn a_list_of_files_names_a_file_without_its_slot_and_spelled() {
+        let file = |target: &str| Activity::running("Write", target).naming_a_file(true);
+
+        assert_eq!(file("src/main.rs").shown_file(), "src/main.rs");
+        assert_eq!(
+            file("ref:3(U,priv):note.md ").shown_file(),
+            "\"note.md\u{2423}\""
+        );
+        assert_eq!(file("ref:12(T,pub):note.md").shown_file(), "note.md");
+        assert_eq!(file("./other.md ").shown_file(), "\"other.md\u{2423}\"");
+        assert_eq!(file("ref:1(U,priv):./a.md").shown_file(), "a.md");
+        // Once each: a second `./` is part of the name, and so is a slot that is not one.
+        assert_eq!(file(".//a.md").shown_file(), "/a.md");
+        assert_eq!(file("ref:(U,priv):a.md").shown_file(), "ref:(U,priv):a.md");
+        assert_eq!(
+            file("ref:1(X,priv):a.md").shown_file(),
+            "ref:1(X,priv):a.md"
+        );
+        assert_eq!(
+            file("ref:1(U,secret):a.md").shown_file(),
+            "ref:1(U,secret):a.md"
+        );
+        // Taking the slot off a name that is nothing but one leaves nothing to draw as a name.
+        assert_eq!(file("ref:1(U,priv):").shown_file(), "\"\"");
+        assert_eq!(file("").shown_file(), "");
+
+        let search = Activity::running("Search", "./todo ");
+        assert_eq!(search.shown_file(), "./todo ");
     }
 
     /// Some work has nothing to name, and an empty pair of brackets reads as a bug rather than

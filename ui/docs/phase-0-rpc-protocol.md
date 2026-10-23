@@ -994,7 +994,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 `Activity` serialises as:
 
 ```json
-{ "verb": "read", "target": "src/main.rs", "shownTarget": "src/main.rs",
+{ "verb": "read", "target": "src/main.rs", "shownTarget": "src/main.rs", "shownFile": "src/main.rs",
   "why": "see the entry point", "note": "412 lines",
   "failed": false, "untrusted": false, "waitedSeconds": null,
   "changes": [ { "kind": "added", "text": "…" } ] }
@@ -1004,7 +1004,10 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 spelled for a person where the call names a file (PROMPT-1): a name that is empty, is only
 whitespace, ends in a space or holds a character that draws as nothing arrives quoted with each
 such character made visible, and any other target arrives unchanged. A client draws `shownTarget`
-and matches a call to its confirmation on `target`.
+and matches a call to its confirmation on `target`. `shownFile` is the name a list of files
+draws: `shownTarget` of the target with the `ref:N(label):` a reference was drawn under and a
+leading `./` taken off, so a file named two ways is one row and is spelled as the confirmation for
+it is. It equals `shownTarget` where the call names no file.
 
 `why` is the planner's own line on what the call is for, the same on `tool.started` and
 `tool.finished`, and empty where it gave none. It is released for the screen and read by

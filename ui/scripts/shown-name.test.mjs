@@ -227,8 +227,8 @@ test('the list of rules a checkout proposed draws each rule and its file as spel
 
 // A call's own `target` is what a window matches the call to its confirmation on, so it stays as the
 // model wrote it. What the transcript line and the Context lists draw is `shownTarget`.
-const call = (verb, target, shownTarget, note = 'done') =>
-  ({ verb, target, shownTarget, why: '', note, failed: false, untrusted: false, changes: [], waitedSeconds: null })
+const call = (verb, target, shownTarget, note = 'done', shownFile = shownTarget) =>
+  ({ verb, target, shownTarget, shownFile, why: '', note, failed: false, untrusted: false, changes: [], waitedSeconds: null })
 
 test('a tool line draws the name of its file as spelled, and does not draw it as written', () => {
   const markup = draw(t.started(call('Write', WRITTEN, SPELLED, null)))
@@ -262,12 +262,12 @@ test('a write that was asked about is listed once, under the name as spelled', (
   assert.deepEqual(written([asked]), [{ target: WRITTEN, shown: SPELLED, state: 'approved' }])
 })
 
-test('a write named through a reference or a leading ./ is listed under the spelled name without them', () => {
+test('a write named through a reference or a leading ./ is listed under the name the bridge sent for the file', () => {
   const { written } = load('src/renderer/components/Context.tsx')
   const rows = written([
-    { kind: 'tool', id: 'a', activity: call('Write', 'ref:1(U,priv):note.md ', '"ref:1(U,priv):note.md␣"'), landing: null },
-    { kind: 'tool', id: 'b', activity: call('Write', './other.md ', '"./other.md␣"'), landing: null },
-    { kind: 'tool', id: 'c', activity: call('Write', 'ref:2(U,priv):plain.md', 'ref:2(U,priv):plain.md'), landing: null },
+    { kind: 'tool', id: 'a', activity: call('Write', 'ref:1(U,priv):note.md ', '"ref:1(U,priv):note.md␣"', 'done', '"note.md␣"'), landing: null },
+    { kind: 'tool', id: 'b', activity: call('Write', './other.md ', '"./other.md␣"', 'done', '"other.md␣"'), landing: null },
+    { kind: 'tool', id: 'c', activity: call('Write', 'ref:2(U,priv):plain.md', 'ref:2(U,priv):plain.md', 'done', 'plain.md'), landing: null },
   ])
   assert.deepEqual(rows.map((row) => row.shown), ['"note.md␣"', '"other.md␣"', 'plain.md'])
 })

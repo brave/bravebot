@@ -337,15 +337,10 @@ function fileTarget(target: string): string {
   return target.replace(/^ref:\d+\([TU],(?:pub|priv)\):/, '').replace(/^\.\//, '')
 }
 
-/** [`fileTarget`] for a name that was spelled, which opens with a quotation mark where it needed spelling. */
-function shownFileTarget(shown: string): string {
-  return shown.replace(/^("?)ref:\d+\([TU],(?:pub|priv)\):/, '$1').replace(/^("?)\.\//, '$1')
-}
-
 /** One file the turn wrote, and how far that write got. */
 interface Write {
   target: string
-  /** `target` spelled so a blank or whitespace-ended name is visible (PROMPT-1). */
+  /** `target` as the bridge spelled it, so a blank or whitespace-ended name is visible (PROMPT-1). */
   shown: string
   state: 'approved' | 'applying' | 'applied' | 'failed' | 'refused' | 'waiting' | 'cancelled'
 }
@@ -382,7 +377,7 @@ export function written(entries: Entry[]): Write[] {
     calls.set(target, entry.activity)
     // An outcome already recorded for this path — a decision, or the finish of the same
     // call — outranks a line that has not finished, so a pending row cannot overwrite it.
-    rows.set(target, { target, shown: shownFileTarget(entry.activity.shownTarget), state: outcome(entry.activity) })
+    rows.set(target, { target, shown: entry.activity.shownFile, state: outcome(entry.activity) })
   }
   return [...rows.values()]
 }

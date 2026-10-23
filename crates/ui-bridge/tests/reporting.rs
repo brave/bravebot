@@ -207,37 +207,40 @@ fn what_a_call_spent_at_a_model_reaches_a_front_end() {
 }
 
 /// PROMPT-1: a call crosses with its file's name as held, which a window matches the call to its
-/// confirmation on, and as spelled, which is all it draws. A name that needs no spelling crosses as
-/// itself, a call that named nothing crosses with nothing to draw, and the target of a tool that
-/// names no file is not spelled.
+/// confirmation on, as spelled, which is what it draws on the line, and as spelled without the slot
+/// a reference was drawn under and a leading `./`, which is what it lists the file under. A name
+/// that needs no spelling crosses as itself, a call that named nothing crosses with nothing to
+/// draw, and the target of a tool that names no file is not spelled or stripped.
 #[test]
 fn a_calls_file_crosses_as_held_and_as_spelled() {
     let (mut reporter, events) = harness();
 
     reporter.tool_started(Activity::running("Write", "note.md ").naming_a_file(true));
     reporter.tool_started(Activity::running("Write", "note.md").naming_a_file(true));
-    reporter.tool_started(Activity::running("Search", "todo "));
+    reporter.tool_started(Activity::running("Write", "ref:1(U,priv):a.md ").naming_a_file(true));
+    reporter.tool_started(Activity::running("Search", "./todo "));
     reporter.tool_started(Activity::running("List", "").naming_a_file(true));
 
     let events = events.lock().expect("not poisoned");
-    let crossed: Vec<(&str, &str)> = events
+    let crossed: Vec<(&str, &str, &str)> = events
         .iter()
         .map(|event| {
-            (
-                event.data["target"].as_str().expect("a target"),
-                event.data["shownTarget"]
-                    .as_str()
-                    .expect("a spelled target"),
-            )
+            let text = |key: &str| event.data[key].as_str().expect(key);
+            (text("target"), text("shownTarget"), text("shownFile"))
         })
         .collect();
     assert_eq!(
         crossed,
         [
-            ("note.md ", "\"note.md\u{2423}\""),
-            ("note.md", "note.md"),
-            ("todo ", "todo "),
-            ("", ""),
+            ("note.md ", "\"note.md\u{2423}\"", "\"note.md\u{2423}\""),
+            ("note.md", "note.md", "note.md"),
+            (
+                "ref:1(U,priv):a.md ",
+                "\"ref:1(U,priv):a.md\u{2423}\"",
+                "\"a.md\u{2423}\""
+            ),
+            ("./todo ", "./todo ", "./todo "),
+            ("", "", ""),
         ]
     );
 }

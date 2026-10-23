@@ -111,7 +111,7 @@ waiting write, draw the spelled paths the bridge sends and never the paths as he
 transcript draws for a call about a file, such as `Write(note.md )`, draws the name spelled in the
 terminal, in lines, in the editor, in the desktop window (`shownTarget`) and in the mobile app, and so
 does the list of files a turn wrote in the terminal and the lists of files read and written in the
-desktop window's Context panel. A call about anything else, such as a search for a pattern, is drawn
+desktop window's Context panel, which draw the name the bridge sent for the file (`shownFile`). A call about anything else, such as a search for a pattern, is drawn
 as written, and the target a call carries to a program or is matched on is the name as held. The
 notes said before the first prompt about an allow rule a checkout proposed, whether it was granted
 before or is not granted, draw the rule as a rule is drawn and the settings file and the record a yes
@@ -182,6 +182,7 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::control_tests::the_startup_question_carries_the_directory_and_the_record_spelled_for_a_person`
 `verified-by: bravebot_agent::report::a_line_spells_the_name_of_a_file_and_nothing_else`
+`verified-by: bravebot_agent::report::a_list_of_files_names_a_file_without_its_slot_and_spelled`
 `verified-by: bravebot_agent::tools::a_file_calls_line_spells_a_name_a_person_could_not_otherwise_tell_apart`
 `verified-by: bravebot_agent::tools::a_stored_call_spells_the_name_of_its_file`
 `verified-by: bravebot_ui_bridge::reporting::a_calls_file_crosses_as_held_and_as_spelled`
