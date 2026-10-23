@@ -13145,6 +13145,62 @@ mod tests {
         );
     }
 
+    /// A held repeat of a call to a server's tool is drawn with the same target `dispatch_with`
+    /// would draw for it (TOOL-5): the alias and the tool the live offer answers for where one is
+    /// held, and the alias and the word parsed off the wire name's own `mcp__` prefix where none
+    /// is. The offer in each case names a different alias than the wire name itself would parse
+    /// to, so a target drawn from the wrong source is told apart from one drawn from the right one.
+    #[test]
+    fn a_held_call_to_a_servers_tool_is_drawn_with_its_target() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let drawn = |name: &str, mcp: Option<&crate::mcp::Offer>| {
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "c1",
+                "type": "function",
+                "function": { "name": name, "arguments": r#"{"city":"Lyon"}"# },
+            }))
+            .unwrap();
+            let mut sink = RecordingSink::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "ask the weather");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            let slots = SlotStore::new();
+            refused_without_running(
+                &mut policy,
+                &mut reporter,
+                mcp,
+                &slots,
+                &call,
+                "held".to_string(),
+            );
+            reporter.started[0].target.clone()
+        };
+
+        let offer = crate::mcp::offer_for_test(&[(
+            "mcp__weather__get_forecast",
+            "the-offers-alias",
+            "the-offers-tool",
+        )]);
+        assert_eq!(
+            drawn("mcp__weather__get_forecast", Some(&offer)),
+            r#"the-offers-alias:the-offers-tool {"city":"Lyon"}"#
+        );
+        assert_eq!(
+            drawn("mcp__weather__get_forecast", None),
+            r#"weather:get_forecast {"city":"Lyon"}"#
+        );
+    }
+
     /// Every kind above the bottom of the tree is offered the way to delegate, with the kinds this
     /// session resolved, and none at the bottom is. This is the offer; the kernel refusing a call
     /// from the bottom anyway is `policy::tests`' half.
