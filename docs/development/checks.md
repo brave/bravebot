@@ -399,6 +399,12 @@ a job summary somebody has to remember to read. Search the issues before treatin
 known flake, and run `contrib/measure-flakes.py --runs 30` to ask this machine over a shorter sweep.
 Neither fails a build over a rate.
 
+A passing test is not evidence that it would fail if the code were wrong. The
+[Mutation testing](../../.github/workflows/mutation-testing.yml) workflow runs cargo-mutants over
+`bravebot-core` every Sunday, in six shards, and its job summary lists the functions with the most
+changes no test noticed. That list is where to find a test to write. It gates nothing, and
+[contrib/README.md](../../contrib/README.md#measure-mutantspy) says how to run it on one file.
+
 **A test missing from that list is not thereby clean.** A hundred runs can only account for a test
 that loses more than about three in a hundred, and the job measures quiet hosted runners, while
 the mock server races that `make check-linux` caps threads for want a machine with something else on

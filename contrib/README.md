@@ -237,6 +237,39 @@ of its own in that workflow, which is also what a pull request touching this fil
 thing to run after touching a regular expression here: a parser that matches nothing reports a clean
 suite forever.
 
+## measure-mutants.py
+
+Names the changes to the code that no test notices.
+
+A passing suite says every assertion held, and not that the assertions would fail if the code were
+wrong. [TS-003](../docs/best-practices/tests.md#TS-003) asks for that proof of a new test, one fault
+at a time by hand. [cargo-mutants](https://mutants.rs) does it for a crate: it changes one thing, such
+as a `<` to a `<=` or a function body to `true`, runs the tests, and reports each change they did not
+fail on as missed.
+
+The report is the product. It gives the share of tested changes that made a test fail, the files with
+the most missed changes, and the functions with the most, each with its lines and the change that
+survived. Nothing fails over a score, because a job that goes red over a list is one people learn to
+ignore. Only a measurement that did not happen fails: cargo-mutants exiting for a usage error or
+because the suite fails before anything is changed, or a report of fewer shards than were run.
+
+```sh
+cargo install --locked cargo-mutants@27.1.0
+contrib/measure-mutants.py run --package bravebot-core --shard 0/6 --save shard-0.json
+contrib/measure-mutants.py run --package bravebot-core --save one-file.json -- --file crates/core/src/canonical.rs
+contrib/measure-mutants.py report shard-*.json --shards 6 --summary summary.md
+```
+
+`bravebot-core` has about three thousand changes, two to five seconds each, so the
+[Mutation testing](../.github/workflows/mutation-testing.yml) workflow cuts it into six shards,
+measures each in a job that holds no grant and no secret, and joins them in a job that runs no cargo.
+It runs on Sundays and by hand, and its pull request trigger runs only `--selftest`. Timeouts are
+changes that make the code loop; they are counted apart and left out of the score. A change in the
+list is one of three things: a test that is missing, an assertion too loose to fail, or code whose
+behaviour does not matter, such as a `<` in a loop bound that only changes how many times a no-op runs.
+Only the first two are fixed. `agents/skills/security-audit` treats `run` as it does a cargo build,
+so a job that holds a token cannot start one.
+
 ## drive_tui.py
 
 Drives the terminal interface from a script, so the parts of it that a unit test cannot reach can
