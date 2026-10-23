@@ -302,8 +302,16 @@ mod tests {
     #[test]
     fn this_agents_credentials_are_withheld_without_being_configured() {
         let names = names(&Settings::default());
-        assert!(names.iter().any(|name| name == "SERVICES_KEY_AICHAT"));
-        assert!(names.iter().any(|name| name == "BRAVE_SERVICES_KEY_ID"));
+        for withheld in [
+            "SERVICES_KEY_AICHAT",
+            "BRAVE_SERVICES_KEY_ID",
+            "BRAVE_AI_CHAT_API_KEY",
+        ] {
+            assert!(
+                names.iter().any(|name| name == withheld),
+                "{withheld} reached a program the agent started"
+            );
+        }
     }
 
     /// What the planner is told is the fixed set and nothing a configuration adds. An entry in a
@@ -313,7 +321,11 @@ mod tests {
     fn the_credentials_told_to_the_planner_are_the_fixed_ones() {
         assert_eq!(
             builtin_credentials(),
-            ["SERVICES_KEY_AICHAT", "BRAVE_SERVICES_KEY_ID"]
+            [
+                "SERVICES_KEY_AICHAT",
+                "BRAVE_SERVICES_KEY_ID",
+                "BRAVE_AI_CHAT_API_KEY"
+            ]
         );
     }
 
@@ -439,7 +451,7 @@ mod tests {
         );
         assert_eq!(
             names.len(),
-            3,
+            4,
             "a block naming no variable added to the set: {names:?}"
         );
     }
@@ -469,6 +481,7 @@ mod tests {
             [
                 "SERVICES_KEY_AICHAT",
                 "BRAVE_SERVICES_KEY_ID",
+                "BRAVE_AI_CHAT_API_KEY",
                 "GATEWAY_TOKEN"
             ]
         );

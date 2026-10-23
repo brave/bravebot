@@ -513,6 +513,9 @@ doctor-dropped-chatgpt-account-renewable-without-authority =
 # à sa prochaine utilisation.
 doctor-chatgpt = chatgpt
 doctor-chatgpt-signed-in = connecté, le jeton d'accès expire le { $expires }
+doctor-relay = requêtes
+doctor-relay-key = clé d'API (paramètres relayés, premium indisponible)
+doctor-relay-signed = signées
 doctor-backend = service
 doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo

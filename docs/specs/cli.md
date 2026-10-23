@@ -219,7 +219,9 @@ over one set of failures is one of them going out of date.
 <a id="CLI-7"></a>
 ### CLI-7: `doctor` reports configuration and confinement without changing anything
 
-It prints every backend this build can reach and what identifies it, which names the settings set,
+It prints every backend this build can reach and what identifies it, whether a request to Brave's
+endpoint will be signed or will present an API key instead
+([BACKEND-62](backends.md#BACKEND-62)), which names the settings set,
 which settings files are in force and which of them won a name more than one set, which names a
 machine-level file pinned and where that file is, how to configure a service where nothing
 configured will serve a turn, the model in force
@@ -281,6 +283,7 @@ that is not `<host>/<owner>` is refused with the status an argument error has.
 `verified-by: bravebot_cli::doctor::doctor_checks_resolved_agent_link_targets`
 `verified-by: bravebot_cli::doctor::doctor_finds_direnv_only_when_path_contains_an_executable`
 `verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::doctor_says_whether_requests_are_signed_or_present_an_api_key`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
