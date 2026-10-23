@@ -67134,6 +67134,88 @@ fn a_quarantined_capped_files_result_still_says_it_is_incomplete() {
     );
 }
 
+/// What the planner is sent after a search whose time ran out before the first file, under
+/// `trust`. A spent clock is the state a real timeout leaves behind, and nothing was found, so
+/// the only sign the answer is partial is the claim the turn makes.
+fn a_search_whose_clock_ran_out(
+    name: &str,
+    trust: Option<bravebot_core::trust::TrustStore>,
+) -> String {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("f.txt"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(None, Some(std::time::Duration::ZERO));
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("search", r#"{"pattern":"needle","directory":"."}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("find needle");
+    match trust {
+        Some(trust) => turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::Unattended,
+            &mut sink,
+            trust,
+        ),
+        None => turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::Unattended,
+            &mut sink,
+        ),
+    }
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    received.recv().expect("second request")
+}
+
+/// SEARCH-3: a search that ran out of time says so to a planner that may read the answer, in words
+/// that name the clock and not the file cap. With nothing found, "no matches" is all the answer
+/// would otherwise say, and the planner would take a tree it never read for one without the needle.
+#[test]
+fn a_search_that_ran_out_of_time_tells_the_model_it_did_not_read_the_rest() {
+    let second =
+        a_search_whose_clock_ran_out("search-timed-out-trusted", Some(trusting_the_workspace()));
+
+    assert!(
+        second.contains("this search ran out of time") && second.contains("did not read the rest"),
+        "a search that ran out of time did not say so: {second}"
+    );
+    assert!(
+        !second.contains("did not reach the whole tree"),
+        "the clock was reported as the cap on files: {second}"
+    );
+}
+
+/// SEARCH-3: the time cap is a claim too when the planner is only handed a reference. The notice
+/// written into the body reaches nobody then, so a search that read nothing before its clock ran out
+/// has to be marked incomplete beside the reference.
+#[test]
+fn a_quarantined_search_that_ran_out_of_time_still_says_it_is_incomplete() {
+    let second = a_search_whose_clock_ran_out("search-timed-out-quarantined", None);
+
+    assert!(
+        !second.contains("ran out of time"),
+        "the body reached the model, so this is not the quarantined case: {second}"
+    );
+    assert!(
+        second.contains("incomplete"),
+        "a search that ran out of time reached the model as a plain reference: {second}"
+    );
+}
+
 // SANDBOX-28: asking the person for reach to a path a program cannot otherwise touch.
 
 /// What a turn that made `calls` in order left behind.
