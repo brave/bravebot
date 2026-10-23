@@ -99,11 +99,7 @@ fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<String>) {
     }
     // Additive like a gateway: a stored ChatGPT sign-in adds its models and takes none away.
     if account {
-        let listed = bravebot_agent::chatgpt::account_models(
-            config,
-            &mut bravebot_session::audit::Trail::new(),
-        );
-        with_account(&mut rows, &mut warnings, listed);
+        with_account(&mut rows, &mut warnings, ask_the_account(config));
     }
     if config.serves_aichat() {
         let mut routing = Routing::new();
@@ -123,6 +119,24 @@ fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<String>) {
         }
     }
     (rows, warnings)
+}
+
+/// What the ChatGPT account offers, asked of the serving host with the stored sign-in
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// The one place this crate asks. A unit test never reaches the host, which is compiled in and would
+/// be sent a stored sign-in's token from a machine that has one: it gets the answer it scripted on
+/// its thread, or an account nobody signed in to, and can read how often it was asked.
+fn ask_the_account(config: &Config) -> bravebot_agent::chatgpt::AccountModels {
+    #[cfg(test)]
+    {
+        let _ = config;
+        scripted_account::ask()
+    }
+    #[cfg(not(test))]
+    {
+        bravebot_agent::chatgpt::account_models(config, &mut bravebot_session::audit::Trail::new())
+    }
 }
 
 /// Add what the ChatGPT account offers (CHATGPT-9) to the rows, or say that its listing could not
@@ -291,6 +305,38 @@ pub fn selection(value: Option<&Value>) -> Result<Option<String>, crate::protoco
     }
 }
 
+/// What a unit test scripts for the account's listing, and how often it was asked for.
+#[cfg(test)]
+mod scripted_account {
+    use bravebot_agent::chatgpt::AccountModels;
+    use bravebot_aichat::models::Model;
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        static OFFERED: RefCell<Option<Vec<Model>>> = const { RefCell::new(None) };
+        static ASKED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Offer `models` to whatever asks on this thread, and forget how often it was asked.
+    pub(super) fn offer(models: Vec<Model>) {
+        OFFERED.with(|offered| *offered.borrow_mut() = Some(models));
+        ASKED.with(|asked| asked.set(0));
+    }
+
+    /// How often the account was asked about on this thread since [`offer`], or since it began.
+    pub(super) fn asked() -> usize {
+        ASKED.with(Cell::get)
+    }
+
+    pub(super) fn ask() -> AccountModels {
+        ASKED.with(|asked| asked.set(asked.get() + 1));
+        OFFERED.with(|offered| match offered.borrow().as_ref() {
+            Some(models) => AccountModels::Offered(models.clone()),
+            None => AccountModels::Absent,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +484,73 @@ mod tests {
         with_account(&mut rows, &mut warnings, AccountModels::Absent);
         assert_eq!(rows, [elsewhere]);
         assert!(warnings.is_empty());
+    }
+
+    /// CHATGPT-9 in the window: a turn on a model that is not the account's sends the stored token
+    /// nowhere, whether the model is named for the turn or is the configured default, and a turn on
+    /// one of the account's own models asks for its row and takes the window the listing states.
+    /// The window is asked from a fresh configuration each time, as every turn builds one, so the
+    /// budget it ends with is its own.
+    #[test]
+    fn a_turn_in_the_window_asks_the_account_only_for_one_of_its_own_models() {
+        use scripted_account::{asked, offer};
+        let listing = || {
+            vec![Model {
+                conversation_tokens: Some(65_536),
+                ..account_row("chatgpt/gpt-5.5")
+            }]
+        };
+
+        offer(listing());
+        let mut named = a_config_with_a_gateway_stating_a_window(8_192);
+        adopt_window(&mut named, Some("ollama/tiny"));
+        assert_eq!(asked(), 0, "a turn named for a gateway's model asked");
+        let mut unnamed = a_config_with_a_gateway_stating_a_window(8_192);
+        adopt_window(&mut unnamed, None);
+        assert_eq!(asked(), 0, "a turn on the configured default asked");
+        assert_eq!(
+            unnamed.context_budget, 8_192,
+            "the gateway's window was lost"
+        );
+
+        offer(listing());
+        let mut account = a_config_with_a_gateway_stating_a_window(8_192);
+        adopt_window(&mut account, Some("chatgpt/gpt-5.5"));
+        assert_eq!(asked(), 1, "a turn on the account's model did not ask");
+        assert_eq!(account.context_budget, 65_536);
+
+        // The configured default can be the account's own: a turn naming no model asks too.
+        offer(listing());
+        let mut by_default = a_config_with_a_gateway_stating_a_window(8_192);
+        by_default.default_model = "chatgpt/gpt-5.5".into();
+        adopt_window(&mut by_default, None);
+        assert_eq!(asked(), 1, "a turn on an account default did not ask");
+        assert_eq!(by_default.context_budget, 65_536);
+    }
+
+    /// CHATGPT-9 in the window: the model list asks the account whatever model is configured, since
+    /// it is where a person who has yet to choose one finds it, and offers what it lists beside the
+    /// rows already there. Run on a configuration whose default is a gateway's model.
+    #[test]
+    fn the_models_list_asks_the_account_whatever_model_is_configured() {
+        use scripted_account::{asked, offer};
+        let config = a_config_with_a_gateway_stating_a_window(8_192);
+        offer(vec![account_row("chatgpt/gpt-5.5")]);
+
+        let result = list(&config);
+
+        assert_eq!(asked(), 1, "the list did not ask");
+        let ids: Vec<&str> = result["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["id"].as_str().expect("an id"))
+            .collect();
+        assert!(ids.contains(&"chatgpt/gpt-5.5"), "{ids:?}");
+        assert!(
+            ids.contains(&"ollama/tiny"),
+            "a row already there was taken away: {ids:?}"
+        );
     }
 
     #[test]

@@ -604,7 +604,12 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_agent::chatgpt::a_listing_refused_for_its_token_is_asked_again_once_with_a_replacement`
 `verified-by: bravebot_agent::chatgpt::a_gateway_entry_named_chatgpt_keeps_the_name_and_the_account_is_not_asked_about`
 `verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none`
+`verified-by: bravebot_tui::app::a_caller_on_a_model_that_is_not_the_accounts_never_asks_the_account`
+`verified-by: bravebot_tui::app::a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists`
+`verified-by: bravebot_tui::app::the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers`
 `verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more`
+`verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_account_only_for_one_of_its_own_models`
+`verified-by: bravebot_ui_bridge::models::the_models_list_asks_the_account_whatever_model_is_configured`
 
 <a id="CHATGPT-10"></a>
 ### CHATGPT-10: a request to the serving host is made in the Responses protocol and carries the token and the session's identifiers
@@ -959,8 +964,7 @@ work lands, in the same commit as the code.
   and a name the account cannot reach is refused at the first request. The terminal picker does not say the
   listing failed.
 - A picker asks the serving host for the listing each time it opens, so a signed-in person who opens one sends
-  the access token to the serving host for a request that is not a turn. A test that opens a picker's roster
-  on a machine with a stored sign-in sends it too.
+  the access token to the serving host for a request that is not a turn.
 - A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,
   since the renewal that finds it removes the file. The next turn on a `chatgpt/` model says so.
 - Every request of a process carries one session identifier, so two sessions of a process share a cache

@@ -72,7 +72,7 @@ fn roster(
     // away. Not asked where nothing is signed in, and a listing that cannot be had adds nothing.
     if account {
         configured.extend(account_rows(
-            bravebot_agent::chatgpt::account_models(config, &mut Trail::new()),
+            ask_the_account(config),
             chosen.unwrap_or(&config.default_model),
         ));
     }
@@ -84,6 +84,24 @@ fn roster(
     }
 
     combined(configured, fetch_models(config)).map(|models| requestable(config, models))
+}
+
+/// What the ChatGPT account offers, asked of the serving host with the stored sign-in
+/// ([CHATGPT-9](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// The one place this crate asks. A unit test never reaches the host, which is compiled in and would
+/// be sent a stored sign-in's token from a machine that has one: it gets the answer it scripted on
+/// its thread, or an account nobody signed in to, and can read how often it was asked.
+fn ask_the_account(config: &Config) -> bravebot_agent::chatgpt::AccountModels {
+    #[cfg(test)]
+    {
+        let _ = config;
+        scripted_account::ask()
+    }
+    #[cfg(not(test))]
+    {
+        bravebot_agent::chatgpt::account_models(config, &mut Trail::new())
+    }
 }
 
 /// The rows the ChatGPT account adds to a roster (CHATGPT-9), in the order a fetched gateway
@@ -557,5 +575,37 @@ pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
             crate::model_prompt::Picker::new(models, session.model()),
         )),
         Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),
+    }
+}
+
+/// What a unit test scripts for the account's listing, and how often it was asked for.
+#[cfg(test)]
+pub(super) mod scripted_account {
+    use bravebot_agent::chatgpt::AccountModels;
+    use bravebot_aichat::models::Model;
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        static OFFERED: RefCell<Option<Vec<Model>>> = const { RefCell::new(None) };
+        static ASKED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Offer `models` to whatever asks on this thread, and forget how often it was asked.
+    pub(in crate::app) fn offer(models: Vec<Model>) {
+        OFFERED.with(|offered| *offered.borrow_mut() = Some(models));
+        ASKED.with(|asked| asked.set(0));
+    }
+
+    /// How often the account was asked about on this thread since [`offer`], or since it began.
+    pub(in crate::app) fn asked() -> usize {
+        ASKED.with(Cell::get)
+    }
+
+    pub(super) fn ask() -> AccountModels {
+        ASKED.with(|asked| asked.set(asked.get() + 1));
+        OFFERED.with(|offered| match offered.borrow().as_ref() {
+            Some(models) => AccountModels::Offered(models.clone()),
+            None => AccountModels::Absent,
+        })
     }
 }
