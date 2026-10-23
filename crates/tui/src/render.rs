@@ -809,7 +809,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     draw_input(frame, areas[2], session);
     draw_previews(frame, areas[3], &thumbs);
     frame.render_widget(Paragraph::new(beneath), areas[4]);
-    draw_hint(frame, hint_row, session);
+    laid.mode = draw_hint(frame, hint_row, session);
     if let Some(panel) = panel {
         crate::panel::draw(frame.buffer_mut(), panel, session);
     }

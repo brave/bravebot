@@ -11,7 +11,7 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, is built. Clicking other things on the screen, a context menu, edge
+drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, and the permission mode under the box, is built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
@@ -215,3 +215,17 @@ a tool returned in it ([PANEL-11](info-panel.md#PANEL-11)).
 `verified-by: bravebot_tui::app::a_click_on_the_panels_mcp_server_row_lists_the_servers`
 `verified-by: bravebot_tui::app::a_drag_over_an_mcp_server_row_or_a_click_in_the_scroller_lists_nothing`
 `verified-by: bravebot_tui::panel::only_a_started_mcp_servers_rows_are_click_targets`
+
+<a id="MOUSE-14"></a>
+### MOUSE-14: a click on the permission mode under the box cycles it
+
+On the row under the box, a left click that sweeps nothing on the permission mode, where the row
+draws one, moves to the next mode, as the key that cycles it does ([MODE-8](permission-modes.md#MODE-8)).
+As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and the press is a single
+click, so a drag, a double click and a triple click are selections, and a click over the scroller or
+a history search does nothing. The rest of the row is not a target, nor is a mode the row does not
+draw: the ordinary mode has no name there, and a row too narrow for the mode is cleared whole. The
+cycle reaches bypass only where the key does. The key stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_on_the_footers_permission_mode_cycles_it`
+`verified-by: bravebot_tui::app::a_drag_over_the_mode_or_a_click_beside_it_leaves_the_permission_mode_alone`

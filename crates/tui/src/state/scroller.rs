@@ -43,6 +43,8 @@ pub struct Laid {
     pub continued: Vec<(u16, bool)>,
     /// The regions of the screen a selection can begin in, empty for a view that has none.
     pub panes: Vec<(crate::select::Pane, ratatui::layout::Rect)>,
+    /// The cells the permission mode is drawn in on the hint row, where it is drawn (MOUSE-14).
+    pub mode: Option<ratatui::layout::Rect>,
 }
 
 impl Laid {

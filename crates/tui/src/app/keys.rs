@@ -1823,30 +1823,45 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             Action::Redraw
         }
         // A click on the panel's model, effort, context or MCP server row asks what `/model`,
-        // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13). The press and the release are on one cell and the
-        // press is a single click, so a drag, a double click and a triple click stay selections.
-        MouseEventKind::Up(MouseButton::Left)
-            if !session.scrolling()
-                && !session.searching_history()
-                && session.last_click.is_some_and(|click| {
-                    click.count() == 1 && click.cell() == (mouse.row, mouse.column)
-                })
-                && session.panel_target_at(mouse.row, mouse.column).is_some() =>
-        {
-            session.clear_selection();
-            match session.panel_target_at(mouse.row, mouse.column) {
-                Some(crate::panel::Target::Model) => super::ask_which_model(session),
-                Some(crate::panel::Target::Effort) => Action::ChooseEffort,
-                Some(crate::panel::Target::Context) => {
-                    session.report_context();
-                    Action::Redraw
-                }
-                Some(crate::panel::Target::Servers) => Action::Mcp(String::new()),
-                None => Action::Redraw,
-            }
+        // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13), and one on the
+        // permission mode under the box cycles it (MOUSE-14).
+        MouseEventKind::Up(MouseButton::Left) if is_a_shortcut_click(session, mouse) => {
+            click_shortcut(session, mouse)
         }
         MouseEventKind::Up(MouseButton::Left) => Action::Copy,
         _ => Action::None,
+    }
+}
+
+/// Whether a release is the end of a single click that swept nothing, on something that has a
+/// shortcut: a row of the info panel or the permission mode under the box. The press and the
+/// release are on one cell and the press is a single click, so a drag, a double click and a triple
+/// click stay selections.
+fn is_a_shortcut_click(session: &Session, mouse: MouseEvent) -> bool {
+    !session.scrolling()
+        && !session.searching_history()
+        && session
+            .last_click
+            .is_some_and(|click| click.count() == 1 && click.cell() == (mouse.row, mouse.column))
+        && (session.panel_target_at(mouse.row, mouse.column).is_some()
+            || session.on_the_mode(mouse.row, mouse.column))
+}
+
+/// What a click [`is_a_shortcut_click`] names does.
+fn click_shortcut(session: &mut Session, mouse: MouseEvent) -> Action {
+    session.clear_selection();
+    match session.panel_target_at(mouse.row, mouse.column) {
+        Some(crate::panel::Target::Model) => super::ask_which_model(session),
+        Some(crate::panel::Target::Effort) => Action::ChooseEffort,
+        Some(crate::panel::Target::Context) => {
+            session.report_context();
+            Action::Redraw
+        }
+        Some(crate::panel::Target::Servers) => Action::Mcp(String::new()),
+        None => {
+            session.cycle_permission_mode();
+            Action::Redraw
+        }
     }
 }
 
