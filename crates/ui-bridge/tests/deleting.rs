@@ -4,7 +4,10 @@
 //! turns that wrote the record and the trail, the request that removes them, and the refusals that
 //! keep a session a window is using from being deleted under it.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "record, Chat::Refuses and BACKEND_WORDS are helpers shared with history.rs that no test here calls"
+)]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 #![allow(
     clippy::unwrap_used,

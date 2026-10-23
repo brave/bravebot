@@ -283,7 +283,10 @@ impl State {
     /// the turn numbering the transcript shows carries on rather than restarting under a history
     /// that already has some. `tokens` starts at nothing: the figure answers "what has this
     /// session cost me", and this one has not run yet.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is parent session state the fork inherits, with one caller in bridge.rs and one test"
+    )]
     pub fn forked(
         handle: Handle,
         before: Snapshot,

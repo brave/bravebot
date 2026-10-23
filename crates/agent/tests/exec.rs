@@ -12,7 +12,6 @@ use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[allow(dead_code)]
 #[path = "../test-support/pipelines.rs"]
 mod pipelines;
 

@@ -231,7 +231,6 @@ pub(super) struct ModelForTheTurn {
     pub(super) on_the_plan_model: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
     config: &Config,
     egress: &bravebot_net::Egress,
@@ -343,7 +342,10 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// turn resolved, which may differ from the one the task carries (INSTR-12). `skill_mode` is the
 /// name and gated words of the skill `/mode` keeps applied, which the turn read again (SKILL-21). `memory` is what a
 /// definition's kept memory says, which the caller reads through its policy and so keeps hold of.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
+)]
 pub(super) fn system_prompt(
     task: &Task,
     workspace: &Workspace,

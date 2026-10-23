@@ -1247,7 +1247,10 @@ mod tests {
     }
 
     // These tests need `HOME` pointed somewhere else, and there is no safe way to do that.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "`set_var` and `remove_var` are unsafe, and `HOME_LOCK` is held while they run and until restored"
+    )]
     fn with_home<T>(dir: Option<PathBuf>, body: impl FnOnce() -> T) -> T {
         let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 

@@ -536,7 +536,10 @@ enum Plan {
 ///
 /// Returns the servers to start. Every request that will not be is a line in `notes` saying why.
 /// `prelude` is this platform's confinement base, and a local server is not asked about without one.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "environment is injected so tests fix PATH, beside the request, the person's state, the asker and the notes"
+)]
 fn settle<A: Asker + ?Sized>(
     requested: &[(PathBuf, String)],
     project: &Path,
@@ -710,7 +713,10 @@ pub enum Unstarted {
 /// to, so bypassing reaches a refused server no more than an answer would (SERVERS-12,
 /// SERVERS-13). A recorded project answers for a server nobody has seen here, and not for one
 /// somebody saw as something else: that is a server they have not seen either (SERVERS-5).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "grant and settle each pass the approvals, projects, managed layer and the injected lookups separately"
+)]
 fn assess(
     alias: &str,
     declaration: &Declaration,
@@ -1637,7 +1643,10 @@ pub fn record(
 ///
 /// Returns what could not be kept, since the server is still used in this session: the person
 /// said yes, and a file that would not take the answer does not unsay it.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "settle, the one caller, holds the home, both loaded stores and the answered declaration separately"
+)]
 fn keep(
     home: &Home,
     directory: &Path,
@@ -2200,7 +2209,10 @@ fn handshake_remote(
     (reached, hop)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "handshake_remote, the one caller, adds the policy and egress to the declaration's fields it was given"
+)]
 fn handshake_at(
     policy: &mut Policy<'_, RecordingSink>,
     egress: &bravebot_net::Egress,
@@ -2584,7 +2596,10 @@ fn at_home(variables: Variables, own: &Path) -> Variables {
 /// it is in. The
 /// declared directory may be written too, and is where it starts; without one it starts in the
 /// temporary directory, and reads nothing of the workspace.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "confinement_here passes this machine's values, and tests pass chosen directories to pin each base row"
+)]
 fn confinement(
     prelude: Option<Prelude>,
     program: &Path,

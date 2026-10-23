@@ -15,7 +15,10 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "undo_endpoint.rs is shared by several test binaries, and session_hooks does not use tool or LIMIT"
+)]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
 #[path = "../../session/test-support/profile.rs"]

@@ -13,10 +13,16 @@
 //! ordinary behaviour. An integration test is its own process, so this file engages once and no
 //! other test in the workspace is affected.
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "repository.rs is shared by several test binaries, and incognito uses only commit_files"
+)]
 mod repository;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "turns.rs is shared by several test binaries, and incognito uses only run_cancellable"
+)]
 #[path = "../test-support/turns.rs"]
 mod turns;
 

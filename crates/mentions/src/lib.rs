@@ -707,7 +707,10 @@ pub fn enter_completes(
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "`aliases.rs` is shared with the agent's tests, and the mentions tests call only its `held_names`"
+)]
 #[path = "../../agent/test-support/aliases.rs"]
 mod aliases;
 

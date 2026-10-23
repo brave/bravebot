@@ -5,7 +5,10 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "undo_endpoint.rs is shared by several test binaries, and attaching does not use tool"
+)]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
 #[path = "../../session/test-support/profile.rs"]
