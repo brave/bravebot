@@ -30,9 +30,10 @@ transcript when you press the key.
 **Accepting edits stops at writes on purpose.** A write lands in a tree you can read afterwards and
 `git diff` shows you all of it; a program runs with everything your own shell has, leaves no diff,
 and what it prints is what the next round reads. A mode named for edits that also stopped asking
-about programs would be granting the larger thing quietly. It does accept a write to any path the
-workspace reaches, since the prompt was the only thing that would have shown you the path. A rule in
-the settings file is what narrows that. Under the sandbox mode `read-only`
+about programs would be granting the larger thing quietly. Apart from a protected path and a
+credential, which are below, it accepts a write to any path the workspace reaches, since the prompt
+was the only thing that would have shown you the path. A rule in the settings file is what narrows
+that. Under the sandbox mode `read-only`
 ([confinement](security.md#confinement)) the agent's file tools write nothing, in this mode or in
 bypassing.
 
@@ -54,6 +55,12 @@ the same name after `/cd`, in another checkout or behind a link is asked about a
 in an incognito session or for a file outside the directory. Both settle the secret only: a write a
 rule asks about is still asked about. With nobody to ask, the write is refused unless the run is
 bypassing, even where a rule allows it. The desktop application and `--plain` offer yes and no only.
+
+**A write to a protected path is still put to you.** The protected paths are any `.git`, `.bravebot`
+or `.husky` component and the files `.gitmodules`, `.gitconfig` and `.pre-commit-config.yaml`
+wherever they are. A file there is code that runs later with your own rights, such as a git hook the
+next `git commit` starts. Accepting edits does not answer a write to one, and neither does an `allow`
+rule or a vouched path. Only bypassing does, and where nobody can be asked the write is refused.
 
 **Plan mode refuses a write rather than asking**, whatever you would have answered, and the planner
 is told so and why, so a run of refusals reads as a constraint to work inside rather than as a series

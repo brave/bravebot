@@ -111,7 +111,7 @@ starting there would. `/clear` reads the rules again for the directory you are i
 in, so neither the prompt you still get nor the one you no longer get is a mystery. Waiving a prompt
 for *every* project is still your own file, or a file passed on the command line for one run.
 
-**Four prompts no rule can answer.** A run that would put your private data into a program asks
+**Five prompts no rule can answer.** A run that would put your private data into a program asks
 whatever the rules say, because a rule saying which commands may run is not consent to hand one your
 data. A call that would put your private data into an [MCP server's](../customize/mcp-servers.md#each-call)
 tool asks for the same reason, and a standing answer to that server does not cover it. That is every
@@ -120,7 +120,9 @@ destination is known only through a reference asks too: that prompt is the only
 moment such a path is shown to anybody, so nothing a pattern says can stand in for having looked. And a
 run carrying a variable set in front of one of its programs asks, because a rule is matched against the
 program and its arguments: `Bash(git log)` matches `LD_PRELOAD=./evil.so git log`, and no rule you could
-write tells the two apart.
+write tells the two apart. Last, a write to a [protected path](permission-modes.md)
+asks, an `Edit` allow rule and a vouched path included, because a file there is code that runs later with
+your own rights.
 
 **A rule that cannot be read is dropped, named, and takes nothing with it.** A line that is not a rule,
 names no tool family, or has no anchor to resolve is skipped and the rest of the file still applies.
