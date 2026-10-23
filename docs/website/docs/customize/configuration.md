@@ -1492,7 +1492,7 @@ knows it may ask for, and a delegate runs under whatever the session that starte
 The same three lists Claude Code keeps, with the same spellings, so a block copied out of
 `~/.claude/settings.json` works unedited. What a rule is allowed to decide, and the reason it may
 never trust a command's output, is on
-[Approvals and permissions](../security/permissions.md#rules-you-write-down-in-advance).
+[Permission rules](../security/permission-rules.md).
 
 An entry in `deny`, `ask` or `allow` can also be an object, which is the same rule with a note on
 why it exists:

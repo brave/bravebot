@@ -367,7 +367,7 @@ goes.
 Your permission rules do not come with you. The new directory's rules are read, and anything its
 checkout proposes is put to you in the box a session opening there would show, so a rule you granted
 for the directory you left answers nothing here. See
-[Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
+[Permission rules](../security/permission-rules.md).
 
 Nor do your answers about reading a file that holds what looks like a credential. Each is kept under
 the file's name from the directory you left, which here can name another file, so such a file is asked
