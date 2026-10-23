@@ -5,6 +5,10 @@
 //! file, and a cap that is not passed on is a cap nobody in the graphical front end ever gets.
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_agent::workspace::{MAX_SEARCH_FILES, Workspace};
 use bravebot_config::{Managed, Settings};

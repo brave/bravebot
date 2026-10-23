@@ -19,6 +19,15 @@ pre-commit hook that refuses a commit failing either. The hook skips a commit th
 but files under `docs/` or `agents/`, Markdown, `LICENSE` or `CODEOWNERS`, which nothing compiled
 reads; a commit that stages anything else, or nothing, runs both.
 
+The workspace manifest holds a `[workspace.lints.clippy]` table of lints that code in this tree has no
+violation of: `unwrap_used`, `todo`, `unimplemented`, `dbg_macro`, `unused_async`, `large_futures`,
+`future_not_send`, `let_underscore_future`, `rc_mutex` and `mutex_atomic`. Each crate opts in with
+`[lints]` and `workspace = true`, and `crates/cli/tests/workspace_lints.rs` fails a member that does
+not. A lint is added to the table once the tree has none of it. A test target that unwraps starts with
+`#![allow(clippy::unwrap_used, reason = "...")]` (`#![cfg_attr(test, allow(...))]` in a crate root whose
+unit tests unwrap), because `allow-unwrap-in-tests` in `clippy.toml` exempts a `#[test]` function and
+a `#[cfg(test)]` module and not a helper in `tests/` or under `cfg(all(test, unix))`.
+
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
 [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
 with `bravebot_sandbox::programs::start`, which takes a `Resolved`, the variables the program

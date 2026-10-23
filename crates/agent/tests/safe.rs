@@ -5,6 +5,10 @@
 //! Engaging safe mode is a one-way door for the life of a process, so these cannot share a binary
 //! with the tests that assert the ordinary behaviour. The fixtures are the ones
 //! `tests/preamble.rs` and `tests/skills.rs` show are read in an ordinary session.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_agent::preamble;
 use bravebot_agent::skills::{self, Catalogue};

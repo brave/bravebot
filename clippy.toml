@@ -13,3 +13,6 @@ disallowed-methods = [
     { path = "std::process::Command::new", reason = "SANDBOX-30: start the program with `bravebot_sandbox::programs::start`, which takes a `Resolved` (the lookup, or a named constructor that says who chose the program), what the program inherits and the `PATH` it is given" },
     { path = "windows_sys::Win32::System::Threading::CreateProcessW", reason = "SANDBOX-30: only the AppContainer backend creates a process this way, and `make check-security` lists the file that may mark it" },
 ]
+
+# `unwrap_used` is denied in the workspace lints. A test that unwraps fails at the line that did.
+allow-unwrap-in-tests = true

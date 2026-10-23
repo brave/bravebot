@@ -2,6 +2,10 @@
 //!
 //! Events are collected into a vector instead of being written anywhere, which is the
 //! point of the callback: the library has no opinion about where they go.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;

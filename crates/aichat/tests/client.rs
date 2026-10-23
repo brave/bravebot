@@ -3,6 +3,10 @@
 //! These check what unit tests cannot: that the request actually carries the signing
 //! headers the server verifies, that it reaches the right path, and that the reply
 //! arrives labelled untrusted.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_aichat::protocol::{ChatRequest, Effort, Message};
 use bravebot_aichat::{AichatClient, ChatError};

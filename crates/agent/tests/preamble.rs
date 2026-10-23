@@ -2,6 +2,10 @@
 //!
 //! No test here touches `HOME`. The home root is an argument, which is what keeps the rest of the
 //! suite from depending on whatever the developer happens to have installed.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_agent::preamble;
 use bravebot_agent::skills::Catalogue;

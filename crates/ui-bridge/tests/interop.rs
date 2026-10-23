@@ -6,6 +6,10 @@
 //!
 //! No model is involved: this writes a record the way a finished turn does and reads it
 //! back the way `bravebot --resume` does.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_aichat::protocol::Message;
 use bravebot_core::programs::TrustedPrograms;

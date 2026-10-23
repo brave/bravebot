@@ -9,6 +9,10 @@
 //! Sessions, the store and a turn are in `host_process.rs`, which gives the host a home of its own.
 
 #![cfg(unix)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_ui_bridge::host::{Ended, Host, MAX_LINE, Setup};
 use serde_json::{Value, json};
