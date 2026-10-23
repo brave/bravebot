@@ -10,7 +10,7 @@
 // and it puts its own keys back.
 
 import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB, ASSISTANT_BUBBLE, BOT_OPEN_BUTTON } from './drive-support.mjs'
-import { appState, forgetCheckoutSessions, locateProfile, openBot, settle } from './drive-profile.mjs'
+import { appBots, appState, forgetCheckoutSessions, locateProfile, openBot, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -20,6 +20,7 @@ const { check, problems } = checker()
 
 const { userData, stateFile } = await locateProfile()
 const { readState, putKey } = appState(stateFile)
+const { readBots, putBots } = appBots()
 const hadView = readState().view
 
 // This driver's own row and no more. `bots` holds somebody's actual bots — names and purposes they
@@ -27,9 +28,9 @@ const hadView = readState().view
 // clearing it to make room, and putting it back at the end, is a destructive act one interrupted
 // run away from happening. It adds one bot and removes one bot.
 const MINE = 'custodian'
-const withoutMine = () => (readState().bots ?? []).filter((bot) => bot.slug !== MINE)
+const withoutMine = () => readBots().filter((bot) => bot.slug !== MINE)
 
-putKey('bots', withoutMine())
+putBots(withoutMine())
 putKey('view', undefined)
 
 const app = await launch()
@@ -85,7 +86,7 @@ check(
 )
 
 // The id the agent minted has been written down, which is what a resume needs.
-const stored = (readState().bots ?? []).find((bot) => bot.slug === MINE)
+const stored = readBots().find((bot) => bot.slug === MINE)
 check(typeof stored?.session === 'string', `the bot remembers its session (${stored?.session})`)
 check(
   stored?.conversations?.some((each) => each.id === stored.session && each.directory === home),
@@ -125,7 +126,7 @@ await page2.screenshot({ path: '/tmp/bravebot-ui/25-bot-resumed.png' })
 
 await back.close()
 
-putKey('bots', withoutMine())
+putBots(withoutMine())
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
 rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
 forgetCheckoutSessions(home)

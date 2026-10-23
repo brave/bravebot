@@ -1,12 +1,12 @@
-// Setup for the drivers that write the real profile's `bravebot-ui.json`.
+// Setup for the drivers that write the real profile's `bravebot-ui.json` and bots file.
 //
 // Everything in this module acts on the real profile: `locateProfile` launches through
 // `drive-support.mjs`, which passes no `--user-data-dir`, and `appState` then reads and writes
-// the person's own file. A driver replaces only its own rows inside a shared key, and puts its
-// own keys back. `bots` holds somebody's actual bots (names and purposes they wrote, sessions
-// with history in them, and the only copy of each face), so clearing the key to make room is a
-// destructive act one interrupted run away from happening. `drive-bots.mjs` records that an
-// earlier version did exactly that.
+// the person's own files. A driver replaces only its own rows inside a shared key or file, and
+// puts its own keys back. The bots file holds somebody's actual bots (names and purposes they
+// wrote, sessions with history in them, and the only copy of each face), so clearing it to make
+// room is a destructive act one interrupted run away from happening. `drive-bots.mjs` records
+// that an earlier version did exactly that.
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -45,6 +45,28 @@ export function appState(stateFile) {
     }
   }
   return { readState, putKey }
+}
+
+/** The bots file the agent keeps, which `BRAVEBOT_HOME` moves and the desktop reads through the agent. */
+export function botsFile() {
+  return join(process.env.BRAVEBOT_HOME ?? join(homedir(), '.bravebot'), 'bots.json')
+}
+
+/** Read and write the rows of the bots file, which holds nothing else. */
+export function appBots() {
+  const file = botsFile()
+  const readBots = () => {
+    try {
+      return JSON.parse(readFileSync(file, 'utf8')).bots ?? []
+    } catch {
+      return []
+    }
+  }
+  const putBots = (bots) => {
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, `${JSON.stringify({ bots }, null, 2)}\n`, 'utf8')
+  }
+  return { readBots, putBots }
 }
 
 /** Wait for a turn to finish, or for the screen that says why it cannot. */

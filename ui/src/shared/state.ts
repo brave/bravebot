@@ -19,7 +19,6 @@ import { parseLayout, type StoredLayout } from './layout'
 import { parseView, type StoredView } from './view'
 import { parseRecents } from './recents'
 import { parseForks, type Fork } from './forks'
-import { parseBots, type Bot } from './bots'
 import { parseSummons, type Summon } from './summons'
 import { parseAppearance } from './theme'
 
@@ -37,8 +36,6 @@ export interface StoredState {
   recents: string[]
   /** Which session came out of which, newest first. Written by the main process alone. */
   forks: Fork[]
-  /** The bots somebody has defined, by slug. Half written here, half by the main process. */
-  bots: Bot[]
   /** Which bot answered which summoned turn, newest first. Written by the main process alone. */
   summons: Summon[]
   /** Which appearance the window follows: `system`, `light`, or `dark`. */
@@ -53,7 +50,7 @@ export interface StoredState {
  * decision it does not have to make. Each key is delegated whole to the validator that owns that
  * shape, and `layout` keeps its own nullability because "never arranged" is a real state there.
  */
-export function parseState(value: unknown, homeFor?: (slug: string) => string): StoredState {
+export function parseState(value: unknown): StoredState {
   const held = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
   return {
     layout: parseLayout(held.layout),
@@ -62,7 +59,6 @@ export function parseState(value: unknown, homeFor?: (slug: string) => string): 
     // expect to read, and handed to their validators in the shape those already judge.
     recents: parseRecents({ directories: held.recents }).directories,
     forks: parseForks({ forks: held.forks }).forks,
-    bots: parseBots({ bots: held.bots }, homeFor).bots,
     summons: parseSummons({ summons: held.summons }).summons,
     // Judged by `parseAppearance`, which lives beside the appearance names rather than here —
     // the same arrangement the four above have, where the validator sits with the shape it

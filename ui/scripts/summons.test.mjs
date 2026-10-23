@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { botRow, fakeBots } from './fake-bots.mjs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -26,7 +27,7 @@ const load = (contents, profile = '/nonexistent') => {
 const summons = load(`export * from './src/shared/summons'`)
 const staging = load(`export * from './src/renderer/staging'; export { route, taken } from './src/renderer/interjecting'`)
 const transcript = load(`export { summonedReplies, summonedAt, summonedFor } from './src/renderer/transcript'`)
-const bots = load(`export { parseBots } from './src/shared/bots'`)
+const bots = load(`export { parseHomeTurn } from './src/shared/bots'`)
 
 const A = '11111111-1111-4111-8111-111111111111'
 const B = '22222222-2222-4222-8222-222222222222'
@@ -223,23 +224,23 @@ test('a reopened conversation marks its prompts from the record, by ordinal', ()
 })
 
 test('a bot’s place in its own conversation is kept only where it names one', () => {
-  const base = { slug: 'ada', name: 'Ada', purpose: 'Help', home: '/homes/ada', avatar: 'v2:ada' }
-  assert.deepEqual(bots.parseBots({ bots: [{ ...base, lastHome: { id: HOME, prompt: 3 } }] }).bots[0].lastHome, { id: HOME, prompt: 3 })
+  assert.deepEqual(bots.parseHomeTurn({ id: HOME, prompt: 3 }), { id: HOME, prompt: 3 })
   for (const lastHome of [undefined, null, { id: '../x', prompt: 1 }, { id: HOME, prompt: -1 }, { id: HOME, prompt: 1.5 }, { id: HOME }]) {
-    assert.equal(bots.parseBots({ bots: [{ ...base, lastHome }] }).bots[0].lastHome, null)
+    assert.equal(bots.parseHomeTurn(lastHome), null)
   }
 })
 
-test('a turn in a bot’s home moves its place there, and a turn in a project does not', () => {
+test('a turn in a bot’s home moves its place there, and a turn in a project does not', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-last-home-'))
   try {
-    const store = load(`export * from './src/main/bots'`, profile)
-    const base = bots.parseBots({ bots: [{ slug: 'ada', name: 'Ada', purpose: 'Help', home: join(profile, 'home'), avatar: 'v2:ada' }] }).bots[0]
-    store.saveBot(base)
-    store.noteBotSession('ada', HOME, base.home, 2)
-    assert.deepEqual(store.bot('ada').lastHome, { id: HOME, prompt: 2 })
-    store.noteBotSession('ada', A, '/work/site', 7)
-    assert.deepEqual(store.bot('ada').lastHome, { id: HOME, prompt: 2 })
+    const store = load(`export * from './src/main/bots'\nexport { useBotsBridge } from './src/main/bot-store'\n`, profile)
+    store.useBotsBridge(fakeBots().request)
+    const base = botRow({ slug: 'ada', name: 'Ada', purpose: 'Help', home: join(profile, 'home'), avatar: 'v2:ada', lastHome: null })
+    await store.saveBot(base)
+    await store.noteBotSession('ada', HOME, base.home, 2)
+    assert.deepEqual((await store.bot('ada')).lastHome, { id: HOME, prompt: 2 })
+    await store.noteBotSession('ada', A, '/work/site', 7)
+    assert.deepEqual((await store.bot('ada')).lastHome, { id: HOME, prompt: 2 })
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 

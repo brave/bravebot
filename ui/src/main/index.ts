@@ -14,13 +14,15 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Bridge, BridgeError } from './bridge'
+import type { BridgeEvent } from '../shared/protocol'
 import { parseLayout } from '../shared/layout'
 import { parseView } from '../shared/view'
 import { parseContextRef, parseWindowState } from '../shared/commands'
 import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
 import { noteProject, recents } from './recents'
-import { putBots, putLayout, putTheme, putView, readState } from './state'
+import { putLayout, putTheme, putView, readState } from './state'
 import { Caffeinate, trackTurns } from './caffeinate'
+import { botsProblem, noteBotsFailure, readBots, useBotsBridge } from './bot-store'
 import { isProjectPath } from '../shared/recents'
 import { forgetFork, forks, noteFork } from './forks'
 import {
@@ -37,6 +39,7 @@ import {
   nudgeDue,
   releaseBotSession,
   retireBot,
+  removeBot,
   forgetBotConversation,
   saveBotModel,
   readBotServers,
@@ -48,7 +51,7 @@ import {
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { botFolders, isBotModel, isServerSelection, withoutBot, type Bot } from '../shared/bots'
+import { botFolders, isBotModel, isServerSelection, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
@@ -338,11 +341,11 @@ function summonedTurn(
       request: bridge ? (method, params) => bridge!.request(method, params) : null,
       summoning,
       folderOf: rootForSession,
-      ownerOf: (handle, folder) => botHandles.get(handle) ?? bots().find((each) => each.home === folder)?.slug,
+      ownerOf: async (handle, folder) => botHandles.get(handle) ?? (await bots()).find((each) => each.home === folder)?.slug,
       adopt: (handle, slug) => { botHandles.set(handle, slug) },
       migrate: migrateBot,
       host: async (handle, slug, folder, request) => {
-        const held = bot(slug)
+        const held = await bot(slug)
         if (!held) return null
         // As `sendBotTurn` does: the old notes are recorded before a definition replaces them, and
         // are asked about once the turn that gave the bot one has ended.
@@ -397,7 +400,7 @@ async function consolidate(
   slug: string,
   compose: (held: Bot) => string = (held) => consolidationPrompt(held, AFTER_COMPACTION),
 ): Promise<void> {
-  const held = bot(slug)
+  const held = await bot(slug)
   if (!held) return
   // Set before the send rather than after it, because the answer can arrive before an `await`
   // resumes and a flag set late is a flag that was never set.
@@ -425,6 +428,86 @@ async function consolidate(
 // the dock cannot load an `.icns` from a path; Windows and Linux take a bitmap for the window.
 const DEV_ICON_DIR = join(__dirname, '../../build')
 const devIcon = app.isPackaged ? undefined : join(DEV_ICON_DIR, process.platform === 'win32' ? 'icon.ico' : 'icons/256x256.png')
+
+let delivering: Promise<unknown> = Promise.resolve()
+
+const recorded = (work: Promise<unknown>): Promise<unknown> => work.catch(noteBotsFailure)
+
+async function deliver(message: BridgeEvent): Promise<void> {
+  // What this app has to say about the event, held until the event itself has been sent. See
+  // the note where it is called.
+  let after: (() => void) | null = null
+  // Two things a bot needs to remember are only ever said here, and only by the agent: the
+  // durable id of the session behind it — which becomes real on the turn that first writes a
+  // record, not before — and how much compaction has taken out of that session, which is what
+  // decides when its briefing has to be given again.
+  //
+  // Read off the event and never off anything a window asked for, the same promise the recents
+  // list and the fork lineage each make one screen up. The window can ask a bot to speak; it
+  // cannot tell this process what the answer was.
+  if (message.event === 'turn.done' && typeof message.session === 'string') {
+    const handle = message.session
+    const slug = botHandles.get(handle)
+    const folder = rootForSession(handle)
+    const pending = summoning.finish(handle)
+    // Which bot answered is the pick's, and where is the agent's answer (MEMORY-14). The reply is
+    // carried for the card and nothing here reads it.
+    const { id, prompt } = message.data
+    if (folder && id && typeof prompt === 'number') noteTurnEnded({ directory: folder, id }, prompt, pending, message.data.reply)
+    if (slug && folder) {
+      if (message.data.id) await recorded(noteBotSession(slug, message.data.id, folder, prompt ?? undefined))
+      // Read before `noteBotArchived` moves it, because the comparison *is* the signal: the
+      // archive rises exactly once per compaction that actually happened, which is the only
+      // reliable way to learn that one did. See the note on `Bot.archived`.
+      const known = await bot(slug)
+      const before = known?.archived ?? 0
+      await recorded(noteBotArchived(slug, message.data.archived))
+      // Whether the bot wrote anything down during the turn that has just ended. Asked of every
+      // turn including a consolidation's own, so a consolidation that worked is what resets the
+      // count that would otherwise have nudged.
+      await recorded(noteBotMemory(slug, folder))
+      try { await snapshotMemory(slug, folder) } catch { /* Memory itself remains available if history storage fails. */ }
+
+      // A consolidation ending is the end of it. Answering it with another would be a loop.
+      if (consolidating.delete(handle)) {
+        // Keep the queue held until the ordered completion announcement releases it.
+        message.data.consolidating = true
+        after = () => ended(handle, slug, true)
+      }
+      else if (message.data.archived > before) {
+        message.data.consolidating = true
+        after = () => void consolidate(handle, slug)
+      }
+      // The turn that gave the bot its definition has ended, so the old notes can be asked about
+      // without a person's own line being in flight. Behind a compaction's consolidation, which
+      // is owed first, and so sent after whichever turn next ends without one.
+      else if (owedCarryOver.delete(handle)) {
+        message.data.consolidating = true
+        after = () => void consolidate(handle, slug, carryOverPrompt)
+      }
+    }
+  }
+  // A turn this app sent can fail like any other, and a flag left set would mean the next
+  // compaction went unanswered in silence. Cleared without a word to the window beyond the
+  // ordinary `turn.error` it is about to receive.
+  if (message.event === 'turn.error' && typeof message.session === 'string') {
+    const handle = message.session
+    summoning.abandon(handle)
+    const slug = botHandles.get(handle)
+    const folder = rootForSession(handle)
+    if (slug && folder && message.data.id) await recorded(noteBotSession(slug, message.data.id, folder))
+    if (consolidating.delete(handle)) {
+      after = () => ended(handle, botHandles.get(handle) ?? null, true)
+    }
+  }
+
+  // The event first, and this app's own announcement after it. Both arrive as messages to the
+  // same window in the order they are sent, and the wrong order here is visible: a consolidation
+  // announced before the `turn.done` that provoked it draws its line above the reply it comes
+  // after, which reads as though the app interrupted rather than followed.
+  tell('bravebot:event', message)
+  after?.()
+}
 
 function createWindow(): void {
   window = new BrowserWindow({
@@ -473,79 +556,11 @@ function createWindow(): void {
     caffeinate?.setBusy(runningHandles.size > 0)
     // A sign-in's URL, address and code stay in this process; the page is told a reduced notice.
     if (signIn.handle(message)) return
-    // What this app has to say about the event, held until the event itself has been sent. See
-    // the note where it is called.
-    let after: (() => void) | null = null
-    // Two things a bot needs to remember are only ever said here, and only by the agent: the
-    // durable id of the session behind it — which becomes real on the turn that first writes a
-    // record, not before — and how much compaction has taken out of that session, which is what
-    // decides when its briefing has to be given again.
-    //
-    // Read off the event and never off anything a window asked for, the same promise the recents
-    // list and the fork lineage each make one screen up. The window can ask a bot to speak; it
-    // cannot tell this process what the answer was.
-    if (message.event === 'turn.done' && typeof message.session === 'string') {
-      const handle = message.session
-      const slug = botHandles.get(handle)
-      const folder = rootForSession(handle)
-      const pending = summoning.finish(handle)
-      // Which bot answered is the pick's, and where is the agent's answer (MEMORY-14). The reply is
-      // carried for the card and nothing here reads it.
-      const { id, prompt } = message.data
-      if (folder && id && typeof prompt === 'number') noteTurnEnded({ directory: folder, id }, prompt, pending, message.data.reply)
-      if (slug && folder) {
-        if (message.data.id) noteBotSession(slug, message.data.id, folder, prompt ?? undefined)
-        // Read before `noteBotArchived` moves it, because the comparison *is* the signal: the
-        // archive rises exactly once per compaction that actually happened, which is the only
-        // reliable way to learn that one did. See the note on `Bot.archived`.
-        const before = bot(slug)?.archived ?? 0
-        noteBotArchived(slug, message.data.archived)
-        // Whether the bot wrote anything down during the turn that has just ended. Asked of every
-        // turn including a consolidation's own, so a consolidation that worked is what resets the
-        // count that would otherwise have nudged.
-        noteBotMemory(slug, folder)
-        try { snapshotMemory(slug, folder) } catch { /* Memory itself remains available if history storage fails. */ }
-
-        // A consolidation ending is the end of it. Answering it with another would be a loop.
-        if (consolidating.delete(handle)) {
-          // Keep the queue held until the ordered completion announcement releases it.
-          message.data.consolidating = true
-          after = () => ended(handle, slug, true)
-        }
-        else if (message.data.archived > before) {
-          message.data.consolidating = true
-          after = () => void consolidate(handle, slug)
-        }
-        // The turn that gave the bot its definition has ended, so the old notes can be asked about
-        // without a person's own line being in flight. Behind a compaction's consolidation, which
-        // is owed first, and so sent after whichever turn next ends without one.
-        else if (owedCarryOver.delete(handle)) {
-          message.data.consolidating = true
-          after = () => void consolidate(handle, slug, carryOverPrompt)
-        }
-      }
-    }
-    // A turn this app sent can fail like any other, and a flag left set would mean the next
-    // compaction went unanswered in silence. Cleared without a word to the window beyond the
-    // ordinary `turn.error` it is about to receive.
-    if (message.event === 'turn.error' && typeof message.session === 'string') {
-      const handle = message.session
-      summoning.abandon(handle)
-      const slug = botHandles.get(handle)
-      const folder = rootForSession(handle)
-      if (slug && folder && message.data.id) noteBotSession(slug, message.data.id, folder)
-      if (consolidating.delete(handle)) {
-        after = () => ended(handle, botHandles.get(handle) ?? null, true)
-      }
-    }
-
-    // The event first, and this app's own announcement after it. Both arrive as messages to the
-    // same window in the order they are sent, and the wrong order here is visible: a consolidation
-    // announced before the `turn.done` that provoked it draws its line above the reply it comes
-    // after, which reads as though the app interrupted rather than followed.
-    tell('bravebot:event', message)
-    after?.()
+    // One at a time, in the order they arrived: a turn's end waits for its row to be written, and an
+    // event that arrived after it must not be drawn before it.
+    delivering = delivering.then(() => deliver(message)).catch(() => undefined)
   }, selectedSettings)
+  useBotsBridge((method, params) => (bridge ? bridge.request(method, params) : Promise.reject(new Error('The agent is not running, so the bots cannot be reached.'))))
 
   if (watchClock) clearInterval(watchClock)
   watchClock = setInterval(() => {
@@ -555,12 +570,14 @@ function createWindow(): void {
   }, 1000)
   window.on('closed', () => { if (watchClock) clearInterval(watchClock); watchClock = null })
 
-  const devServer = rendererUrl(app)
-  if (devServer) {
-    void window.loadURL(devServer)
-  } else {
-    void window.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  // The first read of the bots moves any held in `bravebot-ui.json` to the bots file, and this
+  // app's next write of that file drops them from it. The page is loaded after that read, so none
+  // of the writes it triggers can come first.
+  void readBots().then(() => {
+    const devServer = rendererUrl(app)
+    if (devServer) void window?.loadURL(devServer)
+    else void window?.loadFile(join(__dirname, '../renderer/index.html'))
+  })
 
   window.on('closed', () => {
     signIn.abandon()
@@ -724,7 +741,7 @@ app.whenReady().then(() => {
     // A bot's home is made when a conversation is started or reopened in it, not when the bots are listed.
     if (method === 'session.new' || method === 'session.open') {
       const directory = (params as { directory?: unknown } | null)?.directory
-      const owner = bots().find((each) => each.home === directory)
+      const owner = (await bots()).find((each) => each.home === directory)
       if (owner && !ensureHome(owner)) {
         return { error: { code: 'bad_request', message: `could not make the folder for ${owner.name}` } }
       }
@@ -756,7 +773,7 @@ app.whenReady().then(() => {
       // A bot's home folder is not a project, so it is kept off the list.
       if (method === 'session.open' || method === 'session.new') {
         const directory = (params as { directory?: unknown } | null)?.directory
-        if (isProjectPath(directory) && !bots().some((each) => each.home === directory) && noteProject(directory)) rebuildMenu()
+        if (isProjectPath(directory) && !(await bots()).some((each) => each.home === directory) && noteProject(directory)) rebuildMenu()
       }
       // A fork is the one call whose *answer* is worth writing down: which session it made and
       // which one it came out of. Read off the agent's reply and never off `params`, so the
@@ -780,7 +797,7 @@ app.whenReady().then(() => {
       for (const { directory, id } of deletedConversations(method, params, ok)) {
         removeConversation(conversationKey(directory, id))
         forgetFork({ directory, id })
-        forgetBotConversation(directory, id)
+        await forgetBotConversation(directory, id).catch(noteBotsFailure)
         forgetSummons({ directory, id })
       }
       if (method === 'session.close') {
@@ -913,14 +930,16 @@ app.whenReady().then(() => {
   // A bot's home and the folders it has worked in are offered as the recents are: this process
   // composed them, so a window may open a session there. Whether a bot's turn may run there is
   // still `worksIn`'s, in `sendBotTurn`.
-  ipcMain.handle('bravebot:bots:read', () => {
-    const all = bots()
+  ipcMain.handle('bravebot:bots:read', async () => {
+    const all = await bots()
     for (const each of all) offerDirectories(botFolders(each))
     return all
   })
 
+  ipcMain.handle('bravebot:bots:problem', () => botsProblem())
+
   ipcMain.handle('bravebot:bots:model', async (_event, slug: unknown, model: unknown) => {
-    const held = bot(slug)
+    const held = await bot(slug)
     if (!held || !isBotModel(model)) return null
     return saveBotModel(held, model, bridge ? (method, params) => bridge!.request(method, params) : null)
   })
@@ -928,13 +947,13 @@ app.whenReady().then(() => {
   // The window names a bot and a selection; the definition is the row's, so no window chooses which
   // file is read or rewritten.
   ipcMain.handle('bravebot:bots:servers:read', async (_event, slug: unknown) => {
-    const held = bot(slug)
+    const held = await bot(slug)
     if (!held) return null
     return readBotServers(held, bridge ? (method, params) => bridge!.request(method, params) : null)
   })
 
   ipcMain.handle('bravebot:bots:servers:write', async (_event, slug: unknown, servers: unknown) => {
-    const held = bot(slug)
+    const held = await bot(slug)
     if (!held || !isServerSelection(servers)) return null
     return saveBotServers(held, servers, bridge ? (method, params) => bridge!.request(method, params) : null)
   })
@@ -956,16 +975,15 @@ app.whenReady().then(() => {
   // Archiving is the ordinary way a bot leaves the list, and it is not a removal at all: the
   // definition stays exactly as it was, which is what lets the same session, the same memory and
   // the same face come back together when somebody brings it out again.
-  ipcMain.handle('bravebot:bots:retire', (_event, slug: unknown, retired: unknown) => {
+  ipcMain.handle('bravebot:bots:retire', async (_event, slug: unknown, retired: unknown) => {
     if (typeof retired !== 'boolean') return null
     return retireBot(slug, retired)
   })
 
-  ipcMain.handle('bravebot:bots:remove', (_event, slug: unknown) => {
-    const held = bot(slug)
+  ipcMain.handle('bravebot:bots:remove', async (_event, slug: unknown) => {
+    const held = await bot(slug)
     if (!held) return null
     if ([...botHandles].some(([handle, owner]) => owner === held.slug && runningHandles.has(handle))) throw new Error('Stop this bot’s running conversations before deleting it.')
-    removeMemoryHistory(held.slug)
     // The definition and app-owned memory copies go. Its session is a session like any other and stays
     // in the agent's own store, and its memory is a file in somebody's checkout that this app did
     // not put there on its own account. Deleting either would make a bot's removal a destructive
@@ -977,18 +995,19 @@ app.whenReady().then(() => {
     // there, a second deliberate step. The guarantee is the interface's rather than this
     // channel's, and it stays that way on purpose — the demo tears its own bots down through
     // here, and a bot made by a script is a bot a script should be able to take away.
-    putBots(withoutBot(bots(), held.slug))
+    await removeBot(held.slug)
+    await removeMemoryHistory(held.slug)
     return held.slug
   })
 
   // Each names a folder, which is checked against the folders this process recorded for the bot.
   const botRunning = (slug: unknown) => [...botHandles].some(([handle, owner]) => owner === slug && runningHandles.has(handle))
-  ipcMain.handle('bravebot:bots:memory', (_event, slug: unknown, directory: unknown) => {
-    if (!botRunning(slug)) tidyMemory(slug, directory)
+  ipcMain.handle('bravebot:bots:memory', async (_event, slug: unknown, directory: unknown) => {
+    if (!botRunning(slug)) await tidyMemory(slug, directory)
     return memory(slug, directory)
   })
   ipcMain.handle('bravebot:bots:memory-history', (_event, slug: unknown, directory: unknown) => memoryHistory(slug, directory))
-  ipcMain.handle('bravebot:bots:edit-memory', (_event, slug: unknown, directory: unknown, text: unknown, expected: unknown) => {
+  ipcMain.handle('bravebot:bots:edit-memory', async (_event, slug: unknown, directory: unknown, text: unknown, expected: unknown) => {
     if (botRunning(slug)) throw new Error('Stop this bot’s running conversations before editing its memory.')
     return editMemory(slug, directory, text, expected)
   })
@@ -1017,7 +1036,7 @@ app.whenReady().then(() => {
       if (model !== undefined && model !== null && typeof model !== 'string') {
         return { error: { code: 'bad_request', message: 'invalid model' } }
       }
-      const held = bot(slug)
+      const held = await bot(slug)
       if (!held) return { error: { code: 'no_such_bot', message: 'no bot by that name' } }
       // Said separately from the line above rather than folded into it. A bot that has been put
       // away is not a bot that does not exist, and a refusal that named the wrong reason would
@@ -1031,7 +1050,7 @@ app.whenReady().then(() => {
       // did not. It is never the other way round — a window saying "grounded" is answering a
       // question about *its* session, which this process cannot see, so that answer stands.
       const nudge = grounded !== true && nudgeDue(held)
-      if (nudge) noteBotNudged(held.slug)
+      if (nudge) await recorded(noteBotNudged(held.slug))
       return sendBotTurn(session, held, prompt, {
         grounded: grounded === true || nudge,
         nudge,
@@ -1060,7 +1079,7 @@ app.whenReady().then(() => {
       if (model !== undefined && model !== null && typeof model !== 'string') {
         return { error: { code: 'bad_request', message: 'invalid model' } }
       }
-      const held = bot(slug)
+      const held = await bot(slug)
       if (!held) return { error: { code: 'no_such_bot', message: 'no bot by that name' } }
       if (held.retired !== 0) return { error: { code: 'bot_archived', message: 'that bot is archived' } }
       return summonedTurn(session, held, prompt, {

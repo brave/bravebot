@@ -17,6 +17,7 @@ import { createRequire } from 'node:module'
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { botRow } from './fake-bots.mjs'
 
 const require = createRequire(import.meta.url)
 function load(path, userData) {
@@ -33,8 +34,7 @@ const scratch = (name) => realpathSync(mkdtempSync(join(tmpdir(), `bravebot-${na
 function fixture(name) {
   const userData = scratch(`${name}-app`)
   const checkout = scratch(`${name}-checkout`)
-  const { parseBots } = load('src/shared/bots.ts', userData)
-  const bot = parseBots({ bots: [{ slug: 'custodian', name: 'Custodian', purpose: 'Keep the harbour lights lit', home: join(userData, 'bot-homes', 'custodian'), avatar: 'v2:test', session: null }] }).bots[0]
+  const bot = botRow({ slug: 'custodian', name: 'Custodian', purpose: 'Keep the harbour lights lit', home: join(userData, 'bot-homes', 'custodian'), avatar: 'v2:test' })
   return { userData, checkout, bot, bots: load('src/main/bots.ts', userData), clean: () => { for (const at of [userData, checkout]) rmSync(at, { recursive: true, force: true }) } }
 }
 

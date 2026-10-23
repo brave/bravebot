@@ -383,6 +383,8 @@ impl Bridge {
                 Ok(json!({"kept": bravebot_session::store::load_caffeinate_confirmed()}))
             }
             "bot.define" => crate::definitions::make(request),
+            "bot.list" => crate::bots::list(request),
+            "bot.replace" => crate::bots::replace(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
             "bot.servers.read" => crate::definitions::servers_read(request),
