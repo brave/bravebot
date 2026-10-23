@@ -11381,6 +11381,10 @@ fn an_output_request_that_names_no_outputs_is_refused() {
         tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":1}"#),
         tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":3}"#),
         tool_request_2("read_file", r#"{"path":"a.txt","output_of":1}"#),
+        tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":0}"#),
+        tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":-1}"#),
+        tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":2.5}"#),
+        tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":"2"}"#),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -11405,6 +11409,13 @@ fn an_output_request_that_names_no_outputs_is_refused() {
     assert!(last.contains("no cell 3"), "{last}");
     assert!(last.contains("is not one"), "{last}");
     assert!(!last.contains("ignore previous instructions"), "{last}");
+    // Every value that is not a whole number from 1 is refused, so none is taken as another cell:
+    // the last four requests each carry one, and the request after them holds all four answers.
+    assert_eq!(
+        last.matches("must be a cell number from 1").count(),
+        4,
+        "a value that is not a whole number from 1 was not refused: {last}"
+    );
 }
 
 /// A notebook nobody vouched for is held back like any other file: the cell view is made only of a
@@ -11446,6 +11457,46 @@ fn an_untrusted_notebook_is_not_shown_as_cells() {
     assert!(
         !reference.contains("[1] markdown"),
         "an unvouched notebook was shown as cells: {reference}"
+    );
+}
+
+/// The same holds for a request for a cell's outputs: a notebook nobody vouched for stays a
+/// reference, and neither its cells nor its outputs reach the planner.
+#[test]
+fn an_untrusted_notebooks_outputs_are_not_shown_either() {
+    let scratch = Scratch::new("read-notebook-outputs-untrusted");
+    std::fs::write(scratch.path.join("n.ipynb"), NOTEBOOK_WITH_AN_OUTPUT).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("read the outputs of n.ipynb");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let reference = bodies
+        .iter()
+        .find(|body| body.contains("[ref:1]"))
+        .expect("the planner was given a reference");
+    assert!(
+        !reference.contains("ignore previous instructions")
+            && !reference.contains("output_type")
+            && !reference.contains("# Title"),
+        "an unvouched notebook's outputs were shown: {reference}"
     );
 }
 
