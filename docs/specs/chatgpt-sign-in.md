@@ -270,10 +270,11 @@ shape:
   into the driver is a token and a category, which is the class of a reply's status, as the failure
   categories of the backends spec are for the reply of any other service. A refused refresh adds one value,
   that the refresh token is no longer valid, chosen by comparing one field of the error body with `invalid_grant`
-  ([CHATGPT-7](#CHATGPT-7)). A refused model request adds one more, that the account may not be used this way,
-  chosen by comparing the error code of the body with a closed list of codes the exchange records
-  ([CHATGPT-8](#CHATGPT-8)); that comparison is made in the client that sends the request, which is not the
-  driver. A turn already branches on the categories, and none is content anyone authored. The
+  ([CHATGPT-7](#CHATGPT-7)). A refused model request adds two more, that the account has reached its usage limit
+  and that it may not be used this way, chosen by comparing the error code of the body with a closed list
+  of codes the exchange records ([CHATGPT-8](#CHATGPT-8)); that comparison is made in the client that sends the request, which is not the
+  driver, and the egress crate hands the client the whole body of the refusal under the label of its
+  request and reads none of it ([NET-12](network-egress.md#NET-12)). A turn already branches on the categories, and none is content anyone authored. The
   rest of a reply's body, its error text and its claims stay in the crate. That is the ordinary case the
   document's section on the inverse mistake describes, and the same footing as the fields of a model
   listing the code already reads.
@@ -298,7 +299,9 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    is read. The access token's expiry is read from the `expires_in` field of the reply, not from the token,
    and is compared with the clock. Claims such as an organisation's name are text somebody else chose.
 
-No exception is added to [labels.md](labels.md), and no count it pins moves.
+No exception is added to [labels.md](labels.md). The counts it pins for `Labelled::new` and
+`Policy::decode_transport` move by the one place a refusal's body is read and the one that hands it back,
+and by the tests that exercise them.
 
 **Why.** The rule protects the planner and the driver from content an attacker could write. A callback is
 the one place here where bytes from outside arrive, and whoever wrote them could reach a loopback port: any
@@ -385,7 +388,10 @@ refresh reply that grants no refresh token keeps the one presented. No request i
 expiry. A token the serving host refuses before its expiry,
 whether the clock here runs behind or the token was revoked early, is replaced in the same way once, and the
 request is sent once more, unless the refusal carries a code of [CHATGPT-8](#CHATGPT-8)'s closed list: those
-say the account may not be used this way, and a new token does not change that. A second refusal ends the
+say the account has reached its usage limit or may not be used this way, and a new token does not change
+that. The code is the `error.code` of
+the refusal's body, compared as a whole with the list, and a body that holds none, holds another or cannot be
+read leaves the refusal as its status alone. A second refusal ends the
 turn with a sentence from [CHATGPT-8](#CHATGPT-8). Where the refresh fails other
 than by ending the sign-in and the access token in hand has not yet passed its expiry, the request is sent
 with it.
@@ -420,12 +426,11 @@ required here. A server that did not replace it would lose nothing to them. Remo
 on an ended sign-in leaves `auth status` and the picker saying what is true, and stops every later turn
 from presenting a token that cannot work.
 
-**Not built:** the closed list of codes that says a new token would not help, so a 401 of any code is
-replaced once, and the report of a renewal the file could not take, which is held in memory and written again
+**Not built:** the report of a renewal the file could not take, which is held in memory and written again
 before the next request without the turn being told. A turn asks the renewal before every request
 (`Renewer::access_token`) and after a refusal of the token (`Renewer::replace_refused`), which gives a token
 other than the refused one and never the refused one back. Only a refusal with the status 401 is a refusal of
-the token.
+the token, and one whose body names a code of the closed list ends the turn without a replacement.
 
 `verified-by: bravebot_skus::chatgpt::renew::a_token_with_more_than_a_minute_left_is_used_and_nothing_is_asked`
 `verified-by: bravebot_skus::chatgpt::renew::a_token_within_a_minute_of_its_expiry_or_past_it_is_replaced`
@@ -450,14 +455,16 @@ the token.
 `verified-by: bravebot_aichat::client::an_account_asks_for_its_token_before_every_request_and_sends_the_one_it_is_given`
 `verified-by: bravebot_aichat::client::a_token_the_host_refuses_is_replaced_once_and_the_request_is_sent_again_with_the_new_one`
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
+`verified-by: bravebot_aichat::client::a_refusal_that_names_no_listed_code_is_replaced_and_sent_again_as_before`
 `verified-by: bravebot_agent::chatgpt::each_failed_step_of_a_renewal_is_its_own_failure_and_only_an_ended_account_is_ended`
 
 <a id="CHATGPT-8"></a>
 ### CHATGPT-8: a failure names its step and quotes nothing
 
 Every refusal is one fixed sentence, chosen from the step that failed, the class of an HTTP status and,
-for a refused refresh, whether its error code is the one that ends the sign-in. None holds text taken from a
-reply, a request, a callback or a settings file. A request to either host that did not succeed reports one
+for a refused refresh, whether its error code is the one that ends the sign-in, and for a refused model
+request, whether its error code is one of a closed list. None holds text taken from a reply, a request, a
+callback or a settings file. A request to either host that did not succeed reports one
 of the backends spec's failure categories: refused, rate-limited, unavailable, incomplete or a transport
 failure. The rest are these, each saying which it is:
 
@@ -465,10 +472,16 @@ failure. The rest are these, each saying which it is:
   the sign-in has ended, the service refused the token.
 - **The sign-in file** cannot be read, cannot be written, or has nowhere to be kept on this platform, with the
   remedy the Leo store gives for a batch it cannot use.
-- **The account may not be used this way.** A request is refused with one of the codes the exchange
-  records as ending the use of a subscription: usage limit exceeded, user not eligible, capability or route
-  not supported, invalid user, or the token's scope not authorized. The request is not repeated, and the
-  sentence says the account cannot be used this way and does not name signing in again as the remedy.
+- **The account has reached its usage limit, or may not be used this way.** A request is refused with one of
+  the codes the exchange records as ending the use of a subscription, in the `error.code` of the refusal's
+  body, whatever its status, or of a `response.failed` event or an `error` event of the stream, where it is
+  `code`. The request is not repeated and no token is replaced. `subscription_sharing_usage_limit_exceeded`
+  has a sentence of its own, which says the account has reached its usage limit. The other six (user not
+  eligible, capability or route not supported, invalid user, the token's scope or authorization context not
+  authorized) have one sentence that says the account may not be used this way. It names no cause, since the
+  six do not say which, and does not name signing in again as the remedy. Both are a refusal among the
+  categories, which no fallback model is used for: the account answers for every model it serves, so the
+  fallback would be refused the same way.
 - **The command stopped,** and says so: the listener could not start, the browser returned no code or no
   usable client, the ID token did not verify, the time bound passed, a `provider` entry named `chatgpt` is a
   gateway ([CHATGPT-9](#CHATGPT-9)). The entry's name in that sentence is the constant `chatgpt`. A reply
@@ -489,17 +502,19 @@ the terminal once by [CHATGPT-13](#CHATGPT-13) and goes nowhere else. A test hol
 against each of those outputs, as the trail's test does for the credentials the agent holds, and leaves out
 that one line.
 
-**Not built:** the sentence of a request refused with a code of the closed list, the completed command that
-says the account reaches no model, and the test that holds every secret the process held against each output
-of a run that signs in, refreshes and fails. The sentences of the sign-in, of a refused refresh and of a
-refused token are built.
+**Not built:** the completed command that says the account reaches no model, and the test that holds every
+secret the process held against each output of a run that signs in, refreshes and fails. The sentences of the
+sign-in, of a refused refresh, of a refused token and of a request refused with a code of the closed list are
+built.
 
 **Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
 to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
 Choosing from a closed set also keeps [CHATGPT-5](#CHATGPT-5) true: what the agent branches on is a value
-this crate computed from a step and a status class. The categories are the ones the other services'
-failures already use, so a rate limit here is waited out and reported as a rate limit is elsewhere, and a
-remedy that signing in again would not supply is not offered.
+this crate computed from a step and a status class, or one of the values the client chose by comparing a
+refusal's code with a closed list. The categories are the ones the other services' failures already use, so
+a rate limit by status here is waited out and reported as a rate limit is elsewhere, and a remedy that
+signing in again would not supply is not offered. A usage limit named by a code is not waited out, since
+nothing a second request or a wait of this program's does changes it.
 
 `verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
 `verified-by: bravebot_skus::chatgpt::a_failed_exchange_is_classed_by_its_status_and_quotes_nothing`
@@ -512,7 +527,17 @@ remedy that signing in again would not supply is not offered.
 `verified-by: bravebot_cli::chatgpt::a_failure_of_the_file_is_worded_with_its_detail_made_printable_and_the_remedy`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 `verified-by: bravebot_agent::backend::an_account_failure_is_diagnosed_by_its_step_and_names_the_command_where_it_is_the_remedy`
+`verified-by: bravebot_agent::backend::a_refusal_of_the_account_is_not_a_refusal_of_the_body`
+`verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_never_falls_back_to_another_model_of_it`
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
+`verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
+`verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`
+`verified-by: bravebot_aichat::client::a_rate_limit_that_names_no_listed_code_is_asked_for_again`
+`verified-by: bravebot_aichat::client::a_listed_code_reported_on_the_stream_ends_the_turn_in_the_same_sentence`
+`verified-by: bravebot_aichat::client::a_gateways_reply_naming_a_listed_code_is_not_the_account_being_refused`
+`verified-by: bravebot_aichat::responses::protocol::the_listed_codes_are_the_seven_the_clause_names_and_the_usage_limit_is_told_apart`
+`verified-by: bravebot_aichat::responses::protocol::only_a_refusals_error_code_that_is_a_listed_code_says_something_of_the_account`
+`verified-by: bravebot_aichat::responses::protocol::a_listed_code_reported_on_the_stream_is_a_refusal_and_no_other_failure`
 
 <a id="CHATGPT-9"></a>
 ### CHATGPT-9: the account's models are offered under the identifier `chatgpt`
@@ -562,12 +587,15 @@ account's, so a session on another model sends the stored token nowhere. No row 
 stored, and nothing is asked of the service then. A stored sign-in
 whose token cannot be had, or whose listing cannot be read, offers no row. The desktop picker says so in a
 warning beside the other rosters', and the terminal picker says nothing, as it says nothing for a gateway
-whose listing fails.
+whose listing fails. A listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s closed list is warned of by
+the desktop picker in that clause's sentence, which does not send the person to sign in again, and the
+terminal picker says nothing of it.
 
 **Not built:** the entry's `models` (source 1, #3133), and the compiled list (source 3) with the terminal
 picker's saying that the listing could not be read (#3134). Where the listing cannot be read nothing is
 offered, and a person names the model as `chatgpt/<name>`. A listing the service refuses for its token with a
-401 is asked for again once with a replacement, as a turn's request is, and a second refusal ends it. A model
+401 is asked for again once with a replacement, as a turn's request is, and a second refusal ends it, as does
+a refusal whose body names a code of [CHATGPT-8](#CHATGPT-8)'s closed list, at once. A model
 named `chatgpt/<name>` on the command line or in a settings file is built: it selects the account, the request
 carries the part after the identifier, and an entry with the id keeps it, and none of the account's models is
 offered then.
@@ -602,6 +630,8 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
 `verified-by: bravebot_agent::chatgpt::an_unreadable_listing_is_told_apart_from_an_empty_one`
 `verified-by: bravebot_agent::chatgpt::a_listing_refused_for_its_token_is_asked_again_once_with_a_replacement`
+`verified-by: bravebot_agent::chatgpt::a_listing_refused_for_a_listed_code_is_not_replaced_or_asked_again`
+`verified-by: bravebot_aichat::client::the_accounts_listing_refused_for_a_listed_code_says_so_and_any_other_keeps_its_status`
 `verified-by: bravebot_agent::chatgpt::a_gateway_entry_named_chatgpt_keeps_the_name_and_the_account_is_not_asked_about`
 `verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none`
 `verified-by: bravebot_tui::app::a_caller_on_a_model_that_is_not_the_accounts_never_asks_the_account`
@@ -870,7 +900,9 @@ real ChatGPT account on this program's own build:
 - The error codes that end the use of a subscription: `subscription_sharing_usage_limit_exceeded`,
   `subscription_sharing_user_not_eligible`, `subscription_sharing_unsupported_capability`,
   `subscription_sharing_route_not_supported`, `subscription_sharing_invalid_user`,
-  `chatpass_v2_scope_not_authorized` and `chatpass_v2_invalid_authorization_context`.
+  `chatpass_v2_scope_not_authorized` and `chatpass_v2_invalid_authorization_context`, and where they are
+  written: `error.code` in the body of a refusal, as opencode's tests have it for a 429,
+  `response.error.code` in a `response.failed` event and `code` in an `error` event.
 
 **Not in any source this spec was written from:**
 
@@ -969,6 +1001,22 @@ work lands, in the same commit as the code.
   since the renewal that finds it removes the file. The next turn on a `chatgpt/` model says so.
 - Every request of a process carries one session identifier, so two sessions of a process share a cache
   affinity.
+- The codes that say the account has reached its usage limit or may not be used this way, and the fields of a
+  refusal and of a failed event that hold them, are read from another program's source and have not been seen
+  from this service. A refusal that says it in another code or another field is handled as its status: a 401
+  is replaced once, a 429 or a 5xx is asked for again, and the turn ends with the sentence of that status.
+  The two codes that program retries (`subscription_sharing_usage_unavailable` and
+  `subscription_sharing_user_unavailable`) are not in the list and are handled the same way.
+- A refusal that names the account carries no HTTP status and no wait, and is a refusal among the categories,
+  so the line the terminal and the desktop show for it is the refusal's. A usage limit that came as a 429
+  with a `Retry-After` showed the wait, and one that came as a refusal that names the account says that it
+  was rejected and nothing more.
+- The terminal picker says nothing of a listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s list, as it
+  says nothing of one that could not be read (#3134), so the account's rows are missing from `/model` with no
+  reason given.
+- The terminal and the desktop say why a turn failed from its category alone, so the sentences of
+  [CHATGPT-8](#CHATGPT-8) reach the one-shot run's report and not them. A turn that ended on a refusal that
+  names the account says there that the service rejected the request, whichever the code.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
   the dead refresh token and is told the refresh failed, until the person signs in again.

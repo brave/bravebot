@@ -2535,7 +2535,9 @@ The fallback is used only where the same service answers for both models: the sa
 same gateway, or the aichat endpoint. A fallback another service would answer is not used and the
 failure ends the turn, because naming a model is the person's agreement to send the conversation
 to the service that serves it ([BACKEND-3](#BACKEND-3)), and nothing here agreed to the first
-model's service handing it on. A turn moves to the fallback at most once; a failure on the fallback
+model's service handing it on. A refusal of the ChatGPT account that names it
+([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)) is a refusal among the categories and so never moves the turn: the
+account answers for every model it serves. A turn moves to the fallback at most once; a failure on the fallback
 model ends the turn. A delegate, and a turn running on the model a definition named
 ([DELEGATE-22](delegation.md#DELEGATE-22)), do not fall back: that model is a boundary its file
 drew.
@@ -2558,6 +2560,7 @@ as the `model` key is, and the switch is decided by a category the driver derive
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_fallback_model`
 `verified-by: bravebot_config::lib::a_fallback_the_managed_layer_refuses_is_not_used`
 `verified-by: bravebot_agent::backend::two_models_share_a_service_only_where_one_account_answers_for_both`
+`verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_never_falls_back_to_another_model_of_it`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_fallback_model_is_not_obeyed`
 
 <a id="BACKEND-54"></a>
@@ -3126,7 +3129,10 @@ named as [BACKEND-57](#BACKEND-57) names one. A final event in a shape this cann
 reply and not one that stopped short. `response.failed`
 is a failure named from a list this build holds and never by what the service wrote, and asked for again
 only where a second attempt could get past it, as [BACKEND-57](#BACKEND-57) does for a failure reported
-part way through. A stream that stops before any of them is a reply that did not finish and is asked for
+part way through. The codes with which the ChatGPT account says it has reached its usage limit or may not be
+used this way ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)), in a `response.failed` event or an `error` event, are
+read on the stream as that account's refusal and not as a failure of this list, and end the turn in the sentence of that clause without being asked for again.
+From any other service they are a failure it did not name. A stream that stops before any of them is a reply that did not finish and is asked for
 again, as many times as the entry's retries allow ([BACKEND-55](#BACKEND-55)) and no more.
 
 A reasoning item a reply carried is not sent back. The conversation keeps a model's words and calls, so a
@@ -3177,6 +3183,7 @@ clause was written for.
 
 `verified-by: bravebot_config::provider::an_entry_naming_the_openai_sdk_is_reached_through_the_responses_api`
 `verified-by: bravebot_aichat::responses::protocol::a_request_is_the_body_this_api_states`
+`verified-by: bravebot_aichat::responses::protocol::a_listed_code_reported_on_the_stream_is_a_refusal_and_no_other_failure`
 `verified-by: bravebot_aichat::responses::protocol::a_call_and_its_result_are_items_beside_the_messages`
 `verified-by: bravebot_aichat::responses::protocol::a_request_offering_no_tools_sends_no_tool_fields_and_its_calls_as_text`
 `verified-by: bravebot_aichat::responses::protocol::reasoning_is_the_level_and_a_summary_only_where_a_level_was_given`

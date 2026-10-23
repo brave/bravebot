@@ -304,7 +304,7 @@ impl<'a> ResponsesClient<'a> {
             for name in ["session-id", "thread-id", "x-client-request-id"] {
                 http = http.header(name, account.session.as_str());
             }
-            http = http.refusing_redirects();
+            http = http.refusing_redirects().reading_a_refusal();
         } else {
             // After the credential, and never over it: a name this request already set is refused
             // where the block is read.
@@ -529,12 +529,15 @@ impl<'a> ResponsesClient<'a> {
         };
         let http = self.build(body, token.as_ref());
         self.attempts += 1;
-        let stream = self.egress.fetch_streaming(
+        let stream = match self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
             self.cancel.as_ref(),
-        )?;
+        ) {
+            Ok(stream) => stream,
+            Err(error) => return Err(crate::failure_of_refusal(policy, error)),
+        };
         let label = stream.label();
 
         // Read on a thread this one can walk away from, for the same reason the other backends do:
@@ -614,6 +617,18 @@ impl<'a> ResponsesClient<'a> {
                     // reply was cut off" and a request nothing can fix is asked for twice more.
                     Decoded::Event(Event::Failed(failure)) => {
                         return Err(ChatError::Reported { failure });
+                    }
+                    // The account's own words for a refusal, told as a refusal that came with a status
+                    // is. Any other service has no such words, and a code it writes that is one of them is
+                    // a failure it did not name.
+                    Decoded::Event(Event::Refused(refusal)) => {
+                        return Err(if self.account.is_some() {
+                            ChatError::Account(crate::AccountFailure::Named(refusal))
+                        } else {
+                            ChatError::Reported {
+                                failure: Failure::Unknown,
+                            }
+                        });
                     }
                     Decoded::Event(event) => reply.absorb(event),
                     Decoded::Unreadable => reply.unreadable = true,
@@ -796,7 +811,9 @@ impl Reply {
                 self.reported = usage;
                 self.model = model;
             }
-            Event::Failed(_) => {}
+            // A failure and a refusal end the stream where they arrive, in `stream_once`, before a
+            // reply is built from anything after them.
+            Event::Failed(_) | Event::Refused(_) => {}
         }
     }
 

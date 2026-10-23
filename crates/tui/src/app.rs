@@ -7897,6 +7897,13 @@ mod tests {
             ["chatgpt/gpt-c", "chatgpt/gpt-a", "chatgpt/gpt-b"]
         );
         assert!(account_rows(AccountModels::Unreadable, "chatgpt/gpt-c").is_empty());
+        assert!(
+            account_rows(
+                AccountModels::Refused(bravebot_aichat::responses::protocol::Refusal::NotPermitted),
+                "chatgpt/gpt-c"
+            )
+            .is_empty()
+        );
         assert!(account_rows(AccountModels::Absent, "chatgpt/gpt-c").is_empty());
         assert!(account_rows(AccountModels::Offered(Vec::new()), "chatgpt/gpt-c").is_empty());
     }
@@ -34309,6 +34316,7 @@ mod tests {
                     url: "https://example.test/PRIVATE_PATH?key=PRIVATE_QUERY".into(),
                     status: 503,
                     retry_after: None,
+                    body: None,
                 }),
             )),
         };

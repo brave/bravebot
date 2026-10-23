@@ -153,6 +153,11 @@ impl BackendError {
                     | AccountFailure::Ended
                     | AccountFailure::Refused
                     | AccountFailure::Unusable => Category::Unauthorized,
+                    // The service answered and said the account has reached a limit or may not be
+                    // used this way, which a new sign-in does not change, so it is no failure of the
+                    // credential. A refusal is a category no fallback model is used for, and the
+                    // account answers for every model it serves.
+                    AccountFailure::Named(_) => Category::Refused,
                     AccountFailure::Renewal(class) => match class {
                         RenewalFailure::Refused => Category::Refused,
                         RenewalFailure::RateLimited => Category::RateLimited,
@@ -1335,6 +1340,7 @@ fn gateway_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_aichat::responses::protocol::Refusal;
     use bravebot_config::DEFAULT_MODEL;
     use bravebot_config::env_var;
 
@@ -1896,6 +1902,16 @@ mod tests {
             (AccountFailure::Refused, Category::Unauthorized, true),
             (AccountFailure::Unusable, Category::Unauthorized, false),
             (
+                AccountFailure::Named(Refusal::UsageLimit),
+                Category::Refused,
+                false,
+            ),
+            (
+                AccountFailure::Named(Refusal::NotPermitted),
+                Category::Refused,
+                false,
+            ),
+            (
                 AccountFailure::Renewal(RenewalFailure::Refused),
                 Category::Refused,
                 false,
@@ -1940,6 +1956,69 @@ mod tests {
         assert_eq!(error.diagnosis().category, Category::Refused);
         assert!(!error.to_string().contains("auth login"), "{error}");
         assert!(!BackendError::from(ChatError::Account(AccountFailure::Ended)).refused_the_body());
+    }
+
+    /// CHATGPT-8: a refusal that says something about the account is not a refusal of the body, so no
+    /// summary is spent on it, and the sentences of the two are told apart and quote nothing.
+    #[test]
+    fn a_refusal_of_the_account_is_not_a_refusal_of_the_body() {
+        let mut sentences = Vec::new();
+        for failure in [
+            AccountFailure::Named(Refusal::UsageLimit),
+            AccountFailure::Named(Refusal::NotPermitted),
+        ] {
+            let error = BackendError::from(ChatError::Account(failure));
+            assert!(!error.refused_the_body(), "{failure:?}");
+            assert!(!error.is_unreachable(), "{failure:?}");
+            assert!(!error.is_cancelled(), "{failure:?}");
+            sentences.push(error.to_string());
+        }
+        assert_ne!(sentences[0], sentences[1]);
+        assert!(sentences[0].contains("usage limit"), "{}", sentences[0]);
+        assert!(!sentences[1].contains("usage limit"), "{}", sentences[1]);
+    }
+
+    /// CHATGPT-8 and BACKEND-53: a refusal that names the account is a refusal among the failure
+    /// categories, which no fallback model is used for: the account answers for every model it
+    /// serves, so the fallback would be refused the same way. The model named as a fallback is moved
+    /// to after a rate limit by status, so the category is why it is not used here.
+    #[test]
+    fn a_refusal_that_names_the_account_never_falls_back_to_another_model_of_it() {
+        let mut config = with_providers("{}");
+        config.fallback_model = Some("chatgpt/gpt-b".to_string());
+        let by_status = BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+            url: "https://api.example.invalid/v1/responses".to_string(),
+            status: 429,
+            retry_after: None,
+            body: None,
+        }));
+        assert_eq!(
+            fallback_after(&config, "chatgpt/gpt-a", &by_status),
+            Some(("chatgpt/gpt-b".to_string(), Category::RateLimited))
+        );
+
+        for failure in [
+            AccountFailure::Named(Refusal::UsageLimit),
+            AccountFailure::Named(Refusal::NotPermitted),
+        ] {
+            let refused = BackendError::from(ChatError::Account(failure));
+            assert_eq!(
+                refused.diagnosis().category,
+                Category::Refused,
+                "{failure:?}"
+            );
+            assert_eq!(
+                fallback_after(&config, "chatgpt/gpt-a", &refused),
+                None,
+                "{failure:?}"
+            );
+            let after_attempts = refused.counted(3, None, None);
+            assert_eq!(
+                fallback_after(&config, "chatgpt/gpt-a", &after_attempts),
+                None,
+                "{failure:?} after attempts"
+            );
+        }
     }
 
     /// A gateway authenticates with a bearer token and has nothing to sign in for. Deciding
@@ -2838,6 +2917,7 @@ mod tests {
             url: "https://ai-chat.example/v1".to_string(),
             status: 401,
             retry_after: None,
+            body: None,
         };
         assert!(!BackendError::from(ChatError::Egress(refused_credential)).is_unreachable());
         assert!(!BackendError::from(ChatError::NoContent).is_unreachable());
@@ -2961,6 +3041,7 @@ mod tests {
             url: "https://bedrock-runtime.example/model/invoke".into(),
             status: 403,
             retry_after: None,
+            body: None,
         }));
         let why = refused.diagnosis();
         assert_eq!(why.category, Category::Unauthorized, "{why:?}");
@@ -2988,6 +3069,7 @@ mod tests {
                 url: "https://service.example/v1/chat/completions".into(),
                 status,
                 retry_after: None,
+                body: None,
             }))
             .diagnosis()
         };
@@ -3007,6 +3089,7 @@ mod tests {
                 url: "https://service.example/v1/chat/completions".into(),
                 status,
                 retry_after,
+                body: None,
             }))
             .diagnosis()
             .retry_after
@@ -3110,6 +3193,7 @@ mod tests {
             url: "https://service.example/v1".to_string(),
             status,
             retry_after: None,
+            body: None,
         };
         for refused in [400, 422] {
             assert!(

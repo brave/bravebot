@@ -1494,6 +1494,7 @@ mod tests {
             url: "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/converse".to_string(),
             status,
             retry_after: None,
+            body: None,
         })
     }
 
@@ -1521,6 +1522,7 @@ mod tests {
                 url: "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/converse".to_string(),
                 status,
                 retry_after: None,
+                body: None,
             });
             assert!(error.is_credential_refused(), "{status} was not recognised");
             let said = error.to_string();
@@ -1539,6 +1541,7 @@ mod tests {
                 url: "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/invoke".to_string(),
                 status,
                 retry_after: None,
+                body: None,
             });
             assert!(
                 !error.is_credential_refused(),

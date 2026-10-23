@@ -129,7 +129,9 @@ retried, did the server it needs start. Each is a fact about the program and non
 **Known costs.** A reply a caller gave up on without a stop, because it had already failed on a
 frame it read, can still be waiting on its connection, and when that gives out the log holds a
 second failure for a request that was already reported. A request a person stopped is not written
-however its read then ends, including a connection that failed after the stop.
+however its read then ends, including a connection that failed after the stop. A refusal whose body
+failed while [NET-12](network-egress.md#NET-12) read it is written twice, as the body failing and as the
+status that is the failure.
 
 `verified-by: bravebot_net::lib::a_failed_request_is_logged_as_host_status_and_kind_only`
 `verified-by: bravebot_net::lib::a_stopped_request_is_not_a_failure_to_log`
@@ -138,6 +140,7 @@ however its read then ends, including a connection that failed after the stop.
 `verified-by: bravebot_net::egress::a_reply_that_runs_past_its_deadline_is_written_as_out_of_time`
 `verified-by: bravebot_net::egress::a_body_failure_is_timed_from_when_the_request_began`
 `verified-by: bravebot_net::egress::a_body_that_fails_after_the_request_was_stopped_is_not_written`
+`verified-by: bravebot_net::egress::a_refusal_whose_body_fails_while_it_is_read_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_aichat::client::a_reply_cut_off_part_way_is_written_to_the_diagnostic_log_as_well_as_its_retries`
 `verified-by: bravebot_aichat::client::a_retry_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_bedrock::lib::a_retry_is_written_to_the_diagnostic_log`

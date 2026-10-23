@@ -78,10 +78,12 @@ pub enum ChatError {
     /// Sent nowhere and no token spent on it. A caller that can shorten the conversation does, as
     /// it does where a service refuses the body.
     BodyTooLarge { limit: usize },
-    /// The ChatGPT account's access token could not be had, or was refused twice
+    /// The ChatGPT account's access token could not be had or was refused twice, or the serving host
+    /// refused a request in a code that names the account
     /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
     ///
-    /// A value from a closed set chosen from the step that failed, never text from a reply.
+    /// A value from a closed set chosen from the step that failed or the code that was compared,
+    /// never text from a reply.
     Account(AccountFailure),
     /// The caller asked for the reply to stop, whether or not it had begun arriving.
     ///
@@ -158,6 +160,36 @@ impl fmt::Display for ChatError {
 }
 
 impl std::error::Error for ChatError {}
+
+/// What a failed request is as a [`ChatError`], for a request that asked for the body of a refusal
+/// ([`Request::reading_a_refusal`]).
+///
+/// A refusal whose `error.code` is one of [`responses::protocol::REFUSAL_CODES`] is the account being
+/// refused, and says so. Any other body, or none, leaves the status alone with the body dropped, as
+/// it is for a request that did not ask, so what a status decides is decided the same way for both.
+/// Every other failure is converted as it is.
+///
+/// The one place the body of a refusal is read, and all it reads is the code, whole, against the
+/// closed list ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). What leaves is a
+/// value from this crate's own set, and nothing the service wrote.
+pub(crate) fn failure_of_refusal<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    mut error: EgressError,
+) -> ChatError {
+    let EgressError::Status { body, .. } = &mut error else {
+        return error.into();
+    };
+    // Taken out of the error, so the status that is handed on carries none of it.
+    let Some(body) = body.take() else {
+        return error.into();
+    };
+    let label = body.label();
+    let (bytes, _) = policy.decode_transport("refusal", label).decode(body);
+    match responses::protocol::refusal_in(&bytes) {
+        Some(refusal) => ChatError::Account(AccountFailure::Named(refusal)),
+        None => error.into(),
+    }
+}
 
 impl From<EgressError> for ChatError {
     fn from(value: EgressError) -> Self {
@@ -244,11 +276,11 @@ pub trait AccountAccess {
     fn replace_refused(&mut self, refused: &Secret) -> Result<Secret, AccountFailure>;
 }
 
-/// Why a ChatGPT account's request was not sent, or was refused for its token.
+/// Why a ChatGPT account's request was not sent, or was refused.
 ///
-/// Each is a step and no text from a reply, so a sentence made from it quotes nothing
-/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Where signing in again is the
-/// remedy the sentence names `bravebot auth login chatgpt`.
+/// Each is a step, or a code compared with a closed list, and no text from a reply, so a sentence
+/// made from it quotes nothing ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+/// Where signing in again is the remedy the sentence names `bravebot auth login chatgpt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountFailure {
     /// Nothing is stored.
@@ -258,6 +290,9 @@ pub enum AccountFailure {
     Ended,
     /// The serving host refused the token it was sent, and a new one was refused as well.
     Refused,
+    /// The serving host refused a request in a code that names the account, which a new token or a
+    /// second request does not change, and no sentence sends the person to sign in again for.
+    Named(responses::protocol::Refusal),
     /// The sign-in file could not be read, or the claim on it could not be taken.
     Unusable,
     /// The token could not be renewed, and the reason is the class of the reply.
@@ -287,6 +322,7 @@ impl fmt::Display for AccountFailure {
                 "OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login \
                  chatgpt` to sign in again",
             ),
+            Self::Named(refusal) => fmt::Display::fmt(refusal, f),
             Self::Unusable => f.write_str(
                 "the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` \
                  to see why",

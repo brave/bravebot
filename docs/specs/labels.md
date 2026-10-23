@@ -35,7 +35,7 @@ guards:
       - crates/mcp/src/lib.rs: 1
       - crates/mcp/src/protocol.rs: 3
       - crates/mcp/src/stdio.rs: 3
-      - crates/net/src/lib.rs: 2
+      - crates/net/src/lib.rs: 4
   - symbol: Labelled::declassify
     every-spelling: yes
     sites:
@@ -183,14 +183,14 @@ guards:
       - crates/aichat/src/anthropic.rs: 2
       - crates/aichat/src/generate_content.rs: 2
       - crates/aichat/src/responses.rs: 1
-      - crates/aichat/src/lib.rs: 2
+      - crates/aichat/src/lib.rs: 3
       - crates/aichat/src/models.rs: 2
       - crates/aichat/src/ollama.rs: 1
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 2
       - crates/mcp/src/http.rs: 1
       - crates/net/src/lib.rs: 1
-      - crates/net/tests/egress.rs: 2
+      - crates/net/tests/egress.rs: 3
       - crates/tui/src/update.rs: 1
 documented-by: docs/website/docs/how-it-works.md
 ---

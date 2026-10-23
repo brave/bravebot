@@ -412,8 +412,54 @@ encrypted key needs is not read; see Known costs.
 `verified-by: bravebot_cli::doctor::the_network_section_names_a_client_certificate_that_loaded_and_never_its_key`
 `verified-by: bravebot_cli::doctor::the_network_section_names_each_client_file_that_cannot_be_used`
 
+<a id="NET-12"></a>
+### NET-12: a request may ask for the whole body of a refusal, and nothing here reads it
+
+A request that asks (`Request::reading_a_refusal`) is answered a non-success status with the body as well,
+where the body is no longer than 16 KiB: all of it, labelled as the call labels its replies, in the failure
+beside the status and the wait the server asked for. A longer body is not handed over cut, since half of it
+would be read as if it were whole, and neither is one that could not be read because the connection broke or
+went quiet past [NET-5](#NET-5)'s gap. The failure is then the status alone. A request that does not ask is
+answered a non-success status with no body, and a success is answered the same whatever the request asked.
+
+The body is read with the reply, under the bounds of NET-5. A body that goes quiet is given up on at the gap.
+Where the request is made with a way to stop it, the read is on the thread a stop abandons, so the caller is
+answered at once. A read that fails is written to the diagnostic log as the body failing, beside the status
+that is the failure, unless the request was stopped.
+
+This crate does not look at the body. What decides anything from it is the caller, which compares one field
+of it with a list of its own, as [CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8) does, and no text made from the
+failure (its words, its debug form, the diagnostic log) holds any of it. Only the body of the URL the caller
+asked for is handed over. A refusal after a redirect is reported against the URL that was asked for, as
+[NET-2](#NET-2) says of a status, and carries no body, so a server's redirect cannot speak for the host the
+caller asked. A request that waits on its reply without bound (`Request::patient_on_this_machine`) is handed
+none either, since a stop would leave the read blocked with no bound to end it.
+
+**Why.** The status alone cannot say whether asking again will help. A service may refuse a request with
+the same 401 for a token that a replacement fixes and for an account that no token reaches, and writes
+which in the body. The body is untrusted bytes, so it is handed back under the label the request's call
+gave, like any other body, and the one place that reads it states its comparison. It is a request's
+choice because a caller that decides nothing from the body has no use for a read of up to 16 KiB on every
+failed request.
+
+`verified-by: bravebot_net::egress::a_request_that_asks_is_handed_a_refusals_body_and_one_that_does_not_is_told_the_status_alone`
+`verified-by: bravebot_net::egress::a_streamed_request_that_asks_is_handed_a_refusals_body`
+`verified-by: bravebot_net::egress::a_refusals_body_is_handed_over_whole_up_to_the_cap_and_not_at_all_past_it`
+`verified-by: bravebot_net::egress::a_success_is_not_changed_by_asking_for_a_refusals_body`
+`verified-by: bravebot_net::egress::a_refusal_whose_body_stops_partway_is_the_status_alone`
+`verified-by: bravebot_net::egress::a_refusal_whose_body_goes_quiet_is_the_status_alone_after_the_gap_bound`
+`verified-by: bravebot_net::egress::a_stop_while_a_refusals_body_is_awaited_is_acted_on`
+`verified-by: bravebot_net::egress::a_refusal_whose_body_fails_while_it_is_read_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_net::egress::a_refusal_after_a_redirect_carries_no_body_and_names_the_url_that_was_asked_for`
+`verified-by: bravebot_net::egress::a_request_that_waits_without_bound_is_not_handed_a_refusals_body`
+`verified-by: bravebot_net::lib::a_refusals_body_is_in_no_text_made_from_the_failure`
+
 ## Known costs
 
+- **A refusal's body is read before its failure is returned** ([NET-12](#NET-12)). A server that sends the
+  headers of a refusal and then goes quiet holds the failure for [NET-5](#NET-5)'s gap, two minutes by
+  default, and a token replacement or a backoff waits behind it. A stop ends the wait where the request was
+  made with a way to stop it, and a request made without one waits it out.
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own
   HTTP client for the subscription service. That traffic carries credentials and an order id,
   never workspace content or model output, so no labelled value escapes the gate. NET-1 is about
