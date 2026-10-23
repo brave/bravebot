@@ -1,4 +1,4 @@
-// The README's two pictures are generated, and GitHub shows an SVG only when it is a closed,
+// The README's pictures are generated, and GitHub shows an SVG only when it is a closed,
 // self-contained document. These tests hold the generator to what that needs, to the rule that
 // motion stops for a person who asked for less of it, and to the pixel figures being the app's.
 import test from 'node:test'
@@ -78,7 +78,7 @@ test('a bot is drawn with every cell and colour the desktop app draws for its se
   }
 })
 
-test('the README shows both pictures, each with a description for a reader who cannot see them', () => {
+test('the README shows every picture, each with a description for a reader who cannot see them', () => {
   const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8')
   for (const name of Object.keys(ART)) {
     const tag = readme.match(new RegExp(`<img [^>]*src="docs/assets/${name}"[^>]*>`))

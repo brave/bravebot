@@ -1,8 +1,8 @@
-// The two pictures in the README, drawn from the pixel figures the desktop app gives each bot.
+// The pictures in the README, drawn from the pixel figures the desktop app gives each bot.
 //
 // A bot's face is a function of its seed (src/renderer/avatar/pixels.ts), so the bots here are
 // faces real bots have, not a redrawing of them. `node scripts/readme-art.mjs` writes
-// docs/assets/readme-banner.svg and docs/assets/readme-how-it-works.svg.
+// docs/assets/readme-banner.svg, readme-how-it-works.svg and readme-plan-first.svg.
 //
 // GitHub serves a repository's SVG as an image, so each file is self-contained: no script, no
 // external reference, no web font and no foreignObject. The motion is CSS, and it stops under
@@ -16,10 +16,14 @@ export const CELL = 8
 const SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace"
 
+const BACKGROUND = '#0b0c14'
+const PANEL = '#14161f'
+const EDGE = '#363a4d'
 const INK = '#eceaf8'
 const MUTED = '#a6abd0'
 const ORANGE = '#ff5601'
 const DANGER = '#ff5d73'
+const SAFE = '#5be28a'
 
 /** Seeds of the bots in the banner, left to right, with the middle one the warmest. */
 export const CAST = [30, 11, 4, 5, 42, 27, 25, 3, 1].map((n) => `readme-${n}`)
@@ -34,6 +38,8 @@ export const GLYPHS = {
   o: ['.....', '.....', '.###.', '#...#', '#...#', '#...#', '.###.'],
   t: ['.#...', '.#...', '####.', '.#...', '.#...', '.#..#', '..##.'],
 }
+
+const CHECK = ['......#', '.....##', '#...##.', '##.##..', '.###...', '..#....']
 
 /** One colour per row of a letter, from the top of an ascender down to the baseline. */
 const WORDMARK_ROWS = ['#ffd24a', '#ffb02e', '#ff8a14', '#ff6a06', '#ff5601', '#ff3a01', '#ff1f01']
@@ -64,12 +70,7 @@ function svg({ width, height, title, description, body }) {
 <title id="t">${escape(title)}</title>
 <desc id="d">${escape(description)}</desc>
 <style>${CSS}</style>
-<defs>
-<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0e1c"/><stop offset="1" stop-color="#1b1233"/></linearGradient>
-<radialGradient id="glow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="${ORANGE}" stop-opacity=".26"/><stop offset="1" stop-color="${ORANGE}" stop-opacity="0"/></radialGradient>
-<pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="12" height="12" fill="#2a1424"/><rect width="5" height="12" fill="${DANGER}" fill-opacity=".38"/></pattern>
-</defs>
-<rect width="${width}" height="${height}" rx="24" fill="url(#sky)"/>
+<rect width="${width}" height="${height}" rx="24" fill="${BACKGROUND}"/>
 ${body}
 <rect x="1" y="1" width="${width - 2}" height="${height - 2}" rx="23" fill="none" stroke="#ffffff" stroke-opacity=".09" stroke-width="2"/>
 </svg>
@@ -161,9 +162,9 @@ export function banner() {
   const keepOut = [
     { x: wordX - 16, y: wordY - 16, width: letters.width + 48, height: 7 * cell + 48 },
     { x: 140, y: 340, width: width - 280, height: 64 },
+    { x: 40, y: 36, width: width - 80, height: 124 },
   ]
-  const body = `${stars(90, [...keepOut, { x: 40, y: 36, width: width - 80, height: 124 }], width, height)}
-<ellipse cx="${width / 2}" cy="${wordY + 56}" rx="520" ry="190" fill="url(#glow)"/>
+  const body = `${stars(90, keepOut, width, height)}
 <g class="march">${bots}</g>
 ${shadow.rects}
 ${face.rects}
@@ -178,106 +179,145 @@ ${face.rects}
   })
 }
 
-function arrow(x1, y, x2, colour) {
-  return `<rect x="${x1}" y="${y - 2}" width="${x2 - x1 - 10}" height="4" fill="${colour}"/><polygon points="${x2},${y} ${x2 - 14},${y - 9} ${x2 - 14},${y + 9}" fill="${colour}"/>`
+const words = (x, y, content, { size = 22, colour = INK, anchor = 'middle', mono = false, weight = 600 } = {}) =>
+  `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="${mono ? MONO : SANS}" font-size="${size}" font-weight="${weight}" fill="${colour}">${escape(content)}</text>`
+
+/** Lines of a caption, centred on `x`, the first line's baseline on `y`. */
+const caption = (x, y, lines, colour = INK) => lines.map((line, i) => words(x, y + i * 30, line, { colour })).join('')
+
+/** A line from `x1` to `x2` at height `y` with an arrowhead on the right end. */
+const arrow = (x1, y, x2, colour) =>
+  `<rect x="${x1}" y="${y - 2}" width="${x2 - x1 - 10}" height="4" fill="${colour}"/><polygon points="${x2},${y} ${x2 - 16},${y - 10} ${x2 - 16},${y + 10}" fill="${colour}"/>`
+
+/** A reference, as a tag sitting on an arrow. */
+const chip = (cx, cy, content) => {
+  const wide = content.length * 15 + 32
+  return `<rect x="${cx - wide / 2}" y="${cy - 21}" width="${wide}" height="42" rx="21" fill="${PANEL}" stroke="${MUTED}" stroke-width="2"/>${words(cx, cy + 8, content, { mono: true, size: 24, weight: 700 })}`
 }
 
-const label = (x, y, text, anchor = 'middle') =>
-  `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="${SANS}" font-size="17" font-weight="700" letter-spacing="1.5" fill="${MUTED}">${escape(text)}</text>`
+const card = (x, y, wide, high, stroke = EDGE) => `<rect x="${x}" y="${y}" width="${wide}" height="${high}" rx="16" fill="${PANEL}" stroke="${stroke}" stroke-width="2"/>`
 
-const words = (x, y, text, { size = 24, colour = INK, anchor = 'middle', mono = false, weight = 600 } = {}) =>
-  `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family="${mono ? MONO : SANS}" font-size="${size}" font-weight="${weight}" fill="${colour}">${escape(text)}</text>`
+/** The rows of a grid as one rect per run of `#`. */
+function pixels(grid, { x, y, cell, fill }) {
+  const rects = []
+  grid.forEach((row, r) => {
+    for (const run of row.matchAll(/#+/g)) {
+      rects.push(`<rect x="${x + run.index * cell}" y="${y + r * cell}" width="${run[0].length * cell}" height="${cell}" fill="${fill}"/>`)
+    }
+  })
+  return rects.join('')
+}
 
-export const REFERENCE = 'ref:2  notes.md, 84 lines, 2.1 KiB, (U,priv)'
-export const CALL = 'write_file  path: out.md  contents_ref: ref:2'
-
-/** What the planner is handed, and where the bytes go instead. */
-export function howItWorks() {
-  const width = 1280
-  const height = 520
-
-  // The effect lane runs left to right at one height. Each column is [left edge, width].
-  const top = 316
-  const lane = 150
-  const mid = top + lane / 2
-  const [page, slot, gate, effect] = [[64, 170], [336, 210], [650, 230], [966, 254]]
-  const centreOf = ([left, wide]) => left + wide / 2
-  const rightOf = ([left, wide]) => left + wide
-  const panel = (column, stroke, fill = '#161a30') =>
-    `<rect x="${column[0]}" y="${top}" width="${column[1]}" height="${lane}" rx="14" fill="${fill}" stroke="${stroke}" stroke-width="3"/>`
-
-  const planner = bot('readme-42', { centre: 145, baseline: 196, cell: 12, gaze: 1, d: 1, g: 3 })
-  const card = `<rect x="280" y="52" width="940" height="168" rx="16" fill="#161a30" stroke="#3b4278" stroke-width="2"/>
-${label(310, 86, 'THE PLANNER IS HANDED', 'start')}
-${words(310, 128, REFERENCE, { mono: true, size: 28, anchor: 'start' })}
-${label(310, 172, 'AND ANSWERS WITH', 'start')}
-${words(310, 208, CALL, { mono: true, size: 28, colour: '#ffb02e', anchor: 'start' })}`
-
-  // The page in its window, with one line of it picked out in the danger colour.
-  const [px, pw] = page
-  const browser = `<rect x="${px}" y="${top + 14}" width="${pw}" height="124" rx="10" fill="#161a30" stroke="${DANGER}" stroke-width="3"/>
-<rect x="${px}" y="${top + 14}" width="${pw}" height="26" rx="10" fill="${DANGER}" fill-opacity=".35"/>
-${[14, 30, 46].map((dx) => `<rect x="${px + dx}" y="${top + 24}" width="8" height="8" fill="${INK}" fill-opacity=".7"/>`).join('')}
-<rect x="${px + 18}" y="${top + 58}" width="134" height="8" fill="${MUTED}" fill-opacity=".6"/>
-<rect x="${px + 18}" y="${top + 78}" width="104" height="8" fill="${MUTED}" fill-opacity=".6"/>
-<rect x="${px + 18}" y="${top + 98}" width="134" height="8" fill="${DANGER}"/>
-<rect x="${px + 18}" y="${top + 118}" width="78" height="8" fill="${MUTED}" fill-opacity=".6"/>`
-
-  const slotBox = `${panel(slot, DANGER, 'url(#hatch)')}
-${words(centreOf(slot), top + 66, 'ref:2', { mono: true, size: 34, weight: 700 })}
-${words(centreOf(slot), top + 104, 'the bytes', { size: 20, colour: INK, weight: 500 })}`
-
-  const gateBox = `${panel(gate, ORANGE)}
-${words(centreOf(gate), top + 70, 'resolves ref:2', { size: 28 })}
-${words(centreOf(gate), top + 106, 'when the write or', { size: 22, colour: MUTED, weight: 500 })}
-${words(centreOf(gate), top + 134, 'the call happens', { size: 22, colour: MUTED, weight: 500 })}`
-
-  const effects = ['a file write you approve', "a program's stdin", 'a processor']
-    .map((text, i) => {
-      const y = top + i * 54
-      return `<rect x="${effect[0]}" y="${y}" width="${effect[1]}" height="42" rx="21" fill="#161a30" stroke="#3b4278" stroke-width="2"/>${words(centreOf(effect), y + 28, text, { size: 20, weight: 500 })}`
+/** A to-do list: each row is `todo`, `now` or `done`, with a box and a line of text. */
+function checklist(x, y, rows) {
+  const widths = [120, 100, 112, 80]
+  return rows
+    .map((state, i) => {
+      const top = y + i * 32
+      const mark =
+        state === 'done'
+          ? `<rect x="${x}" y="${top}" width="24" height="24" rx="4" fill="${SAFE}"/>${pixels(CHECK, { x: x + 3, y: top + 4, cell: 3, fill: BACKGROUND })}`
+          : `<rect x="${x + 1}" y="${top + 1}" width="22" height="22" rx="4" fill="none" stroke="${state === 'now' ? ORANGE : MUTED}" stroke-width="3"/>${state === 'now' ? `<rect x="${x + 8}" y="${top + 8}" width="8" height="8" fill="${ORANGE}"/>` : ''}`
+      return `${mark}<rect x="${x + 38}" y="${top + 8}" width="${widths[i % widths.length]}" height="8" fill="${MUTED}" fill-opacity="${state === 'done' ? 0.45 : 0.8}"/>`
     })
     .join('')
+}
 
-  // The planner's call reaches the gate. Nothing runs from the slot to the planner.
-  const names = `<line x1="${centreOf(gate)}" y1="228" x2="${centreOf(gate)}" y2="298" stroke="${ORANGE}" stroke-width="4" stroke-dasharray="10 8"/><polygon points="${centreOf(gate)},${top - 2} ${centreOf(gate) - 10},${top - 20} ${centreOf(gate) + 10},${top - 20}" fill="${ORANGE}"/>
-${words(centreOf(gate) + 20, 276, 'names ref:2', { size: 20, colour: ORANGE, anchor: 'start', weight: 700 })}`
-  const never = `<line x1="${centreOf(slot)}" y1="${top - 2}" x2="${centreOf(slot)}" y2="230" stroke="${DANGER}" stroke-width="4" stroke-dasharray="6 6"/>
-<path d="M${centreOf(slot) - 15} 258 L${centreOf(slot) + 15} 288 M${centreOf(slot) + 15} 258 L${centreOf(slot) - 15} 288" stroke="${DANGER}" stroke-width="6" stroke-linecap="square"/>
-${words(centreOf(slot) - 34, 279, 'the bytes never reach the planner', { size: 20, colour: DANGER, anchor: 'end', weight: 700 })}`
+/** A web page's instructions are stopped, and what reaches the planner is a reference. */
+export function howItWorks() {
+  const width = 1280
+  const height = 490
 
-  const captionY = top + lane + 30
-  const body = `${planner}
-${card}
-${arrow(224, 140, 270, MUTED)}
-${browser}
-${label(centreOf(page), captionY, 'UNTRUSTED CONTENT')}
-${arrow(rightOf(page) + 10, mid, slot[0] - 10, DANGER)}
-${slotBox}
-${label(centreOf(slot), captionY, 'WRITE-ONCE SLOT')}
-${arrow(rightOf(slot) + 10, mid, gate[0] - 10, ORANGE)}
-${gateBox}
-${label(centreOf(gate), captionY, 'POLICY LAYER')}
-${arrow(rightOf(gate) + 10, mid, effect[0] - 10, ORANGE)}
-${effects}
-${label(centreOf(effect), captionY, 'THE EFFECT')}
-${names}
-${never}`
+  const page =`${card(48, 130, 158, 140, DANGER)}
+<rect x="48" y="130" width="158" height="26" rx="16" fill="${DANGER}" fill-opacity=".35"/>
+${[14, 30, 46].map((dx) => `<rect x="${48 + dx}" y="${140}" width="8" height="8" fill="${INK}" fill-opacity=".7"/>`).join('')}
+<rect x="66" y="176" width="122" height="8" fill="${MUTED}" fill-opacity=".6"/>
+<rect x="66" y="196" width="92" height="8" fill="${MUTED}" fill-opacity=".6"/>
+<rect x="66" y="216" width="122" height="8" fill="${DANGER}"/>
+<rect x="66" y="236" width="70" height="8" fill="${MUTED}" fill-opacity=".6"/>
+${words(127, 326, 'A web page')}`
+
+  const blocked = `<rect x="232" y="104" width="312" height="48" rx="24" fill="${DANGER}" fill-opacity=".18" stroke="${DANGER}" stroke-width="2"/>
+${words(388, 136, 'Ignore your instructions', { weight: 700 })}
+${arrow(214, 172, 552, DANGER)}
+<rect x="560" y="108" width="14" height="128" fill="${DANGER}"/>
+<circle cx="567" cy="172" r="24" fill="${DANGER}" stroke="${BACKGROUND}" stroke-width="4" shape-rendering="auto"/>
+<path d="M556 161 L578 183 M578 161 L556 183" stroke="${INK}" stroke-width="6" stroke-linecap="square"/>`
+
+  const reference = `${arrow(214, 252, 632, MUTED)}${chip(400, 252, 'ref:2')}`
+  const planner = `${bot('readme-42', { centre: 700, baseline: 280, cell: 12, gaze: -1, nods: false, d: 1, g: 3 })}${words(700, 326, 'Planner')}`
+  const starts = `${arrow(776, 232, 900, MUTED)}${chip(838, 232, 'ref:2')}`
+  const processors = ['readme-30', 'readme-4', 'readme-25']
+    .map((seed, i) => bot(seed, { centre: 975 + i * 85, baseline: 280, cell: 7, nods: false, d: 1 + i * 1.9, g: i * 2.7 }))
+    .join('')
+
+  const body = `${page}
+${blocked}
+${reference}
+${planner}
+${starts}
+${processors}
+${words(1060, 326, 'Processors')}
+${caption(300, 396, ['Instructions in a web page', 'never reach the planner.'])}
+${caption(700, 396, ['The planner is handed', 'a reference to the page.'])}
+${caption(1060, 396, ['Processors work on it.', 'They hold no tools, no', 'memory, no conversation.'])}`
 
   return svg({
     width,
     height,
-    title: 'How bravebot keeps untrusted content away from the planner',
+    title: 'How bravebot keeps instructions in a web page away from the planner',
     description:
-      `Untrusted content goes into a write-once slot. The planner is handed only a reference to it (${REFERENCE}) and answers with a call that names the reference (${CALL}). ` +
-      'The policy layer resolves the reference where the effect happens: a file write you approve, the stdin of a program, or a processor. The bytes never go to the planner.',
+      'A web page holds instructions. They are blocked and never reach the planner. The planner is handed a reference to the page, ref:2, instead. ' +
+      'It starts processors that work on the reference, and a processor holds no tools, no memory and no conversation.',
     body,
+  })
+}
+
+/** Manifest mode: the planner plans the whole run, a person approves it, and a driver runs it. */
+export function planFirst() {
+  const width = 1280
+  const height = 400
+  const wide = 360
+  const gap = 60
+  const left = (width - (3 * wide + 2 * gap)) / 2
+  const at = (i) => left + i * (wide + gap)
+  const top = 40
+  const centreOf = (i) => at(i) + wide / 2
+
+  const plan = `${bot('readme-42', { centre: at(0) + 82, baseline: 176, cell: 9, gaze: 1, nods: false, d: 2, g: 1 })}${checklist(at(0) + 170, 76, ['todo', 'todo', 'todo', 'todo'])}`
+  const approve = pixels(CHECK, { x: centreOf(1) - 49, y: 84, cell: 14, fill: SAFE })
+  const run = checklist(at(2) + 101, 76, ['done', 'done', 'now', 'todo'])
+
+  const cards = [
+    { art: plan, title: 'Plan first', lines: ['The planner writes the', 'whole plan before it has', 'read anything.'] },
+    { art: approve, title: 'Approve', lines: ['You approve the plan once,', 'before the first step runs.'] },
+    { art: run, title: 'Execute', lines: ['A driver runs the steps.', 'No model is in the control', 'path. Nothing is re-planned.'] },
+  ]
+  const body = cards
+    .map(
+      ({ art, title, lines }, i) => `${card(at(i), top, wide, 320)}
+${art}
+${words(centreOf(i), 232, title, { size: 28, weight: 700 })}
+${caption(centreOf(i), 270, lines, MUTED)}`,
+    )
+    .join('\n')
+  const arrows = [0, 1].map((i) => arrow(at(i) + wide + 8, 200, at(i + 1) - 8, ORANGE)).join('')
+
+  return svg({
+    width,
+    height,
+    title: 'Manifest mode: plan first, then execute',
+    description:
+      'Manifest mode in three steps. The planner writes the whole plan before it has read anything. You approve the plan once, before the first step runs. ' +
+      'A driver runs the steps with no model in the control path, and nothing is re-planned.',
+    body: `${body}\n${arrows}`,
   })
 }
 
 export const ART = {
   'readme-banner.svg': banner,
   'readme-how-it-works.svg': howItWorks,
+  'readme-plan-first.svg': planFirst,
 }
 
 function main() {

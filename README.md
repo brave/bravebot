@@ -74,7 +74,7 @@ in-tree under [docs/website](docs/website).
 ## How it works
 
 <p align="center">
-  <img src="docs/assets/readme-how-it-works.svg" alt="Untrusted content goes into a write-once slot. The planner is handed only the reference ref:2 and answers with a write_file call that names it. The policy layer resolves ref:2 when the write, the program or the processor runs. The bytes never reach the planner." width="100%">
+  <img src="docs/assets/readme-how-it-works.svg" alt="Instructions in a web page are blocked and never reach the planner. The planner is handed a reference to the page, ref:2, and starts processors that work on it. A processor holds no tools, no memory and no conversation." width="100%">
 </p>
 
 Before data is processed it is labelled as trusted or untrusted and as public or private.
@@ -86,6 +86,24 @@ The planner is never influenced by untrusted context.
 
 [How Brave Bot works](docs/website/docs/how-it-works.md) covers labels, quarantine and processors
 in full. Traces of the gates running are in [docs/specs/](docs/specs/README.md).
+
+### Plan first, then execute
+
+<p align="center">
+  <img src="docs/assets/readme-plan-first.svg" alt="Manifest mode in three steps. The planner writes the whole plan before it has read anything. You approve the plan once, before the first step runs. A driver runs the steps with no model in the control path, and nothing is re-planned." width="100%">
+</p>
+
+The default decides each step after the last one has run. `--mode manifest` plans the whole run
+before anything is read, asks you to approve the plan, and then runs the steps with nothing
+re-planned:
+
+```sh
+bravebot --mode manifest "collect every TODO comment into notes/todos.md"
+```
+
+In a session, `/manifest <task>` does the same for one task.
+[A plan is put to you first](docs/website/docs/using/headless.md#a-plan-is-put-to-you-first) says
+what the approval covers.
 
 ## Specs
 
