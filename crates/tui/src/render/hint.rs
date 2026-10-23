@@ -167,7 +167,8 @@ mod shell {
 
 /// Where each part of the ordinary line sits in the array `ordinary_parts` builds.
 mod ordinary {
-    // 0 is the permission mode and 1 the vi mode, which `MODES` covers.
+    // 1 is the vi mode, which `MODES` covers with the permission mode.
+    pub const MODE: usize = 0;
     pub const TRAIL: usize = 2;
     pub const CONTEXT: usize = 3;
     pub const CACHE: usize = 4;
@@ -414,7 +415,10 @@ pub(super) fn hint_spans(
 }
 
 /// The shortcut line. Keeps the bindings discoverable without a help command.
-pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
+///
+/// Gives the cells the permission mode is drawn in, when it is drawn: what a click on it acts on
+/// (MOUSE-14).
+pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) -> Option<Rect> {
     // The files state names its own keys and keeps the figures the panel has no section for
     // (FILES-4, FILES-9). Every other key does nothing there, so nothing else on the line applies.
     if session.files_open() {
@@ -430,7 +434,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             .collect();
         let line = crate::status::cut(&said.join("  ·  "), usize::from(area.width));
         frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
-        return;
+        return None;
     }
     // Words an outside link put in the box stay named as such until they are sent or cleared, and
     // the line says how long they are, because a long one runs past what the box shows (LINK-4).
@@ -442,7 +446,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         };
         let line = crate::status::cut(&said, usize::from(area.width));
         frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
-        return;
+        return None;
     }
     let facts = hint_facts(session);
 
@@ -465,7 +469,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         );
         let spans = hint_spans(&parts, &kept, shell::NAME + 1);
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
-        return;
+        return None;
     }
 
     let parts = ordinary_parts(session, area, frame.area().height, facts);
@@ -523,6 +527,13 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             area,
         );
     }
+
+    // The mode leads the line and is never given up, so it is either the first part kept or the
+    // line was cleared whole.
+    (kept.first() == Some(&ordinary::MODE)).then(|| {
+        let width = u16::try_from(parts[ordinary::MODE].chars().count()).unwrap_or(u16::MAX);
+        Rect::new(area.x.saturating_add(2), area.y, width, 1).intersection(area)
+    })
 }
 
 /// What a press just did, drawn at the right of the hint row, where there is anything to say.

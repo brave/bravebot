@@ -610,6 +610,13 @@ impl Session {
         crate::panel::target_at(self, *area, row, column)
     }
 
+    /// Whether the cell is one the permission mode is drawn in, as the last frame drew it.
+    pub fn on_the_mode(&self, row: u16, column: u16) -> bool {
+        self.laid
+            .mode
+            .is_some_and(|rect| rect.contains(ratatui::layout::Position::new(column, row)))
+    }
+
     /// Begin dragging the panel's border where the button went down, and say whether it was
     /// there. A press that is not leaves the session untouched.
     pub fn begin_panel_drag(&mut self, row: u16, column: u16) -> bool {

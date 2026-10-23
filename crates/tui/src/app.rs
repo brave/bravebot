@@ -9092,6 +9092,7 @@ mod tests {
                 delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
+                mode: None,
             });
 
             handle_key_while_working(&mut session, ctrl('u'));
@@ -9740,6 +9741,7 @@ mod tests {
                 delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
+                mode: None,
             });
             session
         }
@@ -10296,6 +10298,7 @@ mod tests {
                 delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
+                mode: None,
             });
             session.open_scroller();
             type_keys(&mut session, "1000b");
@@ -10323,6 +10326,7 @@ mod tests {
                 delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
+                mode: None,
             });
             session.open_scroller();
 
@@ -10358,6 +10362,7 @@ mod tests {
                 delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
+                mode: None,
             });
             session.open_scroller();
             session.scroller_to_first_row();
@@ -12257,6 +12262,56 @@ mod tests {
             .expect("draw");
         session.note_layout(laid);
         terminal.backend().buffer().clone()
+    }
+
+    /// MOUSE-14: a click on the permission mode under the box cycles it, as the key does.
+    #[test]
+    fn a_click_on_the_footers_permission_mode_cycles_it() {
+        let mut session = Session::new("none");
+        session.cycle_permission_mode();
+        let first = session.permission_mode();
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(
+            &buffer,
+            crate::status::named_mode(first, false).expect("named"),
+        );
+        assert_eq!(click(&mut session, row, column + 1), Action::Redraw);
+        assert_ne!(session.permission_mode(), first);
+        assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-14: a drag over the mode, a click on the rest of the row, a mode that is not drawn
+    /// and a click over the scroller change nothing.
+    #[test]
+    fn a_drag_over_the_mode_or_a_click_beside_it_leaves_the_permission_mode_alone() {
+        let mut session = Session::new("none");
+        session.cycle_permission_mode();
+        let mode = session.permission_mode();
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(
+            &buffer,
+            crate::status::named_mode(mode, false).expect("named"),
+        );
+
+        swept(&mut session, (row, column), (row, column + 3));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 3);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        click(&mut session, row, 0);
+        click(&mut session, row, column + 40);
+        assert_eq!(session.permission_mode(), mode);
+
+        session.open_scroller();
+        click(&mut session, row, column);
+        assert_eq!(session.permission_mode(), mode);
+
+        let mut asking = Session::new("none");
+        let buffer = drawn(&mut asking);
+        let (row, _) = find_on(&buffer, "?");
+        click(&mut asking, row, 2);
+        assert_eq!(
+            asking.permission_mode(),
+            bravebot_agent::PermissionMode::Ask
+        );
     }
 
     /// The row and column where `needle` is drawn in the session's own frame.
