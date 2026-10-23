@@ -19,7 +19,9 @@ governs:
 guards:
   - symbol: Operation::parse
   - symbol: locations_in
-documented-by: docs/website/docs/reference/tools.md
+documented-by:
+  - docs/website/docs/reference/tools.md
+  - docs/website/docs/reference/lsp-tool.md
 ---
 
 ## Scope

@@ -81,7 +81,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/agents/<name>.md` | [delegate definitions](agents.md) available in every project |
 | `~/.bravebot/rules/<name>.md` | [rules](instructions.md) for every project, in force every turn or once a file their `paths` match is touched |
 | `~/.bravebot/sessions/<directory>/` | session records and audit trails, removed after [`retentionDays`](#retentiondays) |
-| `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace, removed after [`retentionDays`](#retentiondays) ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
+| `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace, removed after [`retentionDays`](#retentiondays) ([`lsp`](../reference/lsp-tool.md#the-index-is-cached-and-it-is-not-small)) |
 | `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace, removed after [`retentionDays`](#retentiondays) |
 | `~/.bravebot/granted/<directory>.jsonl` | the permission rules a checkout proposed that you granted, one file per directory ([`permissions`](#permissions)) |
 | `~/.bravebot/trusted/<directory>.jsonl` | the yes to the startup question, one file per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
