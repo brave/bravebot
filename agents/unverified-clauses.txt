@@ -7,7 +7,6 @@
 # where the lists themselves merge cleanly, and a count nothing reads is wrong quietly. Count the
 # lines, or read the warnings check-spec prints.
 
-docs/specs/backends.md:BACKEND-61: a service that takes the Responses protocol is sent a request in it and read in it, and nothing is asked to be kept
 docs/specs/background-sessions.md:BG-1: a background session is an ordinary session in a process the terminal does not own
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked

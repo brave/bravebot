@@ -539,6 +539,10 @@ opencode names the SDK for a gateway, is an OpenAI-compatible gateway like any o
 endpoint of its own, since the address compiled in is the one the other protocol is spoken at. Its models are asked for as [BACKEND-19](#BACKEND-19) says, and
 [Known costs](#known-costs) records what that offers for this service.
 
+An entry naming `@ai-sdk/openai` in `npm` is reached in the Responses protocol whatever its id,
+except `google-vertex`, whose id fixes its protocols ([BACKEND-61](#BACKEND-61)). Under the id `anthropic` it states an endpoint of its own, as one naming
+`@ai-sdk/openai-compatible` does, since the address compiled in is the one the Messages API is spoken at.
+
 One thing differs for `openai` and `anthropic`: the name a reply reports is not compared with the name
 asked for, as [BACKEND-18](#BACKEND-18) compares a gateway's. A name such as `gpt-4o` or
 `claude-haiku-4-5` is an alias for a dated model, and the reply names the model behind it, which is
@@ -568,6 +572,7 @@ what keeps a known name usable against a proxy or a private deployment.
 `verified-by: bravebot_config::provider::an_anthropic_entry_naming_the_openai_compatible_sdk_is_a_gateway_like_any_other`
 `verified-by: bravebot_config::provider::what_decides_the_protocol_of_an_entry_is_its_id_and_the_sdk_it_names`
 `verified-by: bravebot_config::provider::a_provider_without_a_base_url_is_not_offered`
+`verified-by: bravebot_config::provider::an_entry_naming_the_openai_sdk_is_reached_through_the_responses_api`
 
 <a id="BACKEND-18"></a>
 ### BACKEND-18: a model name may say which gateway is meant, and only the rest of it is sent
@@ -671,6 +676,7 @@ gateway is still read: what a gateway puts under `capabilities` is its own.
 `verified-by: bravebot_aichat::client::a_gateway_with_a_credential_is_asked_what_that_account_may_reach`
 `verified-by: bravebot_aichat::client::a_gateway_needing_no_credential_is_asked_for_its_roster_unauthenticated`
 `verified-by: bravebot_aichat::client::a_gateway_that_cannot_answer_the_account_question_is_asked_for_its_whole_roster`
+`verified-by: bravebot_aichat::client::a_responses_entry_is_asked_what_its_key_may_reach_before_its_whole_roster`
 `verified-by: bravebot_tui::app::a_fetched_roster_leads_with_the_model_in_force`
 `verified-by: bravebot_tui::app::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
 
@@ -710,6 +716,7 @@ service is sent the other's shape.
 | AWS Bedrock | `effort`, inside `output_config`, among the fields handed to the model unread |
 | Anthropic's Messages API | `effort`, inside `output_config`, a field of the request body |
 | Google's `generateContent` API | `thinkingBudget`, inside `thinkingConfig`, inside `generationConfig`, as a token count that rises with the level |
+| OpenAI's Responses API | `effort`, inside `reasoning`, beside a `summary` of `auto` ([BACKEND-61](#BACKEND-61)) |
 
 This says where a level is sent, not what becomes of it. What a service does with the field is that
 service's own behaviour, observable only by measuring it, and one of them is known to discard it
@@ -724,6 +731,7 @@ certainly does not read.
 `verified-by: bravebot_bedrock::protocol::a_level_is_sent_inside_the_object_this_api_states`
 `verified-by: bravebot_aichat::anthropic::protocol::a_level_is_sent_inside_the_object_this_api_states`
 `verified-by: bravebot_aichat::generate_content::protocol::a_ceiling_a_level_and_a_schema_go_in_the_generation_config`
+`verified-by: bravebot_aichat::responses::protocol::reasoning_is_the_level_and_a_summary_only_where_a_level_was_given`
 `verified-by: bravebot_agent::turn::a_chosen_effort_is_the_one_requested`
 
 
@@ -1276,8 +1284,9 @@ read. Both are counted inside the prompt total rather than beside it, so one fig
 round sent and the other two say what it cost. Bedrock states both, and so does Anthropic, as
 `cache_read_input_tokens` and `cache_creation_input_tokens` beside an `input_tokens` that is net of the
 cache, so the prompt is the three added together. An OpenAI-compatible reply states the read alone, in
-`prompt_tokens_details.cached_tokens`, there being no field in that protocol for a write. A service
-stating neither leaves both at zero, and a figure Anthropic states as `null` is one it did not state.
+`prompt_tokens_details.cached_tokens`, there being no field in that protocol for a write. The Responses API states the read in
+`input_tokens_details.cached_tokens` and the write in `input_tokens_details.cache_write_tokens`, both
+counted inside `input_tokens`. A service stating neither leaves both at zero, and a figure Anthropic states as `null` is one it did not state.
 
 A turn sums them over its rounds, as it sums the total, and a delegate's are added to the turn that
 spawned it.
@@ -1328,6 +1337,7 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_aichat::anthropic::protocol::cached_tokens_are_counted_as_the_prompt_they_were_and_carried_apart`
 `verified-by: bravebot_aichat::anthropic::protocol::a_null_cache_figure_reads_as_silence`
 `verified-by: bravebot_aichat::anthropic::protocol::a_prompt_too_large_to_add_saturates_and_never_wraps`
+`verified-by: bravebot_aichat::responses::protocol::a_stream_ends_in_one_of_three_events_and_reports_usage`
 `verified-by: bravebot_aichat::anthropic::protocol::a_later_report_replaces_what_it_restates_and_keeps_the_rest`
 `verified-by: bravebot_aichat::client::a_whole_anthropic_reply_is_read_into_text_calls_model_and_cost`
 `verified-by: bravebot_aichat::client::an_anthropic_stream_is_assembled_from_its_events_and_asks_for_arguments_as_written`
@@ -1954,6 +1964,8 @@ is the egress layer's whatever the ceiling, or the one the account's block state
 
 The aichat endpoint and an OpenAI-compatible gateway state no ceiling at all, so nothing here applies
 to them: their requests carry no such field and whatever bounds a reply there belongs to the service.
+A Responses request carries `max_output_tokens` where somebody stated a ceiling and is given the time it
+allows on the same terms; where none was stated it carries none and is bounded as a gateway's is.
 An `anthropic` entry is given the time its ceiling allows on the same terms as Bedrock.
 
 **Why.** A ceiling below what the model allows costs the tail of a long answer, and a tool call the
@@ -3050,8 +3062,8 @@ A request is made in the Responses protocol where the service is the ChatGPT acc
 `@ai-sdk/openai` in `npm`, as opencode names the SDK that speaks it. Every other service is spoken to in
 chat completions, and an entry naming no SDK stays one. The ChatGPT account is always spoken
 to in this protocol, and no request is made to its host in another. A model's own `npm` outranks its
-entry's, so one entry may offer models in both protocols. The SDK an entry names decides over its id: an
-`anthropic` entry that names `@ai-sdk/openai` is reached in this protocol, and states an endpoint of its own,
+entry's, so one entry may offer models in both protocols. The SDK an entry names decides over its id, except
+under `google-vertex`, whose id fixes its protocols and the header its key goes in: an `anthropic` entry that names `@ai-sdk/openai` is reached in this protocol, and states an endpoint of its own,
 as one naming `@ai-sdk/openai-compatible` does ([BACKEND-17](#BACKEND-17)), since the address compiled in is
 the one the Messages API is spoken at. The request goes to the endpoint's
 `/responses` route, names the model by the part of the name after the id ([BACKEND-18](#BACKEND-18)), and
@@ -3068,8 +3080,8 @@ The body is built from the conversation as these fields:
   Calls and results are paired, ordered and cleaned of what the service would refuse by the walk of the
   conversation that [BACKEND-57](#BACKEND-57) names, so a result with no call is dropped there and not here,
   and arguments that are not a JSON object cross as `{}`.
-- `tools` is each tool as one object with `type` `function`, a `name`, a `description` and `parameters`,
-  and `tool_choice` is `auto` where any is offered.
+- `tools` is each tool as one object with `type` `function`, a `name`, a `description`, `parameters` and
+  `strict` of `false`, and `tool_choice` is `auto` where any is offered.
 - `stream` is `true` on every request, and the reply is read as server-sent events whatever the caller
   asked for, since a service in this protocol may refuse one asked for whole.
 - `store` is `false` on every request. Nothing is asked to be kept, so the conversation is held by the
@@ -3081,7 +3093,8 @@ The body is built from the conversation as these fields:
 - `max_output_tokens` is the ceiling of [BACKEND-41](#BACKEND-41).
 - No `temperature`, `top_p` or other sampling field is added by this program. On an entry, a model's own
   `options` reach the body as [BACKEND-15](#BACKEND-15) says and carry the fields a person chose to send,
-  and none of them replaces a field built above: `stream`, `store` and the `input` are the turn's.
+  and none of them supplies or replaces a field the request owns, whether or not the turn set it: the model,
+  `instructions`, `input`, `tools`, `tool_choice`, `stream`, `store` and `previous_response_id`.
   The ChatGPT account carries no `options` ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
 
 The reply's events are read as they arrive. Words come from the text deltas of an output item. A call
@@ -3093,8 +3106,10 @@ reasoning arrives as a summary and is handed to the caller as it arrives, for a 
 ([VIEW-33](terminal-transcript.md#VIEW-33)) and for nothing else, as [BACKEND-59](#BACKEND-59) hands on a
 chat-completions model's. An event this does not know is ignored, and one it knows in a shape it cannot read
 is unreadable and not ignored. A stream ends in one of three events. `response.completed` is a reply.
-`response.incomplete` is a reply the service stopped, for the ceiling or for another reason, and is kept for
-what it said and never for what it asked ([BACKEND-42](#BACKEND-42)), not asked for again. `response.failed`
+`response.incomplete` is a reply the service stopped for the ceiling, and is kept for what it said and never
+for what it asked ([BACKEND-42](#BACKEND-42)), not asked for again; one stopped for its content is a refusal,
+named as [BACKEND-57](#BACKEND-57) names one. A final event in a shape this cannot read is an unreadable
+reply and not one that stopped short. `response.failed`
 is a failure named from a list this build holds and never by what the service wrote, and asked for again
 only where a second attempt could get past it, as [BACKEND-57](#BACKEND-57) does for a failure reported
 part way through. A stream that stops before any of them is a reply that did not finish and is asked for
@@ -3122,13 +3137,17 @@ counting its cached part inside `input_tokens` is the protocol's own shape and h
 ([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). Nothing has been
 observed of an entry that names `@ai-sdk/openai` on another service.
 
-**Not built:** all of it. The Responses protocol is not carried by `bravebot-aichat`, `npm` is read only to
-tell an OpenAI-compatible gateway from Anthropic's ([BACKEND-17](#BACKEND-17)), and nothing sends a request
-to the ChatGPT host, with the session headers and the zstd body of
-[CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10). When it is built, [BACKEND-21](#BACKEND-21) gains the row `reasoning.effort`, inside
-`reasoning`, [BACKEND-31](#BACKEND-31) gains these usage fields, [BACKEND-17](#BACKEND-17) and
-[BACKEND-13](#BACKEND-13) gain the SDK that selects this protocol, and [IMPORT-3](import.md#IMPORT-3) stops
-leaving an `openai` entry that names `@ai-sdk/openai`.
+**Built:** the protocol for an entry that names `@ai-sdk/openai`, in `bravebot-aichat` beside the Anthropic
+and Gemini clients: the request, the events, calls and their results, usage, the level, the three endings
+of a stream, and the refusals, reached at the entry's `/responses` route with its key as a bearer token.
+
+**Not built:** an `npm` on a model, so the SDK an entry names decides for every model it lists; the ChatGPT
+account, which waits on the request path of [CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10) with its session
+headers and zstd body; a run's `--output-schema`, which the request does not carry; a document attachment,
+which is dropped ([#3121](https://github.com/brave/bravebot/issues/3121)); a refusal the model writes as a
+content part of a reply that completes, which is read as no content
+([#3120](https://github.com/brave/bravebot/issues/3120)); and [IMPORT-3](import.md#IMPORT-3) still leaves
+an `openai` entry that names `@ai-sdk/openai`.
 
 **Why.** The service decides the protocol, so the same body serves the ChatGPT account and a gateway that
 takes it, and a second encoding for either is a second place for one to drift. `store` is `false` because a
@@ -3142,7 +3161,32 @@ service answers the same request without it. This program adds no sampling field
 and the ChatGPT host refuses `temperature`, so a field added for every service would fail on the one this
 clause was written for.
 
-`verified-by: none`
+`verified-by: bravebot_config::provider::an_entry_naming_the_openai_sdk_is_reached_through_the_responses_api`
+`verified-by: bravebot_aichat::responses::protocol::a_request_is_the_body_this_api_states`
+`verified-by: bravebot_aichat::responses::protocol::a_call_and_its_result_are_items_beside_the_messages`
+`verified-by: bravebot_aichat::responses::protocol::a_request_offering_no_tools_sends_no_tool_fields_and_its_calls_as_text`
+`verified-by: bravebot_aichat::responses::protocol::reasoning_is_the_level_and_a_summary_only_where_a_level_was_given`
+`verified-by: bravebot_aichat::responses::protocol::a_picture_crosses_as_a_data_uri_and_a_document_is_dropped`
+`verified-by: bravebot_aichat::responses::protocol::the_events_that_carry_a_reply_decode`
+`verified-by: bravebot_aichat::responses::protocol::a_stream_ends_in_one_of_three_events_and_reports_usage`
+`verified-by: bravebot_aichat::responses::protocol::a_reported_failure_is_one_of_a_closed_set_and_never_named_by_the_service`
+`verified-by: bravebot_aichat::responses::protocol::an_unknown_event_is_ignored_and_a_known_one_in_a_wrong_shape_is_not`
+`verified-by: bravebot_aichat::responses::protocol::a_call_with_no_arguments_written_is_an_empty_object`
+`verified-by: bravebot_aichat::client::a_responses_request_is_streamed_kept_nowhere_and_carries_its_key_as_a_bearer_only`
+`verified-by: bravebot_aichat::client::a_responses_reply_is_read_from_its_events_and_its_cost_from_the_final_one`
+`verified-by: bravebot_aichat::client::a_responses_reasoning_summary_reaches_progress_and_never_the_reply`
+`verified-by: bravebot_aichat::client::a_responses_call_is_taken_from_its_item_and_named_while_it_is_written`
+`verified-by: bravebot_aichat::client::a_responses_stream_that_stops_short_is_asked_again_and_hands_on_no_unfinished_call`
+`verified-by: bravebot_aichat::client::an_incomplete_responses_reply_keeps_its_words_and_not_its_call`
+`verified-by: bravebot_aichat::client::a_failed_responses_reply_is_named_from_a_closed_set_and_asked_again_only_where_it_could_pass`
+`verified-by: bravebot_aichat::client::a_level_a_responses_service_refuses_costs_the_field_and_not_the_turn`
+`verified-by: bravebot_aichat::client::a_models_options_reach_the_responses_body_and_cannot_overwrite_what_the_turn_built`
+`verified-by: bravebot_aichat::client::a_refused_responses_request_does_not_repeat_the_key`
+`verified-by: bravebot_aichat::client::a_responses_call_is_named_before_its_arguments_arrive_and_they_are_never_charged`
+`verified-by: bravebot_aichat::client::a_final_responses_event_in_a_shape_this_cannot_read_is_not_asked_for_again`
+`verified-by: bravebot_aichat::client::a_responses_reply_stopped_for_its_content_is_a_refusal_and_not_a_ceiling`
+`verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
+`verified-by: bravebot_agent::backend::a_header_the_block_asked_for_reaches_the_request_whichever_protocol_it_answers_in`
 
 ## Known costs
 
@@ -3527,8 +3571,8 @@ clause was written for.
   and no others.
 
 - **A model OpenAI serves only through its Responses API is offered and fails when picked.** The
-  route is chat completions, and the listing does not say which models take it. A block naming
-  `models` offers only the ones it names.
+  route is chat completions unless the entry names `@ai-sdk/openai`, and the listing does not say
+  which models take either. A block naming `models` offers only the ones it names.
 
 - **Each OpenAI roster costs a request that is expected to be refused.** BACKEND-19 asks what the
   credential may reach at `/models/user` before it asks for the whole listing, and OpenAI is not
@@ -3638,3 +3682,11 @@ clause was written for.
 - **A model's protocol is the entry's or the model's, never the listing's.** A service whose listing does not
   say which protocol a model takes is offered under the protocol its entry names, so a model that takes only
   the other one is refused at the first request. Only the ChatGPT account states its protocol itself.
+
+- **A Responses request does not carry a run's `--output-schema`.** The reply is still checked against the
+  schema once it arrives, and a run whose reply is off it ends as [CLI-28](cli.md#CLI-28) says, as it does
+  for an Anthropic request.
+
+- **A level the service refuses inside the stream is not given up.** Only a refusal by status is, so a
+  service that answers 200 and then reports the level as an unsupported value fails the turn at that level,
+  and the refusal is not remembered. No service has been seen to do this.

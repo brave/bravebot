@@ -345,7 +345,8 @@ fn fetch_listing<S: Sink>(
             | bravebot_config::provider::Protocol::GenerateContent => {
                 request.socket_header(name, value)
             }
-            bravebot_config::provider::Protocol::ChatCompletions => request.header(name, value),
+            bravebot_config::provider::Protocol::ChatCompletions
+            | bravebot_config::provider::Protocol::Responses => request.header(name, value),
         };
     }
     // Carried, never read: `Request::header` appends, and a name this request already set is

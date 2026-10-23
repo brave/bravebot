@@ -24,6 +24,7 @@ guards:
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/anthropic.rs: 8
       - crates/aichat/src/generate_content.rs: 7
+      - crates/aichat/src/responses.rs: 6
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
@@ -49,7 +50,7 @@ guards:
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 59
-      - crates/aichat/tests/client.rs: 9
+      - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 63
@@ -181,6 +182,7 @@ guards:
     sites:
       - crates/aichat/src/anthropic.rs: 2
       - crates/aichat/src/generate_content.rs: 2
+      - crates/aichat/src/responses.rs: 1
       - crates/aichat/src/lib.rs: 2
       - crates/aichat/src/models.rs: 2
       - crates/aichat/src/ollama.rs: 1

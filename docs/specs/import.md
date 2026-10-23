@@ -186,7 +186,8 @@ from it would send it to Anthropic's, so the key and the host are both left
 
 **An `openai` entry is OpenAI-compatible when it names no `npm`**, and is offered at
 `https://api.openai.com/v1`. One naming `@ai-sdk/openai` is left as another SDK
-([IMPORT-4](#IMPORT-4)), that package speaking the Responses API, which this program does not send.
+([IMPORT-4](#IMPORT-4)), that package speaking the Responses API ([BACKEND-61](backends.md#BACKEND-61)),
+and the entry import writes naming no SDK, so one written from it would be sent chat completions.
 An entry that names no variable is written with `OPENAI_API_KEY`, the variable opencode reads for
 this id.
 
