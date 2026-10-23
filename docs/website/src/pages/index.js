@@ -10,12 +10,12 @@ import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 
 import styles from './index.module.css';
 
-const TAGLINE = 'A general-purpose agent that a web page cannot redirect.';
+const TAGLINE = 'A general-purpose agent that untrusted data cannot redirect.';
 
 const FEATURES = [
   {
     title: 'Structural resistance to indirect prompt injection',
-    text: 'A web page cannot redirect an agent working on your behalf. Content nobody vouched for never reaches the part that decides what to do next.',
+    text: "No untrusted data can redirect an agent working on your behalf, whether a web page, a file, a command's output or a tool's result. Content nobody vouched for never reaches the part that decides what to do next.",
     to: '/how-it-works',
     link: 'How it works',
   },

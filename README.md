@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="docs/assets/readme-banner.svg" alt="bravebot: a general-purpose agent that a web page cannot redirect." width="100%">
+  <img src="docs/assets/readme-banner.svg" alt="bravebot: a general-purpose agent that untrusted data cannot redirect." width="100%">
 </h1>
 
 <p align="center">
@@ -18,8 +18,8 @@
 Brave Bot is a general-purpose agent, meant as a drop-in replacement for Claude Code, Codex and
 OpenCode. Brave has always shipped user agents, and this one is the user's agent in both senses:
 
-- **Structural resistance to indirect prompt injection:** a web page cannot redirect an agent
-  working on your behalf.
+- **Structural resistance to indirect prompt injection:** no untrusted data the agent reads can
+  redirect it, whether a web page, a file, a command's output, a tool's result or an email.
 - **As few tokens as possible.**
 - **As fast as it can be.**
 - **Nothing hidden:** what it read and what it decided are on the screen.
