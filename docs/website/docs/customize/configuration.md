@@ -991,7 +991,7 @@ The session you are starting is never removed, so resuming a record older than t
 neither is a session running in the background or the language server index of the workspace you
 start in. Your
 rules, your answers to the startup question, your prompt history and the acceptances of findings are
-not swept. An [incognito](../using/sessions.md#a-session-that-leaves-nothing-behind) session removes
+not swept. An [incognito](../using/incognito.md) session removes
 nothing. A session left open in another terminal for longer than the period has its record removed by
 a new one, and its next save writes it again.
 

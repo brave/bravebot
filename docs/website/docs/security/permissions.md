@@ -263,7 +263,7 @@ stop no prompt:
 | a line setting a variable in front of a program | asked about whatever is recorded |
 | a line running anywhere but the workspace root | including one that names a directory |
 | a line a `deny` or `ask` rule matches | a keypress must not overturn a rule you wrote |
-| an [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) | it adds nothing to `~/.bravebot` |
+| an [incognito session](../using/incognito.md) | it adds nothing to `~/.bravebot` |
 | bypassing | no run prompt is drawn for a key to reach |
 
 A rule you write **afterwards** takes a remembered line back: an `ask` rule puts it to you again and a

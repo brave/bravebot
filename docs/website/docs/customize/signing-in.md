@@ -92,7 +92,7 @@ exits 0 if any is usable. See [the reference](../reference/cli.md#auth).
 
 ## In an incognito session
 
-In an [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind), `leo`,
+In an [incognito session](../using/incognito.md), `leo`,
 `import` and `gateway` are refused, since each keeps something in bravebot's own directory.
 `bedrock` is allowed: the AWS CLI keeps that session, and a session in this mode signs in to it as
 well. It writes nothing to settings, so `BRAVEBOT_USE_BEDROCK=1` still has to be exported. Signing

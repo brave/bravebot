@@ -373,7 +373,7 @@ supply or change it.
 Where a yes cannot be kept, the question says so and the yes trusts that session only. That is the
 case at your home directory, a directory holding it or a filesystem root, where the filesystem cannot
 say when the directory was made, and in an
-[incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
+[incognito session](../using/incognito.md).
 
 A later session started in that directory is not asked, and says so as it opens. In the terminal:
 
