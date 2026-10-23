@@ -2004,8 +2004,9 @@ mod tests {
         assert!(left(&found).is_empty(), "{:?}", left(&found));
     }
 
-    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, which this program does not send, so an
-    /// entry naming it is left even though the host it would reach is one this program knows.
+    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, and the entry import writes names no SDK,
+    /// so one written from it would be sent chat completions at a host that takes the other protocol.
+    /// An entry naming it is left even though the host it would reach is one this program knows.
     #[test]
     fn an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk() {
         let home = Scratch::new("import-openai-sdk");

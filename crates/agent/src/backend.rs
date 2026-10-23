@@ -15,6 +15,7 @@ use bravebot_aichat::anthropic::AnthropicClient;
 use bravebot_aichat::anthropic::protocol::Failure;
 use bravebot_aichat::generate_content::GenerateContentClient;
 use bravebot_aichat::protocol::{ChatRequest, Usage};
+use bravebot_aichat::responses::ResponsesClient;
 use bravebot_aichat::{AichatClient, ChatError, Completion, CutOff, Progress, Subscription};
 pub use bravebot_bedrock::credentials::CredentialError;
 use bravebot_bedrock::{BedrockClient, BedrockError};
@@ -1112,6 +1113,9 @@ fn gateway_client<'a>(
             GenerateContentClient::new(egress, provider, wire_model, token)
                 .with_gateway_headers(headers),
         ),
+        Protocol::Responses => GatewayClient::Responses(
+            ResponsesClient::new(egress, provider, wire_model, token).with_gateway_headers(headers),
+        ),
     })
 }
 
@@ -1149,6 +1153,7 @@ enum GatewayClient<'a> {
     Chat(AichatClient<'a>),
     Messages(AnthropicClient<'a>),
     GenerateContent(GenerateContentClient<'a>),
+    Responses(ResponsesClient<'a>),
 }
 
 /// The failure of a call to `client`, with the requests it took and what they cost.
@@ -1171,6 +1176,7 @@ impl GatewayClient<'_> {
             Self::Chat(client) => Self::Chat(client.with_cancel(stop)),
             Self::Messages(client) => Self::Messages(client.with_cancel(stop)),
             Self::GenerateContent(client) => Self::GenerateContent(client.with_cancel(stop)),
+            Self::Responses(client) => Self::Responses(client.with_cancel(stop)),
         }
     }
 
@@ -1183,6 +1189,7 @@ impl GatewayClient<'_> {
             Self::Chat(client) => counted!(client, client.complete(policy, request)),
             Self::Messages(client) => counted!(client, client.complete(policy, request)),
             Self::GenerateContent(client) => counted!(client, client.complete(policy, request)),
+            Self::Responses(client) => counted!(client, client.complete(policy, request)),
         }
     }
 
@@ -1200,6 +1207,9 @@ impl GatewayClient<'_> {
                 counted!(client, client.complete_streaming(policy, request, progress))
             }
             Self::GenerateContent(client) => {
+                counted!(client, client.complete_streaming(policy, request, progress))
+            }
+            Self::Responses(client) => {
                 counted!(client, client.complete_streaming(policy, request, progress))
             }
         }
@@ -1952,6 +1962,8 @@ mod tests {
         // takes Vertex's own API.
         let sdk = if provider == "google-vertex" {
             r#""npm": "@ai-sdk/google-vertex","#
+        } else if provider == "responses-gw" {
+            r#""npm": "@ai-sdk/openai","#
         } else {
             ""
         };
@@ -2026,6 +2038,12 @@ mod tests {
         "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":3,",
         "\"candidatesTokenCount\":1}}\n\n",
     );
+    /// A Responses reply, which is read as events however the caller asked for it.
+    const RESPONSES_STREAM: &str = concat!(
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"model\":\"served\",",
+        "\"output\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}}\n\n",
+    );
     const OPENAI_WHOLE: &str =
         r#"{"model":"served","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#;
     const OPENAI_STREAM: &str = concat!(
@@ -2033,8 +2051,10 @@ mod tests {
         "data: [DONE]\n\n",
     );
 
-    /// A request for a model an `anthropic` entry names goes to the Messages route with its key in
-    /// `x-api-key`, and one for a gateway beside it goes to chat completions with a bearer token,
+    /// A request for a model an entry naming `@ai-sdk/openai` names goes to the Responses route with
+    /// a bearer token, whole or streamed. A request for a model an `anthropic` entry names goes to
+    /// the Messages route with its key in `x-api-key`, and one for a gateway beside it goes to chat
+    /// completions with a bearer token,
     /// whether the reply is read whole or as it arrives. Selecting the backend is not enough: the
     /// dispatch has to build the client that speaks the protocol, or the key reaches a route that
     /// does not exist, and the whole and streamed calls are dispatched separately.
@@ -2094,6 +2114,14 @@ mod tests {
                     "authorization",
                     "Bearer a-key",
                 ),
+                (
+                    "responses-gw",
+                    RESPONSES_STREAM,
+                    "text/event-stream",
+                    "POST /v1/responses HTTP/1.1",
+                    "authorization",
+                    "Bearer a-key",
+                ),
             ] {
                 let (outcome, received) = call_once(provider, reply, content_type, streamed);
 
@@ -2142,6 +2170,12 @@ mod tests {
                 OPENAI_WHOLE,
                 "application/json",
                 "POST /v1/chat/completions HTTP/1.1",
+            ),
+            (
+                "responses-gw",
+                RESPONSES_STREAM,
+                "text/event-stream",
+                "POST /v1/responses HTTP/1.1",
             ),
         ] {
             let (outcome, received) = call_once_with_options(

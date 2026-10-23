@@ -130,9 +130,10 @@ names, it is [withheld from the programs bravebot runs](../../reference/run-tool
 
 With no `models` key, OpenAI is asked what it serves and `/model` offers everything it lists. The
 listing says nothing about what a model can do, so embedding, speech and image models are in it beside
-the chat models, and so are models OpenAI serves only through its Responses API, which bravebot does
-not use. Picking one of those fails. A block that lists `models` is offered those and no others, which
-is how to keep the picker to the models you use:
+the chat models, and so are models OpenAI serves only through its Responses API. An entry reaches those
+by naming `@ai-sdk/openai` in `npm`, as it does in opencode, and without that line picking one fails. A
+block that lists `models` is offered those and no others, which is how to keep the picker to the models
+you use:
 
 ```json
 {
@@ -144,6 +145,30 @@ is how to keep the picker to the models you use:
   }
 }
 ```
+
+### The Responses API
+
+OpenAI also serves models through its Responses API, and some only through it. An entry that names
+`@ai-sdk/openai` is sent requests there, at `/responses` under its `baseURL`, instead of at
+`/chat/completions`:
+
+```json
+{
+  "provider": {
+    "openai": {
+      "npm": "@ai-sdk/openai",
+      "env": ["OPENAI_API_KEY"],
+      "models": { "<model id>": {} }
+    }
+  }
+}
+```
+
+The SDK decides for every model the entry lists, and the entry's `id` does not matter except for
+`google-vertex`: any other entry naming it, a proxy included, is reached in this protocol. The conversation is never kept at the service
+(`store` is off), the reply is always streamed, and the model's earlier reasoning is not sent back with
+a later request. Pictures are sent, and a document attachment is not. The effort level is sent as
+`reasoning.effort`, with a summary of the reasoning that `/thinking` shows.
 
 A model is named with the id in front, as `openai/<model id>`, in `--model` or the `model` key. Signing
 in with a ChatGPT account instead of a key is not supported.

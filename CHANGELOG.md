@@ -1,5 +1,6 @@
 ## Unreleased
 
+ - Added the Responses API for an entry that names `npm: "@ai-sdk/openai"`, at `/responses` under its `baseURL`, so models OpenAI serves only through it can be used. The conversation is not kept at the service and the model's earlier reasoning is not sent back. ([#2994](https://github.com/brave/bravebot/issues/2994))
  - Added notebook cells to `read_file` and `edit_file`: a `.ipynb` file the agent may read comes back as numbered cells with their source and without their saved outputs, and `edit_file` takes `cell`, `cell_action` and `cell_type` to replace, insert or delete a cell by its number, writing the notebook back in the layout Jupyter uses. Replacing a code cell drops its saved outputs. ([#1570](https://github.com/brave/bravebot/issues/1570))
  - Added the tokens the model read and the tokens it wrote to `bravebot stats`, as Read and Written columns beside the total. A session recorded before the split was kept shows its tokens in an Unsplit column. ([#1497](https://github.com/brave/bravebot/issues/1497))
 

@@ -143,6 +143,10 @@ pub(crate) const VERTEX_EXPRESS_ENDPOINT: &str = "https://aiplatform.googleapis.
 /// The SDK an entry names to say that its stated endpoint takes Vertex's own API.
 const VERTEX_SDK: &str = "@ai-sdk/google-vertex";
 
+/// The SDK an entry names to say that its endpoint takes the Responses API, as opencode names the
+/// package that speaks it.
+const RESPONSES_SDK: &str = "@ai-sdk/openai";
+
 /// The publisher a model named without one is taken to belong to.
 const VERTEX_PUBLISHER: &str = "google";
 
@@ -401,6 +405,9 @@ pub enum Protocol {
     Messages,
     /// Google's native `generateContent` API, which Vertex AI express mode speaks.
     GenerateContent,
+    /// OpenAI's Responses API, which an entry naming `@ai-sdk/openai` speaks
+    /// ([BACKEND-61](../../../docs/specs/backends.md#BACKEND-61)).
+    Responses,
 }
 
 impl Provider {
@@ -487,7 +494,7 @@ impl Provider {
             )?,
             // The table's address for this id is the one its own protocol is spoken at, so an entry
             // that names another protocol has no address here and says where its service is.
-            None if id == ANTHROPIC_ID && protocol == Protocol::ChatCompletions => return None,
+            None if id == ANTHROPIC_ID && protocol != Protocol::Messages => return None,
             None => known_endpoint(id)?.to_string(),
         };
 
@@ -623,6 +630,7 @@ impl Provider {
             Protocol::GenerateContent => {
                 format!("{}/publishers/{VERTEX_PUBLISHER}/models", self.base_url)
             }
+            Protocol::Responses => format!("{}/responses", self.base_url),
         }
     }
 
@@ -665,7 +673,7 @@ impl Provider {
     /// default would leave the later models out of the picker without a word.
     pub fn models_url(&self) -> String {
         match self.protocol() {
-            Protocol::ChatCompletions => format!("{}/models", self.base_url),
+            Protocol::ChatCompletions | Protocol::Responses => format!("{}/models", self.base_url),
             Protocol::Messages => format!("{}/models?limit={ANTHROPIC_PAGE}", self.base_url),
             Protocol::GenerateContent => self.completion_url(),
         }
@@ -677,7 +685,10 @@ impl Provider {
     /// route only a service that has it is asked. Anthropic has none: the request would carry the
     /// key to be answered 404.
     pub fn answers_for_an_account(&self) -> bool {
-        self.protocol() == Protocol::ChatCompletions
+        matches!(
+            self.protocol(),
+            Protocol::ChatCompletions | Protocol::Responses
+        )
     }
 
     /// The URL that answers with what the credential in use may reach.
@@ -721,7 +732,7 @@ impl Provider {
     /// both and cannot disagree about either.
     pub fn fixed_headers(&self) -> &'static [(&'static str, &'static str)] {
         match self.protocol() {
-            Protocol::ChatCompletions | Protocol::GenerateContent => &[],
+            Protocol::ChatCompletions | Protocol::GenerateContent | Protocol::Responses => &[],
             Protocol::Messages => &[("anthropic-version", ANTHROPIC_VERSION)],
         }
     }
@@ -731,7 +742,7 @@ impl Provider {
     /// second copy would go out beside it rather than in place of it.
     fn fixed_header_names(protocol: Protocol) -> &'static [&'static str] {
         match protocol {
-            Protocol::ChatCompletions | Protocol::GenerateContent => &[],
+            Protocol::ChatCompletions | Protocol::GenerateContent | Protocol::Responses => &[],
             Protocol::Messages => &["anthropic-version"],
         }
     }
@@ -973,11 +984,15 @@ impl fmt::Debug for Credential {
 
 /// The protocol an entry's requests are written in, from its id and the SDK it names.
 ///
-/// Only the `anthropic` id is reached in the Messages protocol, as opencode reaches it, and an entry
+/// An entry naming the SDK that speaks the Responses API is reached in it, whatever its id but
+/// `google-vertex`, whose own protocols, and the header its key goes in, are fixed by the id. Otherwise
+/// only the `anthropic` id is reached in the Messages protocol, as opencode reaches it, and an entry
 /// under that id that names the OpenAI-compatible SDK is reached as any other gateway is. Any other
 /// SDK an entry names is not read: the id decides.
 fn protocol_of(id: &str, npm: Option<&str>) -> Protocol {
-    if id == ANTHROPIC_ID && npm != Some("@ai-sdk/openai-compatible") {
+    if npm == Some(RESPONSES_SDK) && id != GOOGLE_VERTEX_ID {
+        Protocol::Responses
+    } else if id == ANTHROPIC_ID && npm != Some("@ai-sdk/openai-compatible") {
         Protocol::Messages
     } else {
         Protocol::ChatCompletions
@@ -2108,6 +2123,66 @@ mod tests {
                 "options": {"baseURL": "https://proxy.example.invalid/v1"}
             }}}"#);
         assert_eq!(elsewhere.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// BACKEND-61: an entry naming `@ai-sdk/openai` is reached in the Responses protocol, whatever its
+    /// id, at the `/responses` route, with its key as a bearer token and no header of the protocol's
+    /// own. The SDK it names decides over the id, so an `anthropic` entry naming it is Responses and
+    /// must say where its service is, since the address compiled in is the Messages API's.
+    #[test]
+    fn an_entry_naming_the_openai_sdk_is_reached_through_the_responses_api() {
+        let own_id = one(r#"{"provider": {"a-gateway": {
+                "npm": "@ai-sdk/openai",
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://gateway.example.invalid/v1/"}
+            }}}"#);
+        assert_eq!(own_id.protocol(), Protocol::Responses);
+        assert_eq!(
+            own_id.completion_url(),
+            "https://gateway.example.invalid/v1/responses"
+        );
+        assert_eq!(
+            own_id.models_url(),
+            "https://gateway.example.invalid/v1/models"
+        );
+        assert!(own_id.fixed_headers().is_empty());
+        assert_eq!(
+            own_id.credential_header("secret"),
+            ("authorization", "Bearer secret".to_string())
+        );
+        // A gateway that takes this protocol is asked what an account may reach as any other is.
+        assert!(own_id.answers_for_an_account());
+
+        let known = one(r#"{"provider": {"openai": {"npm": "@ai-sdk/openai", "env": ["A_KEY"]}}}"#);
+        assert_eq!(known.protocol(), Protocol::Responses);
+        assert_eq!(
+            known.completion_url(),
+            "https://api.openai.com/v1/responses"
+        );
+
+        let plain = one(r#"{"provider": {"openai": {"env": ["A_KEY"]}}}"#);
+        assert_eq!(plain.protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            plain.completion_url(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+
+        let stated = one(r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/openai",
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}
+            }}}"#);
+        assert_eq!(stated.protocol(), Protocol::Responses);
+        assert!(
+            parsed(r#"{"provider": {"anthropic": {"npm": "@ai-sdk/openai"}}}"#).is_empty(),
+            "the address compiled in for `anthropic` is not one this protocol is spoken at"
+        );
+
+        // An id that fixes its own protocol and the header its key goes in keeps both.
+        let vertex = one(r#"{"provider": {"google-vertex": {
+                "npm": "@ai-sdk/openai",
+                "options": {"project": "an-example-project", "apiKey": "a-key"}
+            }}}"#);
+        assert_eq!(vertex.protocol(), Protocol::ChatCompletions);
     }
 
     /// The table supplies an address and nothing else. A block naming no credential is somebody saying

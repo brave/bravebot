@@ -24,6 +24,7 @@ pub mod lm_studio;
 pub mod models;
 pub mod ollama;
 pub mod protocol;
+pub mod responses;
 
 #[cfg(test)]
 mod local_servers;

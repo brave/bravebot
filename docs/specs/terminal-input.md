@@ -288,6 +288,7 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_aichat::client::a_stream_stopped_before_it_starts_reports_nothing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_the_model_to_start_writing`
+`verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_a_responses_model_to_start_writing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_endpoint_that_has_not_answered`
 `verified-by: bravebot_tui::state::cancelling_before_anything_happens_still_un_sends_the_prompt`
 `verified-by: bravebot_tui::undo_tests::a_prompt_stopped_before_any_reply_is_sent_once_when_it_is_sent_again`
