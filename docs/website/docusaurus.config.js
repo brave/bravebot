@@ -19,6 +19,7 @@ const config = {
   favicon: 'img/favicon.png',
   organizationName: 'brave',
   projectName: 'bravebot',
+  customFields: {repository},
 
   presets: [
     [
@@ -41,8 +42,10 @@ const config = {
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
+      // Dark is the default whatever the system prefers, and the navbar toggle remembers a choice.
       colorMode: {
-        respectPrefersColorScheme: true,
+        defaultMode: 'dark',
+        respectPrefersColorScheme: false,
       },
       navbar: {
         title: 'Brave Bot',
@@ -80,7 +83,7 @@ const config = {
           {
             title: 'Docs',
             items: [
-              {label: 'Overview', to: '/'},
+              {label: 'Overview', to: '/overview'},
               {label: 'Quickstart', to: '/quickstart'},
               {label: 'CLI reference', to: '/reference/cli'},
             ],

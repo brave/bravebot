@@ -1,6 +1,6 @@
 ---
 sidebar_position: 1
-slug: /
+slug: /overview
 title: Overview
 description: What Brave Bot is, what makes it different, and where to start.
 ---
