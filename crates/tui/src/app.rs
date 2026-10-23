@@ -1910,7 +1910,7 @@ fn save_compacted(
 /// than it is.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the arguments are the session, conversation, trust, programs, record, workspace, servers and step count"
+    reason = "each is a piece of session state the rewind restores, and the caller holds them as separate locals, so there is no one struct to pass"
 )]
 fn rewind(
     session: &mut Session,
