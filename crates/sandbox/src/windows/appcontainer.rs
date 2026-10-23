@@ -173,7 +173,7 @@ impl Drop for AppContainerSandbox {
     /// Best effort, and the reason a leftover entry is survivable: the profile is this
     /// run's alone, so an entry that outlives a run names a container nothing else is,
     /// and no later run inherits the access it describes.
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, reason = "calls `DeleteAppContainerProfile`")]
     fn drop(&mut self) {
         let granted = std::mem::take(
             self.granted
@@ -332,7 +332,10 @@ impl CreatedProcess {
         self.handle.as_raw_handle() as HANDLE
     }
 
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "calls `WaitForSingleObject` and `GetExitCodeProcess`"
+    )]
     pub(crate) fn wait(&mut self) -> Result<std::process::ExitStatus> {
         use std::os::windows::process::ExitStatusExt;
 
@@ -352,7 +355,10 @@ impl CreatedProcess {
         Ok(std::process::ExitStatus::from_raw(code))
     }
 
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "calls `WaitForSingleObject` and `GetExitCodeProcess`"
+    )]
     pub(crate) fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>> {
         use std::os::windows::process::ExitStatusExt;
 
@@ -379,7 +385,7 @@ impl CreatedProcess {
     ///
     /// The job rather than the process, since a child of a confined process outlives its parent
     /// and keeps its token, its network and the pipes it was handed.
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, reason = "calls `TerminateJobObject`")]
     pub(crate) fn kill(&mut self) -> Result<()> {
         // The code a killed process reports. One rather than zero, so a caller reading the
         // status cannot mistake a process this ended for one that succeeded.
@@ -398,7 +404,10 @@ impl CreatedProcess {
 /// A job that ends every process in it when its last handle is closed.
 ///
 /// Not inheritable, and handed to no process, so the handle this returns is the last one.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "calls `CreateJobObjectW` and `SetInformationJobObject`"
+)]
 fn job_ending_on_close() -> Result<OwnedHandle> {
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let job = unsafe { CreateJobObjectW(null(), null()) };
@@ -443,7 +452,10 @@ impl Sid {
     /// # Safety
     ///
     /// `psid` points at a valid security identifier.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "an `unsafe fn` that calls `GetLengthSid` on a `psid` its caller vouches for"
+    )]
     unsafe fn copied_from(psid: PSID) -> Self {
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let length = unsafe { GetLengthSid(psid) } as usize;
@@ -470,7 +482,10 @@ impl Sid {
 struct LocalBuffer(*mut c_void);
 
 impl Drop for LocalBuffer {
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "calls `LocalFree` on the allocation this value owns"
+    )]
     fn drop(&mut self) {
         if !self.0.is_null() {
             let allocation = self.0 as HLOCAL;
@@ -485,7 +500,10 @@ impl Drop for LocalBuffer {
 /// A profile that already exists is an error. The name carries a nonce chosen for this
 /// backend, so an existing profile is not one this run created: it belongs to another run,
 /// and adopting it would apply the access entries that run left on directories to this one.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "calls `CreateAppContainerProfile` and `FreeSid`"
+)]
 fn create_profile(name: &[u16]) -> Result<Sid> {
     let description = wide(OsStr::new(PROFILE_DESCRIPTION))?;
     let mut psid: PSID = null_mut();
@@ -519,7 +537,10 @@ fn create_profile(name: &[u16]) -> Result<Sid> {
 ///
 /// Each is copied out before the platform's arrays are freed, so what the token is built
 /// from outlives the call that resolved it.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "calls `DeriveCapabilitySidsFromName` and `LocalFree`"
+)]
 fn capability_sids(names: &[&str]) -> Result<Vec<Sid>> {
     let mut sids = Vec::with_capacity(names.len());
     for name in names {
@@ -568,7 +589,10 @@ fn capability_sids(names: &[&str]) -> Result<Vec<Sid>> {
 /// The list is read, the entry merged into it and the result written back, rather than a
 /// list built from scratch: a directory carries entries that are not this backend's, and
 /// replacing them would take somebody's own access to their own files away.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "calls `GetNamedSecurityInfoW`, `SetEntriesInAclW` and `SetNamedSecurityInfoW`"
+)]
 fn set_entry(path: &Path, sid: &Sid, mode: ACCESS_MODE, grant: Grant) -> Result<()> {
     let path = wide(path.as_os_str())?;
 
@@ -639,7 +663,7 @@ struct AttributeList {
 }
 
 impl AttributeList {
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, reason = "calls `InitializeProcThreadAttributeList`")]
     fn holding(count: u32) -> Result<Self> {
         let mut size = 0usize;
         // The call that asks how large the list has to be fails saying so, which is the
@@ -671,7 +695,7 @@ impl AttributeList {
 
     /// Point `attribute` at `value`, which must outlive the process creation this list is
     /// used for: the list holds the pointer rather than a copy of what it points at.
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, reason = "calls `UpdateProcThreadAttribute`")]
     fn set(&mut self, attribute: usize, value: *const c_void, size: usize) -> Result<()> {
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let updated = unsafe {
@@ -685,7 +709,7 @@ impl AttributeList {
 }
 
 impl Drop for AttributeList {
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, reason = "calls `DeleteProcThreadAttributeList`")]
     fn drop(&mut self) {
         let buffer = self.as_ptr();
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -763,7 +787,7 @@ fn discarded() -> Result<File> {
 /// A copy rather than the handle itself, because inheritance is a property of the handle
 /// and marking this process's own would hand it to every process started from here rather
 /// than to this one.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "calls `DuplicateHandle`")]
 fn inheritable(handle: RawHandle) -> Result<OwnedHandle> {
     let mut copy: HANDLE = null_mut();
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -859,7 +883,11 @@ fn start(
     .map_err(SandboxError::SpawnFailed)
 }
 
-#[allow(unsafe_code, clippy::too_many_arguments)]
+#[allow(
+    unsafe_code,
+    clippy::too_many_arguments,
+    reason = "calls `CreateProcessW` and `CloseHandle`, and takes the parts of one process creation"
+)]
 fn started(
     sid: &Sid,
     capabilities: &[Sid],
@@ -1015,7 +1043,10 @@ struct OwnerOnly {
 
 impl OwnerOnly {
     /// The attributes for the access list `sddl` writes.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "calls `ConvertStringSecurityDescriptorToSecurityDescriptorW`"
+    )]
     fn described_by(sddl: &str) -> Result<Self> {
         let text = wide(OsStr::new(sddl))?;
         let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
@@ -1075,7 +1106,7 @@ fn create_directories(path: &Path, owner_only: &OwnerOnly) -> Result<()> {
     }
 }
 
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "calls `CreateDirectoryW`")]
 fn create_directory(path: &Path, owner_only: &OwnerOnly) -> Result<()> {
     let path = wide(path.as_os_str())?;
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -1089,7 +1120,7 @@ fn create_directory(path: &Path, owner_only: &OwnerOnly) -> Result<()> {
 /// Create an empty file at `path` with an access list naming only its owner
 /// ([`OWNER_ONLY_FILE_SDDL`]), failing if anything is there. The directory holding it is
 /// the caller's to have made.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "calls `CreateFileW` and `CloseHandle`")]
 pub(crate) fn create_file_owner_only(path: &Path) -> Result<()> {
     let owner_only = OwnerOnly::described_by(OWNER_ONLY_FILE_SDDL)?;
     let path = wide(path.as_os_str())?;

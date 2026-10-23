@@ -13,7 +13,13 @@
 //! question.
 
 // The socket half of this is unix only, and the rest of it is only reached through that half.
-#![cfg_attr(not(unix), allow(dead_code))]
+#![cfg_attr(
+    not(unix),
+    allow(
+        dead_code,
+        reason = "the socket half is unix only, and the rest is reached only through it"
+    )
+)]
 
 use bravebot_agent::messages::{Arrived, Courier, Delivery, Found, Inbox, Target};
 use bravebot_session::jobs::{Held, Job, Mode, Roster, State};
