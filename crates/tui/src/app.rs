@@ -12041,6 +12041,51 @@ mod tests {
         );
     }
 
+    /// A session with the panel drawn and a measured context, and the frame drawn after both.
+    fn panel_with_a_context() -> (Session, ratatui::buffer::Buffer) {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (mut session, _) = two_panes();
+        session.set_last_request(a_request_of_known_parts());
+        session.measured(777, 10_000, false);
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, &session))
+            .expect("draw");
+        session.note_layout(laid);
+        let buffer = terminal.backend().buffer().clone();
+        (session, buffer)
+    }
+
+    /// MOUSE-12: a click on the panel's context reading says what `/context` says, and leaves no
+    /// selection behind.
+    #[test]
+    fn a_click_on_the_panels_context_reading_reports_the_context() {
+        let (mut session, buffer) = panel_with_a_context();
+        let (row, column) = find_on(&buffer, &render::context_reading(&session));
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(session.selection.is_none());
+        assert_eq!(context_rows(&session).first().map(|(_, n)| *n), Some(777));
+    }
+
+    /// MOUSE-12: a drag over the reading, or a click over the scroller, reports nothing.
+    #[test]
+    fn a_drag_over_the_context_reading_or_a_click_in_the_scroller_reports_nothing() {
+        let (mut session, buffer) = panel_with_a_context();
+        let (row, column) = find_on(&buffer, &render::context_reading(&session));
+        swept(&mut session, (row, column), (row, column + 4));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 4);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(session.selection.is_some(), "the drag was a selection");
+        assert!(context_rows(&session).is_empty());
+
+        session.open_scroller();
+        click(&mut session, row, column);
+        assert!(context_rows(&session).is_empty());
+    }
+
     /// The row and column where `needle` is drawn in the session's own frame.
     fn find_on_text(session: &Session, needle: &str) -> (u16, u16) {
         let text = render::as_text(session);

@@ -1822,9 +1822,9 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.clear_selection();
             Action::Redraw
         }
-        // A click on the panel's model or effort row asks what `/model` or `/effort` asks
-        // (MOUSE-11). The press and the release are on one cell and the press is a single click,
-        // so a drag, a double click and a triple click stay selections.
+        // A click on the panel's model, effort or context row asks what `/model`, `/effort` or
+        // `/context` asks (MOUSE-11, MOUSE-12). The press and the release are on one cell and the
+        // press is a single click, so a drag, a double click and a triple click stay selections.
         MouseEventKind::Up(MouseButton::Left)
             if !session.scrolling()
                 && !session.searching_history()
@@ -1837,6 +1837,10 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             match session.panel_target_at(mouse.row, mouse.column) {
                 Some(crate::panel::Target::Model) => super::ask_which_model(session),
                 Some(crate::panel::Target::Effort) => Action::ChooseEffort,
+                Some(crate::panel::Target::Context) => {
+                    session.report_context();
+                    Action::Redraw
+                }
                 None => Action::Redraw,
             }
         }
