@@ -16,16 +16,10 @@ pub fn terms(select: &str) -> Result<Vec<(String, String)>, String> {
             return Err(format!("'{key}' is not a selector key"));
         }
         let (value, remaining) = match after.strip_prefix('"') {
-            Some(quoted) => {
-                let end = quoted
-                    .find('"')
-                    .ok_or_else(|| format!("'{key}' opens a quote it does not close"))?;
-                (&quoted[..end], &quoted[end + 1..])
-            }
-            None => {
-                let end = after.find(char::is_whitespace).unwrap_or(after.len());
-                (&after[..end], &after[end..])
-            }
+            Some(quoted) => quoted
+                .split_once('"')
+                .ok_or_else(|| format!("'{key}' opens a quote it does not close"))?,
+            None => after.split_at(after.find(char::is_whitespace).unwrap_or(after.len())),
         };
         if value.is_empty() || value.len() > 100 || value.chars().any(char::is_control) {
             return Err(format!("'{key}' has no usable value"));
