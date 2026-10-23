@@ -17,7 +17,7 @@ Place: `{place}`
 ```json
 {candidate}
 ```
-
+{grouped}
 The tree to check is `{repo_root}`, and every path in the claim is relative to it.
 
 ## Read these first
@@ -40,9 +40,24 @@ filters on its capabilities, `access` is compared against premium, and `adopt_wi
 out of it. All correct, because the label "records where bytes came from, not that the data is
 injection-sensitive".
 
-If the answer is no, the verdict is `DROPPED` and the reason is that this is an ordinary engineering
-question about latency, staleness, offline behaviour, or how many code paths there are. Say so
-plainly. Do not soften a drop into a warning.
+The sentence about configuration and startup covers the person's own configuration: their user
+settings file, their command line and their environment. It does not cover a checkout's. The project
+and local settings files and every other file that arrives in a clone are written by whoever wrote the
+repository and reach the same code the person's own files reach. A candidate in which a cloned file
+sets a destination, a credential, a permission, a program that starts, a path the program opens or a
+string shown to the person is not dropped under this question.
+
+The `identity`, `checkout-controls`, `output-sinks`, `tooling` and `supply-chain` lanes can describe a
+defect whose effect is something other than bytes in a context: a path that resolves to a credential
+location, a request sent to a host a clone names, text that hides what a prompt asks, a hook that runs
+a branch's file. For a candidate from one of them the question becomes: does the input it names,
+which an attacker who owns a stage, a clone, a server's text or a branch controls, reach the effect it
+names? A candidate from those lanes is not dropped because no byte reaches the planner.
+
+If the answer is no, the verdict is `DROPPED`. For a candidate from the rule's own lanes the reason is
+that this is an ordinary engineering question about latency, staleness, offline behaviour, or how many
+code paths there are. For one from the lanes above it is that the input does not reach the effect. Say
+so plainly. Do not soften a drop into a warning.
 
 **2. Is this already inside a gate, or already a recorded exception?**
 
@@ -120,6 +135,11 @@ Write JSON to `{results_file}` and nothing else. Do not edit any file in the tre
   "screen": "what a person would be looking at when it happens, where the interface shows it, else omit"
 }}
 ```
+
+`reason`, the fields of `corrected` and `test_that_would_pin_it` are written into the issue as they
+stand. Do not use one to say that another site, platform, program or defect may have the same
+weakness or is left for later. The verdict is about this candidate, and the issue cannot cite an
+issue for a case nobody filed.
 
 `reproduce` is a shell command and nothing else: a test that fails, a `cargo run` with an argument, a
 `grep` that returns the site. Leave it out rather than inventing one.

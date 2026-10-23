@@ -10,6 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
+import { agentInfo, threeModelList } from './acceptance-fixture.mjs'
 
 const output = process.env.VISUAL_OUTPUT || join(tmpdir(), 'bravebot-visual')
 mkdirSync(output, { recursive: true })
@@ -32,7 +33,7 @@ try {
   page.setDefaultTimeout(6000)
   page.on('pageerror', (e) => { errors.push(e.message); console.error('RENDERER', e.message) })
 
-  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, idA, idB, idC }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, idA, idB, idC, info, models }) => {
     const now = Math.floor(Date.now() / 1000)
     const rows = [
       { id: idA, title: 'Refactor the session store and add migration tests', updated: now - 60 * 4 },
@@ -51,17 +52,14 @@ try {
       { kind: 'assistant', text: 'The store keeps one lock for both halves, so a slow read holds up every write.\n\n## Plan\n\n1. Split the lock into a **read** side and a **write** side.\n2. Move the migration into `migrate.ts` and cover it with tests.\n\n```ts\nexport function open(path: string): Store {\n  const store = new Store(path)\n  store.migrate()\n  return store\n}\n```\n\n| Step | Risk |\n| --- | --- |\n| Split lock | Low |\n| Migration | Medium |\n\n> Reads stay consistent because each one takes a snapshot.\n\nSee [store.ts](src/store.ts) and the [design notes](https://example.com/notes).' },
     ]
     replace('bravebot:request', async (_, method, p = {}) => {
-      if (method === 'agent.info') return { ok: { configured: true, build: '0.9.0 (abc1234)', version: '1' } }
+      if (method === 'agent.info') return { ok: info }
       if (method === 'session.list') return { ok: { sessions: globalThis.visual.rows ?? rows } }
-      if (method === 'models.list') return { ok: { defaultModel: 'sample/fast', warnings: [], models: [
-        { id: 'sample/fast', name: 'Fast model', provider: 'Sample', premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] },
-        { id: 'sample/deep', name: 'Deep model', provider: 'Sample', premium: true, contextWindow: 1000000, capabilities: ['text', 'tools'] },
-        { id: 'other/small', name: 'Small model', provider: 'Other', premium: false, contextWindow: 32000, capabilities: ['text'] },
-      ] } }
+      if (method === 'models.list') return { ok: models }
       if (method === 'session.new') return { ok: { session: 's-new', directory, branch: 'main', model: 'sample/fast' } }
       if (method === 'session.open') return { ok: { session: 's-' + p.id, model: 'sample/fast', record: { ...rows.find((r) => r.id === p.id), started: 1, turns: 1, tokens: 100, build: 'fixture' }, said: p.id === idA ? said : [], todos: { rows: [{ content: 'Split the lock', status: 'done' }, { content: 'Move the migration', status: 'active' }, { content: 'Write migration tests', status: 'pending' }] }, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
       if (method === 'turn.send') { emit('turn.started', { turn: 2 }, p.session); return { ok: { turn: 2 } } }
-      if (method === 'permissions.list') return { ok: { paths: [{ path: '', integrity: 'trusted' }, { path: 'vendor', integrity: 'untrusted' }], commands: [{ program: '/usr/bin/git', args: ['status'], display: 'git status' }] } }
+      if (method === 'turn.interject') return { ok: { accepted: true } }
+      if (method === 'permissions.list') return { ok: { paths: [{ path: '', shownPath: '""', integrity: 'trusted' }, { path: 'vendor', shownPath: 'vendor', integrity: 'untrusted' }], commands: [{ program: '/usr/bin/git', args: ['status'], display: 'git status' }] } }
       if (method === 'watches.list') return { ok: { busy: false, watches: [{ number: 1, path: 'src/store.ts', state: 'watching', remainingSeconds: 86400, armedBy: null }] } }
       if (method === 'settings.inspect') return { ok: { build: '0.9.0 (abc1234)', configured: true, problem: null, model: 'sample/fast', brave: false, bedrock: false, providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] }, network: { roots: [], problem: null, trustsNothing: false, proxy: null, authenticated: false, unusableProxy: null, noProxy: null } } }
       if (method === 'about') return { ok: { version: '1.0.0', build: '0.9.0 (abc1234)', home: '/Users/example/.bravebot' } }
@@ -74,7 +72,7 @@ try {
     replace('bravebot:files:choose-attachments', () => ['src/store.ts', 'src/migrate.ts', 'tests/store.test.ts', 'docs/a-deliberately-long-file-name-that-has-to-truncate.md', 'package.json'].map((path, i) => ({ id: 'att-' + i, path, bytes: 100 + i })))
     replace('bravebot:files:search', () => ({ paths: ['src/store.ts'], incomplete: false }))
     replace('bravebot:files:preview', (_, session, path) => ({ path, text: 'export const store = 1\n', truncated: false }))
-  }, { directory, idA, idB, idC })
+  }, { directory, idA, idB, idC, info: agentInfo, models: threeModelList })
 
   const emit = (event, data, session = 's-' + idA) => app.evaluate((_, v) => globalThis.visual.emit(v.event, v.data, v.session), { event, data, session })
   const settle = () => page.waitForTimeout(450)
@@ -88,7 +86,7 @@ try {
           if (el.shadowRoot) visit(el.shadowRoot)
           const host = el.getRootNode() instanceof ShadowRoot ? null : el
           if (!host || seen.has(host)) continue
-          const interactive = host.matches('button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="option"], leo-button, leo-checkbox, leo-radiobutton') && !host.matches('a, .local-file-link') && !host.closest('[inert], [hidden]')
+          const interactive = host.matches('button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="option"], leo-button') && !host.matches('a, .local-file-link') && !host.closest('[inert], [hidden]')
           if (!interactive) continue
           seen.add(host)
           const box = host.getBoundingClientRect()
@@ -154,9 +152,33 @@ try {
     await variants('03-running')
   })
 
+  // VIEW-34: off until the person asks, then the last eight lines of the round's thinking under
+  // the working row, and gone again when the button is pressed a second time.
+  await scene('03b-thinking', async () => {
+    const thought = ['The lock is taken in open(), so every reader waits on the writer.', 'A read side that takes a snapshot would not need it.', 'Check whether migrate() writes while a reader is open.']
+    await emit('phase', { phase: 'thinking' })
+    await emit('thinking', { text: thought.slice(0, 2).join('\n') + '\n' })
+    const toggle = page.locator('[data-test="thinking-toggle"]')
+    await toggle.waitFor()
+    if (await page.locator('[data-test="thinking"]').count()) throw new Error('the thinking was drawn before it was asked for')
+    await toggle.click()
+    await page.locator('[data-test="thinking"]').waitFor()
+    await emit('thinking', { text: thought[2] + '\n' + Array.from({ length: 8 }, (_, line) => `Step ${line + 1}: <b>read</b> the next call site.`).join('\n') })
+    await settle()
+    if (await page.locator('.thinking-text').innerText().then((text) => text.includes('lock is taken'))) throw new Error('more than the last eight lines were drawn')
+    await variants('03b-thinking')
+    await toggle.click()
+    await settle()
+    if (await page.locator('[data-test="thinking"]').count()) throw new Error('the thinking stayed drawn after it was turned off')
+    // The round ends and the next opens: the thinking is gone and the button is still there.
+    await emit('phase', { phase: 'planning' })
+    await settle()
+    if (!(await toggle.count())) throw new Error('the button went with the round that offered it')
+  })
+
   await scene('04-confirm', async () => {
     await emit('tool.finished', tool('Search', 'lock', 'Find other lock users', '3 matches'))
-    await emit('confirm.request', { request: 1, path: 'src/store.ts', intent: 'edit', untrusted: false, existing: true, added: 3, removed: 1, exact: true, changes: [
+    await emit('confirm.request', { request: 1, path: 'src/store.ts', shownPath: 'src/store.ts', intent: 'edit', untrusted: false, existing: true, added: 3, removed: 1, exact: true, changes: [
       { kind: 'kept', text: 'export class Store {' }, { kind: 'removed', text: '  private lock = new Mutex()' }, { kind: 'added', text: '  private readLock = new RwLock()' }, { kind: 'added', text: '  private writeLock = new Mutex()' }, { kind: 'added', text: '  // Reads take a snapshot.' }, { kind: 'elided', lines: 42 }, { kind: 'kept', text: '}' },
     ] })
     await page.locator('.confirm').first().scrollIntoViewIfNeeded()
@@ -165,14 +187,14 @@ try {
 
   await scene('05-untrusted', async () => {
     await page.locator('.confirm .approve').first().click()
-    await emit('confirm.request', { request: 2, path: 'vendor/patch.ts', intent: 'create', untrusted: true, existing: false, added: 2, removed: 0, exact: false, remark: { preview: ['Applied the vendor fix.'], lines: 1, label: 'processor remark' }, credentials: ['api key at line 2: sk-…9f'], changes: [{ kind: 'added', text: 'export const fix = true' }, { kind: 'added', text: 'const key = "sk-…9f"' }] })
+    await emit('confirm.request', { request: 2, path: 'vendor/patch.ts', shownPath: 'vendor/patch.ts', intent: 'create', untrusted: true, existing: false, added: 2, removed: 0, exact: false, remark: { preview: ['Applied the vendor fix.'], lines: 1, label: 'processor remark' }, credentials: ['api key at line 2: sk-…9f'], changes: [{ kind: 'added', text: 'export const fix = true' }, { kind: 'added', text: 'const key = "sk-…9f"' }] })
     await page.locator('.confirm.untrusted').last().scrollIntoViewIfNeeded()
     await variants('05-untrusted')
   })
 
   await scene('06-run-output-vouch', async () => {
     await page.locator('.confirm .reject').last().click()
-    await emit('run.request', { request: 3, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, releasesPrivate: false, ambient: [], vouches: [{ program: 'npm', args: ['test'], display: 'npm test' }], summary: 'Run the store tests' })
+    await emit('run.request', { request: 3, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', shownBinary: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, shownDirectory: directory, releasesPrivate: false, ambient: [], vouches: [{ program: 'npm', args: ['test'], display: 'npm test' }], summary: 'Run the store tests' })
     await page.locator('.confirm.run').last().scrollIntoViewIfNeeded()
     await variants('06-run')
     await page.locator('.confirm.run .approve').first().click()
@@ -180,7 +202,7 @@ try {
     await page.locator('.confirm.output').last().scrollIntoViewIfNeeded()
     await variants('07-output')
     await page.locator('.confirm.output .approve').first().click()
-    await emit('vouch.request', { request: 5, path: 'vendor/notes.md', preview: '# Vendor notes\nThe cache is warmed on start.', truncated: true, vetting: { verdict: 'unsafe', reason: 'Contains an instruction to the model.' } })
+    await emit('vouch.request', { request: 5, path: 'vendor/notes.md', shownPath: 'vendor/notes.md', rule: '/work/vendor/notes.md', shownRule: '/work/vendor/notes.md', preview: '# Vendor notes\nThe cache is warmed on start.', truncated: true, vetting: { verdict: 'unsafe', reason: 'Contains an instruction to the model.' } })
     await page.locator('.confirm.vouch').last().scrollIntoViewIfNeeded()
     await variants('08-vouch')
     await page.locator('.confirm.vouch .reject').first().click()
@@ -188,11 +210,15 @@ try {
 
   await scene('09-ask', async () => {
     await emit('ask.request', { request: 6, prompts: [
-      { header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers, one writer' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock' },
-      { header: 'Tests', question: 'Which suites should run?', rows: [{ index: 0, label: 'Unit', detail: null }, { index: 1, label: 'Integration', detail: null }], multiple: true, key: 'tests' },
+      { header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers, one writer' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock', place: 'the agent is asking (1 of 2)', last: false },
+      { header: 'Tests', question: 'Which suites should run?', rows: [{ index: 0, label: 'Unit', detail: null }, { index: 1, label: 'Integration', detail: null }], multiple: true, key: 'tests', place: 'the agent is asking (2 of 2)', last: true },
     ] })
     await page.locator('.confirm.ask').last().scrollIntoViewIfNeeded()
     await variants('09-ask')
+    // One question at a time: the second is drawn after the first is answered, and a skip on it ends the series.
+    await page.locator('.confirm.ask .choice').last().click()
+    await page.locator('.confirm.ask .approve').last().click()
+    await variants('09-ask-second')
     await page.locator('.confirm.ask .reject').last().click()
   })
 
@@ -304,9 +330,23 @@ try {
     await page.locator('.attachment-chips').waitFor()
     for (const text of ['First queued follow-up', 'Second, a longer follow-up that runs on far enough to need truncating in the tray', 'Third', 'Fourth']) {
       await composer.fill(text)
-      await composer.press('Enter')
+      await composer.press('Alt+Enter')
     }
     await variants('23-queue-and-attachments')
+    await page.setViewportSize({ width: 1440, height: 900 })
+  })
+
+  // In the conversation the scene above left running, with its queue still showing under the tray.
+  await scene('23b-sent-into-the-turn', async () => {
+    await page.setViewportSize({ width: 900, height: 560 })
+    const composer = page.getByRole('textbox', { name: 'Message the agent' })
+    for (const text of ['no, the other one', 'And a second line, long enough that the tray has to truncate it before it reaches the end of the row']) {
+      await composer.fill(text)
+      await composer.press('Enter')
+    }
+    await composer.fill('Held for after the turn')
+    await page.locator('[data-test="interjected-messages"]').waitFor()
+    await variants('23b-sent-into-the-turn')
     await page.setViewportSize({ width: 1440, height: 900 })
   })
 

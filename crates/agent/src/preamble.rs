@@ -29,6 +29,7 @@
 //! and is put in front of each request afresh. A persistent session therefore holds one copy of
 //! AGENTS.md however many turns it runs, where a `Message::user` would accumulate one per turn.
 
+use crate::calendar::civil_from_days;
 use crate::request_view::{Prompt, Provenance};
 use crate::skills::{Catalogue, ImportRefusal, Notice};
 use crate::workspace::Workspace;
@@ -54,6 +55,19 @@ const WORKSPACE_AGENT_FILES: &[&str] = &[AGENTS_FILE, "CLAUDE.md", ".claude/CLAU
 /// A pointer is a sentence. Anything longer is a document that happens to cite another, and
 /// following that would replace instructions with the ones they referred to in passing.
 const POINTER_BYTES: usize = 500;
+
+/// How long one instruction file may be before its size is said out loud.
+///
+/// About 200 lines of prose, which is the length Claude Code recommends staying under. The file is
+/// always loaded, however long it is: a person who meant to write that much should not have it
+/// dropped or cut short, and the cost of it is worth a sentence rather than a refusal.
+const INSTRUCTIONS_WARN_BYTES: usize = 16_384;
+
+/// How long every instruction file together may be before the total is said out loud.
+///
+/// Codex stops adding instruction files at 32 KiB in all, which is the same judgement about the
+/// same cost. Said once for the turn rather than once per file, since the total is one fact.
+const INSTRUCTIONS_COMBINED_WARN_BYTES: usize = 32_768;
 
 /// How many files deep an `@path` import may nest, counting the instructions file as zero.
 const IMPORT_DEPTH: usize = 4;
@@ -83,6 +97,20 @@ pub struct Preamble {
     pub for_a_person: String,
     /// Lines for the person watching: what loaded, and what did not and why.
     pub notices: Vec<Notice>,
+    /// The rule files a touched file has brought in (INSTR-16), in the order they came.
+    ///
+    /// Apart from `prompt` because they go last in the system prompt, after the words about the
+    /// mode: a rule that arrives while a turn runs is appended to what was sent, so the bytes in
+    /// front of it are the ones the last request carried. `text` holds them after everything
+    /// else.
+    pub rules: Prompt,
+    /// The rule files whose paths nothing touched has matched yet, for the turn to add as its
+    /// rounds touch files (INSTR-16).
+    pub held: crate::rules::Held,
+    /// The rule files in `rules`, each with the touched name that matched it, for the turn to tell
+    /// the person of. Said by the turn and not here, because a delegate composes the same prompt
+    /// and has nobody to tell.
+    pub added: Vec<crate::rules::Loaded>,
 }
 
 impl Preamble {
@@ -91,6 +119,35 @@ impl Preamble {
         self.text.push_str(&text);
         self.prompt.push(provenance, text);
     }
+
+    fn add_rule(&mut self, loaded: &crate::rules::Loaded) {
+        for (provenance, text) in rule_pieces(loaded) {
+            self.text.push_str(&text);
+            self.rules.push(provenance, text);
+        }
+    }
+}
+
+/// The words a rule adds to the end of the system prompt, with the origin of each piece (INSTR-16).
+///
+/// The first rule a session adds carries the heading over all of them. Public to the crate because
+/// a rule a round brings in is appended by the turn, with the same words as one the turn began
+/// with.
+pub(crate) fn rule_pieces(loaded: &crate::rules::Loaded) -> Vec<(Provenance, String)> {
+    let mut pieces = Vec::new();
+    if loaded.introduces {
+        pieces.push((
+            Provenance::Driver,
+            "\n\nRules for the files this session has worked with. Each was added once a file \
+             its paths match was read, written or named by the user, and it applies to the files \
+             those paths match. They follow every instruction above, the mode and any words the \
+             user gave on the command line included, and where one disagrees with those, those \
+             stand.\n\n"
+                .to_string(),
+        ));
+    }
+    pieces.extend(source_pieces(&loaded.origin, &loaded.text));
+    pieces
 }
 
 /// Build the preamble for one turn.
@@ -124,7 +181,10 @@ pub fn compose<S: Sink>(
 ///
 /// `appended` is what `--append-system-prompt` named (INSTR-10). It is the last standing source,
 /// after the project's file, and it is in `text`, which is what a delegate reads.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, the two workspaces and each preamble input are held separately by compose and by the turn"
+)]
 pub fn compose_in<S: Sink>(
     policy: &mut Policy<'_, S>,
     sources: &Workspace,
@@ -150,17 +210,35 @@ pub fn compose_in<S: Sink>(
         .push_str(missing_dependency_guidance(workspace.scratch().is_some()));
 
     let mut standing = Prompt::default();
+    // What the sources admitted so far cost, for the combined word of INSTR-15.
+    let mut standing_bytes = 0;
     // Neither file is read in a safe session. What the command line named is the person's words for
     // this run and stays.
     let safe = bravebot_core::safe::engaged();
+    // Read before the sources that sit above them in the order, and placed in it below: the
+    // person's own after the person's `AGENTS.md`, the project's after the project's.
+    let mut rules = match safe {
+        true => crate::rules::Found::default(),
+        false => crate::rules::read(policy, sources, workspace, home, &mut preamble.notices),
+    };
     if !safe
         && let Some(home) = home
-        && let Some(text) = read_home_agents(policy, home)
+        && let Some(text) =
+            read_home_agents(policy, &[sources, workspace], home, &mut preamble.notices)
     {
         let origin = format!("~/.bravebot/{AGENTS_FILE}");
+        admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
         standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
         standing.push(Provenance::TrustedFile(origin), text.trim());
         standing.push(Provenance::Driver, "\n\n");
+    }
+    for rule in &rules.home {
+        stand_rule(
+            &mut standing,
+            rule,
+            &mut standing_bytes,
+            &mut preamble.notices,
+        );
     }
     let workspace_agents = match safe {
         true => Ok(None),
@@ -168,6 +246,12 @@ pub fn compose_in<S: Sink>(
     };
     match workspace_agents {
         Ok(Some(found)) => {
+            admit_by_size(
+                &found.origin,
+                &found.text,
+                &mut standing_bytes,
+                &mut preamble.notices,
+            );
             standing.push(Provenance::Driver, format!("From {}:\n\n", found.origin));
             standing.push(
                 Provenance::TrustedFile(found.origin.to_string()),
@@ -178,10 +262,19 @@ pub fn compose_in<S: Sink>(
         Ok(None) => {}
         Err(notice) => preamble.notices.push(notice),
     }
+    for rule in &rules.project {
+        stand_rule(
+            &mut standing,
+            rule,
+            &mut standing_bytes,
+            &mut preamble.notices,
+        );
+    }
     if !safe {
         for relative in nested_agents_files(sources) {
             match read_nested_agents(policy, sources, &relative) {
                 Ok(Some(text)) => {
+                    admit_by_size(&relative, &text, &mut standing_bytes, &mut preamble.notices);
                     standing.push(Provenance::Driver, format!("From {relative}:\n\n"));
                     standing.push(Provenance::TrustedFile(relative), text.trim());
                     standing.push(Provenance::Driver, "\n\n");
@@ -208,13 +301,21 @@ pub fn compose_in<S: Sink>(
         }
     }
 
-    if !skills.is_empty() {
+    if skills.advertises_any() {
+        let find_more = if skills.is_curated() {
+            "This is the whole set a definition named for this turn; there are no others to find."
+        } else {
+            "These are the ones built into this program; call search_skills with a word or \
+             phrase to find one of the user's own or the project's."
+        };
         preamble.add(
             Provenance::Driver,
-            "\n\nSkills. Each is a set of instructions for a kind of task, most of them written \
-             by the user. When a task matches one, call load_skill with its name before starting \
-             that work and follow what it says. A prompt naming one as /name is the user asking \
-             for it. These names are the only ones that exist.\n\n",
+            format!(
+                "\n\nSkills. Each is a set of instructions for a kind of task, most of them \
+                 written by the user. When a task matches one, call load_skill with its name \
+                 before starting that work and follow what it says. A prompt naming one as \
+                 /name is the user asking for it. {find_more}\n\n"
+            ),
         );
         preamble.add(
             Provenance::Trusted("skill list"),
@@ -317,7 +418,54 @@ pub fn compose_in<S: Sink>(
         );
     }
 
+    // The rules a file touched in an earlier turn, or one named with `@` in this prompt, has
+    // already matched. Last, so that a rule a round adds later goes after the same bytes
+    // (INSTR-16).
+    for loaded in rules.held.take_for(sources) {
+        admit_by_size(
+            &crate::confirm::shown_name(&loaded.origin),
+            &loaded.text,
+            &mut standing_bytes,
+            &mut preamble.notices,
+        );
+        preamble.add_rule(&loaded);
+        preamble.added.push(loaded);
+    }
+    preamble.held = rules.held;
+
     preamble
+}
+
+/// One rule that applies on every turn, put with the standing instructions in the order INSTR-4
+/// gives (INSTR-16).
+fn stand_rule(
+    standing: &mut Prompt,
+    rule: &crate::rules::Rule,
+    standing_bytes: &mut usize,
+    notices: &mut Vec<Notice>,
+) {
+    admit_by_size(
+        &crate::confirm::shown_name(&rule.origin),
+        &rule.text,
+        standing_bytes,
+        notices,
+    );
+    for (provenance, text) in source_pieces(&rule.origin, &rule.text) {
+        standing.push(provenance, text);
+    }
+}
+
+/// One rule file's words as the system prompt carries them: where it came from, what it says, and
+/// a blank line (INSTR-16).
+fn source_pieces(origin: &str, text: &str) -> [(Provenance, String); 3] {
+    [
+        (Provenance::Driver, format!("From {origin}:\n\n")),
+        (
+            Provenance::TrustedFile(origin.to_string()),
+            text.trim().to_string(),
+        ),
+        (Provenance::Driver, "\n\n".to_string()),
+    ]
 }
 
 /// What the settings say a commit message and a pull request this program writes may carry.
@@ -629,34 +777,53 @@ pub(crate) fn today() -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-/// Convert a count of days since 1970-01-01 to a civil date.
+/// What one gate-passed source costs, said out loud where it is worth saying (INSTR-15).
 ///
-/// Howard Hinnant's `civil_from_days`, exact for every date this will see and needing no leap-year
-/// table. Duplicated from `crate::subscription` rather than shared: that one is part of the
-/// credential protocol's wire format, and coupling a line of the system prompt to it would mean a
-/// change for one had to answer for the other.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let day_of_era = (z - era * 146_097) as u64;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era as i64 + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = (day_of_year - (153 * shifted_month + 2) / 5 + 1) as u32;
-    let month = if shifted_month < 10 {
-        shifted_month + 3
-    } else {
-        shifted_month - 9
-    } as u32;
-
-    (if month <= 2 { year + 1 } else { year }, month, day)
+/// Every source reaches the prompt whatever its size; this only decides what is said about it.
+/// `total` is what the sources admitted so far add up to, so the combined word is said at the one
+/// source that crosses the line and not again.
+///
+/// **The only thing read here is the byte length of text that has already passed the trust gate**,
+/// which is the test [`pointer_target`] already rests on (INSTR-8). `origin` is a path from
+/// INSTR-1's fixed set, so a notice names a file and a number and never anything a file holds.
+/// An untrusted source never reaches this, because [`read_instructions`] has already refused it.
+fn admit_by_size(origin: &str, text: &str, total: &mut usize, notices: &mut Vec<Notice>) {
+    let bytes = text.len();
+    if bytes > INSTRUCTIONS_WARN_BYTES {
+        notices.push(Notice::source_is_large(origin, bytes));
+    }
+    let before = *total;
+    *total += bytes;
+    if before <= INSTRUCTIONS_COMBINED_WARN_BYTES && *total > INSTRUCTIONS_COMBINED_WARN_BYTES {
+        notices.push(Notice::sources_large_together(
+            *total,
+            INSTRUCTIONS_COMBINED_WARN_BYTES,
+        ));
+    }
 }
 
 /// `~/.bravebot/AGENTS.md`, trusted for sitting where it sits.
-fn read_home_agents<S: Sink>(policy: &mut Policy<'_, S>, home: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(home.join(AGENTS_FILE)).ok()?;
+///
+/// Not read where the way to it goes through a directory one of `workspaces` may write to, because
+/// a turn can write it and the trust map would then record it untrusted (SKILL-3).
+fn read_home_agents<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspaces: &[&Workspace],
+    home: &Path,
+    notices: &mut Vec<Notice>,
+) -> Option<String> {
+    let file = home.join(AGENTS_FILE);
+    if !file.is_file() {
+        return None;
+    }
+    if workspaces
+        .iter()
+        .any(|workspace| crate::skills::goes_through_the_workspace(workspace, &file))
+    {
+        notices.push(Notice::home_agents_file_reached_through_the_workspace());
+        return None;
+    }
+    let text = std::fs::read_to_string(file).ok()?;
     let origin = format!("~/.bravebot/{AGENTS_FILE}");
     let labelled = policy.label_user_configuration(&origin, text);
     policy.read_trusted_content("preamble", &labelled).ok()
@@ -987,6 +1154,17 @@ fn read_instructions<S: Sink>(
     workspace: &Workspace,
     name: &str,
 ) -> Result<Option<String>, Notice> {
+    read_instructions_as(policy, workspace, name, name)
+}
+
+/// [`read_instructions`] for a file whose name a notice draws as `shown`, for a file the project
+/// named and not this program (INSTR-16).
+pub(crate) fn read_instructions_as<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    name: &str,
+    shown: &str,
+) -> Result<Option<String>, Notice> {
     let Ok(contents) = workspace.read(policy, &Labelled::trusted(name.to_string())) else {
         return Ok(None);
     };
@@ -998,14 +1176,14 @@ fn read_instructions<S: Sink>(
     // warning stops being read.
     if !contents.label().is_trusted() {
         return Err(Notice::from_message(format!(
-            "{name} was not loaded: this directory is not trusted"
+            "{shown} was not loaded: this directory is not trusted"
         )));
     }
 
     match policy.read_trusted_content("preamble", &contents) {
         Ok(text) => Ok(Some(text)),
         Err(_) => Err(Notice::from_message(format!(
-            "{name} was not loaded: it is not trusted"
+            "{shown} was not loaded: it is not trusted"
         ))),
     }
 }

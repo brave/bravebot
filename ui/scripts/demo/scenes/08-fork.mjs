@@ -9,6 +9,7 @@
 // a forked session in the store — it writes no record until it has something to say, but it
 // is there in the window. The scene says which one, so it can be cleaned up after the shoot.
 import { findSession, openSession } from '../pick.mjs'
+import { COMPOSER_INPUT } from '../../drive-support.mjs'
 
 export default {
   id: '08-fork',
@@ -43,7 +44,7 @@ export default {
     await page.waitForTimeout(1800 * s.speed)
     await s.shot('08-fork')
 
-    const composer = page.locator('.composer textarea')
+    const composer = page.locator(COMPOSER_INPUT)
     await s.glideTo(composer)
     await s.say('The prompt is waiting', 'In the composer, to be edited and asked differently.', 2.4)
     await s.spotlight(composer, 1.6)

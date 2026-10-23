@@ -3,13 +3,28 @@ resolver = "3"
 members = ["crates/agent", "crates/approval", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
 
 [workspace.package]
-version = "0.15.0"
+version = "0.18.0"
 edition = "2024"
 # Matches the pinned cross-build container, so `cargo build` fails on a feature the
 # release build could not compile rather than deferring that to CI.
 rust-version = "1.90"
 license = "MPL-2.0"
 repository = "https://github.com/brave/bravebot"
+
+[workspace.lints.clippy]
+# Lints this tree has no violation of in code that ships, held at zero. They are `deny` rather than
+# `warn` so a plain `cargo clippy` and an editor refuse them too, not only the `-D warnings` that
+# `make check` and CI add. A test may unwrap (`allow-unwrap-in-tests` in clippy.toml).
+unwrap_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+unused_async = "deny"
+large_futures = "deny"
+future_not_send = "deny"
+let_underscore_future = "deny"
+rc_mutex = "deny"
+mutex_atomic = "deny"
 
 [workspace.dependencies]
 base64 = "0.22"
@@ -44,6 +59,10 @@ sha2 = "0.10"
 # Test fixtures use private directories that are removed even when a test fails.
 # This includes file-helper permission tests and isolated terminal session profiles.
 tempfile = "3"
+# Checks the decomposition tables in bravebot-core against the crate that publishes them. A
+# dev-dependency only: gix-utils already depends on it, so the lock gains the one line saying
+# bravebot-core's tests use it, and bravebot-core itself keeps no dependency at runtime.
+unicode-normalization = "0.1"
 unicode-width = "0.2"
 # The Win32 calls that keep the imported subscription file readable by one account, which is what
 # stands in for a mode on Windows. Microsoft's own generated bindings, one crate deep

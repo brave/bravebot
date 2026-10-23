@@ -1,3 +1,7 @@
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 use bravebot_agent::{Category, Diagnosis, Ending};
 use bravebot_tui::{render, state::Session};
 

@@ -364,10 +364,10 @@ test('starting and revisiting bot conversations preserves all earlier IDs across
 
 // The events the agent sends, folded by the window's own reducer, read by the word both places draw.
 function liveSession() {
-  const { apply } = load('src/renderer/App.tsx')
+  const { apply } = load('src/renderer/apply.ts')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
-    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
+    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
   }
   session.send = (event, data) => apply({ event, data }, (update) => { session.live = update(session.live) }, () => {}, () => {})
   session.word = () => workingWord(session.live.phase, session.live.checking, session.live.composing, session.live.hook)
@@ -407,6 +407,65 @@ test('the call being written names the wait, and every event that ends it clears
   session.send('composing', { call: 'Read' })
   session.send('turn.error', { kind: 'failed', message: 'x', category: 'other', attempts: 1, status: null, turn: 1, prompt: 'p', contextTokens: 0, id: null })
   assert.equal(session.live.composing, null)
+})
+
+// VIEW-34: the thinking is held as it arrives whether or not it is shown, so turning it on mid-round
+// shows what has come so far; it is no part of the conversation; only its end is kept; and it goes
+// when the round does, whichever way the round ends.
+test('the thinking is held apart from the transcript, kept to its end, and gone when the round is', () => {
+  const session = liveSession()
+  session.send('turn.started', { turn: 1 })
+  const before = session.live.entries
+  session.send('thinking', { text: 'first ' })
+  session.send('thinking', { text: 'second' })
+  assert.equal(session.live.thinking, 'first second')
+  assert.equal(session.live.showThinking, undefined, 'it was held only once it was asked for')
+  assert.equal(session.live.thinkingSeen, true, 'a session sent thinking was not offered the button')
+  assert.equal(session.live.entries, before, 'the thinking became part of the conversation')
+
+  session.send('thinking', { text: 'a'.repeat(3000) })
+  session.send('thinking', { text: 'b'.repeat(3000) })
+  assert.equal(session.live.thinking, 'a'.repeat(1096) + 'b'.repeat(3000), 'what was kept was not the end of it')
+
+  // A cut through the middle of a character gives up the character rather than draw half of it.
+  session.send('phase', { phase: 'planning' })
+  session.send('thinking', { text: '😀'.repeat(2500) + 'z' })
+  assert.equal(session.live.thinking.length, 4095)
+  assert.ok(!/^[\udc00-\udfff]/.test(session.live.thinking), 'half a character was drawn')
+
+  session.send('phase', { phase: 'planning' })
+  const ended = [
+    ['phase', { phase: 'planning' }],
+    ['narration', { text: 'Reading it.' }],
+    ['tool.started', { verb: 'Write', target: 'a.txt', why: null, note: null, failed: false, untrusted: false, changes: [], waitedSeconds: null }],
+    ['turn.started', { turn: 2 }],
+    ['turn.done', { turn: 2, reply: 'done', prompt: 1, archived: 0, contextTokens: 0 }],
+    ['turn.error', { kind: 'failed', message: 'x', category: 'other', attempts: 1, status: null, turn: 1, prompt: 'p', contextTokens: 0, id: null }],
+    ['manifest.started', { run: 1 }],
+    ['manifest.done', { run: 1, reply: 'done', model: 'm', steps: 1, clean: true, tokens: 0, outputTokens: 0, attempt: null, record: null, trust: { rules: [] } }],
+    ['manifest.error', { run: 1, kind: 'failed', message: 'x', category: 'other', stopped: false, declined: false, problem: null, attempt: null, record: null }],
+  ]
+  for (const [ender, data] of ended) {
+    session.send('thinking', { text: 'a thought' })
+    assert.equal(session.live.thinking, 'a thought')
+    session.send(ender, data)
+    assert.equal(session.live.thinking, '', `${ender} left the round's thinking up`)
+    assert.equal(session.live.thinkingSeen, true, `${ender} took the button away with the round`)
+  }
+})
+
+// The choice is a session's own and outlasts the round it was made in, and the thinking it shows
+// is the round now being written and not the one before.
+test('showing the thinking is kept by the session while each round starts without any', () => {
+  const session = liveSession()
+  session.live = { ...session.live, showThinking: true }
+  session.send('turn.started', { turn: 1 })
+  session.send('thinking', { text: 'one' })
+  session.send('phase', { phase: 'planning' })
+  session.send('thinking', { text: 'two' })
+  assert.equal(session.live.thinking, 'two')
+  session.send('turn.error', { kind: 'cancelled', message: 'x', category: 'other', attempts: 1, status: null, turn: 1, prompt: 'p', contextTokens: 0, id: null })
+  assert.equal(session.live.showThinking, true, 'a round ending turned it off')
 })
 
 // A check is a whole model call inside a tool call whose row is already drawn, and the round's phase
@@ -565,4 +624,127 @@ test('a turn the output limit ended says the limit and what the reply was writin
 
   // The fields describe a stop at the limit and nothing else, so they move no other card.
   assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
+})
+
+test('Send is allowed once the trust question has been answered', () => {
+  const { canSend } = load('src/renderer/can-send.ts')
+  const asking = { running: false, askingTrust: '/work/project' }
+  const answered = { ...asking, askingTrust: null }
+  assert.equal(canSend(asking, true, 'hello'), false, 'the trust question blocks Send')
+  assert.equal(canSend(answered, true, 'hello'), true, 'answering it releases Send with the draft unchanged')
+  assert.equal(canSend(answered, true, '  \n'), false, 'a blank draft is not sent')
+  assert.equal(canSend({ ...answered, running: true }, true, 'hello'), false, 'a running turn blocks Send')
+  assert.equal(canSend(answered, false, 'hello'), false, 'a backend known unready blocks Send')
+  assert.equal(canSend(answered, undefined, 'hello'), true, 'an unknown backend does not')
+  assert.equal(canSend(null, true, 'hello'), false, 'no open session')
+})
+
+test('submit and the run-plan callback list every field they test', () => {
+  const source = readFileSync('src/renderer/App.tsx', 'utf8')
+  for (const name of ['submit', 'submitPlan']) {
+    const body = source.slice(source.indexOf(`const ${name} = useCallback(`))
+    const deps = body.slice(0, body.indexOf('\n  }, [')+ 200).match(/\n  \}, \[([^\]]*)\]/)[1]
+    assert.match(deps, /live\?\.askingTrust/, `${name} must depend on live?.askingTrust`)
+    assert.match(deps, /live\?\.running/, `${name} must depend on live?.running`)
+  }
+})
+
+// The window builds a session in three places (resumed, new, forked) from three different bridge
+// answers; the eight fields that start the same everywhere are written once.
+function bridgeFields(over = {}) {
+  return {
+    handle: 's-9', model: 'm', summary: { id: null, title: 'T', project: 'p', branch: null, directory: '/d' },
+    entries: [], todos: [], askingTrust: '/d', keepingTrust: null, shownKeepingTrust: null, trustRemembered: null, forkedFrom: null,
+    focus: 4, bot: null, archived: 2, autoVetting: true, permissionMode: 'ask', sandboxMode: 'on', rules: null,
+    ...over,
+  }
+}
+
+test('a new session starts with the nine starting values and keeps every field it was given', () => {
+  const { newLive } = load('src/renderer/live.ts')
+  const fields = bridgeFields()
+  const live = newLive(fields)
+  assert.deepEqual(
+    { turns: live.turns, quarantine: live.quarantine, phase: live.phase, checking: live.checking, hook: live.hook, composing: live.composing, thinking: live.thinking, tokens: live.tokens, running: live.running },
+    { turns: {}, quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false },
+  )
+  for (const [key, value] of Object.entries(fields)) assert.deepEqual(live[key], value, `${key} lands unchanged`)
+  assert.notEqual(newLive(fields).turns, live.turns, 'two sessions do not share one turns object')
+  assert.notEqual(newLive(fields).quarantine, live.quarantine, 'or one quarantine list')
+})
+
+test('a session is keyed by its record id once it has one, and by its draft or handle before', () => {
+  const { liveKey, preIdKey } = load('src/renderer/live.ts')
+  const key = (id) => JSON.stringify(['/d', id])
+  const draft = { handle: 'h', draftId: 'draft:1', summary: { id: null, directory: '/d' } }
+  const bare = { handle: 'h', summary: { id: null, directory: '/d' } }
+  const saved = { handle: 'h', draftId: 'draft:1', summary: { id: 'rec', directory: '/d' } }
+  assert.equal(liveKey(draft), key('draft:1'))
+  assert.equal(liveKey(bare), key('h'), 'no draft falls back to the handle')
+  assert.equal(liveKey(saved), key('rec'), 'the record id wins over the draft')
+  assert.equal(preIdKey(saved), key('draft:1'), 'the pre-id key ignores the record id')
+  assert.equal(preIdKey(bare), key('h'))
+})
+
+test('a draft moves to the record id once the session has one, and only then', () => {
+  const written = []
+  globalThis.window = { bravebot: { writeExperience: async (key, value) => { written.push([key, value]) } } }
+  try {
+    const { promoteDraft } = load('src/renderer/live.ts')
+    const old = { handle: 'h', draftId: 'draft:1', summary: { id: null, directory: '/d' } }
+    const next = { ...old, summary: { id: 'rec', directory: '/d' } }
+    promoteDraft(old, next)
+    const keys = written.map(([key]) => key)
+    assert.deepEqual(keys, [JSON.stringify(['/d', 'rec']), JSON.stringify(['/d', 'draft:1'])])
+    assert.equal(written[1][1].draft, '', 'the old key forgets its draft')
+    written.length = 0
+    promoteDraft(next, next)
+    promoteDraft(old, old)
+    assert.deepEqual(written, [], 'a session that already had an id, or still has none, moves nothing')
+  } finally { delete globalThis.window }
+})
+
+test('the sidebar lists sessions from the record, the open windows and unsent drafts, and says which ask something', () => {
+  const { listSessions, NO_PROJECT } = load('src/renderer/session-list.ts')
+  const key = (directory, id) => JSON.stringify([directory, id])
+  const summary = (id, directory = '/p') => ({ id, directory, title: id, project: 'p', branch: 'main', updated: 1, bytes: 5 })
+  const bot = { slug: 'review', name: 'Review', avatar: 'a', home: '/home/review', conversations: [{ id: 'bot-chat', directory: '/p' }] }
+  const open = (id, over = {}) => ({ handle: `h-${id}`, summary: { ...summary(id), title: 'Renamed' }, entries: [], running: false, bot: null, ...over })
+  const asking = { kind: 'ask', id: 'q', request: { request: 1 }, answers: null }
+  const list = (over = {}) => listSessions({ sessions: [], opened: [], conversations: {}, bots: [], now: 600, currentKey: '', ...over })
+
+  // A bot's home folder is not a project.
+  const homed = list({ sessions: [summary('in-home', '/home/review'), summary('in-project')], bots: [bot] }).ownSessions
+  assert.equal(homed[0].project, NO_PROJECT)
+  assert.equal(homed[0].branch, null)
+  assert.equal(homed[1].project, 'p')
+
+  // An open window's title wins over the record's, and a window with no record yet is listed first, stamped with the clock.
+  const merged = list({ sessions: [summary('a')], opened: [open('a'), { ...open('b'), summary: { ...summary(null), title: 'New' }, draftId: 'draft:9' }] }).ownSessions
+  assert.deepEqual(merged.map((each) => [each.id, each.title, each.updated]), [['draft:9', 'New', 600], ['a', 'Renamed', 1]])
+
+  // A draft somebody typed is listed once, a blank one and a key that is not a draft key are not, and a key that is not JSON is skipped.
+  const drafts = list({ conversations: {
+    [key('/p', 'draft:1')]: { draft: 'hello' }, [key('/p', 'draft:2')]: { draft: '  ' }, [key('/p', 'real')]: { draft: 'x' }, 'not json': { draft: 'y' },
+  } }).ownSessions
+  assert.deepEqual(drafts.map((each) => [each.id, each.title, each.updated]), [['draft:1', 'Draft · hello', 600]])
+
+  // What a row says: only what asks something of the reader, and the bot found by record, by owner, or by the open window.
+  const listing = list({
+    sessions: [summary('bot-chat'), summary('owned'), summary('asks'), summary('runs'), summary('failed'), summary('quiet'), summary('windowed')],
+    conversations: { [key('/p', 'owned')]: { draft: '', botSlug: 'review' } },
+    bots: [bot],
+    opened: [open('asks', { entries: [asking] }), open('runs', { running: true }), open('failed', { entries: [{ kind: 'error' }] }), open('quiet'), open('windowed', { bot: { slug: 'review' } })],
+    currentKey: key('/p', 'runs'),
+  })
+  const face = { name: 'Review', avatar: 'a' }
+  assert.deepEqual(listing.info[key('/p', 'bot-chat')], { bot: face, status: undefined })
+  assert.deepEqual(listing.info[key('/p', 'owned')], { bot: face, status: undefined })
+  assert.deepEqual(listing.info[key('/p', 'windowed')], { bot: face, status: undefined })
+  assert.deepEqual(listing.info[key('/p', 'asks')], { bot: undefined, status: 'answer' })
+  assert.equal(listing.info[key('/p', 'runs')].status, 'working')
+  assert.equal(listing.info[key('/p', 'failed')].status, 'failed')
+  assert.equal(key('/p', 'quiet') in listing.info, false, 'a row with neither a bot nor a status has no entry')
+  assert.equal(listing.attention, 1)
+  assert.equal(list({ ...{ sessions: [summary('asks')], opened: [open('asks', { entries: [asking] })] }, currentKey: key('/p', 'asks') }).attention, 0, 'the session on screen does not ask for attention')
 })

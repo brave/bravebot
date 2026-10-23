@@ -4,6 +4,12 @@
 //! wiring is the whole of SEARCH-9 for this front end: nothing in the workspace reads a settings
 //! file, and a cap that is not passed on is a cap nobody in the graphical front end ever gets.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
+
 use bravebot_agent::workspace::{MAX_SEARCH_FILES, Workspace};
 use bravebot_config::{Managed, Settings};
 use bravebot_core::capability::{Capability, CapabilitySet};

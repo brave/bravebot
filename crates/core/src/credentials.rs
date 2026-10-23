@@ -506,8 +506,15 @@ fn standing_alone(lines: &[&str]) -> Option<(usize, String)> {
     let (index, line) = only?;
     let value = trim_quoting(line);
     // Anything a value is not written in says this line is prose, an assignment or a fragment of
-    // a format, and each of those is another layer's business.
-    if !value.chars().all(is_token) {
+    // a format, and each of those is another layer's business. Base64 padding is the one use of
+    // `=` that is not a separator: it only ever closes a value whose length is a multiple of
+    // four, which `openssl rand -base64 32` and every key encoded that way ends in.
+    let unpadded = value.trim_end_matches('=');
+    let padding = value.len() - unpadded.len();
+    if padding > 2
+        || (padding > 0 && !value.len().is_multiple_of(4))
+        || !unpadded.chars().all(is_token)
+    {
         return None;
     }
     looks_rare(value).then(|| (index, value.to_string()))
@@ -579,7 +586,33 @@ impl Exposed {
 /// Whether this text is one value and nothing else, which is what [`Scanned::only_the_value`]
 /// carries to the caller deciding what to tell a turn.
 pub fn stands_alone(text: &str) -> bool {
-    standing_alone(&text.lines().collect::<Vec<&str>>()).is_some()
+    let lines: Vec<&str> = text.lines().collect();
+    standing_alone(&lines).is_some() || armoured_alone(&lines)
+}
+
+/// Whether the text is one private key block and nothing else: its opening line, a body written
+/// in the base64 alphabet, and its closing line. A generated key is written to a file in exactly
+/// this shape, and the file is the value just as a one-line token is, so there is no room in it
+/// for a reference ([CRED-13]).
+///
+/// [CRED-13]: ../../../docs/specs/credential-protection.md
+fn armoured_alone(lines: &[&str]) -> bool {
+    let present: Vec<&str> = lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect();
+    let [opening, body @ .., closing] = present.as_slice() else {
+        return false;
+    };
+    opening.starts_with(PEM_BEGINS)
+        && opening.ends_with(PEM_PRIVATE)
+        && closing.starts_with("-----END")
+        && !body.is_empty()
+        && body.iter().all(|line| {
+            let unpadded = line.trim_end_matches('=');
+            line.len() - unpadded.len() <= 2 && unpadded.chars().all(is_token)
+        })
 }
 
 /// What the format put around a value, taken off: spaces, quotes, and the punctuation a container
@@ -1124,6 +1157,36 @@ mod tests {
         assert!(!stands_alone(&format!("SECRET_KEY_BASE={value}\n")));
         assert!(!stands_alone(&format!("# generated\n{value}\n")));
         assert!(!stands_alone("a file of ordinary prose about nothing\n"));
+    }
+
+    /// A generated key written as a PEM file is the value and nothing else, so the refusal must
+    /// tell the turn nothing was created rather than to put a reference in the file; and a key
+    /// that is a padded base64 string has to be recognised at all.
+    #[test]
+    fn a_pem_file_and_a_padded_base64_key_are_the_whole_file() {
+        let body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\nMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYdJm\n";
+        let pem = format!("-----BEGIN PRIVATE KEY-----\n{body}-----END PRIVATE KEY-----\n");
+        assert!(stands_alone(&pem));
+        assert!(!stands_alone(&format!("# server key\n{pem}")));
+        assert!(!stands_alone(&format!("{pem}note: keep this safe\n")));
+        let found = scan("certs/server.key", &pem, 1);
+        assert!(
+            found.iter().any(|f| f.kind == Kind::PrivateKey),
+            "got {found:?}"
+        );
+
+        let padded = "k3Jx9Qm2vLp8Zt4Nw7Rb1Yc5Hd6Gf0AsDe8UiOa3Xy4=";
+        assert_eq!(padded.len() % 4, 0);
+        assert!(stands_alone(&format!("{padded}\n")));
+        let found = scan("config/master.key", &format!("{padded}\n"), 1);
+        assert_eq!(found.len(), 1, "got {found:?}");
+        assert_eq!(found[0].kind, Kind::Standalone);
+        // An assignment is not padding: the name is to the left of the separator.
+        assert!(!stands_alone(&format!("KEY={padded}\n")));
+        assert!(!stands_alone("k3Jx9Qm2vLp8Zt4Nw7Rb1Yc5Hd6Gf0AsDe8Ui===\n"));
+        assert!(!stands_alone(
+            "k3Jx9Qm2vLp8Zt4Nw7Rb1Yc5Hd6Gf0AsDe8UiOa3Xy4a=\n"
+        ));
     }
 
     /// A configuration file naming the variable it wants set is the commonest thing in a tree,

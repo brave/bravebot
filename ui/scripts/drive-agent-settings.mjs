@@ -19,7 +19,9 @@ try {
   page.on('pageerror', e => errors.push(e.message))
   await app.evaluate(({ ipcMain, BrowserWindow }, directory) => {
     const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
-    const state = { report, hooks: { path: '/test/.bravebot/hooks.json', text: '{"hooks":[]}', entire: true, hooks: [] }, watches: [], replies: [], turns: 0, conflict: false, unreadable: false }
+    // Figures that are not the agent's real ones, so a placeholder that held its own would not match them.
+    const defaultFor = { 'turn-started': 41, 'tool-finished': 42, 'turn-finished': 43, 'prompt-shown': 44, 'checkout-made': 46, 'compacted': 47, 'session-started': 45, 'session-ended': 7 }
+    const state = { report, defaultFor, hooks: { path: '/test/.bravebot/hooks.json', text: '{"hooks":[]}', entire: true, hooks: [] }, watches: [], replies: [], turns: 0, conflict: false, unreadable: false }
     const emit = (event, data, session = 's-a') => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session })
     globalThis.agentSettingsFixture = { state, emit }
     const replace = (name, fn) => { ipcMain.removeHandler(name); ipcMain.handle(name, fn) }
@@ -31,7 +33,7 @@ try {
       if (method === 'models.list') return { ok: { models: [{ id: 'local/test', name: 'Test model', provider: 'Local', premium: false, contextWindow: 32000 }], defaultModel: 'local/test', warnings: [] } }
       if (method === 'settings.inspect') return { ok: report }
       // Stands in for the agent's reader: the panel is told what a hook is rather than deciding.
-      if (method === 'hooks.inspect') return state.unreadable ? { error: { code: 'internal', message: 'The hooks file could not be read back.' } } : { ok: { timeoutSeconds: { min: 1, max: 600 }, ...state.hooks } }
+      if (method === 'hooks.inspect') return state.unreadable ? { error: { code: 'internal', message: 'The hooks file could not be read back.' } } : { ok: { timeoutSeconds: { min: 1, max: 600, defaultFor: state.defaultFor }, ...state.hooks } }
       if (method === 'watches.add') { state.watches.push({ number: 1, path: params.path, state: 'watching', remainingSeconds: 604800, armedBy: 0 }) }
       if (method === 'watches.stop') state.watches = params.all ? [] : state.watches.filter(w => w.number !== params.number)
       if (method.startsWith('watches.')) return { ok: { watches: state.watches, busy: false } }
@@ -68,6 +70,23 @@ try {
   await dialog.getByText('No override selected', { exact: true }).waitFor()
   await dialog.getByText('No hooks configured.', { exact: true }).waitFor()
   await dialog.getByRole('button', { name: 'Add hook', exact: true }).click()
+  // The timeout field shows the bound the agent reported for the entry's moment, not a figure of the panel's own.
+  const placeholder = () => dialog.locator('[data-test="hook-timeout-0"]').evaluate(field => field.placeholder)
+  const placeholderBecomes = async expected => {
+    for (let tries = 0; tries < 50 && (await placeholder()) !== expected; tries++) await page.waitForTimeout(100)
+    assert.equal(await placeholder(), expected)
+  }
+  await dialog.locator('[data-test="hook-when-0"]').click()
+  await page.getByRole('option', { name: 'Question waiting', exact: true }).click()
+  await placeholderBecomes('44')
+  // The desktop app fires both session moments, so a hook on one carries no 'does not fire this moment yet' note.
+  await dialog.locator('[data-test="hook-when-0"]').click()
+  await page.getByRole('option', { name: 'Session ends', exact: true }).click()
+  await placeholderBecomes('7')
+  assert.equal(await dialog.getByText('does not fire this moment yet').count(), 0)
+  await dialog.locator('[data-test="hook-when-0"]').click()
+  await page.getByRole('option', { name: 'Turn ends', exact: true }).click()
+  await placeholderBecomes('43')
   // An entry with no program is one the agent reads no hook out of, and a file this panel wrote and
   // the agent cannot read whole is a file this panel then refuses to edit.
   await dialog.getByRole('button', { name: 'Save hooks', exact: true }).click()
@@ -137,7 +156,7 @@ try {
   await emit('watch.fired', { number: 1, path: 'src/example.ts' })
   await emit('turn.started', { turn: 1 })
   await page.getByText('File watch 1: src/example.ts', { exact: true }).waitFor()
-  await emit('confirm.request', { request: 1, path: 'file.ts', intent: 'edit', untrusted: true, existing: true, added: 1, removed: 1, exact: true, changes: [{ kind: 'removed', text: 'old' }, { kind: 'added', text: 'new' }], remark: { preview: ['Fixed a typo'], lines: 5, label: 'untrusted' } })
+  await emit('confirm.request', { request: 1, path: 'file.ts', shownPath: 'file.ts', intent: 'edit', untrusted: true, existing: true, added: 1, removed: 1, exact: true, changes: [{ kind: 'removed', text: 'old' }, { kind: 'added', text: 'new' }], remark: { preview: ['Fixed a typo'], lines: 5, label: 'untrusted' } })
   await page.locator('.confirm').last().locator('.card-details summary').click()
   await page.getByText('Processor’s remark · untrusted', { exact: true }).waitFor()
   await page.getByText('4 more lines not shown', { exact: false }).waitFor()
@@ -145,7 +164,7 @@ try {
   await emit('output.request', { request: 2, command: 'cat notes.md', reference: '1', output: 'Quarantined output', lines: 1, summary: 'Read output', vetting: { verdict: 'unsafe', reason: 'Treat this as advice.' } })
   await page.locator('.confirm.output').getByText('Possible instructions detected', { exact: true }).waitFor()
   await page.locator('.confirm.output').getByRole('button', { name: 'Keep it out', exact: true }).click()
-  await emit('vouch.request', { request: 3, path: 'source.md', preview: 'Partial file', truncated: true, vetting: { verdict: 'inconclusive', detail: 'Checker unavailable' } })
+  await emit('vouch.request', { request: 3, path: 'source.md', shownPath: 'source.md', rule: '/work/source.md', shownRule: '/work/source.md', preview: 'Partial file', truncated: true, vetting: { verdict: 'inconclusive', detail: 'Checker unavailable' } })
   await page.locator('.confirm.vouch').getByText('Check inconclusive', { exact: true }).waitFor()
   await page.locator('.confirm.vouch .card-details summary').click()
   await page.locator('.confirm.vouch').getByText('Content may already have reached the backend.', { exact: false }).waitFor()

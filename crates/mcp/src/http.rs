@@ -15,9 +15,10 @@
 //! and a new [`HttpServer`] rather than this one following the header.
 
 use crate::protocol::{
-    Listing, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params, paged,
+    Listing, PromptListing, PromptResult, RpcRequest, RpcResponse, ToolResult, call_params,
+    declares_prompts, get_prompt_params, initialize_params, paged, paged_prompts,
 };
-use crate::{McpError, McpResult, malformed, named};
+use crate::{McpError, McpResult, log_step, malformed, named};
 use bravebot_core::capability::{Capability, ServerAlias};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
@@ -41,6 +42,9 @@ pub struct HttpServer {
     /// How long a reply to the handshake may take, which a server reached again after it moved is
     /// given as it was when it was first reached.
     startup: Duration,
+    /// Whether the handshake said the server has prompts, which is what a request for them waits
+    /// on (MCP-10).
+    prompts: bool,
 }
 
 impl HttpServer {
@@ -54,6 +58,7 @@ impl HttpServer {
             session: None,
             bound: Duration::from_secs(bravebot_config::mcp::TOOL_SECS),
             startup: Duration::from_secs(bravebot_config::mcp::STARTUP_SECS),
+            prompts: false,
         }
     }
 
@@ -196,13 +201,18 @@ impl HttpServer {
         client_name: &str,
         client_version: &str,
     ) -> McpResult<()> {
-        self.send(
-            policy,
-            egress,
-            "initialize",
-            Some(initialize_params(client_name, client_version)),
-        )?;
-        Ok(())
+        let done = self
+            .send(
+                policy,
+                egress,
+                "initialize",
+                Some(initialize_params(client_name, client_version)),
+            )
+            .map(|initialized| {
+                self.prompts = declares_prompts(&initialized);
+            });
+        log_step("mcp.initialize", &done);
+        done
     }
 
     /// List the tools this server offers, as the one labelled text a person vouches for before any
@@ -212,8 +222,57 @@ impl HttpServer {
         policy: &mut Policy<'_, S>,
         egress: &Egress,
     ) -> McpResult<Listing> {
-        let list = paged(|params| self.send(policy, egress, "tools/list", params))?;
+        let listed = paged(|params| self.send(policy, egress, "tools/list", params));
+        log_step("mcp.list_tools", &listed);
+        Ok(listed?.listing(&self.name))
+    }
+
+    /// List the prompts this server offers, as the text a person is shown in a menu. None where the
+    /// handshake did not say the server has any, and nothing is asked of it then. MCP-10.
+    pub fn list_prompts<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        egress: &Egress,
+    ) -> McpResult<PromptListing> {
+        if !self.prompts {
+            return Ok(PromptListing::none(&self.name));
+        }
+        let list = paged_prompts(|params| self.send(policy, egress, "prompts/list", params))?;
         Ok(list.listing(&self.name))
+    }
+
+    /// Get a prompt's text, given the arguments a person typed for it, labelled untrusted-private
+    /// as a tool's result is (MCP-11). Asked for only of a server that said it has prompts.
+    pub fn get_prompt<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        egress: &Egress,
+        name: &str,
+        arguments: &[(String, String)],
+    ) -> McpResult<Labelled<String>> {
+        policy
+            .before_capability(self.capability())
+            .map_err(McpError::Denied)?;
+        if !self.prompts {
+            return Err(McpError::Transport("the server offers no prompts".into()));
+        }
+
+        let result = self.send(
+            policy,
+            egress,
+            "prompts/get",
+            Some(get_prompt_params(name, arguments)),
+        )?;
+        let parsed: PromptResult =
+            serde_json::from_value(result).map_err(|e| malformed("prompt result", &e))?;
+        if !parsed.carries_text() {
+            return Err(McpError::Transport("the prompt returned no text".into()));
+        }
+
+        let label = policy
+            .observe(self.capability())
+            .map_err(McpError::Denied)?;
+        Ok(Labelled::new(parsed.text(), label))
     }
 
     /// Call a tool.

@@ -185,6 +185,7 @@ Every session, draft, message, and pending action is qualified by target and run
 | Describe target | Sanitized identity/version, supported operations, readiness. | Project `agent.info`/`agent.ready`; strip the state-directory path returned by `agent.info` and other raw host-home paths. |
 | List workspaces | Only workspaces authorized for this client. | Host-owned project-ID table; no raw client filesystem paths. |
 | Create session | Fresh session in an approved workspace, not an implicit trust answer. | `session.new`; map workspace ID to a configured path. No automatic retry. |
+| List and open sessions | The target's sessions, newest first, and one of them opened by id. | `AgentClient.listSessions()` and `openSession(id)`, gated by `TargetInfo.sessionList`. `RpcAgentClient` reports `sessionList: false` and rejects both with `UnsupportedError`, sending nothing. A target that has them says what each session shows in a `SessionSummary` and does not make the app read row content. |
 | Attach/view | Current control state and subscription for an authorized live session. | New host registry and snapshot operation; never `session.open` on a live record. |
 | Take control | Explicit authorized handoff using expected controller epoch. | New atomic host transition; old-epoch actions fail. |
 | Send | Text plus client message ID; acknowledge acceptance separately from completion. | `turn.send`; add narrow send deduplication below. Busy returns no queued turn; record that rejection. |

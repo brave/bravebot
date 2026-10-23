@@ -10,67 +10,33 @@
 // (`electron-vite build`), which `npm run drive:at-mentions` does first. Screenshots of the open
 // list in light and dark go to AT_MENTIONS_OUTPUT, or /tmp/bravebot-ui.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
 
-const listening = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-
-const rounds = []
 // While set, the next reply waits until the test resolves it, so a turn stays running.
 let held = null
-const service = createServer(async (request, response) => {
-  let body = ''
-  for await (const chunk of request) body += chunk
-  if (request.method !== 'POST') {
-    response.writeHead(200, { 'Content-Type': 'application/json' })
-    return response.end(JSON.stringify({ data: [{ id: 'test' }] }))
-  }
-  rounds.push(body)
+const { service, rounds } = await startModelService(async () => {
   if (held) await held.promise
-  const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
-  response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-  response.end(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`)
+  return { content: 'done' }
 })
-await listening(service)
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-at-mentions-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
-for (const path of [join(home, '.bravebot'), join(project, 'src/nested'), join(project, 'node_modules/pkg'), join(project, 'scripts'), profile]) mkdirSync(path, { recursive: true })
+const { root, project, profile, env } = makeWorld('bravebot-at-mentions-', {
+  service,
+  dirs: ['project/src/nested', 'project/node_modules/pkg', 'project/scripts'],
+})
 writeFileSync(join(project, 'src/nested/deep.md'), 'The release colour is blue.\n')
 writeFileSync(join(project, 'src/main.rs'), 'fn main() {}\n')
 writeFileSync(join(project, 'README.md'), '# Project\n')
 writeFileSync(join(root, 'outside.txt'), 'A secret outside the project.\n')
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({
-  provider: { local: { options: { baseURL: `http://127.0.0.1:${service.address().port}/v1` }, models: { test: {} } } },
-  model: 'local/test',
-}))
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost', BRAVEBOT_LOCALE: 'en-US' })
 
 const output = process.env.AT_MENTIONS_OUTPUT || '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const app = await electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
-let page
+let app, page, errors
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 900 })
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, project)
-  await page.getByRole('button', { name: 'Open project', exact: true }).click()
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 900 } }))
+  await openProject(page, app, project)
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
-  await trust.getByRole('button', { name: 'Trust this directory' }).click()
-  await trust.waitFor({ state: 'hidden' })
 
   const field = page.getByRole('textbox', { name: 'Message the agent' })
   const list = page.locator('[data-test="mention-list"]')
@@ -90,17 +56,20 @@ try {
   assert.deepEqual(await offered(), ['scripts/', 'src/', 'README.md'], 'node_modules is not offered')
   await page.screenshot({ path: join(output, 'at-mentions-light.png') })
 
-  // ---- a prefix narrows, the arrows walk, Esc closes and leaves the text -----------------------
+  // ---- a prefix narrows and the names found below follow, the arrows walk the whole list, Esc
+  // closes and leaves the text ----------------------------------------------------------------
   await page.keyboard.type('s')
-  await page.waitForFunction(() => document.querySelectorAll('[data-test="mention-option"]').length === 2)
+  await page.waitForFunction(() => document.querySelectorAll('[data-test="mention-option"]').length === 5)
+  assert.deepEqual(await offered(), ['scripts/', 'src/', 'src/main.rs', 'src/nested/', 'src/nested/deep.md'], 'the prefix first, then what was found below')
   await selected('scripts/')
-  await page.keyboard.press('ArrowDown')
-  await selected('src/')
-  await page.keyboard.press('ArrowDown')
-  await selected('src/')
-  await page.keyboard.press('ArrowUp')
-  await page.keyboard.press('ArrowUp')
-  await selected('scripts/')
+  for (const row of ['src/', 'src/main.rs', 'src/nested/', 'src/nested/deep.md', 'src/nested/deep.md']) {
+    await page.keyboard.press('ArrowDown')
+    await selected(row)
+  }
+  for (const row of ['src/nested/', 'src/main.rs', 'src/', 'scripts/']) {
+    await page.keyboard.press('ArrowUp')
+    await selected(row)
+  }
   await page.keyboard.press('Escape')
   await list.waitFor({ state: 'hidden' })
   assert.equal(await value(), 'What colour is in @s', 'Escape closed the list and kept the line')
@@ -146,6 +115,32 @@ try {
   const rows = await page.locator('.entries .attached').allInnerTexts()
   assert.deepEqual(rows.map((text) => text.trim()), ['Read src/nested/deep.md'], 'one Read row, drawn before the reply came back')
 
+  // ---- a fragment of a name finds the file below, and Tab writes its whole path ----------------
+  await field.fill('Open @dp')
+  await list.waitFor()
+  assert.deepEqual(await offered(), ['src/nested/deep.md'], 'a fragment found the file in a directory below')
+  await page.keyboard.press('Tab')
+  await valueIs('Open @src/nested/deep.md ')
+  await field.fill('')
+
+  // ---- a name with a space is completed to the escaped text, and Enter completes a half of one ---
+  mkdirSync(join(project, 'My Documents'))
+  writeFileSync(join(project, 'My Documents/notes.md'), 'Notes.\n')
+  await field.fill('read @My')
+  await list.waitFor()
+  await page.keyboard.press('Tab')
+  await valueIs('read @My\\ Documents/')
+  await field.fill('read @My\\ Doc')
+  await list.waitFor()
+  await page.keyboard.press('Enter')
+  await valueIs('read @My\\ Documents/')
+  assert.equal(rounds.length, 1, 'Enter on a half-typed name holding an escaped space completed it rather than sending')
+  await page.keyboard.type('no')
+  await list.waitFor()
+  await page.keyboard.press('Tab')
+  await valueIs('read @My\\ Documents/notes.md ')
+  await field.fill('')
+
   // ---- a name outside the project is refused at send, and nothing goes -------------------------
   await field.fill('Read @../outside.txt')
   await field.press('Enter')
@@ -184,9 +179,9 @@ try {
   assert.equal(rounds.length, 3, 'the held turn reached the model')
   await page.locator('.composer .stop').waitFor()
   await field.fill('Read @../outside.txt')
-  await field.press('Enter')
+  await field.press('Alt+Enter')
   await field.fill('After the refused one')
-  await field.press('Enter')
+  await field.press('Alt+Enter')
   const tray = page.locator('.queued-messages')
   await tray.waitFor()
   held = null
@@ -217,7 +212,7 @@ try {
   await page.waitForTimeout(500)
   assert.equal(await list.count(), 0, 'a bot page with no conversation yet has no folder to list')
   await page.keyboard.press('Enter')
-  await trust.getByRole('button', { name: 'Trust this directory' }).click()
+  await trust.locator('[data-test="trust-approve"]').click()
   await trust.waitFor({ state: 'hidden' })
   await page.locator('.bubble.assistant').first().waitFor()
   await page.locator('.composer .stop').waitFor({ state: 'hidden' })
@@ -237,12 +232,12 @@ try {
   assert.equal(rounds.length, 4, 'a project file is not named from the home folder')
 
   assert.deepEqual(errors, [])
-  console.log(`PASS: @ offers the project, narrows, walks and completes; Enter completes a half name and sends a finished one; the model got the file and the transcript drew its Read row; @../outside.txt was refused at send, by turn.send itself too, and a queued one went back to the head of a paused queue; a bot conversation in its home folder read and listed that folder and refused a project file. Screenshots in ${output}/at-mentions-{light,dark}.png`)
+  console.log(`PASS: @ offers the project, narrows, finds a fragment in a directory below, walks and completes; Enter completes a half name and sends a finished one; the model got the file and the transcript drew its Read row; @../outside.txt was refused at send, by turn.send itself too, and a queued one went back to the head of a paused queue; a bot conversation in its home folder read and listed that folder and refused a project file. Screenshots in ${output}/at-mentions-{light,dark}.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'at-mentions-failure.png') }).catch(() => undefined)
   throw error
 } finally {
-  await app.close()
+  await app?.close()
   await new Promise((resolve) => service.close(resolve))
   rmSync(root, { recursive: true, force: true })
 }

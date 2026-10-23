@@ -14,13 +14,17 @@
 //! this crate speaks the wire protocol and mints no witness.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 pub mod credentials;
 pub mod eventstream;
 pub mod protocol;
 
 use bravebot_aichat::protocol::{ChatRequest, Usage};
-use bravebot_aichat::{Completion, CutOff, OpenCall, Progress};
+use bravebot_aichat::{Completion, CutOff, OpenCall, Progress, reply_bound};
 use bravebot_config::bedrock::Bedrock;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -332,7 +336,7 @@ pub struct BedrockClient<'a> {
     recalled: Refusals,
     /// How long to wait before the first retry. Doubled for each retry after that.
     ///
-    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
+    /// [`BACKOFF`] unless a test shortens it.
     backoff: Duration,
 }
 
@@ -381,9 +385,16 @@ impl<'a> BedrockClient<'a> {
         }
     }
 
+    /// How many requests are sent for one call before its failure is the caller's: the retry count
+    /// the account's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
+    fn attempts_allowed(&self) -> u32 {
+        self.config.patience().attempts(ATTEMPTS)
+    }
+
     /// Wait this long before the first retry instead of [`BACKOFF`]. Later retries still double it.
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
+    #[cfg(test)]
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
         self.backoff = backoff;
         self
@@ -427,7 +438,7 @@ impl<'a> BedrockClient<'a> {
                     self.ceiling = false;
                     probed = true;
                 }
-                Err(error) if worth_another_attempt(attempt, &error) => {
+                Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
                     log_retry(attempt + 1, backoff(self.backoff, attempt));
                     if !self.wait(backoff(self.backoff, attempt)) {
                         return Err(BedrockError::Cancelled);
@@ -790,7 +801,7 @@ impl<'a> BedrockClient<'a> {
                     self.arguments_as_written = false;
                     probed = true;
                 }
-                Err(error) if worth_another_attempt(attempt, &error) => {
+                Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
                     attempt += 1;
                     log_retry(attempt, backoff(self.backoff, attempt - 1));
                     // Announced before the wait rather than after it, so the pause is explained
@@ -799,6 +810,7 @@ impl<'a> BedrockClient<'a> {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
                         calling: None,
+                        thinking: Labelled::new("", Label::untrusted_public()),
                         counted_by_server: false,
                         attempt,
                     });
@@ -934,10 +946,12 @@ impl<'a> BedrockClient<'a> {
                 }
             }
 
+            let thinking = std::mem::take(&mut reply.thinking);
             progress(Progress {
                 written: Labelled::new(&reply.text[written_before..], label),
                 output_tokens: reply.output_so_far(),
                 calling: reply.calling().map(|name| Labelled::new(name, label)),
+                thinking: Labelled::new(&thinking, label),
                 counted_by_server: reply.counted,
                 attempt,
             });
@@ -1036,11 +1050,14 @@ impl<'a> BedrockClient<'a> {
 
         // A stream's headers come at once and the model writes after them; a reply asked for whole
         // is written before any of it is sent.
-        let http = if streaming {
+        let mut http = if streaming {
             http.stream_within(bound)
         } else {
             http.reply_within(bound)
         };
+        if let Some(gap) = self.config.patience().idle_timeout {
+            http = http.idle_within(gap);
+        }
         Ok((http, model))
     }
 
@@ -1150,6 +1167,9 @@ struct Reply {
     last_block: Option<usize>,
     /// Whether any reasoning arrived. Known from the key its delta arrives under.
     thought: bool,
+    /// The words of that reasoning not yet reported to the caller's screen. Taken at every report,
+    /// so it holds one frame's worth, and it is never part of `text`, which is what the reply is.
+    thinking: String,
     /// Whether a known content frame or block could not be decoded.
     ///
     /// Kept rather than failed on the spot so the stream is still drained: the reply is refused
@@ -1233,8 +1253,13 @@ impl Reply {
                         {
                             self.unreadable_content = true;
                         }
-                        if value.get(protocol::REASONING).is_some() {
+                        if let Some(reasoning) = value.get(protocol::REASONING) {
                             self.thought = true;
+                            if let Some(words) =
+                                reasoning.get("text").and_then(serde_json::Value::as_str)
+                            {
+                                self.thinking.push_str(words);
+                            }
                         }
                     }
                 }
@@ -1308,7 +1333,8 @@ const TRANSIENT_REPORTS: [&str; 4] = [
     "serviceUnavailableException",
 ];
 
-/// How many times one request is sent before its failure is the caller's.
+/// How many times one request is sent before its failure is the caller's, where the account's block
+/// states no retry count.
 const ATTEMPTS: u32 = 3;
 
 /// How long to wait after the first failure. Doubled for each attempt after that.
@@ -1320,31 +1346,13 @@ const WAKE: Duration = Duration::from_millis(50);
 /// How many chunks may sit between the thread reading them and the one taking them apart.
 const CHUNKS_AHEAD: usize = 16;
 
-/// The slowest a reply is taken to be written, in tokens a second.
-///
-/// Well under half the slowest rate measured on Bedrock, 69 tokens a second on Claude Opus 5.5, so
-/// a reply running to its ceiling on a slow day still finishes inside the bound.
-const SLOWEST_WRITING: u64 = 25;
-
-/// How long a reply may take to begin, reading the prompt, before the first token of it.
-const BEFORE_WRITING: Duration = Duration::from_secs(120);
-
-/// How long a reply that may run to `ceiling` tokens is given.
-///
-/// Never less than the bound the egress layer puts on a reply of unstated length, which stays the
-/// figure for a short reply.
-fn reply_bound(ceiling: u64) -> Duration {
-    (BEFORE_WRITING + Duration::from_secs(ceiling.div_ceil(SLOWEST_WRITING)))
-        .max(bravebot_net::Timeouts::default().reply)
-}
-
-/// Whether a failed attempt should be repeated.
+/// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
 ///
 /// Only transport failures qualify. A reply that arrived and would not decode is not a connection
 /// problem, and asking again produces the same thing. Nor is an expired credential: that is fixed by
 /// signing in, which resolving them already did.
-fn worth_another_attempt(attempt: u32, error: &BedrockError) -> bool {
-    if attempt >= ATTEMPTS {
+fn worth_another_attempt(allowed: u32, attempt: u32, error: &BedrockError) -> bool {
+    if attempt >= allowed {
         return false;
     }
     match error {
@@ -1485,6 +1493,7 @@ mod tests {
         BedrockError::Egress(EgressError::Status {
             url: "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/converse".to_string(),
             status,
+            retry_after: None,
         })
     }
 
@@ -1511,6 +1520,7 @@ mod tests {
             let error = BedrockError::Egress(EgressError::Status {
                 url: "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/converse".to_string(),
                 status,
+                retry_after: None,
             });
             assert!(error.is_credential_refused(), "{status} was not recognised");
             let said = error.to_string();
@@ -1528,6 +1538,7 @@ mod tests {
             let error = BedrockError::Egress(EgressError::Status {
                 url: "https://bedrock-runtime.us-west-2.amazonaws.com/model/x/invoke".to_string(),
                 status,
+                retry_after: None,
             });
             assert!(
                 !error.is_credential_refused(),
@@ -1820,7 +1831,7 @@ mod tests {
             call: None,
             thought: false,
         });
-        assert!(!worth_another_attempt(1, &error));
+        assert!(!worth_another_attempt(ATTEMPTS, 1, &error));
         let said = error.to_string();
         assert!(said.contains("output limit"), "{said}");
         assert!(said.contains("8192"), "the ceiling is not named: {said}");
@@ -1982,14 +1993,20 @@ mod tests {
             let error = BedrockError::Reported {
                 kind: kind.to_string(),
             };
-            assert!(worth_another_attempt(1, &error), "{kind} was given up on");
+            assert!(
+                worth_another_attempt(ATTEMPTS, 1, &error),
+                "{kind} was given up on"
+            );
         }
 
         for kind in ["validationException", "somethingNewException"] {
             let error = BedrockError::Reported {
                 kind: kind.to_string(),
             };
-            assert!(!worth_another_attempt(1, &error), "{kind} was asked again");
+            assert!(
+                !worth_another_attempt(ATTEMPTS, 1, &error),
+                "{kind} was asked again"
+            );
         }
     }
 
@@ -1998,22 +2015,37 @@ mod tests {
     #[test]
     fn only_transport_failures_are_retried() {
         assert!(!worth_another_attempt(
+            ATTEMPTS,
             1,
             &BedrockError::Decode {
                 detail: "bad".into()
             }
         ));
-        assert!(!worth_another_attempt(1, &BedrockError::NoContent));
-        assert!(!worth_another_attempt(1, &BedrockError::NoModel));
-        assert!(!worth_another_attempt(1, &BedrockError::Cancelled));
         assert!(!worth_another_attempt(
+            ATTEMPTS,
+            1,
+            &BedrockError::NoContent
+        ));
+        assert!(!worth_another_attempt(ATTEMPTS, 1, &BedrockError::NoModel));
+        assert!(!worth_another_attempt(
+            ATTEMPTS,
+            1,
+            &BedrockError::Cancelled
+        ));
+        assert!(!worth_another_attempt(
+            ATTEMPTS,
             1,
             &BedrockError::Credentials(credentials::CredentialError::NotInstalled)
         ));
 
         // A dead connection and lost framing are both worth another attempt.
-        assert!(worth_another_attempt(1, &BedrockError::Incomplete));
         assert!(worth_another_attempt(
+            ATTEMPTS,
+            1,
+            &BedrockError::Incomplete
+        ));
+        assert!(worth_another_attempt(
+            ATTEMPTS,
             1,
             &BedrockError::Frame(eventstream::FrameError::Corrupt { detail: "x".into() })
         ));
@@ -2023,10 +2055,15 @@ mod tests {
     #[test]
     fn attempts_are_bounded() {
         assert!(worth_another_attempt(
+            ATTEMPTS,
             ATTEMPTS - 1,
             &BedrockError::Incomplete
         ));
-        assert!(!worth_another_attempt(ATTEMPTS, &BedrockError::Incomplete));
+        assert!(!worth_another_attempt(
+            ATTEMPTS,
+            ATTEMPTS,
+            &BedrockError::Incomplete
+        ));
     }
 
     /// Each wait is longer than the last, because the failure this exists for is a network that
@@ -2041,7 +2078,9 @@ mod tests {
         scripted_responses(statuses.into_iter().map(refused_with).collect())
     }
 
-    /// Answer each request with the next of `responses`, and hand on the body each one carried.
+    /// Answer each request with the next of `responses`, and hand on the body each one carried. A
+    /// body is on the channel before its response is written, so every request the client has an
+    /// answer to can be read with `try_iter` once the client returns.
     fn scripted_responses(
         responses: Vec<Vec<u8>>,
     ) -> (Request, std::sync::mpsc::Receiver<Vec<u8>>) {
@@ -2061,8 +2100,11 @@ mod tests {
             for (response, silent) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 let body = read_request(&mut stream);
+                // Handed on before the response is written, so a client that has its answer
+                // returns after the body is on the channel and a test reading it then misses none.
+                // A test that has dropped the receiver is still answered.
+                let _ = sent.send(body);
                 stream.write_all(&response).unwrap();
-                sent.send(body).unwrap();
                 if silent {
                     let _ = stream.read(&mut [0; 1]);
                 }
@@ -2840,7 +2882,8 @@ mod tests {
                         context_window: None,
                         output_limit: Some(16_000),
                     }],
-                ),
+                )
+                .expect("a valid region"),
                 stated,
                 16_000,
             ),
@@ -3026,6 +3069,63 @@ mod tests {
             completion.usage.completion_tokens, 0,
             "the live tally was charged"
         );
+    }
+
+    /// The thinking a streamed reply carries is handed to the caller's screen as it arrives and is
+    /// no part of what the reply is: the words are the answer alone, and a signature or a
+    /// redacted piece, which carry no text, add nothing.
+    #[test]
+    fn thinking_reaches_progress_and_never_the_reply() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let model = "a-model-that-thinks";
+        let reply = streamed(vec![
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"The user "}}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"wants a file"}}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"c2ln"}}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":1,"delta":{"text":"Here it is."}}"#,
+            ),
+            eventstream::tests::frame("messageStop", br#"{"stopReason":"end_turn"}"#),
+        ]);
+        let config = config_for(model);
+        let egress = Egress::new();
+        let (http, _received) = scripted_with_silences(vec![(reply, false)]);
+        let mut client = BedrockClient::new(&config, &egress);
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+        let shown = policy.authorise_display_release("the reply as the model writes it");
+
+        let mut thought = String::new();
+        let result = client.complete_streaming(&mut policy, &writing_a_file(model), |progress| {
+            thought.push_str(progress.thinking.declassify(&shown));
+        });
+
+        let completion = result.expect("a reply that thought and then answered");
+        assert_eq!(thought, "The user wants a file");
+        assert_eq!(completion.content.declassify(&shown), "Here it is.");
     }
 
     /// Announcing a retry before a wait must not count it as sent when the caller cancels.
@@ -3259,7 +3359,8 @@ mod tests {
                     output_limit: None,
                 },
             ],
-        );
+        )
+        .expect("a valid region");
         let egress = Egress::new();
         let ceiling = |config: &Bedrock, model: &str| {
             let client = BedrockClient::new(config, &egress);
@@ -3407,7 +3508,8 @@ mod tests {
                     output_limit: None,
                 },
             ],
-        );
+        )
+        .expect("a valid region");
         let egress = Egress::new();
         let mut client = BedrockClient::new(&config, &egress);
         client.test_request = Some(Request::post("http://127.0.0.1:9/converse", Vec::new()));
@@ -4476,5 +4578,257 @@ mod tests {
             "the retry gave up the breakpoints with the lifetime, or kept the lifetime"
         );
         assert!(refusals(model).cache_ttl);
+    }
+
+    /// The configured account with the retry count and quiet gap a `provider` block would have
+    /// stated.
+    fn account_stating(max_retries: Option<u32>, idle_ms: Option<u64>) -> Bedrock {
+        config().with_patience(bravebot_config::provider::Patience {
+            max_retries,
+            idle_timeout: idle_ms.map(Duration::from_millis),
+        })
+    }
+
+    /// Ask `account` for a reply through `http`, down the streamed or the whole path, with the pause
+    /// between attempts shortened so a test of several retries is not a test of the wall clock.
+    fn asked_through(
+        account: &Bedrock,
+        egress: &Egress,
+        http: Request,
+        streaming: bool,
+    ) -> (Result<Completion, BedrockError>, u32) {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let mut client = BedrockClient::new(account, egress).with_backoff(Duration::from_millis(1));
+        client.test_request = Some(http);
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "test");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .unwrap();
+        let request = ChatRequest::new("opus-arn", vec![Message::user("hi")]);
+        let result = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        };
+        (result, client.attempts())
+    }
+
+    /// A busy service is a failure the person asked to see after the first request when they stated
+    /// no retries, on each of the two paths that have a loop of their own.
+    #[test]
+    fn an_account_stating_no_retries_is_asked_once() {
+        for streaming in [false, true] {
+            let (http, received) = refused_requests(vec![503, 503]);
+            let (result, attempts) = asked_through(
+                &account_stating(Some(0), None),
+                &Egress::new(),
+                http,
+                streaming,
+            );
+            assert_eq!(
+                attempts, 1,
+                "streaming {streaming}: a request was sent again: {result:?}"
+            );
+            assert_eq!(received.try_iter().count(), 1, "streaming {streaming}");
+            assert!(
+                matches!(
+                    result,
+                    Err(BedrockError::Egress(EgressError::Status {
+                        status: 503,
+                        ..
+                    }))
+                ),
+                "streaming {streaming}: {result:?}"
+            );
+        }
+    }
+
+    /// The count is how many times a request is sent again: a stated four is five requests and not
+    /// four or six, and an account that states nothing is sent the three it always was.
+    #[test]
+    fn an_account_stating_a_retry_count_is_asked_again_that_many_times() {
+        for streaming in [false, true] {
+            for (stated, asked) in [(Some(4), 5), (None, ATTEMPTS)] {
+                let (http, received) = refused_requests(vec![503; 8]);
+                let (result, attempts) = asked_through(
+                    &account_stating(stated, None),
+                    &Egress::new(),
+                    http,
+                    streaming,
+                );
+                assert!(result.is_err(), "streaming {streaming}: {result:?}");
+                assert_eq!(attempts, asked, "streaming {streaming}, stated {stated:?}");
+                assert_eq!(
+                    received.try_iter().count() as u32,
+                    asked,
+                    "streaming {streaming}, stated {stated:?}"
+                );
+            }
+        }
+    }
+
+    /// A service that recovers inside the count stated is reached. Without this a client that
+    /// counted attempts correctly and then reported the last failure anyway would pass the count.
+    #[test]
+    fn an_account_stating_a_retry_count_reaches_a_service_that_recovers_inside_it() {
+        let (http, _received) = scripted_responses(vec![
+            refused_with(503),
+            refused_with(503),
+            refused_with(503),
+            refused_with(503),
+            answered(),
+        ]);
+        let (result, attempts) =
+            asked_through(&account_stating(Some(4), None), &Egress::new(), http, true);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(attempts, 5);
+    }
+
+    /// The count says how many times a request is sent again and not which failures are worth it:
+    /// a model the service does not have is not there the second time either.
+    #[test]
+    fn a_larger_retry_count_does_not_make_a_refusal_worth_asking_again() {
+        for streaming in [false, true] {
+            let (http, received) = refused_requests(vec![404, 404]);
+            let (result, attempts) = asked_through(
+                &account_stating(Some(7), None),
+                &Egress::new(),
+                http,
+                streaming,
+            );
+            assert_eq!(
+                attempts, 1,
+                "streaming {streaming}: a refusal was sent again: {result:?}"
+            );
+            assert_eq!(received.try_iter().count(), 1, "streaming {streaming}");
+            assert!(
+                matches!(
+                    result,
+                    Err(BedrockError::Egress(EgressError::Status {
+                        status: 404,
+                        ..
+                    }))
+                ),
+                "streaming {streaming}: {result:?}"
+            );
+        }
+    }
+
+    /// A reply written slowly, gone quiet for longer than the egress layer's gap between two pieces
+    /// and then continuing, is given up on until the person says it may take that long. The
+    /// halves share every gap, so only the stated figure separates them, on both paths.
+    #[test]
+    fn an_account_stating_an_idle_gap_waits_that_long_for_a_reply_gone_quiet() {
+        for streaming in [false, true] {
+            let pieces = || -> Vec<Vec<u8>> {
+                if streaming {
+                    vec![
+                        eventstream::tests::frame(
+                            "contentBlockDelta",
+                            br#"{"contentBlockIndex":0,"delta":{"text":"hel"}}"#,
+                        ),
+                        eventstream::tests::frame(
+                            "contentBlockDelta",
+                            br#"{"contentBlockIndex":0,"delta":{"text":"lo"}}"#,
+                        ),
+                        eventstream::tests::frame("messageStop", br#"{"stopReason":"end_turn"}"#),
+                        eventstream::tests::frame(
+                            "metadata",
+                            br#"{"usage":{"inputTokens":1,"outputTokens":2}}"#,
+                        ),
+                    ]
+                } else {
+                    vec![
+                        br#"{"output":{"message":"#.to_vec(),
+                        br#"{"content":[{"text":"hello"}]}},"#.to_vec(),
+                        br#""stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":2}}"#
+                            .to_vec(),
+                    ]
+                }
+            };
+            let gap = Duration::from_millis(600);
+
+            let unstated = trickled(pieces(), gap, 1);
+            let (result, _) = asked_through(
+                &account_stating(Some(0), None),
+                &impatient(),
+                unstated,
+                streaming,
+            );
+            assert!(
+                result.is_err(),
+                "streaming {streaming}: a gap longer than the default was waited through: {result:?}"
+            );
+
+            let stated = trickled(pieces(), gap, 1);
+            let (result, _) = asked_through(
+                &account_stating(Some(0), Some(3_000)),
+                &impatient(),
+                stated,
+                streaming,
+            );
+            let completion = result.unwrap_or_else(|error| {
+                panic!("streaming {streaming}: a stated gap of three seconds was not honoured: {error:?}")
+            });
+            assert_eq!(completion.content.label(), Label::untrusted_public());
+        }
+    }
+
+    /// The stated gap is also the shorter one: a connection that goes quiet is given up on at the
+    /// figure the person chose even where the egress layer would have waited a good deal longer.
+    #[test]
+    fn an_account_stating_a_shorter_idle_gap_gives_up_on_a_quiet_reply_sooner() {
+        let frames = || {
+            vec![
+                eventstream::tests::frame(
+                    "contentBlockDelta",
+                    br#"{"contentBlockIndex":0,"delta":{"text":"hel"}}"#,
+                ),
+                eventstream::tests::frame("messageStop", br#"{"stopReason":"end_turn"}"#),
+                eventstream::tests::frame(
+                    "metadata",
+                    br#"{"usage":{"inputTokens":1,"outputTokens":2}}"#,
+                ),
+            ]
+        };
+        let patient = || {
+            Egress::with_timeouts(bravebot_net::Timeouts {
+                idle: Duration::from_secs(5),
+                ..Default::default()
+            })
+        };
+        let gap = Duration::from_millis(700);
+
+        let (result, _) = asked_through(
+            &account_stating(Some(0), None),
+            &patient(),
+            trickled(frames(), gap, 1),
+            true,
+        );
+        assert!(
+            result.is_ok(),
+            "the control reply is not one the default gap lets through: {result:?}"
+        );
+
+        let (result, _) = asked_through(
+            &account_stating(Some(0), Some(300)),
+            &patient(),
+            trickled(frames(), gap, 1),
+            true,
+        );
+        assert!(
+            result.is_err(),
+            "a quiet reply was waited on past the stated 300 ms: {result:?}"
+        );
     }
 }

@@ -40,7 +40,7 @@ Three things about Leo's React wrappers shape how the components are used:
 
 - **`aria-*` props are dropped.** The wrappers hand only the Svelte component's own props to
   its custom element, so `aria-label`, `aria-expanded`, `aria-pressed` and friends never
-  become attributes. `Button`, `Input`, `TextArea`, `Checkbox`, `RadioButton` and `Toggle` are
+  become attributes. `Button`, `Input`, `Navigation`, `NavigationItem` and `TextArea` are
   therefore wrapped by `withShadowAttrs` (`nala-a11y.tsx`), which writes those attributes, and
   `title`, onto the host and onto the control drawn inside its shadow root, and puts them
   back when Leo rebuilds it. Write `<Button aria-label="Close">` as usual. It also flattens

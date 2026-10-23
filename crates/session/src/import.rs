@@ -169,11 +169,13 @@ fn record_of(project: &Path, found: &Found) -> Record {
         },
         turns: 0,
         tokens: 0,
+        split: Default::default(),
         model: None,
         spend: Default::default(),
         timing: Default::default(),
         todos: Default::default(),
         trust: None,
+        confined_lines_in: None,
         programs: Vec::new(),
         directories: Vec::new(),
         build: None,
@@ -202,11 +204,13 @@ fn record_of(project: &Path, found: &Found) -> Record {
         // Where one turn ended and the next began is not something these files say (SESSION-25).
         history: None,
         asides: Vec::new(),
+        notes: Vec::new(),
         manifest: None,
         rewind: Vec::new(),
         server_children_may_run: false,
         checkouts: Vec::new(),
         agent: None,
+        skill_mode: None,
     }
 }
 

@@ -18,7 +18,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-skills-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-skills-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -395,8 +396,8 @@ fn a_skill_in_a_foreign_project_directory_is_offered() {
         );
         assert_eq!(body_of(&catalogue, name).trim(), "ported body");
         assert!(
-            catalogue.describe_for_prompt().contains(name),
-            "a skill in {dir}/skills was not advertised"
+            catalogue.search(name).0.iter().any(|s| s.name == name),
+            "a skill in {dir}/skills was not findable by search_skills"
         );
     }
 }
@@ -745,6 +746,96 @@ fn a_foreign_skills_directory_below_the_root_is_not_a_source() {
     );
 }
 
+/// INSTR-13 with INSTR-14's record: working in a directory adds its `.bravebot/skills` and nothing
+/// else. A `.claude/skills` or `.agents/skills` under a directory the session has worked in is
+/// still an ordinary directory, at every level down to the file, while the root's own are read.
+#[test]
+fn a_foreign_skills_directory_under_a_touched_directory_is_not_a_source() {
+    let scratch = Scratch::new("foreign-touched");
+    let project = scratch.workspace();
+    write_skill(&project.join(".claude"), "rootc", "rootc", "root", "ROOT-C");
+    write_skill(&project.join(".agents"), "roota", "roota", "root", "ROOT-A");
+    let pkg = project.join("pkg");
+    let inner = pkg.join("inner");
+    write_skill(&pkg.join(".bravebot"), "own", "own", "native", "OWN-BODY");
+    write_skill(&pkg.join(".claude"), "pkgc", "pkgc", "foreign", "PKG-C");
+    write_skill(&pkg.join(".agents"), "pkga", "pkga", "foreign", "PKG-A");
+    write_skill(
+        &inner.join(".claude"),
+        "innerc",
+        "innerc",
+        "foreign",
+        "IN-C",
+    );
+    write_skill(
+        &inner.join(".agents"),
+        "innera",
+        "innera",
+        "foreign",
+        "IN-A",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    workspace.record_touch("pkg/inner/a.rs");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let mut offered = from_disk(&catalogue);
+    offered.sort_unstable();
+    assert_eq!(offered, ["own", "roota", "rootc"]);
+    assert!(notices.is_empty(), "{notices:?}");
+}
+
+/// Two levels of nested skills shadow one another deepest last (INSTR-14), whatever order the
+/// session worked in them, and a package's own skill the deeper one does not name stays offered.
+#[test]
+fn a_deeper_nested_skill_shadows_a_shallower_one_of_its_name() {
+    let scratch = Scratch::new("nested-two-levels");
+    let project = scratch.workspace();
+    let pkg = project.join("pkg");
+    let inner = pkg.join("inner");
+    write_skill(
+        &project.join(".bravebot"),
+        "fmt",
+        "fmt",
+        "root",
+        "ROOT-BODY",
+    );
+    write_skill(&pkg.join(".bravebot"), "fmt", "fmt", "package", "PKG-BODY");
+    write_skill(
+        &pkg.join(".bravebot"),
+        "lint",
+        "lint",
+        "package",
+        "PKG-LINT",
+    );
+    write_skill(
+        &inner.join(".bravebot"),
+        "fmt",
+        "fmt",
+        "inner",
+        "INNER-BODY",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    let discover = |workspace: &Workspace| {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, workspace, None).0
+    };
+
+    workspace.record_touch("pkg/a.rs");
+    assert_eq!(body_of(&discover(&workspace), "fmt"), "PKG-BODY");
+
+    // The deeper directory is named first, so an order of touching would put it the wrong way.
+    workspace.record_touch("pkg/inner/b.rs");
+    let both = discover(&workspace);
+    assert_eq!(body_of(&both, "fmt"), "INNER-BODY");
+    assert_eq!(body_of(&both, "lint"), "PKG-LINT");
+}
+
 /// The trust map's rules are workspace-relative, so a rule about the project must not decide
 /// anything about the user's own directory. Declining the working directory says nothing about
 /// the skills someone installed globally, and they must still load.
@@ -1042,6 +1133,43 @@ fn a_home_skill_inside_a_directory_opened_beside_the_project_is_not_offered() {
     assert_eq!(told, [ONE_HOME_SKILL_REACHED], "the person was not told");
 }
 
+/// A directory opened beside the project adds no skills, whatever it holds and even where the person
+/// vouched for it. Left untrusted, the trust gate would keep its skills out whatever was read, so
+/// the directory is vouched for here and only the set of project roots can keep it out.
+#[test]
+fn a_directory_opened_beside_the_project_adds_no_skills_even_where_it_is_vouched_for() {
+    let scratch = Scratch::new("skills-in-an-opened-directory");
+    let project = scratch.workspace();
+    let other = scratch.path.join("other");
+    write_skill(
+        &project.join(".bravebot"),
+        "own",
+        "own",
+        "the project's",
+        "own",
+    );
+    for root in [".bravebot", ".claude", ".agents"] {
+        write_skill(&other.join(root), "added", "added", "INJECTED", "body");
+    }
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(other.to_str().expect("a scratch path is text"))
+        .expect("open the directory");
+    let vouched = other.canonicalize().expect("the directory resolves");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &[".", vouched.to_str().expect("path is text")]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert_eq!(
+        from_disk(&catalogue),
+        ["own"],
+        "a skill from a directory opened alongside the project was offered"
+    );
+}
+
 /// Most specific wins, as it does in the trust map. A project that ships its own version of a
 /// skill means it, and a global one silently overriding it would be the wrong way round.
 #[test]
@@ -1218,8 +1346,23 @@ fn what_the_prompt_advertises_holds_no_bodies() {
         skills::discover(&mut policy, &workspace, Some(&home))
     };
 
-    let advertised = catalogue.describe_for_prompt();
-    assert!(advertised.contains("commit-style") && advertised.contains("how to commit"));
+    let (found, _) = catalogue.search("commit-style");
+    let skill = found
+        .first()
+        .expect("the skill was not found by search_skills");
+    assert_eq!(skill.name, "commit-style");
+    assert_eq!(skill.description, "how to commit");
+
+    // A definition naming the skill curates the catalogue, which lists it in full rather than
+    // leaving it for search_skills (SKILL-18), so the actual rendering a request carries is
+    // exercised here too: a body leaking into it would pass the search-based check above, which
+    // never touches `describe_for_prompt` at all.
+    let curated = catalogue.only(&["commit-style".to_string()]);
+    let advertised = curated.describe_for_prompt();
+    assert!(
+        advertised.contains("commit-style") && advertised.contains("how to commit"),
+        "the curated listing did not advertise the skill: {advertised}"
+    );
     assert!(
         !advertised.contains("THE-BODY-TEXT"),
         "the body was advertised: {advertised}"
@@ -1257,7 +1400,21 @@ fn an_argument_hint_reaches_the_interface_and_not_the_planner() {
         Some("<zebra-marker>")
     );
     assert_eq!(catalogue.get("plain").expect("offered").argument_hint, None);
-    let advertised = catalogue.describe_for_prompt();
+    let (found, _) = catalogue.search("hinted");
+    let skill = found
+        .first()
+        .expect("the skill was not found by search_skills");
+    assert_eq!(skill.name, "hinted");
+    assert!(
+        !skill.description.contains("zebra-marker"),
+        "the hint reached the description: {}",
+        skill.description
+    );
+
+    // Curated the way a definition naming the skill would (SKILL-18), so the actual rendering a
+    // request carries is exercised, not only the fields a search result is built from.
+    let curated = catalogue.only(&["hinted".to_string()]);
+    let advertised = curated.describe_for_prompt();
     assert!(advertised.contains("hinted"), "{advertised}");
     assert!(
         !advertised.contains("zebra-marker"),
@@ -1399,6 +1556,85 @@ fn the_set_an_interface_resolves_is_the_one_a_turn_would() {
             &["commit-style", "release-notes"]
         };
         assert_eq!(from_disk(&interface), expected, "trusting {trusted:?}");
+    }
+}
+
+/// The input box draws names and descriptions and never loads a skill, so it does not walk each
+/// skill's directory for the files beside it. It still offers exactly the skills a turn resolves,
+/// and the turn's own set keeps the listing `load_skill` hands back.
+#[test]
+fn the_set_the_box_offers_is_the_turns_without_the_files_beside_each_skill() {
+    let scratch = Scratch::new("offered");
+    let home = scratch.home();
+    let project = scratch.workspace();
+    write_skill(
+        &home,
+        "commit-style",
+        "commit-style",
+        "how commits read",
+        "sign",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "release-notes",
+        "release-notes",
+        "draft the notes",
+        "draft",
+    );
+    for beside in [
+        home.join("skills/commit-style/template.md"),
+        project.join(".bravebot/skills/release-notes/template.md"),
+    ] {
+        std::fs::write(beside, "template").expect("write file beside a skill");
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let trusted = || {
+        let mut store = TrustStore::new("/work");
+        store.trust(".");
+        store
+    };
+    let mut sink = RecordingSink::new();
+    let resolved = skills::resolved(
+        &workspace,
+        Some(&home),
+        trusted(),
+        Default::default(),
+        &mut sink,
+    );
+    let offered = skills::offered(
+        &workspace,
+        Some(&home),
+        trusted(),
+        Default::default(),
+        &mut sink,
+    );
+
+    let names = |catalogue: &skills::Catalogue| {
+        catalogue
+            .iter()
+            .map(|skill| (skill.name.clone(), skill.description.clone(), skill.source))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&offered), names(&resolved));
+    assert_eq!(
+        from_disk(&offered),
+        ["commit-style", "release-notes"],
+        "both skills are offered"
+    );
+    for skill in resolved.iter().filter(|skill| skill.origin != "built-in") {
+        assert_eq!(
+            skill.files,
+            ["template.md"],
+            "{} in the turn's set",
+            skill.name
+        );
+    }
+    for skill in offered.iter() {
+        assert!(
+            skill.files.is_empty(),
+            "{} was walked for its files",
+            skill.name
+        );
     }
 }
 
@@ -1763,4 +1999,632 @@ fn a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name() {
         notices.is_empty(),
         "an entry the nested skill covered was counted: {notices:?}"
     );
+}
+
+/// The documentation skill is offered in a directory nobody vouched for with no home, and the
+/// description is the whole of when the planner loads it, so it names one condition and ends with it.
+#[test]
+fn the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else() {
+    let scratch = Scratch::new("help-skill-offered");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let skill = catalogue.get("bravebot-help").expect("the help skill");
+    assert_eq!(skill.source, skills::Source::BuiltIn);
+    assert!(notices.is_empty(), "a notice about a built-in: {notices:?}");
+    assert!(
+        skill
+            .description
+            .ends_with("Load it when the user asks a question about using bravebot itself."),
+        "something follows the condition: {}",
+        skill.description
+    );
+    assert_eq!(
+        skill.description.to_lowercase().matches("load").count(),
+        1,
+        "the description invites a load more than once: {}",
+        skill.description
+    );
+    assert!(
+        !catalogue.describe_for_prompt().contains("using/watches"),
+        "the pages are advertised with the skill instead of waiting for load_skill"
+    );
+}
+
+/// A skill of the user's own is never in the default listing, however many there are: only a
+/// built-in is (SKILL-18).
+///
+/// A directory of many skills is exactly what crowded the prompt before this clause existed,
+/// and that cost is removed by never putting the project's own skills in `describe_for_prompt`
+/// at all, not by bounding how many of them fit. Each one stays loadable by name: nothing here
+/// is dropped from the catalogue, only left off the default listing.
+#[test]
+fn describe_for_prompt_lists_only_built_in_skills() {
+    let scratch = Scratch::new("built-ins-only-by-default");
+    let project = scratch.workspace();
+    for n in 0..60 {
+        let name = format!("skill-{n:02}");
+        write_skill(
+            &project.join(".bravebot"),
+            &name,
+            &name,
+            "when the task calls for it",
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    let advertised = catalogue.describe_for_prompt();
+    assert!(
+        advertised.contains("- loop: "),
+        "the built-in was not in the default listing: {advertised}"
+    );
+    for n in 0..60 {
+        let name = format!("skill-{n:02}");
+        assert!(
+            !advertised.contains(&name),
+            "a project skill was in the default listing: {name}"
+        );
+        assert!(
+            catalogue.get(&name).is_some(),
+            "a project skill left off the default listing stopped being loadable: {name}"
+        );
+    }
+}
+
+/// A description past the warn figure reaches the planner in full, wherever it is read from, and
+/// is only ever counted, never cut (SKILL-18).
+///
+/// A built-in's own listing and a `search_skills` result are the two places a description
+/// reaches the planner outside `load_skill`, so both are checked here against the same long
+/// text. The regression this guards is a cut reappearing on either path: the clause used to cut
+/// a description at a limit, and that is exactly what a maintainer asked removed in favour of a
+/// count.
+#[test]
+fn a_long_description_is_never_cut_and_is_counted() {
+    let scratch = Scratch::new("long-description-warned");
+    let project = scratch.workspace();
+    let tail = "ZEBRA-TAIL";
+    let long = format!("when the task is {} {tail}", "y".repeat(1_100));
+    write_skill(
+        &project.join(".bravebot"),
+        "verbose",
+        "verbose",
+        &long,
+        "THE-BODY",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    assert_eq!(
+        catalogue.long_descriptions(),
+        1,
+        "the long description was not counted"
+    );
+
+    let (found, more) = catalogue.search("verbose");
+    assert_eq!(more, 0);
+    let result = found
+        .first()
+        .expect("the long-description skill did not match its own name");
+    assert_eq!(
+        result.description, long,
+        "search_skills would have cut or changed the description"
+    );
+
+    assert_eq!(body_of(&catalogue, "verbose").trim(), "THE-BODY");
+
+    // Curated the way a definition naming the skill would (SKILL-18), so the actual rendering a
+    // request carries is exercised too, not only the fields a search result is built from.
+    let curated = catalogue.only(&["verbose".to_string()]);
+    let advertised = curated.describe_for_prompt();
+    assert!(
+        advertised.ends_with(&format!("{long}\n")),
+        "the curated listing cut or changed the description: {advertised}"
+    );
+}
+
+/// `Catalogue::search` matches a query word by word, case-insensitively, against a skill's name
+/// and its description, in SKILL-2 order, and caps how many it returns in one call (SKILL-18).
+#[test]
+fn search_matches_every_word_case_insensitively_and_caps_the_result() {
+    let scratch = Scratch::new("search-skills");
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".bravebot"),
+        "commit-style",
+        "commit-style",
+        "How Commit messages are written here",
+        "body",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "release-notes",
+        "release-notes",
+        "How a changelog entry is worded",
+        "body",
+    );
+    for n in 0..30 {
+        write_skill(
+            &project.join(".bravebot"),
+            &format!("broad-{n:02}"),
+            &format!("broad-{n:02}"),
+            "matches a broad query on its own name",
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    // Case-insensitive, and every word of the query has to match.
+    let (found, more) = catalogue.search("COMMIT messages");
+    assert_eq!(more, 0);
+    assert_eq!(
+        found.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["commit-style"]
+    );
+
+    // A word that is not in either the name or the description matches nothing.
+    let (none, _) = catalogue.search("commit nonexistentword");
+    assert!(none.is_empty(), "an unmatched word still matched: {none:?}");
+
+    // A blank query is not a search.
+    let (blank, _) = catalogue.search("   ");
+    assert!(blank.is_empty(), "a blank query matched something");
+
+    // A broad query returns exactly the cap, and says how many more there were past it.
+    let (broad, more) = catalogue.search("broad");
+    assert_eq!(broad.len(), 25, "the result was not held to the cap");
+    assert_eq!(
+        more, 5,
+        "the overflow count does not account for the rest of the matches"
+    );
+}
+
+/// A curated catalogue's search runs over the names a definition kept, not the ones it dropped
+/// (SKILL-18, DELEGATE-23): without this, a delegate denied a skill by name could still reach it
+/// by searching for it, which would make the curation a label rather than a boundary.
+#[test]
+fn a_curated_catalogues_search_does_not_reach_a_skill_outside_its_list() {
+    let scratch = Scratch::new("curated-search-excludes");
+    let project = scratch.workspace();
+    write_skill(
+        &project.join(".bravebot"),
+        "named",
+        "named",
+        "when to use named",
+        "body",
+    );
+    write_skill(
+        &project.join(".bravebot"),
+        "excluded",
+        "excluded",
+        "when to use excluded",
+        "body",
+    );
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    let curated = catalogue.only(&["named".to_string()]);
+    let (found, _) = curated.search("excluded");
+    assert!(
+        found.is_empty(),
+        "a curated catalogue's search still reached a skill its definition did not name"
+    );
+
+    let (still_found, _) = curated.search("named");
+    assert_eq!(
+        still_found.len(),
+        1,
+        "curation excluded the one skill it was supposed to keep"
+    );
+}
+
+/// SKILL-19: `other_skill_names` names every skill the default listing leaves out, and none at
+/// all once a definition's own `skills:` line has curated the catalogue, since a curated listing
+/// already shows everything there is and a session told about it again would be told of skills
+/// it can neither search for nor load.
+#[test]
+fn other_skill_names_is_empty_for_a_curated_catalogue() {
+    let scratch = Scratch::new("other-skill-names-curated");
+    let project = scratch.workspace();
+    for name in ["aaa-skill", "zzz-skill"] {
+        write_skill(
+            &project.join(".bravebot"),
+            name,
+            name,
+            "when to use it",
+            "body",
+        );
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let catalogue = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None).0
+    };
+
+    assert_eq!(catalogue.other_skill_names(), ["aaa-skill", "zzz-skill"]);
+
+    let curated = catalogue.only(&["aaa-skill".to_string()]);
+    assert!(
+        curated.other_skill_names().is_empty(),
+        "a curated catalogue still named a skill to search for: {:?}",
+        curated.other_skill_names()
+    );
+}
+
+/// Write a skill with its own description, whose frontmatter also carries the lines given. The
+/// description is what a test looks for in a prompt, so it is one nothing else there contains.
+fn write_described(root: &Path, dir: &str, description: &str, lines: &str) {
+    let at = root.join("skills").join(dir);
+    std::fs::create_dir_all(&at).expect("create skill directory");
+    std::fs::write(
+        at.join("SKILL.md"),
+        format!("---\nname: {dir}\ndescription: {description}\n{lines}---\n\nthe body\n"),
+    )
+    .expect("write skill");
+}
+
+/// Resolve the skills of a home directory the way a turn does, with no project.
+fn found_in(home: &Path, project: &Path) -> (skills::Catalogue, Vec<skills::Notice>) {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink, &[]);
+    skills::discover(&mut policy, &workspace, Some(home))
+}
+
+/// A skill whose file says `disable-model-invocation: true` is kept from the planner: neither its
+/// name nor its description is in the lines the prompt carries. The ordinary skill beside it is the
+/// control, since a prompt that advertised nothing would pass for the skill being left out.
+#[test]
+fn a_skill_kept_from_the_planner_is_left_out_of_what_the_prompt_advertises() {
+    let scratch = Scratch::new("person-only-advertised");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "DEPLOYS-TO-PRODUCTION",
+        "disable-model-invocation: true\n",
+    );
+    write_described(&home, "commit-style", "HOW-COMMITS-READ", "");
+
+    let (catalogue, notices) = found_in(&home, &scratch.workspace());
+    // Listed in full only where a definition's `skills:` line curated the set (SKILL-18), so that
+    // the ordinary skill is a line in the prompt for the control to find.
+    let curated = catalogue
+        .clone()
+        .only(&["ship-it".to_string(), "commit-style".to_string()]);
+    let advertised = curated.describe_for_prompt();
+
+    assert!(
+        notices.is_empty(),
+        "a notice for a usable value: {notices:?}"
+    );
+    assert!(
+        advertised.contains("commit-style") && advertised.contains("HOW-COMMITS-READ"),
+        "the ordinary skill was not advertised, so this proves nothing: {advertised}"
+    );
+    assert!(
+        !advertised.contains("ship-it") && !advertised.contains("DEPLOYS-TO-PRODUCTION"),
+        "a skill kept from the planner was advertised: {advertised}"
+    );
+    // Found by a search as an ordinary skill is, and never as one kept from the planner, whose
+    // name and description reach the planner by no route.
+    assert_eq!(catalogue.search("commit-style").0.len(), 1);
+    assert!(
+        catalogue.search("ship-it").0.is_empty() && catalogue.search("DEPLOYS").0.is_empty(),
+        "a search found a skill kept from the planner"
+    );
+    assert_eq!(catalogue.other_skill_names(), ["commit-style"]);
+    assert!(
+        catalogue.get("ship-it").expect("still found").person_only,
+        "the key was read and the skill not marked"
+    );
+    assert!(!catalogue.get("commit-style").expect("found").person_only);
+}
+
+/// Only `true` keeps a skill from the planner. A `false`, a blank value and no key at all leave it
+/// advertised, and the case of the word does not matter. A reading that took the key's presence for a
+/// yes would hide the skill a person wrote `false` to keep available.
+#[test]
+fn only_a_true_value_keeps_a_skill_from_the_planner() {
+    let scratch = Scratch::new("person-only-values");
+    let home = scratch.home();
+    for (dir, line) in [
+        ("lower", "disable-model-invocation: true\n"),
+        ("upper", "disable-model-invocation: TRUE\n"),
+        ("title", "disable-model-invocation: \"True\"\n"),
+        ("off", "disable-model-invocation: false\n"),
+        ("blank", "disable-model-invocation:\n"),
+        ("absent", ""),
+    ] {
+        write_described(&home, dir, "when to use it", line);
+    }
+
+    let (catalogue, notices) = found_in(&home, &scratch.workspace());
+
+    assert!(
+        notices.is_empty(),
+        "a notice for a usable value: {notices:?}"
+    );
+    let kept: Vec<&str> = catalogue
+        .iter()
+        .filter(|skill| skill.person_only)
+        .map(|skill| skill.name.as_str())
+        .collect();
+    assert_eq!(kept, ["lower", "title", "upper"]);
+}
+
+/// A word that is neither `true` nor `false` is said back and read as `true`. The key exists to keep a
+/// skill with side effects from being chosen by a model, so a misspelling that left the skill
+/// advertised would expose the skill the key was written to protect, and the person can still name it.
+#[test]
+fn a_value_that_is_neither_true_nor_false_keeps_the_skill_from_the_planner_and_is_reported() {
+    let scratch = Scratch::new("person-only-unreadable");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "DEPLOYS-TO-PRODUCTION",
+        "disable-model-invocation: yes\n",
+    );
+
+    let (catalogue, notices) = found_in(&home, &scratch.workspace());
+
+    let skill = catalogue.get("ship-it").expect("the skill was dropped");
+    assert!(
+        skill.person_only,
+        "an unreadable value left the skill advertised"
+    );
+    assert!(
+        !catalogue
+            .clone()
+            .only(&["ship-it".to_string()])
+            .describe_for_prompt()
+            .contains("DEPLOYS-TO-PRODUCTION")
+            && catalogue.search("DEPLOYS-TO-PRODUCTION").0.is_empty(),
+        "an unreadable value left the skill advertised"
+    );
+    assert_eq!(notices.len(), 1, "expected one notice: {notices:?}");
+    assert!(
+        notices[0].message.contains("yes") && notices[0].message.contains("ship-it"),
+        "the notice names neither the word nor the file: {}",
+        notices[0].message
+    );
+}
+
+/// A trailing YAML comment is not part of the value. A file written for another agent says
+/// `false # keep available` and means false, so reading the whole line as an unknown word would hide
+/// a skill its author left open to the planner and report it every turn. `true # only me` is the
+/// same line the other way round, and a quoted word with a comment after it is the word. A value that
+/// is only a comment is blank, which is no value. A `#` inside a word is not a comment, so it is still
+/// an unknown word.
+#[test]
+fn a_trailing_comment_is_not_part_of_the_value() {
+    let scratch = Scratch::new("person-only-comment");
+    let home = scratch.home();
+    for (dir, line) in [
+        ("open", "disable-model-invocation: false # keep available\n"),
+        (
+            "quoted-open",
+            "disable-model-invocation: \"false\" # keep available\n",
+        ),
+        ("nothing", "disable-model-invocation: # nothing here\n"),
+        ("two", "disable-model-invocation: false\t# a # b\n"),
+        ("closed", "disable-model-invocation: true # only me\n"),
+        (
+            "quoted-closed",
+            "disable-model-invocation: 'true' # only me\n",
+        ),
+        ("tabbed", "disable-model-invocation: true\t# only me\n"),
+        ("glued", "disable-model-invocation: true#only-me\n"),
+    ] {
+        write_described(&home, dir, "when to use it", line);
+    }
+
+    let (catalogue, notices) = found_in(&home, &scratch.workspace());
+
+    let kept: Vec<&str> = catalogue
+        .iter()
+        .filter(|skill| skill.person_only)
+        .map(|skill| skill.name.as_str())
+        .collect();
+    assert_eq!(
+        kept,
+        ["closed", "glued", "quoted-closed", "tabbed"],
+        "a comment changed the value"
+    );
+    assert_eq!(
+        notices.len(),
+        1,
+        "expected a notice for the glued word alone: {notices:?}"
+    );
+    assert!(
+        notices[0].message.contains("glued"),
+        "{}",
+        notices[0].message
+    );
+}
+
+/// The key is read, so `doctor` has nothing to report about it: a key reported as unread says the
+/// line does nothing while the turn is running on it.
+#[test]
+fn the_key_is_read_and_not_carried_out_as_unread() {
+    let scratch = Scratch::new("person-only-read");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "when to use it",
+        "disable-model-invocation: true\nlicense: MPL-2.0\n",
+    );
+
+    let (catalogue, _) = found_in(&home, &scratch.workspace());
+
+    assert_eq!(
+        catalogue.get("ship-it").expect("found").unread,
+        ["license"],
+        "the key was carried out as unread, or the one nothing reads was lost"
+    );
+}
+
+/// What an interface lists is the set a turn would resolve, and that set still holds the skill, marked
+/// so the list can say only the person may have it loaded (SKILL-14). A set that dropped it would leave
+/// a person with no way to find the name to type.
+#[test]
+fn the_set_an_interface_resolves_still_holds_a_skill_kept_from_the_planner() {
+    let scratch = Scratch::new("person-only-listed");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "DEPLOYS-TO-PRODUCTION",
+        "disable-model-invocation: true\n",
+    );
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let interface = skills::offered(
+        &workspace,
+        Some(&home),
+        TrustStore::new("/work"),
+        Default::default(),
+        &mut sink,
+    );
+
+    let skill = interface.get("ship-it").expect("the list lost the skill");
+    assert!(
+        skill.person_only,
+        "the list cannot tell the skill is the person's alone"
+    );
+    assert_eq!(skill.description, "DEPLOYS-TO-PRODUCTION");
+}
+
+/// A word of the line names a skill as the whole of `/name`, with the quotes, brackets and sentence
+/// punctuation around it taken off, because a person ends a sentence with the name and a skill that
+/// loaded for `/name` and not for `/name.` would fail in silence. A prefix, another case, a longer name
+/// and the bare name each select nothing, since guessing would load instructions nobody asked for
+/// (LOAD-2). The skills the line names are exactly the ones that were found and kept from the planner:
+/// an ordinary skill is not named this way, and a name that was never found cannot be.
+#[test]
+fn a_line_names_a_kept_skill_only_by_its_whole_name_after_a_slash() {
+    let scratch = Scratch::new("person-only-named");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "when to use it",
+        "disable-model-invocation: true\n",
+    );
+    write_described(
+        &home,
+        "deploy",
+        "when to use it",
+        "disable-model-invocation: true\n",
+    );
+    write_described(&home, "commit-style", "when to use it", "");
+
+    let (catalogue, _) = found_in(&home, &scratch.workspace());
+    let named = |line: &str| -> Vec<String> {
+        catalogue
+            .named_in(line)
+            .into_iter()
+            .map(|skill| skill.name)
+            .collect()
+    };
+
+    assert_eq!(named("/ship-it"), ["ship-it"]);
+    assert_eq!(named("please run /ship-it now"), ["ship-it"]);
+    assert_eq!(
+        named("/deploy then /ship-it"),
+        ["deploy", "ship-it"],
+        "found order"
+    );
+    assert_eq!(named("/ship-it /ship-it"), ["ship-it"], "named once");
+    for punctuated in [
+        "tag it with /ship-it.",
+        "/ship-it,",
+        "/ship-it!",
+        "(/ship-it)",
+        "run `/ship-it` now",
+        "say \"/ship-it\" to start",
+        "is it /ship-it?",
+        "say \u{201c}/ship-it\u{201d}",
+        "then /ship-it\u{2026}",
+    ] {
+        assert_eq!(
+            named(punctuated),
+            ["ship-it"],
+            "{punctuated:?} did not name it"
+        );
+    }
+    for near in [
+        "ship-it",
+        "/ship",
+        "/ship-its",
+        "/Ship-It",
+        "/ship-it-now",
+        "/ship-it.md",
+        "/ship-it/",
+        "a/ship-it",
+        "//ship-it",
+        "/ ship-it",
+        "/commit-style",
+        "/nothing-by-this-name",
+        "",
+    ] {
+        assert_eq!(
+            named(near),
+            Vec::<String>::new(),
+            "{near:?} named a skill it is not the whole name of"
+        );
+    }
+}
+
+/// A catalogue holding only skills kept from the planner advertises none, so the prompt has no section
+/// of skills to name: its heading over an empty list would promise names that do not follow. One
+/// ordinary skill beside them is the control.
+#[test]
+fn a_catalogue_of_kept_skills_alone_advertises_nothing() {
+    let scratch = Scratch::new("person-only-alone");
+    let home = scratch.home();
+    write_described(
+        &home,
+        "ship-it",
+        "when to use it",
+        "disable-model-invocation: true\n",
+    );
+    write_described(&home, "commit-style", "when to use it", "");
+
+    let (catalogue, _) = found_in(&home, &scratch.workspace());
+    let kept_alone = catalogue.clone().only(&["ship-it".to_string()]);
+    let with_an_ordinary_one = catalogue.only(&["ship-it".to_string(), "commit-style".to_string()]);
+
+    assert_eq!(kept_alone.len(), 1, "the fixture lost the skill");
+    assert!(!kept_alone.advertises_any());
+    assert_eq!(kept_alone.describe_for_prompt(), "");
+    assert!(with_an_ordinary_one.advertises_any());
 }

@@ -13,6 +13,39 @@
   overflow: hidden;
 }
 
+/* ---- a file being dragged over the conversation
+
+   Over the whole column, and inert: the drop itself is taken by the preload wherever it lands in
+   here, so this only says what letting go will do. */
+.drop-target {
+  position: absolute;
+  inset: var(--leo-spacing-m);
+  z-index: 20;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--leo-spacing-s);
+  border: 1px dashed var(--border-focus);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--surface-panel) 88%, transparent);
+  pointer-events: none;
+  animation: drop-target-in var(--motion-fast);
+  --leo-icon-size: var(--icon-hero);
+  --leo-icon-color: var(--ink-secondary);
+}
+.drop-target-title { font: var(--type-title); color: var(--ink-primary); }
+.drop-target-note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  --leo-icon-size: var(--icon-caption);
+  --leo-icon-color: var(--status-warning);
+}
+@keyframes drop-target-in { from { opacity: 0; } }
+@media (forced-colors: active) { .drop-target { border-color: Highlight; } }
+
 /* ---- header */
 
 .transcript-head {

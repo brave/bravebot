@@ -5,6 +5,12 @@
 //! identical until the round the bound would have stopped at, so the difference is visible
 //! nowhere earlier and in nothing smaller.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
+
 use bravebot_agent::turn::MAX_TOOL_ROUNDS;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};

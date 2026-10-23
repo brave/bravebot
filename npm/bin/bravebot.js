@@ -1,18 +1,44 @@
 #!/usr/bin/env node
 
-// Thin launcher: forwards to the platform binary fetched during install.
+// Thin launcher: forwards to the binary in the platform package npm installed beside this one.
 
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const { spawnSync } = require("node:child_process");
 
-const binaryName = process.platform === "win32" ? "bravebot-bin.exe" : "bravebot-bin";
-const binaryPath = path.join(__dirname, binaryName);
+// Named from the platform and architecture of the node running this, and from nothing else:
+// not an argument, not a file, and not the environment. Which package is run decides which
+// executable starts, so no value somebody supplies gets to pick it. The publish step names its
+// packages the same way (npm/scripts/stage-platform-package.js), and npm/tests holds the two
+// to each other.
+const key = `${process.platform}-${process.arch}`;
+const packageName = `@brave/bravebot-${key}`;
+const binaryName = process.platform === "win32" ? "bravebot.exe" : "bravebot";
 
-if (!fs.existsSync(binaryPath)) {
+function findBinary() {
+  let manifest;
+  try {
+    manifest = require.resolve(`${packageName}/package.json`);
+  } catch {
+    return { missing: "package" };
+  }
+  const binaryPath = path.join(path.dirname(manifest), "bin", binaryName);
+  return fs.existsSync(binaryPath) ? { binaryPath } : { missing: "file" };
+}
+
+const found = findBinary();
+if (!found.binaryPath) {
+  const what =
+    found.missing === "package"
+      ? `its package, ${packageName}, is not installed`
+      : `its package, ${packageName}, is installed but holds no binary`;
   console.error(
-    "The bravebot binary is missing. Reinstall the package to download the binary for this platform."
+    `The bravebot binary for ${key} is missing: ${what}.\n` +
+      "npm installs that package with @brave/bravebot, unless optional dependencies are omitted " +
+      "(--omit=optional), the platform has no package, or the version is not published (an install " +
+      "from a checkout or a git ref).\n" +
+      "Reinstall without --omit=optional, or build bravebot from source."
   );
   process.exit(1);
 }
@@ -21,7 +47,7 @@ if (!fs.existsSync(binaryPath)) {
 // launcher is the only thing that knows the package it belongs to. It says so, and that is what
 // lets bravebot offer the npm command when a newer release is out rather than one that would
 // install a second copy somewhere else.
-const result = spawnSync(binaryPath, process.argv.slice(2), {
+const result = spawnSync(found.binaryPath, process.argv.slice(2), {
   stdio: "inherit",
   env: { ...process.env, BRAVEBOT_INSTALLED_VIA: "npm" },
 });

@@ -54,11 +54,16 @@ permissions-check-allow = allow
 permissions-check-none = no rule matches, so the ordinary gates decide
 permissions-check-rule = rule
 permissions-check-file = file
+permissions-check-reason = reason
 permissions-check-granted = granted at the question for this workspace, written in { $path }
 permissions-check-not-in-force = not in force: { $rule } in { $path } would allow this once it is granted at the question
-cli-usage-sessions = List the sessions that keep running after the terminal closes
+cli-usage-sessions = List the sessions that keep running after the terminal closes, grouped by state on a terminal
 cli-usage-sessions-stop = Stop one of them
+cli-usage-sessions-list = List the sessions recorded for this directory
+cli-usage-sessions-delete = Delete one recorded session, its trail and its search index
+cli-usage-sessions-purge = Delete every session recorded for this directory
 cli-usage-sessions-import = Copy sessions another agent kept for this directory
+cli-usage-stats = Total the turns and tokens recorded sessions spent; takes --days <n>, --models and --project [<dir>]
 cli-usage-bg = Start a session that keeps running after the terminal closes
 cli-usage-attach = Join a background session's terminal
 cli-usage-reply = Send a prompt to an idle background session
@@ -92,22 +97,30 @@ cli-plain-takes-nothing-else =
     --plain starts a session and takes no other arguments. --incognito,
     --dangerously-skip-permissions, --settings and --agent go with it; everything else is another
     way of starting.
-# Said where the startup question was not put because an earlier session here was told to remember
-# the answer (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
+# Said where the startup question was not put because an earlier session here was answered yes and
+# the yes was kept (TRUST-23). A session in lines has no slash commands, so the ways to be asked again are
 # the ones it can name: the command in the interface that draws, or the lines in the file. The
 # lines rather than the file, since a directory whose path is spelled alike shares the file.
 # Said on stderr by a one-shot run that opens with a kept answer about its working directory
 # or the root of the git worktree around it, naming the directory the answer was about.
 cli-trusting-kept =
-    trusting { $directory } (you said to remember it { $when }; to be asked again, run
+    trusting { $directory } (you trusted it { $when }; to be asked again, run
     /forget-trust in bravebot, or delete the lines naming it from { $path })
 
 cli-plain-trusting-kept =
-    trusting { $directory } (you said to remember it { $when }; to be asked again, run
+    trusting { $directory } (you trusted it { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming it from { $path })
 cli-plain-trusting-kept-root =
-    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; to be asked again, run
+    trusting { $directory }, inside { $root } (you trusted { $root } { $when }; to be asked again, run
     /forget-trust in bravebot without --plain, or delete the lines naming { $root } from { $path })
+# Said in a session in lines (CLI-14) after a yes is kept, and in the lines before the question. It
+# has no /forget-trust of its own, so both name the command in the interface that draws.
+cli-plain-trust-kept =
+    trusting { $directory }, and later sessions started here will not ask; to take it back, run
+    /forget-trust in bravebot without --plain, or delete the lines naming it from { $path }
+cli-plain-trust-remember-where =
+    To take it back, run /forget-trust in bravebot without --plain, or delete the lines naming
+    this directory from this file:
 
 # Said when a background session is started again and its earlier conversation was read back from
 # its record (BG-1).
@@ -145,6 +158,8 @@ cli-option-log-level =
     How much of a failure's shape is written to the diagnostic log: error (the default), info or debug.
     Hosts, statuses and counts only, never content; an incognito session writes none
 cli-option-agent = Address every turn to this definition, as /agent does for one
+cli-option-issue = Give the session it opens this issue link, as /issue does
+cli-option-pr = Give the session it opens this pull request link, as /pr does
 cli-option-system-prompt =
     Replace the opening sentence of the planner's system prompt for every turn. The rest of it stays
 cli-option-append-system-prompt =
@@ -152,22 +167,32 @@ cli-option-append-system-prompt =
 cli-option-mode = turn (default) decides step by step; manifest plans the whole run first
 cli-option-model = The model this run asks for, in place of the remembered or configured one
 cli-option-advisor = A model the agent may put a question to, offered to it as the advisor tool
+cli-option-processor-model = The model processors run on, in place of the processorModel setting. inherit runs them on this run's model
 cli-option-tools = Offer the agent only these tools, comma separated. It cannot add one a setting removed
 cli-option-no-shell = Offer the agent no tool that runs a program or reads what one printed
 cli-option-effort = How hard this run asks the model to think, in place of the remembered or configured level
 cli-option-print = Non-interactive. Reads piped stdin as quarantined context
-cli-option-interactive = Open the interactive session and send this prompt as its first turn
+cli-option-interactive = Open the interactive session and send this prompt as its first turn; --model and --effort may follow it
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-json-stream = Print one event per line on stdout as the run goes, then the result object
+cli-option-input-format = Read turns from stdin as JSON lines when given lines (implies --json-stream)
+cli-option-trust-input-lines = Treat the lines on stdin as your own words and not a program's (needs --input-format lines)
 cli-option-output-schema = Require the reply to match the JSON Schema in this file; with --json the value is in "structured"
+cli-option-goal = Work towards this condition: after each turn a judge says whether it holds, and the work goes back until it does; exits with status 7 if it never does
+cli-option-max-rounds = Stop the run when the agent asks for more than this many rounds of tool calls, ending on status 8
+cli-option-max-tokens = Stop the run before a request once this many tokens are spent, ending on status 8
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
 cli-option-safe =
     Load none of your own hooks, skills, definitions, MCP servers or AGENTS.md. Sign-in, model and permissions still apply
 cli-option-locked =
     Like --safe, and also read no project or local settings file, and refuse --dangerously-skip-permissions
 cli-locked-refuses-bypass =
-    --dangerously-skip-permissions is refused with --locked: a locked run never opens the bypass mode
+    { $flag } is refused with --locked: a locked run never opens the bypass mode
+cli-accept-edits-not-with-bypass =
+    --accept-edits is refused with { $flag }: the second answers every question the first answers and more, so say which you mean
+cli-accept-edits-needs-a-run =
+    --accept-edits is for a one-shot run, such as -p "task". A session has the mode key
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
@@ -176,6 +201,14 @@ cli-option-sandbox =
     floor this cannot go below
 cli-option-dangerously-skip-permissions =
     Bypass all permission checks. Recommended only for sandboxes with no internet access
+cli-option-dangerously-bypass-approvals-and-sandbox =
+    Bypass all permission checks and confine no program, as --dangerously-skip-permissions with --sandbox off.
+    Recommended only for machines you can lose
+cli-bypass-and-sandbox-disagree =
+    --dangerously-bypass-approvals-and-sandbox turns the sandbox off, and --sandbox { $mode } asks for it on. Give one of them
+cli-option-accept-edits =
+    For a one-shot run, write files without asking. Commands, fetches and a write that would
+    create a credential are still refused
 cli-option-help = Show this message
 cli-option-version = Show the version
 
@@ -248,7 +281,7 @@ cli-plain-working-under-model = every prompt is addressed to { $definition }, wh
 # The file is named because the flag is documented and works everywhere else, so a refusal without
 # it sends somebody looking for a fault in the program.
 cli-bypass-unreachable =
-    --dangerously-skip-permissions is refused: permissions.bypassUnreachable in { $path } makes
+    { $flag } is refused: permissions.bypassUnreachable in { $path } makes
     that mode unreachable here. Remove it there, or run without the flag.
 cli-sandbox-needs-a-mode = --sandbox requires one of { $names }
 # The file that holds the floor is named, and the file that asked when there was one, because a
@@ -276,10 +309,32 @@ cli-sandbox-refused-network-file =
 cli-mode-needs-a-name = --mode requires one of { $names }
 cli-model-needs-a-name = --model requires the name of a model
 cli-advisor-needs-a-name = --advisor requires the name of a model
+cli-processor-model-needs-a-name = --processor-model requires the name of a model
 cli-advisor-not-with-a-manifest = --advisor cannot be used with --mode manifest, which runs its plan without a planner to ask
 cli-effort-needs-a-level = --effort requires one of { $levels }
+cli-goal-needs-a-condition = --goal requires the condition to work towards
+cli-goal-not-with-a-manifest = --goal cannot be used with --mode manifest, which runs its plan once and has no conversation to send the work back into
+cli-goal-impossible = the goal cannot be met: { $reason }
+cli-goal-unreadable = the check did not answer with a verdict, so there is nothing to act on and the run stops
+cli-goal-quarantined =
+    this conversation has met untrusted content, so a verdict about it is not something this
+    program may act on, and the run stops
+cli-goal-stalled =
+    the goal has sent the work back without a turn making a tool call, and has stopped sending it
+cli-goal-failed = the goal could not be checked: { $problem }
 cli-output-schema-needs-a-path = --output-schema requires the path of a JSON Schema file
+cli-input-format-unknown = --input-format takes lines
+cli-trust-input-lines-needs-lines = --trust-input-lines requires --input-format lines
+cli-input-lines-not-with-incognito = --input-format lines does not go with --incognito: each turn is carried on from the session record, and an incognito run writes none
+cli-input-lines-not-with-a-manifest = --input-format lines does not go with --mode manifest: a manifest run has one task and no turns to add
+cli-input-lines-no-prompt = no prompt line arrived before the input ended
+cli-input-lines-session-lost = the session this run carries on from cannot be read back, so the turn was not run: { $problem }
+cli-input-lines-session-unsaved = the turn before this one wrote no session record, so there is nothing to carry on from and the turn was not run
 cli-output-schema-not-with-a-manifest = --output-schema cannot be used with --mode manifest, which has a reply for each step and none for the run
+cli-max-rounds-needs-a-count = --max-rounds requires a whole number from 1 to { $most }
+cli-max-tokens-needs-a-count = --max-tokens requires a whole number of tokens, 1 or more
+cli-limit-not-with-a-manifest = { $flag } cannot be used with --mode manifest, which plans the whole run first and makes no rounds of tool calls
+cli-limit-not-with-a-goal = { $flag } cannot be used with --goal, which sends the work back for further rounds and would count the limit afresh in each of them
 cli-output-schema-not-served = --output-schema cannot be used with { $model }, which cannot be asked for a reply that matches a schema
 cli-output-schema-unreadable = cannot read the output schema { $path }: { $problem }
 cli-output-schema-not-json = the output schema { $path } is not JSON
@@ -305,17 +360,24 @@ cli-directory-unknown = cannot tell which directory this is
 cli-no-such-session = no session { $id } in this directory
 cli-manifest-run = { $id } is a manifest run, so there is nothing to continue; this is what it did
 cli-nothing-to-continue = no session to continue in this directory
+cli-issue-needs-a-link = --issue requires one http or https address
+cli-pr-needs-a-link = --pr requires one http or https address
+# Said where --issue or --pr is given to a line that opens no interactive session: a task, a session
+# in lines, a background session, or a command that starts none.
+cli-links-need-a-session =
+    --issue and --pr give the session they open its links, and this command line opens no interactive session
 cli-from-pr-needs-a-value = --from-pr requires a pull request number or address
 cli-interactive-needs-a-prompt = -i takes the prompt to send as the session's first turn
-# Said where something follows the prompt of -i. The session it opens takes the flags every way of
-# starting takes, which are already out of the line by then; what is left describes a one-shot run.
+# Said where something other than --model or --effort follows the prompt of -i. The session it opens
+# takes the flags every way of starting takes, which are already out of the line by then; what is
+# left describes a one-shot run.
 cli-interactive-takes-nothing-else =
-    -i takes one prompt, quoted where it has spaces, and nothing after it, so '{ $argument }' is
-    refused. --model, --effort, --file and the other options for a task go with a one-shot run (-p).
+    -i takes one prompt, quoted where it has spaces, and then --model and --effort, so '{ $argument }'
+    is refused. --file and the other options for a task go with a one-shot run (-p).
 # Said where -i came after a task's own options rather than first.
 cli-interactive-not-with-a-task =
-    -i opens a session and comes first, followed by its prompt. --model, --effort, --file and the
-    other options for a task go with a one-shot run (-p).
+    -i opens a session and comes first, followed by its prompt and then --model and --effort. --file
+    and the other options for a task go with a one-shot run (-p).
 # Said where -i came after another way of starting a session, such as --resume or --fork.
 cli-interactive-not-with-another-start = -i opens a new session and comes first, so it does not go with { $flag }.
 # Said where -i was given with something other than a terminal on stdin or stdout, where there is
@@ -339,17 +401,21 @@ onboarding-no-model = no model service is configured yet
 # case is one import away rather than a whole configuration away.
 onboarding-subscription-unusable = the subscription that is stored could not be used: { $problem }
 # Said before the routes where Claude Code or opencode configures a service bravebot can use, or a
-# running Ollama serves one, and nobody was there to be asked about it: a one-shot run, --json, a
-# pipe, or doctor.
+# running Ollama, LM Studio or llama-server serves one, and nobody was there to be asked about it: a
+# one-shot run, --json, a pipe, or doctor.
 onboarding-import-one =
     { $source } configures a model service bravebot can use: run `bravebot auth login import` in a terminal to import it.
-# The same, where the one source is Ollama running on this machine.
+# The same, where the one source is a server running on this machine: Ollama, LM Studio or
+# llama-server.
 onboarding-import-running =
     { $source } is running here with models bravebot can use: run `bravebot auth login import` in a terminal to import it.
 onboarding-import-both =
     { $first } and { $second } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
 onboarding-import-three =
     { $first }, { $second } and { $third } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
+# Where more than three have one. The names arrive as one comma-separated list.
+onboarding-import-many =
+    { $sources } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
 # Said instead, where a service is configured and only the model in force is Brave's own. A
 # settings block copied out of another tool names its models and names no default, so this is
 # where somebody following that route lands, and what they have to do is name one of their own.
@@ -417,6 +483,8 @@ doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-subscription-batch =
     an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot auth logout leo` ends this machine's custody and leaves the batch spendable by whatever copied the file
+doctor-ends-chatgpt-account =
+    a ChatGPT sign-in: issued by OpenAI to the account that signed in, and the refresh token replaces the access token without asking anybody, so the access token's expiry ends that copy rather than this program's access; ended at OpenAI by signing out of the account or removing this program's access in its settings, since `bravebot auth logout chatgpt` ends this machine's custody and leaves the tokens live there
 # Which tier the gate walk left a credential on, shown under the account of what would end it. One
 # sentence per tier rather than per credential: the tier is where the walk stopped, and what is
 # particular to a credential is the line above this one. Delegated is here although nothing stands
@@ -442,6 +510,8 @@ doctor-noticed-aws-session =
 doctor-outlives = outlives
 doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
+doctor-outlives-chatgpt-account =
+    an access token OpenAI already issued from the refresh token, which may run to its own expiry: whether revoking the sign-in reaches it has not been observed
 # Whether a derived credential is bound to the party that presents it. Shown only for the
 # credentials minted from something else. A bearer secret is usable by whatever holds a copy, and the
 # two bearer sentences keep apart an issuer that offers no bound form from one nobody has asked.
@@ -488,6 +558,19 @@ doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents a credential from the batch itself and nothing is asked to authorise the request
+doctor-dropped-chatgpt-account-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents the access token itself and nothing is asked to authorise the request
+doctor-dropped-chatgpt-account-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the sign-in may do is fixed before it is issued, since nothing here asks OpenAI to narrow it to this run
+doctor-dropped-chatgpt-account-renewable-without-authority =
+    gate { $gate }, { $answer }: the agent renews it without further authority, since the refresh token replaces the access token without asking anybody
+# The ChatGPT sign-in, shown only where one is stored. A sign-in that cannot be read is shown on the
+# same line with the sentence that names its remedy. The instant is the one the access token expires,
+# written as 2026-10-22T21:05:27Z, and is the only part of the file shown: the file also holds the
+# tokens and identifiers, which belong in no report people paste. A past instant is still signed in,
+# since the token is replaced when it is next used.
+doctor-chatgpt = chatgpt
+doctor-chatgpt-signed-in = signed in, the access token expires { $expires }
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock
@@ -501,6 +584,12 @@ doctor-gateway-token-stored = stored by bravebot auth login gateway (never print
 doctor-gateway-token-absent =
     none found (set a variable its `env` names, or run bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = none needed (the block names none)
+# A header a gateway block named and this build does not send, with the name the file wrote and the
+# reason. The name only: a header a gateway routes on is often a second credential.
+doctor-header-reserved = { $name } in the provider block is not sent: this program sets that header itself
+doctor-header-not-a-name = { $name } in the provider block is not sent: it is not a header name
+doctor-header-not-a-value = { $name } in the provider block is not sent: a header value cannot hold a line ending or a control character
+doctor-header-substitution = { $name } in the provider block is not sent: a variable reference is read as the whole value, not inside a longer one
 doctor-gateway-keys = gateway keys
 doctor-gateway-keys-unreadable =
     { $path } cannot be read, so no key in it is sent (bravebot auth login gateway leaves it as it is)
@@ -574,12 +663,34 @@ doctor-settings-fallback-ignored =
     fallbackModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-summary-ignored =
     summaryModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-plan-ignored =
+    planModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-processor-ignored =
+    processorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-style-ignored =
     style in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-language-ignored =
+    language in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
+doctor-settings-language-unmatched =
+    language { $language } in ~/.bravebot/settings.json names no catalog, so it chooses { $reference }; the catalogs are { $available }
+doctor-settings-ask-idle-ignored =
+    askIdleSeconds in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-references-ignored =
     references in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-attribution-ignored =
+    attribution in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+# retentionDays is read from the person's own file alone, since a checkout choosing when their
+# records are deleted would delete them by being opened. A line that does nothing is worth saying so.
+doctor-settings-retention-ignored =
+    retentionDays in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
+# The sweep that removes old session records, language server indexes and findings waits while the
+# period it was asked for cannot be determined, and removes nothing, so a person who set a period
+# is not swept on the built-in one instead.
+doctor-retention = retention
+doctor-retention-paused =
+    nothing is removed for age until { $path } is readable and retentionDays in it is a whole number of days above zero
 # A key that only ever refuses, spelled as something other than a boolean. It is read as absence, so
 # the session is as permissive as one that named nothing, and nothing else would say so.
 doctor-settings-narrowing-ignored =
@@ -621,7 +732,7 @@ sandbox-rule-climbs = it climbs out of the directory it is read from, or holds .
 sandbox-rule-glob-on-a-write = a wildcard applies to reads and not to writes
 sandbox-rule-confines-nothing = a write row over the home directory or the whole filesystem confines nothing
 sandbox-rule-private-key = no list adds reach to ~/.ssh, where a private key is
-sandbox-rule-state-directory = no list adds reach to ~/.bravebot, where the gateway keys are
+sandbox-rule-state-directory = no list adds reach to ~/.bravebot, where the gateway keys are, except to read ~/.bravebot/sessions
 sandbox-rule-holds-credentials = on this platform a row over a directory reaches everything inside it, so no list adds a directory that holds a credential location such as ~/.ssh, ~/.aws or ~/.bravebot
 sandbox-rule-too-broad = its wildcard looked at more of the disk than a pattern may, so what it names is not known
 sandbox-rule-overridden = another entry decides that path: a refusal at the same path, or one the managed file wrote
@@ -693,6 +804,13 @@ doctor-state-directory-logs = diagnostic logs { $path }
 doctor-state-directory-unprotected = not restricted
 doctor-state-directory-permissions =
     prompt history, session records and saved choices carry your profile directory's permissions
+# A value that is not an absolute path names no directory, so the state directory is the one the
+# profile directory gives and the report above says `HOME` named it. Without this line somebody who
+# set the variable and sees no effect has nothing to tell them it was read and passed over. Only the
+# variable's name is said, as for the proxy variables, since a value may carry a credential.
+doctor-state-directory-passed-over = passed over
+doctor-state-directory-passed-over-detail =
+    { $variable } is not an absolute path, so it names no directory
 # What outlives a session is kept in this directory, so a machine without one keeps none of it, and
 # nothing else in the report says so. Every variable that was looked at is named, since which ones
 # they are is a fact about the platform rather than something the reader should have to know. The
@@ -745,6 +863,14 @@ doctor-proxy-unsupported = { $protocol } is not supported by this build, so requ
 doctor-proxy-unparseable = not a proxy
 doctor-proxy-unparseable-detail = { $variable } is set to something that cannot be read as a proxy address, so it is not the route (its value is never printed)
 doctor-no-proxy = not proxied
+doctor-client-certificate = client certificate
+doctor-client-certificate-loaded = { $certificate }, key { $key } (loaded; the key is never printed)
+doctor-client-certificate-refused = named and unusable, so every TLS connection will be refused
+doctor-client-certificate-unusable = unusable
+doctor-network-file = stated in
+doctor-network-file-detail = { $names } from { $path }
+doctor-network-file-ignored = ignored
+doctor-network-file-ignored-detail = { $name } in { $path } is a checkout's file, so it decides nothing
 
 
 ## A permission rule this build could not act on
@@ -760,6 +886,7 @@ permission-rule-empty = is empty
 permission-rule-unclosed-bracket = is missing its closing bracket
 permission-rule-unknown-family = names no family of tools this agent has; use Read, Edit, Bash, WebFetch or Mcp
 permission-rule-empty-brackets = has empty brackets; drop them to mean every use
+permission-rule-whitespace-at-an-end = has whitespace at the start or end of its path, which would be part of a file's name; remove it, or use a * in its place, which also covers other names
 permission-rule-unanchored = needs a home directory or a settings directory to say where it points
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
@@ -798,6 +925,21 @@ subscription-unusable =
 # printed goes to the view a person can open; this is the sentence saying the thing has ended.
 background-job-finished = `{ $command }` finished in the background: { $outcome }
 
+# The heading over a message another session sent, where it reaches the planner of this one. The
+# sender is named by the start of its id and by its name as the list of background sessions shows
+# them, and the label is the one the message was given on arrival, which is the sender's word only
+# where it was a label.
+session-message-heading = message from session { $from } ({ $name }) · { $label }
+
+# The heading over a message this session's planner sent to another session. The receiver is named
+# as the list of background sessions names it, and the label is the one the message was sent under.
+session-message-sent-heading = message to session { $to } ({ $name }) · { $label }
+
+# Under the heading of a resumed session's message that the planner was not given the words of: a
+# message whose label was not trusted reaches the planner as a reference, and the record keeps no
+# content for it.
+session-message-kept = its words were kept from the planner and are not in this record
+
 # Said when a reply reached the output limit and the model is asked again rather than the turn
 # ending. Which one follows from what the reply was doing when it stopped: a call it was writing
 # was never made, so the work is asked for in parts, and a reply that wrote nothing is asked again.
@@ -819,6 +961,9 @@ spend-limit-without-a-limit = Go on without a limit
 spend-limit-raised = the session limit is now { $limit } { $unit }
 spend-limit-lifted = the session has no limit
 spend-limit-stopped = stopped at the session limit: { $spent } { $unit } spent against a limit of { $limit }
+# What a run says when a limit its person gave it ended it, before the round or request it would have made.
+run-limit-rounds = stopped at the limit on rounds of tool calls ({ $most }): the planner asked for another and it was not run
+run-limit-tokens = stopped at the limit on tokens ({ $most }): { $spent } were spent and the next request was not sent
 repeated-call-header = Repeated call
 repeated-call-reached = The planner has made the same { $tool } call { $count } times in a row. It was not run. Run it again, or choose another way forward.
 repeated-call-refuse = Do not run it, and tell the planner to try another approach
@@ -849,7 +994,7 @@ hook-stopped =
     stopped
 
 
-## Importing a model service Claude Code or opencode configured, or a running Ollama serves
+## Importing a model service Claude Code or opencode configured, or a running Ollama, LM Studio or llama-server serves
 
 # Said above everything an import would write, naming the files it was read from. Every name and
 # value follows before the question, because what is written is what the person approves.
@@ -857,8 +1002,15 @@ import-found = { $source } configures a model service bravebot can use, in { $fi
 # Where no file was read: the setup is exported rather than written down.
 import-found-exported =
     { $source } configures a model service bravebot can use, in this process's environment.
-# Where the source is a server that answered rather than a file: Ollama, at the address asked.
+# Where the source is a server that answered rather than a file: Ollama, LM Studio or llama-server,
+# at the address asked.
 import-found-running = { $source } is running at { $url }, serving models bravebot can use.
+# Under the model, where the running server stated the window it holds that model loaded with.
+import-window = the server has it loaded with a context window of { $window } tokens
+# Said where that window is below the one a conversation is otherwise budgeted against. The entry
+# listed below it carries the figure as contextWindow, so a conversation is kept within it.
+import-ollama-window-small = Ollama drops the earliest turns beyond that window, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Set OLLAMA_CONTEXT_LENGTH higher before starting Ollama to keep more.
+import-lm-studio-window-small = A conversation longer than that window does not fit the model as LM Studio has loaded it, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Load the model with a longer context length in LM Studio to keep more.
 import-adds = Importing it adds these to { $file }:
 # One gateway, with the host its requests go to: that host is where a credential is sent, so it is
 # the part of the entry the question is really about.
@@ -873,7 +1025,7 @@ import-named-model = { $model } in provider.{ $id }, named by { $variable }
 import-pinned = Not offered, since { $file } sets them for every user of this machine:
 # Found and not imported, one line each, by name and reason and never by value.
 import-left-heading = Found in { $source } and not imported:
-import-left-anthropic-api = Anthropic's own API, whose wire format no service here speaks
+import-left-anthropic-api = a setting for Anthropic's own API, which is not carried over: add a provider.anthropic block that names where the key lives
 import-left-vertex = Google Vertex AI without a Google Cloud project, or through Google Cloud credentials, neither of which a service here reaches
 import-left-bearer-token =
     a Bedrock API key; bravebot signs Bedrock requests through the AWS credential chain instead
@@ -883,7 +1035,7 @@ import-left-another-sdk = an entry reached through an SDK other than an OpenAI-c
 import-left-no-endpoint = no reachable endpoint is stated or known for it
 import-left-substitution =
     its key is built from an opencode substitution inside a longer value, which bravebot does not make
-import-left-elsewhere = names a server on another machine, which is not asked
+import-left-elsewhere = names an address other than this machine's loopback, which is not asked
 import-left-no-tool-model = running there, with no model that can call tools
 import-question = Import this from { $source }?
 # Asked on its own, after the import is approved, and never showing the key.
@@ -910,7 +1062,7 @@ import-needs-a-terminal = import-providers asks before it writes anything, so it
 import-not-while-incognito = an import writes settings to disk, which an incognito session will not do
 import-no-home = there is no home directory to write settings in
 import-nothing-found =
-    neither Claude Code nor opencode configures a model service bravebot can use, and no Ollama serving one is running here
+    neither Claude Code nor opencode configures a model service bravebot can use, and no Ollama, LM Studio or llama-server serving one is running here
 import-nothing-new = nothing is left to import: every name found is already set, or pinned
 import-takes-nothing-else = import-providers takes no arguments
 
@@ -931,8 +1083,9 @@ auth-logout-needs-a-way = bravebot auth logout needs the name of the way to sign
 auth-ways-heading = Ways to sign in to a model service:
 auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
 auth-way-bedrock = An AWS account, for Amazon Bedrock
-auth-way-import = A model service Claude Code, opencode or Ollama has, imported into settings
+auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
 auth-way-gateway = A key for a gateway a provider block in settings names, typed here and kept by bravebot
+auth-way-chatgpt = A ChatGPT Plus or Pro account, signed in to in a browser
 # The status of the gateway way where keys are stored. The ids are provider ids.
 auth-gateway-held = a key stored for { $ids }
 auth-gateway-held-unreadable = the file of gateway keys cannot be read
@@ -1033,7 +1186,76 @@ auth-status-not-all-usable = a sign-in asked about is not usable
 auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock or gateway
 auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
 auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
+# The instant is the one the access token expires, written as 2026-10-22T21:05:27Z. The token is
+# replaced when it is next used, so a past instant is still signed in.
+auth-status-chatgpt-expires = the access token expires { $expires }
+auth-status-chatgpt-none = no ChatGPT sign-in is stored; run bravebot auth login chatgpt
+auth-status-chatgpt-nowhere = this machine has nowhere to keep a sign-in, so none is stored
 auth-status-bedrock-good = the AWS session gives credentials to sign a request with
+# The next four are fixed sentences because a line of `auth status` carries no text the AWS CLI
+# chose: its error text names accounts and roles, and its profile list can embed an account id.
+auth-status-bedrock-lapsed = the AWS session has lapsed: run `bravebot auth login bedrock`
+auth-status-bedrock-no-profile = the AWS CLI has no profile by this name: name one it has in settings
+auth-status-bedrock-no-cli = the AWS CLI is not installed, and Bedrock credentials come from it
+auth-status-bedrock-undecodable = the AWS CLI answered with something that is not a credential
+
+
+## Signing in with a ChatGPT account
+
+chatgpt-not-while-incognito = signing in stores a token on disk, which an incognito session will not do
+chatgpt-needs-a-terminal =
+    signing in to ChatGPT shows an address to open and waits for the browser, so bravebot auth login chatgpt needs a terminal on standard error
+chatgpt-held-needs-a-terminal =
+    a ChatGPT sign-in is already stored and replacing it needs an answer, so bravebot auth login chatgpt needs a terminal on standard input
+chatgpt-name-is-a-gateway =
+    a provider block named chatgpt is a gateway, and one name cannot select two services: rename the block, then run bravebot auth login chatgpt again
+chatgpt-held = A ChatGPT sign-in is already stored.
+# Beside the way in the list of ways, where the file a sign-in is kept in cannot be read.
+chatgpt-held-unusable = a stored sign-in cannot be read
+chatgpt-replace = Replace it?
+chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
+chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
+chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
+chatgpt-not-used-yet = bravebot sends no request with this sign-in yet
+chatgpt-forgotten =
+    forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings
+chatgpt-nothing-to-forget = no ChatGPT sign-in is stored
+# Why the sign-in stopped. Each is chosen from the step that failed and, for a failed request, the
+# class of its status. None repeats anything the browser, OpenAI or a settings file said.
+chatgpt-failed-listener =
+    could not listen for the browser on the loopback address, so no browser was opened and nothing was changed
+chatgpt-failed-timed-out =
+    the browser did not return to bravebot in time, so the sign-in stopped and nothing was stored; a browser on another machine reaches this machine's loopback port only if the port named above is forwarded to it
+chatgpt-failed-no-code =
+    the browser returned no authorization code, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-no-client =
+    the browser returned no usable client for bravebot, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-client-changed =
+    the browser returned a different client from the one stored, so the sign-in stopped and nothing was changed; run bravebot auth logout chatgpt and sign in again
+chatgpt-failed-no-use-scope =
+    the sign-in did not allow bravebot to use the subscription's tokens, so nothing was stored; run bravebot auth login chatgpt and allow it, or use an API key with the openai gateway
+chatgpt-failed-exchange = the sign-in could not be completed: { $reason }; nothing was stored
+chatgpt-class-refused = the authorization server refused the request
+chatgpt-class-rate-limited = the authorization server is limiting requests; try again later
+chatgpt-class-unavailable = the authorization server is unavailable; try again later
+chatgpt-class-incomplete = the authorization server's reply was incomplete
+chatgpt-class-transport = the authorization server could not be reached
+# The detail is a path and what the operating system said about it.
+chatgpt-account-nowhere = there is nowhere to keep a ChatGPT sign-in: { $detail }
+chatgpt-account-unusable =
+    the stored ChatGPT sign-in could not be read: { $detail }; run bravebot auth login chatgpt to sign in again, or bravebot auth logout chatgpt to forget it
+chatgpt-account-malformed =
+    the stored ChatGPT sign-in is unusable: { $defect }; run bravebot auth login chatgpt to sign in again, or bravebot auth logout chatgpt to forget it
+chatgpt-account-unwritable = the ChatGPT sign-in could not be stored: { $detail }; nothing was changed
+chatgpt-defect-empty = the file holds nothing, which an interrupted write leaves behind
+chatgpt-defect-not-json = the file is not valid JSON
+chatgpt-defect-other-version = it was written by another version, and this build reads version 1
+chatgpt-defect-missing-field = a field is missing or empty
+chatgpt-defect-no-expiry = it has no expiry
+# The two pages the browser is shown: after it returns to bravebot, and for any other request to the
+# port. They are shown in the browser, not in the terminal.
+chatgpt-page-done = You can close this tab and return to bravebot, which says whether the sign-in worked.
+chatgpt-page-not-found = Not found.
 
 
 ## Declaring an MCP server, and approving one
@@ -1100,7 +1322,7 @@ mcp-problem-twice =
     { $name } is given twice: a variable has one value, stored or read from your environment
 mcp-problem-reads = reads is not a list of absolute paths
 mcp-problem-directory = the directory is not an absolute path
-mcp-problem-url = the url is not http or https with a host
+mcp-problem-url = the url is not http or https with a host and, where it writes a port, a number up to 65535
 mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
 mcp-problem-header = { $name } is not a valid HTTP header token
@@ -1184,6 +1406,11 @@ mcp-list-declared-in = declared in { $path }
 mcp-approved = approved
 mcp-unapproved = unapproved
 mcp-unapproved-run-approve = unapproved: run bravebot mcp approve { $alias }
+# The heading `get` puts over the policy a session would start a local server under, which the lines
+# beneath it spell out with the labels /status uses.
+mcp-get-policy = a session here would confine it to:
+mcp-get-policy-home = home
+mcp-get-policy-home-throwaway = a new directory in the temporary directory, made when it starts
 mcp-refused-by-managed = not started: { $reason }
 mcp-cannot-be-used = cannot be used: { $problem }
 mcp-unusable = { $alias } cannot be used: { $problem }
@@ -1274,6 +1501,11 @@ servers-paths-left-out =
     is not on disk: { $paths }
 servers-no-handshake = { $alias } was started and did not complete its handshake: { $reason }
 servers-too-slow = { $alias } did not complete its handshake within { $seconds } seconds
+servers-prompts-not-listed = { $alias } offers no prompt in this session: { $reason }
+servers-prompts-refused = { $count ->
+    [one] { $alias } listed { $count } prompt it cannot offer: a name is letters, digits, - and _, listed once, and so is the name of each argument
+   *[other] { $alias } listed { $count } prompts it cannot offer: a name is letters, digits, - and _, listed once, and so is the name of each argument
+    }
 
 ## A model this machine's administrator does not let it ask for
 
@@ -1294,6 +1526,10 @@ delegate-model-refused =
 # Said among a delegate's own lines when a person stopped it from the delegate view: the turn goes on.
 delegate-stopped-narration = you stopped this delegate, so it has to finish with what it has
 
+# Said among a delegate's own lines when it has spent the token budget its definition or the call
+# set: it loses its tools and answers with what it has. The figure is a count of tokens.
+delegate-budget-narration = this delegate has spent its budget of { $budget } tokens, so it has to finish with what it has
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = offer these tools to the model?
@@ -1303,7 +1539,6 @@ mcp-tools-offered =
        *[other] { $alias } offers { $count } tools
     }
 mcp-tools-none = { $alias } lists no tool it can offer
-mcp-tools-changed = this is not the list you said yes to before: the tools it offers have changed
 mcp-tools-explained =
     The model will read each tool's name, its arguments and what the server says about it, as
     shown here. Every call is still put to you. Say no if a description gives instructions.
@@ -1325,9 +1560,8 @@ mcp-tools-yes = Yes, offer them
 mcp-tools-no = No, continue without them
 mcp-tools-declined = { $alias } offers no tool in this session: its list was not approved
 mcp-tools-refused = { $alias } offers no tool in this session: { $reason }
-mcp-tools-not-recorded =
-    the tools { $alias } offers are approved for this session only, since the answer could not be
-    recorded: { $error }
+mcp-tools-changed = { $alias } changed its tools: it offers none until the list it gives now is approved
+mcp-tools-reread-failed = { $alias } offers no tool in this session: its changed list could not be read ({ $reason })
 
 ## One call to a tool of an MCP server
 
@@ -1352,6 +1586,21 @@ mcp-record-not-read = it could not be read as text, so it was left as it is
 ## A remote MCP server whose reply pointed somewhere it is not declared
 
 mcp-move-title = declare this server where its reply points?
+mcp-start-title = start { $alias }?
+command-mcp = List MCP servers, start one again, or turn one off
+mcp-command-usage = /mcp takes list, reconnect [alias] or disable <alias>
+mcp-command-none = No MCP server is requested here, and none is running
+mcp-command-running = MCP servers running:
+mcp-command-not-running = MCP servers requested here and not running:
+mcp-command-not-connected = { $alias }: not connected. /mcp reconnect { $alias } tries it again
+mcp-command-off = { $alias }: turned off for this session. /mcp reconnect { $alias } starts it again
+mcp-command-already-running = { $alias } is already running
+mcp-command-not-requested = { $alias } is not requested by this session's settings
+mcp-command-nothing-to-reconnect = Every requested MCP server is running or turned off. /mcp reconnect <alias> starts one that is off.
+mcp-command-reconnected = { $alias } is running. Its tools are put to you before the next turn plans.
+mcp-command-disabled = { $alias } is turned off for this session. Nothing was written.
+mcp-command-already-off = { $alias } is already turned off
+mcp-command-needs-an-alias = /mcp { $command } needs the alias of a server
 mcp-move-declared = { $alias } is declared at { $url }
 mcp-move-destination = and its reply points to { $url }
 mcp-move-reaching = reaching { $authority }
@@ -1377,6 +1626,16 @@ mcp-move-not-recorded =
     recorded: { $error }
 mcp-move-no-handshake = { $alias } did not complete its handshake where its reply pointed: { $reason }
 mcp-move-again = { $alias } was redirected again, off where it was just moved, so that was refused
+
+## An MCP server's prompt a person ran by typing its name
+
+mcp-prompt-failed = the prompt { $name } of { $alias } could not be fetched: { $reason }
+mcp-prompt-not-a-pair = { $word } is not name=value, so the line was not sent. A prompt of a server takes its arguments as name=value, with a value that holds spaces in double quotes
+mcp-prompt-bad-name = { $word } does not start with a name an argument may have, so the line was not sent. A name is letters, digits, _, - and .
+mcp-prompt-ambiguous = { $word } begins the alias of more than one server, so it names none of them and the line was not sent
+mcp-prompt-sent-as-text = that line names a prompt it cannot run, so it went to the model as it is and the prompt was not fetched
+mcp-prompt-twice = { $name } is given more than once, so the line was not sent
+mcp-prompt-quote = the value of { $name } has a double quote that does not close, or text straight after it, so the line was not sent
 
 ## Programs asking for one more path for the session
 
@@ -1414,6 +1673,23 @@ host-explained =
 host-yes = Yes, for this session
 host-no = No
 
+## A message to another background session, asked before it is sent
+
+message-title = send a message to another session?
+message-to = To the session "{ $name }" ({ $state }), working in { $directory }:
+message-label = Sent as { $label }.
+message-explained =
+    A yes sends this text to that session's planner as advice from another session. It answers
+    nothing that session is holding, grants it no permission and starts no turn there. The planner
+    wrote the text.
+message-explained-turn =
+    Answering { $key } sends this one and the later ones to this session until this turn ends.
+    Nothing is written down, so the next turn asks again.
+# What a line on a terminal accepts: y sends this one, the key named in message-answer-turn sends
+# this one and the later ones this turn, and any other line, and the end of the input, sends nothing.
+message-answer = [y/t/N]
+message-answer-turn = t
+
 ## Vouching for a directory, asked once when a session starts somewhere new
 
 trust-directory-title = trust this directory?
@@ -1424,23 +1700,34 @@ trust-directory-explained =
 trust-directory-regardless =
     Either way, anything derived from the web or from an untrusted file is still shown
     before it is written.
+# What a yes grants beyond the files (RUN-5), above the lines that scroll so that it is on the screen
+# whenever the yes can be taken. It names the cases where a line still asks, since a person who
+# reads it should not expect more than they get.
+trust-directory-confined-lines =
+    A yes also lets a command run here without asking when the sandbox confines it, with the
+    network closed for that command, which today is on macOS only. Anything that needs more still asks.
+# The yes where the answer cannot be kept (TRUST-23): no state directory, a filesystem root, the home
+# directory or one holding it, a filesystem that does not say when a directory was made, or an
+# incognito session.
 trust-directory-yes = trust it
 trust-directory-no = ask me about every write
-# The key that keeps the answer for later sessions (TRUST-23). Offered only where it can be written
-# down, and its lines say what it covers and where it goes, since nobody can endorse a record they
-# were not shown.
+# The yes where it keeps the answer for later sessions (TRUST-23). Its lines say what it covers and
+# where it goes, since nobody can endorse a record they were not shown.
 trust-directory-remember = trust and remember
 trust-directory-remember-explained =
-    r: trust it, and skip this question in later sessions started in this directory, or below it if it is a git root
+    A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked.
 trust-directory-remember-exact =
     A session started above it is still asked, and so is one in a nested repository or in a directory deleted and made again here.
 trust-directory-remember-where = /forget-trust takes it back, and it is written down here:
-# Above the keys while the lines saying what r does and where it writes have not been on the screen
-# together, which is when r is not taken. What r does comes first, so a narrow terminal that cuts the
+# Said where a yes cannot be kept, so the person is not left to find out from the next session.
+trust-directory-not-remembered =
+    This answer cannot be kept here, so a session started in this directory later asks again.
+# Above the keys while the lines saying what y keeps and where it writes have not been on the screen
+# together, which is when y is not taken. What y does comes first, so a narrow terminal that cuts the
 # line off keeps it.
-trust-directory-remember-unseen = ↑↓ r remembers nothing: what it writes is not shown yet
+trust-directory-remember-unseen = ↑↓ y trusts nothing yet: what it keeps is not shown yet
 # The same where those lines are taller than the box, so no scroll shows them together.
-trust-directory-remember-too-small = r remembers nothing: what it writes is taller than this box
+trust-directory-remember-too-small = y trusts nothing: what it keeps is taller than this box
 quit = quit
 trust-quit-again = again
 
@@ -1530,8 +1817,9 @@ picker-service-bedrock = Bedrock, your AWS account
 history-search-title = Search prompts
 history-scope-everywhere = everywhere
 history-scope-here = this project
+history-scope-session = this session
 history-search-placeholder = Filter history…
-history-search-keys = ↑↓ to move  ·  Enter to use  ·  { $scope } to scope  ·  Esc to cancel
+history-search-keys = ↑↓ to move  ·  Enter to use  ·  { $scope } to cycle the scope  ·  Esc to cancel
 history-search-nothing-matches = nothing matches that
 history-search-more-lines =
     { $count ->
@@ -1549,9 +1837,11 @@ history-age-months = { $count }mo ago
 # in the box, of how many.
 input-history-position = { $scope } { $index }/{ $total }
 input-history-this-session = This session
+input-history-this-project = This project
 input-history-all = All
 input-history-widen = { $chord } all prompts
 input-history-narrow = { $chord } this session
+input-history-project = { $chord } project prompts
 # At the other end of that same border, the ways in: the search over every prompt, and the search
 # narrowed to the ones sent from this project. The narrower one is dropped where the row will not
 # hold both beside the position, and then the other one is, so a longer wording is one that fewer
@@ -1560,17 +1850,32 @@ input-history-search = { $chord } to search
 input-history-scope = { $chord } this project
 resume-heading = Resume session
 resume-search-placeholder = Search titles and what was said… (since:7d for recent)
-resume-keys = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc for a new session
+resume-keys = ↑↓ to choose  ·  Enter to resume  ·  Del to delete  ·  type to search  ·  Esc for a new session
 resume-from-pr = for pull request { $pull_request }
 resume-handed-off = from { $id }
-resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  type to search  ·  Esc to stay in this session
+resume-keys-within = ↑↓ to choose  ·  Enter to resume  ·  Del to delete  ·  type to search  ·  Esc to stay here
 resume-nothing-matches = nothing matches that
+resume-delete-question = Delete "{ $title }"? y deletes it, any other key keeps it
+resume-delete-held = that session is running in the background; stop it before deleting it
+resume-delete-done = deleted
+resume-delete-failed = could not delete that session
 resume-manifest-run = that was a manifest run, which cannot be continued; start a new session
 
 
 ## Shared by every question the interface stops to ask
 
 stop-the-turn = stop the turn
+# Beside a write, run or call question's keys: the key that opens a line to type a note into.
+note-key = note
+# The line a note is typed into, opened from a write, run or call question.
+note-title = add a note
+note-sent-with-no = sent with a no
+note-sent-with-yes = sent with a yes
+note-explained = the planner reads this beside your answer. it does not change what is approved.
+note-send = send
+note-switch-to-yes = answer yes
+note-switch-to-no = answer no
+note-back = back
 scroll-more = ↑↓ { $count } more
 scroll-back = ↑↓ back
 # Under a question's body in place of the scroll hint while rows that decide the question have not
@@ -1619,6 +1924,7 @@ write-remember-where = it is written down here, and deleting the line is the way
 write-yes = write it
 write-always = always this session
 write-remember = remember it
+write-edit-first = edit it first
 write-no = leave it alone
 
 
@@ -1662,6 +1968,10 @@ watching-output-more = { $count ->
     [one] 1 more line was printed and is not kept
    *[other] { $count } more lines were printed and are not kept
     }
+watching-output-live-more = { $count ->
+    [one] 1 earlier line is not shown here and is still unread
+   *[other] { $count } earlier lines are not shown here and are still unread
+    }
 run-line-sent = the model wrote:
 run-writes = it writes these files:
 run-is-fed = it is fed the contents of:
@@ -1676,6 +1986,7 @@ run-confined-machine-git = it can read this machine except the places that hold 
 run-carries-known-hosts = { $program } also adds to your ssh known hosts and can reach your ssh agent
 run-carries-toolchain = { $program } also reaches the install and the cache of the { $toolchain } toolchain
 run-carries-loopback = { $program } can also listen on, and connect to, ports of this machine
+run-carries-ssh-key = the planner asked that you choose again which ssh key { $program } offers first, where more than one could be offered, and nothing more is lent
 run-carries-remote = { $program } also reads your git and gh logins, your ssh configuration and public keys, never a private key, and adds to your ssh known hosts
 run-carries-aws = { $program } also reads your aws credentials in ~/.aws
 run-carries-kubernetes = { $program } also reads your kubernetes credentials in ~/.kube
@@ -1705,7 +2016,7 @@ reach-lifetime-session-in = for this session in { $workspace }
 reach-lifetime-always-in = always in { $workspace }
 reach-added = remembered: { $command } also { $access } { $entry }, { $lifetime }. The next plan for it shows this row.
 reach-removed = forgotten: { $command } no longer also { $access } { $entry }
-reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, ~/.ssh, or a directory above them.
+reach-refused-entry = { $entry } is not a credential scope (remote, aws, kubernetes, docker) or a directory that can be reached. It must be an absolute path or start with ~/, exist, and not be your home directory, a directory above it, ~/.ssh, or a credential location such as ~/.aws or ~/.gnupg.
 reach-refused-write = a credential scope is read only. Only a directory can be written.
 reach-refused-line = that command line cannot be run as written, so there is nothing to remember the reach for
 reach-refused-assignment = a command with NAME=value in front of it carries no remembered reach
@@ -1772,10 +2083,12 @@ run-remember-explained = r: stop asking about this exact line, in this directory
 run-remember-where = it is written down here, and deleting the line is the way back:
 run-remember-only-asking = it stops the asking only: what it prints stays quarantined
 run-remember-every-session = every session started in this directory reads it, not just this one
-# Said only for a sub-command the program's table lists, under the record's own rows. The line below
-# it is the entry as it will be held, with the slot drawn where the number goes.
-run-remember-family-explained = f: stop asking about this line with any number in place of this one, in this directory, from now on
-run-remember-family-only-number = only a whole number may change: another repository, another flag or another sub-command is still asked about
+# Said only for a line the program's table lists, under the record's own rows. The name under the
+# first row is the scope in words, and the two rows after it say what it covers and what stays fixed.
+run-remember-scope-explained = s: stop asking about this, in this directory, from now on:
+run-remember-scope-read-covers = it covers viewing a pull request or an issue and reading a pull request's diff and checks, each with any number
+run-remember-scope-read-fixed = everything else is still asked about: another repository, another flag, and anything that writes
+run-remember-scope-one-entry = it is saved as one entry in the same file, and deleting that line takes all of it back
 # Said where the person has already answered a prompt for this binary under other arguments, which
 # is the only thing a prompt can establish about a line that will be asked about however it is
 # answered. No pattern is suggested: which argument carried the message is the person's to decide.
@@ -1787,7 +2100,7 @@ run-pattern-only-asking = a pattern stops the asking and nothing else: what the 
 run-yes = run it
 run-always = always this session
 run-remember = remember it
-run-remember-family = any number
+run-remember-scope-read-pull-requests-and-issues = read pull requests and issues in { $repository }
 run-no = don't
 # Said above the keys while a row of the plan has not been on the screen. It counts rows, which is
 # what the arrows move by, and the count comes first so a narrow box does not cut it off.
@@ -1813,6 +2126,18 @@ run-grant-unseen =
 check-safe = the check found no attempt to give instructions in this
 check-unsafe = the check says this looks like an attempt to give instructions
 check-inconclusive = the check did not complete, so nothing has looked at this
+
+
+## Characters in a prompt's text that draw as nothing
+
+# Said above text a person is deciding about, where some of it draws as nothing: a zero-width
+# character, a bidirectional control, a variation selector or a tag character. The text below
+# writes each one out, so the sentence says what those tokens are and that the model reads the
+# characters themselves.
+hidden-characters = { $count ->
+    [one] 1 character in this text draws as nothing. It is written out below as ‹U+XXXX›, and a tag character also as the letter it stands for. The model reads it as it is.
+   *[other] { $count } characters in this text draw as nothing. Each is written out below as ‹U+XXXX›, and a tag character also as the letter it stands for. The model reads them as they are.
+    }
 
 
 ## Letting the model read what a command printed
@@ -1889,6 +2214,9 @@ vet-picture-yes = let it see this
 fetch-title = fetch this?
 fetch-verb = Fetch
 fetch-host = talking to { $host }
+# Said under the host where the fetch was approved for another host and a redirect led here, so
+# the question reads as a hop the person was never shown and not as a fresh fetch.
+fetch-redirected = redirected from { $from }, which is the host this fetch was approved for
 # Said where the host is the metadata service of the machine this is running on, which is a host
 # like any other to everything in between: it asks for no credential and hands out the ones of
 # the role this machine runs as. A person shown the address alone has been shown a number.
@@ -1960,6 +2288,7 @@ vouch-verb = Trust
 vouch-explained =
     the model cannot read this file, so it is working blind on it. Vouching lets it read
     this file for the rest of this session, here and in every later read.
+vouch-rule = a yes trusts { $rule } and everything beneath it
 vouch-nothing = (nothing of this file can be shown)
 vouch-yes = trust it
 vouch-no = leave it quarantined
@@ -1988,6 +2317,10 @@ count-rules = { $count ->
 count-commands = { $count ->
     [one] { $count } command
    *[other] { $count } commands
+    }
+count-remembered = { $count ->
+    [one] { $count } entry
+   *[other] { $count } entries
     }
 count-requested-paths = { $count ->
     [one] { $count } path
@@ -2068,12 +2401,39 @@ status-mcp-servers-tools =
        *[other] { $alias }: { $count } tools offered to the model
     }
 status-mcp-servers-declined = { $alias }: no tool offered, as you answered
+# The heading of what one started local server's confinement grants, then a line each for the
+# network, subprocesses and where it starts, and one for each path its backend was handed. Each
+# path's label is what the server may do at it.
+status-server-policy = Server policy
+status-server-policy-egress = egress
+status-server-policy-egress-closed = none
+status-server-policy-egress-loopback = this machine only
+status-server-policy-egress-open = any address
+status-server-policy-egress-hosts = only through the allowed-hosts proxy
+status-server-policy-subprocesses = subprocesses
+status-server-policy-subprocesses-allowed = allowed
+status-server-policy-subprocesses-refused = refused
+status-server-policy-starts-in = starts in
+# macOS refuses a write to a .git beneath a write row, so a row labelled write does not reach one.
+status-server-policy-git = .git
+status-server-policy-git-held-back = not written under a write row
+status-server-policy-read = read
+status-server-policy-write = write
+status-server-policy-read-write = read, write
+# The paths that were wanted and are not rows, because this platform grants no path that is not on
+# disk and these are not. The paths follow, one to a line.
+status-server-policy-left-out = left out
+status-server-policy-left-out-reason = not on disk, and this platform grants no path that is not
 status-loop = Loop
+status-loop-numbered = Loop { $number }
 status-loop-every = every { $every }
 status-loop-self-paced = paced by each turn
 status-loop-next = next in { $next }
 status-loop-running = running now
 status-loop-unpaced = waiting for the turn to say when
+status-loop-once = once
+status-after = After
+status-after-numbered = After { $number }
 status-goal = Goal
 status-goal-paused = paused, /goal resume arms it
 status-goal-usage = { $note } · { $elapsed } · { $tokens }
@@ -2166,6 +2526,7 @@ status-nothing-vouched-this-session = nothing vouched for this session; the line
 status-trusted-commands = Trusted commands
 status-trusted-commands-note = run unasked, and their output is trusted
 status-command-in = in { $directory }
+scope-read-pull-requests-and-issues = Read pull requests and issues in { $repository }
 status-remembered = Remembered lines
 status-remembered-note = run unasked in this directory, and their output stays quarantined
 status-remembered-this-session = remembered in this session
@@ -2292,6 +2653,10 @@ tokens-millions = { $millions }M
 # disappearing, and an announcement made by something vanishing is one nobody reads.
 turn-done = turn { $turn } done
 turn-failed = turn { $turn } failed
+# The text of the terminal notice written when a turn ended or a question is waiting while the
+# terminal was left. Fixed: it never carries a command, a path or any part of a reply.
+notice-turn-finished = bravebot: turn finished
+notice-waiting = bravebot: waiting for an answer
 # Said of a turn the person stopped themselves, which is neither of the above.
 turn-cancelled = turn { $turn } cancelled
 
@@ -2331,6 +2696,12 @@ ask-key-answer = answer
 ask-key-skip = skip
 ask-key-skip-question = skip the question
 ask-key-back-to-options = back to the options
+ask-key-back = back
+ask-key-send = send
+ask-key-change = change an answer
+ask-review-title = review your answers
+ask-review-heading = Nothing has been sent yet.
+ask-review-skipped = (skipped)
 
 
 ## Handing the line to an editor
@@ -2339,8 +2710,8 @@ editor-none-configured = no editor found: set $VISUAL or $EDITOR to the one you 
 editor-scratch-unusable = the file to edit could not be used: { $problem }
 editor-named-but-missing =
     '{ $command }' was not found, and $VISUAL or $EDITOR names it, so nothing else was tried
-editor-exited-badly = { $editor } exited with status { $code }, so the line is unchanged
-editor-was-stopped = { $editor } was stopped before it finished, so the line is unchanged
+editor-exited-badly = { $editor } exited with status { $code }, so what you had is unchanged
+editor-was-stopped = { $editor } was stopped before it finished, so what you had is unchanged
 editor-would-not-start = { $editor } would not start: { $problem }
 
 
@@ -2355,6 +2726,12 @@ transcript-more-lines = { $count ->
 transcript-earlier-lines = { $count ->
     [one] … { $count } earlier line
    *[other] … { $count } earlier lines
+    }
+# Said under output a program coloured: how many colour codes were taken out of the text and not
+# drawn, so that a person can still tell they were there.
+colour-codes-not-drawn = { $count ->
+    [one] { $count } colour code not drawn
+   *[other] { $count } colour codes not drawn
     }
 transcript-unchanged = { $count ->
     [one] … { $count } unchanged line
@@ -2446,6 +2823,11 @@ caffeinate-explained =
 # Left in the transcript when /caffeinate turns on, and when it turns off.
 caffeinate-on = the computer is kept awake while a turn runs or a loop waits
 caffeinate-off = the computer may sleep again
+# Left in the transcript when /thinking turns on, and when it turns off.
+thinking-on = the model's thinking is shown as it arrives, for this session only
+thinking-off = the model's thinking is hidden
+# The heading over the model's thinking while it arrives.
+transcript-thinking = thinking
 # Left in the transcript when the program that holds off sleep would not start, which turns
 # /caffeinate off.
 caffeinate-unavailable = /caffeinate is unavailable: `{ $program }` could not be started ({ $reason })
@@ -2476,6 +2858,39 @@ panel-more = +{ $count } more
 panel-earlier = +{ $count } earlier
 # The same, with rows left out below as well.
 panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
+
+# The files state of the info panel, which lists what the session wrote (`/files`).
+# Its heading, above the list: how many files the session's write calls changed.
+files-heading = { $count ->
+    [one] { $count } file changed
+   *[other] { $count } files changed
+    }
+# Beside that heading after a resume, since the session record holds no write's changes.
+files-earlier-not-kept = earlier edits are not kept
+# The first and last rows of a list longer than its room, counting the files left out.
+files-more-above = ↑ { $count } more above
+files-more-below = ↓ { $count } more below
+# The last row of that list when files arrived after the reader last pressed a key.
+files-more-below-new = ↓ { $count } more below, { $new } new
+# Over each edit to the highlighted file: its place among them and the turn it was made in.
+files-edit-header = edit { $index } of { $total }, turn { $turn }
+# After the highlighted file's name.
+files-edit-count = { $count ->
+    [one] { $count } edit
+   *[other] { $count } edits
+    }
+# Left in the transcript by /files before the session has written a file.
+files-nothing-written = no file has been written in this session yet
+# Left in the transcript by /files on a terminal too narrow for the state.
+files-too-narrow = The files view needs a terminal at least { $columns } columns wide.
+# Said on the bottom line while the state is open, naming its keys.
+files-hint = ↑↓ file  ·  PgUp PgDn scroll  ·  [ ] edit  ·  q back
+# The info panel's Files section: its heading, and how many files the session wrote.
+panel-files = Files
+panel-files-total = { $count ->
+    [one] { $count } file
+   *[other] { $count } files
+    }
 # Said on the bottom line while the view is scrolled back off the tail, and gone once it reaches it.
 held-hint = { $count ->
     [one] held, { $count } row below  ·  { $chord } to return
@@ -2524,14 +2939,25 @@ command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
 command-advisor = Name the model the planner may consult, say which it may, or drop the choice
 command-style = Choose how the planner answers: list the styles, pick one, or clear the pick
+command-mode = Keep a skill applied to every turn: list skills, pick one, or leave
+session-mode-set = the { $skill } skill is in force from the next turn, until you leave it with /mode off
+session-mode-in-force = mode: { $skill }; available: { $skills }
+session-mode-none = no mode; available: { $skills }
+session-mode-cleared = mode left
+session-mode-unknown = no skill called { $skill }; available: { $skills }
+session-mode-resumed = this session was in the { $skill } mode, which is in force again
+input-skill-mode = mode: { $skill }
 command-config = Choose how the input box edits text
+command-language = Choose the interface language for the next start, or drop the choice
 command-add-dir = Open another directory and trust it for this session, or close one
 command-reach = Remember a directory or credential for a command, or list and remove them
 command-sandbox = Show the sandbox mode, or change it from the next turn
 command-cd = Work in another directory from now on, and trust it for this session
 command-rename = Call this conversation something else
+command-note = Note something on this session's record, without putting it in the conversation
 command-branch = Copy this session and carry on in the copy, keeping the original to return to
 command-handoff = Start a new session from a brief you can edit, written for the next goal
+command-commit-message = Draft a commit message from the staged changes into the box, for you to edit
 command-resume = Pick up another session of this directory, by id or from a list
 command-background = Hand this session to a background process and leave it running
 command-issue = Say which issue this session is for, show it, or clear it
@@ -2542,11 +2968,14 @@ command-recap = Recap where this session stands, without putting it in the conve
 command-clear = Start a new session here, keeping this one resumable
 command-forget-trust = Stop remembering that this directory is trusted, so later sessions here ask
 command-loop = Send a prompt again and again, say what is repeating, or stop it
+command-after = Send a prompt once, after a delay
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-jobs = List this turn's background jobs, and stop one by its name
 command-panel = Show or hide the info panel beside the transcript
+command-files = List the files the session wrote and show every edit to the one highlighted
 command-caffeinate = Keep the computer awake while a turn or loop is pending
+command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-plan = Enter plan mode, and start on a task if you give one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
@@ -2554,10 +2983,13 @@ command-agent = Run one of your definitions on a task, by its name
 command-memory = List each definition's memory, where it is kept and whether it is withheld
 command-init = Have the planner draft an AGENTS.md for this project
 command-review = Have the planner review local changes or a pull request
+command-help = Ask a question about bravebot, answered from its own documentation
+command-changelog = Show what changed in this version
 command-export = Export the session transcript to a markdown file
 command-copy = Put the last reply on the clipboard, or the one that many replies back
 command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
+command-hunks = List the hunks the last turn wrote, or put one back as it stood before the turn
 command-exit = Leave
 
 
@@ -2571,11 +3003,23 @@ command-when-queued = queued
 command-when-either = now/queued
 
 
+## Why a command typed while a turn runs waits
+
+# Said under the turn when a command joins the queue. The turn holds the conversation, the workspace, the terminal and the network.
+command-waits-for-the-turn = { $command } waits for the turn to end: it acts on what the turn holds or starts a turn.
+# A command that is carried out as typed unless a line waiting ahead of it could change what it acts on. $line is that line: a command as it was typed, or what the line is where it is not a command.
+command-waits-behind = { $command } waits for the turn to end, behind { $line }.
+# `/sandbox off`, which asks before it changes anything.
+command-waits-to-ask = { $command } waits for the turn to end: moving to off asks first, and the turn has the screen.
+
 ## Where a skill offered after a slash was found
 
 skill-from-project = (project)
 skill-from-user = (user)
 skill-from-built-in = (built-in)
+skill-from-mcp-server = (MCP { $alias })
+# Beside where it was found, on a skill row whose file says only the person may have it loaded.
+skill-person-only = (only you)
 
 
 ## What the session says back
@@ -2584,6 +3028,10 @@ session-resumed = resumed session: { $title }
 session-renamed = renamed to { $title }
 session-rename-needs-a-name = /rename needs a name, as in /rename the parser bug
 session-rename-needs-something = /rename needs a name with something in it
+session-note-added = noted on turn { $turn }, in the record only: the planner is not given it
+session-note-needs-text = /note needs the note, as in /note the wrong file was edited here
+session-note-not-recorded = not noted: this session writes no record, so a note would be kept nowhere
+session-note-listed = turn { $turn }: { $text }
 # What /issue and /pr say back. A refused value is not repeated, since it may hold a control
 # character.
 session-issue-is = this session is for { $url }. /issue clear removes it
@@ -2659,6 +3107,60 @@ session-rewind-goes-no-further =
     { $kept ->
         [one] this session can go back one turn, no further
        *[other] this session can go back { $kept } turns, no further
+    }
+# Drawn after a line of a hunk that has no terminator, which only a file's final line can lack.
+diff-no-final-newline = [no newline at end of file]
+# What /hunks says. A hunk is a run of changed lines in a file the last turn wrote.
+session-hunks-heading = turn { $turn } wrote these hunks. /hunks <number> puts one back, and leaves the rest of the file
+session-hunks-wrote-nothing = turn { $turn } wrote no files, so there are no hunks to put back
+# One hunk: the line it starts at in the file now, and how many lines it added and removed.
+session-hunk-row = from line { $line }: { $added }, { $removed }
+# A hunk that only removes lines has none of its own in the file now, so the line before it places it.
+session-hunk-row-after = after line { $line }: { $removed }
+session-hunk-row-at-start = at the start of the file: { $removed }
+session-hunk-added =
+    { $count ->
+        [one] added 1 line
+       *[other] added { $count } lines
+    }
+session-hunk-removed =
+    { $count ->
+        [one] removed 1 line
+       *[other] removed { $count } lines
+    }
+# A file the last turn wrote that has no hunks to list, and why.
+session-hunks-left-row = { $path }: { $why }
+session-hunks-left-created = the turn created it, so a hunk cannot be taken out of it. /undo removes it, with the rest of the turn
+session-hunks-left-not-kept = what it held before the turn was not kept, so it will not go back
+session-hunks-left-untrusted =
+    its contents are not vouched for, so they are not compared. Only /undo puts it back, with the rest of the turn
+session-hunks-left-not-text = it is not text
+session-hunks-left-too-different = so much of it changed that its hunks cannot be lined up
+session-hunks-left-outside = it does not resolve inside the project now, so it is not read
+session-hunks-left-unreadable = it is gone, is not a file, or is larger than a rewind keeps
+session-hunks-left-as-it-was = it holds what it held before the turn
+session-hunk-put-back = put back hunk { $number } of { $path } as it stood before turn { $turn }
+session-hunk-not-put-back = hunk { $number } of { $path } was not put back: { $why }
+session-hunk-changed =
+    { $path } no longer holds hunk { $number } as it was listed, so nothing was written. /hunks lists
+    what it holds now
+session-hunk-failed =
+    writing { $path } failed, so it may hold part of the change and is not vouched for: { $problem }
+session-hunks-unavailable = /hunks could not begin: { $problem }
+session-hunks-needs-a-number = /hunks takes the number of a hunk it listed, as in /hunks 2
+session-hunks-more =
+    { $count ->
+        [one] 1 more hunk is not listed. /undo puts it back, with the rest of the turn
+       *[other] { $count } more hunks are not listed. /undo puts them back, with the rest of the turn
+    }
+session-hunks-uncovered = the list may be missing changes. Not fully covered: { $causes }.
+session-hunks-list-first = list the hunks with /hunks first, then put one back by its number
+session-hunks-turn-moved =
+    the session has had another turn since that list. /hunks lists the hunks of the last one
+session-hunk-no-such =
+    { $hunks ->
+        [one] there is no hunk { $number }; the last list had 1 hunk
+       *[other] there is no hunk { $number }; the last list had { $hunks } hunks
     }
 session-exported = exported transcript to { $path }
 session-export-failed = could not export transcript: { $problem }
@@ -2736,6 +3238,12 @@ session-effort-set = thinking at { $effort }
 session-effort-unset = thinking as the service decides
 session-no-such-effort = no effort level named { $effort }; try /effort for the list
 session-effort-not-read = this model reads no effort level, so requests carry none
+session-language-in-use = the interface is in { $language }; catalogs: { $available }; /language <tag> saves a choice for the next start and /language auto drops it
+session-language-saved = saved choice: { $language }
+session-language-set = the interface will be in { $language } from the next start, unless BRAVEBOT_LOCALE is set, which answers first
+session-language-auto = the interface will follow the settings file and the environment from the next start
+session-language-not-saved = this session cannot keep a choice, so the language is unchanged
+session-no-such-language = no catalog for { $language }; the catalogs are { $available }
 session-advisor-set = the planner may consult { $model } from the next turn, which spends that model's tokens
 session-advisor-in-force = the planner may consult { $model }
 session-advisor-none = no advisor; try /advisor followed by a model name
@@ -2756,13 +3264,13 @@ session-trusting-as-left = trusting { $directory } (as this session left it)
 # what made it.
 session-trusting-unasked =
     trusting { $directory } (--dangerously-skip-permissions, so you were not asked)
-# Said where the question was not put because an earlier session here was told to remember the
-# answer (TRUST-23). When it was given and how to take it back, because this is a grant nobody made
+# Said where the question was not put because an earlier session here was answered yes and the yes
+# was kept (TRUST-23). When it was given and how to take it back, because this is a grant nobody made
 # in this session and the line is the only thing on the screen that says where it came from.
 session-trusting-kept =
-    trusting { $directory } (you said to remember it { $when }; /forget-trust to be asked again)
+    trusting { $directory } (you trusted it { $when }; /forget-trust to be asked again)
 session-trusting-kept-root =
-    trusting { $directory }, inside { $root } (you said to remember { $root } { $when }; /forget-trust to be asked again)
+    trusting { $directory }, inside { $root } (you trusted { $root } { $when }; /forget-trust to be asked again)
 session-trust-kept =
     trusting { $directory }, and later sessions started here will not ask; /forget-trust takes it back
 # The answer was given, but writing it down failed, so the next session will ask after all.
@@ -2819,7 +3327,21 @@ session-offered-tools =
 # Said when a person answers that a server's tool may be called without asking, in this project.
 session-stands-for-tool = calling { $tool } without asking in this project
 session-answered-already = answered already: { $question }
+# Said when a question was closed because no key was pressed for the time askIdleSeconds names. The
+# planner was told no answer was given and the person may be away; this is what the person finds when
+# they come back to a conversation that went on without them.
+session-question-timed-out = { $seconds ->
+    [one] a question was closed after { $seconds } second with no key pressed, and the planner was told you may be away
+   *[other] a question was closed after { $seconds } seconds with no key pressed, and the planner was told you may be away
+    }
 session-something-was-refused = a policy gate refused something during that turn
+# Said under a finished turn for refusals that no later call to the same tool got past. A refusal
+# a later call got past is left to the audit trail.
+session-refusals-left =
+    { $count ->
+        [one] the turn ended with a refused call left undone. Refused: { $first }
+       *[other] the turn ended with { $count } refused calls left undone. First refused: { $first }
+    }
 # The endpoint substitutes a model it will not serve rather than refusing, so without this a
 # session can ask for one model and be answered by another with nothing said.
 session-model-substituted =
@@ -2828,12 +3350,18 @@ session-model-substituted =
 session-error = error: { $problem }
 session-no-output = no output
 shell-kept-private = typed with !!, so this output was not sent to the model
+shell-stopped-not-sent = what it printed before it stopped was not sent to the model
 
 ## Why a turn failed
 
 # Fixed descriptions keep raw backend error text out of the interface.
 failure-unauthorized = the service would not accept the credentials
 failure-rate-limited = the service asked for fewer requests
+failure-rate-limited-for =
+    { $minutes ->
+        [one] the service asked for fewer requests, and for a wait of about 1 minute
+       *[other] the service asked for fewer requests, and for a wait of about { $minutes } minutes
+    }
 failure-unavailable = the service could not answer
 failure-refused = the service rejected the request
 failure-transport = the request did not get through
@@ -2860,46 +3388,64 @@ loop-needs-a-prompt =
     /loop needs something to repeat, as in /loop 5m check the deploy, or /loop watch the build to
     let each turn say when to run again
 loop-started-every =
-    repeating every { $every }; /loop stop ends it, and so does ctrl-c or leaving
+    loop { $number }: repeating every { $every }; /loop stop { $number } ends it, and so does ctrl-c or leaving
 loop-started-self-paced =
-    repeating at a pace each turn sets; /loop stop ends it, and so does ctrl-c or leaving
+    loop { $number }: repeating at a pace each turn sets; /loop stop { $number } ends it, and so does ctrl-c or leaving
 # The answer to the bare command. The line is in it because the note above scrolls away, and
 # somebody asking what is repeating has usually lost sight of what they set going.
-loop-active = repeating: { $prompt } · { $pace } · { $when }
-loop-ends-with = /loop stop ends it, and so does ctrl-c or leaving
+loop-active = loop { $number }, repeating: { $prompt } · { $pace } · { $when }
+loop-ends-with = /loop stop <number> ends one, /loop stop alone ends the only one, and ctrl-c or leaving ends them all
 loop-none =
     nothing is repeating. /loop 5m check the deploy sends a line every five minutes, /loop watch the
-    build lets each turn say when to run again, and /loop stop ends either of them
+    build lets each turn say when to run again, and /loop stop <number> ends one of them
 # The part of the row under the box that says a loop is live, which between ticks is the only thing
 # on the screen that does. Short on purpose: it shares that row with the mode and the readings, and
 # a part a narrow terminal has no room for is a part the row gives up.
 loop-hint = looping
 loop-hint-next = looping, next in { $next }
+loop-hint-several = { $count } loops
+loop-hint-several-next = { $count } loops, next in { $next }
 loop-interval-raised = the interval was raised to { $every }, which is as fast as a loop goes
 loop-interval-capped = the interval was capped at { $every }, which is as long as a loop lives
-loop-replaced = the loop that was running has been replaced
-loop-tick = loop { $count }
+loop-full = { $count } loops are already repeating, which is as many as a session holds; /loop stop <number> ends one
+loop-stop-which = { $count } loops are repeating, so /loop stop needs the number of the one to end; /loop lists them
+loop-no-such = no loop is numbered { $number }; /loop lists what is repeating
+loop-stopped-numbered = loop { $number } is stopped
+loop-stopped-all = all { $count } loops are stopped
+loop-cleared-all = all { $count } loops are stopped, because they belonged to the session that was cleared
+loop-tick = loop { $number }, tick { $count }
 loop-tick-quiet = { $quiet ->
-    [one] loop { $count }, after { $quiet } tick that found nothing
-   *[other] loop { $count }, after { $quiet } ticks that found nothing
+    [one] loop { $number }, tick { $count }, after { $quiet } tick that found nothing
+   *[other] loop { $number }, tick { $count }, after { $quiet } ticks that found nothing
     }
 loop-stopped = the loop is stopped
 loop-cleared = the loop is stopped, because it belonged to the session that was cleared
-loop-aged-out = the loop has run for a week and stopped itself
-loop-unpaced = that turn did not say when to run again, so the loop has stopped
-loop-finished = that turn said the loop is finished, so the loop has stopped
+loop-aged-out = loop { $number } has run for a week and stopped itself
+loop-unpaced = that turn did not say when to run again, so loop { $number } has stopped
+loop-finished = that turn said the loop is finished, so loop { $number } has stopped
 loop-busy = /loop starts with a turn of its own, so it waits until this one is done
 loop-replaces-goal =
     the goal that was set has been cleared: a session works towards one thing at a time
 loop-armed-by-the-turn =
-    looking again in { $after }, repeating what you asked; /loop stop ends it, and so does ctrl-c
-    or leaving
+    loop { $number }: looking again in { $after }, repeating what you asked; /loop stop { $number }
+    ends it, and so does ctrl-c or leaving
 loop-not-armed-under-a-goal =
     a later look was asked for and not started: this session is working towards a goal, and it
     does one thing at a time
 loop-not-armed-under-a-watch =
     a later look was asked for and not started: this session is already watching a file, and it
     does one thing at a time
+
+after-needs-a-delay =
+    /after needs a delay and something to send, as in /after 5m check the deploy
+after-started =
+    sending that once, in { $delay }, as loop { $number }; /loop stop { $number } cancels it, and so does ctrl-c or leaving
+after-active = loop { $number }, sending later: { $prompt } · { $when }
+after-sent = sending what /after held
+after-hint = sending later
+after-hint-next = sending in { $next }
+after-delay-raised = the delay was raised to { $delay }, which is as short as /after goes
+after-delay-capped = the delay was capped at { $delay }, which is as long as /after waits
 
 
 ## Working towards a condition
@@ -2936,10 +3482,10 @@ goal-quarantined =
 goal-spent =
     the goal has sent the work back { $rounds } times without being met, and has stopped rather
     than carrying on
+goal-stalled =
+    the goal has sent the work back without a turn making a tool call, and has stopped sending
+    it; it is still set, and your next prompt is judged against it
 goal-failed = the goal could not be checked ({ $problem }), so it is cleared
-goal-uninterruptible =
-    the check already in flight is one request and cannot be stopped part way, but nothing
-    more will be sent
 goal-ended-unexpectedly = the goal check ended unexpectedly
 goal-replaces-loop =
     the loop that was running has been stopped: a session works towards one thing at a time
@@ -3072,6 +3618,13 @@ queued-into-the-next-turn = into the next turn
 queued-carried-out = carried out after this
 # A command line: run by the person's own shell, whose output then reaches the model.
 queued-run = run in your shell
+# A command that would have been carried out as typed, but for a line waiting ahead of it. $line is
+# that line, from the two messages below where it is not a command. Same width limit as above.
+queued-carried-out-after = after { $line }
+# What a waiting prompt is called where a command is said to wait behind it.
+queued-a-prompt = the prompt before it
+# What a waiting command line is called where a command is said to wait behind it.
+queued-a-shell-line = the shell line before it
 
 ## Pasting, dropping and attaching
 
@@ -3083,11 +3636,23 @@ paste-not-with-a-command =
 paste-with-the-first-tick =
     that picture goes with the first tick of this loop; the ones after it say it was pasted
 paste-too-large = that picture is { $size }, and a paste carries at most { $limit }
+attachment-too-large = { $name } is { $size }, and an attachment carries at most { $limit }
 paste-nothing-on-clipboard = there is nothing on the clipboard to paste
+paste-files-refused =
+    a copied file's name is not text or holds a line break, so none of the files were pasted
 return-not-pressed =
     that return arrived with other keys, so it was not a press: press Enter to send this line, or Escape to clear it
 leave-not-pressed =
     that arrived with other keys, so it was not a press: press it again to leave
+suspend-not-pressed =
+    that arrived with other keys, so it was not a press: press it again to suspend
+suspend-failed = could not suspend the session: { $reason }
+# Said under the box while the turn runs that the bare word exit or quit began, which other terminal
+# agents leave on and which here is a prompt for the model. A turn is running, so the first way out
+# it names is the one that stops it. Drawn at the right of the hint row, where the parts of the line
+# are fitted to the room it leaves: kept short enough that any one permission mode name still fits
+# beside it on a row eighty columns wide.
+leave-word-sent = Sent as a prompt; ctrl-c stops it, /exit leaves
 prompt-file-unreadable =
     /{ $name } is a prompt file that could not be read as text, so the line was not sent: { $path }
 prompt-file-too-large =
@@ -3111,7 +3676,7 @@ cli-prompt-invisible-removed = { $count ->
    *[other] removed { $count } invisible characters from the prompt -i gave
     }
 drop-name-not-written =
-    a dropped file's name holds a control character or one a terminal draws as nothing, so no path was written into the command
+    a dropped or copied file's name holds a control character or one a terminal draws as nothing, so no path was written into the command
 kilobytes = { $size } KB
 megabytes = { $size } MB
 gigabytes = { $size } GB
@@ -3125,7 +3690,7 @@ command-reported-a-failure = the command reported a failure
 
 ## Shortening a long conversation
 
-compact-uninterruptible = summarising cannot be interrupted; it takes one request
+compact-stopped = summarising was stopped; the conversation is as it was
 compact-ended-unexpectedly = the summary ended unexpectedly
 compact-done =
     summarised { $summarised } earlier messages, keeping the last { $kept } as they are
@@ -3137,7 +3702,7 @@ turn-ended-unexpectedly = the turn ended unexpectedly
 ## Asking something beside the work
 
 btw-needs-a-question = /btw takes the question to ask, which the conversation will not read
-btw-uninterruptible = the question cannot be interrupted; it takes one request
+btw-stopped = the question was stopped
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-failed = the question could not be answered: { $problem }
 
@@ -3146,7 +3711,31 @@ handoff-nothing-to-hand-off = nothing to hand off yet: the session has no record
 handoff-ready = the brief is in the box. Edit it, then Enter starts a new session from it, or Esc drops it. The file decisions and permissions given here do not carry over
 handoff-untrusted = the brief was not offered: this conversation has met something untrusted, so the new session would not be starting from what the planner could have held
 handoff-failed = the brief could not be written: { $problem }
+handoff-stopped = the brief was stopped
+commit-message-usage = /commit-message takes --staged or --range <a>..<b>, then any words about the format you want
+commit-message-nothing = there is nothing to draft a message for: the changes named show no file
+commit-message-credential = the changes hold what looks like a credential, so no part of them was sent to a model
+commit-message-none-written = the model did not mark where the message begins, so there is no draft
+commit-message-ready = the draft is in the box. Edit it, then Enter sends it to the planner as your prompt, or Esc drops it. The planner has not seen the diff
+commit-message-partial = the changes were longer than one read takes, so the draft describes the part that was read
+commit-message-failed = the commit message could not be drafted: { $problem }
+commit-message-stopped = the commit message was stopped
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
+
+enhance-ready = the enhanced line is in the box. Edit it, then Enter sends it, or Esc puts back what you wrote
+enhance-ready-vi = the enhanced line is in the box. Edit it, then Enter sends it, or Ctrl-C puts back what you wrote
+enhance-invisible-removed = { $count ->
+    [one] removed { $count } invisible character from the enhanced line
+   *[other] removed { $count } invisible characters from the enhanced line
+    }
+enhance-untrusted = the enhancement was not offered: this conversation has met something untrusted, so the rewrite would not be words the planner could have held
+enhance-unusable = the enhancement was not offered: it came back empty or longer than { $limit } characters
+enhance-line-changed = the enhancement was not offered: the line changed while it was being written
+enhance-failed = the line could not be enhanced: { $problem }
+enhance-stopped = the enhancement was stopped
+enhance-not-a-command = { $key } rewrites a prompt, and a line that begins with / is a command or a skill, so it was left as written
+enhance-not-with-a-picture = { $key } rewrites words, and this line holds a picture or a dropped file, so it was left as written
+enhance-too-long = { $key } rewrites a line of up to { $limit } characters, and this one is longer, so it was left as written
 
 # What the session says about a manifest run started from it. The plan, each step and the reply are
 # shown as they happen, so what is left to say is that a run is starting, where it was written down,
@@ -3163,6 +3752,15 @@ init-already-there = { $file } already exists here, so /init leaves it alone
 
 # What /review says when the target it was given names nothing it can use.
 review-usage = Usage: /review [staged | since <ref> | commit <ref> | pr <number or URL>] [what to look at]
+
+# What /help says when it is typed with no question.
+help-usage = Usage: /help <question>, such as /help how do I stop a background job. Type / for the commands
+
+# What /changelog puts above the notes: the version that is running, or the newest release where
+# this build's own version has no notes, or nothing where the build carries none at all.
+changelog-heading = What changed in { $version }
+changelog-newest = No release notes are carried for { $running }. The newest are for { $version }
+changelog-none = No release notes are carried in this build
 
 # What the session says about a definition a person addressed with /agent. Every name here is one
 # the session resolved from a source somebody vouched for, so it may be printed; it is never offered
@@ -3198,6 +3796,17 @@ session-model-is-the-definitions =
 agent-model-outranked =
     { $definition } asked for { $model }, and --model outranks it, so this run asked for the model
     the command line named
+# Said where a project's output style was picked and the turn could not read it: the trust map no
+# longer vouches for the file, or it is no longer a style. The name is what the person typed.
+agent-style-not-used =
+    the { $style } style was not used: its file is not trusted or is no longer a style, so this turn
+    opened with the usual words
+# Said where the skill the person put in force with /mode could not be applied to a turn: it is no
+# longer found, or its file is no longer trusted. The turn goes on without it. The skill is the name
+# the person typed.
+agent-skill-mode-not-used =
+    the { $skill } mode was not applied: its skill is not found or not trusted, so this turn ran
+    without it
 # Said where a turn is addressed to a definition whose isolation line asks for a checkout of its
 # own. Only a delegate is given one, so the person's own turn works in their working directory. The
 # definition's name is the word of a vouched-for file.
@@ -3241,6 +3850,7 @@ verb-todo-write = Plan
 # remember which of the verbs meant that.
 verb-spawn-processor = Isolated processor
 verb-load-skill = Skill
+verb-search-skills = Find skill
 verb-load-tool = Load
 verb-ask-user = Ask
 verb-request-path = Reach
@@ -3254,6 +3864,8 @@ verb-spawn-agent = Delegate
 verb-schedule-next = Schedule
 verb-watch-file = Watch
 verb-advisor = Advise
+verb-propose-plan = Plan
+verb-message-session = Message
 verb-mcp-call = MCP
 verb-unknown = Tool
 
@@ -3265,7 +3877,6 @@ verb-unknown = Tool
 landed-in-the-planner = read into the planner's context
 landed-quarantined = not in the planner's context; only an isolated processor can be sent to read it
 landed-reserved = read by nothing: only its name is known
-reach-not-the-planner = not in the planner's context; a processor can be sent to read it
 reach-no-model = in no model's context: nothing can be sent to read this
 
 # How many calls a delegate has made, where its block shows only the last few.
@@ -3276,6 +3887,10 @@ delegate-model-needs-sign-in =
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words.
 delegate-model-substituted = { $definition } asked for { $model } and was answered by a different model
+# The model `planModel` named, which a turn begun in plan mode could not use. Said, and the turn
+# runs on the session's own model, since the setting asks for a model and not for a refusal.
+plan-model-unavailable =
+    { $model } is set as the plan model but cannot be used here (no configured service answers for it, it needs a sign-in, or this machine's managed settings do not allow it), so this turn runs on the session's model
 # The model `summaryModel` named, from the person's own settings file. A compaction or a goal check
 # is refused rather than sent to the session's model, since the setting is a cost boundary.
 summary-model-needs-sign-in =
@@ -3288,12 +3903,33 @@ summary-model-refused =
 # a judge or a summariser answering without the exchange reads as a verdict rather than a failure.
 summary-model-not-served =
     { $model } is set as the summary model and no configured service answers for it, so nothing was sent
+# The model `processorModel` or `--processor-model` named, both the person's own. A processor call is
+# refused rather than sent to the turn's model, since the name is a cost boundary.
+processor-model-needs-sign-in =
+    { $model } is set as the processor model and needs a sign-in first, so nothing was sent
+# The same name for a model this machine's managed layer excludes (BACKEND-48).
+processor-model-refused =
+    { $model } is set as the processor model and this machine's managed settings do not allow it, so nothing was sent
+# The same name for a model no configured service answers for.
+processor-model-not-served =
+    { $model } is set as the processor model and no configured service answers for it, so nothing was sent
+# The endpoint substitutes a model it will not serve rather than refusing. The name it answered
+# with is left out, because a notice is the driver's own words. The model is the one the person named.
+processor-model-substituted = A processor asked for { $model } and was answered by a different model
 # A definition's skills line named skills this session did not find. The definition is its file's
 # path and the skills are that file's own words, joined with a comma, both from a vouched-for file.
 delegate-skills-not-found =
     { $count ->
         [one] { $definition } names a skill this session did not find, so its delegate is offered without it: { $skills }
        *[other] { $definition } names skills this session did not find, so its delegate is offered without them: { $skills }
+    }
+# A definition's skills line named skills whose files keep them from the planner, so no delegate is
+# offered them. The definition is its file's path and the skills are that file's own words, joined
+# with a comma, both from a vouched-for file.
+delegate-skills-kept-from-the-planner =
+    { $count ->
+        [one] { $definition } names a skill its file keeps from the planner, so its delegate is offered without it: { $skills }
+       *[other] { $definition } names skills their files keep from the planner, so its delegate is offered without them: { $skills }
     }
 # A definition's mcpServers line named servers this session did not reach. The definition is its
 # file's path and the servers are that file's own words, joined with a comma, both from a
@@ -3303,6 +3939,14 @@ delegate-servers-not-found =
         [one] { $definition } names an MCP server this session did not reach, so its delegate runs without it: { $servers }
        *[other] { $definition } names MCP servers this session did not reach, so its delegate runs without them: { $servers }
     }
+# A definition's spawns line named delegates this session did not resolve. The definition is its
+# file's path and the names are that file's own words, joined with a comma, both from a vouched-for
+# file.
+delegate-spawns-not-found =
+    { $count ->
+        [one] { $definition } names a delegate this session did not resolve, so its delegate may not start it: { $names }
+       *[other] { $definition } names delegates this session did not resolve, so its delegate may not start them: { $names }
+    }
 # A definition's mcpServers line declared a server inline rather than naming one, so its delegate
 # calls no MCP server. The definition is its file's path. Nothing from the line is shown, since an
 # inline entry can hold a command line and the value of a secret. "MCP", "mcpServers" and the path
@@ -3311,6 +3955,9 @@ delegate-servers-declared = { $definition } declares an MCP server in its mcpSer
 # A definition's rounds line is not a whole number above zero, so the file did not load. The
 # definition is its file's path.
 delegate-rounds-not-a-count = { $definition } was skipped: its rounds must be a whole number above zero
+# A definition's budget line is not a count of tokens above zero, so the file did not load. The
+# definition is its file's path. "budget" is the key and stays as it is.
+delegate-budget-not-a-count = { $definition } was skipped: its budget must be a count of tokens above zero, such as 500k or 2m
 # A definition asked for more rounds than its kind may make. The kind is its key's value (reader,
 # checker or worker), left as written because it is typed.
 delegate-rounds-held = { $definition } asks for { $asked } rounds, more than the { $most } a { $kind } may make, so its delegate is given { $most }
@@ -3361,6 +4008,18 @@ delegate-memory-in-checkout = { $definition } keeps its memory only in a turn yo
 # An effort word naming none of the five levels. The levels are this program's own names for them,
 # joined with a comma, and are not translated: they are what a file has to write to be understood.
 skill-effort-not-a-level = { $skill } asks for effort { $effort }, which is none of { $levels }, so its rounds keep this session's
+# A skill's disable-model-invocation holds a word that is neither true nor false. It is read as true,
+# so the planner is not offered the skill and the person can still name it. The skill is its file's
+# path and the value is that file's own word, both from a source somebody vouched for.
+skill-person-only-not-a-boolean = { $skill } sets disable-model-invocation to { $value }, which is neither true nor false, so the planner is not offered it
+# A skill only the person may have loaded was named as /name in the line they typed, so the driver
+# put its instructions in front of the planner. Said because nothing else on the screen shows a skill
+# was loaded: no tool call is drawn for it. The skill is its file's name, from a vouched-for source.
+skill-named-by-the-person = { $skill } is loaded because you named it
+# A skill the person named could not be shown to the planner, which a skill passing the trusted-content
+# gate cannot be. The turn stops rather than goes on without a skill the person asked for. The skill
+# is its file's name, from a vouched-for source.
+turn-named-skill-not-shown = { $skill } was named but could not be shown to the planner
 # A skill was loaded and asks the rest of the turn of a model of its own, over whatever the session
 # was running. Said because a switch nobody is told about is the person's money spent on a choice
 # they did not make.
@@ -3391,6 +4050,15 @@ home-skills-reached-through-the-workspace =
         [one] 1 skill in ~/.bravebot/skills was not loaded: the way to its file goes through a directory this session can write to
        *[other] { $count } skills in ~/.bravebot/skills were not loaded: the way to their files goes through a directory this session can write to
     }
+# The person's own ~/.bravebot/AGENTS.md when it was not read, because the way to the file goes
+# through the working directory or a directory opened beside it, where a turn can write.
+home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md was not read: the way to it goes through a directory this session can write to
+# Definitions in the person's own ~/.bravebot/agents that were not loaded, for the same reason.
+home-definitions-reached-through-the-workspace =
+    { $count ->
+        [one] 1 delegate definition in ~/.bravebot/agents was not loaded: the way to its file goes through a directory this session can write to
+       *[other] { $count } delegate definitions in ~/.bravebot/agents were not loaded: the way to their files goes through a directory this session can write to
+    }
 # An entry of "references" in the person's settings that was not offered. The alias is the name they
 # gave it. One message per reason: the alias cannot be used, the entry names a repository, which
 # is not fetched, the entry names no directory, and a directory that could not be opened.
@@ -3404,6 +4072,42 @@ reference-not-opened = reference { $alias } was not opened: { $problem }
 import-too-deep = { $import } was not imported: imports are nested too deeply or there are too many
 import-cycle = { $import } was not imported: a file above it already imports it
 import-not-loaded = { $import } was not imported: it is outside this project, cannot be read or is not trusted
+# Said about a standing instructions file long enough to be worth a word, which goes out with every
+# request of the session. The source is its workspace-relative path, or ~/.bravebot/AGENTS.md, and
+# stays as it is; the sizes are numbers of bytes. The file still loaded.
+source-is-large = { $source } is { $bytes } bytes, and every request this session sends carries it
+# Said once for the turn, about every instructions file together rather than any one of them.
+sources-large-together = standing instructions are { $bytes } bytes in all, past { $limit }, and every request this session sends carries them
+# A rule file, kept in .bravebot/rules or ~/.bravebot/rules, that was added to the instructions
+# because a file the session used matches one of its paths. The rule is its place and stays as it
+# is; the file is the name the planner or the person typed, drawn so that no character in it is
+# hidden.
+rule-loaded = { $rule } was added to the instructions: { $file } matches its paths
+# The project's rule files that were not read, because the directory is not trusted. A count and
+# no name: a name in a directory nobody vouched for is not shown.
+rules-directory-not-trusted =
+    { $count ->
+        [one] 1 rule file in .bravebot/rules was not loaded: this directory is not trusted
+       *[other] { $count } rule files in .bravebot/rules were not loaded: this directory is not trusted
+    }
+# Files in a rules directory (.bravebot/rules or ~/.bravebot/rules) that are not rules, because their
+# names are not text and so cannot be compared or shown. The directory stays as it is.
+rule-names-not-text =
+    { $count ->
+        [one] 1 file in { $directory } was not read as a rule: its name is not text
+       *[other] { $count } files in { $directory } were not read as rules: their names are not text
+    }
+# A rule file that opens a frontmatter block and never closes it, or a paths list with a [ and no
+# closing ], or a paths value that is not a list of globs. Left out rather than read as text for
+# every turn, since the file meant to limit itself to some paths and they cannot be read.
+rule-frontmatter-unreadable = { $rule } was not loaded: its frontmatter or its paths could not be read, so a --- or ] may be missing, or paths is not a list
+# Rule files in the person's own ~/.bravebot/rules that were not loaded, because the way to the file
+# goes through the working directory or a directory opened beside it, where a turn can write.
+home-rules-reached-through-the-workspace =
+    { $count ->
+        [one] 1 rule file in ~/.bravebot/rules was not loaded: the way to it goes through a directory this session can write to
+       *[other] { $count } rule files in ~/.bravebot/rules were not loaded: the way to them goes through a directory this session can write to
+    }
 
 # Advisory checks shown only in a Bravebot source checkout.
 doctor-development = development environment { $path }
@@ -3420,7 +4124,7 @@ doctor-direnv-missing = not found on PATH; see https://direnv.net/ or run `brew 
 
 status-undecided = not decided
 
-sessions-usage = sessions takes --json, stop and a session's id, import and a tool's name, or search and some text
+sessions-usage = sessions takes --json, stop, delete and a session's id, purge, list, import and a tool's name, or search and some text
 sessions-none = No background sessions.
 sessions-no-home = There is no state directory to find background sessions in.
 sessions-missing = No background session { $id }.
@@ -3443,6 +4147,57 @@ sessions-import-ambiguous = More than one Claude Code session here begins with {
 sessions-import-failed = Could not write "{ $title }": { $problem }
 sessions-search-usage = sessions search takes some text to find, and may add since:<n>h, since:<n>d or since:<n>w, and workspace:<directory> if it is not this one
 sessions-search-none = No session matches.
+sessions-list-usage = sessions list takes --json, and --limit and a count
+sessions-list-none = No session is recorded for this directory.
+sessions-list-row = { $id }  { $when }  { $title }  { $branch }  { $front }  { $state }
+sessions-list-continuable = can be continued
+sessions-list-not-continuable = cannot be continued
+sessions-list-unknown = unknown
+sessions-list-more = { $held } more. Pass --limit to see them.
+sessions-delete-usage = sessions delete takes the id of one session, and sessions purge takes --dry-run and -y
+sessions-delete-invalid = { $id } is not shaped like a session id.
+sessions-delete-missing = No session { $id } is recorded for this directory.
+sessions-delete-held = Session { $id } is running in the background. Stop it first with: bravebot sessions stop { $id }
+sessions-delete-failed = Could not delete session { $id }.
+sessions-delete-done = Deleted session { $id }.
+sessions-purge-none = No session is recorded for this directory.
+sessions-purge-row = would delete { $id }  { $when }  { $title }
+sessions-purge-held = left { $id }, which is running in the background
+sessions-purge-question = Delete the recorded sessions for { $directory }, { $count } in all, with their trails and search indexes?
+sessions-purge-needs-yes = sessions purge asks before it deletes, and there is no terminal to ask on. Pass -y to delete without asking, or --dry-run to see what it would delete.
+sessions-purge-declined = Nothing was deleted.
+sessions-purge-done = Deleted: { $count }.
+# What `bravebot stats` says. The figures are numbers the program wrote down, so the only words
+# here are the headings and the sentence saying what the figures cover.
+stats-usage = stats takes --days and a number of days, --models, and --project with a directory if it is not this one
+stats-scope-everything = Every recorded session, in every project
+stats-scope-days = { $days ->
+    [one] Sessions last written in the last day, in every project
+   *[other] Sessions last written in the last { $days } days, in every project
+    }
+stats-scope-project = Every recorded session in { $project }
+stats-scope-days-project = { $days ->
+    [one] Sessions last written in the last day, in { $project }
+   *[other] Sessions last written in the last { $days } days, in { $project }
+    }
+stats-column-model = Model
+stats-column-sessions = Sessions
+stats-column-turns = Turns
+stats-column-tokens = Tokens
+stats-column-read = Read
+stats-column-written = Written
+# Tokens a record holds that its split into read and written does not cover: every token of a
+# session written before the split was kept.
+stats-column-unsplit = Unsplit
+stats-row-total = Total
+# A session whose record names no model: one written before the model was kept, one whose turns
+# never reached a server, and one copied in from another program.
+stats-model-unknown = unknown
+stats-incognito = An incognito session leaves no record, so none is counted.
+stats-unreadable = { $count ->
+    [one] 1 entry in the sessions directory could not be read as a record and is not counted.
+   *[other] { $count } entries in the sessions directory could not be read as records and are not counted.
+    }
 sessions-state-working = working
 sessions-state-idle = idle
 sessions-state-stopped = stopped
@@ -3459,10 +4214,16 @@ sessions-held-tools = tools
 sessions-held-move = move
 sessions-held-manifest = manifest
 sessions-held-question = question
+sessions-held-message = message
+sessions-view-title = Background sessions
+sessions-view-keys = ↑↓ choose  ·  Enter attach  ·  Esc leave
+sessions-view-failed = Could not draw the list of background sessions: { $problem }
 bg-needs-a-prompt = --bg takes the prompt to start with
 bg-needs-a-terminal = --bg starts a session from a terminal, and this is not one
 bg-takes-nothing-else = --bg takes a prompt and no other option, and { $flag } cannot reach the session it starts
-bg-bypass-refused = --dangerously-skip-permissions is refused for a background session, because nobody is there to notice what it does
+bg-bypass-refused = --dangerously-skip-permissions is refused for a background session, because a session nobody is watching does not run in a mode that answers every question. Use a one-shot run (-p) to ask for that.
+# Said to whoever is attached, the mode being fixed for as long as the process runs (BG-8).
+bg-mode = Mode: { $mode }. It stays this for as long as the session runs; attaching cannot change it.
 bg-not-started = The background session did not start.
 bg-started = Started { $id }. Join it with: bravebot attach { $id }
 bg-spawn-failed = Could not start the background session: { $problem }
@@ -3525,7 +4286,9 @@ session-sandbox-needs-a-mode = /sandbox takes one of { $names }, or nothing to r
 session-sandbox-already = The sandbox mode is already { $mode }.
 session-sandbox-kept = The sandbox mode stays { $mode }.
 session-sandbox-set = The sandbox mode is { $mode } from the next turn, for the rest of this session.
+session-sandbox-turn-keeps-its-mode = The turn running now, and every program it starts, keeps the mode it began with.
 session-sandbox-set-off = The sandbox mode is off from the next turn, for the rest of this session: programs `run` starts have no profile.
+session-sandbox-jobs-keep-their-mode = Background jobs still running keep the mode they started under and can still write the project: { $jobs }. /jobs stop <name> ends one.
 session-sandbox-refused-mode =
     /sandbox { $asked } is refused: { $pinned_in } sets sandbox.mode to { $pinned }, and a session may
     read and write no more than that. { $looser }
@@ -3553,3 +4316,33 @@ doctor-push-unanswered = { $host } gave no answer for this key
 doctor-push-chosen = Chosen
 doctor-push-chosen-by = git.identities names this key for the owner
 doctor-push-chosen-at-prompt = you chose this key for the owner at a run prompt; /reach keys in the terminal client lists and forgets it
+
+## The prompt that offers a finished plan in plan mode
+agent-plan-approval-header = Plan
+agent-plan-approval-accept-edits = Yes, accept edits
+agent-plan-approval-accept-edits-detail = Leave plan mode and carry the plan out. Writes go through unasked; commands are still asked about.
+agent-plan-approval-ask = Yes, ask before each edit
+agent-plan-approval-ask-detail = Leave plan mode and carry the plan out, asking before every write and command.
+agent-plan-approval-keep-planning = No, keep planning
+
+# What the handler for a bravebot:// link is, in the usage table and the option list.
+cli-usage-handle-uri = Open a session from a bravebot://open link, its prompt put in the box and not sent
+# Said where `--handle-uri` is given anything but the one link, or a flag that would change how the
+# session runs. A link carries a directory and words, and nothing else.
+deep-link-takes-one-link = --handle-uri takes one bravebot://open link and nothing else
+# Said where the `deepLinks` setting is false.
+deep-link-switched-off = Links that open a session are switched off by the deepLinks setting
+# Said where a link is read in a program with no terminal to open the session on.
+deep-link-needs-a-terminal = A link opens a session in a terminal, and this program has none
+# The ways a link is refused. None of them quotes the link: its text is somebody else's.
+deep-link-not-a-link = That is not a bravebot://open link
+deep-link-too-long = That link is longer than the { $limit } bytes read
+deep-link-parameter = A link may carry dir and prompt, each once, and nothing else
+deep-link-encoding = That link's text is not valid percent-encoded UTF-8
+deep-link-directory = The link's dir is not an absolute path
+# The first line of a session a link started in the home directory because of where it pointed. The
+# path is the link's own and arrives escaped.
+deep-link-started-in-home = The link named { $dir }, which is not a directory you have trusted here, so this session started in your home directory
+# Under the box while the words an outside link put there are still in it.
+deep-link-banner = Prompt from an external link, not sent yet  ·  read it, then Enter sends it
+deep-link-banner-long = Prompt from an external link, { $count } characters, not sent  ·  scroll and review it all first

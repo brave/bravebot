@@ -128,15 +128,19 @@ impl SeatbeltSandbox {
         // the parent or any other process, including another process in the same sandbox.
         out.push_str("(allow process-info-pidinfo (target self))\n");
         // CPU count and page size serve language runtimes (the numeric page-size query
-        // resolves to pagesize_compat). The remaining names are uname's fields, used by
-        // Python's package platform detection. No process arguments or environment query
-        // is in this list.
+        // resolves to pagesize_compat). hw.memsize is the physical memory size, which sort
+        // reads to size its buffer. kern.argmax is the one system-wide argument-size
+        // limit that xargs, find -exec {} + and getconf ARG_MAX read. The remaining names are
+        // uname's fields, used by Python's package platform detection. No process arguments or
+        // environment query is in this list.
         out.push_str("(allow sysctl-read");
         for name in [
             "hw.machine",
+            "hw.memsize",
             "hw.ncpu",
             "hw.pagesize",
             "hw.pagesize_compat",
+            "kern.argmax",
             "kern.hostname",
             "kern.osrelease",
             "kern.ostype",
@@ -289,7 +293,10 @@ impl SeatbeltSandbox {
 /// The per-user cache directory the platform names for this account, with its links followed,
 /// which is how Seatbelt matches it. `None` where the platform does not name one.
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "confstr(_CS_DARWIN_USER_CACHE_DIR) writes into a local PATH_MAX buffer, and its length is checked"
+)]
 #[cfg(target_os = "macos")]
 pub fn user_cache_directory() -> Option<std::path::PathBuf> {
     let mut buffer = [0u8; libc::PATH_MAX as usize];
@@ -308,6 +315,44 @@ pub fn user_cache_directory() -> Option<std::path::PathBuf> {
     Path::new(OsStr::from_bytes(text.to_bytes()))
         .canonicalize()
         .ok()
+}
+
+/// The active developer directory `xcode-select -p` names, with its links followed, which is
+/// what [`crate::base::base`] takes as its developer directory. `None` where there is none or the
+/// tool does not answer.
+///
+/// Asked once for the life of the process, as the first session opens. `DEVELOPER_DIR` is removed
+/// from the question's environment: `xcode-select` answers with it where it is set, and a value
+/// this process holds, or a stage's own assignment, must not decide which directory the base
+/// reads.
+#[cfg(target_os = "macos")]
+pub fn developer_directory() -> Option<std::path::PathBuf> {
+    static DIRECTORY: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIRECTORY
+        .get_or_init(|| {
+            let mut command = crate::programs::start(
+                &crate::programs::Resolved::written_in_source("/usr/bin/xcode-select"),
+                crate::programs::Inherits::All,
+                crate::programs::SearchPath::Inherited,
+            );
+            command
+                .arg("-p")
+                .env_remove("DEVELOPER_DIR")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            let selected = crate::process::starting_a_program(|| command.spawn())
+                .ok()?
+                .wait_with_output()
+                .ok()
+                .filter(|output| output.status.success())?;
+            let line = selected
+                .stdout
+                .strip_suffix(b"\n")
+                .unwrap_or(&selected.stdout);
+            Path::new(OsStr::from_bytes(line)).canonicalize().ok()
+        })
+        .clone()
 }
 
 /// How many names a path has, which is how far down the filesystem it is.
@@ -458,7 +503,13 @@ impl SeatbeltSandbox {
             });
         }
 
-        let mut wrapped = Command::new(SANDBOX_EXEC);
+        // The program is `SANDBOX_EXEC`, an absolute path written here. The program it confines is
+        // an argument the caller chose, and runs under the profile.
+        let mut wrapped = crate::programs::start(
+            &crate::programs::Resolved::written_in_source(SANDBOX_EXEC),
+            crate::programs::Inherits::All,
+            crate::programs::SearchPath::Inherited,
+        );
         wrapped.arg("-p").arg(Self::profile(policy));
         wrapped.args(confined_argv(
             program,
@@ -738,9 +789,11 @@ mod argument_tests {
                 concat!(
                     "(allow sysctl-read",
                     " (sysctl-name \"hw.machine\")",
+                    " (sysctl-name \"hw.memsize\")",
                     " (sysctl-name \"hw.ncpu\")",
                     " (sysctl-name \"hw.pagesize\")",
                     " (sysctl-name \"hw.pagesize_compat\")",
+                    " (sysctl-name \"kern.argmax\")",
                     " (sysctl-name \"kern.hostname\")",
                     " (sysctl-name \"kern.osrelease\")",
                     " (sysctl-name \"kern.ostype\")",
@@ -2748,6 +2801,30 @@ int main(int argc, char **argv) {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// `xargs` and `getconf ARG_MAX` read the longest argument list a program may be given and
+    /// exit with an error that does not name the sandbox when the profile refuses that query.
+    /// `xargs` reads it before any input, so it is started with none. `find -exec {} +` reads the
+    /// same limit; it fails only with a large environment, so the usability suite holds it.
+    #[test]
+    fn a_program_that_asks_for_the_longest_argument_list_runs_under_the_base() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-base-starts-argmax");
+        let policy = crate::base::base(crate::base::Prelude::MacOs, &temporary, None, Some(&home));
+
+        for (program, arguments) in [
+            ("/usr/bin/xargs", &["/usr/bin/true"][..]),
+            ("/usr/bin/getconf", &["ARG_MAX"][..]),
+        ] {
+            assert_eq!(
+                exit_code_under(&policy, a_stage_for(&home), program, arguments),
+                Some(0),
+                "{program} did not run under the base"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// `git` and `make` in `/usr/bin` are shims that run the real program out of the active
     /// developer directory. A base without it is every git stage refused before git runs. The
     /// suite was linked by `cc`, which is the same kind of shim, so a machine running this test
@@ -2869,6 +2946,7 @@ int main(int argc, char **argv) {
         let held_back = [
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
+            ".bravebot/chatgpt-account.json",
             ".bravebot/mcp.json",
             ".bravebot-browser/secret",
             ".ssh/id_ed25519",

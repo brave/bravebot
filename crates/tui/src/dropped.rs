@@ -10,18 +10,11 @@
 //! real path stays prose, because prose has other words in it.
 //!
 //! Nothing here decides anything from the contents of a file. It reads names, which the user is
-//! about to see on their own screen, and asks the filesystem whether they exist.
+//! about to see on their own screen, and asks the filesystem whether they exist. What kind of file
+//! each name is comes from `bravebot_filetype::by_name`, which the desktop window asks as well.
 
+use bravebot_filetype::by_name::{Kind, kind_of};
 use std::path::Path;
-
-/// What a dropped file is, and therefore what happens to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    /// Carried to the model as bytes, in the media type named here.
-    Attachment(&'static str),
-    /// Read into the turn as text, the way a file named with `@` is.
-    Text,
-}
 
 /// A file the user dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,172 +22,6 @@ pub struct Dropped {
     /// The path as the filesystem names it, which is what the terminal handed over.
     pub path: String,
     pub kind: Kind,
-}
-
-impl Dropped {
-    /// The word the marker uses, so a user can tell one dropped thing from another.
-    /// Not from a catalog: this word goes into the marker the planner is sent, so it is part of
-    /// what the model reads rather than something a person is being told. See [`Session::attach`].
-    pub fn noun(&self) -> &'static str {
-        match self.kind {
-            Kind::Attachment("application/pdf") => "PDF",
-            Kind::Attachment(_) => "Image",
-            Kind::Text => "File",
-        }
-    }
-}
-
-/// Extensions carried as bytes, with the type to name in the URI.
-///
-/// The set Claude Code takes, and the same table `read_file` decides a picture by: a file dropped
-/// on the terminal and a file a processor is asked about are the same kinds of file, and a second
-/// list here would be a second answer waiting to disagree with that one.
-use bravebot_agent::workspace::ATTACHABLE;
-
-/// Extensions read as text, which is what the model wants of them anyway.
-const TEXTUAL: &[&str] = &[
-    "txt",
-    "md",
-    "markdown",
-    "rst",
-    "adoc",
-    "org",
-    "rs",
-    "py",
-    "js",
-    "jsx",
-    "mjs",
-    "cjs",
-    "ts",
-    "tsx",
-    "vue",
-    "svelte",
-    "json",
-    "jsonc",
-    "yaml",
-    "yml",
-    "toml",
-    "ini",
-    "cfg",
-    "conf",
-    "properties",
-    "env",
-    "html",
-    "htm",
-    "xml",
-    "svg",
-    "css",
-    "scss",
-    "sass",
-    "less",
-    "sh",
-    "bash",
-    "zsh",
-    "fish",
-    "ps1",
-    "bat",
-    "c",
-    "h",
-    "cc",
-    "cpp",
-    "cxx",
-    "hpp",
-    "hh",
-    "java",
-    "kt",
-    "kts",
-    "go",
-    "rb",
-    "php",
-    "swift",
-    "m",
-    "mm",
-    "cs",
-    "scala",
-    "clj",
-    "cljs",
-    "ex",
-    "exs",
-    "erl",
-    "hs",
-    "lua",
-    "pl",
-    "pm",
-    "r",
-    "jl",
-    "dart",
-    "zig",
-    "nim",
-    "sql",
-    "graphql",
-    "proto",
-    "csv",
-    "tsv",
-    "log",
-    "diff",
-    "patch",
-    "lock",
-    "gradle",
-    "tf",
-    "tfvars",
-    "dockerfile",
-    "mk",
-    "cmake",
-];
-
-/// Names that are text without an extension to say so.
-const TEXTUAL_NAMES: &[&str] = &[
-    "makefile",
-    "dockerfile",
-    "readme",
-    "license",
-    "licence",
-    "changelog",
-    "authors",
-    "notice",
-    "gemfile",
-    "rakefile",
-    "procfile",
-    "justfile",
-    "vagrantfile",
-    "brewfile",
-];
-
-/// What a path's name says it is, or `None` for something neither carried nor read.
-///
-/// A `.dmg` lands here, and the interface writes its path out rather than pretending to attach it.
-pub fn kind_of(path: &str) -> Option<Kind> {
-    let name = Path::new(path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())?;
-
-    // Split on the last dot ourselves rather than asking for an extension, so a name that is all
-    // extension, `.gitignore`, is read as a name and not as an extension of nothing.
-    let extension = name.rsplit_once('.').map(|(stem, ext)| {
-        if stem.is_empty() {
-            String::new()
-        } else {
-            ext.to_string()
-        }
-    });
-
-    if let Some(extension) = &extension {
-        if let Some((_, media)) = ATTACHABLE.iter().find(|(ext, _)| ext == extension) {
-            return Some(Kind::Attachment(media));
-        }
-        if TEXTUAL.contains(&extension.as_str()) {
-            return Some(Kind::Text);
-        }
-    }
-
-    // A name with no usable extension: `Makefile`, or `.gitignore`, whose whole name is the name.
-    let bare = name.strip_prefix('.').unwrap_or(&name);
-    if TEXTUAL_NAMES.contains(&bare) || bare.starts_with("gitignore") || bare.starts_with("gitattr")
-    {
-        return Some(Kind::Text);
-    }
-
-    None
 }
 
 /// The files a paste names, or nothing at all when the paste is not a drop.
@@ -265,6 +92,44 @@ pub fn shell_word(path: &str) -> String {
     }
     word.push('\'');
     word
+}
+
+/// The line a paste of `paths` would have been, so the drop handling reads them the way it reads
+/// any other drop: each path is one word, quoted as [`shell_word`] quotes it and undone by the
+/// same tokenising a pasted path goes through.
+pub fn line_of(paths: &[String]) -> String {
+    paths
+        .iter()
+        .map(|path| shell_word(path))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The paths a `text/uri-list` names, which is what a Linux file manager leaves on the clipboard
+/// when a file is copied. GNOME's `x-special/gnome-copied-files` is the same list behind a `copy`
+/// or `cut` line, which names nothing and is left out like any other line that is not a URI.
+///
+/// One URI per line, and a `#` line is a comment. A line that is not a URI for a file on this
+/// machine, `file:///` or `file://localhost/`, names nothing a drop could take and is left out. A
+/// name holding a newline arrives percent-encoded and decodes to the path it is, so the lines are
+/// the files and nothing else.
+///
+/// `None` when a name does not decode to text. A name that is not UTF-8 has no spelling as a
+/// `String`, and rendering it as one would be the name of another file, so the whole list is
+/// refused rather than read with that file left out or renamed.
+pub fn uri_list(text: &str) -> Option<Vec<String>> {
+    let mut paths = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("file://") else {
+            continue;
+        };
+        let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+        if !rest.starts_with('/') {
+            continue;
+        }
+        paths.push(percent_decoded_exactly(rest)?);
+    }
+    Some(paths)
 }
 
 /// Whether a paste is a drop at all, whether or not each file is a type we take.
@@ -349,8 +214,14 @@ fn unwrap_uri(token: &str) -> String {
 /// Undo percent-encoding, by hand rather than by dependency.
 ///
 /// Anything that is not a well-formed escape is left exactly as it was: a literal `%` in a
-/// filename is a real thing, and mangling it would name a file that does not exist.
+/// filename is a real thing, and mangling it would name a file that does not exist. Text that
+/// decodes to bytes that are not UTF-8 is left as it came.
 fn percent_decoded(text: &str) -> String {
+    percent_decoded_exactly(text).unwrap_or_else(|| text.to_string())
+}
+
+/// [`percent_decoded`], or `None` where the decoded bytes are not UTF-8.
+fn percent_decoded_exactly(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -369,8 +240,9 @@ fn percent_decoded(text: &str) -> String {
         index += 1;
     }
 
-    String::from_utf8(out).unwrap_or_else(|_| text.to_string())
+    String::from_utf8(out).ok()
 }
+
 /// The name to give a task for a dropped file, or `None` for something that is not a file.
 ///
 /// A drop hands over an absolute path, and it is nearly always `~/Downloads` or `~/Desktop`. That
@@ -523,58 +395,6 @@ mod tests {
         assert_eq!(found[0].path, "/tmp/a.png");
     }
 
-    #[test]
-    fn the_recognised_types_are_the_ones_claude_code_takes() {
-        for name in ["a.png", "a.jpg", "a.jpeg", "a.gif", "a.webp"] {
-            assert!(
-                matches!(kind_of(name), Some(Kind::Attachment(media)) if media.starts_with("image/")),
-                "{name} is not an image"
-            );
-        }
-        assert_eq!(kind_of("a.pdf"), Some(Kind::Attachment("application/pdf")));
-        for name in [
-            "a.rs",
-            "a.md",
-            "a.json",
-            "Makefile",
-            "Dockerfile",
-            ".gitignore",
-        ] {
-            assert_eq!(kind_of(name), Some(Kind::Text), "{name} is not text");
-        }
-        for name in ["a.dmg", "a.zip", "a.mp4", "a.so"] {
-            assert_eq!(kind_of(name), None, "{name} should not be taken");
-        }
-    }
-
-    /// Case is the filesystem's business, not the user's.
-    #[test]
-    fn an_extension_is_recognised_whatever_its_case() {
-        assert_eq!(
-            kind_of("/tmp/SHOT.PNG"),
-            Some(Kind::Attachment("image/png"))
-        );
-    }
-
-    #[test]
-    fn the_noun_names_what_was_dropped() {
-        let image = Dropped {
-            path: "a.png".into(),
-            kind: Kind::Attachment("image/png"),
-        };
-        let pdf = Dropped {
-            path: "a.pdf".into(),
-            kind: Kind::Attachment("application/pdf"),
-        };
-        let text = Dropped {
-            path: "a.rs".into(),
-            kind: Kind::Text,
-        };
-        assert_eq!(image.noun(), "Image");
-        assert_eq!(pdf.noun(), "PDF");
-        assert_eq!(text.noun(), "File");
-    }
-
     /// An unterminated quote is not something a terminal emits, so it is a paste.
     #[test]
     fn an_unterminated_quote_is_not_a_drop() {
@@ -585,5 +405,119 @@ mod tests {
     fn an_empty_paste_is_not_a_drop() {
         assert!(dropped_with("", all).is_empty());
         assert!(dropped_with("   ", all).is_empty());
+    }
+
+    /// The names a copied file can carry that a drop's reading would take apart if they were not
+    /// quoted: a space, quotes, a backslash, an escape that is not one, `=`, a command
+    /// substitution, a leading dash and a name outside ASCII.
+    const AWKWARD: &[&str] = &[
+        "/tmp/my shot.png",
+        "/tmp/it's.png",
+        "/tmp/\"quoted\".png",
+        r"/tmp/back\slash.png",
+        "/tmp/100%41.png",
+        "/tmp/a=b.png",
+        "/tmp/$(touch pwned).png",
+        "/tmp/-rf.png",
+        "/tmp/caf\u{e9} \u{65e5}\u{672c}.png",
+        "/tmp/ends with a space .png",
+    ];
+
+    /// The clipboard's paths are put to the drop handling as the line a paste of them would have
+    /// been, and the handling reads back exactly the paths that were given, in order.
+    #[test]
+    fn the_line_of_paths_reads_back_as_those_paths() {
+        let names: Vec<String> = AWKWARD.iter().map(|name| name.to_string()).collect();
+
+        let line = line_of(&names);
+
+        assert_eq!(paths(&line), names);
+        assert!(is_drop(&line, all));
+        assert!(!line.contains('\n'), "a drop is one line");
+    }
+
+    /// Each name on its own is one path and not several, which is what an unquoted space would
+    /// make of it.
+    #[test]
+    fn a_path_with_a_space_is_one_word_of_the_line() {
+        assert_eq!(
+            paths(&line_of(&["/tmp/my shot.png".to_string()])),
+            vec!["/tmp/my shot.png".to_string()]
+        );
+        assert_eq!(
+            line_of(&["/tmp/a.png".to_string(), "/tmp/b.png".to_string()]),
+            "/tmp/a.png /tmp/b.png"
+        );
+    }
+
+    /// A Linux file manager's copy: comments and a CRLF line ending are not part of any path, and
+    /// the URI is decoded the way a dropped one is.
+    #[test]
+    fn a_uri_list_names_the_files_it_lists() {
+        let list = "# copied from a file manager\r\nfile:///tmp/a%20b.png\r\nfile:///tmp/c.txt\r\n";
+
+        assert_eq!(
+            uri_list(list),
+            Some(vec!["/tmp/a b.png".to_string(), "/tmp/c.txt".to_string()])
+        );
+    }
+
+    /// GNOME's type carries the same list behind a line saying whether the files were copied or cut.
+    #[test]
+    fn the_verb_line_of_a_gnome_copied_files_payload_is_not_a_path() {
+        assert_eq!(
+            uri_list("copy\nfile:///tmp/a%20b.png\nfile:///tmp/c.txt"),
+            Some(vec!["/tmp/a b.png".to_string(), "/tmp/c.txt".to_string()])
+        );
+        assert_eq!(
+            uri_list("cut\nfile:///tmp/a.png"),
+            Some(vec!["/tmp/a.png".to_string()])
+        );
+    }
+
+    /// A name holding a newline is percent-encoded in the list, so it stays one entry; it decodes to
+    /// a name with a newline in it, which the clipboard reader then declines to take.
+    #[test]
+    fn a_name_holding_a_newline_stays_one_entry_of_a_uri_list() {
+        assert_eq!(
+            uri_list("file:///tmp/a%0A/etc/hosts\r\n"),
+            Some(vec!["/tmp/a\n/etc/hosts".to_string()])
+        );
+    }
+
+    /// `localhost` is the same machine as no host at all.
+    #[test]
+    fn a_uri_naming_localhost_is_a_file_on_this_machine() {
+        assert_eq!(
+            uri_list("file://localhost/tmp/a.png\nfile:///tmp/b.png"),
+            Some(vec!["/tmp/a.png".to_string(), "/tmp/b.png".to_string()])
+        );
+    }
+
+    /// A line that is not a URI for a file on this machine names nothing a drop could take: another
+    /// scheme, another host, a host that only starts with `localhost` and a bare path.
+    #[test]
+    fn a_uri_list_line_that_is_not_a_local_file_names_nothing() {
+        let list = "https://example.invalid/a.png\r\nfile://elsewhere/tmp/a.png\r\n\
+                    file://localhostile/tmp/a.png\r\n/tmp/bare.png\r\n";
+
+        assert_eq!(uri_list(list), Some(Vec::new()));
+    }
+
+    /// A name that is not UTF-8 refuses the whole list, and its lookalikes are other names. The
+    /// percent-encoded byte `%FF` is a file that is not text; `%EF%BF%BD` is a file whose name holds
+    /// the replacement character; `%25FF` is a file named `%FF`. A decoder that fell back to the
+    /// undecoded text for the first would name the third, and the file beside it would be read.
+    #[test]
+    fn a_name_that_is_not_text_refuses_the_list_and_is_not_taken_for_its_lookalikes() {
+        assert_eq!(uri_list("file:///tmp/ok.png\nfile:///tmp/a%FF.png"), None);
+        assert_eq!(
+            uri_list("file:///tmp/a%EF%BF%BD.png"),
+            Some(vec!["/tmp/a\u{FFFD}.png".to_string()])
+        );
+        assert_eq!(
+            uri_list("file:///tmp/a%25FF.png"),
+            Some(vec!["/tmp/a%FF.png".to_string()])
+        );
     }
 }

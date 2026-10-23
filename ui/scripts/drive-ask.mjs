@@ -7,43 +7,14 @@
 //
 // Note that a planner shown untrusted content may not ask at all — that gate is upstream
 // and deliberate — so this drives a session with nothing quarantined in it.
-import { _electron as electron } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 
-// The left column has two tabs and remembers which was last open, so a run after somebody left it
-// on the bots — or after a run of `drive-bots.mjs` that was interrupted before its teardown — would
-// find the session list present in the DOM and invisible, and every click below would time out
-// against an element that is right there. Everything here is about that list, so it is put back on
-// screen first: a driver leaves the window as the next one expects to find it, and does not assume
-// it was left that way.
-async function showSessions(page) {
-  await page
-    .locator('.sidebar-tabs [role="option"]')
-    .first()
-    .waitFor({ state: 'visible', timeout: 15000 })
-    .catch(() => undefined)
-  await page
-    .locator('.sidebar-tabs [role="option"]')
-    .first()
-    .click({ timeout: 3000 })
-    .catch(() => undefined)
-  await page.waitForTimeout(250)
-}
-
-const app = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
-const page = await app.firstWindow()
-await page.waitForLoadState('domcontentloaded')
-await showSessions(page)
-page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message))
-page.on('console', (m) => m.type() === 'error' && console.log('CONSOLE ERROR:', m.text()))
+const { app, page } = await launchLive()
 await page.waitForTimeout(2500)
 
 if ((await page.locator('.session').count()) === 0) {
@@ -59,7 +30,7 @@ if (await page.locator('.trust').isVisible().catch(() => false)) {
   await page.waitForTimeout(600)
 }
 
-await page.locator('.composer textarea').fill(
+await page.locator(COMPOSER_INPUT).fill(
   'I want to add a --json flag to this project. Do not write anything. First, in ONE ask_user ' +
     'call, ask me two questions together: which approach, and what to name the flag. After I ' +
     'answer, make a SECOND ask_user call with one further question. Then just summarise my ' +
@@ -85,8 +56,10 @@ if (!asked) {
 check(true, 'the questions reach the window')
 const card = page.locator('.confirm.ask').first()
 
-const questions = await card.locator('.ask-question').count()
-check(questions >= 1, `one block per question (${questions})`)
+// The series is put one question at a time, and the card's head says where the person is in it.
+const position = card.locator('.confirm-head .path')
+const questions = Number((await position.textContent())?.trim().match(/^the agent is asking \(1 of (\d+)\)$/)?.[1] ?? 1)
+check((await card.locator('.ask-question').count()) === 1, `one question at a time (${questions} in the series)`)
 check(
   (await card.locator('.ask-question .question').first().textContent())?.trim().length > 0,
   'the question itself is drawn',
@@ -95,8 +68,8 @@ check(
 const choices = await card.locator('.choices .choice').count()
 check(choices >= 1, `the choices are drawn as the agent shaped them (${choices})`)
 check(
-  (await card.locator('.typed').count()) === questions,
-  'and every question keeps a way to answer in your own words',
+  (await card.locator('.typed').count()) === 1,
+  'and the question keeps a way to answer in your own words',
 )
 
 // The composer is closed to sending while the series stands.
@@ -104,7 +77,7 @@ check(
   await page.getByRole('button', { name: 'Stop', exact: true }).isEnabled(),
   'the send control is Stop while the questions stand',
 )
-const placeholder = await page.locator('.composer textarea').getAttribute('placeholder')
+const placeholder = await page.locator(COMPOSER_INPUT).getAttribute('placeholder')
 check(
   (placeholder ?? '').includes('questions'),
   `and the composer says what is waiting (${placeholder})`,
@@ -118,25 +91,25 @@ check(questions >= 2, `several questions arrive in one series (${questions})`)
 const first = card.locator('.choices .choice').first()
 const label = (await first.locator('.label').textContent())?.trim() ?? ''
 for (let at = 0; at < questions; at++) {
-  const block = card.locator('.ask-question').nth(at)
+  check(
+    (await position.textContent())?.trim() === `the agent is asking (${at + 1} of ${questions})`,
+    `question ${at + 1} says where it sits in the series`,
+  )
+  const block = card.locator('.ask-question')
   if ((await block.locator('.choices .choice').count()) > 0) {
     await block.locator('.choices .choice').first().click()
+    check(
+      (await block.locator('.choice.picked').count()) === 1 &&
+        (await block.locator('.choices .choice').first().getAttribute('aria-pressed')) === 'true',
+      'a picked choice says so, to itself and to a screen reader',
+    )
   } else {
     await block.locator('.typed input').fill('whatever you think best')
   }
+  await card.locator('.confirm-actions .approve').click()
+  await page.waitForTimeout(300)
 }
-await page.waitForTimeout(200)
-check(
-  (await first.getAttribute('aria-pressed')) === 'true',
-  'a picked choice says so, to itself and to a screen reader',
-)
-check(
-  (await card.locator('.choice.picked').count()) >= 1,
-  'each question keeps its own selection, independently of the others',
-)
-
-await card.locator('.confirm-actions .approve').click()
-await page.waitForTimeout(1500)
+await page.waitForTimeout(1200)
 
 const records = await card.locator('.asked-answer').count()
 check(records === questions, `every question is recorded, not just the first (${records})`)
@@ -188,7 +161,7 @@ if (again) {
 }
 
 const done = await page
-  .locator('.composer textarea:not([disabled])')
+  .locator(COMPOSER_IDLE)
   .waitFor({ state: 'visible', timeout: 150000 })
   .then(() => true)
   .catch(() => false)

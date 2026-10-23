@@ -4,6 +4,7 @@ title: vet_content
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
 documented-by: docs/website/docs/security/vetting.md
 ---
 
@@ -25,6 +26,7 @@ carries an `expects`. The other two come with a read the planner made for its ow
 
 The call names one reference and says in a sentence what the planner expects it to hold. The
 reference is the only field that decides anything, and the person is shown the bytes behind it,
+with each character in them that draws as nothing written out ([prompting.md](../prompting.md)),
 so the field they approve is the field the call turns on. For a picture they are shown a path to
 a copy of those bytes instead ([VET-4](#VET-4)).
 
@@ -37,6 +39,7 @@ said as a path, a URL or a command rather than as a reference name. A reference 
 the planner and nothing at all to the person being asked about it.
 
 `verified-by: bravebot_agent::turn::content_a_person_reads_after_a_check_reaches_the_planner`
+`verified-by: bravebot_agent::turn::a_vetting_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
 `verified-by: bravebot_core::policy::a_private_expectation_cannot_direct_a_check`
 `verified-by: bravebot_core::policy::a_check_says_where_the_content_came_from_and_not_which_slot_it_is_in`
 `verified-by: bravebot_core::policy::a_check_over_a_file_reference_says_the_path_and_not_the_reference`
@@ -97,6 +100,8 @@ rather than holding it as text, and [VET-4](#VET-4) says where it goes instead.
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_content_a_check_objected_to`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_promotes_content_a_check_found_nothing_in`
 `verified-by: bravebot_agent::turn::a_picture_a_person_keeps_out_is_never_attached`
+`verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said`
+`verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said`
 
 <a id="VET-4"></a>
 ### VET-4: a picture or a PDF is vetted as text is, and put to a person as a file to open

@@ -20,14 +20,42 @@ use bravebot_session::store::Entry;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Ticket(usize);
 
-/// Which prompts Up walks.
+/// Which prompts a walk or a search offers. Up and the search share it, so what each scope holds
+/// is decided once.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
-    /// The prompts this session sent, and the ones its record holds when it was resumed.
-    Session,
     /// Every stored prompt, from every session and workspace.
     #[default]
     All,
+    /// The prompts sent from the workspace the session runs in. An entry recorded with no
+    /// workspace belongs to none, so it is in [`Scope::All`] only.
+    Project,
+    /// The prompts this session sent, and the ones its record holds when it was resumed.
+    Session,
+}
+
+impl Scope {
+    /// The scope the chord moves to from this one, in the order everywhere, this project, this
+    /// session, and back.
+    pub fn next(self) -> Self {
+        match self {
+            Scope::All => Scope::Project,
+            Scope::Project => Scope::Session,
+            Scope::Session => Scope::All,
+        }
+    }
+
+    /// Whether `entry` is in this scope. `mine` says it is this session's, and `project` is the
+    /// workspace the session runs in.
+    pub fn contains(self, entry: &Entry, mine: bool, project: Option<&str>) -> bool {
+        match self {
+            Scope::All => true,
+            Scope::Project => project
+                .filter(|project| !project.is_empty())
+                .is_some_and(|project| entry.project.as_deref() == Some(project)),
+            Scope::Session => mine,
+        }
+    }
 }
 
 /// Prompts already sent, and where the user is looking.
@@ -41,6 +69,8 @@ pub struct History {
     /// say, so the prompts this process sent and the ones a resumed record holds are marked here.
     mine: Vec<bool>,
     scope: Scope,
+    /// The workspace the session runs in, which [`Scope::Project`] compares each entry against.
+    project: Option<String>,
     next_ticket: usize,
     /// How far back the user has walked. `None` means they are editing, not browsing.
     ///
@@ -66,6 +96,7 @@ impl History {
             claims: (0..entries.len()).map(|id| (Ticket(id), 1)).collect(),
             mine: vec![false; entries.len()],
             scope: Scope::All,
+            project: None,
             next_ticket: entries.len(),
             entries,
             back: None,
@@ -84,26 +115,48 @@ impl History {
         self.draft = Some(line);
     }
 
+    /// Say which workspace the session runs in, for [`Scope::Project`].
+    pub fn set_project(&mut self, project: Option<String>) {
+        self.project = project;
+        if !self.holds(self.scope) {
+            self.scope = Scope::All;
+        }
+    }
+
+    /// Whether the entry at `at` is in `scope`.
+    pub fn contains(&self, at: usize, scope: Scope) -> bool {
+        scope.contains(&self.entries[at], self.mine[at], self.project.as_deref())
+    }
+
+    /// Whether any stored prompt is in `scope`.
+    pub fn holds(&self, scope: Scope) -> bool {
+        (0..self.entries.len()).any(|at| self.contains(at, scope))
+    }
+
+    /// The scope the chord moves to from `from`: the next of everywhere, this project and this
+    /// session that holds a prompt, skipping the ones that hold none. `None` when no other scope
+    /// holds one.
+    pub fn following(&self, from: Scope) -> Option<Scope> {
+        let mut scope = from;
+        for _ in 0..2 {
+            scope = scope.next();
+            if self.holds(scope) {
+                return Some(scope);
+            }
+        }
+        None
+    }
+
     /// The entries Up walks now, as indexes into `entries`, oldest first.
     fn visible(&self) -> Vec<usize> {
-        match self.scope {
-            Scope::All => (0..self.entries.len()).collect(),
-            Scope::Session => (0..self.entries.len())
-                .filter(|at| self.mine[*at])
-                .collect(),
-        }
+        (0..self.entries.len())
+            .filter(|at| self.contains(*at, self.scope))
+            .collect()
     }
 
     /// Whether Up has anything to bring back: a sent prompt in the scope or a kept draft.
     pub fn can_recall(&self) -> bool {
-        self.draft.is_some() || self.has_visible()
-    }
-
-    fn has_visible(&self) -> bool {
-        match self.scope {
-            Scope::All => !self.entries.is_empty(),
-            Scope::Session => self.mine.iter().any(|mine| *mine),
-        }
+        self.draft.is_some() || self.holds(self.scope)
     }
 
     /// Which prompts Up is walking.
@@ -111,48 +164,46 @@ impl History {
         self.scope
     }
 
-    /// Whether the scope chord means "every stored prompt" now: a sent prompt is on screen while
-    /// Up walks only this session's.
-    pub fn can_widen(&self) -> bool {
-        self.scope == Scope::Session && self.on_a_sent_prompt()
+    /// The scope the chord would move the walk to: a sent prompt is on screen and another scope
+    /// holds a prompt. With none, the chord is not on offer.
+    pub fn next_scope(&self) -> Option<Scope> {
+        self.on_a_sent_prompt()
+            .then(|| self.following(self.scope))
+            .flatten()
     }
 
-    /// Whether the scope chord means "this session's prompts" now: a sent prompt is on screen in
-    /// the wide scope and this session has some. With none, the chord is not on offer.
-    pub fn can_narrow(&self) -> bool {
-        self.scope == Scope::All && self.on_a_sent_prompt() && self.mine.iter().any(|mine| *mine)
-    }
-
-    /// Walk every stored prompt, staying on the prompt on screen. Returns it.
-    pub fn widen(&mut self) -> Option<String> {
-        let list = self.visible();
-        self.scope = Scope::All;
+    /// Move the walk to the next scope, staying on the prompt on screen where it is in the new
+    /// scope, otherwise landing on the newest prompt of the new scope before it, and failing that
+    /// the oldest. Returns the prompt now on screen.
+    pub fn cycle(&mut self) -> Option<String> {
+        let scope = self.next_scope()?;
         let back = self.back.filter(|back| *back > 0)?;
-        let at = list[list.len() - back];
-        self.back = Some(self.entries.len() - at);
-        Some(self.entries[at].prompt.clone())
-    }
-
-    /// Walk only this session's prompts again, and return the one now on screen: the one that was
-    /// there where it is this session's, otherwise the newest of this session's before it, and
-    /// failing that the oldest of this session's.
-    pub fn narrow(&mut self) -> Option<String> {
-        let back = self.back.filter(|back| *back > 0)?;
-        let at = self.entries.len() - back;
-        self.scope = Scope::Session;
         let list = self.visible();
-        let place = list.iter().rposition(|each| *each <= at).unwrap_or(0);
+        let shown = list[list.len() - back];
+        self.scope = scope;
+        let list = self.visible();
+        let place = list.iter().rposition(|each| *each <= shown).unwrap_or(0);
         self.back = Some(list.len() - place);
         Some(self.entries[list[place]].prompt.clone())
     }
 
     /// Count the prompt a resumed record holds as this session's: the newest stored entry with
-    /// these words that is not already counted.
-    pub fn adopt(&mut self, prompt: &str) {
-        if let Some(at) = (0..self.entries.len())
-            .rev()
-            .find(|at| !self.mine[*at] && self.entries[*at].prompt == prompt)
-        {
+    /// these words that is not already counted and was not sent before the session began.
+    ///
+    /// The words alone do not say whose an entry is, and a prompt such as `continue` is stored
+    /// many times by many sessions. `since` is when the session began, and an entry stamped
+    /// earlier is another session's. An entry with no stamp is still a candidate, since a session
+    /// recorded before times were kept has nothing else to tell its prompts by.
+    pub fn adopt(&mut self, prompt: &str, since: Option<u64>) {
+        if let Some(at) = (0..self.entries.len()).rev().find(|at| {
+            let entry = &self.entries[*at];
+            !self.mine[*at]
+                && entry.prompt == prompt
+                && match (entry.at, since) {
+                    (Some(sent), Some(since)) => sent >= since,
+                    _ => true,
+                }
+        }) {
             self.mine[at] = true;
         }
     }
@@ -202,24 +253,22 @@ impl History {
         self.claims.last().expect("a submitted prompt").0
     }
 
-    /// Cancel one submission without removing other submissions that share its words. Reports
-    /// whether an entry left the list.
-    pub(crate) fn withdraw(&mut self, ticket: Ticket) -> bool {
+    /// Cancel one submission without removing other submissions that share its words. Returns the
+    /// entry that left the list, if one did.
+    pub(crate) fn withdraw(&mut self, ticket: Ticket) -> Option<Entry> {
         self.leave();
-        let Some(at) = self.claims.iter().position(|(id, _)| *id == ticket) else {
-            return false;
-        };
+        let at = self.claims.iter().position(|(id, _)| *id == ticket)?;
         self.claims[at].1 -= 1;
         if self.claims[at].1 == 0 {
             self.claims.remove(at);
             self.mine.remove(at);
-            self.entries.remove(at);
-            if !self.mine.iter().any(|mine| *mine) {
+            let entry = self.entries.remove(at);
+            if !self.holds(self.scope) {
                 self.scope = Scope::All;
             }
-            return true;
+            return Some(entry);
         }
-        false
+        None
     }
 
     /// How many prompts are stored.
@@ -435,13 +484,13 @@ mod tests {
         let mut history = stored(&["old"]);
         history.push("new", None);
         history.older("");
-        assert_eq!(history.narrow().as_deref(), Some("new"));
+        assert_eq!(history.cycle().as_deref(), Some("new"));
         assert_eq!(history.scope(), Scope::Session);
 
-        assert!(history.withdraw(history.ticket()));
+        assert!(history.withdraw(history.ticket()).is_some());
 
         assert_eq!(history.scope(), Scope::All);
-        assert!(!history.can_narrow());
+        assert_eq!(history.next_scope(), None);
         assert!(history.can_recall());
         assert_eq!(history.older("").as_deref(), Some("old"));
     }
@@ -575,17 +624,20 @@ mod tests {
     #[test]
     fn this_sessions_scope_is_offered_only_from_a_prompt_when_the_session_has_sent_one() {
         let mut history = stored(&["old"]);
-        assert!(!history.can_narrow());
+        assert_eq!(history.next_scope(), None);
         history.older("");
-        assert!(!history.can_narrow(), "offered with nothing sent");
+        assert_eq!(history.next_scope(), None, "offered with nothing sent");
         history.newer();
         history.push("new", None);
-        assert!(!history.can_narrow(), "offered with no prompt on screen");
+        assert_eq!(
+            history.next_scope(),
+            None,
+            "offered with no prompt on screen"
+        );
         history.older("");
-        assert!(history.can_narrow());
-        history.narrow();
-        assert!(!history.can_narrow());
-        assert!(history.can_widen());
+        assert_eq!(history.next_scope(), Some(Scope::Session));
+        history.cycle();
+        assert_eq!(history.next_scope(), Some(Scope::All));
     }
 
     /// A prompt a resumed record holds is counted, and clearing the conversation uncounts it and
@@ -593,15 +645,15 @@ mod tests {
     #[test]
     fn a_resumed_prompt_is_this_sessions_until_the_conversation_is_cleared() {
         let mut history = stored(&["a", "b", "c"]);
-        history.adopt("b");
+        history.adopt("b", None);
         assert_eq!(history.older("").as_deref(), Some("c"));
-        assert!(history.can_narrow());
-        assert_eq!(history.narrow().as_deref(), Some("b"));
+        assert_eq!(history.next_scope(), Some(Scope::Session));
+        assert_eq!(history.cycle().as_deref(), Some("b"));
         assert_eq!(history.position(), Some((1, 1)));
         history.forget_session();
         assert_eq!(history.scope(), Scope::All);
         assert_eq!(history.older("").as_deref(), Some("c"));
-        assert!(!history.can_narrow());
+        assert_eq!(history.next_scope(), None);
     }
 
     /// Switching keeps the prompt, and where the prompt is not this session's it lands on the
@@ -609,28 +661,28 @@ mod tests {
     #[test]
     fn narrowing_from_a_prompt_of_another_session_lands_on_the_one_before_it() {
         let mut history = stored(&["a", "b", "c", "d"]);
-        history.adopt("b");
-        history.adopt("d");
+        history.adopt("b", None);
+        history.adopt("d", None);
         assert_eq!(history.older("").as_deref(), Some("d"));
         assert_eq!(history.position(), Some((4, 4)));
-        assert_eq!(history.narrow().as_deref(), Some("d"));
+        assert_eq!(history.cycle().as_deref(), Some("d"));
         assert_eq!(history.position(), Some((2, 2)));
-        assert!(history.can_widen());
-        assert_eq!(history.widen().as_deref(), Some("d"));
+        assert_eq!(history.next_scope(), Some(Scope::All));
+        assert_eq!(history.cycle().as_deref(), Some("d"));
         assert_eq!(history.position(), Some((4, 4)));
         history.older("");
         history.older("");
         history.older("");
-        assert_eq!(history.narrow().as_deref(), Some("b"));
+        assert_eq!(history.cycle().as_deref(), Some("b"));
         assert_eq!(history.position(), Some((1, 2)));
 
         let mut history = stored(&["a", "b", "c"]);
-        history.adopt("b");
+        history.adopt("b", None);
         history.older("");
-        assert_eq!(history.narrow().as_deref(), Some("b"));
-        history.widen();
+        assert_eq!(history.cycle().as_deref(), Some("b"));
+        history.cycle();
         assert_eq!(history.older("").as_deref(), Some("a"));
-        assert_eq!(history.narrow().as_deref(), Some("b"));
+        assert_eq!(history.cycle().as_deref(), Some("b"));
     }
 
     /// Ending the walk, and sending, leave the scope where it was put, so the next Up walks the
@@ -640,7 +692,7 @@ mod tests {
         let mut history = stored(&["a"]);
         history.push("b", None);
         history.older("");
-        assert_eq!(history.narrow().as_deref(), Some("b"));
+        assert_eq!(history.cycle().as_deref(), Some("b"));
         history.newer();
         assert_eq!(history.scope(), Scope::Session);
         assert_eq!(history.older("").as_deref(), Some("b"));
@@ -652,8 +704,8 @@ mod tests {
         assert_eq!(history.older("").as_deref(), Some("b"));
         assert_eq!(history.older(""), None);
         history.newer();
-        history.newer();
-        history.widen();
+        history.older("");
+        history.cycle();
         assert_eq!(history.scope(), Scope::All);
     }
 
@@ -662,18 +714,208 @@ mod tests {
     fn narrowing_picks_the_nearest_earlier_prompt_not_the_oldest() {
         let mut history = stored(&["a", "b", "c", "d", "e", "f"]);
         for prompt in ["b", "d", "f"] {
-            history.adopt(prompt);
+            history.adopt(prompt, None);
         }
         history.older("");
         history.older("");
         assert_eq!(history.older("").as_deref(), Some("d"));
         assert_eq!(history.older("").as_deref(), Some("c"));
-        assert_eq!(history.narrow().as_deref(), Some("b"));
-        history.widen();
+        assert_eq!(history.cycle().as_deref(), Some("b"));
+        history.cycle();
         history.newer();
         assert_eq!(history.newer().as_deref(), Some("d"));
         history.newer();
-        assert_eq!(history.narrow().as_deref(), Some("d"));
+        assert_eq!(history.cycle().as_deref(), Some("d"));
         assert_eq!(history.position(), Some((2, 3)));
+    }
+
+    const HERE: &str = "/work/here";
+
+    /// Entries in a mix of workspaces, `b` and `e` from this process, running in [`HERE`].
+    fn spread() -> History {
+        let sent =
+            |prompt: &str, project: Option<&str>| Entry::sent(prompt, project.map(str::to_string));
+        let mut history = History::from_entries(vec![
+            sent("a", Some(HERE)),
+            sent("b", Some("/work/elsewhere")),
+            sent("c", None),
+            sent("d", Some(HERE)),
+            sent("e", Some("/work/elsewhere")),
+        ]);
+        history.set_project(Some(HERE.to_string()));
+        history.adopt("b", None);
+        history.adopt("e", None);
+        history
+    }
+
+    /// Everywhere, this project, this session, and back, the walk staying on the prompt on screen
+    /// where it is in the new scope and otherwise on the newest one before it.
+    #[test]
+    fn the_scope_cycles_everywhere_project_session_and_back() {
+        let mut history = spread();
+        assert_eq!(history.older("").as_deref(), Some("e"));
+        assert_eq!(history.older("").as_deref(), Some("d"));
+
+        // `d` is this project's, so it stays on screen.
+        assert_eq!(history.next_scope(), Some(Scope::Project));
+        assert_eq!(history.cycle().as_deref(), Some("d"));
+        assert_eq!(history.scope(), Scope::Project);
+        assert_eq!(history.position(), Some((2, 2)));
+
+        // `d` is not this session's, so the newest of this session's before it is `b`.
+        assert_eq!(history.next_scope(), Some(Scope::Session));
+        assert_eq!(history.cycle().as_deref(), Some("b"));
+        assert_eq!(history.scope(), Scope::Session);
+        assert_eq!(history.position(), Some((1, 2)));
+
+        assert_eq!(history.next_scope(), Some(Scope::All));
+        assert_eq!(history.cycle().as_deref(), Some("b"));
+        assert_eq!(history.scope(), Scope::All);
+        assert_eq!(history.position(), Some((2, 5)));
+    }
+
+    /// Where no earlier prompt of the new scope exists, the walk lands on the oldest of it.
+    #[test]
+    fn a_scope_switch_before_every_prompt_of_the_scope_lands_on_the_oldest() {
+        let mut history = spread();
+        for _ in 0..5 {
+            history.older("");
+        }
+        assert_eq!(history.position(), Some((1, 5)));
+        assert_eq!(history.cycle().as_deref(), Some("a"));
+        assert_eq!(history.cycle().as_deref(), Some("b"));
+        assert_eq!(history.position(), Some((1, 2)));
+    }
+
+    /// An entry stored with no workspace is in everywhere only, and a session with no workspace has
+    /// no project scope at all: guessing would file a whole history under the next checkout opened.
+    #[test]
+    fn a_prompt_with_no_recorded_project_is_in_the_everywhere_scope_only() {
+        let history = spread();
+        assert!(history.contains(2, Scope::All));
+        assert!(!history.contains(2, Scope::Project));
+        assert!(!history.contains(2, Scope::Session));
+
+        let mut unplaced = spread();
+        unplaced.set_project(None);
+        assert!(!unplaced.holds(Scope::Project));
+    }
+
+    /// A scope that holds nothing is not offered, and the cycle goes past it.
+    #[test]
+    fn a_scope_with_nothing_in_it_is_skipped() {
+        // This session has sent nothing: everywhere, then this project, then back.
+        let mut history = spread();
+        history.forget_session();
+        history.older("");
+        assert_eq!(history.next_scope(), Some(Scope::Project));
+        assert_eq!(history.cycle().as_deref(), Some("d"));
+        assert_eq!(history.scope(), Scope::Project);
+        assert_eq!(history.next_scope(), Some(Scope::All));
+
+        // No stored prompt belongs to this workspace: everywhere, then this session.
+        let mut history = spread();
+        history.set_project(Some("/work/nowhere".to_string()));
+        history.older("");
+        assert_eq!(history.next_scope(), Some(Scope::Session));
+        assert_eq!(history.cycle().as_deref(), Some("e"));
+        assert_eq!(history.scope(), Scope::Session);
+        assert_eq!(history.next_scope(), Some(Scope::All));
+    }
+
+    /// With one scope left the chord is not offered and does nothing.
+    #[test]
+    fn with_one_scope_left_the_chord_is_not_offered_and_does_nothing() {
+        let mut history = stored(&["a", "b"]);
+        history.older("");
+        assert_eq!(history.next_scope(), None);
+        assert_eq!(history.cycle(), None);
+        assert_eq!(history.scope(), Scope::All);
+        assert_eq!(history.position(), Some((2, 2)));
+    }
+
+    /// The scope holds across ending the walk, and `/clear` puts it back on everywhere.
+    #[test]
+    fn the_project_scope_holds_across_the_walk_and_clearing_puts_it_back() {
+        let mut history = spread();
+        history.older("");
+        history.cycle();
+        history.newer();
+        history.newer();
+        assert!(!history.is_browsing());
+        assert_eq!(history.scope(), Scope::Project);
+        assert_eq!(history.older("").as_deref(), Some("d"));
+
+        history.forget_session();
+        assert_eq!(history.scope(), Scope::All);
+    }
+
+    /// Withdrawing the last prompt of the project scope in force leaves nothing to walk there, so
+    /// the walk goes back to everywhere.
+    #[test]
+    fn withdrawing_the_last_prompt_of_this_project_puts_the_scope_back_on_everywhere() {
+        let mut history = stored(&["old"]);
+        history.set_project(Some(HERE.to_string()));
+        history.push("new", Some(HERE.to_string()));
+        history.older("");
+        assert_eq!(history.cycle().as_deref(), Some("new"));
+        assert_eq!(history.scope(), Scope::Project);
+
+        assert!(history.withdraw(history.ticket()).is_some());
+
+        assert_eq!(history.scope(), Scope::All);
+        assert_eq!(history.older("").as_deref(), Some("old"));
+    }
+
+    /// Moving to a workspace that has no stored prompt leaves nothing to walk on the project
+    /// scope, so the walk goes back to everywhere rather than recalling nothing.
+    #[test]
+    fn moving_to_a_workspace_with_no_prompts_puts_the_scope_back_on_everywhere() {
+        let mut history = stored(&["old"]);
+        history.set_project(Some(HERE.to_string()));
+        history.push("new", Some(HERE.to_string()));
+        history.older("");
+        assert_eq!(history.cycle().as_deref(), Some("new"));
+        assert_eq!(history.scope(), Scope::Project);
+
+        history.set_project(Some("/elsewhere".to_string()));
+
+        assert_eq!(history.scope(), Scope::All);
+        assert_eq!(history.older("").as_deref(), Some("old"));
+    }
+
+    /// A prompt such as `continue` is stored by many sessions, so the words do not say whose entry
+    /// is whose. A resumed session counts the ones sent since it began and leaves the older ones,
+    /// which would otherwise fill its scope with prompts from days before.
+    #[test]
+    fn a_resumed_prompt_is_not_matched_to_an_entry_sent_before_the_session_began() {
+        let stamped = |at| Entry {
+            prompt: "continue".to_string(),
+            at: Some(at),
+            project: None,
+        };
+        let mut history = History::from_entries(vec![stamped(100), stamped(1_000), stamped(1_010)]);
+        history.adopt("continue", Some(500));
+        history.adopt("continue", Some(500));
+        history.adopt("continue", Some(500));
+
+        let mine: Vec<bool> = (0..3)
+            .map(|at| history.contains(at, Scope::Session))
+            .collect();
+        assert_eq!(
+            mine,
+            [false, true, true],
+            "an entry from before the session began was counted as its own"
+        );
+    }
+
+    /// A session recorded before times were kept has stored entries with no stamp, and they are
+    /// still found by their words.
+    #[test]
+    fn an_entry_with_no_stamp_is_still_matched_to_a_resumed_prompt() {
+        let mut history = stored(&["a"]);
+        history.entries[0].at = None;
+        history.adopt("a", Some(500));
+        assert!(history.contains(0, Scope::Session));
     }
 }

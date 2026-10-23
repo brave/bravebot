@@ -143,6 +143,8 @@ pub const DENIED: &[&str] = &[
     // Read files or attach them to a turn.
     "mentions.offer",
     "mentions.named",
+    "drops.classify",
+    "pastes.check",
     // Work that runs without a request, or a plan walked as one run.
     "watches.list",
     "watches.add",
@@ -151,6 +153,9 @@ pub const DENIED: &[&str] = &[
     "manifest.run",
     "manifest.read",
     "manifest.reply",
+    // Words a person types into a turn already running (INPUT-10). The only client of the host
+    // today is not a window with a message box that stays live while a turn runs.
+    "turn.interject",
     // Answers that widen what a session may do or read beyond `trust.reply` above, which are not
     // offered to any client yet.
     "output.reply",

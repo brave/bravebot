@@ -76,6 +76,18 @@ fn the_suite_covers_each_everyday_program_and_the_rows_that_stay_refused() {
             "no workflow for {group}"
         );
     }
+    for name in [
+        "sort and uniq count lines",
+        "xargs passes a list of files to one program",
+        "find -exec {} + passes a list of files to one program",
+    ] {
+        assert!(
+            workflows
+                .iter()
+                .any(|workflow| workflow.name == name && workflow.expect == Expect::Works),
+            "no workflow named {name}"
+        );
+    }
     let refused = workflows
         .iter()
         .filter(|workflow| workflow.expect == Expect::Refused)
@@ -210,6 +222,94 @@ fn a_setup_that_fails_is_named_as_setup() {
     assert_eq!(only_failure(&report).code, Some(1));
 }
 
+/// Holds this agent's signing key in the environment of this process while it is alive, and puts
+/// back what was there. The tests that read the environment of a program the suite starts share it,
+/// since the environment belongs to the process.
+struct SigningKey {
+    previous: [Option<std::ffi::OsString>; 2],
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl SigningKey {
+    const NAME: &'static str = "SERVICES_KEY_AICHAT";
+    /// The switch that turns the removal off, which a machine may have set.
+    const SWITCH: &'static str = "BRAVEBOT_SUBPROCESS_ENV_SCRUB";
+
+    fn held() -> Self {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = [std::env::var_os(Self::NAME), std::env::var_os(Self::SWITCH)];
+        // SAFETY: the lock serialises the tests that set these, and `drop` puts them back.
+        unsafe {
+            std::env::set_var(Self::NAME, "a-live-signing-key");
+            std::env::remove_var(Self::SWITCH);
+        }
+        Self {
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for SigningKey {
+    fn drop(&mut self) {
+        // SAFETY: as in `held`.
+        for (name, previous) in [Self::NAME, Self::SWITCH].into_iter().zip(&self.previous) {
+            match previous {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+    }
+}
+
+/// CRED-14: neither a setup stage, which runs outside the sandbox with the person's access, nor a
+/// stage under it is handed this agent's signing key. Each stage fails if the variable is set. The
+/// regression it rejects: starting the suite's programs with the environment this process holds,
+/// which hands the key to a program a workflow's author chose.
+#[test]
+fn a_program_the_suite_starts_is_not_handed_this_agents_signing_key() {
+    if !usability::available() {
+        return;
+    }
+    let _key = SigningKey::held();
+    let unset = || Stage::new("sh", &["-c", "test -z \"$SERVICES_KEY_AICHAT\""]);
+
+    let report = run(
+        "signing-key",
+        &[Workflow::new("test", "a stage that reads the signing key")
+            .setup(unset())
+            .stage(unset())],
+    );
+
+    assert!(
+        report.is_green(),
+        "a program the suite started was handed the signing key: {:?}",
+        report.rows
+    );
+}
+
+/// CRED-14: the `gh` the stored-login row asks for a token is not handed the signing key either,
+/// outside the sandbox or under it. The stub fails if the variable is set, and a `gh` that fails
+/// outside the sandbox gives no row.
+#[test]
+fn the_gh_the_login_row_starts_is_not_handed_this_agents_signing_key() {
+    if !usability::available() {
+        return;
+    }
+    let _key = SigningKey::held();
+    let (root, gh, home) = login_fixture(
+        "login-signing-key",
+        r#"test -z "$SERVICES_KEY_AICHAT" || exit 1"#,
+    );
+
+    let row = usability::login_row_for(&root, &gh, &home, &Lists::default())
+        .expect("the probe runs")
+        .expect("the stub failed, so it was handed the signing key");
+
+    assert_eq!(row.outcome, Outcome::Passed);
+}
+
 /// The regression it rejects: a program that is not installed read as a failure, which fails the
 /// suite on a machine without `go`, or dropped without a word, which hides that the workflow was
 /// never checked.
@@ -278,7 +378,8 @@ fn the_report_holds_no_program_output() {
 /// permitted, which turns every refused row into a failure of the check itself.
 #[test]
 fn the_suite_will_not_run_under_the_temporary_directory() {
-    let under_temporary = std::env::temp_dir().join("bravebot-usability-root");
+    let under_temporary =
+        std::env::temp_dir().join(format!("bravebot-usability-root-{}", std::process::id()));
 
     let refused = usability::run(&under_temporary, &[]);
 

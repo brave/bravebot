@@ -51,13 +51,31 @@ The label is a first label from provenance, exactly like the label on a program'
 own configuration. It is admissible for the reason a vouched-for command's output is: a person took
 responsibility, and nothing inspected anything.
 
+A command that colours its output is drawn without its colour codes, with a row under the output
+saying how many were left out ([the transcript](transcript.md)). That changes what the screen draws
+and not what the model is sent.
+
+## Output while it runs
+
+What a command prints is drawn under it as it prints, from standard output and standard error in the
+order they were read. A build or a server start that prints for minutes shows what it has printed so
+far, so you can tell a slow command from a hung one and stop it with Esc. While it runs only the
+last 200 lines are drawn, with a row saying how many came before them. Colour codes and other
+escapes are drawn the way they are for a command that has ended.
+
+When the command ends, what was drawn is replaced by the output the model reads, so nothing is drawn
+twice. Standard error is listed after standard output there, which is the order the model reads it
+in. A command you stop, or that runs past ten minutes, leaves on the screen what it had printed,
+above the note saying why it ended and a note that it was not sent to the model.
+
 ## Keeping the output to yourself
 
 Type `!!` to run one command whose output is shown and never sent to the model: `!!cat .env`. The
 prompt shows `!!`, the hint says the output stays on the screen, and a line under the output says it
 was not sent. The next request carries neither the command nor what it printed. Nothing else changes:
 the line runs through `$SHELL -c`, nothing asks, and the mode lasts one command. Backspace on the
-empty line removes the second `!` first. A paste cannot make a line private.
+empty line removes the second `!` first. A line queued behind a turn keeps its form, so it is still
+private when it runs. A paste cannot make a line private.
 
 ## Only a line a human typed
 

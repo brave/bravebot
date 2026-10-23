@@ -141,7 +141,13 @@ impl SettingsRules {
                 .map(|entry| json!({ "rule": entry.rule, "said": entry.said }))
                 .collect::<Vec<_>>(),
             "proposed": self.proposed.iter()
-                .map(|entry| json!({ "rule": entry.rule, "file": entry.file.display().to_string() }))
+                .map(|entry| json!({
+                    "rule": entry.rule,
+                    // Spelled for a person (PROMPT-1): the rule as text, the file as a path.
+                    "shownRule": bravebot_agent::confirm::shown_text(&entry.rule),
+                    "file": entry.file.display().to_string(),
+                    "shownFile": bravebot_agent::confirm::shown_path(&entry.file),
+                }))
                 .collect::<Vec<_>>(),
             "directories": self.directories,
             "filesystem": self.filesystem.iter()
@@ -287,6 +293,47 @@ mod tests {
             proposed.file.display()
         );
         drop(dir);
+    }
+
+    /// PROMPT-1: a window lists the rules a checkout proposed through the spelled fields, so a rule
+    /// that holds a character that draws as nothing, and a file whose directory ends in a space,
+    /// do not read as the rule and the file without them. A space inside a rule is not marked,
+    /// since a rule is not a name, and a rule or file that needs no spelling is sent as it is.
+    #[test]
+    fn a_proposed_rule_and_its_file_are_reported_spelled_for_a_person() {
+        let proposed = |rule: &str, file: &str| Proposed {
+            rule: rule.to_string(),
+            file: PathBuf::from(file),
+        };
+        let rules = SettingsRules {
+            proposed: vec![
+                proposed(
+                    "WebFetch(domain:exa\u{200b}mple.com)",
+                    "/work/proj /.bravebot/settings.json",
+                ),
+                proposed("Bash(cat /etc/hosts)", "/work/proj/.bravebot/settings.json"),
+            ],
+            ..SettingsRules::default()
+        };
+        let json = rules.json();
+        assert_eq!(
+            json["proposed"],
+            json!([
+                {
+                    "rule": "WebFetch(domain:exa\u{200b}mple.com)",
+                    "shownRule": "\"WebFetch(domain:exa\\u{200b}mple.com)\"",
+                    "file": "/work/proj /.bravebot/settings.json",
+                    "shownFile": "\"/work/proj\u{2423}/.bravebot/settings.json\"",
+                },
+                {
+                    "rule": "Bash(cat /etc/hosts)",
+                    "shownRule": "Bash(cat /etc/hosts)",
+                    "file": "/work/proj/.bravebot/settings.json",
+                    "shownFile": "/work/proj/.bravebot/settings.json",
+                },
+            ]),
+            "{json}"
+        );
     }
 
     /// `deny` and `ask` rules only narrow, so a checkout's hold as the person's own do.

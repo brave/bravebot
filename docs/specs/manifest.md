@@ -9,10 +9,16 @@ governs:
   - crates/agent/src/connectors.rs
   - crates/agent/src/mode.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/finish.rs
+  - crates/cli/src/one_shot.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/confirm.rs
+  - crates/tui/src/confirm/grants.rs
+  - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/manifest_run.rs
   - crates/ui-bridge/src/manifest.rs
 guards:
@@ -109,7 +115,9 @@ never half adopted, and a step is never repaired to make a plan usable.
 `verified-by: bravebot_core::manifest::a_path_outside_the_workspace_is_refused`
 `verified-by: bravebot_core::manifest::a_read_after_an_action_is_refused`
 `verified-by: bravebot_core::manifest::validation_is_deterministic`
+`verified-by: bravebot_core::manifest::a_body_field_must_hold_text`
 `verified-by: bravebot_agent::manifest::a_plan_that_fails_validation_runs_nothing`
+`verified-by: bravebot_agent::manifest::a_plan_whose_body_field_is_not_text_is_refused`
 
 <a id="MANIFEST-5"></a>
 ### MANIFEST-5: the driver adds nothing
@@ -185,11 +193,21 @@ There is no planner left to show anything to. A step result is stored, whatever 
 the only ways out of a slot are a later processor, a write back into the workspace, and a
 release the plan named in advance.
 
-An unmarked processor answer is a remark, not a document. Treating it as the slot would write an
-explanation over whatever the plan named next.
+An unmarked processor answer is a remark, not a document, except for a slot an answer reads and
+nothing else does. Treating it as the slot would write an explanation over whatever the plan named
+next. Such an answer is asked for once more, with the plan's instruction and one fixed sentence,
+both trusted, and a second answer without the mark fails the step. An empty reply is asked for once
+more as it stands, sharing that one further try. A slot only shown to the person has no file for a
+remark to land on, and what the processor said reaches the person either way, so there it stands as
+the answer.
 
 `verified-by: bravebot_core::policy::a_step_result_is_quarantined_whatever_its_label`
 `verified-by: bravebot_agent::manifest::an_unmarked_transform_does_not_become_a_file`
+`verified-by: bravebot_agent::manifest::an_unmarked_transform_is_asked_once_more_for_its_document`
+`verified-by: bravebot_agent::manifest::an_empty_processor_reply_is_asked_for_once_more`
+`verified-by: bravebot_agent::manifest::a_processor_gets_one_further_try_whatever_went_wrong`
+`verified-by: bravebot_agent::manifest::an_unmarked_answer_for_a_slot_only_shown_stands_as_the_answer`
+`verified-by: bravebot_agent::manifest::an_unmarked_answer_for_a_slot_a_write_also_reads_still_fails`
 `verified-by: bravebot_agent::manifest::a_slot_no_step_reads_is_never_opened`
 
 <a id="MANIFEST-9"></a>
@@ -224,7 +242,7 @@ Between freezing a plan and walking it, the frozen plan is put to a person: the 
 words, then every step in order, each naming its tier, what it would do, and every routing field the
 step fixed. The routing is part of what is being answered for, so the line a person reads carries the
 directory a search runs in and the glob it filters by, not the pattern alone. A connector act's line
-also names where the content it carries came from and where it goes (MANIFEST-13), since approving
+also names where the content it carries came from and where it goes (MANIFEST-14), since approving
 the plan is what releases it, and the text and title the plan wrote for it, the first 200 characters
 of each on one line with control characters escaped. A file write that carries a slot names where
 that slot's content came from, in the same words, wherever that is anything but the workspace.
@@ -349,7 +367,33 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
 
 <a id="MANIFEST-12"></a>
-### MANIFEST-12: an authority's detail about a call reaches only the margin
+### MANIFEST-12: planning runs on the run's model and each processing step on the processor model
+
+Both planning calls ([MANIFEST-1](#MANIFEST-1)) run on the model the run was given. A processing
+step's call runs on the model [PROC-13](processors.md#PROC-13) names, which is the `processorModel`
+setting or the `--processor-model` flag ([CLI-34](cli.md#CLI-34)), and on the run's own model where
+neither names one. A plan can then be made on a model chosen for reasoning and carried out on one
+chosen for cost, so a run with several transforms over long text is not billed at the planner's price
+for each.
+
+The choice is the person's configuration. No plan, step, instruction or file content names a model,
+so nothing the run reads decides where a processor's input goes. A processing step is the call it is
+in a turn ([PROC-1](processors.md#PROC-1)): no tools, no history and one request. A weaker model can
+write a transform worse, and a write of the result is approved from the diff of the real bytes. The
+trail records the model each call names ([TRACE-10](trace.md#TRACE-10)).
+
+A processor model that needs a sign-in this machine has not made fails the step that would have used
+it. The failure names the model, and nothing is sent to it or to the run's model in its place. A model
+the managed layer refuses or that no configured service answers for is refused the same way
+([PROC-13](processors.md#PROC-13)).
+
+`verified-by: bravebot_agent::manifest::a_manifest_run_plans_on_the_runs_model_and_processes_on_the_processor_model`
+`verified-by: bravebot_agent::manifest::a_manifest_run_with_no_processor_model_processes_on_the_runs_own`
+`verified-by: bravebot_agent::manifest::a_manifest_processor_model_needing_a_sign_in_fails_the_step_and_sends_nothing`
+`verified-by: bravebot_agent::manifest::a_manifest_processor_answered_by_another_model_than_the_configured_one_says_so`
+
+<a id="MANIFEST-13"></a>
+### MANIFEST-13: an authority's detail about a call reaches only the margin
 
 The detail an authority reports about a connector call, for a fetch it did not accept and for an
 act whatever its outcome, is drawn in the margin every untrusted byte is drawn in, labelled as the
@@ -370,8 +414,8 @@ its form is held here so that it cannot draw anything but one URL on one line.
 `verified-by: bravebot_agent::manifest::an_authoritys_detail_about_an_accepted_act_is_shown`
 `verified-by: bravebot_agent::manifest::an_accepted_acts_link_is_shown_only_when_it_is_well_formed`
 
-<a id="MANIFEST-13"></a>
-### MANIFEST-13: a connector act's content is released only to the place its plan fixed
+<a id="MANIFEST-14"></a>
+### MANIFEST-14: a connector act's content is released only to the place its plan fixed
 
 A connector act that carries a slot, or takes a value a fetch recorded, names from the frozen plan
 the one connector and place that content may go to and where it came from: a workspace read, a
@@ -404,6 +448,13 @@ lets fetched content change what a slot says and never where it goes.
   is why it is a cost rather than a hole in MANIFEST-10: a processor's output is a slot, and every
   step that lands a slot anywhere names the destination on its own line and is put to the person
   again as its turn comes.
+- **A processor model that needs a sign-in, or that only the setting names and nothing can use,
+  fails the run at its first processing step.** The two planning calls come first and have been
+  spent on the run's model by then. A model named with `--processor-model` is checked before the run
+  for a refusal by the machine and for no service answering for it ([CLI-34](cli.md#CLI-34)). The
+  setting, and a sign-in for either, are met when a processor is first asked
+  ([PROC-13](processors.md#PROC-13)): a run that starts no processor has no use for the model and is
+  not refused for it, and the run's own sign-in comes first and may cover the model.
 - **A release fixes the account and the place, not whom an act addresses there.** An act whose
   definition takes a value from the item it lands on, such as a reply's recipient, addresses whoever
   that item names. Where the fetch that chose the item did not narrow, as a fetch of the newest
@@ -411,4 +462,4 @@ lets fetched content change what a slot says and never where it goes.
   fills in and from which fetch, and the authority's popup shows the recipient before anything is
   sent, which is the person's check; nothing earlier refuses it. Requiring such an act's fetch to
   narrow, as an act on every match must, would close it, at the cost of definitions that list
-  narrowing terms for every act that takes a value from its item (MANIFEST-13).
+  narrowing terms for every act that takes a value from its item (MANIFEST-14).

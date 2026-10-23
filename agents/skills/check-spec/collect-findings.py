@@ -8,9 +8,18 @@ same answer from the same place.
 """
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
+
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
+
+read_manifest = workdir.read_manifest
 
 ERROR = "error"
 WARNING = "warning"
@@ -18,10 +27,33 @@ WARNING = "warning"
 VERDICT_SEVERITY = {"violation": ERROR, "untested": WARNING}
 
 
+def carried(entry, clause, before):
+    """A finding taken from the record: what an earlier run decided, with nothing the clause depends
+    on changed since. It is reported, and it is not drafted again, because the run that decided it
+    drafted it."""
+    return {
+        "spec": entry["path"],
+        "clause": clause,
+        "severity": before["severity"],
+        "kind": before["verdict"],
+        "summary": before["summary"] or "(no summary)",
+        "evidence": None,
+        "carried": True,
+        "recorded": before["commit"],
+        "source": "review",
+    }
+
+
 def load_reviews(manifest):
+    """The findings the reviewers' results and the record make, how many clauses a reviewer read,
+    and what each of them decided, keyed by clause, for `record-reviewed.py`."""
     findings = []
     reviewed = 0
+    decided = {}
     for entry in manifest["specs"]:
+        for held in entry.get("kept", []):
+            if held["verdict"] != "conforms":
+                findings.append(carried(entry, held["clause"], held))
         for prompt in entry["reviewer_prompts"]:
             path = Path(prompt["results_file"])
             if not path.exists():
@@ -58,7 +90,22 @@ def load_reviews(manifest):
             for clause in result.get("clauses", []):
                 reviewed += 1
                 expected.discard(clause.get("clause"))
-                verdict = clause.get("verdict", "unclear")
+                before = prompt.get("previous", {}).get(clause.get("clause"))
+                holds = bool(before) and clause.get("holds") is True
+                verdict = clause.get("verdict", before["verdict"] if holds else "unclear")
+                # A reviewer that says the earlier verdict holds, and names no other, has kept
+                # it. One that names another has not, whatever it says about `holds`.
+                if holds and verdict == before["verdict"]:
+                    decided[clause["clause"]] = dict(before, held=True)
+                    if verdict != "conforms":
+                        findings.append(carried(entry, clause["clause"], before))
+                    continue
+                decided[clause.get("clause")] = {
+                    "verdict": verdict,
+                    "severity": clause.get("severity") or VERDICT_SEVERITY.get(verdict, "-"),
+                    "summary": clause.get("summary") or "",
+                    "held": False,
+                }
                 if verdict == "conforms":
                     continue
                 if verdict == "unclear":
@@ -108,7 +155,7 @@ def load_reviews(manifest):
                         "source": "review",
                     }
                 )
-    return findings, reviewed
+    return findings, reviewed, decided
 
 
 def render(findings, manifest, reviewed):
@@ -125,6 +172,8 @@ def render(findings, manifest, reviewed):
             mark = "error" if item["severity"] == ERROR else "warn "
             clause = f"{item['clause']}: " if item.get("clause") else ""
             lines.append(f"  {mark}  {clause}{item['summary']}")
+            if item.get("carried"):
+                lines.append(f"         recorded at {item['recorded']} and still holds")
             if item.get("failure"):
                 lines.append(f"         failure: {item['failure']}")
             if item.get("evidence"):
@@ -135,23 +184,16 @@ def render(findings, manifest, reviewed):
     errors = [f for f in findings if f["severity"] == ERROR]
     warnings = [f for f in findings if f["severity"] == WARNING]
     clauses = sum(entry["clauses"] for entry in manifest["specs"])
+    kept = sum(len(entry.get("kept", [])) for entry in manifest["specs"])
     lines.append("")
     lines.append(
-        f"{len(manifest['specs'])} specs, {clauses} clauses, {reviewed} reviewed: "
-        f"{len(errors)} errors, {len(warnings)} warnings"
+        f"{len(manifest['specs'])} specs, {clauses} clauses, {reviewed} reviewed"
+        + (f", {kept} carried from the record" if kept else "")
+        + f": {len(errors)} errors, {len(warnings)} warnings"
     )
     if not errors and not warnings:
         lines.append("the implementation matches the spec")
     return "\n".join(lines)
-
-
-def read_manifest(work_dir):
-    """The parsed `manifest.json` of a work directory, or None after saying there is none."""
-    path = Path(work_dir) / "manifest.json"
-    if not path.exists():
-        print(f"no manifest at {path}", file=sys.stderr)
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def main():
@@ -166,7 +208,7 @@ def main():
         return 2
 
     findings = list(manifest.get("mechanical_findings", []))
-    reviews, reviewed = load_reviews(manifest)
+    reviews, reviewed, _ = load_reviews(manifest)
     findings.extend(reviews)
 
     strict = args.strict or manifest.get("strict", False)

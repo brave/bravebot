@@ -1,7 +1,7 @@
-//! Importing a model service Claude Code or opencode configured, or a running Ollama serves
-//! (`docs/specs/import.md`).
+//! Importing a model service Claude Code or opencode configured, or a running Ollama, LM Studio or
+//! llama-server serves (`docs/specs/import.md`).
 //!
-//! What the two programs' files hold, and what Ollama answers, is read and mapped in
+//! What the two programs' files hold, and what the servers answer, is read and mapped in
 //! [`bravebot_config::import`]. Here is the rest: what is shown, the questions, and the write.
 //! Every question is put in lines, the way a session in lines puts one, because each is asked
 //! before anything is drawn.
@@ -38,21 +38,28 @@ impl Looked {
     pub(crate) fn command(&self) -> Option<String> {
         match self.importable.as_slice() {
             [] => None,
-            [Source::Ollama] => Some(t!(
-                onboarding_import_running,
-                source = Source::Ollama.name()
-            )),
+            [source] if source.is_server() => {
+                Some(t!(onboarding_import_running, source = source.name()))
+            }
             [source] => Some(t!(onboarding_import_one, source = source.name())),
             [first, second] => Some(t!(
                 onboarding_import_both,
                 first = first.name(),
                 second = second.name()
             )),
-            [first, second, third, ..] => Some(t!(
+            [first, second, third] => Some(t!(
                 onboarding_import_three,
                 first = first.name(),
                 second = second.name(),
                 third = third.name()
+            )),
+            sources => Some(t!(
+                onboarding_import_many,
+                sources = sources
+                    .iter()
+                    .map(|source| source.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )),
         }
     }
@@ -65,14 +72,14 @@ impl Looked {
 /// service these sources configure would make the request, so every answer to the question would be
 /// refused, and the file that refused is not this person's to write (BACKEND-48).
 pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
-    let model = crate::model_for_this_run(None, config);
+    let model = crate::model::model_for_this_run(None, config);
     let (subscription, a_service_is_configured) =
         match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
             bravebot_agent::backend::Serving::Configured => return None,
             bravebot_agent::backend::Serving::Refused { file, why } => {
                 return Some(fail(
                     Ending::Configuration,
-                    crate::managed_refusal(&model, &file, why),
+                    crate::model::managed_refusal(&model, &file, why),
                 ));
             }
             bravebot_agent::backend::Serving::NothingConfigured {
@@ -88,7 +95,7 @@ pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
         Start::Ended(code) => Some(code),
         Start::Refuse(looked) => Some(fail(
             Ending::Configuration,
-            crate::how_to_configure_a_model(
+            crate::model::how_to_configure_a_model(
                 subscription.as_deref(),
                 a_service_is_configured,
                 &looked,
@@ -126,12 +133,12 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
         return Start::Refuse(Looked::default());
     };
     // Opened before the sources are read, since the refusal for a file that cannot be written
-    // reads them itself, and Ollama is asked once per start.
+    // reads them itself, and the servers are asked once per start.
     let mut destination = match Destination::open(&file) {
         Ok(destination) => destination,
         Err(_) => return Start::Refuse(looked(false)),
     };
-    let found = import::found(&import::Places::from_env(), exported, ask_ollama);
+    let found = import::found(&import::Places::from_env(), exported, ask_server);
     if found.is_empty() {
         return Start::Refuse(Looked::default());
     }
@@ -171,7 +178,7 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     // exported later, and ending here over it would refuse a service that works.
     let unset = unset_gateways(&config, &offered.gateways);
     let blocked = config
-        .provider_for(&crate::model_for_this_run(None, &config))
+        .provider_for(&crate::model::model_for_this_run(None, &config))
         .is_some_and(|(serving, _)| unset.iter().any(|provider| provider.id == serving.id));
     if blocked {
         let lines: Vec<String> = unset
@@ -183,14 +190,14 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
     for provider in &unset {
         asking.say(&unset_line(provider, &file, true));
     }
-    let model = crate::model_for_this_run(None, &config);
+    let model = crate::model::model_for_this_run(None, &config);
     match bravebot_agent::backend::serving(&config, &bravebot_net::Egress::new(), &model) {
         bravebot_agent::backend::Serving::NothingConfigured {
             subscription,
             a_service_is_configured,
         } => Start::Ended(fail(
             Ending::Configuration,
-            crate::how_to_configure_a_model(
+            crate::model::how_to_configure_a_model(
                 subscription.as_deref(),
                 a_service_is_configured,
                 &Looked::default(),
@@ -201,7 +208,7 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
         // (BACKEND-48).
         bravebot_agent::backend::Serving::Refused { file, why } => Start::Ended(fail(
             Ending::Configuration,
-            crate::managed_refusal(&model, &file, why),
+            crate::model::managed_refusal(&model, &file, why),
         )),
         bravebot_agent::backend::Serving::Configured => Start::Serving(Box::new(config)),
     }
@@ -223,7 +230,7 @@ pub(crate) fn looked(a_service_is_configured: bool) -> Looked {
     let managed = Managed::load();
     // Why the command would refuse to write, where one source's addition would not fit.
     let mut too_large = None;
-    for found in import::found(&import::Places::from_env(), exported, ask_ollama) {
+    for found in import::found(&import::Places::from_env(), exported, ask_server) {
         let plan = plan(found, destination.as_ref().ok(), &managed, &exported);
         looked.left.extend(left_lines(plan.source, &plan.left));
         if plan.adds_anything() {
@@ -284,7 +291,7 @@ pub(crate) fn providers(args: &[String]) -> ExitCode {
         Err(why) => return fail(Ending::Failed, unwritable(why, &file)),
     };
 
-    let found = import::found(&import::Places::from_env(), exported, ask_ollama);
+    let found = import::found(&import::Places::from_env(), exported, ask_server);
     let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());
     let offered = offer(
         &mut asking,
@@ -323,12 +330,19 @@ fn exported(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-/// What the Ollama at `host` has pulled.
+/// What the server of `source` at `host` has to offer.
 ///
 /// Asked only once there is a settings file to write, so an incognito start opens no socket, and a
-/// trail of its own because no session exists yet whose trail it could join.
-fn ask_ollama(host: &str) -> Option<Vec<import::Installed>> {
-    bravebot_agent::backend::installed_on_ollama(host, &mut bravebot_session::audit::Trail::new())
+/// trail of its own because no session exists yet whose trail it could join. A source that is
+/// files is never asked.
+fn ask_server(source: Source, host: &str) -> Option<Vec<import::Installed>> {
+    let trail = &mut bravebot_session::audit::Trail::new();
+    match source {
+        Source::Ollama => bravebot_agent::backend::installed_on_ollama(host, trail),
+        Source::LmStudio => bravebot_agent::backend::installed_on_lm_studio(host, trail),
+        Source::LlamaServer => bravebot_agent::backend::installed_on_llama_server(host, trail),
+        Source::ClaudeCode | Source::Opencode => None,
+    }
 }
 
 /// The user's own settings file, or `None` where nothing may be written.
@@ -456,6 +470,8 @@ struct Plan {
     source: Source,
     read: Vec<PathBuf>,
     running_at: Option<String>,
+    /// The window the running server holds the model loaded with.
+    window: Option<u64>,
     env: Vec<(String, String)>,
     model: Option<String>,
     gateways: Vec<Gateway>,
@@ -486,6 +502,7 @@ fn plan(
         source: found.source,
         read: found.read,
         running_at: found.running_at,
+        window: found.window,
         env: Vec::new(),
         model: None,
         gateways: Vec::new(),
@@ -533,7 +550,7 @@ fn plan(
             plan.pinned.push(name);
         } else if holds(&|file| file.holds_gateway(&gateway.id)) {
             plan.kept.push(name);
-        } else if plan.source == Source::Ollama
+        } else if plan.source.is_server()
             && let Some(id) = destination.and_then(|file| file.serving_locally(&gateway.endpoint))
         {
             // The same server under another id: a second entry would list every model twice.
@@ -604,6 +621,7 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
     }
     if let Some(model) = &plan.model {
         lines.push(printable(&format!("  model: {}", import::quoted(model))));
+        lines.extend(window_lines(plan.source, plan.window));
     }
     for gateway in &plan.gateways {
         lines.push(format!(
@@ -635,6 +653,30 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
     lines.extend(named_lines(plan));
     lines.extend(pinned_lines(plan, managed));
     lines.extend(left_lines(plan.source, &plan.left));
+    lines
+}
+
+/// The window the server holds the chosen model loaded with, and where that is below what bravebot
+/// budgets a conversation against, that the server drops what does not fit.
+///
+/// Said only where the server stated a figure: a model that is not loaded has none, and guessing
+/// one would be worse than saying nothing. Where it is below the assumed window the entry listed
+/// under it carries the figure as `options.contextWindow`, so it is the entry that is written.
+fn window_lines(source: Source, window: Option<u64>) -> Vec<String> {
+    let Some(window) = window else {
+        return Vec::new();
+    };
+    let mut lines = vec![format!("  {}", t!(import_window, window = window as i64))];
+    if window < bravebot_config::provider::CONTEXT_WINDOW {
+        let assumed = bravebot_config::provider::CONTEXT_WINDOW as i64;
+        lines.push(format!(
+            "  {}",
+            match source {
+                Source::LmStudio => t!(import_lm_studio_window_small, assumed = assumed),
+                _ => t!(import_ollama_window_small, assumed = assumed),
+            }
+        ));
+    }
     lines
 }
 
@@ -722,9 +764,9 @@ fn left_lines(source: Source, left: &[Left]) -> Vec<String> {
 
 fn imported(source: Source, file: &Path) -> String {
     let file = printable(&file.display().to_string());
-    match source {
-        Source::Ollama => t!(import_imported_running, source = source.name(), file = file),
-        _ => t!(import_imported, source = source.name(), file = file),
+    match source.is_server() {
+        true => t!(import_imported_running, source = source.name(), file = file),
+        false => t!(import_imported, source = source.name(), file = file),
     }
 }
 
@@ -850,7 +892,7 @@ mod tests {
         fn found(&self) -> Vec<Found> {
             let home = self.path.display().to_string();
             let lookup = |name: &str| (name == "HOME").then(|| home.clone());
-            import::found(&Places::from_lookup(lookup), lookup, |_| None)
+            import::found(&Places::from_lookup(lookup), lookup, |_, _| None)
         }
     }
 
@@ -968,7 +1010,7 @@ mod tests {
             "AWS_REGION" => Some("us-west-2".to_string()),
             _ => None,
         };
-        let found = import::found(&Places::from_lookup(lookup), lookup, |_| None);
+        let found = import::found(&Places::from_lookup(lookup), lookup, |_, _| None);
 
         let (said, _) = asked_about(&scratch, found, "", &Managed::default(), &lookup);
 
@@ -1103,7 +1145,7 @@ mod tests {
             "ANTHROPIC_DEFAULT_OPUS_MODEL" => Some(OPUS.to_string()),
             _ => None,
         };
-        let found = import::found(&Places::from_lookup(lookup), lookup, |_| None);
+        let found = import::found(&Places::from_lookup(lookup), lookup, |_, _| None);
 
         let (said, _) = asked_about(&scratch, found, "y\n", &Managed::default(), &lookup);
 
@@ -1178,6 +1220,39 @@ mod tests {
             written(&scratch),
             r#"{"provider":{"local":{"options":{"baseURL":"http://127.0.0.1:11434/v1"}}}}"#
         );
+    }
+
+    /// IMPORT-3, IMPORT-6: the key Claude Code holds for Anthropic's API is an `anthropic` entry with
+    /// a question of its own, which writes the key when approved and names the variable to export
+    /// when declined, and says nothing of the key being left.
+    #[test]
+    fn a_claude_code_anthropic_key_is_asked_about_and_written_as_an_entry() {
+        let settings = r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-a-held-key"}}"#;
+
+        let scratch = Scratch::new("cli-import-claude-anthropic-key");
+        scratch.write(".claude/settings.json", settings);
+        let (said, _) = asked(&scratch, "y\ny\n", &Managed::default());
+        assert!(said.contains("provider.anthropic"), "{said}");
+        assert!(said.contains("https://api.anthropic.com/v1"), "{said}");
+        assert!(said.contains("in plain text"), "{said}");
+        assert!(!said.contains("not carried over"), "{said}");
+        assert!(
+            !said.contains("sk-ant-a-held-key"),
+            "the key was drawn: {said}"
+        );
+        let file = written(&scratch);
+        assert!(file.contains(r#""apiKey":"sk-ant-a-held-key""#), "{file}");
+
+        let scratch = Scratch::new("cli-import-claude-anthropic-declined");
+        scratch.write(".claude/settings.json", settings);
+        let (said, _) = asked(&scratch, "y\nn\n", &Managed::default());
+        let file = written(&scratch);
+        assert!(file.contains(r#""env":["ANTHROPIC_API_KEY"]"#), "{file}");
+        assert!(
+            !file.contains("sk-ant-a-held-key"),
+            "a declined key was written"
+        );
+        assert!(said.contains("ANTHROPIC_API_KEY: export it"), "{said}");
     }
 
     /// IMPORT-6: a `{file:path}` credential is not followed. The shown line names the path, no
@@ -1390,7 +1465,7 @@ mod tests {
     /// configured ends a start as well, and that is the end a broken implementation would pass on.
     /// The allow list is empty rather than naming models, so the refusal does not depend on which
     /// model this machine has recorded; the record is read from the real home directory, which no
-    /// test can move. The sentence is read through [`crate::managed_refusal`], the function the start
+    /// test can move. The sentence is read through [`crate::model::managed_refusal`], the function the start
     /// ends with, because `fail` writes to the process's own stderr and no test can read that.
     #[test]
     fn a_start_on_a_model_the_managed_layer_refuses_is_ended() {
@@ -1416,11 +1491,11 @@ mod tests {
             "the start opened on a model the managed layer refuses"
         );
 
-        let model = crate::model_for_this_run(None, &config);
+        let model = crate::model::model_for_this_run(None, &config);
         let (file, why) = config
             .model_refused(&model)
             .expect("the layer refuses the model in force");
-        let said = crate::managed_refusal(&model, file, why);
+        let said = crate::model::managed_refusal(&model, file, why);
         assert!(
             said.contains(&refusing.display().to_string()),
             "the end did not name the file that refused: {said}"
@@ -1434,13 +1509,89 @@ mod tests {
     /// What a running Ollama at the default address serves, one model that can call tools.
     fn ollama_running() -> Found {
         import::running(
+            Source::Ollama,
             "http://localhost:11434",
             vec![import::Installed {
                 name: "qwen3-coder:30b".to_string(),
                 modified_at: "2026-09-18T14:07:58-04:00".to_string(),
                 capabilities: Some(vec!["completion".to_string(), "tools".to_string()]),
+                window: None,
             }],
         )
+    }
+
+    /// What a running Ollama serves when its one model that can call tools is loaded with `window`.
+    fn ollama_loaded_with(window: Option<u64>) -> Found {
+        import::running(
+            Source::Ollama,
+            "http://localhost:11434",
+            vec![import::Installed {
+                name: "qwen3-coder:30b".to_string(),
+                modified_at: "2026-09-18T14:07:58-04:00".to_string(),
+                capabilities: Some(vec!["completion".to_string(), "tools".to_string()]),
+                window,
+            }],
+        )
+    }
+
+    /// IMPORT-5: the question for a server whose model is loaded below the window a conversation is
+    /// budgeted against shows the figure and says the server drops earlier turns; a window at or
+    /// above that, or none stated, shows no warning, and none stated shows no figure either.
+    #[test]
+    fn a_window_below_the_assumed_one_is_shown_with_what_the_server_drops() {
+        let scratch = Scratch::new("cli-import-ollama-window");
+        let asked = |window| {
+            asked_about(
+                &scratch,
+                vec![ollama_loaded_with(window)],
+                "n\n",
+                &Managed::default(),
+                &|_| None,
+            )
+            .0
+        };
+
+        let small = asked(Some(4096));
+        assert!(small.contains("context window of 4096 tokens"), "{small}");
+        assert!(small.contains("drops the earliest turns"), "{small}");
+        assert!(small.contains("OLLAMA_CONTEXT_LENGTH"), "{small}");
+
+        let large = asked(Some(131_072));
+        assert!(large.contains("context window of 131072 tokens"), "{large}");
+        assert!(!large.contains("drops the earliest turns"), "{large}");
+
+        let unstated = asked(None);
+        assert!(!unstated.contains("context window"), "{unstated}");
+        assert!(!unstated.contains("OLLAMA_CONTEXT_LENGTH"), "{unstated}");
+    }
+
+    /// IMPORT-5: the answer that approves writes the window the server holds the model with, and a
+    /// model with no figure writes none. The regression rejected is showing the figure and leaving
+    /// it out of the file, which keeps budgeting compaction against the assumed window.
+    #[test]
+    fn approving_a_small_window_writes_it_into_the_file() {
+        let scratch = Scratch::new("cli-import-ollama-window-written");
+        let (said, offered) = asked_about(
+            &scratch,
+            vec![ollama_loaded_with(Some(4096))],
+            "y\n",
+            &Managed::default(),
+            &|_| None,
+        );
+        assert_eq!(offered.imported, [Source::Ollama], "{said}");
+        assert!(said.contains("contextWindow"), "{said}");
+        let file = written(&scratch);
+        assert!(file.contains(r#""contextWindow":4096"#), "{file}");
+
+        let scratch = Scratch::new("cli-import-ollama-window-unstated");
+        asked_about(
+            &scratch,
+            vec![ollama_loaded_with(None)],
+            "y\n",
+            &Managed::default(),
+            &|_| None,
+        );
+        assert!(!written(&scratch).contains("contextWindow"));
     }
 
     /// IMPORT-10: an entry for the same server under an id of its own already lists every model it
@@ -1512,5 +1663,233 @@ mod tests {
             .expect("the entry the first answer wrote was named");
         assert!(said[running..].contains("provider.mine"), "{said}");
         assert!(!written(&scratch).contains("ollama"), "{said}");
+    }
+
+    /// What a running LM Studio at the default address serves, one model that can call tools,
+    /// loaded with `window`.
+    fn lm_studio_loaded_with(window: Option<u64>) -> Found {
+        import::running(
+            Source::LmStudio,
+            "http://127.0.0.1:1234",
+            vec![import::Installed {
+                name: "qwen/qwen3-coder-30b".to_string(),
+                modified_at: String::new(),
+                capabilities: Some(vec!["completion".to_string(), "tools".to_string()]),
+                window,
+            }],
+        )
+    }
+
+    /// What a running llama-server at its current default address lists.
+    fn llama_server_running() -> Found {
+        import::running(
+            Source::LlamaServer,
+            "http://127.0.0.1:9931",
+            vec![import::Installed {
+                name: "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf".to_string(),
+                modified_at: String::new(),
+                capabilities: None,
+                window: None,
+            }],
+        )
+    }
+
+    /// IMPORT-5 and IMPORT-12: the question for an LM Studio model loaded below the assumed window
+    /// says what is true of LM Studio. It does not say Ollama drops turns or name Ollama's variable,
+    /// which would send a person to a setting of a program they are not running.
+    #[test]
+    fn a_small_window_is_shown_for_lm_studio_in_its_own_words() {
+        let scratch = Scratch::new("cli-import-lm-studio-window");
+
+        let (said, _) = asked_about(
+            &scratch,
+            vec![lm_studio_loaded_with(Some(4096))],
+            "n\n",
+            &Managed::default(),
+            &|_| None,
+        );
+
+        assert!(said.contains("context window of 4096 tokens"), "{said}");
+        assert!(said.contains("in LM Studio to keep more"), "{said}");
+        assert!(said.contains("contextWindow"), "{said}");
+        assert!(!said.contains("drops the earliest turns"), "{said}");
+        assert!(!said.contains("OLLAMA_CONTEXT_LENGTH"), "{said}");
+        assert!(said.contains("Import this from LM Studio?"), "{said}");
+    }
+
+    /// IMPORT-5 and IMPORT-12: each server is asked about on its own, in the order Ollama, LM
+    /// Studio, llama-server, and an answer is for the one asked. Declining the first and third and
+    /// approving the second writes the second alone, which an answer applied to the wrong source, or
+    /// one question for every server, does not.
+    #[test]
+    fn each_server_is_asked_about_on_its_own() {
+        let scratch = Scratch::new("cli-import-each-server");
+        let found = vec![
+            ollama_running(),
+            lm_studio_loaded_with(None),
+            llama_server_running(),
+        ];
+
+        let (said, offered) =
+            asked_about(&scratch, found, "n\ny\nn\n", &Managed::default(), &|_| None);
+
+        assert_eq!(offered.imported, [Source::LmStudio], "{said}");
+        let questions: Vec<_> = said
+            .lines()
+            .filter(|line| line.starts_with("Import this from"))
+            .map(str::trim_end)
+            .collect();
+        assert_eq!(
+            questions,
+            [
+                "Import this from Ollama? [y/N]",
+                "Import this from LM Studio? [y/N]",
+                "Import this from llama-server? [y/N]",
+            ],
+            "{said}"
+        );
+        let file = written(&scratch);
+        assert!(
+            file.contains(
+                r#""lmstudio":{"name":"LMStudio(local)","options":{"baseURL":"http://127.0.0.1:1234/v1"}}"#
+            ),
+            "{file}"
+        );
+        assert!(
+            file.contains(r#""model":"lmstudio/qwen/qwen3-coder-30b""#),
+            "{file}"
+        );
+        assert!(
+            !file.contains("ollama") && !file.contains("llama-server"),
+            "{file}"
+        );
+    }
+
+    /// IMPORT-12: llama-server's entry is written with its own id, and a model the server names as
+    /// a path is written as it is named, so the question shows what the file will hold.
+    #[test]
+    fn approving_llama_server_writes_its_entry_and_the_model_it_names() {
+        let scratch = Scratch::new("cli-import-llama-server");
+
+        let (said, offered) = asked_about(
+            &scratch,
+            vec![llama_server_running()],
+            "y\n",
+            &Managed::default(),
+            &|_| None,
+        );
+
+        assert_eq!(offered.imported, [Source::LlamaServer], "{said}");
+        assert!(
+            said.contains("llama-server is running at http://127.0.0.1:9931, serving models"),
+            "{said}"
+        );
+        assert!(
+            said.contains("provider.llama-server, reached at http://127.0.0.1:9931/v1"),
+            "{said}"
+        );
+        let file = written(&scratch);
+        assert!(
+            file.contains(
+                r#""llama-server":{"name":"llama-server(local)","options":{"baseURL":"http://127.0.0.1:9931/v1"}}"#
+            ),
+            "{file}"
+        );
+        assert!(
+            file.contains(
+                r#""model":"llama-server/../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf""#
+            ),
+            "{file}"
+        );
+        assert!(!file.contains("contextWindow"), "{file}");
+    }
+
+    /// IMPORT-10 and IMPORT-12: two sources that name one port are one server to the file, whichever
+    /// two they are, so the second is not offered once the first is written, and is offered where
+    /// the first was declined. Two entries for one server would list every model twice.
+    #[test]
+    fn a_server_at_a_port_an_earlier_answer_wrote_is_not_offered_again() {
+        let at_the_same_port = || {
+            vec![
+                import::running(
+                    Source::Ollama,
+                    "http://localhost:1234",
+                    vec![import::Installed {
+                        name: "llama3".to_string(),
+                        modified_at: "2026-09-18T14:07:58-04:00".to_string(),
+                        capabilities: Some(vec!["tools".to_string()]),
+                        window: None,
+                    }],
+                ),
+                lm_studio_loaded_with(None),
+            ]
+        };
+
+        let scratch = Scratch::new("cli-import-same-port-written");
+        let (said, offered) = asked_about(
+            &scratch,
+            at_the_same_port(),
+            "y\ny\n",
+            &Managed::default(),
+            &|_| None,
+        );
+        assert_eq!(offered.imported, [Source::Ollama], "{said}");
+        assert!(!said.contains("Import this from LM Studio?"), "{said}");
+        let kept = said.find("Left as they are").expect("the entry was named");
+        assert!(said[kept..].contains("provider.ollama"), "{said}");
+        assert!(!written(&scratch).contains("lmstudio"), "{said}");
+
+        let scratch = Scratch::new("cli-import-same-port-declined");
+        let (said, offered) = asked_about(
+            &scratch,
+            at_the_same_port(),
+            "n\ny\n",
+            &Managed::default(),
+            &|_| None,
+        );
+        assert_eq!(offered.imported, [Source::LmStudio], "{said}");
+    }
+
+    /// IMPORT-8 and IMPORT-12: where nobody can be asked, the refusal names every source that
+    /// holds something, whichever and however many they are. A list that stopped at three would
+    /// leave the fourth unnamed in the one message that says what was found.
+    #[test]
+    fn the_command_line_names_every_source_that_holds_something() {
+        let every = [
+            Source::ClaudeCode,
+            Source::Opencode,
+            Source::Ollama,
+            Source::LmStudio,
+            Source::LlamaServer,
+        ];
+        for count in 1..=every.len() {
+            let looked = Looked {
+                left: Vec::new(),
+                importable: every[..count].to_vec(),
+            };
+
+            let line = looked.command().expect("a line");
+
+            for source in &every[..count] {
+                assert!(line.contains(source.name()), "{count}: {line}");
+            }
+            for source in &every[count..] {
+                assert!(!line.contains(source.name()), "{count}: {line}");
+            }
+            assert!(
+                line.contains("bravebot auth login import"),
+                "{count}: {line}"
+            );
+        }
+        let running = Looked {
+            left: Vec::new(),
+            importable: vec![Source::LmStudio],
+        };
+        assert!(
+            running
+                .command()
+                .expect("a line")
+                .contains("LM Studio is running here with models bravebot can use")
+        );
     }
 }

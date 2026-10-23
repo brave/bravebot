@@ -5,6 +5,12 @@
 //! Driven through the binary against a model service of the test's own. Whether a program was held
 //! to its profile is read off what the tool handed back to the model.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -261,10 +267,19 @@ impl FrontEnd {
             json!({"directory": scratch.project().display().to_string()}),
         );
         let session = opened["session"].as_str().expect("a handle").to_string();
-        self.call(
-            "trust.reply",
-            json!({"session": session, "trusted": trusted}),
-        );
+        // A yes an earlier session here gave is kept, and settles the next one without asking.
+        // A test that wants a session with nothing trusted opens it before any yes is given.
+        if opened["remembered"].is_null() {
+            self.call(
+                "trust.reply",
+                json!({"session": session, "trusted": trusted}),
+            );
+        } else {
+            assert!(
+                trusted,
+                "a kept yes settled a session the test wanted untrusted"
+            );
+        }
         (session, opened)
     }
 

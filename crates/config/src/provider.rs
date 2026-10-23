@@ -12,6 +12,24 @@
 
 use crate::Secret;
 use std::fmt;
+use std::time::Duration;
+
+/// `url` as a report may print it: the userinfo of its authority dropped.
+///
+/// A `baseURL`, or an endpoint a variable or a settings `env` block names, may state credentials
+/// (`https://user:token@host/v1`), and a report is pasted into issues. Only the authority is read
+/// for an `@`, so one in a path or a query is kept.
+pub fn without_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{tail}")
+}
 
 /// The endpoints known by the name a provider block gives them.
 ///
@@ -29,11 +47,45 @@ use std::fmt;
 ///
 /// The third column is the variable the other tool reads that id's token from. A block copied out of
 /// it relies on that variable without naming it, so an import names it for the block.
-const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[(
-    "openrouter",
-    "https://openrouter.ai/api/v1",
-    "OPENROUTER_API_KEY",
-)];
+const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
+    (
+        "openrouter",
+        "https://openrouter.ai/api/v1",
+        "OPENROUTER_API_KEY",
+    ),
+    (OPENAI_ID, "https://api.openai.com/v1", "OPENAI_API_KEY"),
+    (
+        ANTHROPIC_ID,
+        "https://api.anthropic.com/v1",
+        "ANTHROPIC_API_KEY",
+    ),
+];
+
+/// The id naming OpenAI, which is reached at the endpoint compiled in for it.
+///
+/// Named apart from the table because a reply from it is read differently: see
+/// [`Provider::answers_under_the_model_behind_an_alias`].
+const OPENAI_ID: &str = "openai";
+
+/// The id naming Anthropic, which is reached at the endpoint compiled in for it, in the Messages
+/// protocol rather than the chat completions one: see [`Provider::protocol`].
+pub(crate) const ANTHROPIC_ID: &str = "anthropic";
+
+/// The version of Anthropic's API every request to it states.
+///
+/// A header the service requires, and a date rather than a release: it names the shape of the
+/// request and reply, and a change to either is a new date. Compiled in because a request that left
+/// it to configuration could be sent in a shape the reader here does not parse.
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// The header an Anthropic key travels in, which the service takes in place of `authorization`.
+const ANTHROPIC_KEY_HEADER: &str = "x-api-key";
+
+/// How many models Anthropic's listing is asked for in one page, the most it allows.
+///
+/// Its default is twenty, and the lineup is longer than that once the models still served but no
+/// longer current are counted.
+const ANTHROPIC_PAGE: u32 = 1000;
 
 /// The id naming AWS Bedrock, which is reached by signing rather than by a bearer token.
 ///
@@ -83,6 +135,21 @@ const VERTEX_MODELS: &[&str] = &[
 /// The location Vertex AI is reached in where none is stated.
 const VERTEX_DEFAULT_LOCATION: &str = "global";
 
+/// Where Vertex AI express mode is reached: the native API, which takes a key and no project.
+///
+/// The URL names no region, and Google chooses where the request is served.
+pub(crate) const VERTEX_EXPRESS_ENDPOINT: &str = "https://aiplatform.googleapis.com/v1";
+
+/// The SDK an entry names to say that its stated endpoint takes Vertex's own API.
+const VERTEX_SDK: &str = "@ai-sdk/google-vertex";
+
+/// The SDK an entry names to say that its endpoint takes the Responses API, as opencode names the
+/// package that speaks it.
+const RESPONSES_SDK: &str = "@ai-sdk/openai";
+
+/// The publisher a model named without one is taken to belong to.
+const VERTEX_PUBLISHER: &str = "google";
+
 /// The header a Vertex AI key travels in.
 ///
 /// The service refuses the same key as a bearer token, so this is where it goes instead of
@@ -110,6 +177,12 @@ pub struct Model {
     /// `None` reads as [`CONTEXT_WINDOW`]. Kept distinct from a stated figure so that
     /// `doctor` can say which models are running on the default.
     pub context_window: Option<u64>,
+    /// How long a reply this model may write, where the file stated it, out of the same `limit`
+    /// block the window comes from and under the same rule.
+    ///
+    /// Read for the service that states a ceiling in every request, which is Anthropic's. Nothing
+    /// else sends one, so for every other gateway it is carried and unused.
+    pub output_limit: Option<u64>,
     /// Whatever `options` held, merged into the request body and never interpreted.
     ///
     /// Opaque on purpose: a gateway's routing controls are its own invention, and a schema
@@ -118,11 +191,122 @@ pub struct Model {
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-impl Model {
-    /// The window to budget against, stated or assumed.
-    pub fn window(&self) -> u64 {
-        self.context_window.unwrap_or(CONTEXT_WINDOW)
+/// The most times a request is sent again that a block may state.
+///
+/// The pauses the doubling from one second gives total 127 seconds at the cap, and none is longer
+/// than 64, which stays inside the two minutes after which a service's own request to wait is
+/// refused rather than waited out. A wait a service asks for is taken in place of the pause, so the
+/// whole wait is bounded by this count and by that figure per retry.
+pub const MAX_RETRIES: u32 = 7;
+
+/// The longest gap between two pieces of a reply that a block may state, in milliseconds.
+///
+/// The bound on the whole of a reply of unstated length is ten minutes, so a longer gap could never
+/// be the one that ended it.
+pub const MAX_IDLE_TIMEOUT_MS: u64 = 600_000;
+
+/// What a block states about repeating a request and about waiting on a reply gone quiet.
+///
+/// Both are plain numbers a person chose, and only ever set a count or a timer: the decision to send
+/// a request again is still taken from the status or the failure that came back, never from this.
+/// `None` is nothing stated, which the clients read as the figures they have always used. Read out of
+/// the block's `options` for a gateway and for an AWS account alike, and so only from the layers a
+/// `provider` block is read from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Patience {
+    /// `options.maxRetries`: how many times a request is sent again, at most [`MAX_RETRIES`].
+    ///
+    /// Zero is a statement, not an absence: it sends each request once.
+    pub max_retries: Option<u32>,
+    /// `options.idleTimeoutMs`: how long a reply may go quiet before it is given up on, at most
+    /// [`MAX_IDLE_TIMEOUT_MS`].
+    pub idle_timeout: Option<Duration>,
+}
+
+impl Patience {
+    /// What a block's `options` state. A figure above its cap is the cap, as Codex reads its own;
+    /// anything that is not a whole number, and a zero gap, states nothing.
+    pub(crate) fn from_options(
+        options: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Self {
+        let stated = |key: &str| options.and_then(|options| options.get(key));
+        Self {
+            max_retries: stated("maxRetries")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|retries| u32::try_from(retries.min(u64::from(MAX_RETRIES))).ok()),
+            idle_timeout: positive(stated("idleTimeoutMs"))
+                .map(|gap| Duration::from_millis(gap.min(MAX_IDLE_TIMEOUT_MS))),
+        }
     }
+
+    /// How many requests are sent before a failure is the caller's: `default` where no retry count
+    /// was stated, and one more than the count where one was.
+    pub fn attempts(&self, default: u32) -> u32 {
+        self.max_retries.map_or(default, |retries| retries + 1)
+    }
+}
+
+/// One header a block asked for, with the value as the file wrote it.
+#[derive(Debug, Clone)]
+pub struct Header {
+    /// The name, lowercased. HTTP names are case-insensitive, so one spelling here makes a name
+    /// written two ways one header rather than two.
+    pub name: String,
+    /// The value as the block wrote it, which may be an `{env:NAME}` reference rather than a value.
+    ///
+    /// A [`Secret`] for the reason [`Provider::api_key`] is one: the header a gateway wants is
+    /// often a second credential, and a block reaches a person's screen whenever a diagnostic
+    /// prints one or an assertion about one fails
+    /// ([CRED-23](../../../docs/specs/credential-protection.md#CRED-23)).
+    pub value: Secret,
+}
+
+/// Why a header a block named is not sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderFault {
+    /// A name this program sets itself, or one that says how the request is framed.
+    Reserved,
+    /// Not a header name: empty, or holding a character a name may not.
+    NotAName,
+    /// A value holding a line ending, a NUL or a character that is not sendable, which would end
+    /// the header and let what follows start another.
+    NotAValue,
+    /// A value holding `{env:` or `{file:` as part of something longer, which is a substitution
+    /// nothing here makes. Refused rather than sent, the unsubstituted text being what would go.
+    Substitution,
+}
+
+/// The variable a whole-value `{env:NAME}` reference names.
+///
+/// The same form `crate::import` reads, so a value written for one path means the same on the
+/// other. Whole-value only: a reference inside a longer string is refused at load rather than
+/// sent with the braces still in it.
+fn env_reference(value: &str) -> Option<&str> {
+    let inner = value.strip_prefix('{')?.strip_suffix('}')?;
+    if inner.contains(['{', '}']) {
+        return None;
+    }
+    let name = inner.strip_prefix("env:")?.trim();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Whether `value` is one a header can carry.
+///
+/// A line ending would end this header and let the rest of the value start another, which is a
+/// block choosing headers nobody wrote down. A NUL and the other control characters are refused
+/// with it because no service reads one and an intermediary may read several of them differently.
+fn sendable(value: &str) -> bool {
+    value
+        .chars()
+        .all(|c| c == '\t' || (c.is_ascii() && !c.is_ascii_control()))
+}
+
+/// Whether `name` holds only the characters an HTTP field name may.
+fn a_field_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c))
 }
 
 /// One gateway, and the models it was configured to offer.
@@ -164,12 +348,66 @@ pub struct Provider {
     /// enumerate, so the gateway is asked. A service with no listing to ask is offered
     /// [`Self::compiled_roster`] instead, which is never copied in here.
     pub models: Vec<Model>,
+    /// The window every model of this provider is assumed to have, where `options.contextWindow`
+    /// states one.
+    ///
+    /// For a server whose window is one setting for all its models, such as a local Ollama, and the
+    /// only place to keep a figure where the block lists no models, since a block that lists models
+    /// turns off the roster. A model's own `limit.context` outranks it.
+    pub context_window: Option<u64>,
+    /// How often a request to this gateway is sent again, and how long a reply that has gone quiet
+    /// is waited on, where `options` states either.
+    ///
+    /// Nothing for an AWS entry: its account is what a client reaches and carries its own
+    /// ([`crate::bedrock::Bedrock::patience`]), so the figures have one home.
+    pub patience: Patience,
+    /// A reply ceiling somebody exported, which outranks whatever the models state.
+    ///
+    /// Set where the account's own copy is, once the environment has been read: a block is parsed
+    /// with none to consult. Only a service whose requests state a ceiling reads it.
+    pub(crate) output_budget: Option<u64>,
+    /// The protocol this entry's requests are written in: see [`Provider::protocol`].
+    pub(crate) protocol: Protocol,
     /// The AWS account this entry reaches, where it names Bedrock rather than a gateway.
     ///
     /// Resolved here rather than by the caller because a request to Bedrock needs a region to sign
     /// for and a profile to resolve credentials from, and both are properties of this block.
     /// `None` for every other entry, which is reached as an OpenAI-compatible gateway.
     pub bedrock: Option<crate::bedrock::Bedrock>,
+    /// The headers `options.headers` asked for, in the order the block listed them.
+    ///
+    /// Carried rather than resolved, on [BACKEND-16]'s footing for a token: a value may name a
+    /// variable, and one read at startup is stale in a session where somebody exported another.
+    /// [`Self::request_headers`] resolves them at the point a request needs them.
+    ///
+    /// Person-written, like every other name in a settings file, so nothing here is untrusted
+    /// content and no decision is made on a byte a turn produced.
+    ///
+    /// [BACKEND-16]: ../../../docs/specs/backends.md#BACKEND-16
+    pub headers: Vec<Header>,
+    /// The names under `options.headers` this block will not send, with why.
+    ///
+    /// Kept rather than dropped for the reason `crate::settings::Settings::references_unread` is
+    /// kept: a header somebody wrote and this program refuses is the one worth saying out loud,
+    /// since a gateway that answers 401 says nothing about a line in a settings file.
+    pub headers_refused: Vec<(String, HeaderFault)>,
+}
+
+/// The wire protocol a provider's requests are written in.
+///
+/// Which one is a fact about the service and not about the model, so it is read from the entry's
+/// id: the endpoint compiled in for a name is the only place the protocol is known to match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    /// OpenAI's chat completions, which most gateways speak.
+    ChatCompletions,
+    /// Anthropic's Messages API.
+    Messages,
+    /// Google's native `generateContent` API, which Vertex AI express mode speaks.
+    GenerateContent,
+    /// OpenAI's Responses API, which an entry naming `@ai-sdk/openai` speaks
+    /// ([BACKEND-61](../../../docs/specs/backends.md#BACKEND-61)).
+    Responses,
 }
 
 impl Provider {
@@ -209,14 +447,54 @@ impl Provider {
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|url| !url.is_empty());
+        let npm = string(entry.get("npm"));
+        let mut protocol = protocol_of(id, npm.as_deref());
+        let project = string(options.and_then(|options| options.get("project")));
+        // A Vertex entry naming no project is the express mode of the native API, which needs the
+        // key alone. One that states an endpoint of its own keeps speaking chat completions there
+        // unless it names the SDK that says the endpoint takes Vertex's own API, so a proxy written
+        // for the OpenAI-compatible route is not sent a request it cannot read.
+        if id == GOOGLE_VERTEX_ID
+            && project.is_none()
+            && (stated.is_none() || npm.as_deref() == Some(VERTEX_SDK))
+        {
+            protocol = Protocol::GenerateContent;
+        }
         // A stated endpoint wins, so a block pointing a known name at a proxy or a private
         // deployment reaches the host it named rather than the one compiled in.
+        // The credential header is this provider's own, whichever one `credential_header` chooses,
+        // and a block naming a credential has already said how the request authenticates. Settled
+        // here rather than in the parse so that Vertex refuses `x-goog-api-key` and nothing else
+        // has to know that is the name.
+        let names_a_credential = !names(entry.get("env")).is_empty()
+            || options
+                .and_then(|options| string(options.get("apiKey")))
+                .is_some();
+        let credential_name = if id == GOOGLE_VERTEX_ID {
+            VERTEX_KEY_HEADER
+        } else if protocol == Protocol::Messages {
+            ANTHROPIC_KEY_HEADER
+        } else {
+            "authorization"
+        };
+        let (headers, headers_refused) = header_entries(
+            options.and_then(|options| options.get("headers")),
+            credential_name,
+            names_a_credential,
+            Provider::fixed_header_names(protocol),
+        );
         let base_url = match stated {
             Some(url) => url.to_string(),
+            None if id == GOOGLE_VERTEX_ID && project.is_none() => {
+                VERTEX_EXPRESS_ENDPOINT.to_string()
+            }
             None if id == GOOGLE_VERTEX_ID => vertex_endpoint(
-                string(options.and_then(|options| options.get("project"))).as_deref(),
+                project.as_deref(),
                 string(options.and_then(|options| options.get("location"))).as_deref(),
             )?,
+            // The table's address for this id is the one its own protocol is spoken at, so an entry
+            // that names another protocol has no address here and says where its service is.
+            None if id == ANTHROPIC_ID && protocol != Protocol::Messages => return None,
             None => known_endpoint(id)?.to_string(),
         };
 
@@ -230,25 +508,40 @@ impl Provider {
                 .map(Secret::new),
             stored_key: None,
             models: models(entry.get("models")),
+            context_window: options.and_then(|options| positive(options.get("contextWindow"))),
+            patience: Patience::from_options(options),
+            output_budget: None,
+            protocol,
             bedrock: None,
+            headers,
+            headers_refused,
         })
     }
 
     /// The Vertex AI service the environment names, where it names one.
     ///
-    /// The key and the project both have to hold a value, and neither is guessed: a key with no
-    /// project is a request the service refuses, and a project with no key is a service nobody
-    /// could sign in to. The entry names `GOOGLE_API_KEY` in `env`, so an exported key is read again
-    /// when a request needs it, and holds the value `lookup` found for the case where the key lives
-    /// only in a settings file.
+    /// The key has to hold a value, and a project that is set has to be one the service's host can
+    /// be built from. A key with no project is express mode, which the native API serves with the
+    /// key alone; a project with no key is a service nobody could sign in to. The entry names
+    /// `GOOGLE_API_KEY` in `env`, so an exported key is read again when a request needs it, and
+    /// holds the value `lookup` found for the case where the key lives only in a settings file.
     pub(crate) fn from_environment(lookup: &impl Fn(&str) -> Option<String>) -> Option<Self> {
         let filled = |name: &str| lookup(name).filter(|value| !value.trim().is_empty());
         let mut key = filled(crate::env_var::GOOGLE_API_KEY)?;
         let token = Secret::new(key.trim());
         crate::scrub(&mut key);
-        let project = filled(crate::env_var::GOOGLE_CLOUD_PROJECT)?;
-        let location = filled(crate::env_var::VERTEX_LOCATION);
-        let base_url = vertex_endpoint(Some(project.trim()), location.as_deref().map(str::trim))?;
+        let (base_url, protocol) = match filled(crate::env_var::GOOGLE_CLOUD_PROJECT) {
+            Some(project) => {
+                let location = filled(crate::env_var::VERTEX_LOCATION);
+                let base_url =
+                    vertex_endpoint(Some(project.trim()), location.as_deref().map(str::trim))?;
+                (base_url, Protocol::ChatCompletions)
+            }
+            None => (
+                VERTEX_EXPRESS_ENDPOINT.to_string(),
+                Protocol::GenerateContent,
+            ),
+        };
 
         Some(Self {
             id: GOOGLE_VERTEX_ID.to_string(),
@@ -258,7 +551,13 @@ impl Provider {
             api_key: Some(token),
             stored_key: None,
             models: Vec::new(),
+            context_window: None,
+            patience: Patience::default(),
+            output_budget: None,
+            protocol,
             bedrock: None,
+            headers: Vec::new(),
+            headers_refused: Vec::new(),
         })
     }
 
@@ -277,19 +576,42 @@ impl Provider {
         let profile = string(options.and_then(|options| options.get("profile")));
         let models = models(entry.get("models"));
         let entries = bedrock_entries(entry.get("models"));
+        let bedrock = crate::bedrock::Bedrock::from_provider(region, profile, entries)?
+            .with_patience(Patience::from_options(options));
+        // Bedrock takes a signature over the request and the headers it is computed across, so a
+        // header added from a file would either be left out of the signature or change what was
+        // signed. Every name an AWS entry writes is refused for that reason rather than some of
+        // them.
+        let headers_refused = header_names(options.and_then(|options| options.get("headers")))
+            .map(|name| (name, HeaderFault::Reserved))
+            .collect();
 
         Some(Self {
             id: id.to_string(),
             name: string(entry.get("name")),
-            base_url: format!("https://bedrock-runtime.{region}.amazonaws.com"),
+            base_url: format!("https://{}", bedrock.host()),
             env: Vec::new(),
             api_key: None,
             stored_key: None,
             models,
-            bedrock: Some(crate::bedrock::Bedrock::from_provider(
-                region, profile, entries,
-            )),
+            context_window: None,
+            patience: Patience::default(),
+            output_budget: None,
+            protocol: Protocol::ChatCompletions,
+            bedrock: Some(bedrock),
+            headers: Vec::new(),
+            headers_refused,
         })
+    }
+
+    /// The protocol this provider's requests are written in.
+    ///
+    /// Chat completions, except for an `anthropic` entry, which is reached in the Messages protocol
+    /// as opencode reaches it unless the entry names the OpenAI-compatible SDK. A block copied out of
+    /// opencode says which it is in the same field, and an entry that was a gateway of its own
+    /// under this name keeps that reading by naming the SDK.
+    pub fn protocol(&self) -> Protocol {
+        self.protocol
     }
 
     /// The URL one chat completion goes to.
@@ -297,9 +619,76 @@ impl Provider {
         format!("{}/chat/completions", self.base_url)
     }
 
+    /// The URL one request for a reply goes to, whichever protocol it is written in.
+    ///
+    /// The one a refusal is remembered against and a diagnostic names, so neither says a route this
+    /// service does not have.
+    pub fn completion_url(&self) -> String {
+        match self.protocol() {
+            Protocol::ChatCompletions => self.chat_completions_url(),
+            Protocol::Messages => format!("{}/messages", self.base_url),
+            Protocol::GenerateContent => {
+                format!("{}/publishers/{VERTEX_PUBLISHER}/models", self.base_url)
+            }
+            Protocol::Responses => format!("{}/responses", self.base_url),
+        }
+    }
+
+    /// The URL one `generateContent` request for `model` goes to, or `None` where the model's name
+    /// holds a character that would move the request.
+    ///
+    /// `model` is the name the service knows it by, `<publisher>/<model>` or a bare model of the
+    /// `google` publisher. Both parts are written into the path, so one holding `/`, `?`, `#`,
+    /// `@` or `:` would send the key to another route than the one named; such a name has no URL.
+    /// `streaming` picks the route that answers as server-sent events.
+    pub fn generate_content_url(&self, model: &str, streaming: bool) -> Option<String> {
+        let (publisher, name) = match model.split_once('/') {
+            Some((publisher, name)) => (publisher, name),
+            None => (VERTEX_PUBLISHER, model),
+        };
+        // Dots alone are a step up or in place, which a client resolves before it sends.
+        let part_ok = |part: &str| {
+            !part.chars().all(|c| c == '.')
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        };
+        if !part_ok(publisher) || !part_ok(name) {
+            return None;
+        }
+        let route = if streaming {
+            "streamGenerateContent?alt=sse"
+        } else {
+            "generateContent"
+        };
+        Some(format!(
+            "{}/publishers/{publisher}/models/{name}:{route}",
+            self.base_url
+        ))
+    }
+
     /// The URL that answers with what this gateway serves.
+    ///
+    /// Anthropic's states how many it returns in a page, and the page is as long as it allows: its
+    /// default would leave the later models out of the picker without a word.
     pub fn models_url(&self) -> String {
-        format!("{}/models", self.base_url)
+        match self.protocol() {
+            Protocol::ChatCompletions | Protocol::Responses => format!("{}/models", self.base_url),
+            Protocol::Messages => format!("{}/models?limit={ANTHROPIC_PAGE}", self.base_url),
+            Protocol::GenerateContent => self.completion_url(),
+        }
+    }
+
+    /// Whether this service answers a question about what the credential in use may reach.
+    ///
+    /// Not part of the shape every gateway implements, so [`Provider::account_models_url`] is a
+    /// route only a service that has it is asked. Anthropic has none: the request would carry the
+    /// key to be answered 404.
+    pub fn answers_for_an_account(&self) -> bool {
+        matches!(
+            self.protocol(),
+            Protocol::ChatCompletions | Protocol::Responses
+        )
     }
 
     /// The URL that answers with what the credential in use may reach.
@@ -329,9 +718,59 @@ impl Provider {
     pub fn credential_header(&self, token: &str) -> (&'static str, String) {
         if self.id == GOOGLE_VERTEX_ID {
             (VERTEX_KEY_HEADER, token.to_string())
+        } else if self.protocol == Protocol::Messages {
+            (ANTHROPIC_KEY_HEADER, token.to_string())
         } else {
             ("authorization", format!("Bearer {token}"))
         }
+    }
+
+    /// The headers this service takes on every request whatever the credential, with their values.
+    ///
+    /// Empty for every gateway but Anthropic, whose API requires the version of itself the request
+    /// is written for. Here beside [`Provider::credential_header`] so a request and a roster state
+    /// both and cannot disagree about either.
+    pub fn fixed_headers(&self) -> &'static [(&'static str, &'static str)] {
+        match self.protocol() {
+            Protocol::ChatCompletions | Protocol::GenerateContent | Protocol::Responses => &[],
+            Protocol::Messages => &[("anthropic-version", ANTHROPIC_VERSION)],
+        }
+    }
+
+    /// The names `Self::fixed_headers` sets for `protocol`, so `header_entries` can refuse a
+    /// block that also names one: attached unconditionally and before a configured header, a
+    /// second copy would go out beside it rather than in place of it.
+    fn fixed_header_names(protocol: Protocol) -> &'static [&'static str] {
+        match protocol {
+            Protocol::ChatCompletions | Protocol::GenerateContent | Protocol::Responses => &[],
+            Protocol::Messages => &["anthropic-version"],
+        }
+    }
+
+    /// The headers to put on a request to this service beyond the ones it builds, resolved.
+    ///
+    /// A value naming a variable is read through `lookup` at this moment, which is the moment and
+    /// the reason a token is read ([BACKEND-16]). A reference whose variable holds nothing sends no
+    /// header: unlike a credential there is nothing to refuse on its behalf, since nothing here
+    /// knows whether the service requires it, and a request that reaches the gateway without it is
+    /// answered by the gateway rather than failing for a reason only this file could explain.
+    ///
+    /// [BACKEND-16]: ../../../docs/specs/backends.md#BACKEND-16
+    pub fn request_headers(
+        &self,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Vec<(String, Secret)> {
+        self.headers
+            .iter()
+            .filter_map(|header| {
+                let value = match env_reference(header.value.expose()) {
+                    Some(name) => Secret::new(lookup(name)?.trim()),
+                    None => header.value.clone(),
+                };
+                (!value.expose().is_empty() && sendable(value.expose()))
+                    .then(|| (header.name.clone(), value))
+            })
+            .collect()
     }
 
     /// Whether a tool call's `extra_content` is sent back to this service.
@@ -340,6 +779,33 @@ impl Provider {
     /// Another service either ignores the member or refuses the request for carrying it.
     pub fn takes_extra_content(&self) -> bool {
         self.id == GOOGLE_VERTEX_ID
+    }
+
+    /// Whether a reply names the model behind the name the request carried, not that name.
+    ///
+    /// OpenAI and Anthropic only: a name such as `gpt-4o` or `claude-haiku-4-5` is an alias, and the
+    /// reply names the dated model it resolved to. Every other gateway answers under the slug it was
+    /// asked for, so a name that comes back changed is a substitution there and the alias working
+    /// here. Both refuse a name they do not serve, so there is no substitution for the comparison
+    /// to find.
+    pub fn answers_under_the_model_behind_an_alias(&self) -> bool {
+        self.id == OPENAI_ID || self.protocol == Protocol::Messages
+    }
+
+    /// The same provider with the reply ceiling somebody exported, which outranks every model's.
+    pub fn with_output_budget(mut self, budget: Option<u64>) -> Self {
+        self.output_budget = budget;
+        self
+    }
+
+    /// The reply ceiling somebody stated for `model`, exported or in its block, and `None` where
+    /// the one assumed for a request applies.
+    ///
+    /// An exported budget, then what the model's own block stated, which is the order the account
+    /// of AWS resolves its own in ([`crate::bedrock::Bedrock::stated_output_limit`]).
+    pub fn stated_output_limit(&self, model: &str) -> Option<u64> {
+        self.output_budget
+            .or_else(|| self.model(model).and_then(|model| model.output_limit))
     }
 
     /// What to show a person choosing this provider.
@@ -376,6 +842,14 @@ impl Provider {
     /// budget is taken from.
     pub fn model(&self, id: &str) -> Option<&Model> {
         self.models.iter().find(|model| model.id == id)
+    }
+
+    /// The window to budget `model` against: its own, else this provider's, else the assumed one.
+    pub fn window_of(&self, model: &Model) -> u64 {
+        model
+            .context_window
+            .or(self.context_window)
+            .unwrap_or(CONTEXT_WINDOW)
     }
 
     /// Whether a name is one of this provider's models.
@@ -427,6 +901,40 @@ impl Provider {
     pub(crate) fn names_a_credential(&self) -> bool {
         !self.env.is_empty() || self.api_key.is_some() || self.stored_key.is_some()
     }
+
+    /// Refuse a header named for the credential now that a stored key makes this block one that
+    /// names a credential, which `Self::one` could not know when it built `headers`.
+    ///
+    /// `stored_key` is filled in after parsing, by whichever caller reads
+    /// `~/.bravebot/gateway-keys.json` (`Config::from_sources`), so a block naming no `env` and no
+    /// `apiKey` passed `header_entries` its `names_a_credential` as `false` and kept a header named
+    /// for the credential as an ordinary one. Left uncorrected, the request this block builds would
+    /// carry that header's value and the stored key both: two credentials on one request, with
+    /// whichever `Request::header` call ran last deciding which one a reader of the request sees.
+    ///
+    /// A no-op where `stored_key` is still `None`, or where `self.headers` holds nothing by that
+    /// name, so a block already refusing it from `env` or `apiKey` is not reported twice.
+    pub(crate) fn reconcile_stored_credential(&mut self) {
+        if self.stored_key.is_none() {
+            return;
+        }
+        let credential_name = if self.id == GOOGLE_VERTEX_ID {
+            VERTEX_KEY_HEADER
+        } else if self.protocol == Protocol::Messages {
+            ANTHROPIC_KEY_HEADER
+        } else {
+            "authorization"
+        };
+        if let Some(position) = self
+            .headers
+            .iter()
+            .position(|held| held.name == credential_name)
+        {
+            let header = self.headers.remove(position);
+            self.headers_refused
+                .push((header.name, HeaderFault::Reserved));
+        }
+    }
 }
 
 /// What a gateway block says about the credential its requests carry.
@@ -474,13 +982,30 @@ impl fmt::Debug for Credential {
     }
 }
 
+/// The protocol an entry's requests are written in, from its id and the SDK it names.
+///
+/// An entry naming the SDK that speaks the Responses API is reached in it, whatever its id but
+/// `google-vertex`, whose own protocols, and the header its key goes in, are fixed by the id. Otherwise
+/// only the `anthropic` id is reached in the Messages protocol, as opencode reaches it, and an entry
+/// under that id that names the OpenAI-compatible SDK is reached as any other gateway is. Any other
+/// SDK an entry names is not read: the id decides.
+fn protocol_of(id: &str, npm: Option<&str>) -> Protocol {
+    if npm == Some(RESPONSES_SDK) && id != GOOGLE_VERTEX_ID {
+        Protocol::Responses
+    } else if id == ANTHROPIC_ID && npm != Some("@ai-sdk/openai-compatible") {
+        Protocol::Messages
+    } else {
+        Protocol::ChatCompletions
+    }
+}
+
 /// The OpenAI-compatible endpoint of Vertex AI for a project and location, without a trailing slash.
 ///
 /// `None` where there is no project, or where either value holds a character that would move the
 /// request: both are written into the URL, and a `/`, `@`, `?` or `#` in one would send the key to
 /// another host or another route than the one named. The location picks the host, so it is checked
 /// more tightly than the project, which only sits in the path.
-fn vertex_endpoint(project: Option<&str>, location: Option<&str>) -> Option<String> {
+pub(crate) fn vertex_endpoint(project: Option<&str>, location: Option<&str>) -> Option<String> {
     let project = project?;
     let location = location.unwrap_or(VERTEX_DEFAULT_LOCATION);
     let project_ok = project.starts_with(|c: char| c.is_ascii_alphanumeric())
@@ -510,6 +1035,13 @@ fn string(value: Option<&serde_json::Value>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+/// A whole number above zero, where the value is one.
+fn positive(value: Option<&serde_json::Value>) -> Option<u64> {
+    value
+        .and_then(serde_json::Value::as_u64)
+        .filter(|figure| *figure > 0)
 }
 
 /// The `env` array: variable names that may hold the token.
@@ -544,6 +1076,86 @@ fn bedrock_entries(value: Option<&serde_json::Value>) -> Vec<crate::bedrock::Ent
         .collect()
 }
 
+/// The names one `headers` block is keyed by.
+fn header_names(value: Option<&serde_json::Value>) -> impl Iterator<Item = String> + '_ {
+    let block = match value {
+        Some(serde_json::Value::Object(block)) => Some(block),
+        _ => None,
+    };
+    block.into_iter().flat_map(|block| block.keys().cloned())
+}
+
+/// The `headers` block as headers to send and names refused.
+///
+/// `credential_name` is the header this provider's credential goes in, refused where the block
+/// named somewhere for a credential to live: two things authenticating one request is a request
+/// nobody can read the authentication of, and which of them won would depend on the order headers
+/// were attached in.
+///
+/// `fixed_names` is `Provider::fixed_header_names` for this entry's protocol, refused the same
+/// way and for the same reason: those are attached before a configured header regardless of a
+/// credential, and a block naming one would go out beside it rather than in its place.
+fn header_entries(
+    value: Option<&serde_json::Value>,
+    credential_name: &str,
+    names_a_credential: bool,
+    fixed_names: &[&str],
+) -> (Vec<Header>, Vec<(String, HeaderFault)>) {
+    // `content-type` and the framing names are this program's own: a body is encoded here and its
+    // length and destination are properties of the request being sent, so a block restating any of
+    // them describes a request other than the one that goes.
+    const FRAMING: &[&str] = &[
+        "host",
+        "content-length",
+        "content-type",
+        "transfer-encoding",
+        "connection",
+    ];
+
+    let Some(serde_json::Value::Object(block)) = value else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut kept: Vec<Header> = Vec::new();
+    let mut refused = Vec::new();
+    for (written, value) in block {
+        let name = written.trim().to_ascii_lowercase();
+        let fault = |fault| Some((written.clone(), fault));
+        let entry = if !a_field_name(&name) {
+            fault(HeaderFault::NotAName)
+        } else if FRAMING.contains(&name.as_str())
+            || fixed_names.contains(&name.as_str())
+            || (names_a_credential && name == credential_name.to_ascii_lowercase())
+            || kept.iter().any(|held| held.name == name)
+        {
+            fault(HeaderFault::Reserved)
+        } else {
+            match string(Some(value)) {
+                // A name with nothing under it is a line somebody has not finished writing, on the
+                // same footing as every other empty value in this file: absence, not a refusal.
+                None => None,
+                Some(value) if !sendable(&value) => fault(HeaderFault::NotAValue),
+                Some(value)
+                    if env_reference(&value).is_none()
+                        && ["{env:", "{file:"]
+                            .iter()
+                            .any(|opening| value.contains(opening)) =>
+                {
+                    fault(HeaderFault::Substitution)
+                }
+                Some(value) => {
+                    kept.push(Header {
+                        name,
+                        value: Secret::new(&value),
+                    });
+                    None
+                }
+            }
+        };
+        refused.extend(entry);
+    }
+    (kept, refused)
+}
+
 /// The `models` block, in the order the file listed it.
 fn models(value: Option<&serde_json::Value>) -> Vec<Model> {
     let Some(serde_json::Value::Object(block)) = value else {
@@ -556,6 +1168,7 @@ fn models(value: Option<&serde_json::Value>) -> Vec<Model> {
             Model {
                 id: id.to_string(),
                 context_window: entry.and_then(|entry| window(entry.get("limit"))),
+                output_limit: entry.and_then(|entry| ceiling(entry.get("limit"))),
                 options: entry.and_then(|entry| match entry.get("options") {
                     Some(serde_json::Value::Object(options)) if !options.is_empty() => {
                         Some(options.clone())
@@ -599,6 +1212,23 @@ fn ceiling(limit: Option<&serde_json::Value>) -> Option<u64> {
 mod tests {
     use super::*;
 
+    /// CLI-7: only the authority's userinfo goes. The regression it rejects is cutting at the last
+    /// `@` of the whole string, which would eat a path or query that holds one.
+    #[test]
+    fn userinfo_is_dropped_from_the_authority_alone() {
+        for (stated, shown) in [
+            ("https://u:p@host.invalid/v1", "https://host.invalid/v1"),
+            ("https://u:p@host.invalid:8443", "https://host.invalid:8443"),
+            ("https://u:p@w@host.invalid/v1", "https://host.invalid/v1"),
+            ("https://host.invalid/v1/@x", "https://host.invalid/v1/@x"),
+            ("https://host.invalid?a=b@c", "https://host.invalid?a=b@c"),
+            ("https://u@host.invalid#f", "https://host.invalid#f"),
+            ("host.invalid/v1", "host.invalid/v1"),
+        ] {
+            assert_eq!(without_userinfo(stated), shown, "{stated}");
+        }
+    }
+
     fn parsed(text: &str) -> Vec<Provider> {
         let serde_json::Value::Object(root) = serde_json::from_str(text).expect("json") else {
             panic!("not an object");
@@ -624,6 +1254,15 @@ mod tests {
     }
 
     const PLACEHOLDER_PROJECT: &str = "example-project-1";
+
+    /// The `google-vertex` entry written as `entry`, which holds the whole block.
+    fn one_entry(entry: &str) -> Provider {
+        let text = format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#);
+        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+            panic!("not an object");
+        };
+        Provider::all(&root).pop().expect("one provider")
+    }
 
     fn vertex(options: &str) -> Vec<Provider> {
         parsed(&format!(
@@ -657,10 +1296,103 @@ mod tests {
     }
 
     #[test]
-    fn a_google_vertex_entry_without_a_project_configures_nothing() {
-        assert!(vertex("{}").is_empty());
-        assert!(vertex(r#"{"location": "us-central1"}"#).is_empty());
-        assert!(vertex(r#"{"project": "   "}"#).is_empty());
+    fn a_google_vertex_entry_without_a_project_is_reached_in_express_mode() {
+        for options in [
+            "{}",
+            r#"{"location": "us-central1"}"#,
+            r#"{"project": "   "}"#,
+        ] {
+            let all = vertex(options);
+            assert_eq!(all.len(), 1, "{options}");
+            assert_eq!(all[0].protocol(), Protocol::GenerateContent, "{options}");
+            assert_eq!(
+                all[0].base_url, "https://aiplatform.googleapis.com/v1",
+                "{options}"
+            );
+            assert_eq!(all[0].host(), "aiplatform.googleapis.com", "{options}");
+        }
+        let with_project = vertex(&format!(r#"{{"project": "{PLACEHOLDER_PROJECT}"}}"#));
+        assert_eq!(with_project[0].protocol(), Protocol::ChatCompletions);
+    }
+
+    #[test]
+    fn an_express_request_goes_to_the_publisher_and_model_it_names() {
+        let express = vertex("{}");
+        assert_eq!(
+            express[0].generate_content_url("google/gemini-2.5-flash", false),
+            Some(
+                "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:generateContent"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            express[0].generate_content_url("gemini-2.5-flash", true),
+            Some(
+                "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+                    .to_string()
+            )
+        );
+    }
+
+    /// The model is written into the path, so a name that could change the route has no URL.
+    #[test]
+    fn a_model_name_that_would_move_an_express_request_has_no_url() {
+        let express = vertex("{}");
+        for model in [
+            "",
+            "google/",
+            "/gemini",
+            "google/gemini/extra",
+            "google/gemini?x=1",
+            "google/gemini#frag",
+            "google/gem@ini",
+            "google/gemini:other",
+            "evil.invalid/../x",
+            "../gemini",
+            "./gemini",
+            "google/..",
+            "google/.",
+            "google/ge mini",
+        ] {
+            assert_eq!(
+                express[0].generate_content_url(model, false),
+                None,
+                "{model:?}"
+            );
+        }
+    }
+
+    /// An entry stating an endpoint and no project keeps the route it had unless it names the SDK
+    /// that says the endpoint takes Vertex's own API.
+    #[test]
+    fn a_stated_endpoint_with_no_project_keeps_chat_completions_unless_the_sdk_says_otherwise() {
+        let plain = vertex(r#"{"baseURL": "https://proxy.example.invalid/v1"}"#);
+        assert_eq!(plain[0].protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            plain[0].completion_url(),
+            "https://proxy.example.invalid/v1/chat/completions"
+        );
+        let other_sdk = one_entry(
+            r#"{"npm": "@ai-sdk/openai-compatible",
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}}"#,
+        );
+        assert_eq!(other_sdk.protocol(), Protocol::ChatCompletions);
+    }
+
+    #[test]
+    fn a_stated_endpoint_is_where_an_express_entry_is_reached() {
+        let all = [one_entry(
+            r#"{"npm": "@ai-sdk/google-vertex",
+                "options": {"baseURL": "https://proxy.example.invalid/v1/"}}"#,
+        )];
+        assert_eq!(all[0].protocol(), Protocol::GenerateContent);
+        assert_eq!(
+            all[0].generate_content_url("google/gemini-2.5-flash", false),
+            Some(
+                "https://proxy.example.invalid/v1/publishers/google/models/gemini-2.5-flash:generateContent"
+                    .to_string()
+            )
+        );
     }
 
     /// Both values are written into the URL, so one that could change the host or the route
@@ -885,6 +1617,26 @@ mod tests {
         assert!(Provider::all(&root).is_empty());
     }
 
+    /// The block's region is written into the host the entry is reached at, so one that would move
+    /// the request names no service, and the entry is dropped with it rather than reached
+    /// somewhere else.
+    #[test]
+    fn an_aws_block_whose_region_would_move_the_request_configures_nothing() {
+        for &region in crate::testutil::REGIONS_THAT_WOULD_MOVE_THE_REQUEST {
+            let root = serde_json::json!({"provider": {"amazon-bedrock": {
+                "options": {"region": region},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}});
+            let serde_json::Value::Object(root) = root else {
+                unreachable!("a json object literal")
+            };
+            assert!(
+                Provider::all(&root).is_empty(),
+                "region {region:?} was accepted"
+            );
+        }
+    }
+
     /// opencode requires nothing of a model entry, so neither may this. An empty entry is a legal
     /// opencode model and has to stay a legal one here, or a copied block stops working.
     #[test]
@@ -908,9 +1660,41 @@ mod tests {
                 "models": {"some/model": {}}
             }}}"#);
         assert_eq!(
-            provider.model("some/model").expect("offered").window(),
+            provider.window_of(provider.model("some/model").expect("offered")),
             CONTEXT_WINDOW
         );
+    }
+
+    /// IMPORT-5: a window the block states for the provider is every model's, where the model
+    /// states none, and a model's own `limit` outranks it. The regressions rejected are ignoring
+    /// the provider figure, and letting it override a model that pinned its own.
+    #[test]
+    fn a_provider_window_is_the_default_for_models_that_state_none() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1", "contextWindow": 4096},
+                "models": {"plain": {}, "pinned": {"limit": {"context": 8192, "output": 1024}}}
+            }}}"#);
+        assert_eq!(provider.context_window, Some(4096));
+        assert_eq!(
+            provider.window_of(provider.model("plain").expect("offered")),
+            4096
+        );
+        assert_eq!(
+            provider.window_of(provider.model("pinned").expect("offered")),
+            8192
+        );
+    }
+
+    /// A provider window that is not a whole number above zero says nothing, as an unusable model
+    /// `limit` does.
+    #[test]
+    fn an_unusable_provider_window_is_not_read() {
+        for stated in ["0", "-5", "\"4096\"", "40.5", "null"] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://e.invalid/v1", "contextWindow": {stated}}}}}}}}}"#
+            ));
+            assert_eq!(provider.context_window, None, "{stated}");
+        }
     }
 
     /// The case `limit` exists for: an upstream pinned to a smaller window than the model's own.
@@ -925,7 +1709,7 @@ mod tests {
             .model("anthropic/claude-sonnet-4.5")
             .expect("offered");
         assert_eq!(model.context_window, Some(200_000));
-        assert_eq!(model.window(), 200_000);
+        assert_eq!(provider.window_of(model), 200_000);
     }
 
     /// opencode requires `context` and `output` together once `limit` is present. A block naming
@@ -993,6 +1777,123 @@ mod tests {
         assert_eq!(model.context_window, Some(131_072));
     }
 
+    /// The two figures a person states are what the clients read, and nothing stated reads as the
+    /// figures they have always used, which is how a block written before they existed is read.
+    #[test]
+    fn a_block_states_how_often_a_request_is_sent_again_and_how_long_a_quiet_reply_is_waited_on() {
+        let stated = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1",
+                            "maxRetries": 5, "idleTimeoutMs": 300000}
+            }}}"#);
+        assert_eq!(stated.patience.max_retries, Some(5));
+        assert_eq!(
+            stated.patience.idle_timeout,
+            Some(Duration::from_millis(300_000))
+        );
+        assert_eq!(stated.patience.attempts(3), 6);
+
+        let silent =
+            one(r#"{"provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1"}}}}"#);
+        assert_eq!(silent.patience, Patience::default());
+        assert_eq!(
+            silent.patience.attempts(3),
+            3,
+            "nothing stated took a figure"
+        );
+    }
+
+    /// Zero retries sends each request once. Reading it as "nothing stated" would hand a person who
+    /// asked for no repeats the default two, and they would find out from a bill.
+    #[test]
+    fn zero_retries_is_a_statement_and_zero_milliseconds_is_not() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1",
+                            "maxRetries": 0, "idleTimeoutMs": 0}
+            }}}"#);
+        assert_eq!(provider.patience.max_retries, Some(0));
+        assert_eq!(provider.patience.attempts(3), 1);
+        assert_eq!(
+            provider.patience.idle_timeout, None,
+            "a gap of nothing would end every reply the moment it began"
+        );
+    }
+
+    /// A figure above the cap is the cap, as Codex reads its own. Left as written, seven doublings
+    /// of a one second pause is the most that stays inside the two minutes a service's own request
+    /// to wait is held to, and a hundred is a turn that sits unattended for longer than a person
+    /// would wait.
+    #[test]
+    fn a_figure_above_the_cap_is_the_cap() {
+        let provider = one(
+            r#"{"provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1",
+                "maxRetries": 100, "idleTimeoutMs": 86400000}}}}"#,
+        );
+        assert_eq!(provider.patience.max_retries, Some(MAX_RETRIES));
+        assert_eq!(
+            provider.patience.idle_timeout,
+            Some(Duration::from_millis(MAX_IDLE_TIMEOUT_MS))
+        );
+
+        let at_the_cap = one(&format!(
+            r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                "maxRetries": {MAX_RETRIES}, "idleTimeoutMs": {MAX_IDLE_TIMEOUT_MS}}}}}}}}}"#
+        ));
+        assert_eq!(at_the_cap.patience, provider.patience);
+
+        let below = one(&format!(
+            r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                "maxRetries": {}, "idleTimeoutMs": {}}}}}}}}}"#,
+            MAX_RETRIES - 1,
+            MAX_IDLE_TIMEOUT_MS - 1
+        ));
+        assert_eq!(below.patience.max_retries, Some(MAX_RETRIES - 1));
+        assert_eq!(
+            below.patience.idle_timeout,
+            Some(Duration::from_millis(MAX_IDLE_TIMEOUT_MS - 1))
+        );
+    }
+
+    /// A value that is not a whole number states nothing, on the footing `contextWindow` is read:
+    /// a mistyped figure costs the setting and leaves the entry reachable.
+    #[test]
+    fn a_figure_that_is_not_a_whole_number_states_nothing() {
+        for spelling in [r#""3""#, "-1", "1.5", "true", "null", "[]", r#"{"n": 2}"#] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://example.invalid/v1",
+                    "maxRetries": {spelling}, "idleTimeoutMs": {spelling}}}}}}}}}"#
+            ));
+            assert_eq!(
+                provider.patience,
+                Patience::default(),
+                "{spelling} stated something"
+            );
+            assert_eq!(provider.base_url, "https://example.invalid/v1");
+        }
+    }
+
+    /// An AWS account is stated the same two keys, read from the block's `options` beside the
+    /// region, and the entry keeps them where a client reaching the account can read them.
+    #[test]
+    fn an_aws_entry_states_the_same_two_figures() {
+        let provider = one(r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "maxRetries": 4, "idleTimeoutMs": 240000},
+                "models": {"arn:aws:bedrock:us-west-2:111122223333:inference-profile/x": {}}
+            }}}"#);
+        let account = provider.bedrock.expect("an account");
+        assert_eq!(account.patience().max_retries, Some(4));
+        assert_eq!(
+            account.patience().idle_timeout,
+            Some(Duration::from_millis(240_000))
+        );
+
+        let silent =
+            one(r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-west-2"}}}}"#);
+        assert_eq!(
+            silent.bedrock.expect("an account").patience(),
+            Patience::default()
+        );
+    }
+
     /// `options` reaches the request body whole and is never parsed. A gateway's routing controls
     /// are its own invention, so a schema enumerating them is one that changes when it adds a field.
     #[test]
@@ -1048,6 +1949,274 @@ mod tests {
                 "options": {"baseURL": "https://proxy.example.invalid/v1"}
             }}}"#);
         assert_eq!(provider.base_url, "https://proxy.example.invalid/v1");
+    }
+
+    /// OpenAI is a gateway like any other once its host is known: the key goes in `authorization`,
+    /// nothing is compiled in to offer, and no tool call carries anything back that this program
+    /// keeps. A name that changed any of that would be a second code path for a service that
+    /// speaks the protocol everything else here speaks.
+    #[test]
+    fn an_openai_entry_is_reached_at_openais_host_like_any_other_gateway() {
+        let provider = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        assert_eq!(provider.base_url, "https://api.openai.com/v1");
+        assert_eq!(
+            provider.chat_completions_url(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(provider.models_url(), "https://api.openai.com/v1/models");
+        assert_eq!(provider.host(), "api.openai.com");
+        assert_eq!(
+            provider.credential_header("a-key"),
+            ("authorization", "Bearer a-key".to_string())
+        );
+        assert_eq!(provider.compiled_roster(), None);
+        assert!(!provider.takes_extra_content());
+
+        let exported = |name: &str| (name == "OPENAI_API_KEY").then(|| "a-key".to_string());
+        assert_eq!(token(&provider.credential(exported)), Some("a-key"));
+    }
+
+    /// A proxy, or an Azure-style deployment of the same protocol, is reached by stating where it
+    /// is; the host compiled in for the name is only what an absent `baseURL` falls back to.
+    #[test]
+    fn a_stated_endpoint_beats_the_one_compiled_in_for_openai() {
+        let provider = one(r#"{"provider": {"openai": {
+                "env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/openai/v1"}
+            }}}"#);
+        assert_eq!(provider.base_url, "https://proxy.example.invalid/openai/v1");
+        assert_eq!(provider.host(), "proxy.example.invalid");
+    }
+
+    /// Anthropic is the one known name reached in another protocol, so everything that differs
+    /// from a gateway is stated by the entry: the route, the header the key is in, and the version
+    /// header the service requires beside it.
+    #[test]
+    fn an_anthropic_entry_is_reached_through_the_messages_api_at_anthropics_host() {
+        let provider = one(r#"{"provider": {"anthropic": {"env": ["ANTHROPIC_API_KEY"]}}}"#);
+        assert_eq!(provider.base_url, "https://api.anthropic.com/v1");
+        assert_eq!(provider.protocol(), Protocol::Messages);
+        assert_eq!(
+            provider.completion_url(),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            provider.models_url(),
+            "https://api.anthropic.com/v1/models?limit=1000"
+        );
+        assert_eq!(provider.host(), "api.anthropic.com");
+        assert_eq!(
+            provider.credential_header("a-key"),
+            ("x-api-key", "a-key".to_string())
+        );
+        assert_eq!(
+            provider.fixed_headers(),
+            [("anthropic-version", "2023-06-01")]
+        );
+        assert_eq!(provider.compiled_roster(), None);
+        assert!(!provider.takes_extra_content());
+        assert!(!provider.answers_for_an_account());
+        assert!(provider.answers_under_the_model_behind_an_alias());
+
+        let exported = |name: &str| (name == "ANTHROPIC_API_KEY").then(|| "a-key".to_string());
+        assert_eq!(token(&provider.credential(exported)), Some("a-key"));
+
+        let other =
+            one(r#"{"provider": {"gw": {"options": {"baseURL": "https://example.invalid/v1"}}}}"#);
+        assert_eq!(other.protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            other.completion_url(),
+            "https://example.invalid/v1/chat/completions"
+        );
+        assert_eq!(other.models_url(), "https://example.invalid/v1/models");
+        assert!(other.fixed_headers().is_empty());
+        assert!(other.answers_for_an_account());
+        assert!(!other.answers_under_the_model_behind_an_alias());
+    }
+
+    /// A proxy in front of the API is reached by stating where it is, and is still spoken to in the
+    /// protocol the id names, since the table supplies only an address.
+    #[test]
+    fn a_stated_endpoint_beats_the_one_compiled_in_for_anthropic() {
+        let provider = one(r#"{"provider": {"anthropic": {
+                "env": ["ANTHROPIC_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/anthropic/v1"}
+            }}}"#);
+        assert_eq!(
+            provider.base_url,
+            "https://proxy.example.invalid/anthropic/v1"
+        );
+        assert_eq!(provider.host(), "proxy.example.invalid");
+        assert_eq!(provider.protocol(), Protocol::Messages);
+        assert_eq!(
+            provider.completion_url(),
+            "https://proxy.example.invalid/anthropic/v1/messages"
+        );
+    }
+
+    /// The id alone says which protocol an entry is reached in, except that an `anthropic` entry may
+    /// name the SDK opencode would use for it. One that names the OpenAI-compatible SDK is a gateway of
+    /// that kind which happens to be called this, as every such block was before the id was known: its
+    /// requests go to its own chat completions route with a bearer token, and with no address of its
+    /// own it has no service, since the address compiled in is the one the other protocol is spoken at.
+    #[test]
+    fn an_anthropic_entry_naming_the_openai_compatible_sdk_is_a_gateway_like_any_other() {
+        let provider = one(r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/openai-compatible",
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}
+            }}}"#);
+        assert_eq!(provider.protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            provider.completion_url(),
+            "https://proxy.example.invalid/v1/chat/completions"
+        );
+        assert_eq!(
+            provider.credential_header("a-key"),
+            ("authorization", "Bearer a-key".to_string())
+        );
+        assert!(provider.fixed_headers().is_empty());
+        assert!(provider.answers_for_an_account());
+        assert!(!provider.answers_under_the_model_behind_an_alias());
+
+        assert!(
+            parsed(r#"{"provider": {"anthropic": {"npm": "@ai-sdk/openai-compatible"}}}"#)
+                .is_empty(),
+            "an entry that names no address of its own was given Anthropic's"
+        );
+
+        for sdk in [
+            r#""npm": "@ai-sdk/anthropic""#,
+            r#""npm": "something-else""#,
+        ] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"anthropic": {{{sdk}, "env": ["A_KEY"]}}}}}}"#
+            ));
+            assert_eq!(provider.protocol(), Protocol::Messages, "{sdk}");
+        }
+    }
+
+    /// A block written while the id was an ordinary name for a gateway, with an endpoint and no SDK,
+    /// is read in the protocol the id has now, as opencode reads the same block, and the SDK it names
+    /// is the way back. An `@ai-sdk/anthropic` entry under another id is not reached in that protocol:
+    /// only the id says so, and the entry is a gateway like any other. Both are costs the spec records,
+    /// held here so a change to either shows in a test.
+    #[test]
+    fn what_decides_the_protocol_of_an_entry_is_its_id_and_the_sdk_it_names() {
+        let old_form = one(r#"{"provider": {"anthropic": {
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                "models": {"claude-via-the-gateway": {}}
+            }}}"#);
+        assert_eq!(old_form.protocol(), Protocol::Messages);
+
+        let opted_out = one(r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/openai-compatible",
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://litellm.example.invalid/v1"}
+            }}}"#);
+        assert_eq!(opted_out.protocol(), Protocol::ChatCompletions);
+
+        let elsewhere = one(r#"{"provider": {"claude-proxy": {
+                "npm": "@ai-sdk/anthropic",
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}
+            }}}"#);
+        assert_eq!(elsewhere.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// BACKEND-61: an entry naming `@ai-sdk/openai` is reached in the Responses protocol, whatever its
+    /// id, at the `/responses` route, with its key as a bearer token and no header of the protocol's
+    /// own. The SDK it names decides over the id, so an `anthropic` entry naming it is Responses and
+    /// must say where its service is, since the address compiled in is the Messages API's.
+    #[test]
+    fn an_entry_naming_the_openai_sdk_is_reached_through_the_responses_api() {
+        let own_id = one(r#"{"provider": {"a-gateway": {
+                "npm": "@ai-sdk/openai",
+                "env": ["A_KEY"],
+                "options": {"baseURL": "https://gateway.example.invalid/v1/"}
+            }}}"#);
+        assert_eq!(own_id.protocol(), Protocol::Responses);
+        assert_eq!(
+            own_id.completion_url(),
+            "https://gateway.example.invalid/v1/responses"
+        );
+        assert_eq!(
+            own_id.models_url(),
+            "https://gateway.example.invalid/v1/models"
+        );
+        assert!(own_id.fixed_headers().is_empty());
+        assert_eq!(
+            own_id.credential_header("secret"),
+            ("authorization", "Bearer secret".to_string())
+        );
+        // A gateway that takes this protocol is asked what an account may reach as any other is.
+        assert!(own_id.answers_for_an_account());
+
+        let known = one(r#"{"provider": {"openai": {"npm": "@ai-sdk/openai", "env": ["A_KEY"]}}}"#);
+        assert_eq!(known.protocol(), Protocol::Responses);
+        assert_eq!(
+            known.completion_url(),
+            "https://api.openai.com/v1/responses"
+        );
+
+        let plain = one(r#"{"provider": {"openai": {"env": ["A_KEY"]}}}"#);
+        assert_eq!(plain.protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            plain.completion_url(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+
+        let stated = one(r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/openai",
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}
+            }}}"#);
+        assert_eq!(stated.protocol(), Protocol::Responses);
+        assert!(
+            parsed(r#"{"provider": {"anthropic": {"npm": "@ai-sdk/openai"}}}"#).is_empty(),
+            "the address compiled in for `anthropic` is not one this protocol is spoken at"
+        );
+
+        // An id that fixes its own protocol and the header its key goes in keeps both.
+        let vertex = one(r#"{"provider": {"google-vertex": {
+                "npm": "@ai-sdk/openai",
+                "options": {"project": "an-example-project", "apiKey": "a-key"}
+            }}}"#);
+        assert_eq!(vertex.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// The table supplies an address and nothing else. A block naming no credential is somebody saying
+    /// none is needed, so an exported `ANTHROPIC_API_KEY` meant for another tool is not picked up on
+    /// the strength of the id.
+    #[test]
+    fn an_anthropic_block_naming_no_key_names_no_credential() {
+        let provider = one(r#"{"provider": {"anthropic": {}}}"#);
+        let exported = |name: &str| (name == "ANTHROPIC_API_KEY").then(|| "a-key".to_string());
+        assert!(matches!(
+            provider.credential(exported),
+            Credential::NotNeeded
+        ));
+    }
+
+    /// An exported budget outranks a model's own, which outranks the figure a request assumes. The
+    /// same order the AWS account resolves its ceiling in, so one setting means one thing.
+    #[test]
+    fn an_anthropic_reply_ceiling_is_the_exported_budget_then_the_models_own() {
+        let provider = one(r#"{"provider": {"anthropic": {"models": {
+                "claude-stated": {"limit": {"context": 200000, "output": 64000}},
+                "claude-half": {"limit": {"output": 64000}},
+                "claude-silent": {}
+            }}}}"#);
+        assert_eq!(provider.stated_output_limit("claude-stated"), Some(64_000));
+        // A `limit` naming only one half is not a `limit`, as opencode reads it.
+        assert_eq!(provider.stated_output_limit("claude-half"), None);
+        assert_eq!(provider.stated_output_limit("claude-silent"), None);
+        assert_eq!(provider.stated_output_limit("claude-unlisted"), None);
+
+        let exported = provider.with_output_budget(Some(48_000));
+        for model in ["claude-stated", "claude-half", "claude-unlisted"] {
+            assert_eq!(exported.stated_output_limit(model), Some(48_000), "{model}");
+        }
     }
 
     /// A trailing slash on the endpoint would otherwise produce a double slash in the path, which
@@ -1260,5 +2429,477 @@ mod tests {
         ] {
             assert!(parsed(text).is_empty(), "{text:?} configured something");
         }
+    }
+
+    /// The case the block exists for: a gateway that routes on a header of its own. Both spellings
+    /// of one name are asserted, because a reading that kept the name as written would send two
+    /// headers where the person wrote one.
+    #[test]
+    fn a_header_a_block_asked_for_is_read() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"X-Tenant-Id": "team-7", "x-route": "eu"}
+                }
+            }}}"#);
+        let mut seen: Vec<(String, String)> = provider
+            .request_headers(|_| None)
+            .into_iter()
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                ("x-route".to_string(), "eu".to_string()),
+                ("x-tenant-id".to_string(), "team-7".to_string())
+            ]
+        );
+        assert!(
+            provider.headers_refused.is_empty(),
+            "a header nobody objected to was refused: {:?}",
+            provider.headers_refused
+        );
+    }
+
+    /// `Request::header` appends, so a name this program already set would go twice and an
+    /// intermediary would choose between them. The name is reported as the file wrote it, because
+    /// a person looking for the line they typed is looking for their own spelling.
+    #[test]
+    fn a_header_that_would_change_framing_is_refused() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {
+                        "Host": "elsewhere.invalid",
+                        "content-length": "3",
+                        "Content-Type": "text/plain",
+                        "transfer-encoding": "chunked",
+                        "connection": "close",
+                        "x-route": "eu"
+                    }
+                }
+            }}}"#);
+        let kept: Vec<(String, String)> = provider
+            .request_headers(|_| None)
+            .into_iter()
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        assert_eq!(
+            kept,
+            [("x-route".to_string(), "eu".to_string())],
+            "a reserved name was sent"
+        );
+        let mut refused: Vec<(String, HeaderFault)> = provider.headers_refused.clone();
+        refused.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            refused,
+            [
+                ("Content-Type".to_string(), HeaderFault::Reserved),
+                ("Host".to_string(), HeaderFault::Reserved),
+                ("connection".to_string(), HeaderFault::Reserved),
+                ("content-length".to_string(), HeaderFault::Reserved),
+                ("transfer-encoding".to_string(), HeaderFault::Reserved)
+            ],
+            "a refused name was not reported as the file wrote it, or was refused for another reason"
+        );
+    }
+
+    /// One name written twice in two spellings is one header. `Request::header` appends, so
+    /// keeping both would send two values and let the service pick, which is not a thing the
+    /// person asked for in either line.
+    #[test]
+    fn one_name_written_twice_sends_one_header() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-route": "eu", "X-Route": "us"}
+                }
+            }}}"#);
+        let sent = provider.request_headers(|_| None);
+        assert_eq!(sent.len(), 1, "one name produced two headers: {sent:?}");
+        assert_eq!(sent[0].0, "x-route");
+        assert_eq!(
+            provider.headers_refused.len(),
+            1,
+            "the spelling that lost was not reported: {:?}",
+            provider.headers_refused
+        );
+        assert_eq!(provider.headers_refused[0].1, HeaderFault::Reserved);
+    }
+
+    /// Two things authenticating one request is a request nobody can read the authentication of,
+    /// and which won would depend on the order headers were attached in. The same name is kept
+    /// where the block names no credential, because then nothing else is putting it there.
+    #[test]
+    fn the_header_a_credential_goes_in_is_refused_only_where_one_is_named() {
+        let with_key = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "apiKey": "in-the-file",
+                    "headers": {"Authorization": "Bearer another"}
+                }
+            }}}"#);
+        assert!(
+            with_key.request_headers(|_| None).is_empty(),
+            "a second credential was sent beside the configured one"
+        );
+        assert_eq!(
+            with_key.headers_refused,
+            [("Authorization".to_string(), HeaderFault::Reserved)]
+        );
+
+        let named_variable = one(r#"{"provider": {"gw": {
+                "env": ["GW_KEY"],
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Bearer another"}
+                }
+            }}}"#);
+        assert!(
+            named_variable.request_headers(|_| None).is_empty(),
+            "a block naming a variable for its token still sent a written authorization"
+        );
+
+        let no_credential = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Basic abc"}
+                }
+            }}}"#);
+        let sent = no_credential.request_headers(|_| None);
+        assert_eq!(sent.len(), 1, "nothing else was going to set that header");
+        assert_eq!(sent[0].0, "authorization");
+    }
+
+    /// A block naming no `env` and no `apiKey` still names a credential once a key is stored for
+    /// its id, but `Self::one` cannot know that: `stored_key` is filled in later, by
+    /// `Config::from_sources`. Left alone, the written `authorization` would reach the request
+    /// beside the stored key `credential_header` adds, carrying two credentials on one request.
+    /// `reconcile_stored_credential` is what `Config::from_sources` calls to settle this once the
+    /// key is known.
+    #[test]
+    fn a_stored_key_refuses_a_written_authorization_once_it_is_known() {
+        let mut provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Bearer another"}
+                }
+            }}}"#);
+        // Before the key is stored, nothing named a credential, so the header was kept.
+        assert_eq!(
+            provider.request_headers(|_| None).len(),
+            1,
+            "a block naming no credential yet should still send its own header"
+        );
+        assert!(provider.headers_refused.is_empty());
+
+        provider.stored_key = Some(Secret::new("stored-placeholder"));
+        provider.reconcile_stored_credential();
+
+        assert!(
+            provider.request_headers(|_| None).is_empty(),
+            "a second credential was sent beside the stored key"
+        );
+        assert_eq!(
+            provider.headers_refused,
+            [("authorization".to_string(), HeaderFault::Reserved)]
+        );
+        let (credential, source) = provider.credential_and_source(|_| None);
+        assert_eq!(token(&credential), Some("stored-placeholder"));
+        assert_eq!(source, Some(Source::Stored));
+    }
+
+    /// Nothing to do where the block already refused the header from `env` or `apiKey`: a second
+    /// pass over a name no longer in `headers` must not report it twice.
+    #[test]
+    fn reconciling_a_stored_key_is_a_no_op_once_a_credential_was_already_named() {
+        let mut provider = one(r#"{"provider": {"gw": {
+                "env": ["GW_KEY"],
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"authorization": "Bearer another"}
+                }
+            }}}"#);
+        assert_eq!(provider.headers_refused.len(), 1);
+
+        provider.stored_key = Some(Secret::new("stored-placeholder"));
+        provider.reconcile_stored_credential();
+
+        assert_eq!(
+            provider.headers_refused.len(),
+            1,
+            "a header already refused was reported a second time: {:?}",
+            provider.headers_refused
+        );
+    }
+
+    /// Vertex AI takes its key in a header of its own, so the name to refuse is that one and not
+    /// `authorization`. A gateway that is not Vertex has nothing putting `x-goog-api-key` on a
+    /// request, so a block that wants one there gets one.
+    #[test]
+    fn a_vertex_block_refuses_the_header_its_key_goes_in() {
+        let all = vertex(&format!(
+            r#"{{"project": "{PLACEHOLDER_PROJECT}", "apiKey": "in-the-file",
+                "headers": {{"x-goog-api-key": "another", "authorization": "Bearer another"}}}}"#
+        ));
+        let provider = &all[0];
+        let sent = provider.request_headers(|_| None);
+        assert_eq!(
+            sent.len(),
+            1,
+            "the key's own header was sent twice or the other was dropped: {sent:?}"
+        );
+        assert_eq!(sent[0].0, "authorization");
+        assert_eq!(
+            provider.headers_refused,
+            [(VERTEX_KEY_HEADER.to_string(), HeaderFault::Reserved)]
+        );
+
+        let elsewhere = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "apiKey": "in-the-file",
+                    "headers": {"x-goog-api-key": "a-value"}
+                }
+            }}}"#);
+        assert_eq!(elsewhere.request_headers(|_| None).len(), 1);
+    }
+
+    /// An `anthropic` entry takes its key in `x-api-key`, so that is the name to refuse there and
+    /// not `authorization`, which is where every gateway but Vertex and Anthropic takes one.
+    #[test]
+    fn an_anthropic_block_refuses_the_header_its_key_goes_in() {
+        let provider = one(r#"{"provider": {"anthropic": {
+                "env": ["ANTHROPIC_API_KEY"],
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-api-key": "another", "authorization": "Bearer another"}
+                }
+            }}}"#);
+        let sent = provider.request_headers(|_| None);
+        assert_eq!(
+            sent.len(),
+            1,
+            "the key's own header was sent twice or the other was dropped: {sent:?}"
+        );
+        assert_eq!(sent[0].0, "authorization");
+        assert_eq!(
+            provider.headers_refused,
+            [("x-api-key".to_string(), HeaderFault::Reserved)]
+        );
+    }
+
+    /// `Provider::fixed_headers` attaches `anthropic-version` to every Messages request before a
+    /// configured header is, whatever the block names: a second value under that name would go
+    /// out beside the first rather than in place of it, since `Request::header` appends.
+    #[test]
+    fn an_anthropic_block_refuses_the_version_header_the_api_requires() {
+        let provider = one(r#"{"provider": {"anthropic": {
+                "env": ["ANTHROPIC_API_KEY"],
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"Anthropic-Version": "2020-01-01"}
+                }
+            }}}"#);
+        assert!(
+            provider.request_headers(|_| None).is_empty(),
+            "a configured version header was sent beside the one this program sets"
+        );
+        assert_eq!(
+            provider.headers_refused,
+            [("Anthropic-Version".to_string(), HeaderFault::Reserved)]
+        );
+
+        let elsewhere = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"anthropic-version": "a-value"}
+                }
+            }}}"#);
+        let sent: Vec<(String, String)> = elsewhere
+            .request_headers(|_| None)
+            .into_iter()
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        assert_eq!(
+            sent,
+            [("anthropic-version".to_string(), "a-value".to_string())],
+            "a name only Messages sets fixed was refused on a gateway that does not set it"
+        );
+    }
+
+    /// A header a gateway wants is often a second credential, and a block reaches a person's
+    /// screen whenever a diagnostic prints one. The value went out in plain text while this field
+    /// was a `String`, since the derived `Debug` prints whatever a field holds.
+    #[test]
+    fn printing_a_block_does_not_print_a_header_value() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-second-key": "in-the-file"}
+                }
+            }}}"#);
+
+        let printed = format!("{provider:?}");
+
+        assert!(
+            !printed.contains("in-the-file"),
+            "the header value is in what was printed: {printed}"
+        );
+        assert!(
+            printed.contains("x-second-key"),
+            "the name is withheld too, so nothing says which header was configured: {printed}"
+        );
+    }
+
+    /// A value naming a variable is read where a token is read, at the point of use: one read at
+    /// startup is stale in a session where somebody exported another. A variable holding nothing
+    /// sends no header, because nothing here knows whether the service requires it and the gateway
+    /// is the one that can say.
+    #[test]
+    fn a_header_value_naming_a_variable_is_resolved_at_the_point_of_use() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-tenant-id": "{env:GW_TENANT}"}
+                }
+            }}}"#);
+        assert_eq!(
+            provider.headers[0].value.expose(),
+            "{env:GW_TENANT}",
+            "the reference was substituted at load"
+        );
+
+        let first = provider.request_headers(|name| match name {
+            "GW_TENANT" => Some("team-7".to_string()),
+            _ => None,
+        });
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].1.expose(), "team-7");
+
+        // The same block, a different environment: a value cached at load would answer "team-7".
+        let later = provider.request_headers(|_| Some("team-8".to_string()));
+        assert_eq!(later[0].1.expose(), "team-8");
+
+        assert!(
+            provider.request_headers(|_| None).is_empty(),
+            "a variable holding nothing sent the reference as a value"
+        );
+        assert!(
+            provider
+                .request_headers(|_| Some("   ".to_string()))
+                .is_empty(),
+            "a variable holding only spaces sent an empty header"
+        );
+    }
+
+    /// Nothing here substitutes, so a reference inside a longer value would go out with the braces
+    /// still in it and the service would route on the literal text. Refused at load, where the key
+    /// that wrote it can be named.
+    #[test]
+    fn a_reference_inside_a_longer_header_value_is_refused() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://example.invalid/v1",
+                    "headers": {"x-tenant-id": "tenant-{env:GW_TENANT}", "x-key": "{file:/tmp/k}"}
+                }
+            }}}"#);
+        assert!(
+            provider
+                .request_headers(|_| Some("team-7".to_string()))
+                .is_empty(),
+            "an unsubstituted reference was sent"
+        );
+        let mut refused = provider.headers_refused.clone();
+        refused.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            refused,
+            [
+                ("x-key".to_string(), HeaderFault::Substitution),
+                ("x-tenant-id".to_string(), HeaderFault::Substitution)
+            ]
+        );
+    }
+
+    /// A line ending in a value would end the header and let the rest start another, which is a
+    /// settings file choosing headers nobody wrote down. A name that is not a field name is
+    /// refused with it, because what it would produce is a request no service parses.
+    #[test]
+    fn a_header_that_is_not_sendable_is_refused() {
+        let provider = one(&serde_json::json!({"provider": {"gw": {"options": {
+            "baseURL": "https://example.invalid/v1",
+            "headers": {
+                "x-split": "eu\r\nx-admin: yes",
+                "x-nul": "a\u{0}b",
+                "x bad": "eu",
+                "": "eu",
+                "x-ok": "eu"
+            }
+        }}}})
+        .to_string());
+        let sent = provider.request_headers(|_| None);
+        assert_eq!(sent.len(), 1, "something unsendable went out: {sent:?}");
+        assert_eq!(sent[0].0, "x-ok");
+        let mut refused: Vec<(String, HeaderFault)> = provider.headers_refused.clone();
+        refused.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            refused,
+            [
+                (String::new(), HeaderFault::NotAName),
+                ("x bad".to_string(), HeaderFault::NotAName),
+                ("x-nul".to_string(), HeaderFault::NotAValue),
+                ("x-split".to_string(), HeaderFault::NotAValue)
+            ]
+        );
+    }
+
+    /// Every failure reads as absence, on the same footing as the rest of the block: a half-typed
+    /// settings file must not stop a session. A name with nothing under it is a line somebody has
+    /// not finished writing, so it is neither sent nor reported.
+    #[test]
+    fn a_malformed_headers_block_configures_no_headers() {
+        for headers in [
+            "\"not a block\"",
+            "[]",
+            "{}",
+            r#"{"x-route": null}"#,
+            r#"{"x-route": 7}"#,
+            r#"{"x-route": {"a": "b"}}"#,
+            r#"{"x-route": ""}"#,
+            r#"{"x-route": "   "}"#,
+        ] {
+            let provider = one(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{
+                    "baseURL": "https://example.invalid/v1", "headers": {headers}
+                }}}}}}}}"#
+            ));
+            assert!(
+                provider
+                    .request_headers(|_| Some("a-value".to_string()))
+                    .is_empty(),
+                "{headers} configured a header"
+            );
+            assert!(
+                provider.headers_refused.is_empty(),
+                "{headers} was reported as a refusal rather than read as absence"
+            );
+        }
+    }
+
+    /// Bedrock signs over the headers it sends, so one added here either breaks the signature or
+    /// is not covered by it. Refused by name so the block says why rather than failing at the
+    /// service.
+    #[test]
+    fn an_aws_block_sends_no_configured_header() {
+        let provider = one(r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "headers": {"x-tenant-id": "team-7"}}
+            }}}"#);
+        assert!(provider.bedrock.is_some());
+        assert!(provider.request_headers(|_| None).is_empty());
+        assert_eq!(
+            provider.headers_refused,
+            [("x-tenant-id".to_string(), HeaderFault::Reserved)]
+        );
     }
 }

@@ -4,6 +4,12 @@
 //! saves: the unit that builds the record and the unit that reads it each look right alone, and
 //! only a save after a resume shows the history that was there before it gone.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -56,6 +62,10 @@ enum Chat {
     Refuses,
     /// Answers "done", except to a conversation holding [`HELD`], which it never answers.
     Holds,
+    /// Writes a task list in its first round, using 107 tokens, then refuses the credentials.
+    PlansThenRefuses,
+    /// Writes a task list in its first round, using 107 tokens, then never answers the next.
+    PlansThenHolds,
 }
 
 /// What the refusing service says, which is the backend's words and not the interface's.
@@ -109,7 +119,27 @@ fn answer(mut stream: std::net::TcpStream, chat: Chat, held: &mpsc::Sender<()>) 
                                 "long_conversation_warning_character_limit": 400_000}}])
             .to_string(),
         )
-    } else if matches!(chat, Chat::Refuses) {
+    } else if matches!(chat, Chat::PlansThenRefuses | Chat::PlansThenHolds)
+        && !String::from_utf8_lossy(&body).contains("\"role\":\"tool\"")
+    {
+        let plan = json!({"todos": [{"content": "write the plan", "status": "in_progress"}]});
+        let delta = json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "t1",
+            "type": "function",
+            "function": {"name": "todo_write", "arguments": plan.to_string()}}]});
+        let chunk = json!({"id": "c1", "object": "chat.completion.chunk",
+            "model": "stub-model",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 7}});
+        (
+            "200 OK",
+            "text/event-stream",
+            format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+        )
+    } else if matches!(chat, Chat::PlansThenHolds) {
+        let _ = held.send(());
+        let _ = stream.read(&mut [0u8; 1]);
+        return;
+    } else if matches!(chat, Chat::Refuses | Chat::PlansThenRefuses) {
         (
             "401 Unauthorized",
             "application/json",
@@ -361,6 +391,74 @@ fn a_turn_after_a_resume_extends_the_history_the_record_held() {
     assert_eq!(history[1]["prompt_offset"], 0, "{twice}");
 }
 
+/// A turn taken in the desktop records how many of its tokens the model read and how many it wrote,
+/// and a turn taken after a resume adds to the split the record held (SESSION-11).
+///
+/// The faults this rejects: saving no split, saving the split of the last turn alone, and resuming
+/// without reading the record's split. The service counts 10 in and 1 out for each turn.
+#[test]
+fn a_turn_records_its_split_and_a_resumed_one_adds_to_it() {
+    let scratch = Scratch::new("bridge-history-split");
+    let (endpoint, _) = stub_service(Chat::Answers);
+
+    let id = take_turn(
+        &scratch.home(),
+        &scratch.project(),
+        &endpoint,
+        None,
+        "first question",
+    );
+    let once = record(&scratch.home());
+    assert_eq!(once["tokens"], 11, "{once}");
+    assert_eq!(once["split"], json!({"read": 10, "written": 1}), "{once}");
+
+    take_turn(
+        &scratch.home(),
+        &scratch.project(),
+        &endpoint,
+        Some(&id),
+        "second question",
+    );
+    let twice = record(&scratch.home());
+    assert_eq!(twice["tokens"], 22, "{twice}");
+    assert_eq!(twice["split"], json!({"read": 20, "written": 2}), "{twice}");
+}
+
+/// Undoing a turn in the desktop takes its split back with its tokens, so the record saved after
+/// the undo does not say the session wrote more than it spent (SESSION-11, SESSION-19).
+///
+/// The fault this rejects: restoring the total and spend from the rewind point and leaving the
+/// split as the undone turn made it, which saves 20 read and 2 written against a total of 11.
+#[test]
+fn undoing_a_desktop_turn_takes_its_split_back_with_its_tokens() {
+    let scratch = Scratch::new("bridge-history-undo-split");
+    let (endpoint, _) = stub_service(Chat::Answers);
+    let mut window = Window::open(&scratch.home(), &scratch.project(), &endpoint, None);
+    for prompt in ["first question", "second question"] {
+        let ended = window.turn(prompt);
+        assert_eq!(ended["event"], "turn.done", "{ended}");
+    }
+    assert_eq!(record(&scratch.home())["tokens"], 22);
+
+    // The worker that sent the last turn's ending lets the session go a moment after it.
+    let session = window.session.clone();
+    let rewound = (0..500)
+        .find_map(|_| {
+            let reply = window.call("session.rewind", json!({"session": session, "steps": 1}));
+            if reply.get("ok").is_some() {
+                return Some(reply);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            None
+        })
+        .expect("the session was never free to rewind");
+    assert_eq!(rewound["ok"]["turn"], 2, "{rewound}");
+
+    let saved = record(&scratch.home());
+    assert_eq!(saved["tokens"], 11, "{saved}");
+    assert_eq!(saved["split"], json!({"read": 10, "written": 1}), "{saved}");
+}
+
 /// A turn that failed in the desktop is recorded as failed, with the reason the interface composed
 /// for it, and not with the backend's own words.
 ///
@@ -387,6 +485,42 @@ fn a_failed_turn_is_recorded_with_the_reason_the_interface_composed() {
         json!({"kind": "failed",
                "reason": "error: the service would not accept the credentials (HTTP 401)"}),
         "{saved}"
+    );
+    assert!(
+        !saved.to_string().contains("BACKEND-WORDS"),
+        "the record repeats the backend's words: {saved}"
+    );
+}
+
+/// A turn that failed after a tool call in the desktop leaves the planner a note that it failed,
+/// last in the saved conversation, so a resume holds it as the live window did (TURN-13).
+///
+/// The faults this rejects: a note made for the interface and never put in the conversation, a note
+/// the saved conversation leaves out, and a note that repeats the service's words.
+#[test]
+fn a_failed_turn_leaves_the_planner_a_note_in_the_saved_conversation() {
+    let scratch = Scratch::new("bridge-failed-turn-note");
+    let (endpoint, _) = stub_service(Chat::PlansThenRefuses);
+
+    let ended =
+        Window::open(&scratch.home(), &scratch.project(), &endpoint, None).turn("make a plan");
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+
+    let saved = record(&scratch.home());
+    let messages = saved["conversation"]["messages"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no conversation: {saved}"));
+    let last = messages.last().expect("the conversation holds messages");
+    assert_eq!(last["composed"]["kind"], "notice", "{saved}");
+    assert_eq!(last["role"], "user", "{saved}");
+    let words = last["content"].as_str().unwrap_or_default();
+    assert!(
+        words.ends_with("Failure category: unauthorized. Requests sent for the failed call: 1."),
+        "{saved}"
+    );
+    assert!(
+        !words.contains("401"),
+        "the status of the reply is in the note: {saved}"
     );
     assert!(
         !saved.to_string().contains("BACKEND-WORDS"),
@@ -441,6 +575,72 @@ fn a_stopped_turn_is_recorded_as_cancelled_under_its_own_number() {
                 &json!({"kind": "cancelled", "reason": "turn 2 cancelled"})
             ),
         ],
+        "{saved}"
+    );
+}
+
+/// A turn that fails after a request completed keeps what that request cost and the task list it
+/// wrote, under its own number (SESSION-11, SESSION-23, TURN-5).
+///
+/// The faults this rejects: charging only a turn that answered, so the failed turn's 107 tokens are
+/// in neither the total nor the breakdown, and dropping the task list of a turn without a reply.
+#[test]
+fn a_failed_turn_keeps_its_spend_and_its_task_list() {
+    let scratch = Scratch::new("bridge-history-failed-spend");
+    let (endpoint, _) = stub_service(Chat::PlansThenRefuses);
+
+    let ended =
+        Window::open(&scratch.home(), &scratch.project(), &endpoint, None).turn("first question");
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+
+    let saved = record(&scratch.home());
+    assert_eq!(saved["tokens"], 107, "{saved}");
+    assert_eq!(saved["spend"], json!({"1": 107}), "{saved}");
+    assert_eq!(
+        saved["split"],
+        json!({"read": 100, "written": 7}),
+        "the failed turn's tokens were not divided as the service counted them: {saved}"
+    );
+    assert_eq!(
+        saved["todos"]["1"][0]["content"], "write the plan",
+        "{saved}"
+    );
+}
+
+/// A turn that is stopped after a request completed keeps its spend, the wall time it took and
+/// its task list (SESSION-11, SESSION-12, SESSION-23, TURN-5).
+///
+/// The faults this rejects: charging nothing to a stopped turn, and recording no wall time for it.
+#[test]
+fn a_stopped_turn_keeps_its_spend_its_wall_time_and_its_task_list() {
+    let scratch = Scratch::new("bridge-history-stopped-spend");
+    let (endpoint, holding) = stub_service(Chat::PlansThenHolds);
+
+    let mut window = Window::open(&scratch.home(), &scratch.project(), &endpoint, None);
+    window.start("first question");
+    holding
+        .recv_timeout(PATIENCE)
+        .expect("the turn never reached its second request");
+    // The held request is the one a stop interrupts, so some time has passed in the turn.
+    std::thread::sleep(Duration::from_millis(50));
+    let session = window.session.clone();
+    window.call("turn.cancel", json!({"session": session}));
+    let stopped = window.ended();
+    assert_eq!(stopped["data"]["kind"], "cancelled", "{stopped}");
+    drop(window);
+
+    let saved = record(&scratch.home());
+    assert_eq!(saved["tokens"], 107, "{saved}");
+    assert_eq!(saved["spend"], json!({"1": 107}), "{saved}");
+    assert_eq!(
+        saved["split"],
+        json!({"read": 100, "written": 7}),
+        "the stopped turn's tokens were not divided as the service counted them: {saved}"
+    );
+    let wall = saved["timing"]["1"]["wall_ms"].as_u64().unwrap_or(0);
+    assert!(wall >= 50, "no wall time was recorded: {saved}");
+    assert_eq!(
+        saved["todos"]["1"][0]["content"], "write the plan",
         "{saved}"
     );
 }

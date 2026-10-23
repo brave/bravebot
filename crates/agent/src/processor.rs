@@ -100,7 +100,9 @@ pub struct Chat<'a> {
     ///
     /// The planner's model, deliberately: a processor is doing the turn's work on the turn's
     /// behalf, and quietly running it on something else would make the choice mean less than it
-    /// appears to.
+    /// appears to. The one thing that moves a processor off it is the model the person named for
+    /// processors, in the `processorModel` setting or with `--processor-model`, which [`run`]
+    /// resolves and says so when it is answered otherwise (PROC-13).
     pub model: Option<&'a str>,
     /// The turn's stop, where this call is part of a turn that can be stopped.
     ///
@@ -111,6 +113,41 @@ pub struct Chat<'a> {
 }
 
 impl<'a> Chat<'a> {
+    /// A chat on the configured default model, with no subscription and no stop.
+    ///
+    /// The other fields are added with [`Chat::on`], [`Chat::stoppable_by`] and
+    /// [`Chat::spending`]. This only gathers references and decides nothing.
+    pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
+        Self {
+            config,
+            egress,
+            subscription: None,
+            model: None,
+            cancel: None,
+        }
+    }
+
+    /// Runs the call on `model`, where the user chose one. `None` keeps the configured default.
+    #[must_use]
+    pub fn on(mut self, model: Option<&'a str>) -> Self {
+        self.model = model;
+        self
+    }
+
+    /// Lets the turn's stop end the call.
+    #[must_use]
+    pub fn stoppable_by(mut self, cancel: &'a bravebot_core::cancel::Cancel) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Spends the turn's subscription on the call, where the turn has one.
+    #[must_use]
+    pub fn spending<T: Subscription>(mut self, subscription: Option<&'a mut T>) -> Self {
+        self.subscription = subscription.map(|s| s as &mut dyn Subscription);
+        self
+    }
+
     /// The client for one call on `model`, carrying the turn's stop and its tier.
     pub(crate) fn backend(&mut self, model: &str) -> crate::backend::Backend<'_> {
         let mut client = crate::backend::Backend::select(self.config, self.egress, model);
@@ -131,10 +168,14 @@ pub struct Processed {
     /// `None` where the answer never said which part of it was a file. Nothing it wrote can be
     /// written anywhere in that case, which is the safe direction to fail in.
     pub document: Option<Labelled<String>>,
-    /// What it wanted to say about what it did. Goes to the person watching and no further.
+    /// What it wanted to say about what it did. Goes to the person watching and no further, and in a
+    /// manifest run stands as the answer for a slot only an answer reads.
     pub note: Option<Labelled<String>>,
     /// The model the server reported using, which may differ from the one asked for.
     pub model: String,
+    /// The processor model the person wrote, where the call ran on it and a different model
+    /// answered (PROC-13). `None` otherwise, including where the person named none.
+    pub substituted: Option<String>,
     /// What the run cost, so a turn can report the whole of what it spent.
     pub usage: Usage,
 }
@@ -145,6 +186,8 @@ pub enum ProcessorError {
     Denied(Denial),
     /// The call failed or was refused in transit.
     Chat(crate::backend::BackendError),
+    /// The model the person named for processors cannot be used, so nothing was sent (PROC-13).
+    Model(crate::compact::SideModelRefusal),
 }
 
 impl fmt::Display for ProcessorError {
@@ -152,6 +195,11 @@ impl fmt::Display for ProcessorError {
         match self {
             Self::Denied(d) => write!(f, "{d}"),
             Self::Chat(e) => write!(f, "{e}"),
+            // Rendered by the reporting surface, since a person reads this sentence and it names
+            // the key to correct.
+            Self::Model(refusal) => {
+                write!(f, "{}", crate::report::processor_model_refusal(refusal))
+            }
         }
     }
 }
@@ -183,6 +231,17 @@ pub fn run<S: Sink>(
     slots: &SlotStore,
     spec: &ProcessorSpec,
 ) -> Result<Processed, ProcessorError> {
+    // `processorModel` or `--processor-model` where either names one, and the turn's own model
+    // otherwise (PROC-13). One that cannot be used refuses the call: a name chosen to cap what bulk
+    // rewriting costs is not swapped for the planner's model. Asked before the input is assembled,
+    // so a refused call leaves no entry in the trail saying content was carried to a model.
+    let configured = chat.config.processor();
+    let named = configured.is_some();
+    let model =
+        crate::compact::named_model_or_session(chat.config, chat.egress, configured, chat.model)
+            .map_err(ProcessorError::Model)?;
+    let model = model.as_ref();
+
     // Assembled inside the kernel, so the bytes are never in a variable this function could
     // examine. What comes back is wrapped and stays wrapped until the line that hands it over.
     let input = policy.compose_processor_input(spec, slots)?;
@@ -231,7 +290,7 @@ pub fn run<S: Sink>(
 
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
     // below adds to it.
-    let model = chat.model.unwrap_or(&chat.config.default_model);
+    policy.record_processor_model(spec.id(), model);
     // The content is given up once this answers, so nothing asks for a cache of it: a processor
     // is asked once, about pieces assembled for this call alone. The instructions in front of them
     // keep their mark, being the same bytes every time this spec runs.
@@ -245,9 +304,20 @@ pub fn run<S: Sink>(
     let completion = client.complete_streaming(policy, &request, |_| {})?;
 
     let produced = policy.label_processor_output(spec, completion.content, slots);
+    // Compared as a delegate's model is (DELEGATE-22): against the name that was sent, and never
+    // where the name is a handle the reply resolves. Said only for a model the person named, since the turn's
+    // own model is reported by the turn.
+    let asked = crate::backend::Backend::name_as_asked(chat.config, model);
+    let substituted = (named
+        && crate::backend::Backend::reports_the_model_it_was_asked_for(chat.config, model)
+        && asked != bravebot_config::DEFAULT_MODEL
+        && asked != completion.model)
+        .then(|| chat.config.processor_model.clone())
+        .flatten();
     Ok(Processed {
         document: produced.document,
         note: produced.note,
+        substituted,
         model: completion.model,
         usage: completion.usage,
     })
@@ -306,13 +376,9 @@ mod tests {
         let egress = Egress::new();
         let stop = Cancel::new();
         let mut subscription = TheTurns;
-        let mut chat = Chat {
-            config: &config,
-            egress: &egress,
-            subscription: Some(&mut subscription),
-            model: None,
-            cancel: Some(&stop),
-        };
+        let mut chat = Chat::new(&config, &egress)
+            .spending(Some(&mut subscription))
+            .stoppable_by(&stop);
 
         let Backend::Aichat {
             cancel,
@@ -339,13 +405,9 @@ mod tests {
         let config = brave_and_a_gateway();
         let egress = Egress::new();
         let stop = Cancel::new();
-        let mut chat = Chat {
-            config: &config,
-            egress: &egress,
-            subscription: None,
-            model: Some(DEFAULT_MODEL),
-            cancel: Some(&stop),
-        };
+        let mut chat = Chat::new(&config, &egress)
+            .on(Some(DEFAULT_MODEL))
+            .stoppable_by(&stop);
 
         assert!(matches!(
             chat.backend(GATEWAY_MODEL),

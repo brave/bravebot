@@ -1,5 +1,5 @@
 import type { ViewState } from './view.js'
-import type { JsonValue, SessionViewCapability } from './wire.js'
+import type { JsonValue, SessionViewCapability, Status } from './wire.js'
 
 /** What the runtime says about itself. The state-directory path `agent.info` carries is dropped. */
 export interface TargetInfo {
@@ -10,6 +10,22 @@ export interface TargetInfo {
   sessionView: SessionViewCapability
   /** Whether the runtime names what a cancel is for, so a late cancel cannot stop a later turn. */
   actionTargets: boolean
+  /** Whether `listSessions` and `openSession` work on this target. */
+  sessionList: boolean
+}
+
+/** One session a target can list. What it shows is the target's own account, not a reading of row content. */
+export interface SessionSummary {
+  id: string
+  /** The id of a workspace from `workspaces()`. */
+  workspace: string
+  /** The text the person first sent, or null before they sent any. */
+  firstPrompt: string | null
+  status: Status
+  /** Whether a question is waiting for an answer. */
+  waiting: boolean
+  /** Whether the session's view has ended. */
+  ended: boolean
 }
 
 export interface SendResult {
@@ -79,6 +95,10 @@ export interface AgentClient {
   workspaces(): readonly { id: string; name: string }[]
   /** Open a fresh session in a configured workspace. An unknown id is refused without sending. */
   createSession(options: { workspace: string }): Promise<AgentSession>
+  /** The target's sessions, newest first. Rejects with `UnsupportedError` unless `describe()` reports `sessionList`. */
+  listSessions(): Promise<readonly SessionSummary[]>
+  /** The listed session with this id. Rejects with `UnsupportedError` unless `describe()` reports `sessionList`. */
+  openSession(id: string): Promise<AgentSession>
   /** Operations a later stage adds. They fail locally and send nothing. */
   unsupported(operation: 'attach' | 'takeControl' | 'messageStatus'): Promise<never>
 }

@@ -59,6 +59,13 @@
 //! field, and an older one that read past it would report as an open finding something the newer
 //! build would not.
 //!
+//! # A record is removed when it has not been written for the retention period
+//!
+//! [`remove_unwritten_since`] removes a record file whose modification time is before a cutoff, and
+//! leaves the acceptances beside them: an acceptance carries an expiry of its own, and one removed
+//! before it would report a finding open that a person had accepted. The age is the file's
+//! modification time and nothing it holds, so no byte of a finding decides whether it is kept.
+//!
 //! # Nothing here may fail a turn
 //!
 //! No home directory, a full disk, a read-only state directory: each means the record does not
@@ -90,6 +97,22 @@ pub fn now_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(u64::MAX, |elapsed| elapsed.as_secs())
+}
+
+/// Remove the record files under `home` that have not been written since `cutoff`, returning how
+/// many went.
+///
+/// `home` is the state directory itself. Only a plain file directly inside `findings` is a record:
+/// the directory of acceptances and anything that is not a file are left where they are, and a link
+/// standing as `findings`, or as an entry in it, is stepped over rather than followed, because where
+/// it leads is outside the directory this was given. A file whose time is not before the cutoff
+/// stays, which includes one stamped in the future by a clock that was wrong when it was written. A
+/// removal that fails costs that file and nothing more.
+pub fn remove_unwritten_since(home: &Path, cutoff: std::time::SystemTime) -> usize {
+    crate::home::files_unwritten_since(&home.join(FINDINGS), cutoff)
+        .into_iter()
+        .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
+        .count()
 }
 
 /// Whether this session may add a line to a record.
@@ -525,6 +548,124 @@ mod tests {
         scratch.store("/work").record(&[&finding], Some("first"));
 
         assert_eq!(scratch.store("/work").recorded(), [finding]);
+    }
+
+    /// Set a file's modification time to `days` ago, standing in for the last write that long ago.
+    fn written_days_ago(path: &Path, days: u64) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open the file")
+            .set_modified(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400),
+            )
+            .expect("age the file");
+    }
+
+    fn thirty_days_ago() -> std::time::SystemTime {
+        std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86_400)
+    }
+
+    /// STATE-4: a record not written for longer than the period is removed and one written inside it
+    /// is kept, so the sweep is told apart from one that empties the directory.
+    #[test]
+    fn a_record_older_than_the_period_is_removed_and_a_newer_one_is_kept() {
+        let scratch = Scratch::new("findings-retention-age");
+        let finding = found("config.yml", 1);
+        let old = scratch.store("/old");
+        let new = scratch.store("/new");
+        old.record(&[&finding], None);
+        new.record(&[&finding], None);
+        written_days_ago(old.path(), 40);
+        written_days_ago(new.path(), 3);
+
+        let removed = remove_unwritten_since(&scratch.path, thirty_days_ago());
+
+        assert_eq!(removed, 1);
+        assert!(
+            !old.path().exists(),
+            "a record unwritten for forty days was kept"
+        );
+        assert_eq!(
+            new.recorded(),
+            [finding],
+            "a record from three days ago was removed"
+        );
+    }
+
+    /// STATE-4: an acceptance has an expiry of its own, so the sweep leaves it. One removed early
+    /// would report as open a finding a person had accepted.
+    #[test]
+    fn an_acceptance_is_left_where_it_is_whatever_its_age() {
+        let scratch = Scratch::new("findings-retention-accepted");
+        let finding = found("config.yml", 1);
+        let store = scratch.store("/work");
+        store.record(&[&finding], None);
+        store
+            .accept(&finding, "a development key", u64::MAX)
+            .expect("accepted");
+        written_days_ago(&store.path, 400);
+        written_days_ago(&store.accepted_path, 400);
+
+        remove_unwritten_since(&scratch.path, thirty_days_ago());
+
+        assert!(!store.path.exists());
+        assert!(
+            store.accepted_path.is_file(),
+            "an acceptance was removed by age before its expiry"
+        );
+    }
+
+    /// STATE-1: removal stops at the state directory and steps over links. A link standing as the
+    /// directory of records, or as one record, leads to something this was not given.
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_does_not_follow_a_link_out_of_the_state_directory() {
+        let scratch = Scratch::new("findings-retention-link");
+        let elsewhere = scratch.path.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).expect("a directory outside");
+        let theirs = elsewhere.join("theirs.jsonl");
+        std::fs::write(&theirs, "somebody's own").expect("write");
+        written_days_ago(&theirs, 400);
+
+        let state = scratch.path.join("state");
+        std::fs::create_dir_all(state.join(FINDINGS)).expect("findings");
+        std::os::unix::fs::symlink(&theirs, state.join(FINDINGS).join("linked.jsonl"))
+            .expect("link a record");
+        assert_eq!(remove_unwritten_since(&state, thirty_days_ago()), 0);
+        assert!(
+            theirs.is_file(),
+            "a file outside was removed through a link"
+        );
+
+        let linked_state = scratch.path.join("linked-state");
+        std::fs::create_dir_all(&linked_state).expect("state");
+        std::os::unix::fs::symlink(&elsewhere, linked_state.join(FINDINGS))
+            .expect("link the directory of records");
+        assert_eq!(remove_unwritten_since(&linked_state, thirty_days_ago()), 0);
+        assert!(
+            theirs.is_file(),
+            "a directory outside was swept through a link"
+        );
+    }
+
+    /// STATE-4: only a record file is removed. A directory in the place of one is not a file this
+    /// build wrote.
+    #[test]
+    fn a_directory_among_the_records_is_left_where_it_is() {
+        let scratch = Scratch::new("findings-retention-directory");
+        let held = scratch.path.join(FINDINGS).join("held.jsonl");
+        std::fs::create_dir_all(&held).expect("a directory by a record's name");
+        std::fs::write(held.join("inside"), "somebody's own").expect("write");
+
+        assert_eq!(
+            remove_unwritten_since(
+                &scratch.path,
+                std::time::SystemTime::now() + std::time::Duration::from_secs(60)
+            ),
+            0
+        );
+        assert!(held.join("inside").is_file());
     }
 
     /// CRED-19: a key standing as a whole file is recorded as that, not dropped or read back as a

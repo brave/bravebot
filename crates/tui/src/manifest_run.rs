@@ -55,6 +55,7 @@ impl Run {
             ToMain::Narration(text) => session.narrate(text),
             ToMain::Notice(text) => session.note_once(text),
             ToMain::Streaming(text) => session.streaming(&text),
+            ToMain::Thinking(text) => session.thinking(&text),
             ToMain::Composing(call) => session.composing(call),
             ToMain::Started(activity) => session.start_activity(activity),
             ToMain::Finished(activity) => session.finish_activity(activity),
@@ -81,6 +82,9 @@ impl Run {
     ) -> Option<String> {
         let usage = sessions::manifest_usage(outcome, self.retained);
         session.end_run(usage.map_or(0, |s| s.tokens), usage.map(|s| s.timing));
+        if let Some(spent) = usage {
+            session.charged_split(spent.tokens, spent.output_tokens);
+        }
         if outcome.is_err() && cancel.is_cancelled() {
             None
         } else {
@@ -103,5 +107,51 @@ pub fn save_session(stored: &mut Handle, standing: Standing<'_>, events: &[Stamp
         let turns = standing.turns;
         stored.save(&title, standing);
         stored.append_audit(turns, events);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A run the person stopped is charged what its completed requests cost and writes no record,
+    /// and the charge says how it divided: a run charged to the total alone would leave its tokens
+    /// out of both columns of `stats`.
+    #[test]
+    fn a_stopped_run_is_charged_with_the_split_of_its_latest_report() {
+        let mut session = Session::new("none");
+        let mut run = Run::default();
+        for (tokens, written) in [(40, 5), (90, 25)] {
+            let held = run.progress(
+                &mut session,
+                ToMain::Spent(Spent {
+                    tokens,
+                    output_tokens: written,
+                    ..Default::default()
+                }),
+            );
+            assert!(held.is_none());
+        }
+        let cancel = Cancel::new();
+        cancel.cancel();
+
+        let recorded = run.complete(
+            &mut session,
+            Path::new("/work"),
+            "summarise",
+            &Err(TurnError::Cancelled { attempts: None }),
+            &cancel,
+        );
+
+        assert!(recorded.is_none(), "a stopped run was written down");
+        assert_eq!(session.tokens, 90);
+        assert_eq!(
+            session.split(),
+            sessions::Split {
+                read: 65,
+                written: 25
+            },
+            "the split was not the latest report's"
+        );
     }
 }

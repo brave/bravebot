@@ -34,6 +34,21 @@ impl Catalog {
         }
     }
 
+    /// The first message of this catalog that selects on a plural in a language `known` has no
+    /// rule for.
+    ///
+    /// The build script refuses to generate anything while this is `Some`: a select in such a
+    /// language would be formed by some other language's rule (LOCALE-5). `known` is passed in
+    /// because the build script and the crate reach the plural rules by different paths.
+    pub fn select_without_a_plural_rule(&self, known: impl Fn(&str) -> bool) -> Option<&Message> {
+        if known(&self.language) {
+            return None;
+        }
+        self.messages
+            .values()
+            .find(|message| matches!(message.value, Value::Select { .. }))
+    }
+
     /// The message itself. A catalog `words_for` answered with has it, by construction.
     fn message(&self, id: &str) -> &Message {
         self.messages
@@ -301,6 +316,39 @@ mod tests {
         assert!(
             arm(&generated, "EnUs").contains(r#"category("en", rounds.get())"#),
             "the reference stopped being formed by its own rules:\n{generated}"
+        );
+    }
+
+    /// A language nothing writes a plural rule for would have its select formed by another
+    /// language's rule, so the build refuses it. A catalog that only has plain messages, or whose
+    /// language has a rule, is let through.
+    #[test]
+    fn a_select_in_a_language_with_no_plural_rule_is_found() {
+        let known = crate::plural::is_known;
+
+        let unwritten = catalog("qq", ROUNDS);
+        let found = unwritten
+            .select_without_a_plural_rule(known)
+            .expect("a select in a language with no rule was let through");
+        assert_eq!(found.id, "rounds");
+
+        assert!(
+            catalog("qq", "greeting = hello\n")
+                .select_without_a_plural_rule(known)
+                .is_none(),
+            "a language with no rule was refused for a message that counts nothing"
+        );
+        assert!(
+            catalog("fr", ROUNDS_IN_FRENCH)
+                .select_without_a_plural_rule(known)
+                .is_none(),
+            "a language with a rule was refused"
+        );
+        assert!(
+            catalog("en-US", ROUNDS)
+                .select_without_a_plural_rule(known)
+                .is_none(),
+            "the reference was refused"
         );
     }
 

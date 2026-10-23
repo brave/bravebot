@@ -112,7 +112,20 @@ pub fn side_request_model<'a>(
     egress: &bravebot_net::Egress,
     session_model: Option<&'a str>,
 ) -> Result<std::borrow::Cow<'a, str>, SideModelRefusal> {
-    let Some(named) = config.summary() else {
+    named_model_or_session(config, egress, config.summary(), session_model)
+}
+
+/// The model a call runs on: `named`, resolved, where it names one, and the session's own otherwise.
+///
+/// The question [`side_request_model`] puts for `summaryModel`, with the name passed in so a second
+/// setting is held to the same answers (PROC-13).
+pub fn named_model_or_session<'a>(
+    config: &'a bravebot_config::Config,
+    egress: &bravebot_net::Egress,
+    named: Option<String>,
+    session_model: Option<&'a str>,
+) -> Result<std::borrow::Cow<'a, str>, SideModelRefusal> {
+    let Some(named) = named else {
         return Ok(std::borrow::Cow::Borrowed(
             session_model.unwrap_or(&config.default_model),
         ));
@@ -136,7 +149,8 @@ pub fn side_request_model<'a>(
     }
 }
 
-/// Why the model `summaryModel` named cannot be the one a side request runs on.
+/// Why the model a setting named, `summaryModel` or `processorModel`, cannot be the one a call runs
+/// on.
 ///
 /// Each holds the resolved name. A named type rather than the name alone, so a `?` added later over
 /// some other `Result<_, String>` cannot be read as one of these.
@@ -436,15 +450,10 @@ mod tests {
     ///
     /// The refusal itself goes through the same `backend::serving` call `--model` and `--advisor`
     /// are put through, so a name means the same model wherever it was written down. The
-    /// `NothingConfigured` arm of that call depends on premium-subscription discovery reading this
-    /// machine's own files, which a unit test cannot stand up without reaching outside itself; the
-    /// sibling arm, `Refused`, is pinned below and comes from the same call, so what is pinned here
-    /// is the mapping and the message rather than the classification.
-    ///
-    /// The classification was observed instead. With `summaryModel` naming a model nothing serves,
-    /// the request went out, a model answered without the exchange, and `/goal` cleared the goal
-    /// reporting "the state of the task is unknown"; with the key unset the same exchange was judged
-    /// met. `doctor` reported the same value under `model` and said nothing under `summaryModel`.
+    /// classification of a name nothing serves is pinned by
+    /// `a_summary_model_no_configured_service_answers_for_is_refused_rather_than_sent`, and this
+    /// test pins the mapping and the message. A summary or a verdict written without the exchange
+    /// reads as an answer, so the refusal has to name the value the key holds.
     #[test]
     fn a_summary_model_nothing_serves_is_named_in_the_refusal_it_causes() {
         let said = CompactError::from(SideModelRefusal::NotServed(
@@ -472,6 +481,45 @@ mod tests {
             )
             .expect("absent"),
             "a-session-model"
+        );
+    }
+
+    /// COMPACT-15, GOAL-19: a name no configured service answers for is refused rather than sent.
+    ///
+    /// Brave's own endpoint with no premium host, no gateway and no AWS account is a build that
+    /// nothing answers for. The same name against a deployment of the person's own is answered
+    /// for, so whether the name is refused follows the configuration.
+    #[test]
+    fn a_summary_model_no_configured_service_answers_for_is_refused_rather_than_sent() {
+        let mut config = bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com".into()),
+            _ => None,
+        })
+        .expect("configured");
+        config.summary_model = Some("a-model-nobody-has".to_string());
+
+        assert_eq!(
+            side_request_model(
+                &config,
+                &bravebot_net::Egress::new(),
+                Some("a-session-model")
+            )
+            .expect_err("a model nothing answers for must be refused"),
+            SideModelRefusal::NotServed("a-model-nobody-has".to_string()),
+            "the name was not refused as one no configured service answers for"
+        );
+
+        config.endpoint = "https://example.invalid".to_string();
+        assert_eq!(
+            side_request_model(
+                &config,
+                &bravebot_net::Egress::new(),
+                Some("a-session-model")
+            )
+            .expect("a deployment of the person's own answers for any name"),
+            "a-model-nobody-has"
         );
     }
 

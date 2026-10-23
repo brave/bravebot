@@ -28,6 +28,12 @@ fn main() {
     // memory from the first turn, and a crash after this writes no image of it. See CRED-23.
     let _ = bravebot_agent::crash::disable_core_dumps();
 
+    // The desktop window is in English only, so the notes this process builds for it are too,
+    // whatever the machine's language: a French note in an English window reads as a fault. The
+    // terminal chooses from the environment instead (LOCALE-7). This is the one choice, made before
+    // anything is said.
+    bravebot_i18n::init(bravebot_i18n::Locale::EnUs);
+
     // Not a security decision. The only argument is `--settings <path>`, which names a
     // settings file for a developer driving this by hand, and what that file may then grant
     // is decided by the policy layer rather than here. Nothing is authorised by an argument.
@@ -51,6 +57,10 @@ fn main() {
     // network its programs keep, for the lists of paths a person wrote and for the hosts a stage is
     // held to. Nothing in a window sets them. See SANDBOX-20, SANDBOX-25 and SANDBOX-24.
     bravebot_ui_bridge::settings::settle_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
+    );
+    bravebot_ui_bridge::settings::start_the_sweep_for_process(
         std::env::current_dir().ok().as_deref(),
         settings.as_deref(),
     );
@@ -95,10 +105,13 @@ fn main() {
         }
     }
 
-    // EOF on stdin. Anything waiting on an answer from a front-end that has gone away is
-    // refused, which is what dropping the bridge does: a channel that cannot carry the
-    // question cannot carry consent either.
-    drop(bridge);
+    // EOF on stdin. Every session is closed, which refuses anything waiting on an answer from a
+    // front-end that has gone away: a channel that cannot carry the question cannot carry consent
+    // either. Closing is also what fires `session-ended`, so the process waits a few seconds for it
+    // and for the turns still writing their records, as the host does.
+    if !bridge.shut_down(std::time::Duration::from_secs(10)) {
+        eprintln!("bravebot-rpc: some sessions were still working when the process stopped");
+    }
 }
 
 /// Write one line, or give up on writing altogether.

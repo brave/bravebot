@@ -10,7 +10,7 @@ use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{ExitCode, Stdio};
 
 /// The first file name tried, and the stem of the numbered ones after it.
 const NAME: &str = "bravebot-bug-report";
@@ -79,13 +79,16 @@ fn report(
 /// `doctor`, run as this program started again, with nothing on its standard input.
 fn doctor() -> Said {
     // The report is of this same program; nothing is trusted from where it says it is.
-    // nosemgrep: rust.lang.security.current-exe.current-exe
-    let me = std::env::current_exe().ok()?;
-    let output = Command::new(me)
-        .arg("doctor")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+    let me = bravebot_sandbox::programs::Resolved::own_executable().ok()?;
+    let output = bravebot_sandbox::programs::start(
+        &me,
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    )
+    .arg("doctor")
+    .stdin(Stdio::null())
+    .output()
+    .ok()?;
     Some((
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),

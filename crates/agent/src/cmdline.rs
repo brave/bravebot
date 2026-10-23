@@ -221,6 +221,8 @@ pub enum Reason {
     ControlFlow(&'static str),
     /// An unquoted `!`.
     HistoryExpansion,
+    /// An unquoted `(` or `)` written onto the end of an argument.
+    Parenthesis(char),
     /// A descriptor duplication other than `2>&1`.
     Descriptor,
     /// A redirection numbered anything but 2.
@@ -261,17 +263,17 @@ impl fmt::Display for Reason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CommandSubstitution => f.write_str(
-                "a command whose text is computed is a destination nobody saw. Write the value out",
+                "a command whose text is computed is a destination nobody saw. Write the value out, or pass the text as one literal argument in single quotes, as when handing a script to `sh -c`",
             ),
             Self::ProcessSubstitution => f.write_str(
                 "process substitution names a file descriptor nobody named. Use a pipe, or a file",
             ),
             Self::Variable => f.write_str(
-                "the value is not in the line, so the plan would not be in the line. Write the value out",
+                "the value is not in the line, so the plan would not be in the line. Write the value out, or put a literal `$` in single quotes or write it as `\\$`",
             ),
-            Self::Arithmetic => {
-                f.write_str("arithmetic is a language, and a language needs an interpreter")
-            }
+            Self::Arithmetic => f.write_str(
+                "arithmetic is a language, and a language needs an interpreter. To hand the text to one, pass it as one literal argument in single quotes, as when handing a script to `sh -c`",
+            ),
             Self::Background => f.write_str(
                 "backgrounding is a parameter of the call rather than a token in the line",
             ),
@@ -287,6 +289,10 @@ impl fmt::Display for Reason {
             }
             Self::HistoryExpansion => f.write_str(
                 "an unquoted `!` is history expansion. Quote it where you mean the character",
+            ),
+            Self::Parenthesis(c) => write!(
+                f,
+                "an unquoted `{c}` is grouping. Quote the whole argument where you mean the character"
             ),
             Self::Descriptor => {
                 f.write_str("`2>&1` is the only descriptor duplication this grammar has")
@@ -830,7 +836,13 @@ impl<'a> Scan<'a> {
                             }
                             // Expansion inside double quotes is still expansion, so the same
                             // refusal applies as outside them.
-                            Some('$') => return Err(self.dollar()),
+                            Some('$') if self.opens_expansion(true) => {
+                                return Err(self.dollar());
+                            }
+                            Some('$') => {
+                                text.push('$');
+                                self.bump();
+                            }
                             Some('`') => return Err(self.backtick()),
                             Some('\\') => {
                                 self.bump();
@@ -875,7 +887,11 @@ impl<'a> Scan<'a> {
                         }
                     }
                 }
-                '$' => return Err(self.dollar()),
+                '$' if self.opens_expansion(false) => return Err(self.dollar()),
+                '$' => {
+                    text.push('$');
+                    self.bump();
+                }
                 '`' => return Err(self.backtick()),
                 '!' => {
                     self.bump();
@@ -944,6 +960,25 @@ impl<'a> Scan<'a> {
             pieces.push(Piece::Text(String::new()));
         }
         Ok(pieces)
+    }
+
+    /// Whether the `$` at the cursor begins an expansion, as a POSIX shell reads it.
+    ///
+    /// A `$` followed by anything else, or by nothing, is an ordinary character and nothing is
+    /// computed, so `grep -E "x$"` passes the anchor through. `$'…'` and `$"…"` are quoting forms
+    /// outside double quotes, so they stay refused there; inside double quotes the quote after a
+    /// `$` is just text (or the end of the string).
+    fn opens_expansion(&self, in_double_quotes: bool) -> bool {
+        match self.ahead(1) {
+            Some(c)
+                if c.is_alphanumeric()
+                    || matches!(c, '_' | '{' | '(' | '@' | '*' | '#' | '?' | '-' | '$' | '!') =>
+            {
+                true
+            }
+            Some('\'' | '"') => !in_double_quotes,
+            _ => false,
+        }
     }
 
     /// A refusal for the `$` at the cursor, naming what it opened.
@@ -1131,6 +1166,26 @@ impl<'a> Parser<'a> {
         refuse(self.line, span, reason)
     }
 
+    /// The refusal for a `(`, or a `)` that closes no group, written straight onto the end of an
+    /// argument or a redirection's target, as in `--format=%h(%G?)`. Such a character is meant as
+    /// part of that word, and quoting the word is the repair. One after a space could equally be an
+    /// attempt at a group, and one after the program's own name a definition or a call, so those
+    /// keep the general refusal.
+    fn parenthesis_in_argument(&self, program: &Word) -> Option<Refused> {
+        let Some(Tok::Word(word)) = self.at.checked_sub(1).and_then(|at| self.tokens.get(at))
+        else {
+            return None;
+        };
+        let next = self.peek()?;
+        let character = match next {
+            Tok::Open(_) => '(',
+            Tok::Close(_) if self.nesting == 0 => ')',
+            _ => return None,
+        };
+        (word.span.end == next.span().start && word.span != program.span)
+            .then(|| self.refuse(next.span(), Reason::Parenthesis(character)))
+    }
+
     /// The end of the line, for a span pointing at something that is not there.
     fn tail(&self) -> Span {
         Span::new(self.line.len(), self.line.len())
@@ -1313,6 +1368,9 @@ impl<'a> Parser<'a> {
             if let Some(found) = CONTROL_FLOW.iter().find(|word| **word == name) {
                 return Err(self.refuse(program.span, Reason::ControlFlow(found)));
             }
+        }
+        if let Some(refused) = self.parenthesis_in_argument(program) {
+            return Err(refused);
         }
 
         Ok(Command {
@@ -1866,6 +1924,51 @@ pub fn compile(
         reads: compiler.reads,
         stdin: None,
     })
+}
+
+/// The plan as the planner is told it, which is what a person is shown with each operand put back
+/// as the line wrote it.
+///
+/// A pattern in the line is replaced by the names it matched when the line is compiled, and those
+/// names come out of a directory nobody may have vouched for, so a sentence addressed to the planner
+/// cannot spell them ([CMDLINE-4]). The program is still named as the person was shown it (RUN-2).
+/// A plan whose steps this walk cannot pair with the line's commands is told as the line itself,
+/// which is the planner's own text.
+///
+/// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+pub fn display_as_written(plan: &Plan) -> String {
+    let Ok(node) = parse(&plan.line) else {
+        return plan.line.clone();
+    };
+    let mut written = Vec::new();
+    operands_as_written(&node, &mut written);
+    plan.steps
+        .display_with_operands(&written)
+        .unwrap_or_else(|| plan.line.clone())
+}
+
+/// Each command's operands as the line spelled them, in the order the compiler builds its steps.
+fn operands_as_written(node: &Node, out: &mut Vec<Vec<String>>) {
+    let command = |command: &Command, out: &mut Vec<Vec<String>>| {
+        out.push(
+            command.words[1..]
+                .iter()
+                .map(|word| match word.pieces.iter().any(is_pattern) {
+                    true => render(&word.pieces),
+                    false => bravebot_core::command::quoted(&render(&word.pieces)),
+                })
+                .collect(),
+        );
+    };
+    match node {
+        Node::Command(one) => command(one, out),
+        Node::Pipeline(commands) => commands.iter().for_each(|one| command(one, out)),
+        Node::Join { left, right, .. } => {
+            operands_as_written(left, out);
+            operands_as_written(right, out);
+        }
+        Node::Group(inner) => operands_as_written(inner, out),
+    }
 }
 
 /// One compile in progress: where it runs, and what the plan has named so far.
@@ -2438,6 +2541,69 @@ mod tests {
         assert_eq!(refused("ls ${HOME}").reason, Reason::Variable);
     }
 
+    /// A `$` that names nothing is an ordinary character, as in a POSIX shell, so a regex end
+    /// anchor in a double-quoted pattern reaches the program. Refusing it sent the planner to
+    /// retry without the anchor, which selects different lines.
+    #[test]
+    fn a_dollar_that_names_nothing_is_an_ordinary_character() {
+        assert_eq!(argv(r#"grep -E "x$" f"#), ["grep", "-E", "x$", "f"]);
+        assert_eq!(argv(r#"grep -E "x$|^$" f"#), ["grep", "-E", "x$|^$", "f"]);
+        assert_eq!(argv(r#"grep -E "FAILED$""#), ["grep", "-E", "FAILED$"]);
+        assert_eq!(argv(r#"grep -E "a$ b" f"#), ["grep", "-E", "a$ b", "f"]);
+        assert_eq!(argv("grep x$ f"), ["grep", "x$", "f"]);
+        assert_eq!(argv("echo $"), ["echo", "$"]);
+    }
+
+    /// What follows a `$` still decides: a name, a brace, a parenthesis, a special parameter, or
+    /// outside double quotes a quote, each stays refused, in or out of quotes.
+    #[test]
+    fn a_dollar_that_opens_an_expansion_is_still_refused() {
+        for line in [
+            r#"echo "$HOME""#,
+            r#"echo "a$_b""#,
+            r#"echo "$1""#,
+            r#"echo "$?""#,
+            r#"echo "$@""#,
+            r#"echo "${HOME}""#,
+            r#"echo "$$""#,
+            "echo $'a'",
+            r#"echo $"a""#,
+            "echo $?",
+        ] {
+            assert_eq!(refused(line).reason, Reason::Variable, "{line}");
+        }
+        assert_eq!(
+            refused(r#"echo "$(ls)""#).reason,
+            Reason::CommandSubstitution
+        );
+        assert_eq!(refused(r#"echo "$((1))""#).reason, Reason::Arithmetic);
+    }
+
+    /// The refusals that remain say how to write a literal `$`, since the planner cannot guess it.
+    #[test]
+    fn the_variable_refusal_names_the_quoting_that_works() {
+        let said = Reason::Variable.to_string();
+        assert!(
+            said.contains("single quotes") && said.contains("\\$"),
+            "{said}"
+        );
+    }
+
+    /// A script for `sh -c` is the usual reason for a `$(` in an argument, and single quotes pass it.
+    #[test]
+    fn the_substitution_and_arithmetic_refusals_name_single_quotes() {
+        for reason in [Reason::CommandSubstitution, Reason::Arithmetic] {
+            let said = reason.to_string();
+            assert!(said.contains("single quotes"), "{said}");
+        }
+        for line in [
+            "sh -c 'for i in $(seq 1 3); do echo x; done'",
+            "sh -c 'echo $((1+1))'",
+        ] {
+            parsed(line);
+        }
+    }
+
     #[test]
     fn arithmetic_is_refused() {
         assert_eq!(refused("echo $((1+1))").reason, Reason::Arithmetic);
@@ -2485,6 +2651,59 @@ mod tests {
     #[test]
     fn an_unquoted_exclamation_mark_is_refused() {
         assert_eq!(refused("echo !!").reason, Reason::HistoryExpansion);
+    }
+
+    /// A parenthesis written onto an argument, as in `--format=%h(%G?)`, is grouping to this
+    /// grammar until the argument is quoted. The planner can only quote it if the refusal says
+    /// so, and without that it drops the argument and spends further calls on a plainer command.
+    #[test]
+    fn an_unquoted_parenthesis_written_onto_an_argument_says_to_quote_the_argument() {
+        for (line, character, offset) in [
+            ("git log -1 --format=%h(%G?)", '(', 22),
+            ("(cd src && git log --format=%h(%G?))", '(', 30),
+            ("echo a > out(x)", '(', 12),
+            ("echo a)", ')', 6),
+            ("echo a > out)", ')', 12),
+            ("(echo a) ; echo b)", ')', 17),
+            ("(echo a) && echo b)", ')', 18),
+        ] {
+            let refusal = refused(line);
+            assert_eq!(refusal.reason, Reason::Parenthesis(character), "{line}");
+            assert_eq!(refusal.span.start, offset, "{line}");
+            assert_eq!(refusal.text, character.to_string(), "{line}");
+            let said = refusal.to_string();
+            assert!(
+                said.contains("grouping") && said.contains("Quote the whole argument"),
+                "`{line}` was refused without saying to quote the argument: {said}"
+            );
+        }
+        assert_eq!(
+            argv("git log -1 '--format=%h(%G?)'"),
+            ["git", "log", "-1", "--format=%h(%G?)"]
+        );
+    }
+
+    /// Quoting is the repair only for a parenthesis written onto an argument. After a space the
+    /// writer may have meant a group, after the program's own name a definition or a call, and with
+    /// no word before it there is nothing to quote, so these keep the general refusal.
+    #[test]
+    fn a_parenthesis_not_written_onto_an_argument_keeps_the_general_refusal() {
+        for line in [
+            "echo a (b)",
+            "echo a )",
+            "foo()",
+            "FOO=1 foo(x)",
+            ">out foo(x)",
+            "(a) (b)",
+            "(a))",
+            "echo a; )",
+        ] {
+            assert_eq!(
+                refused(line).reason,
+                Reason::Syntax("nothing this could belong to"),
+                "{line}"
+            );
+        }
     }
 
     #[test]
@@ -2974,6 +3193,35 @@ mod tests {
         let tree = Tree::new("quoted");
         tree.file("a.rs");
         assert_eq!(expanded("ls '*.rs'", 1, &tree.root), ["*.rs"]);
+    }
+
+    /// What the planner is told of a line holds each pattern as written in every step of a
+    /// pipeline, a join and a group, and the person's plan holds the names the patterns matched.
+    /// The programs are named as the plan names them in both.
+    #[test]
+    fn a_plan_is_told_to_the_planner_with_each_pattern_as_it_was_written() {
+        let tree = Tree::new("told-as-written");
+        tree.executable("bin/ls")
+            .file("one-HOSTILE.rs")
+            .file("two-HOSTILE.rs");
+        tree.file("a.txt");
+        let line = "./bin/ls *.rs | ./bin/ls -l 'a b' && ( ./bin/ls a.* ; ./bin/ls z?.txt )";
+        let plan = compile(line, &tree.root, None, &mut without_rules).expect("a plan");
+
+        let shown = plan.display();
+        let told = display_as_written(&plan);
+
+        assert!(
+            shown.contains("one-HOSTILE.rs"),
+            "the plan lost the names: {shown}"
+        );
+        assert!(
+            !told.contains("HOSTILE"),
+            "the planner was told a matched name: {told}"
+        );
+        let bin = tree.root.join("bin/ls").display().to_string();
+        let expected = format!("{bin} *.rs | {bin} -l 'a b' && ( {bin} a.* ; {bin} z?.txt )");
+        assert_eq!(told, expected);
     }
 
     /// A compile with no rules in play, which is what a settings file holding none says.

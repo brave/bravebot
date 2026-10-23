@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
+import { oneModelList } from './acceptance-fixture.mjs'
 
 // PAGE in components/Sessions.tsx.
 const PAGE = 100
@@ -53,13 +54,13 @@ try {
   page.setDefaultTimeout(10000)
   const errors = []
   page.on('pageerror', (e) => { errors.push(e.message); console.error('RENDERER', e.message) })
-  await app.evaluate(({ ipcMain, BrowserWindow }, rows) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { rows, models }) => {
     const emit = (event, data, session) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session })
     ipcMain.removeHandler('bravebot:request')
     ipcMain.handle('bravebot:request', async (_, method, p = {}) => {
       if (method === 'agent.info') return { ok: { configured: true, build: 'session list fixture', version: '1' } }
       if (method === 'session.list') return { ok: { sessions: rows } }
-      if (method === 'models.list') return { ok: { defaultModel: 'sample/fast', warnings: [], models: [{ id: 'sample/fast', name: 'Fast model', provider: 'Sample', premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] }] } }
+      if (method === 'models.list') return { ok: models }
       if (method === 'session.open') {
         const record = { ...rows.find((row) => row.id === p.id), started: 1, turns: 0, tokens: 0, build: 'fixture' }
         return { ok: { session: `s-${p.id}`, model: 'sample/fast', record, said: [], todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
@@ -68,7 +69,7 @@ try {
       if (method === 'turn.send') { emit('turn.started', { turn: 1 }, p.session); return { ok: { turn: 1 } } }
       return { ok: {} }
     })
-  }, rows)
+  }, { rows, models: oneModelList })
   await page.setViewportSize({ width: 1350, height: 900 })
   await page.reload()
 

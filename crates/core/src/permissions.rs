@@ -203,6 +203,12 @@ pub struct Rule {
     landed: Vec<Pattern>,
     /// The rule as the list spelled it, trimmed, for a report that names which rule decided.
     written: String,
+    /// Why the person wrote it, where their own settings file said so (PERM-1).
+    ///
+    /// Display text and nothing else. Nothing here reads it, compares it, or matches on it: it is
+    /// set after the rules are read, by whoever held the file, and is only ever handed to a report.
+    /// A rule decides exactly what it decided before one was written.
+    reason: Option<String>,
 }
 
 impl Rule {
@@ -211,6 +217,11 @@ impl Rule {
     /// A rule nobody can act on is dropped rather than guessed at, and the text says which it was
     /// so `doctor` can name it. Guessing would be worse than ignoring: a misread deny rule reads
     /// as protection that is not there.
+    ///
+    /// The line is trimmed, and so is the specifier of every family but `Read` and `Edit`. A path
+    /// specifier with whitespace at an end is not read at all: the whitespace is part of a file's
+    /// name where a path is bytes and as likely padding inside the brackets, and a rule read either
+    /// way would be about a file the person may not have meant ([`Unreadable::WhitespaceAtAnEnd`]).
     pub fn parse(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
         // A rejection names the entry in the spelling the file used, not the trimmed text that was
         // read. Two lines that differ only in surrounding space are two entries somebody has to
@@ -231,6 +242,11 @@ impl Rule {
         &self.written
     }
 
+    /// Why the person wrote it, or `None` where no reason of theirs is attached (PERM-1).
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
     /// [`Rule::parse`] on text with its surrounding space already removed.
     fn parse_trimmed(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
         if text.is_empty() {
@@ -241,13 +257,29 @@ impl Rule {
             None => (text, None),
             Some((name, rest)) => match rest.strip_suffix(')') {
                 None => return Err(Rejected::new(text, Unreadable::UnclosedBracket)),
-                Some(specifier) => (name.trim_end(), Some(specifier.trim())),
+                Some(specifier) => (name.trim_end(), Some(specifier)),
             },
         };
 
         let Some(subject) = Subject::parse(name) else {
             return Err(Rejected::new(text, Unreadable::UnknownFamily));
         };
+
+        let written = specifier;
+        let specifier = specifier.map(str::trim);
+
+        // Whitespace at an end of a path specifier is part of a file's name where a path is bytes
+        // (TRUST-2), and it is as likely padding inside the brackets. Read as the name, a deny rule
+        // typed with padding covers a file nobody meant and the file it was for is left open. Read
+        // as padding, a rule about a file named with whitespace covers the file without it. Neither
+        // is a reading to guess at, so the rule is not read. The other families are words, where
+        // padding says nothing.
+        if subject.takes_a_path()
+            && specifier.is_some_and(|s| !s.is_empty())
+            && written != specifier
+        {
+            return Err(Rejected::new(text, Unreadable::WhitespaceAtAnEnd));
+        }
 
         let pattern = match specifier {
             // A bare family name, and `(*)`, are the same rule and cover every use of it.
@@ -280,6 +312,7 @@ impl Rule {
             pattern,
             landed: Vec::new(),
             written: String::new(),
+            reason: None,
         })
     }
 
@@ -387,9 +420,35 @@ impl Rule {
     ///
     /// `path` arrives already folded where the volume folds case, and the pattern was stored folded
     /// the same way, so the comparison here is byte-exact either way.
-    fn covers_path(&self, path: &str, restricting: bool) -> bool {
+    ///
+    /// A rule that restricts is also matched by canonical equivalence (PERM-7): `canonical` is
+    /// `path` in the one form every equivalent spelling of it shares, and a pattern is brought to
+    /// that form too, so a rule spelled in one Unicode form of a name covers a file stored under
+    /// another. A rule that grants is left as written, since over-covering there would grant a
+    /// file nobody approved on a volume that keeps the two spellings apart.
+    fn covers_path(
+        &self,
+        path: &str,
+        canonical: &str,
+        folds_case: bool,
+        restricting: bool,
+    ) -> bool {
         let absolute = is_absolute_key(path);
         let segments = segments_of(path);
+        let canonical_segments = segments_of(canonical);
+        let covers = |pattern: &PathPattern, anchored: bool| {
+            if anchored != absolute {
+                return false;
+            }
+            if pattern.matches(&segments, restricting) {
+                return true;
+            }
+            restricting
+                && (!path.is_ascii() || !pattern.is_ascii())
+                && pattern
+                    .canonical(folds_case)
+                    .matches(&canonical_segments, restricting)
+        };
         std::iter::once(&self.pattern)
             .chain(&self.landed)
             .any(|pattern| match pattern {
@@ -398,8 +457,8 @@ impl Rule {
                 | Pattern::Domain(_)
                 | Pattern::Server(_)
                 | Pattern::Tool(..) => false,
-                Pattern::Relative(pattern) => !absolute && pattern.matches(&segments, restricting),
-                Pattern::Absolute(pattern) => absolute && pattern.matches(&segments, restricting),
+                Pattern::Relative(pattern) => covers(pattern, false),
+                Pattern::Absolute(pattern) => covers(pattern, true),
             })
     }
 
@@ -459,8 +518,9 @@ impl Rule {
 
 /// A rule that was not one, and what was wrong with it.
 ///
-/// Carries the text so a report can name it. The text came from the user's own settings file, so
-/// there is nothing untrusted in it.
+/// Carries the text so a report can name it. The text is whatever a settings file spelled, and the
+/// project and local layers are a checkout's, so it can hold control characters. A front end that
+/// writes it straight to a terminal pictures them first (LAYER-3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejected {
     pub text: String,
@@ -486,6 +546,10 @@ pub enum Unreadable {
     UnknownFamily,
     /// `Read()`, which says nothing that `Read` alone does not.
     EmptyBrackets,
+    /// A path specifier with whitespace at its start or end, as `Read(./a.md )` or `Read( .env )`.
+    /// The whitespace is part of the name of a file that has it and is as likely padding, so
+    /// neither reading is safe for a rule that refuses.
+    WhitespaceAtAnEnd,
     /// A path rule in a run with no home or settings directory to resolve it against.
     Unanchored,
     /// A `WebFetch` rule whose specifier does not begin `domain:`.
@@ -589,6 +653,27 @@ impl Permissions {
         (permissions, rejected)
     }
 
+    /// Attach to each rule the reason the person gave for writing it (PERM-1).
+    ///
+    /// `reason_of` is asked about every rule in turn, by the list it is in (`deny`, `ask` or
+    /// `allow`) and the text it was written as, and answers with the reason or `None`. Asked rather
+    /// than passed in alongside the lists because which file wrote an entry is not this crate's to
+    /// know, and only the person's own file's reason is theirs to show.
+    ///
+    /// Nothing in this crate reads what comes back. It is stored on the rule, handed to a report,
+    /// and never matched, compared or branched on, so this cannot change what any rule decides.
+    pub fn explain(&mut self, reason_of: impl Fn(&str, &str) -> Option<String>) {
+        for (list, rules) in [
+            ("deny", &mut self.deny),
+            ("ask", &mut self.ask),
+            ("allow", &mut self.allow),
+        ] {
+            for rule in rules.iter_mut() {
+                rule.reason = reason_of(list, &rule.written);
+            }
+        }
+    }
+
     /// The paths a definition's `writes:` line lets a delegate edit, read as `Edit` patterns on the
     /// terms of this host (DELEGATE-28).
     ///
@@ -645,6 +730,18 @@ impl Permissions {
     /// Whether any rule was written at all.
     pub fn is_empty(&self) -> bool {
         self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
+    }
+
+    /// Whether any `deny` rule is about reading or writing a path.
+    pub fn denies_any_path(&self) -> bool {
+        self.deny
+            .iter()
+            .any(|rule| matches!(rule.subject, Subject::Read | Subject::Edit))
+    }
+
+    /// Whether any `deny` rule is about reading a path.
+    pub fn denies_any_read(&self) -> bool {
+        self.deny.iter().any(|rule| rule.subject == Subject::Read)
     }
 
     /// How many rules are in force, for a report.
@@ -704,8 +801,10 @@ impl Permissions {
     /// The rule that decides [`Permissions::for_path`], and which list it is in.
     pub fn rule_for_path(&self, subject: Subject, path: &str) -> Option<(Ruling, &Rule)> {
         let path = key_of(path, self.backslash_separates, self.folds_case);
+        let canonical = crate::trust::canonical_form(&path, self.folds_case);
         self.deciding(|rule, restricting| {
-            rule.subject == subject && rule.covers_path(&path, restricting)
+            rule.subject == subject
+                && rule.covers_path(&path, &canonical, self.folds_case, restricting)
         })
     }
 
@@ -720,9 +819,21 @@ impl Permissions {
 
     /// The rule that decides [`Permissions::for_command`] for one stage.
     pub fn rule_for_command<S: AsRef<str>>(&self, argv: &[S]) -> Option<(Ruling, &Rule)> {
-        let argv = places(argv);
+        let words: Vec<&str> = argv.iter().map(|word| word.as_ref()).collect();
+        let argv = places(&words);
+        // The stage as run is the only one an `allow` rule is matched against, and a list that
+        // restricts is also matched against what is left after each leading wrapper (PERM-20).
+        let under_wrappers: Vec<Vec<Place>> = wrapped_commands(&words)
+            .into_iter()
+            .map(|inner| places(&inner))
+            .collect();
         self.deciding(|rule, restricting| {
-            rule.subject == Subject::Bash && rule.covers_command(&argv, restricting)
+            rule.subject == Subject::Bash
+                && (rule.covers_command(&argv, restricting)
+                    || (restricting
+                        && under_wrappers
+                            .iter()
+                            .any(|inner| rule.covers_command(inner, restricting))))
         })
     }
 
@@ -972,6 +1083,24 @@ impl PathPattern {
         }
     }
 
+    fn is_ascii(&self) -> bool {
+        self.segments.iter().all(|segment| segment.is_ascii())
+    }
+
+    /// This pattern with each segment in the form every canonically equivalent spelling shares,
+    /// reached the way [`crate::trust::canonical_form`] reaches it for the path it is matched
+    /// against. A `*` composes with nothing, so the segments keep their wildcards.
+    fn canonical(&self, folds_case: bool) -> Self {
+        Self {
+            segments: self
+                .segments
+                .iter()
+                .map(|segment| crate::trust::canonical_form(segment, folds_case).into_owned())
+                .collect(),
+            floats_when_restricting: self.floats_when_restricting,
+        }
+    }
+
     /// Whether this pattern covers `path`, already split into segments.
     fn matches(&self, path: &[&str], restricting: bool) -> bool {
         if segments_match(&self.segments, path) {
@@ -1134,6 +1263,142 @@ fn places<S: AsRef<str>>(argv: &[S]) -> Vec<Place> {
         places.extend(word.as_ref().chars().map(Place::Char));
     }
     places
+}
+
+/// How a wrapper program's leading options are read.
+enum Wrapper {
+    /// Flags that stand alone, options that take the next word, and words that stand in a fixed
+    /// place before the program: `timeout` has a duration there.
+    Options {
+        flags: &'static [&'static str],
+        valued: &'static [&'static str],
+        /// Long options that take their value after an `=` or as the next word.
+        long_valued: &'static [&'static str],
+        /// Options written as `-` and digits, which `nice` takes as an adjustment.
+        numeric: bool,
+        /// Words between the options and the program.
+        positional: usize,
+    },
+    /// `env`: options, `NAME=value` words and `--` are all read before the program.
+    Environment,
+}
+
+/// The fixed table of programs whose first word that is not an option is the program they run
+/// (PERM-20). A program that is not here is not looked through, and neither is a wrapper with an
+/// option this table does not list.
+fn wrapper(program: &str) -> Option<Wrapper> {
+    const NONE: &[&str] = &[];
+    let plain = |flags, valued, long_valued, numeric, positional| Wrapper::Options {
+        flags,
+        valued,
+        long_valued,
+        numeric,
+        positional,
+    };
+    Some(match program {
+        "timeout" => plain(
+            &["--foreground", "--preserve-status", "-v", "--verbose"],
+            &["-s", "-k"],
+            &["--signal", "--kill-after"],
+            false,
+            1,
+        ),
+        "time" => plain(&["-p", "-v", "-a"], &["-f", "-o"], NONE, false, 0),
+        "nice" => plain(NONE, &["-n"], &["--adjustment"], true, 0),
+        "stdbuf" => plain(
+            NONE,
+            &["-i", "-o", "-e"],
+            &["--input", "--output", "--error"],
+            false,
+            0,
+        ),
+        "command" => plain(&["-p"], NONE, NONE, false, 0),
+        "nohup" | "builtin" | "noglob" => plain(NONE, NONE, NONE, false, 0),
+        "env" => Wrapper::Environment,
+        _ => return None,
+    })
+}
+
+/// Whether a word is `NAME=value` with a name a shell could assign.
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// What follows one leading wrapper, or `None` where the first word is not in the table, where an
+/// option is not one the table reads, or where nothing is left to run.
+fn without_wrapper<'a>(argv: &[&'a str]) -> Option<Vec<&'a str>> {
+    let (program, mut rest) = argv.split_first()?;
+    let (flags, valued, long_valued, numeric, mut positional) = match wrapper(program)? {
+        Wrapper::Options {
+            flags,
+            valued,
+            long_valued,
+            numeric,
+            positional,
+        } => (flags, valued, long_valued, numeric, positional),
+        Wrapper::Environment => {
+            while let Some((word, tail)) = rest.split_first() {
+                match *word {
+                    "--" => {
+                        rest = tail;
+                        break;
+                    }
+                    "-i" | "--ignore-environment" => rest = tail,
+                    "-u" | "--unset" => rest = tail.get(1..)?,
+                    _ if word.starts_with("--unset=") || is_assignment(word) => rest = tail,
+                    _ if word.starts_with('-') => return None,
+                    _ => break,
+                }
+            }
+            return (!rest.is_empty()).then(|| rest.to_vec());
+        }
+    };
+    let mut options = true;
+    while let Some((word, tail)) = rest.split_first() {
+        if options && *word == "--" {
+            options = false;
+            rest = tail;
+        } else if options && word.starts_with('-') && *word != "-" {
+            if flags.contains(word) {
+                rest = tail;
+            } else if valued.contains(word) || long_valued.contains(word) {
+                rest = tail.get(1..)?;
+            } else if long_valued
+                .iter()
+                .any(|name| word.strip_prefix(name).is_some_and(|v| v.starts_with('=')))
+                || valued
+                    .iter()
+                    .any(|name| word.strip_prefix(name).is_some_and(|v| !v.is_empty()))
+                || (numeric && word[1..].chars().all(|c| c.is_ascii_digit()))
+            {
+                rest = tail;
+            } else {
+                return None;
+            }
+        } else if positional > 0 {
+            positional -= 1;
+            rest = tail;
+        } else {
+            break;
+        }
+    }
+    (positional == 0 && !rest.is_empty()).then(|| rest.to_vec())
+}
+
+/// The argv left after each leading wrapper in turn, outermost first. `timeout 5 nice git push`
+/// gives `nice git push` and then `git push`.
+fn wrapped_commands<'a>(argv: &[&'a str]) -> Vec<Vec<&'a str>> {
+    let mut found = Vec::new();
+    let mut current = argv.to_vec();
+    while let Some(inner) = without_wrapper(&current) {
+        found.push(inner.clone());
+        current = inner;
+    }
+    found
 }
 
 /// Whether one character of a command pattern covers one place in the argv.
@@ -1374,6 +1639,78 @@ mod tests {
         assert!(permissions.rule_for_mcp("weather", "set").is_none());
     }
 
+    /// A rule read from a list carries no reason of its own. A field defaulted to anything but
+    /// absence would have a report quote a sentence nobody wrote.
+    #[test]
+    fn a_rule_carries_no_reason_until_one_is_attached() {
+        let permissions = rules(&["Read(.env)"], &["Bash(git push *)"], &["Bash(ls *)"]);
+        for rule in permissions
+            .deny
+            .iter()
+            .chain(&permissions.ask)
+            .chain(&permissions.allow)
+        {
+            assert_eq!(rule.reason(), None);
+        }
+    }
+
+    /// Each rule is asked about by the list it is in and the text it was written as, so a reason
+    /// lands on the rule the person wrote it beside. An implementation that asked by text alone
+    /// would put one list's reason on another list's rule of the same spelling.
+    #[test]
+    fn explain_attaches_a_reason_by_list_and_written_text() {
+        let mut permissions = rules(&["Read(.env)"], &["Read(.env)"], &["Bash(ls *)"]);
+        permissions.explain(|list, written| match (list, written) {
+            ("deny", "Read(.env)") => Some("holds the deployment key".to_string()),
+            ("ask", "Read(.env)") => Some("asked about on purpose".to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            permissions.deny[0].reason(),
+            Some("holds the deployment key")
+        );
+        assert_eq!(permissions.ask[0].reason(), Some("asked about on purpose"));
+        assert_eq!(permissions.allow[0].reason(), None);
+    }
+
+    /// A reason is display text. Every decision is the same after one is attached, including for a
+    /// reason whose own words name a path and a program the rules decide about, which an
+    /// implementation that matched or trimmed against a reason would answer differently.
+    #[test]
+    fn a_reason_decides_nothing() {
+        let deny = ["Read(.env)"];
+        let ask = ["Bash(git push *)"];
+        let allow = ["Bash(git diff *)"];
+        let plain = rules(&deny, &ask, &allow);
+        let mut explained = rules(&deny, &ask, &allow);
+        explained.explain(|_, _| Some("allow Read(.env) and Bash(git push *)".to_string()));
+
+        for (subject, path) in [
+            (Subject::Read, ".env"),
+            (Subject::Read, "src/main.rs"),
+            (Subject::Edit, ".env"),
+        ] {
+            assert_eq!(
+                explained.for_path(subject, path),
+                plain.for_path(subject, path)
+            );
+        }
+        for line in ["git push origin main", "git diff --stat", "rm -rf /"] {
+            assert_eq!(
+                explained.for_command(&words(line)),
+                plain.for_command(&words(line))
+            );
+        }
+        assert_eq!(
+            explained
+                .rule_for_path(Subject::Read, ".env")
+                .map(|(ruling, rule)| (ruling, rule.written().to_string())),
+            plain
+                .rule_for_path(Subject::Read, ".env")
+                .map(|(ruling, rule)| (ruling, rule.written().to_string()))
+        );
+    }
+
     /// The deny-over-ask order needs one subject in both lists, the ask rule narrower in the first
     /// case and broader in the second. With no subject in both, an implementation that tried ask
     /// first gives the same answers.
@@ -1562,6 +1899,251 @@ mod tests {
             rules(&["Bash(npm run *)"], &[], &[]).for_command(&["npm run"]),
             Decision::Ruled(Ruling::Deny),
             "the bare command a deny rule names was not covered when it came as one word"
+        );
+    }
+
+    /// PERM-7. A rule typed from a keyboard is usually precomposed and a file may be stored
+    /// decomposed, or the other way round; the rule is about the file, so either spelling of
+    /// either side is covered, in a name, a tree, and a name under a directory.
+    #[test]
+    fn a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name() {
+        let (nfc, nfd) = ("caf\u{e9}.md", "cafe\u{301}.md");
+        for (written, asked) in [(nfc, nfd), (nfd, nfc), (nfc, nfc)] {
+            let denied = rules(&[&format!("Read({written})")], &[], &[]);
+            let asking = rules(&[], &[&format!("Edit({written})")], &[]);
+            let tree = rules(
+                &[&format!("Read({}/**)", written.trim_end_matches(".md"))],
+                &[],
+                &[],
+            );
+            assert_eq!(
+                denied.for_path(Subject::Read, asked),
+                Decision::Ruled(Ruling::Deny),
+                "a deny rule {written:?} missed {asked:?}"
+            );
+            assert_eq!(
+                denied.for_path(Subject::Read, &format!("docs/{asked}")),
+                Decision::Ruled(Ruling::Deny)
+            );
+            assert_eq!(
+                asking.for_path(Subject::Edit, asked),
+                Decision::Ruled(Ruling::Ask),
+                "an ask rule {written:?} missed {asked:?}"
+            );
+            assert_eq!(
+                tree.for_path(
+                    Subject::Read,
+                    &format!("{}/a", asked.trim_end_matches(".md"))
+                ),
+                Decision::Ruled(Ruling::Deny)
+            );
+        }
+        // Compatibility forms are not canonical equivalents.
+        assert_eq!(
+            rules(&["Read(\u{ff53}rc)"], &[], &[]).for_path(Subject::Read, "src"),
+            Decision::Unmatched
+        );
+        assert_eq!(
+            rules(&["Read(caf\u{e9}.md)"], &[], &[]).for_path(Subject::Read, "cafe.md"),
+            Decision::Unmatched
+        );
+    }
+
+    /// Whitespace at either end of a name is part of it where a path is bytes, so a rule about a
+    /// name is not about the same name with whitespace at an end of it, and the path is matched as
+    /// it was written (TRUST-2).
+    #[test]
+    fn a_rule_about_a_name_does_not_cover_the_name_with_whitespace_at_an_end() {
+        let denied = rules(&["Read(.env)", "Read(secrets/**)"], &[], &[]);
+        assert_eq!(
+            denied.for_path(Subject::Read, ".env"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        for beneath in ["secrets/a", "secrets/ "] {
+            assert_eq!(
+                denied.for_path(Subject::Read, beneath),
+                Decision::Ruled(Ruling::Deny),
+                "a file named {beneath:?} is beneath `secrets`"
+            );
+        }
+        for other in [".env ", " .env", ".env\u{a0}", "secrets /a"] {
+            assert_eq!(
+                denied.for_path(Subject::Read, other),
+                Decision::Unmatched,
+                "a rule about `.env` or `secrets` decided {other:?}"
+            );
+        }
+    }
+
+    /// A path specifier with whitespace at either end is not read, in any list and for both families
+    /// that take a path (TRUST-2, PERM-11). Whitespace there is part of the name of a file that has
+    /// it and as likely padding inside the brackets: read as the name, a deny rule typed with padding
+    /// covers a file nobody meant, and trimmed, a rule about a file named with whitespace covers the
+    /// file without it, an allow rule granting that file. The shapes are the names the awkward-names
+    /// test cannot spell and the padded forms of a wildcard, an anchor and a tree, which a trimmed
+    /// specifier reads as the blanket or anchored rule they were meant for.
+    #[test]
+    fn a_path_specifier_with_whitespace_at_an_end_is_reported_and_decides_nothing() {
+        for whitespace in [" ", "\t", "\n", "\u{a0}", "\u{3000}"] {
+            for family in ["Read", "Edit"] {
+                for specifier in [
+                    format!("./a.md{whitespace}"),
+                    format!("a.md{whitespace}"),
+                    format!("{whitespace}a.md"),
+                    format!("{whitespace}.env{whitespace}"),
+                    format!("./{whitespace}"),
+                    format!("secrets/**{whitespace}"),
+                    format!("{whitespace}*{whitespace}"),
+                    format!("{whitespace}**"),
+                    format!("{whitespace}~/.ssh/**"),
+                    format!("{whitespace}//etc/**"),
+                ] {
+                    let written = format!("{family}({specifier})");
+                    let rejected = Rule::parse(&written, &anchors()).expect_err(&written);
+                    assert_eq!(
+                        rejected.reason,
+                        Unreadable::WhitespaceAtAnEnd,
+                        "{written:?} was not reported for its whitespace"
+                    );
+                    assert_eq!(rejected.text, written);
+
+                    let owned = vec![written.clone()];
+                    let none: Vec<String> = Vec::new();
+                    for (deny, ask, allow) in [
+                        (&owned, &none, &none),
+                        (&none, &owned, &none),
+                        (&none, &none, &owned),
+                    ] {
+                        let (permissions, rejected) =
+                            Permissions::parse(deny, ask, allow, &anchors());
+                        assert_eq!(rejected.len(), 1, "{written:?} was not reported");
+                        assert!(permissions.is_empty(), "{written:?} was kept");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whitespace between the first and last character of a path specifier is part of a name and
+    /// nothing is wrong with it: a file called `my notes.md` has a rule, in every list. A name that
+    /// starts with whitespace is written from `./` or `**/`, which put something in front of it, and
+    /// is as much a name as the one without it.
+    #[test]
+    fn whitespace_inside_a_path_specifier_is_part_of_the_name() {
+        for whitespace in [" ", "\t", "\u{a0}", "\u{3000}"] {
+            for (written, named, without) in [
+                (
+                    format!("Read(./my{whitespace}notes.md)"),
+                    format!("my{whitespace}notes.md"),
+                    "mynotes.md",
+                ),
+                (
+                    format!("Read(./{whitespace}a.md)"),
+                    format!("{whitespace}a.md"),
+                    "a.md",
+                ),
+                (
+                    format!("Read(**/{whitespace}a.md)"),
+                    format!("d/{whitespace}a.md"),
+                    "d/a.md",
+                ),
+            ] {
+                for (ruling, permissions) in [
+                    (Ruling::Deny, rules(&[written.as_str()], &[], &[])),
+                    (Ruling::Ask, rules(&[], &[written.as_str()], &[])),
+                    (Ruling::Allow, rules(&[], &[], &[written.as_str()])),
+                ] {
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, &named),
+                        Decision::Ruled(ruling),
+                        "{written:?} ({ruling:?}) did not decide {named:?}"
+                    );
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, without),
+                        Decision::Unmatched,
+                        "{written:?} ({ruling:?}) decided the name without the whitespace"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Brackets that hold nothing but whitespace say nothing that the bare family does not, so they
+    /// are reported as empty brackets whatever whitespace is in them, as `Read()` is, and not as a
+    /// path with whitespace at an end.
+    #[test]
+    fn brackets_holding_only_whitespace_are_empty_in_every_family() {
+        for family in ["Read", "Edit", "Bash", "WebFetch", "Mcp"] {
+            for blank in ["", " ", "\t", "\n", "\u{a0}", "\u{3000}"] {
+                let written = format!("{family}({blank})");
+                let rejected = Rule::parse(&written, &anchors()).expect_err(&written);
+                assert_eq!(
+                    rejected.reason,
+                    Unreadable::EmptyBrackets,
+                    "{written:?} was not reported as empty"
+                );
+                assert_eq!(rejected.text, written);
+            }
+        }
+    }
+
+    /// Only a path is bytes. A command is words, a host is a name in lower case and a tool is an
+    /// alias, so padding inside their brackets is dropped and the rule says what it says without it.
+    #[test]
+    fn padding_inside_the_brackets_of_a_command_host_or_tool_rule_is_dropped() {
+        let permissions = rules(
+            &["Bash( git push )", "WebFetch( domain:denied.test )"],
+            &["Mcp( weather:get_alerts )"],
+            &["Mcp(\tnews\u{a0})"],
+        );
+        assert_eq!(
+            permissions.for_command(&["git", "push"]),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_host("denied.test"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_mcp("weather", "get_alerts"),
+            Decision::Ruled(Ruling::Ask)
+        );
+        assert_eq!(
+            permissions.for_mcp("news", "lookup"),
+            Decision::Ruled(Ruling::Allow)
+        );
+    }
+
+    /// A volume that folds case compares the two forms and the two cases together.
+    #[test]
+    fn a_canonical_spelling_is_covered_in_any_case_on_a_folding_volume() {
+        let permissions =
+            rules_on_a_volume_that_folds_case(true, &["Read(Caf\u{c9}/**)"], &[], &[]);
+        for path in [
+            "cafe\u{301}/a",
+            "CAFE\u{301}/a",
+            "caf\u{e9}/a",
+            "CAF\u{c9}/a",
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, path),
+                Decision::Ruled(Ruling::Deny),
+                "the rule missed {path:?}"
+            );
+        }
+    }
+
+    /// A grant stays as written, so it never reaches a file under a spelling nobody approved.
+    #[test]
+    fn an_allow_rule_is_matched_in_the_spelling_it_was_written_in() {
+        let permissions = rules(&[], &[], &["Read(caf\u{e9}.md)"]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "caf\u{e9}.md"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "cafe\u{301}.md"),
+            Decision::Unmatched
         );
     }
 
@@ -2275,6 +2857,130 @@ mod tests {
         assert_eq!(
             permissions.for_pipeline(&stages),
             Decision::Ruled(Ruling::Ask)
+        );
+    }
+
+    /// A deny or ask rule covers a program run under a wrapper from the fixed table, so a rule
+    /// about `git push` needs no second rule for each wrapper (PERM-20).
+    #[test]
+    fn a_restricting_rule_covers_the_program_under_a_wrapper() {
+        let wrapped = [
+            "timeout 30 git push",
+            "timeout -s KILL --kill-after=5 30 git push",
+            "timeout -sKILL 30 git push",
+            "timeout --foreground -- 30 git push",
+            "time git push",
+            "time -p git push",
+            "time -f %e -o /tmp/out git push",
+            "nice git push",
+            "nice -n 10 git push",
+            "nice -n10 git push",
+            "nice -5 git push",
+            "nice --adjustment=5 git push",
+            "nohup git push",
+            "stdbuf -oL git push",
+            "stdbuf -o L -e0 git push",
+            "command git push",
+            "command -p git push",
+            "builtin git push",
+            "noglob git push",
+            "env git push",
+            "env -i git push",
+            "env -u HOME git push",
+            "env FOO=bar git push",
+            "env -- git push",
+            "timeout 5 nice -n 3 nohup env A=1 git push",
+        ];
+        for list in 0..2 {
+            let permissions = if list == 0 {
+                rules(&["Bash(git push *)"], &[], &[])
+            } else {
+                rules(&[], &["Bash(git push *)"], &[])
+            };
+            let expected = Decision::Ruled(if list == 0 { Ruling::Deny } else { Ruling::Ask });
+            for line in wrapped {
+                assert_eq!(permissions.for_command(&words(line)), expected, "{line}");
+                assert_eq!(
+                    permissions.for_pipeline(&[words("echo hi"), words(line)]),
+                    expected,
+                    "{line} as a later stage"
+                );
+            }
+        }
+    }
+
+    /// Looking through a wrapper is for the lists that restrict. An `allow` rule for `git push`
+    /// does not grant `timeout 30 git push`, which is a program the rule never named.
+    #[test]
+    fn an_allow_rule_does_not_look_through_a_wrapper() {
+        let permissions = rules(&[], &[], &["Bash(git push *)"]);
+        assert_eq!(
+            permissions.for_command(&words("git push origin")),
+            Decision::Ruled(Ruling::Allow)
+        );
+        for line in ["timeout 30 git push", "nice git push", "env git push"] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+        // A deny rule still wins over the allow rule it overlaps.
+        let permissions = rules(&["Bash(git push *)"], &[], &["Bash(timeout *)"]);
+        assert_eq!(
+            permissions.for_command(&words("timeout 30 git push")),
+            Decision::Ruled(Ruling::Deny)
+        );
+    }
+
+    /// A wrapper whose options the table cannot read is left whole, and so is one with nothing to
+    /// run, so a rule is never matched against a guess at what the wrapper starts.
+    #[test]
+    fn a_wrapper_the_table_cannot_read_is_left_whole() {
+        let permissions = rules(&["Bash(git push *)"], &[], &[]);
+        for line in [
+            "timeout --unknown 30 git push",
+            "timeout 30",
+            "timeout",
+            "nice -n",
+            "nice -x git push",
+            "command -v git push",
+            "env -S git push",
+            "env -u",
+            "time -o",
+            "env FOO=bar",
+            "xargs git push",
+            "devbox run git push",
+            "npx git push",
+            "docker exec box git push",
+            "/usr/bin/timeout 30 git push",
+        ] {
+            assert_eq!(
+                permissions.for_command(&words(line)),
+                Decision::Unmatched,
+                "{line}"
+            );
+        }
+    }
+
+    /// The rule is still matched against the whole stage, so a rule naming a wrapper keeps
+    /// working, and a program that merely follows a wrapper's name does not match by prefix.
+    #[test]
+    fn a_rule_naming_the_wrapper_still_matches_the_whole_stage() {
+        let permissions = rules(&["Bash(timeout *)"], &[], &[]);
+        assert_eq!(
+            permissions.for_command(&words("timeout 30 ls")),
+            Decision::Ruled(Ruling::Deny)
+        );
+        let permissions = rules(&["Bash(git push *)"], &[], &[]);
+        assert_eq!(
+            permissions.for_command(&words("timeout 30 git pull")),
+            Decision::Unmatched
+        );
+        assert_eq!(
+            permissions.for_command(&["timeout", "30", "git push"]),
+            Decision::Ruled(Ruling::Deny),
+            "a space in a deny rule covers a space inside the program's word"
         );
     }
 

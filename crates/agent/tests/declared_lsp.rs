@@ -97,6 +97,13 @@ impl Confirmer for Asked {
     fn confirm_host(&mut self, _: &HostRequest) -> Decision {
         Decision::Reject
     }
+
+    fn confirm_message(
+        &mut self,
+        _request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::MessageDecision::Decline
+    }
     fn ask_user(&mut self, _: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
         Vec::new()
     }

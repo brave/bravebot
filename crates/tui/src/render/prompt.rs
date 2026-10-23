@@ -156,11 +156,15 @@ fn named_words(session: &Session) -> Vec<(usize, usize)> {
         return vec![(start, start + name.len())];
     }
     let held = session.held_skills();
+    // A prompt of a server runs only from the first word, so it is recognised nowhere else (CMD-26).
+    let first = line.len() - line.trim_start().len();
     let mut words = Vec::new();
     let mut offset = 0;
     for piece in line.split_inclusive(char::is_whitespace) {
         let word = piece.trim_end_matches(char::is_whitespace);
-        if crate::skills::named(held, word).is_some() {
+        if crate::skills::named(held, word)
+            .is_some_and(|row| offset == first || !row.is_a_server_prompt())
+        {
             words.push((offset, offset + word.len()));
         }
         offset += piece.len();
@@ -340,6 +344,9 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
     let selection = session.vi_selection();
     let words = named_words(session);
     let hint = argument_hint(session);
+    // The files state owns every key, so the box has no caret to draw and no selection to show
+    // (FILES-9). The line keeps its text.
+    let held = session.files_open();
 
     // Shell mode is coloured throughout rather than only in the marker, because the whole line
     // means something different: it goes to a shell instead of the model, and that is worth more
@@ -371,6 +378,10 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
                 .iter()
                 .filter_map(|&word| covered(row, wrapped.starts[index], word))
                 .collect();
+            if held {
+                spans.extend(text_spans(row, 0, row.len(), &named));
+                return Line::from(spans);
+            }
             if let Some((at, through)) =
                 selection.and_then(|span| covered(row, wrapped.starts[index], span))
             {
@@ -414,11 +425,19 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             Style::default().fg(colour),
         )];
         // A suggestion takes the invitation's place, drawn the same way: dimmed, with the caret on
-        // its first character, since that is where the first character typed would land.
-        spans.extend(placeholder_spans(
-            colour,
-            session.suggestion().unwrap_or(placeholder()),
-        ));
+        // its first character, since that is where the first character typed would land. Dimmed
+        // alone where the box holds no caret.
+        if held {
+            spans.push(Span::styled(
+                session.suggestion().unwrap_or(placeholder()).to_string(),
+                dim(),
+            ));
+        } else {
+            spans.extend(placeholder_spans(
+                colour,
+                session.suggestion().unwrap_or(placeholder()),
+            ));
+        }
         vec![Line::from(spans)]
     } else {
         lines
@@ -442,8 +461,9 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
 
     if let Some((index, total)) = session.history.position() {
         let scope_name = match session.history.scope() {
-            crate::history::Scope::Session => t!(input_history_this_session),
             crate::history::Scope::All => t!(input_history_all),
+            crate::history::Scope::Project => t!(input_history_this_project),
+            crate::history::Scope::Session => t!(input_history_this_session),
         };
         let position = format!(
             " {} ",
@@ -469,19 +489,12 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             input_history_search,
             chord = session.bindings().history_name()
         );
-        let switch = if session.history.can_narrow() {
-            Some(t!(
-                input_history_narrow,
-                chord = session.bindings().scope_name()
-            ))
-        } else if session.history.can_widen() {
-            Some(t!(
-                input_history_widen,
-                chord = session.bindings().scope_name()
-            ))
-        } else {
-            None
-        };
+        let chord = session.bindings().scope_name();
+        let switch = session.history.next_scope().map(|next| match next {
+            crate::history::Scope::All => t!(input_history_widen, chord = chord),
+            crate::history::Scope::Project => t!(input_history_project, chord = chord),
+            crate::history::Scope::Session => t!(input_history_narrow, chord = chord),
+        });
         let ways_in = switch
             .map(|switch| {
                 format!(
@@ -502,6 +515,15 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
         if let Some(ways_in) = ways_in {
             block = block.title_top(Line::from(Span::styled(ways_in, dim())).right_aligned());
         }
+    }
+
+    // The mode stays on the box for as long as it is in force, so a person who has forgotten it is
+    // reminded by the place they type in (SKILL-21).
+    if let Some(skill) = session.skill_mode() {
+        block = block.title_bottom(Line::from(Span::styled(
+            format!(" {} ", t!(input_skill_mode, skill = skill)),
+            dim(),
+        )));
     }
 
     frame.render_widget(Paragraph::new(lines).block(block), area);

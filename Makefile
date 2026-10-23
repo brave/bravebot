@@ -46,7 +46,7 @@ help:
 	@echo
 	@echo "Development:"
 	@echo "  make init                  Configure bravebot, Claude Code, Codex and Cursor; install hooks"
-	@echo "  make hooks                 Point git at the checked-in git hooks"
+	@echo "  make hooks                 Copy the checked-in git hooks into the git directory and point git at them"
 	@echo "  make build                 Debug build"
 	@echo "  make test                  Run all tests"
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
@@ -55,10 +55,12 @@ help:
 	@echo "  make check-affected-containers  The Docker checks they need [BASE=ref]"
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
-	@echo "  make check-maintenance     Dead code, repeated code and long files, as candidates for the maintenance skill"
+	@echo "  make check-maintenance     Dead, repeated, deeply nested, coupled or untested code, as candidates for the maintenance skill"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
+	@echo "  make check-lint-increase   Whether this branch adds sites of the clippy lints held to the base"
 	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
+	@echo "  make check-pr-body         Whether a pull request body (PR_BODY) has a Not covered line, with an issue per case"
 	@echo "  make check-docs            Build the documentation website under docs/website"
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
@@ -66,16 +68,19 @@ help:
 	@echo "  make write-untranslated    Write contrib/untranslated-messages.txt, which check-locales holds it to"
 	@echo "  make check-reviewdog       The PR security scan, on this branch's changes [BASE=ref]"
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
-	@echo "  make check-npm             The installer test, the pnpm lockfiles in sync with their manifests, and their lint"
+	@echo "  make check-npm             The npm package tests, the pnpm lockfiles in sync with their manifests, and their lint"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
 	@echo "  make check-extension       Test the Brave extension's tools against a fake browser"
 	@echo "  make check-agent-client    Build and test the TypeScript session client against a real bravebot-rpc"
+	@echo "  make check-mobile          Type-check and test the React Native app (no device or simulator)"
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
+	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer [REPO=owner/name REVIEWER=login]"
+	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
 	@echo "  make aws-logout            End every cached AWS SSO session, to test signing in again"
 	@echo
@@ -91,11 +96,14 @@ help:
 	@echo "Releasing:"
 	@echo "  make bump-version BUMP=bugfix|minor|major   Set the next version"
 	@echo "  make github-release                         Tag it; Jenkins and npm publish are later"
+	@echo "  make npm-bootstrap                          Create the name of each new platform package, before its first publish"
 	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
+	@echo "  make package-manifests TAG=v<version>       Write the Homebrew cask and WinGet manifests into dist/packages"
 	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
 	@echo "  make app-release-linux                      Its .deb and .rpm for both Linux architectures, unsigned"
 	@echo "  make app-release-windows                    Its Windows installers for both architectures, unsigned"
+	@echo "  make cli-packages-linux                     The CLI's .deb and .rpm for both Linux architectures, unsigned"
 	@echo
 	@echo "  make clean          Remove build output"
 
@@ -109,9 +117,22 @@ init: hooks
 
 # .git/hooks is not versioned, so a fresh clone commits with nothing checking it
 # until this runs. Idempotent, and part of `init` so nobody has to know it exists.
+#
+# The hooks are copied into the repository's common git directory and git is pointed at the
+# copy by absolute path. A relative path is resolved against each worktree's own top level, so
+# in the worktree of a pull request git would run the hooks that pull request tracks, as
+# whoever runs git there. No branch tracks the copy. Run this again after .githooks changes.
+# A linked worktree installs nothing, since the copy would come from its branch. The directory
+# name is the one agents/pr_worktree.py reads (HOOKS_DIR).
 .PHONY: hooks
 hooks:
-	git config core.hooksPath .githooks
+	@common="$$(cd "$$(git rev-parse --git-common-dir)" && pwd -P)" && \
+	if [ "$$(git rev-parse --absolute-git-dir)" != "$$common" ]; then \
+		echo "hooks: nothing installed from a linked worktree, whose branch may track hooks nobody reviewed; run make hooks in the main checkout" >&2; \
+	else \
+		mkdir -p "$$common/bravebot-hooks" && cp -p .githooks/* "$$common/bravebot-hooks/" && \
+		git config core.hooksPath "$$common/bravebot-hooks" && echo "hooks: $$common/bravebot-hooks"; \
+	fi
 
 .PHONY: build
 build:
@@ -144,6 +165,7 @@ RUST_TEST_THREADS ?= 4
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
+	@python3 contrib/check-lint-increase.py
 	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
 	@python3 contrib/check-versions.py
 	@python3 contrib/check-toolchain.py
@@ -157,6 +179,14 @@ check:
 check-versions:
 	@python3 contrib/check-versions.py --selftest
 	@python3 contrib/check-versions.py
+
+# Whether this branch adds sites of a clippy lint the tree has hundreds of: clippy runs over the
+# libraries and binaries at the merge base and here, and a lint with more sites in a crate than it
+# had fails. Nothing is recorded in the tree. Run by `check` and, on a pull request, by CI. It
+# compiles the workspace twice, so it skips a change that touches nothing clippy reads.
+.PHONY: check-lint-increase
+check-lint-increase:
+	@python3 contrib/check-lint-increase.py
 
 # Whether clippy here knows the lints CI will fail on. Run by `check`; on its own it costs
 # nothing and answers immediately.
@@ -189,6 +219,7 @@ check-spec:
 	@python3 contrib/terminal-screenshot.py --selftest
 	@python3 contrib/check-issue-posters.py --selftest
 	@python3 agents/issue_helper_selftest.py
+	@python3 agents/work_dir_selftest.py
 	@python3 contrib/check-issue-posters.py
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
@@ -218,13 +249,17 @@ check-security:
 	python3 agents/skills/security-audit/security-audit.py --mechanical-only
 
 # The scan half of the maintenance skill: public items nothing names, items only tests name,
-# allowances silencing the dead-code lint, blocks and string literals repeated across files, and
-# files and functions past a length. It reads no code, so a candidate may be wrong in either
-# direction, and it exits zero whatever it finds. Deciding which candidates are worth an issue
-# needs a reading of the code: run the maintenance skill for that half.
+# allowances silencing a lint, blocks and string literals repeated across files, files and
+# functions past a length, deeply nested functions, modules that use many others, public functions
+# no test names, shared mutable state, commented-out code and string-typed errors. It reads no
+# code, so a candidate may be wrong in either direction, and it exits zero whatever it finds.
+# Candidates that docs/maintenance-reviewed holds a verdict for are left out. The clippy lane is
+# left out, because it compiles and this target needs no toolchain: the skill runs it. Deciding
+# which candidates are worth an issue needs a reading of the code: run the maintenance skill for
+# that half.
 .PHONY: check-maintenance
 check-maintenance: check-maintenance-selftest
-	python3 agents/skills/maintenance/maintenance.py --mechanical-only
+	python3 agents/skills/maintenance/maintenance.py --mechanical-only --no-clippy
 
 # agents/unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
 # check-spec fails while it and the specs disagree, so this is what to run after giving a clause
@@ -263,21 +298,21 @@ check-reviewdog-full: check-reviewdog-selftest
 
 # The npm-lockfile job. The published package is a thin wrapper that downloads the
 # release binary, and it has no dependencies, so that download is the whole supply chain surface
-# it has. The three projects with dependencies are ui/ (Electron's tree), docs/website and
-# packages/agent-client. Each has a pnpm lockfile of its own and none is a workspace of another
-# deliberately, so nothing else reaches them.
+# it has. The four projects with dependencies are ui/ (Electron's tree), docs/website,
+# packages/agent-client and mobile/. Each has a pnpm lockfile of its own and none is a workspace
+# of another deliberately, so nothing else reaches them.
 #
 # `install --frozen-lockfile --lockfile-only` fails when a lockfile does not satisfy its
 # package.json and fetches nothing. contrib/check-pnpm-lockfiles.py then holds each lockfile's
 # sources to the registry and the one git dependency its manifest names.
 #
-# The installer test is the download's half, and the only thing in this tree that runs any
-# of docs/specs/releases.md as code: it calls the origin the installer composes with an
-# environment set against it, so a release repository something outside the installer can
-# choose fails here rather than at somebody's install. It needs no dependency, so it runs
-# before the install rather than after it. `ls` precedes the run because `node --test` given
-# a pattern matching nothing exits 0 having run nothing, which would make a renamed-away pin
-# a passing gate.
+# The npm tests are the only thing in this tree that runs any of docs/specs/releases.md as
+# code: they call the origin the package script composes with an environment set against it,
+# so a release repository something outside the script can choose fails here rather than at a
+# publish, and they run the real launcher against a package that script builds. They need no
+# dependency, so they run before the install rather than after it. `ls` precedes the run
+# because `node --test` given a pattern matching nothing exits 0 having run nothing, which
+# would make a renamed-away pin a passing gate.
 .PHONY: check-npm
 check-npm:
 	ls npm/tests/*.test.mjs >/dev/null && node --test npm/tests/*.test.mjs
@@ -285,6 +320,7 @@ check-npm:
 	pnpm --dir ui install --frozen-lockfile --lockfile-only
 	pnpm --dir docs/website install --frozen-lockfile --lockfile-only
 	pnpm --dir packages/agent-client install --frozen-lockfile --lockfile-only
+	pnpm --dir mobile install --frozen-lockfile --lockfile-only
 	python3 contrib/check-pnpm-lockfiles.py
 
 # The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
@@ -365,10 +401,35 @@ docs-changes:
 docs-updated-to-sha:
 	@python3 agents/skills/update-docs/docs-ref.py show
 
+# The pull requests a reviewer can pick up now: mergeable, not a draft, with every check passed
+# or skipped, and whose latest review by REVIEWER is an approval. REPO names another repository,
+# REVIEWER another account and LIMIT raises how many are read.
+REVIEW_REPO = brave/bravebot
+REVIEW_REVIEWER = netzenbot-reviewer
+REVIEW_LIMIT = 500
+.PHONY: review-ready
+review-ready:
+	@gh pr list --repo $(or $(REPO),$(REVIEW_REPO)) --limit $(or $(LIMIT),$(REVIEW_LIMIT)) \
+	  --json number,title,url,mergeable,latestReviews,isDraft,statusCheckRollup \
+	  --jq '.[] | select(.mergeable == "MERGEABLE" and .isDraft == false and any(.latestReviews[]; .author.login == "$(or $(REVIEWER),$(REVIEW_REVIEWER))" and .state == "APPROVED") and all(.statusCheckRollup[]; (.conclusion // .state) | IN("SUCCESS", "NEUTRAL", "SKIPPED"))) | "\(.url)  \(.title)"'
+
+# Removes every linked worktree git knows about, wherever it lives, unlocking locked ones first.
+# The first entry `git worktree list` prints is the main working tree and is never touched.
+# A worktree with uncommitted or untracked files is removed too, and that work is lost. Branches are kept. Removals run CLEAN_WORKTREES_JOBS at a time.
+.PHONY: clean-worktrees
+CLEAN_WORKTREES_JOBS ?= 16
+clean-worktrees:
+	@here=$$(git rev-parse --show-toplevel) && \
+	git worktree list --porcelain | sed -n 's/^worktree //p' | tail -n +2 | grep -vxF "$$here" | tr '\n' '\0' \
+	  | xargs -0 -r -n 1 -P $(CLEAN_WORKTREES_JOBS) sh -c \
+	    'git worktree unlock "$$0" 2>/dev/null; \
+	     if git worktree remove --force "$$0"; then echo "removed $$0"; else echo "kept $$0"; exit 1; fi'; \
+	status=$$?; git worktree prune; exit $$status
+
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-pr-body check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -388,11 +449,11 @@ check-affected-containers:
 		{ [ -z "$$targets" ] || $(MAKE) --no-print-directory -k $$targets; }
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
-	check-maintenance-selftest check-session-review-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
-	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest \
-	check-maintenance-selftest check-session-review-selftest
+	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -424,8 +485,14 @@ check-maintenance-selftest:
 check-session-review-selftest:
 	python3 agents/skills/session-review/selftest.py
 
+check-lint-increase-selftest:
+	python3 contrib/check-lint-increase.py --selftest
+
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest
+
+check-package-manifests-selftest:
+	python3 contrib/package-manifests.py --selftest
 
 # CI and local runs share the same desktop checks. Linux uses a virtual display;
 # macOS uses the logged-in desktop session.
@@ -459,6 +526,17 @@ check-agent-client:
 	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc
 	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
 	pnpm --dir packages/agent-client run check
+
+# The React Native app under mobile/: its types and its tests, against the session client it links.
+# The client is built first because the app resolves it through its dist. Neither a device nor a
+# simulator is involved, so this is a check of the TypeScript only. The app has its own lockfile and
+# is not a pnpm workspace.
+.PHONY: check-mobile
+check-mobile:
+	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
+	pnpm --dir packages/agent-client run build
+	pnpm --dir mobile install --frozen-lockfile --ignore-scripts
+	pnpm --dir mobile run check
 
 # The install the desktop application's recipes start from: here, and for the two Windows packaging
 # steps below. Leo's build is cached in pnpm's store, which CI restores, so a warm install does
@@ -494,6 +572,16 @@ locales:
 check-narration:
 	python3 contrib/check-narration.py --selftest
 	python3 contrib/check-narration.py $(if $(BASE),--base '$(BASE)')
+
+# Whether a pull request body has a Not covered line, which is `none` or a bullet per case, each
+# naming the issue that tracks it. The body is read from PR_BODY, as check-narration reads it, and
+# a run with no PR_BODY and not in a pull request has no body to read, so locally this runs the
+# selftest and checks a draft only where it is given one: PR_BODY="$(cat body.md)" make check-pr-body.
+# Only pull requests opened by netzenbot are held to the line, and PR_AUTHOR says who opened one.
+.PHONY: check-pr-body
+check-pr-body:
+	python3 contrib/check-pr-body.py --selftest
+	python3 contrib/check-pr-body.py
 
 # Whether every catalog matches contrib/untranslated-messages.txt, which records the messages each
 # translation is knowingly missing. A gap is allowed and silence about one is not: falling back to
@@ -814,6 +902,109 @@ app-installers-windows:
 		node ui/scripts/windows-installer.mjs --bundle="ui/dist/Brave Bot-win32-$$electron" --arch=$$arch --out=dist; \
 	done
 
+# The CLI's Linux packages, the ones the apt and dnf repositories will serve, built on a Linux
+# host from what the cross-build left in dist/:
+#
+#   reads   dist/bravebot-linux-<arch>
+#   writes  dist/bravebot-linux-<arch>.deb, dist/bravebot-linux-<arch>.rpm
+#
+# for <arch> amd64 and arm64, from `make linux-amd64 linux-arm64 strip`, and needing no Rust
+# toolchain. The four names are the ones the publish job uploads, so they are a contract: a
+# rename here publishes nothing. The payload is the one binary at /usr/bin/bravebot, and both
+# descriptions are written here from one architecture list, so neither format can be built for
+# an architecture the other is not.
+#
+# The packers are the app packages' two, for the reasons `app-packages-linux` gives: each builds
+# in its own /tmp from a tree staged on the host rather than in the mounted stage, since Docker
+# Desktop's file sharing does not preserve every mode a package records; each runs as root,
+# since installing rpmbuild needs it; and each hands its output back to whoever is packaging.
+# rpmbuild is given its target from the spec's `ExclusiveArch`, as `app-packages-linux` reads it.
+#
+# The dependencies are the binary's own, from its dynamic section: libm, libc, libpthread and
+# libdl, all four libc6 on Debian and glibc on Fedora, required at 2.30 or newer, the newest
+# symbol version either architecture asks for. The Electron list the app declares is not copied:
+# none of it is needed here.
+#
+# The package files carry no signature of their own: what is signed is the checksum each one is
+# published with, as it is for the Linux binaries. Serving them from the apt and dnf
+# repositories, whose metadata is signed, is the publish side's.
+
+# The assets' two architectures, and the name rpmbuild wants for each: an asset and its .deb
+# name agree, so a pair is the asset and its rpm name.
+CLI_ARCHES = amd64:x86_64 arm64:aarch64
+
+.PHONY: cli-packages-linux
+cli-packages-linux:
+	@set -e; missing=; builds=; for pair in $(CLI_ARCHES); do \
+		arch=$${pair%%:*}; \
+		test -f dist/bravebot-linux-$$arch || { missing="$$missing bravebot-linux-$$arch"; builds="$$builds linux-$$arch"; }; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "missing from dist/:$$missing" >&2; \
+		echo "run \`make$$builds strip\` first" >&2; exit 1; \
+	fi
+	@set -e; mkdir -p dist; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
+	for pair in $(CLI_ARCHES); do \
+		arch=$${pair%%:*}; rpmarch=$${pair#*:}; \
+		dir="$$stage/$$arch"; \
+		install -d -m 0755 "$$dir/payload/usr/bin"; \
+		install -m 0755 dist/bravebot-linux-$$arch "$$dir/payload/usr/bin/bravebot"; \
+		size=$$(( ($$(wc -c < dist/bravebot-linux-$$arch) + 1023) / 1024 )); \
+		{ printf '%s\n' \
+			'Package: bravebot' \
+			'Version: $(VERSION)' \
+			"Architecture: $$arch" \
+			'Maintainer: Brave Software, Inc. <support@brave.com>' \
+			"Installed-Size: $$size" \
+			'Depends: libc6 (>= 2.30)' \
+			'Section: devel' \
+			'Priority: optional' \
+			'Homepage: https://github.com/brave/bravebot' \
+			'Description: A general-purpose agent with structural resistance to indirect prompt injection' \
+			' bravebot is a general-purpose agent that runs in a terminal. Untrusted content can be' \
+			' carried and written, and it never decides what happens.'; } > "$$dir/control"; \
+		{ printf '%s\n' \
+			'%global __os_install_post %{nil}' \
+			'%global debug_package %{nil}' \
+			'%global _build_id_links none' \
+			'' \
+			'Name: bravebot' \
+			'Version: $(VERSION)' \
+			'Release: 1' \
+			'Summary: A general-purpose agent with structural resistance to indirect prompt injection' \
+			'License: MPL-2.0' \
+			'URL: https://github.com/brave/bravebot' \
+			'Packager: Brave Software, Inc. <support@brave.com>' \
+			"ExclusiveArch: $$rpmarch" \
+			'AutoReqProv: no' \
+			'Requires: glibc >= 2.30' \
+			'' \
+			'%description' \
+			'bravebot is a general-purpose agent that runs in a terminal. Untrusted content can be' \
+			'carried and written, and it never decides what happens.' \
+			'' \
+			'%install' \
+			'cp -a %{_sourcedir}/payload/. %{buildroot}/' \
+			'' \
+			'%files' \
+			'%defattr(-,root,root,-)' \
+			'/usr/bin/bravebot'; } > "$$dir/bravebot.spec"; \
+		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$dir:/stage" -w /stage $(DEB_IMAGE) sh -c '\
+			cp -a payload /tmp/deb && mkdir /tmp/deb/DEBIAN && cp control /tmp/deb/DEBIAN/control && \
+			dpkg-deb --build --root-owner-group /tmp/deb out.deb && \
+			chown "$$OWNER" out.deb'; \
+		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$dir:/stage" -w /stage $(RPM_IMAGE) sh -c '\
+			dnf -y --setopt=install_weak_deps=False install rpm-build >/dev/null && \
+			target=$$(sed -n "s/^ExclusiveArch: //p" bravebot.spec) && \
+			rpmbuild -bb --target "$${target:?bravebot.spec states no ExclusiveArch}" \
+				--define "_sourcedir /stage" --define "_topdir /tmp/rpm" \
+				--define "_rpmdir /stage" --define "_rpmfilename out.rpm" bravebot.spec && \
+			chown "$$OWNER" out.rpm'; \
+		mv "$$dir/out.deb" dist/bravebot-linux-$$arch.deb; \
+		mv "$$dir/out.rpm" dist/bravebot-linux-$$arch.rpm; \
+		echo "wrote dist/bravebot-linux-$$arch.deb dist/bravebot-linux-$$arch.rpm"; \
+	done
+
 # Symbols are kept during the build because Rust's own strip can corrupt some targets
 # under zigbuild, so they are removed here instead.
 #
@@ -966,7 +1157,15 @@ github-release:
 	echo "then publish npm: make publish-npm TAG=$(TAG)"; \
 	echo "watch CI with: gh run watch --repo brave/bravebot"
 
+# Publishes a placeholder under each platform package name the registry has no package of, so
+# that package can be given a trusted publisher on npmjs.com. Needs npm login as a maintainer who
+# can publish @brave. Does nothing when every name exists. publish-npm refuses until it has run.
+.PHONY: npm-bootstrap
+npm-bootstrap:
+	node npm/scripts/bootstrap-platform-packages.js
+
 # Without TAG on the command line, the latest GitHub release: this tree may be bumped past it.
+# Refuses first when the registry has no package of a platform's name (make npm-bootstrap).
 .PHONY: publish-npm
 publish-npm:
 	@set -eu; \
@@ -975,9 +1174,19 @@ publish-npm:
 	else \
 		tag="$$(gh release view --repo brave/bravebot --json tagName --jq .tagName)"; \
 	fi; \
+	node npm/scripts/bootstrap-platform-packages.js --check; \
 	echo "dispatching publish-npm.yml for $$tag"; \
 	gh workflow run publish-npm.yml --repo brave/bravebot --ref "$$tag" -f tag="$$tag"; \
 	echo "watch it with: gh run watch --repo brave/bravebot"
+
+.PHONY: package-manifests
+package-manifests:
+	@set -eu; \
+	[ "$(origin TAG)" = "command line" ] || { echo "error: name the release: make package-manifests TAG=v<version>" >&2; exit 1; }; \
+	checksums="$$(mktemp -d)"; trap 'rm -rf "$$checksums"' EXIT INT TERM; \
+	gh release download "$(TAG)" --repo brave/bravebot --dir "$$checksums" \
+		--pattern 'bravebot-darwin-*.sha256' --pattern 'bravebot-windows-*.sha256'; \
+	python3 contrib/package-manifests.py "$(TAG)" "$$checksums" dist/packages
 
 .PHONY: clean
 clean:

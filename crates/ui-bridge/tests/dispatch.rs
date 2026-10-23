@@ -2,6 +2,13 @@
 //!
 //! Events are collected into a vector instead of being written anywhere, which is the
 //! point of the callback: the library has no opinion about where they go.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
+
+#[path = "../../session/test-support/profile.rs"]
+mod test_profile;
 
 use bravebot_ui_bridge::bridge::Bridge;
 use bravebot_ui_bridge::protocol::{ErrorCode, Event, Request};
@@ -619,15 +626,17 @@ fn a_malformed_dropped_list_costs_the_files_and_not_the_turn() {
     }
 }
 
+/// In a profile of its own: a yes is kept for later sessions in the directory, and none of this
+/// belongs in the developer's home.
 #[test]
 fn permission_review_can_only_remove_existing_grants() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let directory = test_profile::project("permission-review");
+    std::fs::create_dir_all(&directory).expect("a project directory");
     let (mut bridge, _) = harness();
-    let made = call(
-        &mut bridge,
-        "session.new",
-        json!({"directory": std::env::temp_dir()}),
-    )
-    .unwrap();
+    let made = call(&mut bridge, "session.new", json!({"directory": directory})).unwrap();
     let session = made["session"].as_str().unwrap();
     call(
         &mut bridge,
@@ -638,7 +647,7 @@ fn permission_review_can_only_remove_existing_grants() {
     let before = call(&mut bridge, "permissions.list", json!({"session": session})).unwrap();
     assert_eq!(
         before["paths"],
-        json!([{"path": "", "integrity": "trusted"}])
+        json!([{"path": "", "shownPath": "\"\"", "integrity": "trusted"}])
     );
     assert_eq!(before["commands"], json!([]));
     assert_eq!(
@@ -665,7 +674,7 @@ fn permission_review_can_only_remove_existing_grants() {
     .unwrap();
     assert_eq!(
         after["paths"],
-        json!([{"path": "", "integrity": "untrusted"}])
+        json!([{"path": "", "shownPath": "\"\"", "integrity": "untrusted"}])
     );
     assert_eq!(
         call(
