@@ -44,8 +44,8 @@ pub(crate) struct OneShot<R: Read, W: Write> {
     /// Kept here, at the one place that knows the answer was a refusal for want of anybody to ask,
     /// so the run can end on the status that says a gate refused something (CLI-6). A question the
     /// tool answers with a problem for the planner without telling the policy leaves the run's own
-    /// clean flag true, and this is then the only record of it. A write, a fetch or a call to a
-    /// server's tool is told to the policy, so it is kept for the status alone
+    /// clean flag true, and this is then the only record of it. A write, a run, a fetch or a call
+    /// to a server's tool is told to the policy, so it is kept for the status alone
     /// (`Declined::in_the_trail`).
     declined: Vec<Declined>,
     /// The input lines a run given `--input-format lines` reads (CLI-36), where it was.
@@ -185,7 +185,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "run",
                 reason: "the program was not approved, and nobody was there to approve it",
-                in_the_trail: false,
+                in_the_trail: true,
             });
         }
         decision

@@ -5576,6 +5576,41 @@ fn a_closed_network_reaches_the_description_and_the_trail_of_a_run() {
     );
 }
 
+/// CLI-12: a one-shot run's `--json` result lists an unapproved `run` line once, not twice. The
+/// policy records the line as refused under `approval` (TRACE-1) when nobody is there to approve
+/// it, and the one-shot confirmer used to keep a second record of the same question under `run`,
+/// which the result object listed beside the trail's entry. Marking that record `in_the_trail`,
+/// the way a write's and a fetch's already are, drops the duplicate.
+#[cfg(unix)]
+#[test]
+fn an_unapproved_run_line_is_listed_once_not_twice() {
+    let gateway = a_gateway_asking_for_a_run();
+    let scratch = Scratch::new("cli-running-unapproved-run").with_settings(&settings_for(&gateway));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        &environment,
+        &["--json", "-p", "say hello"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    let refusals = object["refusals"].as_array().expect(&stdout);
+    assert_eq!(
+        refusals.len(),
+        1,
+        "the run line's refusal was listed twice, or not at all: {stdout}"
+    );
+    assert_eq!(refusals[0]["gate"], "approval", "{stdout}");
+    assert_eq!(
+        refusals[0]["reason"], "run: the line was not approved and did not run",
+        "{stdout}"
+    );
+}
+
 /// A level recorded in the store does not reach a request to a model whose listing states which
 /// parameters it takes and does not name the field (BACKEND-22).
 ///
