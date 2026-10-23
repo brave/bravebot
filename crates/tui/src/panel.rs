@@ -250,6 +250,8 @@ pub enum Target {
     Model,
     /// The effort row: the same question `/effort` asks.
     Effort,
+    /// The context reading: the same question `/context` asks.
+    Context,
 }
 
 /// The target a press on screen row `row` of a panel drawn over `area` lands on, if any.
@@ -548,7 +550,9 @@ fn head(session: &Session, text: usize) -> Body {
             ));
         }
     }
+    let count = context.len();
     section(&mut body, t!(panel_context).to_string(), context);
+    targets.push((body.len() - count, Target::Context));
     (body, links, continued, targets)
 }
 
@@ -731,6 +735,38 @@ mod tests {
 
         session.note_model_reads_effort(false);
         assert_eq!(target_at(&session, area, area.y + effort, inside), None);
+    }
+
+    /// MOUSE-12. Rejects: a target on the Context heading or on the rows below the reading, and
+    /// one on a reading cut for want of room.
+    #[test]
+    fn only_the_context_reading_is_a_context_click_target() {
+        let session = Session::new("none");
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let rows = lines(&session, area.width, area.height);
+        let reading = rows
+            .iter()
+            .position(|line| {
+                line.to_string()
+                    .contains(&crate::render::context_reading(&session))
+            })
+            .expect("reading") as u16;
+        let inside = area.x + 3;
+
+        assert_eq!(
+            target_at(&session, area, area.y + reading, inside),
+            Some(Target::Context)
+        );
+        assert_eq!(
+            target_at(&session, area, area.y + reading - 1, inside),
+            None
+        );
+        assert_eq!(
+            target_at(&session, area, area.y + reading + 1, inside),
+            None
+        );
+        let short = Rect::new(area.x, 0, WIDTH, reading);
+        assert_eq!(target_at(&session, short, short.y + reading, inside), None);
     }
 
     fn model_config() -> bravebot_config::Config {
