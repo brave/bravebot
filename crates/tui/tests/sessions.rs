@@ -45,7 +45,10 @@ impl Scratch {
         // A test that panicked while holding this poisoned nothing worth protecting: the guard
         // covers an environment variable, and the next test overwrites it anyway.
         let lock = HOME.lock().unwrap_or_else(|held| held.into_inner());
-        let root = std::env::temp_dir().join(format!("bravebot-sessions-test-{name}"));
+        let root = std::env::temp_dir().join(format!(
+            "bravebot-sessions-test-{}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let home = root.join("home");
         let project = root.join("project");

@@ -48,7 +48,10 @@ impl Scratch {
     /// that asserts the ordinary behaviour and passes for the wrong reason.
     fn incognito(name: &str) -> Self {
         let lock = HOME.lock().unwrap_or_else(|held| held.into_inner());
-        let root = std::env::temp_dir().join(format!("bravebot-incognito-test-{name}"));
+        let root = std::env::temp_dir().join(format!(
+            "bravebot-incognito-test-{}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let home = root.join("home");
         let project = root.join("project");

@@ -5420,7 +5420,10 @@ mod tests {
         // The one scratch directory that cannot live under `target/`: this asserts a
         // directory is *not* inside a checkout, and `target/` is inside this one.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let root = std::env::temp_dir().join("bravebot-sessions-not-a-checkout");
+        let root = std::env::temp_dir().join(format!(
+            "bravebot-sessions-not-a-checkout-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create scratch");
         assert_eq!(branch_of(&root), None);

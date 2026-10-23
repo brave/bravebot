@@ -46,6 +46,13 @@ Then run the tests the diff is under, scoped as tightly as the diff is: `cargo t
 commit still has to be a state that stands up, and a change nothing covers is a change to be
 suspicious of.
 
+A test that builds a path under `std::env::temp_dir()` puts `std::process::id()` in the name, or a
+counter or timestamp, or takes its directory from `tempfile`. Every process on a machine shares that
+directory, so a fixed name is deleted by another run of the same test, which is a second session or the
+same binary started again, and each fails for a reason that is not in the code under test.
+`crates/cli/tests/temp_names.rs` fails a name that has none of these. A name that has to be fixed is
+marked `// shared-temp-name: <why>` on its line or the line above.
+
 ## Before pushing
 
 Choose how much to run:

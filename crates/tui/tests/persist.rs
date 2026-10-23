@@ -61,7 +61,7 @@ fn with_temp_home<T>(name: &str, body: impl FnOnce() -> T) -> T {
     let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     proxy_listener();
 
-    let dir = std::env::temp_dir().join(format!("bravebot-home-{name}"));
+    let dir = std::env::temp_dir().join(format!("bravebot-home-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch home");
 

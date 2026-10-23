@@ -33,7 +33,10 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let home = std::env::temp_dir().join(format!("bravebot-agent-incognito-{name}"));
+        let home = std::env::temp_dir().join(format!(
+            "bravebot-agent-incognito-{}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).expect("create scratch");
         bravebot_core::incognito::engage();
@@ -614,7 +617,10 @@ fn a_model_starting_a_delegate_in_a_checkout() -> (String, std::sync::mpsc::Rece
 #[test]
 fn a_checkout_is_not_made_under_the_state_directory() {
     let scratch = Scratch::new("checkout-not-in-state");
-    let work = std::env::temp_dir().join("bravebot-agent-incognito-checkout-work");
+    let work = std::env::temp_dir().join(format!(
+        "bravebot-agent-incognito-checkout-work-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).expect("create the working directory");
     repository::commit_files(&work, &[("README", "committed\n")], "first");
