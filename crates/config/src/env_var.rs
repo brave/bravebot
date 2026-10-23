@@ -98,7 +98,16 @@ pub const NETWORK: [&str; 6] = [
 ];
 
 /// Every name a build may bake in, in the order `doctor` reports them.
-pub const ALL: [&str; 5] = [SIGNING_KEY, KEY_ID, ENDPOINT, PREMIUM_ENDPOINT, DEFAULT_MODEL];
+///
+/// CRASH_REPORT_URL is the one name no build needs: without it the build reports no crashes.
+pub const ALL: [&str; 6] = [
+    SIGNING_KEY,
+    KEY_ID,
+    ENDPOINT,
+    PREMIUM_ENDPOINT,
+    DEFAULT_MODEL,
+    CRASH_REPORT_URL,
+];
 
 /// Names a build must have.
 ///
@@ -152,6 +161,27 @@ pub const INSTALLED_VIA: &str = "BRAVEBOT_INSTALLED_VIA";
 ///
 /// Absent from ALL: it describes one person's machine rather than the build.
 pub const UPDATE_CHECK: &str = "BRAVEBOT_UPDATE_CHECK";
+
+/// Where a crash report is sent: the submission URL of the Backtrace project, token included.
+///
+/// Read only from what the build baked in. Neither the environment at run time nor a settings file
+/// can name another, so a variable a checkout's `.envrc` exports does not redirect where reports go
+/// (CRASH-3). A build without it reports nothing, which is every build from source that did not
+/// have it set.
+///
+/// The name is the service's rather than this program's, as `SERVICES_KEY_AICHAT` is.
+pub const CRASH_REPORT_URL: &str = "BACKTRACE_SUBMIT_URL";
+
+/// Set to `0` to stop crash reports.
+///
+/// With it set, no hook is installed, no report is written, no report is sent and no line is said.
+/// The `crashReports` settings key turns the same reports off, and either one does: this exists for
+/// a machine where the environment is the one place a person or an administrator can state it, and
+/// one that wants reports on has nothing to set. Any value other than `0`, or none, leaves them as
+/// the settings say.
+///
+/// Absent from ALL: it describes one person's machine rather than the build.
+pub const CRASH_REPORTS: &str = "BRAVEBOT_CRASH_REPORTS";
 
 /// Where the directory this session has to itself is, set on every program the agent runs.
 ///

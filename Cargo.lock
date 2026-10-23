@@ -182,6 +182,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bravebot-backtrace"
+version = "0.18.0"
+dependencies = [
+ "bravebot-agent",
+ "bravebot-config",
+ "bravebot-core",
+ "bravebot-net",
+ "bravebot-stamp",
+ "rand 0.8.7",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "bravebot-bedrock"
 version = "0.18.0"
 dependencies = [
@@ -215,6 +229,7 @@ version = "0.18.0"
 dependencies = [
  "bravebot-agent",
  "bravebot-approval",
+ "bravebot-backtrace",
  "bravebot-config",
  "bravebot-core",
  "bravebot-diag",
@@ -375,6 +390,7 @@ dependencies = [
  "base64 0.22.1",
  "bravebot-agent",
  "bravebot-aichat",
+ "bravebot-backtrace",
  "bravebot-config",
  "bravebot-core",
  "bravebot-filetype",
@@ -404,6 +420,7 @@ dependencies = [
  "bravebot-agent",
  "bravebot-aichat",
  "bravebot-approval",
+ "bravebot-backtrace",
  "bravebot-config",
  "bravebot-core",
  "bravebot-filetype",

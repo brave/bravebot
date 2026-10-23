@@ -18,6 +18,7 @@ bravebot-agent = { path = "../agent" }
 # The model picker lists what the endpoint offers, and asking it is this crate's own call
 # rather than something a turn does.
 bravebot-aichat = { path = "../aichat" }
+bravebot-backtrace = { path = "../backtrace" }
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 # What a dropped file's name says it is, which the desktop window asks as well.

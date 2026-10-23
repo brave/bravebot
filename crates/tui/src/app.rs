@@ -2487,6 +2487,11 @@ fn begin_session(
     if let Some(newer) = crate::update::at_startup(settings.update_check()) {
         session.note(newer);
     }
+    // After the line about a release for the same reason, and said once: a build that sends crash
+    // reports tells the person on the first launch that does, with the two ways of stopping it.
+    if let Some(notice) = crate::crash_notice::at_startup() {
+        session.note(notice);
+    }
     // Why a server this checkout asked for is not in the session, said where the person starts
     // reading rather than on the plain terminal the screen is about to cover.
     for note in absent {

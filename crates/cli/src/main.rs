@@ -301,6 +301,15 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         }
     }
 
+    // Beside the log, for the same reason: an incognito session is given no directory, so it leaves
+    // no report and sends none (CRASH-5), and this is before the first thing that could panic in a
+    // way worth reporting. A build with nowhere to send reports, or a person who switched them off,
+    // gets nothing from this call (CRASH-3, CRASH-4).
+    bravebot_backtrace::start(
+        bravebot_backtrace::Process::Cli,
+        bravebot_agent::home::writable(),
+    );
+
     // Taken out before the refusals below read the first argument: a leading `--sandbox <mode>`
     // would otherwise hide the command from them, and `completion` would go unrefused the flags it
     // refuses (CLI-20). The mode is resolved further down, once the settings it reads are in place.

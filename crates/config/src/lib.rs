@@ -1147,6 +1147,22 @@ fn built_in(name: &str) -> Option<String> {
     String::from_utf8(obfuscate::mask(masked)).ok()
 }
 
+/// Where this build sends a crash report, or `None` for a build that was given nowhere to.
+///
+/// Read from what the build baked in and from nothing else, unlike every other name the build
+/// bakes: the environment and the settings files are the two places a checkout can write to, and
+/// where a report goes is not theirs to say (CRASH-3). Only `https`, since the token is in the path
+/// and a cleartext request would put it on the wire.
+pub fn crash_report_endpoint() -> Option<String> {
+    crash_report_endpoint_in(built_in)
+}
+
+/// [`crash_report_endpoint`] against a stated set of baked values, so the rule needs no build that
+/// had one.
+fn crash_report_endpoint_in(baked: impl Fn(&str) -> Option<String>) -> Option<String> {
+    baked(env_var::CRASH_REPORT_URL).filter(|url| url.starts_with("https://"))
+}
+
 /// Pick between what the environment says and what the build baked in.
 fn resolve(
     name: &str,
@@ -4963,6 +4979,39 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(err, ConfigError::Empty(env_var::SIGNING_KEY));
+    }
+
+    /// The token is in the path of the address, so an address that is not `https` would put it on
+    /// the wire. A build given one is a build with nowhere to send reports, not one that sends them
+    /// in the clear.
+    #[test]
+    fn a_baked_crash_report_address_is_used_only_when_it_is_https() {
+        let baked = |value: &'static str| {
+            crash_report_endpoint_in(move |name| {
+                (name == env_var::CRASH_REPORT_URL).then(|| value.to_string())
+            })
+        };
+        assert_eq!(
+            baked("https://submit.backtrace.invalid/brave/token/json"),
+            Some("https://submit.backtrace.invalid/brave/token/json".to_string())
+        );
+        assert_eq!(
+            baked("http://submit.backtrace.invalid/brave/token/json"),
+            None
+        );
+        assert_eq!(baked("submit.backtrace.invalid/brave/token/json"), None);
+        assert_eq!(baked(""), None);
+        assert_eq!(crash_report_endpoint_in(|_| None), None);
+    }
+
+    /// The address is asked for under its own name and no other, so a build that baked the signing
+    /// key or an endpoint and no crash address reports nowhere.
+    #[test]
+    fn another_baked_value_is_not_a_crash_report_address() {
+        let endpoint = crash_report_endpoint_in(|name| {
+            (name != env_var::CRASH_REPORT_URL).then(|| "https://a.invalid/b".to_string())
+        });
+        assert_eq!(endpoint, None);
     }
 
     /// Masking is what keeps a baked credential out of `strings` output, and it is

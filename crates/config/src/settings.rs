@@ -140,6 +140,12 @@ const REFERENCES_BLOCK: &str = "references";
 /// of the home layer's value and the list of keys this build reads all spell it here.
 const RETENTION_KEY: &str = "retentionDays";
 
+/// The key that turns crash reports off, which only the person's own settings file is asked.
+///
+/// Named as a constant because the read of the home layer's value and the list of keys this build
+/// reads both spell it here.
+const CRASH_REPORTS_KEY: &str = "crashReports";
+
 /// The number of days a record is kept when no `retentionDays` is stated.
 ///
 /// Thirty, which is what Claude Code and Gemini CLI keep a transcript for. The floor is one day,
@@ -164,6 +170,7 @@ const READ_KEYS: &[&str] = &[
     "attribution",
     "awaySummaryEnabled",
     "awaySummaryIdleSeconds",
+    CRASH_REPORTS_KEY,
     "deepLinks",
     "deferMcpToolsAbove",
     "download",
@@ -930,6 +937,26 @@ impl Settings {
     fn language_in(home: Option<PathBuf>) -> Option<String> {
         let document = read(&user_settings_file(&home?))?;
         word(&document.root, "language")
+    }
+
+    /// What the person's own settings file says about crash reports, and nothing else the files say.
+    ///
+    /// A boolean and nothing else: the key exists to turn reports off, so a quoted `"false"` is
+    /// absence and reports stay on. Only the home layer is read. A checkout's file is a thing a
+    /// person did not write, so it can neither turn reports off for them nor turn them back on
+    /// after they did (CRASH-4). Read before the first panic could happen, which is before the
+    /// merged layers exist.
+    pub fn written_crash_reports() -> Option<bool> {
+        Self::crash_reports_in(home())
+    }
+
+    /// As [`Settings::written_crash_reports`], for a named home, so a test needs no ambient one.
+    fn crash_reports_in(home: Option<PathBuf>) -> Option<bool> {
+        let document = read(&user_settings_file(&home?))?;
+        match document.root.get(CRASH_REPORTS_KEY) {
+            Some(serde_json::Value::Bool(on)) => Some(*on),
+            _ => None,
+        }
     }
 
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
@@ -8337,6 +8364,57 @@ mod tests {
             Layers::new("language-ahead-project-only").project(r#"{"language": "ja"}"#);
         assert_eq!(Settings::language_in(Some(only_project.home.clone())), None);
         assert_eq!(Settings::language_in(None), None);
+    }
+
+    /// CRASH-4: only the person's own file is asked, so a checkout can neither turn reports off for
+    /// them nor turn them back on after they turned them off.
+    #[test]
+    fn only_the_persons_own_file_says_whether_crash_reports_go() {
+        let layers = Layers::new("crash-reports-layers")
+            .global(r#"{"crashReports": false}"#)
+            .project(r#"{"crashReports": true}"#)
+            .local(r#"{"crashReports": true}"#);
+        assert_eq!(
+            Settings::crash_reports_in(Some(layers.home.clone())),
+            Some(false)
+        );
+
+        let only_project =
+            Layers::new("crash-reports-project-only").project(r#"{"crashReports": false}"#);
+        assert_eq!(
+            Settings::crash_reports_in(Some(only_project.home.clone())),
+            None
+        );
+        assert_eq!(Settings::crash_reports_in(None), None);
+    }
+
+    /// CRASH-4: a value that is not a boolean is no answer, so reports stay as they were.
+    #[test]
+    fn only_a_boolean_turns_crash_reports_off() {
+        for (text, wanted) in [
+            (r#"{"crashReports": false}"#, Some(false)),
+            (r#"{"crashReports": true}"#, Some(true)),
+            (r#"{"crashReports": "false"}"#, None),
+            (r#"{"crashReports": 0}"#, None),
+            (r#"{"crashReports": null}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            let layers = Layers::new("crash-reports-values").global(text);
+            assert_eq!(
+                Settings::crash_reports_in(Some(layers.home.clone())),
+                wanted,
+                "{text}"
+            );
+        }
+    }
+
+    /// The key is one this build reads, so the person who wrote it is not told it does nothing.
+    #[test]
+    fn the_crash_reports_key_is_not_reported_as_unread() {
+        let settings = Layers::new("crash-reports-read")
+            .global(r#"{"crashReports": false}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
     }
 
     /// LOCALE-8: a blank or non-string `language` names nothing, so the environment answers.
