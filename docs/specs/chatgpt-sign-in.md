@@ -45,7 +45,7 @@ lists them beside what no source states. Whether OpenAI's terms allow a program 
 way, and whether OpenAI registers a client for this program, are
 [decisions left open](#decisions-left-open). The command is built on the values as stated, and a release
 that carries it waits on the first of those decisions. Sending a request with the sign-in waits on the
-Responses protocol of #2994.
+Responses protocol of #2994 ([BACKEND-61](backends.md#BACKEND-61)).
 
 The flow carries no workspace content and no model output. The rule that untrusted content never
 reaches the driver or the planner is [AGENTS.md](../../agents/AGENTS.md), and
@@ -556,10 +556,10 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 ### CHATGPT-10: a request to the serving host is made in the Responses protocol and carries the token and the session's identifiers
 
 The serving host is `https://api.openai.com/v1`, and it takes the Responses API. The request, the streamed
-events, a tool call and its result, usage and cache figures and the effort level are those of the clause that
-adds that protocol for any provider entry (#2994), and this service adds no protocol of its own. The effort
-level maps to the service's reasoning field. Where the exchange shows the host also takes chat completions,
-the aichat client may carry that as it carries a gateway's.
+events, a tool call and its result, usage and cache figures and the effort level are those of
+[BACKEND-61](backends.md#BACKEND-61), the clause that adds that protocol for any provider entry (#2994), and
+this service adds no protocol of its own. The effort level maps to the service's reasoning field, and no
+request to this host is made in another protocol.
 
 The access token is sent as a bearer token in `authorization`. The request carries three more headers,
 `session-id`, `thread-id` and `x-client-request-id`, each holding the identifier of the session that makes
@@ -699,7 +699,7 @@ holds by reading its manifest.
 - **Built in part,** the replacing of an access token, which is the `renew` module and has no caller yet:
   [CHATGPT-7](#CHATGPT-7) and [CHATGPT-14](#CHATGPT-14), each naming what is not.
 - **Not built:** [CHATGPT-9](#CHATGPT-9), the account's models in the picker; [CHATGPT-10](#CHATGPT-10), requests to the
-  serving host, which wait on the Responses protocol of #2994 and on a zstd encoder; and the verification
+  serving host, which wait on the Responses protocol of #2994 ([BACKEND-61](backends.md#BACKEND-61)) and on a zstd encoder; and the verification
   of the ID token of [CHATGPT-5](#CHATGPT-5).
 
 A sign-in made now is stored and can be renewed, and is not yet used by a turn: the command says so.
@@ -755,6 +755,29 @@ real ChatGPT account on this program's own build:
   (a list of words) and `supported_reasoning_levels` (a list of objects with an `effort` and a
   `description`). Of nine rows, seven are `list`. The efforts go beyond `low`, `medium` and `high`, up to
   `max` and `ultra` on some rows.
+- `POST /responses` on the serving host, with the access token as the only header, a body with `stream` `true`
+  and `store` `false`, and a listed model, is answered 200 as server-sent events. This holds for a text
+  turn, for a turn that calls a function and for a turn that reasons, on the two models tried.
+- A text turn's events are `response.created`, `response.in_progress`, `response.output_item.added`,
+  `response.content_part.added`, `response.output_text.delta`, `response.metadata`,
+  `response.output_text.done`, `response.content_part.done`, `response.output_item.done` and
+  `response.completed`. A function call replaces the content events with
+  `response.function_call_arguments.delta` and `response.function_call_arguments.done`, and a reasoning turn
+  adds `response.reasoning_summary_part.added`, `response.reasoning_summary_text.delta`,
+  `response.reasoning_summary_text.done` and `response.reasoning_summary_part.done` before the text.
+- **The `output` list of the final `response` is empty.** The items arrive in `response.output_item.done`.
+- A function call is an item of type `function_call` with `call_id`, `name` and `arguments`, the arguments a
+  string. A `function_call_output` item with the same `call_id` and the result as text answers it, and the
+  next turn is accepted with the call item as it arrived, with its `id` left off, and with a reasoning item
+  from the same round left in or left out.
+- Usage is `input_tokens`, `output_tokens`, `total_tokens`, `input_tokens_details` with `cached_tokens` and
+  `cache_write_tokens`, and `output_tokens_details` with `reasoning_tokens`.
+- `instructions` is optional, and `max_output_tokens`, `tool_choice`, a strict function schema and
+  `reasoning` with an `effort` and a `summary` are accepted.
+- A request that is not streamed is refused with 400, a request carrying `temperature` is refused with 400,
+  and a model the account cannot use is refused with 400. Each body is an object with one field, `detail`,
+  holding a sentence.
+- A request without `session-id`, `thread-id` or `x-client-request-id` is accepted.
 
 **Stated by the clauses from opencode's source, to confirm:**
 
@@ -763,8 +786,8 @@ real ChatGPT account on this program's own build:
   A port the operating system chose is accepted and no other is confirmed.
 - The `id_token` field of the code exchange's reply, which the command drops unread.
 - The ID token's algorithm, issuer, audience, required claims and the nonce match.
-- The serving host's Responses protocol, the three session headers, the zstd body, and that there is no
-  native compaction and no change of effort in a session. The bearer token is accepted by the listing.
+- What the three session headers do for prompt-cache affinity, the zstd body, and that there is no native
+  compaction and no change of effort in a session.
 - The error codes that end the use of a subscription: `subscription_sharing_usage_limit_exceeded`,
   `subscription_sharing_user_not_eligible`, `subscription_sharing_unsupported_capability`,
   `subscription_sharing_route_not_supported`, `subscription_sharing_invalid_user`,
@@ -778,6 +801,9 @@ real ChatGPT account on this program's own build:
 - What an account with no subscription reaches.
 - Whether an access token minted before a revocation survives it, and whether a sender-constrained form is
   offered.
+- What the serving host does with a picture, with a model's own words sent back as `output_text`, with a
+  `response.incomplete` or `response.failed` event, and with a refused access token on `/responses`.
+- Whether `cached_tokens` is counted inside `input_tokens`: every figure seen was zero.
 - Whether the listing is dependable, and what a listing that includes a model the account cannot reach does
   at the first request.
 - Whether OpenAI limits the clients registered for one host identifier, and what a second sign-in on a
