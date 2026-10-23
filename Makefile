@@ -58,6 +58,7 @@ help:
 	@echo "  make check-maintenance     Dead code, repeated code and long files, as candidates for the maintenance skill"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
+	@echo "  make check-lint-increase   Whether this branch adds sites of the clippy lints held to the base"
 	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
 	@echo "  make check-pr-body         Whether a pull request body (PR_BODY) has a Not covered line, with an issue per case"
 	@echo "  make check-docs            Build the documentation website under docs/website"
@@ -164,6 +165,7 @@ RUST_TEST_THREADS ?= 4
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
+	@python3 contrib/check-lint-increase.py
 	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
 	@python3 contrib/check-versions.py
 	@python3 contrib/check-toolchain.py
@@ -177,6 +179,14 @@ check:
 check-versions:
 	@python3 contrib/check-versions.py --selftest
 	@python3 contrib/check-versions.py
+
+# Whether this branch adds sites of a clippy lint the tree has hundreds of: clippy runs over the
+# libraries and binaries at the merge base and here, and a lint with more sites in a crate than it
+# had fails. Nothing is recorded in the tree. Run by `check` and, on a pull request, by CI. It
+# compiles the workspace twice, so it skips a change that touches nothing clippy reads.
+.PHONY: check-lint-increase
+check-lint-increase:
+	@python3 contrib/check-lint-increase.py
 
 # Whether clippy here knows the lints CI will fail on. Run by `check`; on its own it costs
 # nothing and answers immediately.
@@ -436,10 +446,10 @@ check-affected-containers:
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -470,6 +480,9 @@ check-maintenance-selftest:
 
 check-session-review-selftest:
 	python3 agents/skills/session-review/selftest.py
+
+check-lint-increase-selftest:
+	python3 contrib/check-lint-increase.py --selftest
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest

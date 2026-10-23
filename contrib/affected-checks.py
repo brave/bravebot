@@ -115,6 +115,8 @@ def classify(path, desktop):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
         return frozenset({"npm"})
+    if path == "contrib/check-lint-increase.py":
+        return frozenset({"rust"})
     if path == "Dockerfile.cross":
         return frozenset({"build"})
     parts = path.split("/")
@@ -342,6 +344,7 @@ CASES = (
     ("mobile/pnpm-lock.yaml", {"mobile", "npm"}),
     ("mobile/pnpm-workspace.yaml", {"mobile", "npm"}),
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),
+    ("contrib/check-lint-increase.py", {"rust"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/stage-platform-package.js", {"npm", "rust"}),
