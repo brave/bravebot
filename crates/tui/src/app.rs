@@ -12212,6 +12212,53 @@ mod tests {
         assert!(context_rows(&session).is_empty());
     }
 
+    /// MOUSE-13: a click on a started MCP server's row in the panel asks what a bare `/mcp` asks.
+    #[test]
+    fn a_click_on_the_panels_mcp_server_row_lists_the_servers() {
+        let (mut session, _) = panel_with_a_context();
+        session.servers.started = vec!["notes-server".to_string()];
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(&buffer, "notes-server");
+        assert_eq!(click(&mut session, row, column), Action::Mcp(String::new()));
+        assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-13: a drag over the row, a click beside it and a click over the scroller ask for
+    /// nothing.
+    #[test]
+    fn a_drag_over_an_mcp_server_row_or_a_click_in_the_scroller_lists_nothing() {
+        let (mut session, _) = panel_with_a_context();
+        session.servers.started = vec!["notes-server".to_string()];
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(&buffer, "notes-server");
+        swept(&mut session, (row, column), (row, column + 4));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 4);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        let (other, other_column) = find_on(&buffer, "PANELMARK");
+        assert_ne!(
+            click(&mut session, other, other_column),
+            Action::Mcp(String::new())
+        );
+
+        session.open_scroller();
+        assert_ne!(click(&mut session, row, column), Action::Mcp(String::new()));
+    }
+
+    /// The buffer of the session's frame, with its layout recorded.
+    fn drawn(session: &mut Session) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, session))
+            .expect("draw");
+        session.note_layout(laid);
+        terminal.backend().buffer().clone()
+    }
+
     /// The row and column where `needle` is drawn in the session's own frame.
     fn find_on_text(session: &Session, needle: &str) -> (u16, u16) {
         let text = render::as_text(session);

@@ -1822,8 +1822,8 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.clear_selection();
             Action::Redraw
         }
-        // A click on the panel's model, effort or context row asks what `/model`, `/effort` or
-        // `/context` asks (MOUSE-11, MOUSE-12). The press and the release are on one cell and the
+        // A click on the panel's model, effort, context or MCP server row asks what `/model`,
+        // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13). The press and the release are on one cell and the
         // press is a single click, so a drag, a double click and a triple click stay selections.
         MouseEventKind::Up(MouseButton::Left)
             if !session.scrolling()
@@ -1841,6 +1841,7 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
                     session.report_context();
                     Action::Redraw
                 }
+                Some(crate::panel::Target::Servers) => Action::Mcp(String::new()),
                 None => Action::Redraw,
             }
         }
