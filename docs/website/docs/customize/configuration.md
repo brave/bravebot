@@ -1622,7 +1622,7 @@ relative name means a path under the workspace. See
 `defaultMode` is parsed so that a file carrying it is not rejected, and **acted on by nothing**: if
 you wrote `acceptEdits` you get the prompts you would have got without it. The modes it names do
 exist. Shift-Tab and `--dangerously-skip-permissions` are what choose one. See
-[modes](../security/permissions.md#answering-in-advance-modes).
+[modes](../security/permission-modes.md).
 
 **An unreadable rule is dropped, named, and takes nothing with it.** A line that is not a rule, names
 no family, or has an anchor that cannot be resolved is reported by `doctor` and in the session where
