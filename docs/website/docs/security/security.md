@@ -522,6 +522,11 @@ Brave does not use your data and does not store it. Prompts and used file conten
 endpoint to produce a reply and are discarded once it has been produced. Nothing is retained and
 nothing is used for training.
 
+That describes Brave's endpoint. If you configure another provider (Anthropic, OpenAI, Google
+Vertex AI, AWS Bedrock or a gateway), your prompts and file contents go to that provider instead,
+and its terms govern what it retains and whether it trains on them. A model server on your own
+machine, such as Ollama, keeps them on your machine.
+
 :::caution[Six lines about your machine go out with every request]
 The system prompt states your working directory, whether it is a git repository, the platform, the OS
 version, the shell and today's date. The working directory is an absolute path, so on most machines it
