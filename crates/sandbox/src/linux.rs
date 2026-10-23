@@ -83,7 +83,10 @@ const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
 /// Passing a null attribute pointer with `LANDLOCK_CREATE_RULESET_VERSION` returns the
 /// version without creating a ruleset. A negative result means Landlock is absent.
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "Landlock has no libc wrapper, so the syscall is issued directly"
+)]
 fn landlock_abi_version() -> libc::c_long {
     const LANDLOCK_CREATE_RULESET_VERSION: libc::c_ulong = 1;
     // Landlock has no libc wrapper, so the syscall is issued directly.
@@ -445,7 +448,10 @@ impl LandlockSandbox {
         // ruleset is installed in the child between fork and exec.
         // `pre_exec` is unsafe by definition: its closure runs in the forked child, where
         // only async-signal-safe work is allowed.
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "`pre_exec` is unsafe, and its closure runs only async-signal-safe calls in the forked child"
+        )]
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe {
             command.pre_exec(move || {
@@ -1410,6 +1416,7 @@ mod tests {
         let held_back = [
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
+            ".bravebot/chatgpt-account.json",
             ".bravebot/mcp.json",
             ".bravebot-browser/secret",
             ".ssh/id_ed25519",

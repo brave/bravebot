@@ -101,6 +101,9 @@ impl Repository {
                 None => Err(unknown()),
             };
         }
+        if word.starts_with("worktrees/") || word.starts_with("main-worktree/") {
+            return Err(Declined::AnotherWorktree(text.to_owned()));
+        }
         if plausible_ref(word) {
             match self.follow(word)? {
                 Some(Some(id)) => return Ok(id),

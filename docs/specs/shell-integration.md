@@ -41,8 +41,10 @@ is in a workspace or a state directory, and a refusal must print nothing for the
 <a id="SHELLINT-2"></a>
 ### SHELLINT-2: the hook records the command line and nothing else, privately
 
-Each line the person submits is appended to `~/.bravebot/shell/<terminal id>`, where the terminal
-id is the shell's process id. A command that spans lines is recorded as one line, with its
+Each line the person submits is appended to `shell/<terminal id>` in the state directory
+([STATE-2](state-directory.md#STATE-2)), where the terminal id is the shell's process id. The state
+directory is the one `BRAVEBOT_HOME` names, which the hook reads once, as the shell sources it, and
+`~/.bravebot` where the variable is empty, is not an absolute path or is not set. A command that spans lines is recorded as one line, with its
 newlines as spaces. The line is recorded as submitted, so what a command printed and whether it
 succeeded are not recorded. A line that is `@bravebot`, or begins with `@bravebot` and a space, is
 not recorded, so a question is not part of the next one. The state directory, the shell directory
@@ -58,13 +60,19 @@ larger and less predictable record, and a question that needs it can ask for it 
 **Known costs.** bash records through its history, when the command finishes and the prompt
 returns, so a command still running or killed is not in the record, where zsh and fish record it
 as it starts and so also record the line that sets `BRAVEBOT_INCOGNITO`. With bash, a line that `HISTCONTROL` or `HISTIGNORE` drops is not recorded,
-which is the behaviour a person who set them wants. The tests
+which is the behaviour a person who set them wants. A terminal keeps
+recording in the directory `BRAVEBOT_HOME` named when its hook was sourced, so a change to the
+variable in that terminal moves a question's run and leaves the record where it was. The tests
 run the bash hook in a real `bash`; the zsh and fish hooks are the same design written for those
 shells and are not run by the suite.
 
 `verified-by: bravebot_cli::running::a_question_carries_the_commands_since_the_last_one_on_stdin`
 `verified-by: bravebot_cli::running::the_recorded_lines_are_private_and_end_with_the_terminal`
 `verified-by: bravebot_cli::running::the_hook_steps_over_a_linked_directory_rather_than_narrowing_where_it_leads`
+`verified-by: bravebot_cli::running::the_hook_records_in_the_state_directory_a_person_named`
+`verified-by: bravebot_cli::running::the_hook_narrows_a_named_directory_and_nothing_above_it`
+`verified-by: bravebot_cli::running::the_hook_steps_over_a_named_directory_that_is_a_link`
+`verified-by: bravebot_cli::running::the_hook_passes_over_a_value_that_names_no_directory`
 
 <a id="SHELLINT-3"></a>
 ### SHELLINT-3: `BRAVEBOT_INCOGNITO` set and not empty stops the recording

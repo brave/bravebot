@@ -77,7 +77,7 @@ pub fn session(
 /// settings file answers nothing: a rule is a decision about a session somebody is sitting in
 /// front of (BG-8). A question about starting a server is held for whoever attaches, so nothing a
 /// person did not see is started (BG-7).
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(unix), allow(dead_code, reason = "only the unix host calls it"))]
 pub(crate) fn hosted(hosting: crate::host::Hosting) -> ExitCode {
     run(
         false,
@@ -279,8 +279,8 @@ fn run(
     for rule in bravebot_agent::permissions::proposed(&settings, profile.as_deref()) {
         asking.say(&t!(
             session_permission_allow_ignored,
-            rule = shown(&rule.rule),
-            path = crate::progress::printable_path(&rule.path)
+            rule = bravebot_agent::confirm::shown_text(&rule.rule),
+            path = bravebot_agent::confirm::shown_path(&rule.path)
         ));
     }
 
@@ -470,6 +470,10 @@ fn run(
         asking.say(&t!(cli_notice, notice = t!(session_permissions_skipped)));
     }
 
+    // A background session's process has no interface a person opened and leaves, so it fires
+    // neither end of a session (HOOK-10).
+    let mut moments = (!hosted)
+        .then(|| bravebot_agent::hooks::SessionMoments::read(home.as_deref(), workspace.root()));
     let mut running = Running {
         config: &config,
         egress: bravebot_net::Egress::new(),
@@ -526,12 +530,23 @@ fn run(
         ),
     };
 
+    // Every question that precedes the first prompt is settled, so the session has begun and the
+    // first prompt is not yet read (HOOK-10). Run before the stderr lock is taken: the lock is for
+    // writing the sentences, not for the length of a hook.
+    if let Some(moments) = &mut moments {
+        let said = moments.started();
+        crate::finish::say_notices(&mut std::io::stderr().lock(), &said);
+    }
     // The streams themselves rather than a lock on each. A lock held for the length of the session
     // is a lock a delegate's thread waits on for ever: a turn lends its reporter to the delegates
     // it spawns, they write progress from threads of their own, and the first of those writes would
     // block on a lock this thread does not give back until the session ends. Each write takes the
     // lock for its own line, which is what the one-shot run does with the same two streams.
     lines(&mut asking, &mut reply, &mut running, &mut beside);
+    if let Some(moments) = &mut moments {
+        let said = moments.ended();
+        crate::finish::say_notices(&mut std::io::stderr().lock(), &said);
+    }
     ExitCode::SUCCESS
 }
 
@@ -716,6 +731,7 @@ struct Kept {
     handle: bravebot_session::sessions::Handle,
     turns: usize,
     tokens: u64,
+    split: bravebot_session::sessions::Split,
     spend: std::collections::BTreeMap<usize, u64>,
     timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
     /// The model that last answered, kept across a turn that failed before any server did.
@@ -735,6 +751,7 @@ impl Kept {
                 handle: Handle::resuming(root, record, Front::Terminal, bravebot_stamp::BUILD),
                 turns: record.turns,
                 tokens: record.tokens,
+                split: record.split,
                 spend: record.spend.clone(),
                 timing: record.timing.clone(),
                 model: record.model.clone(),
@@ -748,6 +765,7 @@ impl Kept {
                 ),
                 turns: 0,
                 tokens: 0,
+                split: Default::default(),
                 spend: std::collections::BTreeMap::new(),
                 timing: std::collections::BTreeMap::new(),
                 model: None,
@@ -769,6 +787,10 @@ impl Kept {
     ) {
         self.turns += 1;
         self.tokens += outcome.tokens;
+        self.split.add(bravebot_session::sessions::Split::of(
+            outcome.tokens,
+            outcome.output_tokens,
+        ));
         *self.spend.entry(self.turns).or_insert(0) += outcome.tokens;
         self.timing
             .entry(self.turns)
@@ -786,6 +808,7 @@ impl Kept {
         let turn = self.turns + 1;
         let charged = bravebot_session::sessions::charge_failed_turn(
             &mut self.tokens,
+            &mut self.split,
             &mut self.spend,
             &mut self.timing,
             turn,
@@ -827,6 +850,7 @@ impl Kept {
                 history: None,
                 turns: self.turns,
                 tokens: self.tokens,
+                split: self.split,
                 spend: &self.spend,
                 timing: &self.timing,
                 model: self.model.as_deref(),
@@ -1368,7 +1392,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         .iter()
         .map(|step| bravebot_approval::RunStep {
             written: step.as_written(),
-            binary: step.binary(),
+            binary: bravebot_agent::confirm::shown_binary(step),
         })
         .collect();
     let writes: Vec<String> = request
@@ -1465,6 +1489,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             &request.host,
             &request.url,
             request.ambient_authority().is_some(),
+            request.redirected_from.as_deref(),
         );
         self.about(Held::Fetch);
         self.ask(&lines, t!(fetch_title))
@@ -1703,6 +1728,7 @@ mod tests {
         let mut kept = Kept::opening(&root, "id", None, None);
         let spent = bravebot_agent::Spent {
             tokens: 107,
+            output_tokens: 40,
             timing: Timing {
                 wall_ms: 999_999,
                 inference_ms: 11,
@@ -1717,6 +1743,14 @@ mod tests {
 
         assert!(kept.charge_failure(spent, std::time::Duration::from_millis(500)));
         assert_eq!((kept.turns, kept.tokens), (1, 107));
+        assert_eq!(
+            kept.split,
+            bravebot_session::sessions::Split {
+                read: 67,
+                written: 40
+            },
+            "the failed turn's tokens were not divided as the report counted them"
+        );
         assert_eq!(kept.spend.get(&1), Some(&107));
         assert_eq!(
             kept.timing.get(&1),
@@ -2967,6 +3001,43 @@ mod tests {
         }
     }
 
+    /// PROMPT-1: the plain question for a run names the directory the line runs in on its summary
+    /// row, and the file each step runs under it, spelled where the name would draw as another, so
+    /// a line in `/work ` is not read as one in `/work`.
+    #[test]
+    fn a_run_question_spells_the_directory_and_the_binary_that_would_draw_as_another() {
+        let drawn =
+            |directory: &str, binary: &str| {
+                let pipeline = bravebot_core::command::Pipeline::new(vec![
+                    bravebot_core::command::Stage::new("tee", Vec::new()),
+                ]);
+                let mut request =
+                    RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".to_string()], directory);
+                let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+                    panic!("a pipeline");
+                };
+                steps[0].resolved = binary.into();
+                steps[0].started_as = binary.into();
+                program(&request)
+            };
+        let plain = drawn("/work", "/usr/bin/tee");
+        assert_eq!(plain[0], "run 1 step in /work");
+        assert!(plain.contains(&"  /usr/bin/tee".to_string()), "{plain:?}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let in_directory = drawn(name, "/usr/bin/tee");
+            assert_eq!(in_directory[0], format!("run 1 step in {spelled}"));
+            let running = drawn("/work", name);
+            assert!(
+                running.contains(&format!("  {spelled}")),
+                "{name:?}: {running:?}"
+            );
+            assert!(
+                !running.contains(&format!("  {name}")),
+                "{name:?}: {running:?}"
+            );
+        }
+    }
+
     /// The plain question tells the same two stories as the panel: a run the turn confines is
     /// asked about as confined, with its directories and what each stage brings, and one it does
     /// not is asked about as not sandboxed.
@@ -3418,6 +3489,36 @@ mod tests {
         }
     }
 
+    /// FETCH-4: a redirect hop is asked with the host it came from. A hop shown as a fresh fetch
+    /// asks the person to approve a host they were never shown, so the redirect row has to be in
+    /// the question beside the lines a plain fetch gets.
+    #[test]
+    fn a_fetch_hop_is_asked_with_the_host_it_came_from() {
+        let request = FetchRequest {
+            url: "https://other.example/a".to_string(),
+            host: "other.example".to_string(),
+            redirected_from: Some("example.com".to_string()),
+        };
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+            Vec::new(),
+        );
+        assert_eq!(asking.confirm_fetch(&request), Decision::Approve);
+        let drawn = String::from_utf8(asking.output).expect("text");
+        for line in bravebot_approval::fetch_lines(
+            "other.example",
+            &request.url,
+            false,
+            Some("example.com"),
+        ) {
+            assert!(drawn.contains(&line), "`{line}` is missing from: {drawn}");
+        }
+        assert!(
+            drawn.contains(&t!(fetch_redirected, from = "example.com")),
+            "the redirect row is missing: {drawn}"
+        );
+    }
+
     /// BG-7: every question a session puts reaches its watcher as the kind it is, which is the
     /// word the roster stores and the list shows. A method that never said its kind would be
     /// listed as a plain question, and one that said another's would be listed as that.
@@ -3519,6 +3620,7 @@ mod tests {
                 asking.confirm_fetch(&FetchRequest {
                     url: "https://example.com/a".to_string(),
                     host: "example.com".to_string(),
+                    redirected_from: None,
                 });
             }),
             held(Held::Fetch)

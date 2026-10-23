@@ -94,6 +94,14 @@ describe('calls derived from rows', () => {
     expect(callLabel(call!)).toBe(`Read(${hostile})`)
   })
 
+  it('lists the target as the bridge spelled it, and as it came where the bridge sent no spelling', () => {
+    const rows = [
+      activity(1, 'tool.finished', { ...read, verb: 'write', target: 'note.md ', shownTarget: '"note.md\u2423"' }),
+      activity(2, 'tool.finished', { ...read, verb: 'write', target: 'note.md' }),
+    ]
+    expect(callsWhileRunning(rows).map((call) => call.target)).toEqual(['"note.md\u2423"', 'note.md'])
+  })
+
   it('has no calls for a session that has made none, and lists only the one call of a turn that then failed', () => {
     expect(callsWhileRunning([])).toEqual([])
     const failed = callsWhileRunning([

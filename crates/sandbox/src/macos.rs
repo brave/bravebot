@@ -293,7 +293,10 @@ impl SeatbeltSandbox {
 /// The per-user cache directory the platform names for this account, with its links followed,
 /// which is how Seatbelt matches it. `None` where the platform does not name one.
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "confstr(_CS_DARWIN_USER_CACHE_DIR) writes into a local PATH_MAX buffer, and its length is checked"
+)]
 #[cfg(target_os = "macos")]
 pub fn user_cache_directory() -> Option<std::path::PathBuf> {
     let mut buffer = [0u8; libc::PATH_MAX as usize];
@@ -2943,6 +2946,7 @@ int main(int argc, char **argv) {
         let held_back = [
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
+            ".bravebot/chatgpt-account.json",
             ".bravebot/mcp.json",
             ".bravebot-browser/secret",
             ".ssh/id_ed25519",

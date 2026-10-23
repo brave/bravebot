@@ -76,10 +76,12 @@ pub const BEDROCK_HAIKU_MODEL: &str = "ANTHROPIC_DEFAULT_HAIKU_MODEL";
 /// for that service and only once a model naming that service is chosen.
 pub const GOOGLE_API_KEY: &str = "GOOGLE_API_KEY";
 
-/// The Google Cloud project a Vertex AI request is made under. Required beside [`GOOGLE_API_KEY`].
+/// The Google Cloud project a Vertex AI request is made under. Without it the key reaches Vertex AI
+/// express mode, which needs no project.
 pub const GOOGLE_CLOUD_PROJECT: &str = "GOOGLE_CLOUD_PROJECT";
 
-/// The location a Vertex AI request is made in. `global` where it is not set.
+/// The location a Vertex AI request is made in. `global` where it is not set, and not read where
+/// there is no project.
 pub const VERTEX_LOCATION: &str = "VERTEX_LOCATION";
 
 /// The names that decide what this process trusts and where it sends requests, which a settings file

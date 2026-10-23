@@ -264,13 +264,38 @@ a path ([SKILL-8](#SKILL-8)), and a page is trusted for the reason the skill is:
 program's own text ([SKILL-12](#SKILL-12)). A skill of the user's own named `bravebot-help` shadows
 the built-in, and the pages go with it.
 
+The clause headings of `docs/specs/` are carried the same way. The index has one more line, for the
+page `bravebot-help/specs`, which lists every spec with its title and the number of its clauses. The
+page of one spec is `bravebot-help/specs/<place of the spec file>`, such as
+`bravebot-help/specs/tools/read-file`, and holds that spec's file name and the heading of each of
+its clauses in file order, each starting with its clause id. The clause text is not carried, so a
+question the headings do not settle is answered with the clause id and the file. A page says when
+its spec is `proposed`.
+
+The headings are read out of the spec files when the program is built, so a spec that changes is
+carried by the next build and no copy of them is kept in the tree. A heading is a `###` line outside
+a code fence that starts with a clause id. A file in `docs/specs/` other than its README that has no
+frontmatter `id` fails the build rather than dropping out of the skill. A spec page is selected the
+way a documentation page is, by an exact match against the compiled table, so the name is never a
+path.
+
 [CMD-24](commands.md#CMD-24) is the command that asks for the skill by name. Without it the planner
 decides from the description when to load the skill.
 
-**What this clause does not do.** The clause headings of `docs/specs/` are not carried.
+**What this clause does not do.** The text of a clause is not carried: a question about the exact
+wording of a rule is answered from its heading, and the program holds the clause text nowhere.
 
 `verified-by: bravebot_agent::skills::the_help_skill_is_offered_everywhere_for_a_question_about_bravebot_and_nothing_else`
 `verified-by: bravebot_agent::help::every_published_page_is_carried_in_the_binary`
+`verified-by: bravebot_agent::help::every_spec_is_carried_with_the_clause_headings_its_file_holds`
+`verified-by: bravebot_agent::help::a_spec_page_holds_the_heading_of_a_clause_and_names_its_file`
+`verified-by: bravebot_agent::help::a_spec_page_is_found_by_its_exact_name_and_nothing_else`
+`verified-by: bravebot_agent::help::the_list_of_specs_names_a_page_that_loads_for_each_spec`
+`verified-by: bravebot_agent::help::the_index_names_the_list_of_specs_and_carries_none_of_their_headings`
+`verified-by: bravebot_agent::spec_headings::only_a_clause_heading_outside_a_code_fence_is_a_heading`
+`verified-by: bravebot_agent::spec_headings::a_fence_is_closed_only_by_the_same_mark_at_least_as_long`
+`verified-by: bravebot_agent::spec_headings::a_page_names_its_file_and_says_when_the_spec_is_only_proposed`
+`verified-by: bravebot_agent::tools::a_spec_page_loads_by_the_name_the_list_gives_it`
 `verified-by: bravebot_agent::tools::a_documentation_page_loads_by_the_name_the_index_gives_it`
 `verified-by: bravebot_agent::tools::a_users_skill_of_the_help_name_takes_the_pages_with_it`
 
@@ -533,7 +558,49 @@ says not to run it, and a name that cannot be typed. A definition's
 `verified-by: bravebot_agent::conversation::the_cut_of_a_skill_says_who_can_read_the_rest`
 `verified-by: bravebot_agent::conversation::a_cut_never_falls_in_front_of_a_skill_the_person_named`
 
+<a id="SKILL-21"></a>
+### SKILL-21: a skill a person put in force as a mode is in the system prompt of every turn until they leave it
+
+`/mode <skill>` ([CMD-27](commands.md#CMD-27)) names one skill as the session's mode and `/mode off`
+leaves it. A turn built while a mode stands reads the skill again when it begins, from the set it
+found ([LOAD-2](tools/load-skill.md#LOAD-2)), by the whole name and no other comparison, and puts its
+instructions in the system prompt: after what this program says and ahead of the person's own
+`AGENTS.md`, so those words still have the last word over a skill. The words go through
+`Policy::present` with the label the skill was read with, as a skill the planner loads does, and the
+files beside the skill are reachable as they are for one a person names ([SKILL-20](#SKILL-20)).
+They are not a message in the conversation, so a session of many turns holds them once, and nothing
+a compaction keeps ([COMPACT-17](compaction.md#COMPACT-17)) has to carry them. A skill its file
+keeps from the planner can be a mode, since the person chose it, and is still not advertised to the
+planner. The trail records the skill by name with the size of what went, each turn.
+
+A mode that cannot be applied to a turn leaves the turn without it and says so in the turn's notices:
+a skill that is no longer found, a skill of a project the trust map no longer vouches for, a skill
+the gate would hold back, and a skill `permissions` denies reading. Nothing falls back to another skill.
+Nothing a file or a tool said sets or clears a mode, and `load_skill` cannot: the mode is a name the
+person's own command stored, compared whole against names the driver enumerated. A delegate is
+given none, and neither is a turn whose caller is not the terminal interface.
+
+The record stores the name, so a resume puts the mode back and says that it did, and a fork or a
+`/clear` keeps it. A record from before the mode was kept reads as in none. The skill's `model`
+and `effort` are not applied by a mode: only its instructions are ([SKILL-15](#SKILL-15)).
+
+**Why.** A skill that says how to work, a review checklist held across several files or a test-first
+playbook, is wanted for a span of the session and not for one message, and naming it in each prompt
+is what a person forgets to do. Putting it in the system prompt keeps it out of the history, where it
+would repeat each turn. Reading it again each turn, through the gate, is what stops a choice made while
+a project was vouched for from outliving the vouching.
+
+`verified-by: bravebot_agent::turn::a_skill_mode_is_in_the_system_prompt_of_every_turn_and_only_once`
+`verified-by: bravebot_agent::turn::a_skill_mode_that_the_gate_or_the_catalogue_does_not_hold_is_not_applied_and_is_said`
+`verified-by: bravebot_session::sessions::a_session_records_the_skill_mode_and_its_fork_and_resume_keep_it`
+`verified-by: bravebot_tui::app::a_resumed_session_is_in_the_mode_its_record_names`
+`verified-by: bravebot_tui::render::the_box_names_the_mode_while_one_is_in_force`
+
 ## Known costs
+
+- **A mode applies a skill's instructions and nothing else of it ([SKILL-21](#SKILL-21)).** Its
+  `model` and `effort` are not applied, since they take effect from the round after a load and a mode
+  has no load to follow. A person who wants them names the skill in a line as well.
 
 - **A skill kept from the planner is supplied only for a line the person sent as a prompt.** A
   `/name` typed while a turn runs is an interjection, which reaches the planner as words and brings

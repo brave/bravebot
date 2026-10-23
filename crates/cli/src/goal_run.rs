@@ -153,6 +153,9 @@ pub(crate) struct Towards<'a> {
     /// The model the rounds ask for, which the judge asks too unless `summaryModel` names another
     /// (GOAL-19).
     pub(crate) model: &'a str,
+    /// The token a stop reaches the run by. Every round and every check is stoppable by it, so a
+    /// stop sent to a run that reads lines (CLI-36) ends the run and not only its first round.
+    pub(crate) cancel: &'a Cancel,
 }
 
 /// How a run that worked towards a condition ended.
@@ -234,7 +237,7 @@ pub(crate) fn work_towards<C: Confirmer + Send>(
             &mut Progress::new(std::io::sink()),
             sink,
             completed.decisions.trust.clone(),
-            &Cancel::new(),
+            towards.cancel,
         );
         let assessed = match judged {
             Ok(assessed) => assessed,
@@ -321,7 +324,7 @@ pub(crate) fn work_towards<C: Confirmer + Send>(
             trust,
             programs,
             None,
-            &Cancel::new(),
+            towards.cancel,
         );
     }
 }

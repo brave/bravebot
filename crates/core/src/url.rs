@@ -10,6 +10,8 @@
 //! parser that read `https://example.com@evil.test/` as `example.com` would hand a person the
 //! wrong name to approve, so userinfo is dropped rather than mistaken for a host: everything
 //! before the last `@` in the authority belongs to whoever wrote the URL, not to the destination.
+//! The same holds for a socket: where the port cannot be read as the transport reads it, there is
+//! none to report.
 
 /// The host and port in `url`, lowercased, or `None` where it names no host.
 ///
@@ -23,32 +25,54 @@ pub fn authority_of(url: &str) -> Option<String> {
     Some(host_and_port_of(url).to_ascii_lowercase())
 }
 
-/// The host and port a request to `url` connects to, lowercased, or `None` where it names no host.
+/// The scheme, host and port a request to `url` connects to, lowercased, or `None` where it names
+/// no host or no socket the transport would reach.
 ///
 /// [`authority_of`] as written leaves an implied port off, so `http://h/` and `https://h/` read
 /// the same although one connects to 80 and the other to 443. A check that a request has not left
-/// the socket it was addressed to compares this instead: the port is the explicit one, else the
-/// scheme's default. A scheme with no default and no port keeps the authority as written.
+/// the socket it was addressed to compares this instead. The scheme counts, since the server
+/// answering plain text on a port is not the one answering TLS on it, and the port is the written
+/// one, else the scheme's default.
+///
+/// A `:` after the host that is not followed by a number a port can be names no socket. The
+/// transport reads no port from it and connects to the scheme's default, so the key would name a
+/// socket the request never reaches. A scheme with no default port, or none at all, names none
+/// either. A caller treats `None` as a socket nothing is on, the url's own included, so two urls
+/// that name none are not the same socket.
 pub fn socket_of(url: &str) -> Option<String> {
     let authority = authority_of(url)?;
-    let has_port = match authority.strip_prefix('[') {
-        Some(rest) => rest
-            .split_once(']')
-            .is_some_and(|(_, after)| after.starts_with(':')),
-        None => authority.contains(':'),
+    let (host, written) = split_port(&authority)?;
+    let (scheme, _) = url.split_once("://")?;
+    let scheme = scheme.trim_start().to_ascii_lowercase();
+    let default = match scheme.as_str() {
+        "http" => 80,
+        "https" => 443,
+        _ => return None,
     };
-    if has_port {
-        return Some(authority);
+    Some(format!("{scheme}://{host}:{}", written.unwrap_or(default)))
+}
+
+/// The host of an authority as written, and the port after it, or `None` where a `:` follows the
+/// host and what comes after is not a port.
+///
+/// A port is ASCII digits that fit a `u16`, which is what the transport reads. Leading zeros are
+/// the same number. A sign is left out although the transport accepts one: a port nobody writes
+/// that way is refused rather than read.
+fn split_port(authority: &str) -> Option<(&str, Option<u16>)> {
+    let host_end = match authority.strip_prefix('[') {
+        // A bracketed IPv6 literal, whose colons are part of the address, so a port can only
+        // follow its closing bracket.
+        Some(rest) => rest.find(']')? + 2,
+        None => authority.find(':').unwrap_or(authority.len()),
+    };
+    let (host, after) = authority.split_at(host_end);
+    let Some(digits) = after.strip_prefix(':') else {
+        return after.is_empty().then_some((host, None));
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
     }
-    let scheme = url
-        .split_once("://")
-        .map(|(scheme, _)| scheme.trim_start().to_ascii_lowercase());
-    let port = match scheme.as_deref() {
-        Some("http" | "ws") => 80,
-        Some("https" | "wss") => 443,
-        _ => return Some(authority),
-    };
-    Some(format!("{authority}:{port}"))
+    Some((host, Some(digits.parse().ok()?)))
 }
 
 /// The host in `url`, lowercased, or `None` where it names none.
@@ -125,20 +149,101 @@ mod tests {
     fn a_socket_fills_in_the_port_a_scheme_implies() {
         assert_eq!(
             socket_of("http://127.0.0.1/mcp"),
-            Some("127.0.0.1:80".into())
+            Some("http://127.0.0.1:80".into())
         );
         assert_eq!(
             socket_of("https://127.0.0.1/x"),
-            Some("127.0.0.1:443".into())
+            Some("https://127.0.0.1:443".into())
         );
         assert_eq!(
             socket_of("HTTP://Example.com:80/x"),
-            Some("example.com:80".into())
+            Some("http://example.com:80".into())
         );
-        assert_eq!(socket_of("https://[::1]/x"), Some("[::1]:443".into()));
-        assert_eq!(socket_of("http://[::1]:8080/x"), Some("[::1]:8080".into()));
-        assert_eq!(socket_of("http://h:8080/x"), Some("h:8080".into()));
+        assert_eq!(
+            socket_of("https://[::1]/x"),
+            Some("https://[::1]:443".into())
+        );
+        assert_eq!(
+            socket_of("http://[::1]:8080/x"),
+            Some("http://[::1]:8080".into())
+        );
+        assert_eq!(socket_of("http://h:8080/x"), Some("http://h:8080".into()));
         assert_eq!(socket_of("http:///x"), None);
+    }
+
+    /// A socket is what a connection reaches, and the scheme is part of it: the server answering
+    /// plain text on a port is not the one answering TLS on it, so a credential sent to one is not
+    /// meant for the other, whichever port either url writes or implies.
+    #[test]
+    fn a_change_of_scheme_is_a_change_of_socket() {
+        for (declared, hop) in [
+            ("http://h:8080/a", "https://h:8080/b"),
+            ("https://h:8443/a", "http://h:8443/b"),
+            ("http://h/a", "https://h:80/b"),
+            ("https://h/a", "http://h:443/b"),
+        ] {
+            let (declared_socket, hop_socket) = (socket_of(declared), socket_of(hop));
+            assert!(
+                declared_socket.is_some() && hop_socket.is_some(),
+                "{declared} {hop}"
+            );
+            assert_ne!(declared_socket, hop_socket, "{declared} and {hop}");
+        }
+    }
+
+    /// A written port is the number the transport connects to, so the same number spelled another
+    /// way, or left out where the scheme implies it, is one socket and no question is owed for it.
+    #[test]
+    fn a_port_spelled_another_way_is_the_same_socket() {
+        let implied = socket_of("http://h/a").expect("a socket");
+        for url in [
+            "http://h:80/b",
+            "http://h:080/b",
+            "http://h:0080/b",
+            "HTTP://H:00080/c",
+        ] {
+            assert_eq!(socket_of(url).as_ref(), Some(&implied), "{url}");
+        }
+        assert_ne!(socket_of("http://h:81/a").as_ref(), Some(&implied));
+        assert_eq!(
+            socket_of("http://h:65535/a"),
+            socket_of("http://h:065535/b")
+        );
+        assert!(socket_of("http://h:65535/a").is_some());
+    }
+
+    /// A `:` that is not followed by a number a port can be is not a port the transport reads: it
+    /// connects to the scheme's default instead. A key built from what the url spells would name
+    /// a socket the request never reaches, so such a url names none.
+    #[test]
+    fn a_colon_that_is_not_followed_by_a_port_names_no_socket() {
+        for url in [
+            "http://127.0.0.1:/a",
+            "https://127.0.0.1:/b",
+            "http://h:abc/a",
+            "http://h:99999/a",
+            "http://h:65536/a",
+            "http://h:+80/a",
+            "http://h:-80/a",
+            "http://h: 80/a",
+            "http://h:8o/a",
+            "http://h:80:90/a",
+            "http://[::1]:/a",
+            "http://[::1]:abc/a",
+            "http://[::1]:99999/a",
+            "http://[::1]8080/a",
+        ] {
+            assert_eq!(socket_of(url), None, "{url}");
+        }
+    }
+
+    /// The transport connects to `http` and `https` and takes its default from the scheme. A url
+    /// with another scheme, or with none, is not one it connects to at all.
+    #[test]
+    fn a_scheme_the_transport_has_no_default_port_for_names_no_socket() {
+        assert_eq!(socket_of("ftp://h/a"), None);
+        assert_eq!(socket_of("ftp://h:21/a"), None);
+        assert_eq!(socket_of("h:8080/a"), None);
     }
 
     /// Userinfo belongs to whoever wrote the URL, so an authority drops it for the same reason

@@ -133,3 +133,65 @@ fn stopping_everything_closes_each_session_and_returns_its_running_workers() {
     release.send(()).unwrap();
     assert!(all.iter().all(|workers| workers.wait_idle(PATIENCE)));
 }
+
+/// A session no turn began has no end to fire, so closing it starts no worker for one: it is closed
+/// at once, as a session with no work always was. The session's state is held across the close, so a
+/// worker started for an end would be waiting on it and the workers would not be idle.
+#[test]
+fn a_session_that_never_began_has_no_end_among_the_workers_a_close_returns() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    let handle = open_session(&mut bridge, directory.path());
+    let state = Arc::clone(&bridge.open[&handle].state);
+    let held = state.lock().unwrap();
+
+    let workers = bridge.close(&handle).expect("the session was open");
+
+    assert!(
+        workers.is_idle(),
+        "a worker was started for a session that never began"
+    );
+    drop(held);
+}
+
+/// A bridge shutting down for a client that has gone says nothing while it closes what the client
+/// held. A client that is still reading would otherwise be told its view was detached, which is the
+/// bridge's own account of the view, where what happened to it is that the connection was lost.
+#[test]
+fn a_bridge_shutting_down_says_nothing_about_the_views_it_closes() {
+    let directory = tempfile::tempdir().unwrap();
+    let said = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&said);
+    let mut bridge = Bridge::new(Box::new(move |event| {
+        sink.lock().unwrap().push(event.name.to_string())
+    }));
+    let handle = open_session(&mut bridge, directory.path());
+    bridge.emitter.start_view(&handle, true).unwrap();
+    said.lock().unwrap().clear();
+
+    assert!(bridge.shut_down(PATIENCE));
+
+    assert_eq!(*said.lock().unwrap(), Vec::<String>::new());
+}
+
+/// A process that ends soon after a session was closed still waits for the work that session had
+/// left, such as the hook that ends it. A shutdown that waited only for the sessions still open
+/// would report everything ended with that work running, and the process would exit on it.
+#[test]
+fn a_bridge_shutting_down_waits_for_a_session_closed_just_before() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    let handle = open_session(&mut bridge, directory.path());
+    let (release, held) = mpsc::channel::<()>();
+    bridge.workers_of(&handle).spawn(move || {
+        let _ = held.recv_timeout(PATIENCE);
+    });
+    bridge.close(&handle).expect("the session was open");
+
+    assert!(
+        !bridge.shut_down(Duration::from_millis(100)),
+        "the shutdown did not wait for the closed session's work"
+    );
+    release.send(()).unwrap();
+    assert!(bridge.shut_down(PATIENCE));
+}

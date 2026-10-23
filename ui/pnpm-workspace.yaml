@@ -4,6 +4,12 @@ allowBuilds:
   esbuild: false
   svelte-preprocess: false
 
+# @brave/leo reaches storybook through @storybook/test, and storybook 8.6.18 and the
+# @storybook/core it pins carry GHSA-f2ph-cmg5-wxc8. 8.6.19 fixes it and pins the matching core.
+# Nothing in ui imports storybook. Remove this once the @brave/leo pin depends on 8.6.19 or later.
+overrides:
+  storybook: "^8.6.19"
+
 # Known high advisories the dependency tree still carries; braces has no patched release.
 # Any other high or critical advisory fails `pnpm audit --audit-level=high` in CI.
 auditConfig:

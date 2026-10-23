@@ -206,13 +206,48 @@ const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
 #[cfg(not(windows))]
 const PROFILE_VARIABLES: &[&str] = &["HOME"];
 
+/// The variable that names the state directory itself, ahead of the profile directory's.
+///
+/// Spelled here for the same reason as [`PROFILE_VARIABLES`]. A value that is empty or not an
+/// absolute path names nothing and is passed over, so the credentials are never put under wherever
+/// the process happened to start.
+const STATE_VARIABLE: &str = "BRAVEBOT_HOME";
+
 /// The file holding the imported credentials.
 ///
 /// The variables are read directly rather than through a dependency, for the same reason and with
 /// the same absence of a fallback as everywhere else the directory is resolved: inventing one would
 /// put a bearer secret somewhere the user never chose.
 pub fn path() -> Result<PathBuf, StoreError> {
-    path_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
+    path_stated(
+        std::env::var_os(STATE_VARIABLE),
+        PROFILE_VARIABLES.iter().map(std::env::var_os),
+    )
+}
+
+/// A file named `file` in the directory the imported credentials are kept in.
+///
+/// For a credential file of another sign-in that this crate keeps: the directory is decided once,
+/// by the rules above, so two files of one person's credentials cannot end up in two places.
+pub(crate) fn beside(file: &str) -> Result<PathBuf, StoreError> {
+    Ok(path()?.with_file_name(file))
+}
+
+/// The same answer from the values, `stated` being what [`STATE_VARIABLE`] holds.
+///
+/// The directory it names holds the file itself, and a value that names nothing falls through to
+/// the profile directory's.
+fn path_stated(
+    stated: Option<std::ffi::OsString>,
+    named: impl IntoIterator<Item = Option<std::ffi::OsString>>,
+) -> Result<PathBuf, StoreError> {
+    match stated
+        .map(PathBuf::from)
+        .filter(|stated| stated.is_absolute())
+    {
+        Some(stated) => Ok(stated.join(FILE)),
+        None => path_named(named),
+    }
 }
 
 /// The same answer, from the values rather than from the variables.
@@ -247,7 +282,7 @@ fn path_named(
 ///
 /// It holds no bytes. What it says, it says by existing, so the one file
 /// [PREM-7](../../../docs/specs/premium-credentials.md#PREM-7) keeps credentials in is still one.
-struct Claim {
+pub(crate) struct Claim {
     path: PathBuf,
 }
 
@@ -273,8 +308,22 @@ const GIVE_UP_AFTER: std::time::Duration = std::time::Duration::from_secs(15);
 impl Claim {
     /// Take the exclusive claim on the store at `store`, waiting for whoever holds it.
     fn take(store: &Path) -> Result<Self, StoreError> {
+        Self::take_as(store, CLAIM, ABANDONED_AFTER)
+    }
+
+    /// Take the claim named `name` beside `store`, which is judged abandoned once it is
+    /// `abandoned_after` old.
+    ///
+    /// A file whose hold is longer than one local read and write, such as one that is renewed over
+    /// a network round trip, states a longer age than [`ABANDONED_AFTER`]: a claim broken while its
+    /// holder still waits for a reply lets a second holder in beside it.
+    pub(crate) fn take_as(
+        store: &Path,
+        name: &str,
+        abandoned_after: std::time::Duration,
+    ) -> Result<Self, StoreError> {
         prepare_directory(store)?;
-        let path = store.with_file_name(CLAIM);
+        let path = store.with_file_name(name);
         let waiting_since = std::time::Instant::now();
         loop {
             match create_claim(&path) {
@@ -286,7 +335,7 @@ impl Claim {
                     });
                 }
             }
-            if waiting_since.elapsed() >= GIVE_UP_AFTER {
+            if waiting_since.elapsed() >= GIVE_UP_AFTER.max(abandoned_after * 3) {
                 return Err(StoreError::Unusable {
                     detail: format!(
                         "{} is held by another bravebot and did not come free",
@@ -294,8 +343,8 @@ impl Claim {
                     ),
                 });
             }
-            if abandoned(&path) {
-                break_abandoned(&path);
+            if abandoned(&path, abandoned_after) {
+                break_abandoned(&path, abandoned_after);
             }
             std::thread::sleep(LOOK_AGAIN_IN);
         }
@@ -333,12 +382,12 @@ fn create_claim(path: &Path) -> std::io::Result<std::fs::File> {
 ///
 /// A modification time that cannot be read, or one in the future, is not old: a clock disagreeing
 /// with the one that wrote the file is a reason to wait rather than a reason to take it.
-fn abandoned(path: &Path) -> bool {
+fn abandoned(path: &Path, after: std::time::Duration) -> bool {
     std::fs::metadata(path)
         .and_then(|found| found.modified())
         .ok()
         .and_then(|written| written.elapsed().ok())
-        .is_some_and(|age| age >= ABANDONED_AFTER)
+        .is_some_and(|age| age >= after)
 }
 
 /// Remove the claim at `path` if what is there is abandoned, and leave a live one in place.
@@ -353,19 +402,21 @@ fn abandoned(path: &Path) -> bool {
 /// The name is free between the move and the put-back. A third process that takes it in that gap
 /// holds beside the claim's owner, which needs that process to arrive within those two calls of a
 /// claim being broken. An owner that finishes in the gap removes nothing, and the claim put back
-/// is then nobody's until it ages out after [`ABANDONED_AFTER`].
-fn break_abandoned(path: &Path) {
+/// is then nobody's until it ages out after `after`.
+fn break_abandoned(path: &Path, after: std::time::Duration) {
     static MOVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-    let aside = path.with_file_name(format!(
-        "{CLAIM}.{}.{}",
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}.{}",
         std::process::id(),
         MOVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
+    let aside = path.with_file_name(name);
     if std::fs::rename(path, &aside).is_err() {
         return;
     }
-    let was_abandoned = abandoned(&aside);
+    let was_abandoned = abandoned(&aside, after);
     let _ = std::fs::remove_file(&aside);
     if !was_abandoned {
         let _ = create_claim(path);
@@ -522,11 +573,15 @@ fn write_at(destination: &Path, credentials: &StoredCredentials) -> Result<(), S
 ///
 /// The temporary holds tokens, so one left by a failed write (a full disk, for one) would stay in
 /// the directory, and each failing process would leave another named for its id.
-fn write_through(
+pub(crate) fn write_through(
     destination: &Path,
     fill: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
 ) -> Result<(), StoreError> {
-    let temporary = destination.with_file_name(format!("{FILE}.{}.tmp", std::process::id()));
+    // Built as an OS string: a name that is not UTF-8 stays the name it is, so two such names do not
+    // share a temporary.
+    let mut name = destination.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{}.tmp", std::process::id()));
+    let temporary = destination.with_file_name(name);
     let placed = stage_and_rename(&temporary, destination, fill);
     if placed.is_err() {
         let _ = std::fs::remove_file(&temporary);
@@ -612,7 +667,7 @@ mod acl {
 
     /// Open `path` for writing, creating it if it is not there, asking for `descriptor` as it is
     /// created.
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, reason = "calls `CreateFileW`")]
     fn open(path: &Path, descriptor: &SecurityDescriptor) -> Result<File> {
         let path = wide(path.as_os_str());
         let attributes = SECURITY_ATTRIBUTES {
@@ -647,7 +702,10 @@ mod acl {
     ///
     /// Taken from the process token rather than from a user name, because a name is not what the list
     /// holds and the same name can belong to two accounts, one on the machine and one in a domain.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "calls `OpenProcessToken`, `GetTokenInformation`, `ConvertSidToStringSidW` and `LocalFree`"
+    )]
     fn current_account() -> Result<String> {
         // Sound because a call that returns nonzero has written an open handle nothing else owns,
         // which is what [`OwnedHandle`] takes responsibility for closing.
@@ -725,7 +783,10 @@ mod acl {
 
     impl SecurityDescriptor {
         /// Parse SDDL into the form a file takes.
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "calls `ConvertStringSecurityDescriptorToSecurityDescriptorW`"
+        )]
         fn of(sddl: &str) -> Result<Self> {
             let sddl = wide(OsStr::new(sddl));
             let mut descriptor = std::ptr::null_mut();
@@ -749,7 +810,10 @@ mod acl {
         /// A descriptor that named no list at all would answer nothing here, and a file with no list
         /// grants every account everything, so that answer is an error rather than a token written
         /// out in the open.
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "calls `GetSecurityDescriptorDacl` and `SetSecurityInfo`"
+        )]
         fn apply_to(&self, file: &File) -> Result<()> {
             let mut dacl: *mut ACL = std::ptr::null_mut();
             let mut present = 0;
@@ -787,7 +851,10 @@ mod acl {
     }
 
     impl Drop for SecurityDescriptor {
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "calls `LocalFree` on the descriptor this value owns"
+        )]
         fn drop(&mut self) {
             // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe { LocalFree(self.0) };
@@ -1192,7 +1259,10 @@ mod tests {
     }
 
     // These tests need `HOME` pointed somewhere else, and there is no safe way to do that.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "`set_var` and `remove_var` are unsafe, and `HOME_LOCK` is held while they run and until restored"
+    )]
     fn with_home<T>(dir: Option<PathBuf>, body: impl FnOnce() -> T) -> T {
         let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -1201,11 +1271,12 @@ mod tests {
             std::fs::create_dir_all(dir).expect("scratch home");
         }
 
-        // Every variable the platform states a profile directory in, not `HOME` alone: one left set
-        // would answer where `HOME` does not, which would have `with_no_home` asking what happens
-        // when one variable is missing rather than when there is no home at all.
-        let previous: Vec<_> = PROFILE_VARIABLES
-            .iter()
+        // Every variable the state directory is stated in, not `HOME` alone: one left set would
+        // answer where `HOME` does not, which would have `with_no_home` asking what happens when one
+        // variable is missing rather than when there is no home at all, and a `BRAVEBOT_HOME` in the
+        // developer's environment would send every test to the credentials it names.
+        let previous: Vec<_> = std::iter::once(&STATE_VARIABLE)
+            .chain(PROFILE_VARIABLES)
             .map(|variable| (*variable, std::env::var_os(variable)))
             .collect();
         // SAFETY: single-threaded within the lock, and restored before returning.
@@ -1924,7 +1995,10 @@ mod tests {
             let claim = path.with_file_name(CLAIM);
             std::fs::File::create(&claim).expect("a claim");
 
-            assert!(!abandoned(&claim), "a claim taken now is somebody's");
+            assert!(
+                !abandoned(&claim, ABANDONED_AFTER),
+                "a claim taken now is somebody's"
+            );
 
             std::fs::OpenOptions::new()
                 .write(true)
@@ -1934,7 +2008,7 @@ mod tests {
                 .expect("an aged claim");
 
             assert!(
-                abandoned(&claim),
+                abandoned(&claim, ABANDONED_AFTER),
                 "a claim this old belongs to a process that died holding it"
             );
         });
@@ -1954,7 +2028,7 @@ mod tests {
             let claim = path.with_file_name(CLAIM);
             create_claim(&claim).expect("a claim just taken by another process");
 
-            break_abandoned(&claim);
+            break_abandoned(&claim, ABANDONED_AFTER);
 
             let third = create_claim(&claim);
             assert_eq!(
@@ -1980,7 +2054,7 @@ mod tests {
                 .set_modified(std::time::SystemTime::now() - ABANDONED_AFTER * 2)
                 .expect("a claim as old as a dead process leaves");
 
-            break_abandoned(&claim);
+            break_abandoned(&claim, ABANDONED_AFTER);
 
             let left: Vec<_> = std::fs::read_dir(path.parent().expect("a directory"))
                 .expect("a listing")
@@ -2322,6 +2396,65 @@ mod tests {
     /// A profile directory as the environment hands one over.
     fn named(value: &str) -> Option<std::ffi::OsString> {
         Some(std::ffi::OsString::from(value))
+    }
+
+    /// STATE-2: a directory a person names in `BRAVEBOT_HOME` holds the credentials file itself,
+    /// answering before `HOME`. Joined onto, an import would write the bearer token into a hidden
+    /// directory inside the one the person named for their own account's state, and a second
+    /// account's session would not find the first one's.
+    #[test]
+    fn a_directory_named_in_the_environment_holds_the_credentials_itself() {
+        #[cfg(windows)]
+        const NAMED: &str = "C:\\srv\\ci\\state";
+        #[cfg(not(windows))]
+        const NAMED: &str = "/srv/ci/state";
+        assert_eq!(
+            path_stated(named(NAMED), [named("/somebody")]).expect("a state directory"),
+            PathBuf::from(NAMED).join(FILE)
+        );
+    }
+
+    /// STATE-2: a directory a person names holds the credentials file byte for byte, and one whose
+    /// name is not UTF-8 is not the directory its U+FFFD rendering spells. A resolver that went
+    /// through text would put the bearer token in the second, or pass the first over and put it under
+    /// `HOME`, and a second account's session would not find the first one's.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_text_holds_the_credentials_and_not_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = OsStr::from_bytes(b"/srv/state-\xff");
+        let lookalike = OsStr::new("/srv/state-\u{FFFD}");
+        let answer = |stated: &OsStr| {
+            path_stated(Some(stated.to_os_string()), [named("/somebody")])
+                .expect("a state directory")
+        };
+
+        assert_eq!(answer(invalid), PathBuf::from(invalid).join(FILE));
+        assert_eq!(answer(lookalike), PathBuf::from(lookalike).join(FILE));
+        assert_ne!(answer(invalid), answer(lookalike));
+    }
+
+    /// STATE-2: a value that is empty or not an absolute path names nothing and is passed over, so
+    /// the profile directory answers as it would have, and where nothing else is named the import is
+    /// reported rather than put under wherever the process started.
+    #[test]
+    fn a_value_that_names_no_directory_is_passed_over() {
+        for value in ["", "state", "./state", "../state", "~/state", "$HOME/state"] {
+            assert_eq!(
+                path_stated(named(value), [named("/somebody")]).expect("a profile directory"),
+                PathBuf::from("/somebody").join(DIRECTORY).join(FILE),
+                "{value:?} was taken as a directory"
+            );
+            assert!(
+                matches!(
+                    path_stated(named(value), [None]),
+                    Err(StoreError::Unusable { .. })
+                ),
+                "{value:?} produced a location nothing stated"
+            );
+        }
     }
 
     /// PREM-7: stock Windows sets no `HOME`, so the batch imported there belongs under the profile

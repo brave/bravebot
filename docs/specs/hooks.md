@@ -13,9 +13,18 @@ governs:
   - crates/agent/src/turn/task.rs
   - crates/agent/src/turn/sentences.rs
   - crates/agent/src/delegate.rs
+  - crates/cli/src/main.rs
+  - crates/cli/src/plain.rs
+  - crates/tui/src/app.rs
   - crates/agent/src/confirm.rs
   - crates/agent/src/permission_mode.rs
   - crates/ui-bridge/src/hooks.rs
+  - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/workers.rs
+  - crates/ui-bridge/src/running.rs
+  - crates/ui-bridge/src/acp.rs
+  - crates/ui-bridge/src/bin/bravebot-rpc.rs
+  - crates/ui-bridge/src/bin/bravebot-acp.rs
   - crates/ui-files/src/main.rs
   - ui/src/shared/agent-settings.ts
   - ui/src/main/agent-settings.ts
@@ -66,7 +75,7 @@ learn.
 `verified-by: by-construction (one path is ever built, by joining the file name onto the state directory the caller was given; nothing reads a hooks file from a working directory or an ancestor of one)`
 
 <a id="HOOK-2"></a>
-### HOOK-2: six moments, and each fires the hooks written for it
+### HOOK-2: nine moments, and each fires the hooks written for it
 
 A declaration names one moment. These are the moments:
 
@@ -78,6 +87,9 @@ A declaration names one moment. These are the moments:
 | `prompt-shown` | just before a prompt or an `ask_user` question is put to a person who can answer it |
 | `checkout-made` | once the driver has written a checkout for a delegate, before that delegate's first request |
 | `compacted` | after a summary has been adopted in place of the older part of the conversation |
+| `session-started` | when an interface a person opened has begun a session, before it sends a turn, or where a window, an editor or the local host holds the session, as its first turn begins |
+| `session-ended` | when that interface is left, however it ended, or where a window, an editor or the local host holds the session, when the session is closed |
+| `file-changed` | when the file the entry names has a different size or modification time at one look than at the one before, or appears or goes |
 
 A `tool-finished` entry may name a `tool`, and then fires for calls of that name alone; one that
 names none fires for every call. A tool named on any of the other moments is about a call
@@ -87,7 +99,8 @@ fire declares no hook and leaves the rest of the file in force.
 
 The turn moments belong to the turn a person asked for. A delegate is a run inside that turn,
 started by a call nobody typed, so a turn that spawns three delegates still fires `turn-started`
-once. A call a delegate made is a call, and fires `tool-finished` like any other.
+once. A call a delegate made is a call, and fires `tool-finished` like any other. The session
+moments belong to the interface a person opened, and HOOK-10 says when each fires.
 
 `prompt-shown` is about a question that reaches a person, so it fires once for each one that does and
 for none that is answered without them: not where nobody can be asked ([PROMPT-9](prompting.md#PROMPT-9)),
@@ -116,6 +129,21 @@ its own, which the person never held. It is told the moment and nothing of the s
 messages it replaced or how many (HOOK-5), the compaction is the same whatever the hook does
 (HOOK-6), and a hook that fails leaves the conversation shortened and is said to the person
 (HOOK-7).
+
+A `file-changed` entry names the one file it watches in `path`, written by the person in their own
+file, so the path is trusted as the program and its arguments are (HOOK-1, HOOK-3). A path is one
+file: no glob and no directory, as [FSWATCH-2](file-watches.md#FSWATCH-2). An entry with no `path`
+declares no hook, and a `path` on any other moment fires for nothing, as a `tool` does. A relative
+path is the file in the directory the session opened in. The full-screen interface takes a first look
+when the session begins and looks again at most every 5 seconds, and runs the entry when a look
+differs from the one before it, once however many changes the window held. An entry does not run again
+until 5 seconds after its last run ended, and a change seen in that time runs it when they are up. A
+session keeps the first 8 `file-changed` entries and no more. It begins no turn and sends the planner
+nothing, so [FSWATCH-4](file-watches.md#FSWATCH-4) and [FSWATCH-6](file-watches.md#FSWATCH-6) are
+untouched, and the looks stop with the interface, since the entries are read once when it begins
+([FSWATCH-11](file-watches.md#FSWATCH-11)). The looks and the command run on a thread of their own,
+so a slow command does not stop the interface drawing. What it says when it goes wrong reaches the
+transcript (HOOK-7).
 
 **Why.** A short vocabulary in a person's own terms, rather than the events the audit trail
 records: those say which gate decided what, and somebody wanting their formatter to run should not
@@ -161,6 +189,19 @@ and a turn that died is exactly when they want telling.
 `verified-by: bravebot_agent::turn::a_summary_that_could_not_be_made_fires_no_hook`
 `verified-by: bravebot_agent::turn::a_delegate_s_compaction_fires_no_compacted_hook`
 `verified-by: bravebot_tui::app::the_thread_that_summarises_fires_the_hooks_in_the_sessions_directory`
+`verified-by: bravebot_config::hooks::the_list_of_moments_names_each_once_in_a_spelling_a_file_accepts`
+`verified-by: bravebot_config::hooks::a_session_moment_fires_only_the_hooks_written_for_it`
+`verified-by: bravebot_config::hooks::a_tool_named_on_a_session_moment_fires_for_nothing`
+`verified-by: bravebot_config::hooks::a_file_changed_entry_names_the_file_it_watches`
+`verified-by: bravebot_config::hooks::a_path_on_another_moment_fires_for_nothing`
+`verified-by: bravebot_agent::hooks::a_changed_file_runs_the_hook_once_for_the_changes_one_window_held`
+`verified-by: bravebot_agent::hooks::a_file_is_looked_at_no_oftener_than_the_interval`
+`verified-by: bravebot_agent::hooks::a_file_that_appears_or_goes_is_a_change`
+`verified-by: bravebot_agent::hooks::a_hook_that_ran_lately_waits_out_the_floor_before_it_runs_again`
+`verified-by: bravebot_agent::hooks::a_session_keeps_no_more_than_eight_file_entries`
+`verified-by: bravebot_agent::hooks::an_entry_for_another_moment_watches_no_file`
+`verified-by: bravebot_agent::hooks::a_thread_looking_for_an_interface_hands_back_what_a_hook_said`
+`verified-by: bravebot_agent::hooks::no_thread_looks_where_no_entry_is_kept`
 
 <a id="HOOK-3"></a>
 ### HOOK-3: a hook is a program and its arguments, never a line a shell parses
@@ -253,6 +294,8 @@ would reach a hook as another directory through a line of JSON.
 
 `verified-by: bravebot_agent::hooks::a_hook_is_told_the_moment_and_nothing_else`
 `verified-by: bravebot_agent::hooks::the_line_a_hook_is_told_is_built_from_the_moment_alone`
+`verified-by: bravebot_agent::hooks::a_file_changed_hook_is_told_the_moment_and_not_the_path`
+`verified-by: bravebot_agent::hooks::a_session_start_hook_fires_once_however_often_it_is_asked`
 `verified-by: bravebot_agent::hooks::a_hook_is_given_no_environment_of_its_own`
 `verified-by: bravebot_agent::hooks::a_checkout_hook_is_handed_the_checkout_and_the_working_directory_it_was_made_from`
 `verified-by: bravebot_agent::hooks::a_checkout_hook_is_handed_a_directory_whose_name_is_not_text_as_it_is`
@@ -292,11 +335,11 @@ decision is taken from something a person wrote rather than from something a pro
 A hook that could not be started, that ended badly, or that was still running when its bound ran out
 and was stopped, is said to the person, naming the moment, the program and, for a hook that was stopped, the
 bound in seconds. The bound is 30 seconds unless the entry states a `timeout`, which is a whole number
-of seconds from 1 to 600; an entry whose `timeout` is anything else declares no hook, as HOOK-3 treats
-a malformed argument. It reaches a live display as
-it happens and the turn's own account of itself as well, so a run with nowhere to draw says it too.
-A `compacted` hook that `/compact` fires has no turn and so no account, and reaches the live display
-alone.
+of seconds from 1 to 600, and 5 seconds for a `session-ended` entry that states none (HOOK-10). An entry
+whose `timeout` is anything else declares no hook, as HOOK-3 treats a malformed argument. It reaches a
+live display as it happens and the turn's own account of itself as well, so a run with nowhere to draw
+says it too. A `compacted` hook that `/compact` fires has no turn and so no account, and reaches the
+live display alone.
 A turn that fails has no account, and a caller that draws nothing as the turn runs keeps what it was
 told and says it beside the failure.
 A moment inside a delegate is a moment of the turn that spawned it and reaches that turn's account,
@@ -338,17 +381,26 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_config::hooks::an_oversized_file_declares_no_hooks`
 `verified-by: bravebot_config::hooks::a_hooks_file_is_read_up_to_64_kb_and_not_a_byte_past_it`
 `verified-by: bravebot_agent::hooks::the_default_bound_is_thirty_seconds`
+`verified-by: bravebot_agent::hooks::the_default_bound_of_a_session_end_is_five_seconds`
+`verified-by: bravebot_agent::hooks::only_a_session_end_has_a_shorter_default_bound_than_thirty_seconds`
+`verified-by: bravebot_agent::hooks::a_session_begins_holding_its_end_to_the_bound_that_moment_has`
+`verified-by: bravebot_agent::hooks::a_session_end_hook_is_stopped_at_the_bound_the_end_has`
+`verified-by: bravebot_agent::hooks::a_session_end_hook_that_states_a_timeout_keeps_it`
+`verified-by: bravebot_agent::hooks::a_session_hook_that_goes_wrong_is_said_naming_the_moment_and_program`
+`verified-by: bravebot_agent::hooks::a_file_changed_hook_that_could_not_start_is_said`
+`verified-by: bravebot_cli::running::a_session_hook_that_could_not_start_is_said_whether_the_run_answered_or_failed`
 
 <a id="HOOK-8"></a>
 ### HOOK-8: one reader decides what a hook is, and what it read is what is shown
 
 The declarations are read in one place. A surface offering somebody their own hooks is told what that
 reader made of the file rather than reading the text itself: the entries, which of them names a call
-that does not happen at its moment, and whether anything in the file was passed over. A surface
-composing the file back from the entries it was given does that only where it was told the whole file
-was read, and otherwise says so and leaves the file to be edited by hand. It may decline to send a
-field somebody left empty, and decides nothing else about what a hook is: a form that wrote an entry
-this reader takes nothing from would have written a file it then refuses to edit.
+that does not happen at its moment, the bound each moment holds an entry to when it states no
+`timeout`, and whether anything in the file was passed over. A surface composing the file back from
+the entries it was given does that only where it was told the whole file was read, and otherwise says
+so and leaves the file to be edited by hand. It may decline to send a field somebody left empty, and
+decides nothing else about what a hook is: a form that wrote an entry this reader takes nothing from
+would have written a file it then refuses to edit.
 
 **Why.** The rules above are lenient deliberately, and [HOOK-7](#HOOK-7) is why: an unknown moment,
 a key this build does not read and an unusable entry are each that much of the file not applying,
@@ -366,12 +418,14 @@ turn would fire.
 
 `verified-by: bravebot_config::hooks::a_file_read_for_showing_reports_the_text_it_was_read_from`
 `verified-by: bravebot_config::hooks::whatever_went_unread_leaves_the_file_not_wholly_read`
+`verified-by: bravebot_config::hooks::an_entry_with_a_path_leaves_the_file_not_wholly_read`
 `verified-by: bravebot_config::hooks::a_file_that_is_not_there_is_wholly_read_and_one_too_large_is_not`
 `verified-by: bravebot_config::hooks::an_entry_says_whether_it_fires_for_nothing`
 `verified-by: bravebot_ui_bridge::hooks::a_front_end_is_told_the_entries_the_agent_read`
+`verified-by: bravebot_ui_bridge::hooks::a_front_end_is_told_the_bound_each_moment_holds_an_entry_to_when_it_states_none`
 `verified-by: bravebot_ui_bridge::hooks::a_file_the_agent_did_not_wholly_read_says_so`
 `verified-by: bravebot_ui_bridge::dispatch::the_hooks_file_is_read_through_the_bridge`
-`verified-by: by-construction (the desktop interface parses no hooks file: ui/src/shared/agent-settings.ts composes one out of the entries the agent reported and reads none, its main process offers a save channel and no read channel, and the helper binary that writes the file answers no read operation for it, which its own test asserts; ui/scripts/drive-agent-settings.mjs drives the panel against a file the agent reports it did not wholly read and asserts the form refuses it, and ui/scripts/drive-manual-walkthrough.mjs edits, fires and removes a real hook through that panel under CI)`
+`verified-by: by-construction (the desktop interface parses no hooks file: ui/src/shared/agent-settings.ts composes one out of the entries the agent reported and reads none, its main process offers a save channel and no read channel, and the helper binary that writes the file answers no read operation for it, which its own test asserts; ui/scripts/drive-agent-settings.mjs drives the panel against a file the agent reports it did not wholly read and asserts the form refuses it and that the timeout field shows the bound the agent reported for the entry's moment, and ui/scripts/drive-manual-walkthrough.mjs edits, fires and removes a real hook through that panel under CI)`
 
 <a id="HOOK-9"></a>
 ### HOOK-9: a hook holding the turn is said to be running, by moment and program, while it runs
@@ -402,11 +456,111 @@ A check is announced the same way, for the same reason.
 `verified-by: bravebot_ui_bridge::reporting::a_running_hook_crosses_as_a_pair_naming_the_moment_and_the_program`
 `verified-by: bravebot_tui::state::a_running_hook_names_the_indicator_and_gives_it_back`
 `verified-by: bravebot_tui::app::a_hook_running_after_a_summary_is_named_and_its_trouble_said`
+`verified-by: bravebot_agent::hooks::a_session_start_hook_is_announced_once_however_often_it_is_asked`
+`verified-by: bravebot_ui_bridge::session_hooks::a_start_hook_holding_the_first_turn_is_announced_while_it_runs`
 
 `prompt-shown` is the exception to the first sentence: it fires from the confirmer, which has no
 display to hand, and a running status drawn over the prompt it precedes would be gone before the
 prompt is. What it says when it goes wrong is still said (HOOK-7), as soon as the turn next has
 somewhere to say it, which is the end of the call the question came up in.
+
+`session-started` and `session-ended` are the other exception: the interface that owns the session
+fires them with no turn to hold open, so nothing is drawn while either runs. What they say when they
+go wrong is still said (HOOK-7). A session a window, an editor or the local host holds is the one
+place a turn is running while `session-started` does, so there it is announced as a turn's hook is,
+and `session-ended` draws nothing.
+
+<a id="HOOK-10"></a>
+### HOOK-10: a session moment belongs to the interface a person opened, and fires once for it
+
+`session-started` fires once, when an interface a person opened has begun a session and before it
+sends a turn: the full-screen interface once every question it opens with is answered, a session in
+lines (`--plain`) before it reads its first prompt, and a one-shot run before its turn.
+`session-ended` fires once when that interface is left, however it ended, and only where
+`session-started` fired: the full-screen interface after it has handed the terminal back, a session
+in lines when its input ends, and a one-shot run when its turn is over, before it reports. A run
+refused before it could send anything, and an interface left at one of the questions it opens with,
+began no session and fire neither. A session started with `--safe` reads no hooks, so it fires
+neither.
+
+A turn fires neither moment, and neither does a delegate. `/resume` and `/clear` begin another
+conversation in an interface that is already open and fire neither. A session a background process
+holds fires neither. The interface that handed a session to a background process with `/bg` does not
+fire `session-ended`, since the session goes on.
+
+A session the bridge holds, which is how the desktop interface, an editor over ACP and the local host
+hold theirs, begins with its first turn and ends when it is closed. Each session is its own: a window
+that holds two fires each moment twice, and a session opened from a record begins when it takes a
+turn, as any other does. `session-started` fires on the thread that runs that first turn, before
+anything else the turn does, so the request that sent the turn is answered at once and the turn sends
+nothing until the hook has ended. A turn sent to a session that has begun, a session opened or forked
+and closed without one, and a manifest run, which fires no hook, begin nothing. `session-ended` fires
+once, only for a session that began, after the turn that was running when it was closed has ended. A
+close is `session.close`, the host's `quit` or the end of its input, and the end of the input of the
+desktop and editor processes, which wait up to ten seconds for the hooks that end their sessions, a
+session closed a moment before included, as the host does
+([HOST-1](local-host.md#HOST-1)), and say nothing to the client that has gone while they close. It is one of the threads the close returns
+([HOST-6](local-host.md#HOST-6)), so a hook that holds the session open holds back the report that it
+is closed and nothing else. What `session-started` says when it goes wrong is carried by the notices
+that end that first turn, and `session-ended` has no turn and no window to say it to, so it says it to
+nobody (Known costs).
+
+The hooks are read once, when the session begins, and the same ones fire at its end. Both moments run
+in the directory the session opened in. A `session-ended` hook that states no `timeout` is held to 5
+seconds, and one that states a `timeout` keeps it (HOOK-7). A hook is told the moment and nothing else
+(HOOK-5) and decides nothing (HOOK-6). What it says when it goes wrong is said where the interface has
+somewhere to say it: in the transcript when the full-screen interface opens, on the terminal once that
+interface is left, on standard error for a session in lines, and in the notices of a one-shot run's
+result.
+
+**Why.** A session is many turns, so a command meant to run once when it opens would run at every
+turn if a turn fired it. The interface that opens a session is the one place that knows when it begins
+and when it ends, so it fires the moments and a turn never does.
+
+`session-ended` is held to a shorter bound than the other moments because the person is leaving and
+nothing on the screen explains the wait. A hook that needs longer writes a `timeout`, which HOOK-7
+keeps as written.
+
+The hooks are read once for the reason a turn reads them once: a file edited halfway through would
+give a session an end it did not begin with. Both moments run where the session opened, so a relative
+path in the hook that ends a session is the path its twin started from, whatever `/cd` has done since.
+
+`verified-by: bravebot_agent::hooks::a_session_start_hook_fires_once_however_often_it_is_asked`
+`verified-by: bravebot_agent::hooks::a_session_end_hook_fires_once_and_only_for_a_session_that_began`
+`verified-by: bravebot_agent::hooks::each_end_of_a_session_fires_the_hooks_written_for_it`
+`verified-by: bravebot_agent::hooks::a_session_hook_runs_in_the_directory_the_session_opened_in`
+`verified-by: bravebot_agent::hooks::the_hooks_a_session_began_with_are_the_ones_that_fire_at_its_end`
+`verified-by: bravebot_agent::turn::a_turn_and_its_delegate_fire_neither_end_of_a_session`
+`verified-by: bravebot_cli::running::a_one_shot_run_is_a_session_of_one_turn_between_the_two_session_moments`
+`verified-by: bravebot_cli::running::a_one_shot_run_whose_turn_failed_still_ends_its_session`
+`verified-by: bravebot_cli::running::a_run_refused_before_its_turn_opens_no_session`
+`verified-by: bravebot_cli::running::a_session_in_lines_starts_once_however_many_prompts_follow_and_ends_with_its_input`
+`verified-by: bravebot_cli::running::a_session_in_lines_left_at_its_startup_question_opens_no_session`
+`verified-by: bravebot_cli::running::a_safe_run_fires_no_session_moment`
+`verified-by: bravebot_cli::running::a_background_session_fires_turn_moments_and_neither_session_moment`
+`verified-by: bravebot_agent::hooks::an_interface_is_told_whether_a_start_hook_will_run`
+`verified-by: bravebot_tui::session_moments_tests::the_opening_screen_is_drawn_before_a_start_hook_holds_the_first_prompt_back`
+`verified-by: bravebot_tui::session_moments_tests::no_early_frame_is_drawn_where_no_start_hook_will_run`
+`verified-by: bravebot_tui::session_moments_tests::a_start_hook_that_could_not_run_is_noted_once_however_many_conversations_open`
+`verified-by: bravebot_cli::main::leaving_the_interface_ends_the_session_except_for_a_hand_over_to_the_background`
+`verified-by: bravebot_ui_bridge::session_hooks::a_window_session_starts_with_its_first_turn_and_ends_when_it_is_closed`
+`verified-by: bravebot_ui_bridge::session_hooks::a_window_session_closed_before_any_turn_fires_neither_moment`
+`verified-by: bravebot_ui_bridge::session_hooks::each_session_begins_and_ends_once_in_its_own_directory`
+`verified-by: bravebot_ui_bridge::session_hooks::a_start_hook_that_cannot_run_is_said_with_the_first_turn_alone`
+`verified-by: bravebot_ui_bridge::session_hooks::a_start_hook_that_cannot_run_is_said_when_the_first_turn_fails`
+`verified-by: bravebot_ui_bridge::session_hooks::a_start_hook_holding_the_first_turn_is_announced_while_it_runs`
+`verified-by: bravebot_ui_bridge::session_hooks::an_editor_session_ends_when_the_adapter_finishes`
+`verified-by: bravebot_ui_bridge::session_hooks::the_desktop_process_ends_its_open_sessions_before_it_exits`
+`verified-by: bravebot_ui_bridge::session_hooks::the_desktop_process_waits_for_the_end_of_a_session_closed_just_before_it_exits`
+`verified-by: bravebot_ui_bridge::closing_tests::a_bridge_shutting_down_waits_for_a_session_closed_just_before`
+`verified-by: bravebot_ui_bridge::closing_tests::a_bridge_shutting_down_says_nothing_about_the_views_it_closes`
+`verified-by: bravebot_ui_bridge::session_hooks::the_editor_process_ends_its_open_sessions_before_it_exits`
+`verified-by: bravebot_ui_bridge::host_process::a_hosted_session_is_reported_closed_only_after_its_end_hook_has_run`
+`verified-by: bravebot_ui_bridge::host_process::a_host_that_quits_ends_the_sessions_it_holds_before_it_exits`
+`verified-by: bravebot_ui_bridge::ending::worker::the_end_of_a_session_follows_the_turn_that_was_running_and_is_returned_with_it`
+`verified-by: bravebot_ui_bridge::ending::worker::a_session_whose_turn_panicked_still_ends`
+`verified-by: bravebot_ui_bridge::closing_tests::a_session_that_never_began_has_no_end_among_the_workers_a_close_returns`
+`verified-by: bravebot_ui_bridge::workers::a_worker_that_follows_the_rest_runs_after_them_and_is_counted_while_it_waits`
 
 ## The file
 
@@ -485,6 +639,43 @@ somewhere to say it, which is the end of the call the question came up in.
   for up to that long.
 - **A delegate's compaction fires nothing.** The delegate's conversation is its own, so a person
   whose delegates compact does not hear of it.
-- **There is no moment for a session.** A session is many turns, and something that should happen
-  once when the program opens fires per turn instead. The interactive interface is where a session
-  begins and ends, and nothing there fires a hook yet.
+- **A bridge-held session begins with its first turn.** A session a window, an editor or the local
+  host opened and used for no turn fires neither moment, and a command meant to run when the window
+  opens runs when the person first sends something. A session opened from a record fires
+  `session-started` for the turn that resumes it, so a command meant to run once for a conversation
+  runs once for each time the conversation is opened.
+- **A bridge-held session closed while its `session-started` hook runs is closed when that hook
+  ends.** The hook belongs to the first turn, which a stop does not reach, so `session.closed` waits
+  for the hook's bound (HOOK-7) and then for `session-ended`, and a process whose input ended in that
+  time may leave its ten second wait before `session-ended` has run.
+- **A `session-ended` hook that goes wrong on a bridge-held session is said to nobody.** The session
+  is closed when the hook runs, and no turn is left to carry a sentence. A hook that must be known to
+  have run writes a file.
+- **A bridge-held session ended by a process that is killed fires no `session-ended`.** The desktop
+  and editor processes wait ten seconds for the hooks that end their sessions when their input ends,
+  and a hook that outstays the wait is cut off with the process.
+- **`session-started` holds the first prompt back while it runs.** The hook runs before the first
+  turn is sent, up to the bound in HOOK-7, so a slow one delays the session it announces. Starting one
+  in the background is not offered, for the reason a hook that does not wait is not. A hook that
+  starts a long-running service starts it on its own and exits.
+- **`session-ended` is advisory.** A process that is killed outright, or stopped by a signal
+  such as Ctrl-C in a one-shot run or a session in lines, runs none, and a hook that outstays its 5
+  seconds is stopped while the person is waiting to be handed their prompt back.
+- **A session handed to the background fires no `session-ended`.** `/bg` leaves the terminal and the
+  session goes on in another process, which fires neither moment, so a hook cannot end what
+  `session-started` began for it.
+- **A conversation begun inside an open interface fires nothing.** `/resume` and `/clear` begin
+  another conversation in the interface that is already open, so a command meant to run once for each
+  conversation runs once for the interface.
+- **`file-changed` fires in the full-screen interface alone.** A session in lines, a one-shot run,
+  the desktop interface, an editor over ACP and the local host look at no file, so an entry for it
+  fires nowhere else.
+- **`file-changed` does not say which file.** A hook is told the moment and nothing else (HOOK-5), so
+  a person who wants one command for two files declares two entries. The desktop form has no field
+  for `path`, so a file holding one is reported as not wholly read and is edited by hand.
+- **A command that writes the file it watches runs every 5 seconds or so.** Nothing stops that but
+  the floor between runs and the person's own command.
+- **A change is noticed by looking.** A file written and put back to the same size and modification
+  time between two looks is not seen, as a watch a turn armed is not ([FSWATCH-3](file-watches.md#FSWATCH-3)).
+- **A hook added to the file while a session runs is not part of it.** The hooks a session fires at
+  its end are the ones it read at its start (HOOK-10).

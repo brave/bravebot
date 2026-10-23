@@ -7,7 +7,9 @@ use bravebot_agent::turn::Outcome;
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use bravebot_session::rewind::RewindStack;
-use bravebot_session::sessions::{Continuation, Front, Handle, Record, Standing, TurnSnapshot};
+use bravebot_session::sessions::{
+    Continuation, Front, Handle, Record, Split, Standing, TurnSnapshot,
+};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -69,6 +71,7 @@ pub fn rewind_points(
             conversation: conversation.snapshot(),
             turns: record.turns,
             tokens: record.tokens,
+            split: record.split,
             spend: record.spend.clone(),
             timing: record.timing.clone(),
             cached: None,
@@ -139,6 +142,7 @@ pub fn keep(
                     conversation: &snapshot,
                     prompt: turn.prompt,
                     tokens: turn.outcome.tokens,
+                    split: Split::of(turn.outcome.tokens, turn.outcome.output_tokens),
                     model: &turn.outcome.model,
                     trust: turn.trust,
                     begins: turn.begins,
@@ -171,6 +175,7 @@ pub fn keep(
                     history: Some(&history),
                     turns: 1,
                     tokens: turn.outcome.tokens,
+                    split: Split::of(turn.outcome.tokens, turn.outcome.output_tokens),
                     spend: &BTreeMap::from([(1, turn.outcome.tokens)]),
                     timing: &BTreeMap::from([(1, turn.outcome.timing)]),
                     model: Some(&turn.outcome.model),

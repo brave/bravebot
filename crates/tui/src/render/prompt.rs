@@ -517,5 +517,14 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
         }
     }
 
+    // The mode stays on the box for as long as it is in force, so a person who has forgotten it is
+    // reminded by the place they type in (SKILL-21).
+    if let Some(skill) = session.skill_mode() {
+        block = block.title_bottom(Line::from(Span::styled(
+            format!(" {} ", t!(input_skill_mode, skill = skill)),
+            dim(),
+        )));
+    }
+
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }

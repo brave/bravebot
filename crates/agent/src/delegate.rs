@@ -588,7 +588,10 @@ pub fn seed<S: Sink>(
 /// a tower of lenders one level deeper for every level of nesting: a type the compiler builds for
 /// ever and a program that cannot be compiled. A delegate may delegate in turn, and the trait
 /// objects are what keep the tower of types one level tall however deep the tree of runs grows.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a setting or collaborator the spawning turn lends, and tests call it directly too"
+)]
 pub fn run(
     seeded: &Seeded,
     config: &bravebot_config::Config,

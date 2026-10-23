@@ -173,7 +173,9 @@ export class Bridge {
    *
    * Closing stdin is the graceful path and it is also the meaningful one: the agent
    * treats EOF as "the front-end has gone" and refuses anything waiting on an answer,
-   * which is exactly right when the window is closing.
+   * which is exactly right when the window is closing. It also closes each session, which fires its
+   * `session-ended` hook, so the agent waits up to ten seconds for that and for a turn still writing
+   * its record, and ends by itself when it is done.
    */
   dispose(): void {
     if (!this.child) return
@@ -183,10 +185,11 @@ export class Bridge {
       // Already gone; the kill below covers it.
     }
     const child = this.child
-    // A turn mid-model-call will not notice EOF immediately. Give it a moment, then stop.
+    // A turn mid-model-call will not notice EOF immediately, and the agent waits up to ten seconds
+    // for the work it is closing. Give it that and a moment more, then stop it.
     setTimeout(() => {
       if (!child.killed) child.kill('SIGTERM')
-    }, 2000)
+    }, 12000)
     this.child = null
   }
 }

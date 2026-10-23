@@ -209,7 +209,7 @@ gh label create session-analysis --repo brave/bravebot --color 8cad49 \
 ```
 
 The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
-duplication and files or functions past a length, applies the existing `refactor` label, or `bug`
+duplication, files or functions past a length, and the other smells its lanes list, applies the existing `refactor` label, or `bug`
 where a reviewer found a defect, an `area` or `infrastructure` where one is clear, and no axis.
 It assigns every issue to netzenbot. If a required label is missing, the poster refuses and prints
 a creation command for a person. Do not create or use a `maintenance` label for these findings.

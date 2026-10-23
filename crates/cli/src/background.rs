@@ -585,7 +585,10 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
 
 /// Whether a line typed in an attached terminal leaves the session running and goes no further
 /// than this process (BG-9).
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only the unix attach loop calls it")
+)]
 fn leaves(line: &str) -> bool {
     line.trim() == "/detach"
 }
@@ -597,7 +600,10 @@ fn talk(_roster: &Roster, _seen: &Seen) -> ExitCode {
 
 /// The text in `pending` that is whole, drawn with control characters pictured except the line
 /// break, which stays one. An incomplete character at the end is kept for the next read.
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only the unix attach loop calls it")
+)]
 fn drawable(pending: &mut Vec<u8>) -> String {
     let whole = match std::str::from_utf8(pending) {
         Ok(text) => text.len(),

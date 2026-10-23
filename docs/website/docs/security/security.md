@@ -366,7 +366,8 @@ directory as not in force.
 
 **More places a stage cannot reach.** The browser relay's default directory `~/.bravebot-browser`,
 which holds the secret that drives the browser, is refused like `~/.bravebot` (a relay told to use
-another directory is not covered). On Windows `gcloud` and `gpg` keep their data under
+another directory is not covered, and neither is a state directory that `BRAVEBOT_HOME` puts
+somewhere other than `~/.bravebot`). On Windows `gcloud` and `gpg` keep their data under
 `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, and those are refused too, with the browser
 profiles under `~/AppData/Local` (`BraveSoftware`, `Google/Chrome`, `Chromium`, `Microsoft/Edge`) and
 `~/AppData/Roaming/Mozilla`, and the Windows stores for credentials, keys and vaults under
@@ -520,6 +521,11 @@ switch still starts.
 Brave does not use your data and does not store it. Prompts and used file contents are sent to Brave's
 endpoint to produce a reply and are discarded once it has been produced. Nothing is retained and
 nothing is used for training.
+
+That describes Brave's endpoint. If you configure another provider (Anthropic, OpenAI, Google
+Vertex AI, AWS Bedrock or a gateway), your prompts and file contents go to that provider instead,
+and its terms govern what it retains and whether it trains on them. A model server on your own
+machine, such as Ollama, keeps them on your machine.
 
 :::caution[Six lines about your machine go out with every request]
 The system prompt states your working directory, whether it is a git repository, the platform, the OS

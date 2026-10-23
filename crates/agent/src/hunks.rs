@@ -252,7 +252,10 @@ pub fn list<S: Sink>(
 /// The session's language servers are stopped just before the write, as they are before a
 /// restoration: a server's copy of the file is the one this changes, and what a rewind leaves them
 /// to start afresh from is what they start afresh from here. A hunk refused leaves them running.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the one caller, the tui hunks command, holds the workspace, backup, trust maps and servers separately"
+)]
 pub fn reject<S: Sink>(
     workspace: &Workspace,
     backup: &Backup,
@@ -279,7 +282,10 @@ pub fn reject<S: Sink>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "tests replace the re-read and the write with closures to simulate a changed file and a failed write"
+)]
 fn reject_with<S: Sink>(
     workspace: &Workspace,
     backup: &Backup,

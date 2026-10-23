@@ -1997,7 +1997,13 @@ impl Workspace {
         skills: &[PathBuf],
         decode: Decode,
     ) -> Result<(Labelled<Page>, String), WorkspaceError> {
-        let page = self.page_reaching(relative, offset, limit, skills, decode)?;
+        // A notebook the planner may read is shown as its cells (READ-9). Only under a trusted
+        // label and only for the read the planner is shown: a slot is filled with the file's own
+        // bytes, and a file nobody vouched for is never opened here at all.
+        let cells = label.is_trusted()
+            && matches!(decode, Decode::Allowed)
+            && crate::notebook::is_notebook_path(relative);
+        let page = self.page_reaching(relative, offset, limit, skills, decode, cells)?;
         let token = page.change_token.clone();
         Ok((Labelled::new(page, label), token))
     }
@@ -2079,7 +2085,7 @@ impl Workspace {
         offset: usize,
         limit: usize,
     ) -> Result<Page, WorkspaceError> {
-        self.page_reaching(relative, offset, limit, &[], Decode::Exact)
+        self.page_reaching(relative, offset, limit, &[], Decode::Exact, false)
     }
 
     /// [`Workspace::page`] that may also land in the directory of a skill loaded this turn, and
@@ -2091,6 +2097,7 @@ impl Workspace {
         limit: usize,
         skills: &[PathBuf],
         decode: Decode,
+        cells: bool,
     ) -> Result<Page, WorkspaceError> {
         let resolved = self
             .resolve_for_reading(relative, skills)
@@ -2118,6 +2125,14 @@ impl Workspace {
                     })?;
                 (text, decoding)
             }
+        };
+
+        // The cells of a version 4 notebook stand in for its JSON; any other file is shown as the
+        // lines it is.
+        let contents = if cells {
+            crate::notebook::cells_view(&contents).unwrap_or(contents)
+        } else {
+            contents
         };
 
         let (first, limit) = window_of(offset, limit);
@@ -3894,7 +3909,10 @@ impl Workspace {
     /// The lines come from the file the walk already read, so they carry the label the matches do
     /// and nothing is opened or decided for them. They are not matches: they count toward neither
     /// the match cap nor the offset, and a cap of their own bounds how many are returned.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "grep's arguments plus the context line count, which grep passes as 0"
+    )]
     pub fn grep_around<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -3924,7 +3942,10 @@ impl Workspace {
     /// on them. The file cap and the time cap apply as they do to lines. The match cap, the offset
     /// and context do not: no line is returned, so a count totals every match the walk read, and a
     /// walk that stopped short says so through `unvisited` and `timed_out` as a lower bound.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "grep_around's arguments plus the output shape, which grep_around passes as lines"
+    )]
     pub fn grep_shaped<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,

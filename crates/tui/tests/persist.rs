@@ -61,7 +61,7 @@ fn with_temp_home<T>(name: &str, body: impl FnOnce() -> T) -> T {
     let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     proxy_listener();
 
-    let dir = std::env::temp_dir().join(format!("bravebot-home-{name}"));
+    let dir = std::env::temp_dir().join(format!("bravebot-home-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch home");
 
@@ -364,6 +364,33 @@ fn a_press_opens_the_next_session_too_and_a_corrupt_choice_leaves_it_closed() {
         let mut corrupt = bravebot_tui::state::Session::new("test").with_stored_history();
         corrupt.adopt_panel();
         assert!(!corrupt.panel_open(), "a corrupt choice opened the panel");
+    });
+}
+
+/// A press that closes the panel is written too, so a person who closed one the last session left
+/// open finds it closed at the next start. Only the opening press writing the choice would leave the
+/// file saying `open` for good.
+#[test]
+fn a_press_that_closes_the_panel_is_read_back_next_session() {
+    with_temp_home("panel-close-press", || {
+        let wide = bravebot_tui::state::Laid {
+            columns: 120,
+            ..bravebot_tui::state::Laid::default()
+        };
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.note_layout(wide);
+        session.toggle_panel();
+        assert!(session.panel_open(), "the first press did not open it");
+        session.toggle_panel();
+        assert!(!session.panel_open(), "the second press did not close it");
+
+        let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+        next.adopt_panel();
+        assert!(
+            !next.panel_open(),
+            "the press that closed the panel was not read back next session"
+        );
+        assert_eq!(store::load_panel(), Some(false));
     });
 }
 

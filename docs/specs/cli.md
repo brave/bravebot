@@ -17,11 +17,14 @@ governs:
   - crates/cli/src/exit.rs
   - crates/cli/src/goal_run.rs
   - crates/cli/src/json.rs
+  - crates/cli/src/lines.rs
   - crates/agent/src/output_schema.rs
   - crates/cli/src/permissions_check.rs
   - crates/cli/src/plain.rs
   - crates/cli/src/sessions_list.rs
   - crates/cli/src/session_delete.rs
+  - crates/cli/src/stats.rs
+  - crates/session/src/stats.rs
   - crates/cli/src/update.rs
   - crates/config/src/keys.rs
   - crates/tui/src/hidden.rs
@@ -59,7 +62,8 @@ second answers the write prompt and no other, so a run, a fetch and a write the 
 found a value in are still refused, because nobody can be asked. The two are refused together, and
 `--accept-edits` is refused where the line starts no one-shot run, since a session has the mode key
 for the same thing. The planner's questions are declined in both modes, because they are not
-permissions.
+permissions. A run given `--input-format lines` puts them to the program sending its lines instead,
+which picks among the choices the planner offered and writes none of the words (CLI-36).
 
 **Why.** The alternative to a person is not a default, it is a guess made in their name. The
 planner is told a reply came from a person, so inventing one would be worse than not asking. A flag
@@ -95,7 +99,8 @@ answer. Writing stays refused without one of the flags above.
 ### CLI-2: unprompted, stdin is read only when it is not a terminal
 
 A terminal's stdin is left alone, so an interactive invocation does not sit waiting for input
-nobody is sending. Piped bytes are read when there are any.
+nobody is sending. Piped bytes are read when there are any. A run given `--input-format lines` reads
+stdin a line at a time until it closes, whatever stdin is (CLI-36).
 
 A question this run asked is the exception, and it is not the case this clause is about: the bytes
 are read because somebody was prompted for them a moment earlier, so they are input that is being
@@ -110,7 +115,8 @@ a pipe is never read for an answer.
 
 Nothing vouched for what a pipe carries: `gh pr diff` and `cat build-error.txt` both arrive the
 same way and neither passed through the trust map. So it is quarantined and the planner is given a
-reference, never the bytes.
+reference, never the bytes. The lines of CLI-36 are labelled the same way, unless a person typed
+`--trust-input-lines`.
 
 **Why.** A pipe has no path, so there is nothing for the trust map to have an opinion about. The
 pessimistic label is the only one that holds without knowing what fed it.
@@ -135,7 +141,9 @@ Progress, errors and the audit trail go to stderr, so a one-shot run is pipeable
 the trail on stderr beside it: which gate checked what, the label every value carried, and what
 was released. The one thing that may take the reply's place on that stream is the result object in
 CLI-12, and it is still the only thing on it. The events of CLI-24 are the second exception: a run
-given `--json-stream` writes them ahead of that object, and nothing else is on the stream.
+given `--json-stream` writes them ahead of that object, and nothing else is on the stream. A run
+given `--input-format lines` writes a result object for each turn it runs, and the two events of
+CLI-36 beside the others.
 
 **Why.** A progress line mixed into stdout would corrupt whatever the user piped the reply into.
 
@@ -159,6 +167,7 @@ exiting successfully with an explanation on stdout, and each of them has a statu
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` (CLI-28) asked for |
 | 7 | `BB1007` | worked towards the condition `--goal` (CLI-35) gave, and it did not hold |
+| 8 | `BB1008` | reached a limit `--max-rounds` or `--max-tokens` (CLI-38) gave it, and stopped before going past it |
 
 A status is never renumbered and never given a second meaning. A failure kind nothing here names
 is 1, and one worth telling apart takes the next number.
@@ -196,6 +205,8 @@ over one set of failures is one of them going out of date.
 `verified-by: bravebot_cli::exit::a_manifest_run_is_classified_by_what_stopped_it`
 `verified-by: bravebot_cli::running::a_reply_off_the_output_schema_ends_on_its_own_status`
 `verified-by: bravebot_cli::running::a_goal_never_met_stops_after_ten_rounds_on_its_own_status`
+`verified-by: bravebot_cli::running::a_run_asking_for_a_round_past_max_rounds_ends_on_status_eight`
+`verified-by: bravebot_cli::exit::a_run_stopped_at_its_limit_is_told_apart_from_a_failure`
 `verified-by: bravebot_agent::backend::a_request_that_never_left_is_told_apart_from_one_that_was_answered`
 `verified-by: bravebot_cli::main::a_turn_something_was_refused_in_does_not_succeed`
 `verified-by: bravebot_cli::main::what_nobody_could_be_asked_is_kept_and_what_was_answered_is_not`
@@ -231,9 +242,11 @@ it fail rather than pass with a warning. Text it names from a settings file, suc
 or an environment name, is drawn with its control characters replaced ([LAYER-3](layering.md#LAYER-3)),
 because the project and local files belong to whoever made the checkout.
 
-The state directory is reported with the variable that named it, and on a platform where the files
-under it cannot be restricted to one account the report says which of them carry the permissions of
-the profile directory instead. Where there is no state directory, the report says which variables were
+The state directory is reported with the variable that named it. A `BRAVEBOT_HOME` that is set to
+something that is not an absolute path names no directory and is passed over; the report says so, naming
+the variable and not its value, which may carry a credential, and says nothing for one that is empty or
+unset. On a platform where the files under it cannot be restricted to one account the report says
+which of them carry the permissions of the profile directory instead. Where there is no state directory, the report says which variables were
 looked at, points the remedy at those same variables, names what is not kept without one, and says
 that a checkout's own settings, skills and instructions are read regardless. It is reported rather than failed on, and sits outside the
 configuration section, which a configuration error stops early.
@@ -260,6 +273,7 @@ installed. It also checks that `gh` can read the login it holds in the real home
 ssh keys pushes as ([SANDBOX-16](sandboxing.md#SANDBOX-16)). It takes at most one argument, and one
 that is not `<host>/<owner>` is refused with the status an argument error has.
 
+`verified-by: bravebot_cli::running::doctor_passes_over_a_relative_value_and_says_home_named_the_state_directory`
 `verified-by: bravebot_cli::doctor::doctor_development_checks_only_apply_to_the_source_tree`
 `verified-by: bravebot_cli::doctor::doctor_reports_agent_discovery_conflicts_without_changing_them`
 `verified-by: bravebot_cli::doctor::doctor_accepts_current_windows_copies_and_reports_stale_ones`
@@ -572,7 +586,7 @@ A failed run retains measured cumulative token usage from completed work. The la
 replaces earlier reports; a successful outcome is charged once. A goal run (CLI-35) adds the rounds
 before the latest, and the judge's checks, to the latest round's figure. Required numeric token fields
 remain zero when no measurement exists. Failure reports do not invent a model, reply or round
-count.
+count, except that a run stopped at a limit (CLI-38) reports the rounds it made, which it counted.
 
 The object takes the reply's place on stdout and nothing else goes there. Progress, the message and
 the trail stay on stderr, exactly as they are without the flag.
@@ -614,6 +628,7 @@ what may change, every field is either frozen by accident or broken without warn
 `verified-by: bravebot_cli::running::a_write_nobody_could_approve_exits_on_the_refused_status_and_says_so`
 `verified-by: bravebot_cli::main::a_write_and_a_fetch_nobody_could_be_asked_about_count_for_the_status_and_are_listed_once`
 `verified-by: bravebot_cli::main::an_mcp_call_nobody_could_be_asked_about_counts_for_the_status_and_is_listed_once`
+`verified-by: bravebot_cli::running::a_run_that_has_spent_max_tokens_sends_no_further_request_and_ends_on_status_eight`
 
 <a id="CLI-13"></a>
 ### CLI-13: `--settings` names a file that outranks every layer found
@@ -713,6 +728,8 @@ Prompts are read only from a terminal because they are the trusted input, and wh
 that a pipe carries bytes nothing vouched for. A session reading prompts from a pipe would take its
 instructions from whatever fed it, and answer its own approval questions out of the same bytes,
 which is the whole guarantee inverted for the sake of a convenience `-p` already provides.
+`--input-format lines` (CLI-36) reads prompts from a pipe as well, and leaves the guarantee standing
+by labelling them as a pipe's until a person types the flag that says they are theirs.
 
 **What it does not have.** Everything that was a drawing: the scroller and its search, the key
 list, the slash commands, `@` naming a file, a picture on the clipboard, the audit trail under a
@@ -941,10 +958,12 @@ each by a number and by the word that names it:
 - `bedrock` signs in to every AWS account the configuration names for Amazon Bedrock.
 - `import` reads model services out of other tools, as `import-providers` does.
 - `gateway` stores a key for a gateway a provider block names.
+- `chatgpt` signs in to a ChatGPT Plus or Pro account in a browser ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
 
 A way that already holds a sign-in says so on its line. For Leo that is the line `doctor` prints
 for the stored subscription. For Bedrock it is shown where every account named has a usable
-session. For a gateway it is the ids keys are stored for. The credential itself is never printed.
+session. For a gateway it is the ids keys are stored for. For ChatGPT it is that a sign-in is stored. The credential
+itself is never printed.
 
 The answer is a number or a name, in any case. If nothing is typed, or the input ends, the command exits
 successfully having run nothing. An answer that names no listed way is refused with the argument
@@ -954,7 +973,7 @@ runs nothing without a yes.
 
 `bravebot auth login <way>` runs that way without the list. A word after `leo` is the channel and
 is checked as `import-leo-creds` checks it. A word opening with `-` is refused there, and so are a
-second word and any word after `bedrock` or `import`. The list needs a terminal on stdin and on stderr. Without one, the
+second word and any word after `bedrock`, `import` or `chatgpt`. The list needs a terminal on stdin and on stderr. Without one, the
 command is refused with the argument status and the forms a script can type instead.
 
 Each way is run by the function its own command runs, so `auth login import` prompts, refuses and
@@ -1007,7 +1026,8 @@ In an incognito session the Leo and import ways are refused by the checks `impor
 `import-providers` make, with their words. The Bedrock way is not refused. It records nothing, and
 says `BRAVEBOT_USE_BEDROCK=1` still has to be exported.
 `bravebot auth logout leo` forgets the stored subscription, as `import-leo-creds --forget` does, and
-is allowed in an incognito session. `bravebot auth logout gateway [id]` forgets the key stored for
+is allowed in an incognito session. `bravebot auth logout chatgpt` forgets the stored ChatGPT sign-in
+([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)) and is allowed in one too. `bravebot auth logout gateway [id]` forgets the key stored for
 that id, or the only one stored where none is named, and is allowed in an incognito session too.
 With several stored and none named, or an id with none stored, it is refused with the argument
 status and names the ids that hold one. The file is removed with its last key. It says the key still
@@ -1108,6 +1128,8 @@ account whose session has not been checked yet.
 `verified-by: bravebot_cli::running::auth_login_import_is_the_import_and_refuses_where_it_does`
 `verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
 `verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
+`verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
+`verified-by: bravebot_cli::running::auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one`
 
 <a id="CLI-19"></a>
 ### CLI-19: `--system-prompt` and `--append-system-prompt` put a person's own words in the planner's system prompt for one run
@@ -1140,7 +1162,7 @@ The flags are refused, with the status for an argument (CLI-6), when no words fo
 words are blank, and when they open with `-` and hold no whitespace, since that is the next flag:
 taken as the words, `--json` would be removed and the run would answer in the other format. A
 sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
-They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `import-leo-creds`,
+They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `stats`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task. A refusal writes the
 result object of CLI-12 if one was asked for, sends nothing, and says why through the catalogue
 ([LOCALE-2](localization.md#LOCALE-2)).
@@ -1258,27 +1280,28 @@ what it leaves out is permission: nothing is added to what the planner may do.
 <a id="CLI-23"></a>
 ### CLI-23: `auth status` says whether a sign-in is usable, and its exit status says it too
 
-`bravebot auth status [leo|bedrock|gateway [id]]` reads what a turn reads, writes nothing, and
+`bravebot auth status [leo|bedrock|gateway [id]|chatgpt]` reads what a turn reads, writes nothing, and
 prints one line per sign-in: `leo`, `bedrock` for the default AWS profile or `bedrock <profile>`,
-and `gateway <id>`. Each line is one of:
+`gateway <id>` and `chatgpt`. Each line is one of:
 
 - **signed in**, with a detail. For Leo that is the line `doctor` prints, the environment and the
   count of credentials unspent. For an AWS account it is that the session gives credentials, asked
   of the AWS CLI without starting a sign-in. For a gateway it is where a key is found, never what it
-  is.
+  is. For ChatGPT it is the instant the access token expires, and a token past it is still signed in, since
+  the next request replaces it ([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)).
 - **not signed in**, with the way to sign in: nothing is imported, the AWS session has lapsed, or
   a gateway has no key.
 - **unusable**, with the reason and remedy, where signing in again does not fix it: a stored
   batch that cannot be read or was written by another version, or one imported for an environment
   the premium endpoint does not accept, in the words a turn uses
   ([PREM-8](premium-credentials.md#PREM-8)); the AWS CLI missing or the profile unknown; a file of
-  gateway keys that cannot be read.
+  gateway keys that cannot be read; a ChatGPT sign-in file that cannot be read or is another version's.
 
 A gateway whose block names nowhere for a key to live needs none and is signed in. Leo needs the
 configuration only to know the endpoint, so nothing imported is reported without it. A configuration
 that cannot be read is reported as unusable on the lines it blocks.
 
-With no way named, all three are asked about. The command exits 0 if any sign-in is usable, since
+With no way named, all four are asked about. The command exits 0 if any sign-in is usable, since
 nobody holds every way and a script asking whether bravebot can run is asking about the set. With a
 way named, it exits 0 only if every sign-in under it is usable. Otherwise it exits with the
 configuration status where a configuration could not be read, and the failure status
@@ -1316,6 +1339,7 @@ start and one that wants to know whether a particular sign-in worked.
 `verified-by: bravebot_cli::auth::the_verdict_asks_all_of_a_named_way_and_any_of_the_rest`
 `verified-by: bravebot_cli::auth::a_lapsed_aws_session_is_not_signed_in_and_a_missing_cli_is_unusable`
 `verified-by: bravebot_cli::auth::nothing_imported_is_told_from_a_store_that_could_not_be_read`
+`verified-by: bravebot_cli::running::auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request`
 
 <a id="CLI-24"></a>
 ### CLI-24: `--json-stream` writes one event per line as the run goes, then the result object
@@ -1332,7 +1356,9 @@ line, to stdout as each of these happens, in the order they happen:
   counts as they were is not an event.
 
 The last line is the result object of CLI-12, byte for byte what `--json` writes for the same run.
-It has no `event` field, so a caller tells it from an event by that. Every event carries the
+A run given `--input-format lines` runs several turns and writes one result object for each, after
+the events of that turn (CLI-36). It has no `event` field, so a caller tells it from an event by
+that. Every event carries the
 `schema` number of CLI-12 and its add-only rule: within one number a field may be added to an event,
 and an event kind may be added, and neither is removed, renamed or given a different meaning.
 
@@ -1454,7 +1480,7 @@ the status for an argument (CLI-6), when no list follows it, when the list is bl
 in it is not a tool, so a typo is not read as a smaller list than its author meant. If it is given
 twice, the last is used. Both are refused with `--mode manifest`, whose steps are planned and run
 from the plan, with `--bg`, which starts the session in another process that would not carry them,
-and with `doctor`, `auth`, `mcp`, `permissions`, `sessions`, `attach`, `reply`, `import-leo-creds`,
+and with `doctor`, `auth`, `mcp`, `permissions`, `sessions`, `stats`, `attach`, `reply`, `import-leo-creds`,
 `import-providers`, `completion` and `shell-init`, which start neither a session nor a task.
 
 **Why.** A harness running the agent on a shared machine needs to say what a run may reach without
@@ -1470,6 +1496,8 @@ or narrow them.
 `verified-by: bravebot_cli::running::a_tools_list_offers_no_tool_of_an_approved_server`
 `verified-by: bravebot_cli::running::a_tool_limit_that_limits_nothing_is_refused_by_name`
 `verified-by: bravebot_cli::main::the_tool_limit_is_taken_out_wherever_it_appears`
+`verified-by: bravebot_cli::running::the_tool_limit_is_refused_beside_each_command_that_starts_no_session_or_task`
+`verified-by: bravebot_cli::running::a_no_shell_run_does_not_send_the_planner_from_read_git_to_run`
 
 <a id="CLI-27"></a>
 ### CLI-27: `--locked` starts a run that answers to the person's own settings and nothing in the checkout
@@ -1556,9 +1584,10 @@ a regular-expression `pattern` would need one the dependency policy bans.
 ### CLI-29: `update` says the command that updates this copy, and runs nothing
 
 `bravebot update` prints the command for the way this copy was installed: the npm package's line
-for one the npm launcher started, and the install script's own line for the binary that script
-recorded putting there, and `brew upgrade --cask bravebot` or `winget upgrade Brave.Bravebot` for
-one that Homebrew or WinGet unpacked. A copy none of those put here, a build from source above all, is told
+for one the npm launcher started, the install script's own line for the binary that script
+recorded putting there, the PowerShell install script's own line for the binary that script
+recorded, and `brew upgrade --cask bravebot` or `winget upgrade Brave.Bravebot` for one that
+Homebrew or WinGet unpacked. A copy none of those put here, a build from source above all, is told
 there is no update command for it and that a build is updated by building again; that is a success
 rather than a failure, since nothing about the machine is wrong. It takes no argument, and a word
 after it is refused with the status for an argument (CLI-6).
@@ -1568,8 +1597,8 @@ and the output never names a version. The command is a literal per installation 
 comes from a file, an environment variable or a response.
 
 **Why.** How to update is a question with an answer the program already holds and the person does
-not: which of the four installers put this binary here is not something somebody can read off their
-own machine, and the four commands are not interchangeable. The npm line installs a package
+not: which of the five installers put this binary here is not something somebody can read off their
+own machine, and the five commands are not interchangeable. The npm line installs a package
 manager's copy, so sent to a script install it leaves the running binary untouched and a second one
 elsewhere; the script's line writes over the path the script recorded, so sent to a build from
 source it would replace a binary this program did not install.
@@ -1900,7 +1929,8 @@ The condition is recorded nowhere else, so `--resume` carries that conversation 
 
 The flag is refused with the status for an argument (CLI-6) before anything is sent when no
 condition follows it, when the condition is blank or is the next flag, with `--mode manifest`, which
-is planned once and has no conversation to send the work back into, and where a background session
+is planned once and has no conversation to send the work back into, with `--max-rounds` or
+`--max-tokens`, which count from nothing in each round (CLI-38), and where a background session
 is started, whose words after `--bg` are all its prompt. A model for the judge
 that cannot be used, because `summaryModel` names one that needs a sign-in this machine has not
 made or that the machine-level layer excludes ([COMPACT-15](compaction.md#COMPACT-15)), is refused
@@ -1965,3 +1995,369 @@ that broke, and from one that found nothing to connect to.
 `verified-by: bravebot_cli::progress::what_a_run_has_cost_adds_up_across_its_rounds_and_its_checks`
 `verified-by: bravebot_cli::progress::a_streamed_total_never_falls_when_the_next_round_starts`
 `verified-by: bravebot_cli::progress::a_notice_a_later_round_says_again_is_kept_once`
+
+<a id="CLI-36"></a>
+### CLI-36: `--input-format lines` reads turns, steers, answers and stops from stdin, a JSON object to a line
+
+A one-shot run given `--input-format lines` is a `--json-stream` run (CLI-24), since its questions are
+put and its results written there, and reads stdin a line at a time until it closes, where CLI-2
+reads it once. Each line is one JSON object with a `type`:
+
+- `prompt`, with `text`, starts a turn with those words. A prompt that arrives while a turn runs
+  waits, and starts a turn of its own when the turns before it have ended.
+- `steer`, with `text`, is delivered to the turn that is running at its next round boundary, as a
+  line typed while a turn runs is ([INPUT-10](terminal-input.md#INPUT-10)). A steer sent while no
+  turn runs, and one the turn ended without taking, starts a turn of its own, after the prompts
+  already waiting.
+- `answer`, with the `id` of a `question` event and `choices`, answers that question. `choices` holds
+  one array for each question, of the positions of the choices picked in the order the event listed
+  them, and an empty array declines that question.
+- `stop` ends the turn that is running, as Ctrl-Enter does ([INPUT-36](terminal-input.md#INPUT-36)),
+  and leaves the prompts waiting behind it to run. A `stop` sent while no turn runs does nothing.
+
+The run is as many turns as it is sent. The words on the command line, where there are any, are the
+first turn, and `--file` and `--session-ref` attach to it alone. Each later turn is one more turn
+over the session record the turn before wrote, as `-p` with `--resume` is (CLI-25), so the
+conversation is carried and each later turn adds a rewind point behind the ones the record held. A
+`--resume` or `--continue` on the command line names the record the first turn continues. Each turn ends with a
+result object of its own (CLI-12), after the events of that turn (CLI-24), whose `steps` and `tokens`
+count that turn alone. A turn that answered and wrote no record, because the record could not be
+written, leaves nothing for the next to carry on from: the turns after it are not run, and each ends
+with a result object that says so. The process exits once stdin has closed and every turn has
+ended, with the status of the last turn. A run that is sent no prompt before stdin closes has no task and exits with
+the status for an argument (CLI-6), writing a result object that says so.
+
+With `--goal` (CLI-35) each turn works towards the condition until the judge says it holds,
+and a `stop` ends it in the round it reaches, with no further round and no further check.
+
+**The words of a line.** A line on a pipe is the launching program's words, so they are labelled as
+piped input is (CLI-3), untrusted and private, and the planner is given a reference to them and never
+the words. A `prompt` is then a turn with no prompt of its own and those words as its piped input.
+Where the person typed `--trust-input-lines`, the lines are their own words: a `prompt` is the prompt
+of its turn, and a `steer` is an interjection that may not route, which the trail records as
+arriving on a channel the person vouched for and not as typed ([LABEL-8](labels.md#LABEL-8)). The
+flag is read from the command line and from nowhere else, as `--trust-workspace` is. It vouches for
+the words of the lines and for nothing else: it approves no effect (CLI-1), answers no trust
+question and vouches for no path.
+
+A `steer` on a channel nobody vouched for is held as a `prompt` is. Handed to the running turn it
+would be a reference to words the planner cannot read, which steers nothing.
+
+**What a line cannot do.** The one question put to the program is the planner's own
+([ASK-1](tools/ask-user.md#ASK-1)). Every other question stays refused for want of anybody to ask
+(CLI-1): a write, a run, a fetch, a path, a server, a vouch, and the question the trust map asks about
+the directory. An `answer` names positions among choices the planner offered and carries no words, so
+it puts none into the planner's context. It is refused when no question with that `id` is waiting,
+when it holds other than one array for each question, a position the question does not have or the
+same position twice, and more than one position for a question that takes one. A question takes the
+first answer that fits, and a second naming it finds nothing waiting. A `choices` of more than 16
+arrays, or with an array of more than 256 positions, is a field of another kind. A question still
+waiting when stdin closes, or when the turn is stopped, is declined as it is in any run nobody can
+ask ([ASK-7](tools/ask-user.md#ASK-7)).
+
+**What the stream carries.** The events of CLI-24 for each turn, and two more. A `question` event,
+with `id` and `questions`, is written when the planner asks. Each question holds `header`,
+`question`, `choices`, each with a `label` and a `detail` that is `null` where there is none, and
+`multiple`. It is the one event that holds words the result object does not hold, which are those the
+kernel released to put the question to somebody, the words a session draws. An `input_refused` event,
+with `line`, the number of the line in stdin counted from 1, and `reason`, is written for a line that
+was not taken. `reason` is one of `unreadable`, for a line over the cap of CLI-4 or not UTF-8;
+`not_json`, where it is not one JSON object; `unknown_type`; `bad_field`, where a field its type needs
+is missing, repeated, empty or of another kind; `no_such_question`; and `too_much_waiting`, for
+words that would take the bytes waiting for a turn past the cap of CLI-4. It holds nothing the line
+said. A blank line is nothing and is not refused.
+
+A line is read to its end whatever is wrong with it, so a line that is refused costs only itself. A
+field the line's type does not use is skipped, so a sender may add one. No line may hold more than
+the cap of CLI-4, and the words waiting for a turn may not hold more than that between them, so a
+file piped in whole fills no more memory than one piped to `-p` does. A read of stdin that fails
+ends the input as the end of it does.
+
+Refused with the status for an argument (CLI-6), before stdin is read: `--input-format` with a word
+other than `lines`; `--trust-input-lines` without `--input-format lines`;
+`--input-format lines` with `--mode manifest`, which has one task and no turns to add; and
+`--input-format lines` with `--incognito`, since each turn is carried on from the record the one
+before wrote and an incognito run writes none.
+
+**Why.** Without this, a program driving bravebot needs one process for each turn (CLI-25) and
+cannot steer, answer or stop a turn that is running. One process that it talks to for as long as it
+has something to say takes all of them, and the events of CLI-24 follow each turn.
+
+The launching program is not necessarily the person. A line on a pipe has no author the trust map
+could ask about, so its words take the pessimistic label CLI-3 gives a pipe, and the one thing that
+raises it is something a person typed on the command line, which is where every other instruction
+for a run nobody is watching is given (CLI-1). A flag that vouched for the lines and also answered
+the permission questions would turn one decision about whose words these are into a standing
+approval of effects, so it does not.
+
+An answer is a position and nothing else, so what a program can choose is among words the planner
+already wrote, and what it sends the driver to act on is ids and enumerated values. A free-text
+answer as well would let it write into the planner's context under the label of a person.
+
+Words past the cap are refused with an event and the read goes on. A read that paused until a turn
+had taken words would not see the `answer` or the `stop` that the turn in flight is waiting for.
+
+A steer and a stop reach a turn by the places a typed line and the stop key do
+([INPUT-10](terminal-input.md#INPUT-10), [INPUT-36](terminal-input.md#INPUT-36)), so a turn gains
+nothing for being driven this way and the guarantees of those clauses hold here unchanged.
+
+**Not an exception to [LABEL-5](labels.md#LABEL-5).** The program decides when turns begin and end
+and which of the choices the planner offered answers a question, from bytes it sent on a channel
+nobody vouched for as on one somebody did. That is not one of the places
+[Known costs](labels.md#known-costs) lists as deciding from untrusted bytes, and it is not added to
+them. The rule keeps untrusted content out of the driver ([LAYER-2](layering.md#LAYER-2)), and
+`lines.rs` is in `bravebot-cli`, which [LAYER-1](layering.md#LAYER-1) lists as presentation: it holds
+no labelled value and mints no witness. It reads the fixed words and the numbers listed here, which
+the envelope spells, and hands the driver what any front end does: the token that stops a turn, a
+position as the answer to a question, and a steer that is the person's own words only where they
+vouched for the channel. The `text` of a line is unescaped and seen to be there, and nothing in it
+is read: it is carried as the line spelt it, under the channel's label. Those decisions settle no
+effect and put no word of the program's into the planner's context. The program is also what
+launched the run, and its command line already gives the planner words as the person's own
+([LABEL-8](labels.md#LABEL-8)), which is more than a position among words the planner wrote.
+
+**A known cost.** A later turn is carried on from the record, as a resumed session is
+([SESSION-2](sessions.md#SESSION-2)), so a reference to quarantined content an earlier turn made
+names nothing on it and the planner is told so. On a channel nobody vouched for, whose every line is
+quarantined, a turn cannot work on the words of the line before it.
+
+**A known cost.** The planner is told that the user chose a position a program picked, since the
+words that report an answer come from the kernel and do not know who sent the line. The program is
+one the person chose to run with the flag.
+
+`verified-by: bravebot_cli::lines::each_kind_of_line_is_read_as_the_kind_it_names`
+`verified-by: bravebot_cli::lines::the_words_of_a_line_are_carried_as_the_line_spelt_them`
+`verified-by: bravebot_cli::lines::a_field_the_envelope_does_not_name_is_skipped_whatever_it_holds`
+`verified-by: bravebot_cli::lines::a_line_that_is_not_one_json_object_is_refused`
+`verified-by: bravebot_cli::lines::a_line_missing_what_its_type_needs_is_refused_by_name`
+`verified-by: bravebot_cli::lines::a_line_over_the_cap_is_dropped_and_the_next_is_read_whole`
+`verified-by: bravebot_cli::lines::prompts_start_turns_in_the_order_they_arrived`
+`verified-by: bravebot_cli::lines::a_steer_reaches_the_running_turn_only_on_a_vouched_channel`
+`verified-by: bravebot_cli::lines::a_steer_the_turn_ended_without_taking_starts_a_turn_of_its_own`
+`verified-by: bravebot_cli::lines::a_steer_sent_while_no_turn_runs_starts_a_turn_of_its_own`
+`verified-by: bravebot_cli::lines::a_stop_or_a_steer_right_behind_a_prompt_reaches_the_turn_that_prompt_starts`
+`verified-by: bravebot_cli::lines::a_second_answer_to_a_question_does_not_replace_the_first`
+`verified-by: bravebot_cli::lines::a_reader_that_panics_ends_the_input_and_leaves_nothing_waiting`
+`verified-by: bravebot_cli::lines::an_interrupted_read_is_read_again_and_not_taken_for_the_end`
+`verified-by: bravebot_cli::lines::a_pick_past_the_bounds_is_a_field_of_another_kind`
+`verified-by: bravebot_cli::lines::a_large_field_the_envelope_does_not_name_is_read_past`
+`verified-by: bravebot_cli::lines::a_stop_ends_the_running_turn_and_is_not_kept_for_the_next`
+`verified-by: bravebot_cli::lines::a_refused_line_is_said_by_number_and_cause_and_never_repeated`
+`verified-by: bravebot_cli::lines::the_words_waiting_for_a_turn_are_bounded_and_room_comes_back_as_they_are_taken`
+`verified-by: bravebot_cli::lines::an_answer_that_does_not_fit_the_question_is_refused_and_the_question_waits`
+`verified-by: bravebot_cli::lines::an_empty_pick_declines_one_question_and_no_question_waiting_takes_no_answer`
+`verified-by: bravebot_cli::lines::a_question_has_an_id_of_its_own`
+`verified-by: bravebot_cli::lines::a_question_nothing_can_answer_is_declined_when_the_input_ends_or_the_turn_stops`
+`verified-by: bravebot_cli::lines::an_answer_followed_by_the_end_of_the_input_is_still_the_answer`
+`verified-by: bravebot_cli::lines::the_reader_numbers_lines_as_they_were_written`
+`verified-by: bravebot_cli::json::a_question_is_an_event_a_program_can_answer_by_position`
+`verified-by: bravebot_cli::json::a_line_that_was_not_taken_is_named_by_number_and_cause`
+`verified-by: bravebot_cli::running::a_run_reading_lines_runs_each_prompt_as_a_turn_over_one_conversation`
+`verified-by: bravebot_cli::running::the_command_lines_own_prompt_is_the_first_turn`
+`verified-by: bravebot_cli::running::a_file_the_command_line_names_is_attached_to_the_first_turn_alone`
+`verified-by: bravebot_cli::running::a_resume_on_the_command_line_names_the_record_the_first_turn_continues`
+`verified-by: bravebot_cli::running::a_turn_after_one_that_wrote_no_record_is_not_run_on_an_empty_conversation`
+`verified-by: bravebot_cli::running::a_later_turn_rewinds_to_where_the_turn_before_it_left_the_files`
+`verified-by: bravebot_cli::running::lines_nobody_vouched_for_never_reach_the_planner_and_vouched_ones_do`
+`verified-by: bravebot_cli::running::a_steer_on_a_vouched_channel_reaches_the_turn_that_is_running`
+`verified-by: bravebot_cli::running::a_steer_on_a_channel_nobody_vouched_for_waits_for_a_turn_and_is_never_shown`
+`verified-by: bravebot_cli::running::a_stop_ends_the_running_turn_and_the_prompt_behind_it_still_runs`
+`verified-by: bravebot_cli::running::a_stop_ends_the_rounds_of_a_goal_run_reading_lines`
+`verified-by: bravebot_cli::running::a_question_is_put_to_the_program_and_its_pick_reaches_the_planner`
+`verified-by: bravebot_cli::running::a_question_is_declined_when_the_input_ends_without_an_answer`
+`verified-by: bravebot_cli::running::a_line_does_not_approve_a_write`
+`verified-by: bravebot_cli::running::input_lines_is_refused_beside_what_it_cannot_go_with`
+`verified-by: bravebot_cli::running::a_run_reading_lines_streams_without_being_given_the_stream_flag`
+`verified-by: bravebot_cli::running::a_failed_command_line_for_a_lines_run_is_a_result_object`
+`verified-by: bravebot_cli::running::a_run_that_reads_lines_and_is_sent_no_prompt_has_no_task`
+`verified-by: bravebot_core::policy::a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context`
+`verified-by: bravebot_agent::turn::a_line_from_a_vouched_channel_is_recorded_as_vouched_for_and_not_as_typed`
+
+<a id="CLI-37"></a>
+### CLI-37: `stats` totals what the recorded sessions spent
+
+`bravebot stats [--days <n>] [--models] [--project [<dir>]]` prints how many sessions, turns and
+tokens the session records under the state directory hold, and how many of the tokens the model read
+and how many it wrote. With no flag that is every record of
+every project. `--days <n>` keeps the sessions last written within the last `n` days, counted back
+from now in days of 24 hours. `--project` keeps the sessions that ran in the directory the command
+runs in, or in `<dir>` where a word follows it, and a word that opens with `-` is the next flag and
+not a directory. `--models` puts a row for each model above the total, the one that spent most
+first.
+
+The output is a sentence saying what the figures cover, then a table with a heading row, a row for
+each model when asked for, and a total row, with the columns sessions, turns, tokens, read,
+written and unsplit. Read and written are the split of [SESSION-11](sessions.md#SESSION-11) added
+over the sessions that recorded it, and unsplit is the tokens of the rest, so the three add up to
+the tokens. A session written before the split was kept has tokens and no split, so its tokens are
+all unsplit. Every figure is written out in full as a number, and the only words that are not fixed
+are a model's name and the directory, which have the characters a
+terminal would act on removed. A model's name is cut to 60 characters, and names that read alike
+after cleaning and cutting are one row. A name with nothing left after cleaning is the `unknown` row.
+The notes about what is not counted go to stderr, so stdout carries the table and nothing else
+(CLI-5): one says that an incognito session leaves no record and so is not counted, and one says how
+many entries under the sessions directory could not be read as a record, when any could. Such an
+entry is a `.json` file that does not parse as a record, or a directory or an entry that could not be
+listed. It is counted and never named, and adds to no figure. A directory that does not exist is not
+such an entry.
+
+It writes nothing and runs under `--incognito`, which only stops a session adding records. A file is
+a record when `sessions list` would list it as one, and is read for its directory, when it was last
+written, its turns, its tokens, how they divided and the model that answered its last turn, and for
+nothing it says.
+Which records belong to a project is decided by the path inside each record and never by the name of
+the directory holding them, which two working directories can share. A project that is not a
+directory, an empty directory, a count of zero or above 9223372036854775807, a count that is not a
+number, a repeated flag and any other word are refused with the status for an argument (CLI-6) and
+print no figures.
+
+A session whose record names no model is its own row, named `unknown`: a record written before the
+model was kept, one whose turns never reached a server, and one copied in from another program. A
+record that holds no turns or tokens counts as a session with none. A record whose split names more
+than its own tokens is cut to the tokens, so a figure somebody edited cannot make the tokens left
+without a split wrap.
+
+**Why.** `/cost` answers what one session spent, and nothing answers what a week of them spent,
+which models took it, or which project it went to without opening each record. The figures are the
+ones the program already wrote down, so nothing here is estimated, and a person asking is the one
+reading the answer, so none of it goes to a planner.
+
+**Known costs.**
+
+- Nothing is printed in money. [sessions.md](sessions.md) gives the reason a price is not composed:
+  no model listing carries one, and the record keeps no cache split.
+- Read is the tokens the model was sent, which is the total less what it wrote, so a prompt the
+  service answered out of its own cache is counted as read. A record that holds tokens and no
+  split counts all of those tokens in the unsplit column.
+- A session is counted whole, under the day it was last written and the model that answered its last
+  turn. A session that ran over several days is counted when it was last written, and one that changed
+  model part way is counted under the model it ended on, because the record keeps neither a time nor
+  a model for each turn.
+- Each record is counted, and a record can hold spend another record holds. A session forked with
+  `--fork` or `/branch` starts with the spend of the original up to the fork, and one moved with
+  `/cd` leaves its record in the directory it came from beside the record it writes in the new one,
+  which holds the spend so far. Such a session is counted once for each record, so the totals can read
+  higher than what was spent. The record keeps no link from a copy to what it was copied from, so
+  nothing here can tell them apart.
+- The session count includes a session copied in from another program and one whose turns never
+  reached a server. Each spent nothing, so the count can read higher than the number of sessions that
+  ran here.
+- A record keeps its directory as the text `Path::display` gave, so a project whose name is not valid
+  UTF-8 is told from an ordinary directory spelled with that rendering only up to the rendering: the
+  first's exact bytes match no record, so its total is empty, and the second's matches what either
+  wrote. The same holds for `sessions list`.
+- A model's name is free text from the server. One cut to 60 characters is one row with every other
+  model that begins the same way, one named `unknown` shares the row of the sessions that name none,
+  and one named `Total` prints a row labelled like the total.
+- `--project` with no directory is this directory, so a script that passes an unquoted variable that
+  is empty asks about this directory. A quoted empty one is refused.
+- Every record is read whole to find the seven fields, so the time grows with the size of the store.
+
+`verified-by: bravebot_cli::stats::the_words_say_how_far_back_whether_to_split_by_model_and_where`
+`verified-by: bravebot_cli::stats::a_flag_after_project_is_a_flag_and_leaves_the_project_as_this_directory`
+`verified-by: bravebot_cli::stats::a_muddled_request_is_refused_rather_than_guessed_at`
+`verified-by: bravebot_cli::stats::the_most_days_that_can_be_printed_back_are_accepted_and_one_more_is_not`
+`verified-by: bravebot_cli::stats::an_empty_directory_after_project_is_refused_and_not_read_as_this_one`
+`verified-by: bravebot_cli::stats::a_table_without_models_is_the_total_alone`
+`verified-by: bravebot_cli::stats::a_table_with_models_lists_the_one_that_spent_most_first_and_the_total_last`
+`verified-by: bravebot_cli::stats::a_model_name_reaches_a_row_with_nothing_a_terminal_would_act_on`
+`verified-by: bravebot_cli::stats::a_model_name_with_nothing_left_after_cleaning_is_the_row_for_no_name`
+`verified-by: bravebot_cli::stats::a_model_name_of_wide_characters_keeps_the_figures_in_their_columns`
+`verified-by: bravebot_cli::stats::the_sentence_says_how_far_back_and_where`
+`verified-by: bravebot_cli::stats::a_directory_with_an_escape_in_its_name_is_not_drawn_raw`
+`verified-by: bravebot_session::stats::two_records_are_added_into_one_total`
+`verified-by: bravebot_session::stats::a_session_last_written_before_the_cut_is_left_out`
+`verified-by: bravebot_session::stats::a_project_total_holds_the_sessions_that_ran_there_and_no_others`
+`verified-by: bravebot_session::stats::a_record_in_a_shared_store_that_ran_elsewhere_is_not_the_projects`
+`verified-by: bravebot_session::stats::a_directory_that_is_not_utf8_is_told_from_an_ordinary_one_only_up_to_its_rendering`
+`verified-by: bravebot_session::stats::each_model_is_totalled_on_its_own_and_a_record_naming_none_is_kept_apart`
+`verified-by: bravebot_session::stats::a_file_that_is_not_a_record_is_counted_and_adds_to_nothing`
+`verified-by: bravebot_session::stats::the_trail_and_the_search_index_beside_a_record_are_not_records`
+`verified-by: bravebot_session::stats::a_store_that_cannot_be_listed_is_counted_and_not_read_as_empty`
+`verified-by: bravebot_session::stats::a_session_written_the_way_a_front_end_writes_one_is_totalled_as_it_was_written`
+`verified-by: bravebot_session::stats::a_record_from_before_spend_was_kept_counts_as_a_session_with_none`
+`verified-by: bravebot_session::stats::a_hand_edited_figure_cannot_wrap_or_panic_the_total`
+`verified-by: bravebot_session::stats::nothing_recorded_totals_to_nothing`
+`verified-by: bravebot_session::stats::the_split_totals_the_records_that_kept_it_and_leaves_the_rest_unsplit`
+`verified-by: bravebot_session::stats::a_session_that_went_on_after_an_unsplit_record_is_split_for_the_later_turns_only`
+`verified-by: bravebot_session::stats::a_split_past_the_total_is_cut_to_it`
+`verified-by: bravebot_cli::stats::the_split_is_drawn_under_its_own_headings_beside_the_total`
+`verified-by: bravebot_cli::running::stats_adds_up_every_projects_sessions_and_the_day_and_project_narrow_the_total`
+`verified-by: bravebot_cli::running::stats_by_model_has_a_row_for_each_model_and_one_for_a_record_that_names_none`
+`verified-by: bravebot_cli::running::stats_counts_a_record_it_cannot_read_without_naming_it`
+`verified-by: bravebot_cli::running::stats_draws_a_model_name_with_nothing_a_terminal_would_act_on`
+`verified-by: bravebot_cli::running::a_muddled_stats_request_is_refused_with_the_argument_status_and_no_figures`
+`verified-by: bravebot_cli::running::stats_runs_under_incognito_and_counts_the_records_written_before`
+`verified-by: bravebot_cli::running::stats_reports_how_the_tokens_of_one_shot_runs_divided`
+
+<a id="CLI-38"></a>
+### CLI-38: `--max-rounds` and `--max-tokens` stop a one-shot run at a limit, on a status of their own
+
+`--max-rounds <n>` is the most rounds of tool calls the run may make, and `--max-tokens <n>` is the
+most tokens it may have spent when it is about to send a request. A run that reaches either stops
+before the round or the request that would pass it ([TURN-14](turns.md#TURN-14)) and ends on status
+8 (`BB1008`), with the identifier in front of the message on stderr as CLI-6 has it. The message
+says which limit was reached. Without `--json` nothing goes to stdout, as for any failure. With it
+the result object (CLI-12) has `reason` `limit` and says what the run had done: the rounds it made
+in `steps`, the tokens it spent and the calls it made, with `reply` and `model` empty. `--trace`
+puts a line in the trail that says which limit it was.
+
+A run that finishes within both limits ends as it would without them. A planner that answers after
+its last allowed round has not reached the limit, and an answer that carries the total past
+`--max-tokens` is still the answer, since the limit stops a request from being sent and none is
+left. Status 8 is given only to a run that was cut short.
+
+Each value is a whole number written in digits, 1 or more. A value that is not, a flag with no
+value, a `--max-rounds` of 200 or more, which is the bound a one-shot run carries
+([TURN-2](turns.md#TURN-2)), and either flag given with `--mode manifest` or `--goal` are refused
+with status 2 before anything is sent, and the refusal names the flag. A flag given twice takes the
+last value. A session's own limit is the `limit` setting and `/limit`
+([TURN-8](turns.md#TURN-8)).
+
+**Why.** A CI job that runs the agent cannot say how much it is willing to spend. The only bound is
+a constant of 200 rounds, and the run that reaches it answers with what it has and exits 0
+([TURN-1](turns.md#TURN-1)), which suits a person reading it. A script needs to tell a run that was
+cut short from one that finished, so the limit stops the run and the status says so. Status 1 would
+read as something that went wrong, and status 0 as success.
+
+Refused rather than read as no limit, for the reason CLI-11 gives about two audiences: a script that
+computed a bad value asked for a cap, and a run with none costs what the cap was for. Zero is
+refused for the same reason, since it would stop the run before its first request, and a script
+that means no limit leaves the flag off. 200 and above is refused because the bound that takes a
+run's tools away ([TURN-1](turns.md#TURN-1)) ends the run first, on status 0 with an answer, where
+the script expects 8.
+
+A manifest run plans the whole run first and makes no rounds of tool calls, so a limit has no round
+to stop before. Both flags are refused there, as `--output-schema` is, since the script would
+believe it had a limit that nothing enforces.
+
+A goal run (CLI-35) is a turn for each round, and each turn counts rounds of tool calls and tokens
+from nothing. A limit given with it would bound each round, and the run could spend it in the first
+round and in each of the ten that follow. Both flags are refused there for the reason a manifest
+run refuses them: the script would believe it had capped the run.
+
+**Known costs.** A limit in tokens is passed by the request that reached it, as the session limit is
+([TURN-8](turns.md#TURN-8)), so it bounds what the run sends next and not what it has spent. It is
+counted from the usage the backend reports, so a backend that reports none never stops a run at it.
+A delegate still running when the run ends is waited for, and what it spends is in the result. No
+limit in money is offered, because the tree holds no price table. A run that ends on a limit writes
+no session record, so `--resume` cannot carry it on. No limit applies across the rounds of a
+`--goal` run. The flags are refused with it, and the rounds of CLI-35 are what bound its spend.
+
+`verified-by: bravebot_cli::running::a_run_asking_for_a_round_past_max_rounds_ends_on_status_eight`
+`verified-by: bravebot_cli::running::a_run_stopped_at_max_rounds_writes_nothing_to_stdout`
+`verified-by: bravebot_cli::running::a_run_that_finishes_within_max_rounds_ends_as_it_would_without_it`
+`verified-by: bravebot_cli::running::a_run_that_has_spent_max_tokens_sends_no_further_request_and_ends_on_status_eight`
+`verified-by: bravebot_cli::running::an_answer_that_passes_max_tokens_is_still_written`
+`verified-by: bravebot_cli::running::a_limit_that_names_no_count_is_refused_before_anything_is_sent`
+`verified-by: bravebot_cli::running::a_manifest_run_refuses_a_limit_and_sends_nothing`
+`verified-by: bravebot_cli::running::a_goal_run_refuses_a_limit_and_sends_nothing`
+`verified-by: bravebot_cli::main::the_limit_flags_name_the_most_rounds_and_tokens_a_run_may_spend`
+`verified-by: bravebot_cli::main::a_rounds_limit_has_to_be_below_the_built_in_bound`
+`verified-by: bravebot_cli::running::a_run_asking_for_a_round_past_the_largest_max_rounds_ends_on_status_eight`
+`verified-by: bravebot_cli::main::a_limit_flag_that_is_not_a_whole_number_of_one_or_more_is_refused`
+`verified-by: bravebot_cli::main::the_last_value_given_for_a_limit_is_the_one_in_force`
+`verified-by: bravebot_cli::main::a_manifest_run_refuses_the_limit_flags_by_name`
+`verified-by: bravebot_cli::main::a_goal_run_refuses_the_limit_flags_by_name`
+`verified-by: bravebot_cli::main::a_limit_flag_may_lead_the_line_like_the_other_task_flags`
+`verified-by: bravebot_cli::exit::a_run_stopped_at_its_limit_is_told_apart_from_a_failure`

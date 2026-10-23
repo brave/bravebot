@@ -332,12 +332,16 @@ PNPM_RUNS_NOTHING = {
     "link", "ln", "version", "help", "update", "up", "upgrade", "dedupe", "fetch", "import",
 }
 # What a Rust job runs that executes bytes nobody here wrote: cargo compiles every build script and
-# proc macro in Cargo.lock and runs them, and the tests after them. `contrib/measure-flakes.py` is the
-# one script known to do it, and it does not when it is given `--load`, which is its filing mode.
+# proc macro in Cargo.lock and runs them, and the tests after them. `contrib/measure-flakes.py` and
+# `contrib/measure-mutants.py run` are the scripts known to do it, and the first does not when it is
+# given `--load`, which is its filing mode.
 CARGO_RUNS = re.compile(
     r"(?:^|[\s;&|(])cargo(?:\s+\+\S+)?\s+(?:build|b|test|t|clippy|run|r|nextest|install|check|c|bench|doc)\b"
 )
 MEASURES_FLAKES = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?contrib/measure-flakes\.py\b(?![^;&|\n]*--load)")
+# `contrib/measure-mutants.py` builds and tests the crate once per change in its `run` mode, and reads
+# files in its `report` mode.
+MEASURES_MUTANTS = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?contrib/measure-mutants\.py\s+run\b")
 WRITE_GRANT = re.compile(r"\bwrite\b|\bwrite-all\b")
 NOT_PERSISTED = re.compile(r"persist-credentials\s*:\s*[\"']?false\b")
 DEPENDENCY = (
@@ -2435,7 +2439,8 @@ def runs_project_code(path, job, granted):
     """The steps of one job that compile or run this repository's dependencies beside a credential.
 
     Reported for a step that runs `cargo build`, `test`, `clippy`, `run`, `nextest` or `install`, or
-    `contrib/measure-flakes.py` in its measuring mode (#2789), when what it can read is a token:
+    `contrib/measure-flakes.py` in its measuring mode (#2789) or `contrib/measure-mutants.py run`,
+    when what it can read is a token:
 
     - `id-token: write` on the job, which every step is handed the means to use;
     - a secret named by the step itself, or by the job above its steps, or the workflow above its
@@ -2452,7 +2457,7 @@ def runs_project_code(path, job, granted):
             line.strip()[:120]
             for line in step["body"]
             if not line.strip().startswith("#")
-            and (CARGO_RUNS.search(line) or MEASURES_FLAKES.search(line))
+            and (CARGO_RUNS.search(line) or MEASURES_FLAKES.search(line) or MEASURES_MUTANTS.search(line))
         ]
         if not ran:
             continue

@@ -80,14 +80,14 @@ impl Registry for Install {
     fn url(self) -> &'static str {
         match self {
             Self::Npm => NPM_URL,
-            Self::Script | Self::Homebrew | Self::Winget => RELEASES_URL,
+            Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => RELEASES_URL,
         }
     }
 
     fn field(self) -> &'static str {
         match self {
             Self::Npm => "version",
-            Self::Script | Self::Homebrew | Self::Winget => "tag_name",
+            Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => "tag_name",
         }
     }
 
@@ -96,14 +96,14 @@ impl Registry for Install {
     fn source(self) -> &'static str {
         match self {
             Self::Npm => "npm",
-            Self::Script | Self::Homebrew | Self::Winget => "releases",
+            Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => "releases",
         }
     }
 
     fn other(self) -> Self {
         match self {
             Self::Npm => Self::Script,
-            Self::Script | Self::Homebrew | Self::Winget => Self::Npm,
+            Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => Self::Npm,
         }
     }
 }
@@ -457,6 +457,28 @@ mod tests {
             "the install script is missing: {said}"
         );
         assert!(!said.contains("npm install"), "the wrong command: {said}");
+    }
+
+    /// A PowerShell script install is told to run that script again, never the shell script's line,
+    /// which cannot run on Windows, and never the npm one. Like the shell script's, its newest
+    /// version is read from the release listing.
+    #[test]
+    fn a_powershell_install_is_given_the_powershell_script_again() {
+        let said =
+            line(Install::PowerShell, version(0, 5, 0), version(1, 0, 0)).expect("a newer version");
+        assert!(
+            said.contains("install.ps1"),
+            "the PowerShell install script is missing: {said}"
+        );
+        assert!(!said.contains("install.sh"), "the wrong command: {said}");
+        assert!(!said.contains("npm install"), "the wrong command: {said}");
+        assert_eq!(
+            version_in(Install::PowerShell, br#"{"tag_name":"v0.7.2"}"#),
+            Some(version(0, 7, 2)),
+            "the release listing was not read"
+        );
+        assert_eq!(Install::PowerShell.source(), Install::Script.source());
+        assert_eq!(Install::PowerShell.other(), Install::Npm);
     }
 
     /// A package manager's copy is told its manager's own upgrade command, read from the release

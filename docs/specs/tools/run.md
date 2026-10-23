@@ -995,6 +995,7 @@ what was printed: nothing here reads a byte of it.
 
 `verified-by: bravebot_agent::turn::what_a_background_job_printed_is_quarantined_like_any_other_output`
 `verified-by: bravebot_agent::exec::a_background_pipeline_does_not_see_this_agents_credentials`
+`verified-by: bravebot_agent::turn::a_job_keeps_the_label_it_started_with_when_the_program_is_vouched_for_afterwards`
 
 <a id="RUN-17"></a>
 ### RUN-17: a look at a job may wait for it, inside the turn that owns it
@@ -1114,11 +1115,14 @@ the window.
 `verified-by: bravebot_agent::tools::job_output_offers_a_wait_that_output_does_not_end`
 `verified-by: bravebot_agent::report::a_look_that_waited_is_described_with_both_the_window_and_the_warning`
 `verified-by: bravebot_agent::report::one_second_is_described_in_the_singular`
+`verified-by: bravebot_agent::tools::job_output_says_its_wait_stays_inside_the_turn`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting`
 `verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
+`verified-by: bravebot_agent::report::a_look_that_waited_says_nothing_is_watching_the_job_now`
+`verified-by: bravebot_agent::tools::job_output_says_its_wait_ends_with_the_turn`
 
 <a id="RUN-18"></a>
 ### RUN-18: the tool's own description routes a request to watch something to one of two techniques
@@ -1708,6 +1712,8 @@ worth and does not stop being theirs because the work moved ([DELEGATE-1](../del
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_run_is_cut_to`
 `verified-by: bravebot_agent::turn::a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it`
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked`
+`verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_look_at_a_background_job_is_cut_to`
+`verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_the_account_of_a_finished_job_is_cut_to`
 
 <a id="RUN-22"></a>
 ### RUN-22: a run may ask to read what it printed, and gets it in the same result where nobody would be asked

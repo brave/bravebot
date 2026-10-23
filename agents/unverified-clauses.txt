@@ -11,6 +11,7 @@ docs/specs/background-sessions.md:BG-1: a background session is an ordinary sess
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
+docs/specs/chatgpt-sign-in.md:CHATGPT-5: nothing the flow reads from outside reaches the driver or the planner
 docs/specs/commits.md:COMMIT-1: `commit` is a setting with two values, `off` and `turn`, and only the person's own files set it
 docs/specs/commits.md:COMMIT-2: a turn that ends with a reply makes one commit, in a fixed order, and a turn that does not end with one makes none
 docs/specs/commits.md:COMMIT-3: the paths committed are the turn's own that three conditions leave in, and nothing else

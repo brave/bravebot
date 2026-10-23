@@ -5,8 +5,10 @@
 mod auth;
 mod background;
 mod bug_report;
+mod chatgpt;
 mod completion;
 mod continued;
+mod deep_link;
 mod doctor;
 mod exit;
 mod finish;
@@ -15,6 +17,7 @@ mod goal_run;
 mod host;
 mod import;
 mod json;
+mod lines;
 mod mcp;
 mod model;
 mod one_shot;
@@ -28,6 +31,7 @@ mod session_import;
 mod session_search;
 mod sessions_list;
 mod shell_init;
+mod stats;
 #[cfg(unix)]
 mod supervisor;
 #[cfg(test)]
@@ -58,7 +62,7 @@ use crate::workspace::{
     rules_for_a_one_shot_run, scratch_for_this_run, unattended_trust,
 };
 use bravebot_agent::Mode;
-use bravebot_agent::turn::{self, SystemPrompts, Task};
+use bravebot_agent::turn::{self, MAX_TOOL_ROUNDS, RunLimits, SystemPrompts, Task};
 use bravebot_config::{Config, Managed};
 use bravebot_core::cancel::Cancel;
 use bravebot_i18n::t;
@@ -557,6 +561,10 @@ fn main() -> ExitCode {
         Some("-i" | "--interactive") => {
             open_on(&args[1..], as_json, agent, links, skip_permissions, prompts)
         }
+        // What a `bravebot://open` link starts (LINK-1). Takes the link and nothing else, and none of
+        // the flags that compose with other ways of starting: the line is written by the operating
+        // system's registration, and a flag on it would be a way for a link to ask for more.
+        Some("--handle-uri") => open_link(&args[1..], as_json, agent, skip_permissions, prompts),
         // Picking up where a session left off, chosen from a list or named outright.
         Some("--resume" | "-r" | "--continue" | "-c") if continues_with_a_task(&args) => {
             run_task(&args, skip_permissions, accept_edits, agent, prompts)
@@ -628,6 +636,7 @@ fn main() -> ExitCode {
         Some("bug-report") => bug_report::command(&args[1..]),
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
+        Some("stats") => stats::command(&args[1..]),
         Some("--bg") => match carried {
             Some(flag) => stopped_before_the_turn(
                 as_json,
@@ -696,6 +705,58 @@ fn open_on(
         agent,
         links,
         skip_permissions,
+        prompts,
+    )
+}
+
+/// `--handle-uri <link>`: open a session on what a `bravebot://open` link asks, with its prompt put
+/// in the box and not sent (LINK-1 to LINK-5).
+fn open_link(
+    words: &[String],
+    as_json: bool,
+    agent: Option<String>,
+    skip_permissions: bool,
+    prompts: SystemPrompts,
+) -> ExitCode {
+    let [text] = words else {
+        return stopped_before_the_turn(as_json, Ending::Argument, t!(deep_link_takes_one_link));
+    };
+    // A link that is switched off, or that cannot be read, starts nothing, before the terminal is
+    // taken, so what is said is where the person will see it.
+    if bravebot_config::Settings::load().deep_links() == Some(false) {
+        return fail(Ending::Configuration, t!(deep_link_switched_off));
+    }
+    let link = match deep_link::parse(text) {
+        Ok(link) => link,
+        Err(refused) => return stopped_before_the_turn(as_json, Ending::Argument, refused.said()),
+    };
+    // A link carries a directory and words, and nothing that decides how the session runs: the
+    // flags that would, taken from the line before this ran, are refused rather than honoured.
+    if skip_permissions || agent.is_some() || flag_named(&prompts).is_some() {
+        return stopped_before_the_turn(as_json, Ending::Argument, t!(deep_link_takes_one_link));
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return fail(Ending::Argument, t!(deep_link_needs_a_terminal));
+    }
+    let profile = bravebot_agent::home::profile();
+    let placement = deep_link::place(link.dir.as_deref(), profile.as_deref(), |directory| {
+        bravebot_agent::trusted::honoured(
+            bravebot_agent::home::directory().as_deref(),
+            profile.as_deref(),
+            directory,
+        )
+        .is_some()
+    });
+    if let Some(directory) = &placement.start_in
+        && let Err(problem) = std::env::set_current_dir(directory)
+    {
+        return fail(Ending::Failed, t!(cli_workspace_problem, problem = problem));
+    }
+    interactive(
+        bravebot_tui::app::Start::Prefilling(link.prompt.unwrap_or_default(), placement.note),
+        None,
+        bravebot_tui::app::Links::default(),
+        false,
         prompts,
     )
 }
@@ -1061,6 +1122,7 @@ fn starts_no_program(first: Option<&str>) -> bool {
                 | "auth"
                 | "permissions"
                 | "sessions"
+                | "stats"
                 | "attach"
                 | "completion"
                 | "import-leo-creds"
@@ -1261,6 +1323,27 @@ struct Invocation {
     output_schema: Option<String>,
     /// The condition the run works towards until a judge says it holds (CLI-35).
     goal: Option<String>,
+    /// Whether stdin carries lines that start turns, steer them and answer their questions
+    /// (CLI-36).
+    input_lines: bool,
+    /// Whether the person typed `--trust-input-lines`, which makes those lines their own words
+    /// where otherwise they are a program's (CLI-36).
+    trust_input_lines: bool,
+    /// The limits the command line gave the run, which end it where they are reached (CLI-38).
+    limits: RunLimits,
+}
+
+/// The whole number after `--max-rounds` or `--max-tokens`, or `None` where the word is anything
+/// else (CLI-38).
+///
+/// Digits and nothing else, so a sign, a fraction, an exponent or a space is refused as the
+/// mistake in a value a script computed that it is. Zero is refused as well, rather than read as no
+/// limit: a limit of nothing would stop the run before its first request, and a script that means
+/// no limit leaves the flag off.
+fn limit_count(next: Option<&String>) -> Option<u64> {
+    next.filter(|word| !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|word| word.parse::<u64>().ok())
+        .filter(|count| *count > 0)
 }
 
 /// The name after `--model`, for a one-shot run and for the session `-i` opens.
@@ -1314,6 +1397,9 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut resume = None;
     let mut output_schema = None;
     let mut goal = None;
+    let mut input_lines = false;
+    let mut trust_input_lines = false;
+    let mut limits = RunLimits::default();
     let mut index = 0;
 
     while index < args.len() {
@@ -1423,6 +1509,27 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 }
                 None => return Err(t!(cli_goal_needs_a_condition).to_string()),
             },
+            // Refused unless it is a whole number of rounds below the built-in bound, for the reason
+            // a word that is no level is refused by `--effort`: a script that computed a bad value
+            // asked for a cap and would otherwise run without one, untold. At the built-in bound
+            // or above it the run is cut off there by that bound, which takes its tools away and
+            // has it answer, so the status a script reads is 0 and not this one.
+            "--max-rounds" => {
+                let rounds = limit_count(args.get(index + 1))
+                    .and_then(|count| usize::try_from(count).ok())
+                    .filter(|count| *count < MAX_TOOL_ROUNDS);
+                limits.rounds = Some(rounds.ok_or_else(|| {
+                    t!(cli_max_rounds_needs_a_count, most = MAX_TOOL_ROUNDS - 1).to_string()
+                })?);
+                index += 2;
+            }
+            "--max-tokens" => {
+                limits.tokens = Some(
+                    limit_count(args.get(index + 1))
+                        .ok_or_else(|| t!(cli_max_tokens_needs_a_count).to_string())?,
+                );
+                index += 2;
+            }
             "--json" => {
                 json = true;
                 index += 1;
@@ -1431,6 +1538,22 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
             "--json-stream" => {
                 json = true;
                 stream = true;
+                index += 1;
+            }
+            // `lines` is the one format, and the word is checked rather than assumed so a second
+            // format can be added without changing what a script that names this one does. The
+            // lines are answered on the stream, so a run that reads them is a `--json-stream` run.
+            "--input-format" => match args.get(index + 1).map(String::as_str) {
+                Some("lines") => {
+                    input_lines = true;
+                    json = true;
+                    stream = true;
+                    index += 2;
+                }
+                _ => return Err(t!(cli_input_format_unknown).to_string()),
+            },
+            "--trust-input-lines" => {
+                trust_input_lines = true;
                 index += 1;
             }
             "-p" | "--print" => {
@@ -1466,6 +1589,9 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         resume,
         output_schema,
         goal,
+        input_lines,
+        trust_input_lines,
+        limits,
     })
 }
 
@@ -1525,6 +1651,61 @@ fn manifest_conflict(
     })
 }
 
+/// Why `--input-format lines` or `--trust-input-lines` cannot go with the rest of the command line,
+/// as the sentence that refuses it, or `None` where nothing is wrong (CLI-36).
+///
+/// `--incognito` is refused because each turn is carried on from the record the one before wrote,
+/// and an incognito run writes none.
+fn input_lines_conflict(
+    input_lines: bool,
+    trust_input_lines: bool,
+    mode: Mode,
+    incognito: bool,
+) -> Option<String> {
+    if !input_lines {
+        return trust_input_lines.then(|| t!(cli_trust_input_lines_needs_lines).to_string());
+    }
+    if mode == Mode::Manifest {
+        return Some(t!(cli_input_lines_not_with_a_manifest).to_string());
+    }
+    incognito.then(|| t!(cli_input_lines_not_with_incognito).to_string())
+}
+
+/// The sentence that refuses a run limit given to a manifest run, which plans before it makes any
+/// round of tool calls and has none to count (CLI-38). `None` for a turn, and for a run given none.
+///
+/// Refused by name rather than taken and ignored: a script that capped a run and was given one
+/// with no cap would pay for the cost it asked to bound.
+fn limit_not_with_a_manifest(mode: Mode, limits: RunLimits) -> Option<String> {
+    let flag = limit_flag(limits)?;
+    (mode == Mode::Manifest).then(|| t!(cli_limit_not_with_a_manifest, flag = flag))
+}
+
+/// The sentence that refuses a run limit given with `--goal`, whose rounds are each a turn that
+/// counts a limit from nothing, so a limit would bound each round and not the run (CLI-38).
+/// `None` for a run with no goal, and for a run given no limit.
+///
+/// Refused by name for the reason a manifest run is: a script that capped a run would be given one
+/// that spends the cap in every round, up to eleven times over.
+fn limit_not_with_a_goal(has_goal: bool, limits: RunLimits) -> Option<String> {
+    let flag = limit_flag(limits)?;
+    has_goal.then(|| t!(cli_limit_not_with_a_goal, flag = flag))
+}
+
+/// The flag that gave the run a limit, `--max-rounds` before `--max-tokens` where it gave both
+/// (CLI-38). `None` for a run given none.
+fn limit_flag(limits: RunLimits) -> Option<&'static str> {
+    match limits {
+        RunLimits {
+            rounds: Some(_), ..
+        } => Some("--max-rounds"),
+        RunLimits {
+            tokens: Some(_), ..
+        } => Some("--max-tokens"),
+        _ => None,
+    }
+}
+
 /// Whether a one-shot puts its plan to somebody: only where both ends of the conversation are a
 /// terminal, since either one piped or redirected is nobody (CLI-8).
 fn a_plan_is_put(stdin_is_terminal: bool, stderr_is_terminal: bool) -> bool {
@@ -1539,15 +1720,22 @@ fn run_task(
     prompts: SystemPrompts,
 ) -> ExitCode {
     match prepare_the_run(args, skip_permissions, accept_edits, agent, prompts) {
-        Ok(prepared) => run_and_report(prepared),
+        Ok(prepared) if prepared.input_lines => run_the_lines(prepared),
+        Ok(mut prepared) => {
+            let continued = prepared.continued.take();
+            let (code, ..) =
+                run_and_report(&prepared, &prepared.task, continued, None, &Cancel::new());
+            prepared.dismantle();
+            code
+        }
         Err(stopped) => stopped,
     }
 }
 
 /// What the second half of a one-shot run reads, and the two guards that only have to live as long
 /// as the run does. The fields are declared in the order the run used to declare the locals they
-/// replace, and `run_and_report` binds them in that order, so they are dropped in the order they
-/// always were.
+/// replace, and [`Prepared::dismantle`] drops them in the reverse of that order, as those locals
+/// were dropped.
 struct Prepared {
     workspace: bravebot_agent::Workspace,
     continued: Option<bravebot_session::sessions::Record>,
@@ -1569,6 +1757,38 @@ struct Prepared {
     named_on_the_command_line: bool,
     permission_mode: bravebot_agent::PermissionMode,
     goal: Option<String>,
+    /// Whether stdin carries the lines of CLI-36 and not a task.
+    input_lines: bool,
+    /// Whether the person vouched for those lines.
+    trust_input_lines: bool,
+}
+
+impl Prepared {
+    /// Drop what the run holds in the order it has always been dropped in: the servers the task
+    /// reaches stop first, and the scratch directory goes before the workspace it was made in.
+    /// Fields of a struct drop in the order they are declared, which is the other way about, so a
+    /// run that ended by dropping this one would stop its servers last.
+    fn dismantle(self) {
+        let Self {
+            workspace,
+            continued,
+            agent,
+            _scratch,
+            egress,
+            task,
+            _reached,
+            config,
+            ..
+        } = self;
+        drop(config);
+        drop(_reached);
+        drop(task);
+        drop(egress);
+        drop(_scratch);
+        drop(agent);
+        drop(continued);
+        drop(workspace);
+    }
 }
 
 /// Everything a one-shot run settles before the turn: the arguments, the configuration, the
@@ -1612,11 +1832,24 @@ fn prepare_the_run(
         resume,
         output_schema,
         goal,
+        input_lines,
+        trust_input_lines,
+        limits,
     } = invocation;
+
+    // Refused before stdin is read, since a run that reads lines owns the rest of the stream.
+    if let Some(conflict) = input_lines_conflict(
+        input_lines,
+        trust_input_lines,
+        mode,
+        bravebot_core::incognito::engaged(),
+    ) {
+        return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
+    }
 
     // Read before the emptiness check below, since `cat notes.md | bravebot -p` is a complete
     // invocation: the pipe is the input and the prompt may be left off.
-    let piped = if print {
+    let piped = if print && !input_lines {
         let stdin = std::io::stdin();
         let is_tty = stdin.is_terminal();
         match piped_input(stdin.lock(), is_tty) {
@@ -1627,7 +1860,8 @@ fn prepare_the_run(
         None
     };
 
-    if prompt.is_empty() && piped.is_none() {
+    // A run reading lines may be given its first prompt on stdin, so none here is not yet none.
+    if prompt.is_empty() && piped.is_none() && !input_lines {
         return Err(stopped_before_the_turn(
             as_json,
             Ending::Argument,
@@ -1644,6 +1878,11 @@ fn prepare_the_run(
         &prompts,
         resume.as_ref(),
     ) {
+        return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
+    }
+    if let Some(conflict) = limit_not_with_a_manifest(mode, limits)
+        .or_else(|| limit_not_with_a_goal(goal.is_some(), limits))
+    {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
     }
     // Read and vetted before anything is sent, so a schema outside what is checked is a refused
@@ -1896,6 +2135,7 @@ fn prepare_the_run(
         .with_model(model_asked_for(named, pick.into_model()))
         .with_advisor(advisor)
         .with_output_schema(output_schema)
+        .with_run_limits(limits)
         .with_permissions(permissions)
         .with_permission_mode(bravebot_agent::LiveMode::unattended(permission_mode))
         // The words the command line put in the planner's system prompt (CLI-19). A manifest run
@@ -1914,6 +2154,9 @@ fn prepare_the_run(
     }
     if let Some(text) = piped {
         task = task.with_piped_input(text);
+    }
+    if input_lines && trust_input_lines {
+        task = task.with_vouched_channel();
     }
 
     // Nobody is asked here, so a server no answer of the person's covers is absent and the reason
@@ -1986,6 +2229,8 @@ fn prepare_the_run(
         named_on_the_command_line,
         permission_mode,
         goal,
+        input_lines,
+        trust_input_lines,
     })
 }
 
@@ -2058,16 +2303,24 @@ fn check_the_model_can_serve_the_run(
     Ok(model)
 }
 
-/// The turn or the manifest, and what is reported of how it ended.
-fn run_and_report(prepared: Prepared) -> ExitCode {
+/// The turn or the manifest, and what is reported of how it ended, with the id of the session
+/// record the turn wrote where it wrote one, and whether the turn ended with an answer, which is
+/// what a turn that wrote no record has to be told apart from a turn that failed by.
+///
+/// `task` is the prompt to run, which is the one in `prepared` for a run of one turn and the
+/// words of a line for each turn of a run reading lines. `continued` is the record to carry on,
+/// and `lines` is where such a run's questions go and its steers come from (CLI-36).
+fn run_and_report(
+    prepared: &Prepared,
+    task: &Task,
+    continued: Option<bravebot_session::sessions::Record>,
+    lines: Option<&lines::Channel>,
+    cancel: &Cancel,
+) -> (ExitCode, Option<String>, bool) {
     let Prepared {
         workspace,
-        continued,
         agent,
-        _scratch,
         egress,
-        task,
-        _reached,
         config,
         under,
         model,
@@ -2079,7 +2332,17 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         named_on_the_command_line,
         permission_mode,
         goal,
+        ..
     } = prepared;
+    let (mode, trace, as_json, as_stream, trust_workspace, named_on_the_command_line) = (
+        *mode,
+        *trace,
+        *as_json,
+        *as_stream,
+        *trust_workspace,
+        *named_on_the_command_line,
+    );
+    let permission_mode = *permission_mode;
     let mut sink = json::Streaming::new(as_stream.then(|| json::Stream::new(std::io::stdout())));
     // The trail goes to stderr as each gate decides, so a run that never finishes still shows
     // what it decided (TRACE-5).
@@ -2096,11 +2359,18 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
     // Unless the flag was given, which is the one way a run nobody is watching may write: the
     // person accepted that when they typed it, and this is the only path where the refusal above
     // is what stands between the flag and an effect.
-    let attended = a_plan_is_put(
-        std::io::stdin().is_terminal(),
-        std::io::stderr().is_terminal(),
-    );
+    //
+    // Not where lines are being read: stdin then belongs to the thread reading them, and the plan is
+    // refused as it is for any pipe.
+    let attended = lines.is_none()
+        && a_plan_is_put(
+            std::io::stdin().is_terminal(),
+            std::io::stderr().is_terminal(),
+        );
     let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
+    if let Some(lines) = lines {
+        one_shot = one_shot.with_lines(lines.clone());
+    }
     // Screening off the task, so the answer the tools fill a verdict in under and the answer that
     // decides whether a verdict which objects can refuse are the one value resolved above.
     let mut confirmer =
@@ -2114,22 +2384,34 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
     // The id of the record this run wrote, which the result object carries (CLI-25).
     let mut session: Option<String> = None;
 
+    // The run is a session of one turn, so it opens before the turn is sent and ends once the
+    // record is written (HOOK-10). A run refused before this point opened nothing.
+    let mut moments = bravebot_agent::hooks::SessionMoments::read(
+        bravebot_agent::home::directory().as_deref(),
+        workspace.root(),
+    );
+    let opened = moments.started();
+    for sentence in &opened {
+        bravebot_agent::report::Reporter::notice(&mut reporter, sentence.clone());
+    }
+
     // Both modes take the same arguments and return the same outcome. The whole of the
     // difference is inside: one asks the model what to do next after every result, the other
     // asked once, before there were any.
     let mut unmet: Option<goal_run::Unmet> = None;
-    let outcome = match mode {
+    let mut outcome = match mode {
         Mode::Turn => {
             let (outcome, kept, why) = run_turn(
                 TurnRun {
-                    config: &config,
-                    egress: &egress,
-                    workspace: &workspace,
-                    task: &task,
+                    config,
+                    egress,
+                    workspace,
+                    task,
                     trust_workspace,
                     agent: agent.as_deref(),
                     goal: goal.as_deref(),
-                    model: &model,
+                    model,
+                    cancel,
                 },
                 continued,
                 &mut confirmer,
@@ -2143,10 +2425,10 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
             outcome
         }
         Mode::Manifest => bravebot_agent::manifest::run(
-            &config,
-            &egress,
-            &workspace,
-            &task,
+            config,
+            egress,
+            workspace,
+            task,
             &mut confirmer,
             &mut reporter,
             &mut sink,
@@ -2171,10 +2453,23 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
         );
     }
 
+    // Before the reply is written, so a hook that could not run is said beside it and in the result
+    // object. A run that failed carries what the reporter was told, and one that answered carries
+    // the outcome's own list, so both are given the sentences.
+    let closed = moments.ended();
+    for sentence in &closed {
+        bravebot_agent::report::Reporter::notice(&mut reporter, sentence.clone());
+    }
+    if let Ok(outcome) = &mut outcome {
+        outcome.notices.splice(0..0, opened);
+        outcome.notices.extend(closed);
+    }
+
     // Read once the turn is over, which is when the confirmer's borrow ends.
     let declined = one_shot.declined().to_vec();
 
-    match outcome {
+    let answered = outcome.is_ok();
+    let code = match outcome {
         Ok(outcome) => {
             // The reply is untrusted model output. Printing it is safe, since the
             // terminal is not a decision, so it is released explicitly for display.
@@ -2199,10 +2494,9 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
             // settings file is the one a repository commits beside its scripts, so a substitution
             // of that is the case the reporting is for, and a session is told about it whatever
             // named the model.
-            let asked = bravebot_agent::backend::Backend::name_as_asked(&config, &model);
-            let comparable = bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
-                &config, &model,
-            );
+            let asked = bravebot_agent::backend::Backend::name_as_asked(config, model);
+            let comparable =
+                bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(config, model);
             // Skipped where the definition's model was asked for, because the turn compared that
             // model itself and reported the substitution in the definition's words. The same for a
             // turn a skill moved onto its own model (SKILL-15): the command line did not name that
@@ -2301,7 +2595,98 @@ fn run_and_report(prepared: Prepared) -> ExitCode {
             report_a_failed_turn(&cause, Some(&attempt), as_json, &reporter, &sink, &declined)
         }
         Err(err) => report_a_failed_turn(&err, None, as_json, &reporter, &sink, &declined),
+    };
+    (code, session, answered)
+}
+
+/// A run reading lines from stdin: one turn for each `prompt`, each carried on from the record the
+/// turn before wrote, until the input has ended and nothing is left waiting (CLI-36).
+///
+/// The words on the command line, where there are any, are the first turn and are the person's own.
+/// A line's words are the person's only where they vouched for the channel; otherwise they are
+/// piped input to a turn with no prompt of its own, and the planner is given a reference to them.
+/// The process exits with the status of the last turn it ran, and each turn wrote its own result
+/// object.
+fn run_the_lines(mut prepared: Prepared) -> ExitCode {
+    // The cap piped input is held to, for a line and for what waits, so a file piped in whole fills
+    // no more memory than one piped to `-p` does (CLI-4).
+    let channel = lines::Channel::new(
+        prepared.trust_input_lines,
+        json::Stream::new(std::io::stdout()),
+        PIPE_CAP,
+    );
+    // Buffered here for the reason `OneShot` buffers its input: the reader runs on a thread of its
+    // own, and a held lock on stdin cannot go there.
+    channel.read(std::io::BufReader::new(std::io::stdin()));
+
+    let mut command_line =
+        Some(std::mem::take(&mut prepared.task.prompt)).filter(|words| !words.is_empty());
+    let mut continued = prepared.continued.take();
+    // The record the next turn carries on: the one a resumed run started from, then the one each
+    // turn that wrote one left behind. A turn that failed wrote none and leaves the last one
+    // standing. A turn that answered and wrote none leaves nothing to carry on from.
+    let mut kept = continued.as_ref().map(|record| record.id.clone());
+    let mut unsaved = false;
+    let mut turns = 0usize;
+    let mut exit = None;
+    loop {
+        let mut task = prepared.task.clone();
+        let cancel = match command_line.take() {
+            Some(words) => {
+                task.prompt = words;
+                channel.start()
+            }
+            None => {
+                let Some((words, cancel)) = channel.next_prompt() else {
+                    break;
+                };
+                match channel.vouched() {
+                    true => task.prompt = words,
+                    false => task.piped = Some(words),
+                }
+                cancel
+            }
+        };
+        // What the command line attached belongs to the first turn: the next one is carried on
+        // from a conversation that already holds it.
+        if turns > 0 {
+            task.files.clear();
+            task.session_excerpts.clear();
+        }
+        let record = match (turns, kept.as_deref()) {
+            (0, _) => Ok(continued.take()),
+            (_, _) if unsaved => Err(t!(cli_input_lines_session_unsaved).to_string()),
+            (_, None) => Ok(None),
+            (_, Some(id)) => continued::find(
+                prepared.workspace.root(),
+                &continued::Resume::Id(id.to_string()),
+            )
+            .map(Some)
+            .map_err(|problem| t!(cli_input_lines_session_lost, problem = problem).to_string()),
+        };
+        turns += 1;
+        let record = match record {
+            Ok(record) => record,
+            Err(message) => {
+                channel.idle();
+                exit = Some(stopped_before_the_turn(true, Ending::Failed, message));
+                continue;
+            }
+        };
+        let (code, wrote, answered) =
+            run_and_report(&prepared, &task, record, Some(&channel), &cancel);
+        channel.idle();
+        exit = Some(code);
+        match wrote {
+            Some(id) => kept = Some(id),
+            None => unsaved |= answered,
+        }
     }
+    let code = exit.unwrap_or_else(|| {
+        stopped_before_the_turn(true, Ending::Argument, t!(cli_input_lines_no_prompt))
+    });
+    prepared.dismantle();
+    code
 }
 
 /// What `run_turn` reads of the run around it, and none of what it changes.
@@ -2316,6 +2701,8 @@ struct TurnRun<'a> {
     /// the judge is asked too unless `summaryModel` names another.
     goal: Option<&'a str>,
     model: &'a str,
+    /// The token a stop reaches this turn by.
+    cancel: &'a Cancel,
 }
 
 /// The `Mode::Turn` arm of a one-shot run: the turn, continued from `continued` where there is one,
@@ -2341,6 +2728,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         agent,
         goal,
         model,
+        cancel,
     } = run;
     let mut session: Option<String> = None;
     // What a continued session vouched for comes back with it, as it does in a session
@@ -2379,7 +2767,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         trust,
         bravebot_core::programs::TrustedPrograms::new(),
         None,
-        &Cancel::new(),
+        cancel,
     );
     // Where the person's prompt entered the conversation, read before a later round moves it: a
     // run that works towards a goal is one turn of the record, and the prompt is the first one.
@@ -2394,6 +2782,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                     workspace,
                     task,
                     model,
+                    cancel,
                 },
                 completed,
                 &mut conversation,
@@ -2408,8 +2797,12 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
     if let (Some(earlier), Ok(last)) = (earlier, &mut completed.outcome) {
         earlier.fold_into(last, reporter.earlier());
     }
+    // Taken whether or not the turn has points to keep them on, so the next turn of a run that has
+    // several starts with none of this one's: a backup is kept for the first write to a path, and a
+    // later turn writing the same path would otherwise be put back to where this one found it.
+    let backups = workspace.take_backups();
     if let Some(points) = rewind.as_mut() {
-        points.keep_backups(workspace.take_backups());
+        points.keep_backups(backups);
     }
     let turn::Decisions {
         trust,
@@ -2464,6 +2857,9 @@ fn report_a_failed_turn(
         say_the_result(&what_ran(
             ending,
             &error.to_string(),
+            error
+                .limit_reached()
+                .map_or(0, bravebot_agent::turn::LimitReached::rounds),
             reporter.spent(),
             reporter.calls(),
             &with_declined(refusals(sink.recorded()), declined),
@@ -2574,10 +2970,13 @@ fn off_schema_message(broke: &bravebot_agent::output_schema::Mismatch) -> String
 /// Whether a result object was asked for, read straight off the command line.
 ///
 /// Only for the case where the parse failed, which is the one moment the parsed invocation cannot
-/// answer.
+/// answer. `--input-format lines` is a `--json-stream` run (CLI-36), so it asks for one too.
 fn wants_json(args: &[String]) -> bool {
     args.iter()
         .any(|arg| arg == "--json" || arg == "--json-stream")
+        || args
+            .windows(2)
+            .any(|pair| pair[0] == "--input-format" && pair[1] == "lines")
 }
 
 /// What a pipe may carry before it is refused.
@@ -2813,7 +3212,11 @@ fn interactive(
         disabled: Vec::new(),
     };
 
-    match bravebot_tui::app::run(
+    let mut moments = bravebot_agent::hooks::SessionMoments::read(
+        bravebot_agent::home::directory().as_deref(),
+        workspace.root(),
+    );
+    let ended = bravebot_tui::app::run(
         &mut config,
         &workspace,
         confinement,
@@ -2824,7 +3227,13 @@ fn interactive(
         links,
         skip_permissions,
         prompts,
-    ) {
+        &mut moments,
+    );
+    // After the terminal is handed back, so what a hook that went wrong said survives on the screen
+    // the person is left looking at.
+    let closed = end_the_session(&mut moments, &ended);
+    say_notices(&mut std::io::stderr().lock(), &closed);
+    match ended {
         // Printed after the terminal is handed back, so it survives on the screen the person is
         // left looking at rather than going onto the alternate screen with everything else. A
         // session is worth resuming far more often than anybody thinks to write its name down
@@ -2850,6 +3259,22 @@ fn interactive(
         // same name (CLI-17).
         Ok(bravebot_tui::app::Ended::Refused(refused)) => fail(Ending::Argument, refused),
         Err(err) => fail(Ending::Failed, t!(cli_interface_problem, problem = err)),
+    }
+}
+
+/// Fire `session-ended` for the full-screen interface that has just been left, and return the
+/// sentences for a hook that went wrong, for the caller to say (HOOK-10).
+///
+/// However the interface was left, including by a failure, except for a session handed to a
+/// background process, which goes on without the interface and whose process fires neither moment.
+/// Nothing for a session that never began, which `moments` knows.
+fn end_the_session(
+    moments: &mut bravebot_agent::hooks::SessionMoments,
+    ended: &std::io::Result<bravebot_tui::app::Ended>,
+) -> Vec<String> {
+    match ended {
+        Ok(bravebot_tui::app::Ended::Background { .. }) => Vec::new(),
+        _ => moments.ended(),
     }
 }
 
@@ -2897,7 +3322,7 @@ mod tests {
     /// and ignoring it would read as honoured, which is the reason CLI-13 refuses it by name.
     #[test]
     fn the_commands_that_start_no_session_refuse_every_flag_that_shapes_one() {
-        let thirteen = [
+        let commands = [
             "doctor",
             "update",
             "bug-report",
@@ -2905,6 +3330,7 @@ mod tests {
             "mcp",
             "permissions",
             "sessions",
+            "stats",
             "attach",
             "reply",
             "import-leo-creds",
@@ -2912,7 +3338,7 @@ mod tests {
             "completion",
             "shell-init",
         ];
-        for command in thirteen {
+        for command in commands {
             assert!(without_a_definition(Some(command)).is_some(), "{command}");
             assert!(
                 without_a_prompt_to_give("--system-prompt", Some(command)).is_some(),
@@ -2963,6 +3389,84 @@ mod tests {
             hint.contains("/other"),
             "the line does not say where the session went: {hint}"
         );
+    }
+
+    /// HOOK-10: leaving the full-screen interface fires `session-ended`, whether the person left or
+    /// the interface failed, and a session handed to a background process does not end, since it
+    /// goes on in another process, nor does one that was refused before it began. The regressions it
+    /// rejects are an end fired for `/bg`, which stops a service the background session is still
+    /// using, one skipped for a failure, which leaves a service a person opened the session to run,
+    /// and one fired for a refusal, which stops a service nothing started.
+    #[cfg(unix)]
+    #[test]
+    fn leaving_the_interface_ends_the_session_except_for_a_hand_over_to_the_background() {
+        use bravebot_tui::app::Ended;
+
+        let scratch = Scratch::new("cli-main-session-end");
+        let state = scratch.directory("state");
+        let log = scratch.path.join("log");
+        std::fs::write(
+            state.join("hooks.json"),
+            serde_json::json!({"hooks": [{
+                "on": "session-ended",
+                "run": ["/bin/sh", "-c", "echo ended >> \"$1\"", "sh", log.display().to_string()],
+            }]})
+            .to_string(),
+        )
+        .expect("a hooks file");
+        let left = || Resumable {
+            id: "abc".to_string(),
+            directory: PathBuf::from("/work"),
+        };
+        let endings: [(&str, bool, std::io::Result<Ended>, bool); 5] = [
+            ("the person left", true, Ok(Ended::Left(None)), true),
+            (
+                "the person left a session to resume",
+                true,
+                Ok(Ended::Left(Some(left()))),
+                true,
+            ),
+            (
+                "the interface failed",
+                true,
+                Err(std::io::Error::other("the terminal went away")),
+                true,
+            ),
+            (
+                "the session went to the background",
+                true,
+                Ok(Ended::Background {
+                    left: left(),
+                    mode: bravebot_session::jobs::Mode::Ask,
+                }),
+                false,
+            ),
+            (
+                "the session was refused before it began",
+                false,
+                Ok(Ended::Refused("the definition was refused".to_string())),
+                false,
+            ),
+        ];
+
+        for (how, began, ended, fires) in endings {
+            let _ = std::fs::remove_file(&log);
+            let mut moments =
+                bravebot_agent::hooks::SessionMoments::read(Some(&state), &scratch.path);
+            if began {
+                assert!(moments.started().is_empty());
+            }
+
+            let said = end_the_session(&mut moments, &ended);
+
+            assert!(said.is_empty(), "{how}: {said:?}");
+            assert_eq!(
+                log.exists(),
+                fires,
+                "{how}: the end of the session {} fire",
+                if fires { "did not" } else { "did" }
+            );
+        }
     }
 
     /// The flag is taken out wherever it was typed, with its word, and a word that is not a level
@@ -3082,6 +3586,7 @@ mod tests {
         let object = what_ran(
             Ending::Failed,
             "BB1001: nothing answered",
+            0,
             Default::default(),
             &[],
             &[],
@@ -3626,6 +4131,7 @@ mod tests {
         unattended.confirm_fetch(&bravebot_agent::confirm::FetchRequest {
             url: "https://example.invalid/a".to_string(),
             host: "example.invalid".to_string(),
+            redirected_from: None,
         });
         let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
         assert_eq!(gates, ["manifest_plan", "web_fetch"]);
@@ -3675,6 +4181,7 @@ mod tests {
         unattended.confirm_fetch(&bravebot_agent::confirm::FetchRequest {
             url: "https://example.invalid/a".to_string(),
             host: "example.invalid".to_string(),
+            redirected_from: None,
         });
         unattended.confirm_run(&run);
         unattended.confirm_manifest(&a_plan());
@@ -4313,6 +4820,7 @@ mod tests {
             "mcp",
             "permissions",
             "sessions",
+            "stats",
             "attach",
             "reply",
             "import-leo-creds",
@@ -4439,6 +4947,7 @@ mod tests {
             "mcp",
             "permissions",
             "sessions",
+            "stats",
             "attach",
             "reply",
             "import-leo-creds",
@@ -4861,6 +5370,185 @@ mod tests {
             let err = parse_invocation(&typed).expect_err("must refuse");
             assert!(err.contains("--effort"), "{typed:?}: {err}");
             assert!(err.contains("xhigh"), "{typed:?}: {err}");
+        }
+    }
+
+    /// The two flags name a limit each, and a run that names neither has none, which leaves the
+    /// built-in bound to be the only one (CLI-38).
+    #[test]
+    fn the_limit_flags_name_the_most_rounds_and_tokens_a_run_may_spend() {
+        let invocation = parse_invocation(&args(&[
+            "--max-rounds",
+            "12",
+            "do a thing",
+            "--max-tokens",
+            "250000",
+        ]))
+        .expect("parses");
+        assert_eq!(
+            invocation.limits,
+            RunLimits {
+                rounds: Some(12),
+                tokens: Some(250_000),
+            }
+        );
+        assert_eq!(invocation.prompt, "do a thing");
+
+        let invocation = parse_invocation(&args(&["do a thing"])).expect("parses");
+        assert_eq!(invocation.limits, RunLimits::default());
+    }
+
+    /// A rounds limit has to be below the built-in bound, since at it the bound takes the tools
+    /// away and has the run answer, which ends on status 0 where the limit is meant to give 8. A
+    /// limit in tokens has no upper end.
+    #[test]
+    fn a_rounds_limit_has_to_be_below_the_built_in_bound() {
+        let below = (MAX_TOOL_ROUNDS - 1).to_string();
+        let invocation = parse_invocation(&args(&["--max-rounds", &below, "go"])).expect("parses");
+        assert_eq!(invocation.limits.rounds, Some(MAX_TOOL_ROUNDS - 1));
+
+        for refused in [MAX_TOOL_ROUNDS, MAX_TOOL_ROUNDS + 1] {
+            let typed = refused.to_string();
+            let err =
+                parse_invocation(&args(&["--max-rounds", &typed, "go"])).expect_err("refused");
+            assert!(err.contains("--max-rounds"), "{err}");
+            assert!(err.contains(&below), "{err}");
+        }
+
+        let invocation =
+            parse_invocation(&args(&["--max-tokens", "18446744073709551615", "go"])).expect("ok");
+        assert_eq!(invocation.limits.tokens, Some(u64::MAX));
+    }
+
+    /// A value that is not a whole number of 1 or more is refused by name, because read as no
+    /// limit it would hand a script that computed a bad value a run with no cap, untold. Zero is
+    /// among them, since a limit of nothing stops the run before its first request.
+    #[test]
+    fn a_limit_flag_that_is_not_a_whole_number_of_one_or_more_is_refused() {
+        for flag in ["--max-rounds", "--max-tokens"] {
+            for value in [
+                "",
+                " ",
+                "0",
+                "00",
+                "-1",
+                "+5",
+                "5.0",
+                "1e3",
+                "ten",
+                "5 ",
+                " 5",
+                "0x10",
+                "1_000",
+                "--json",
+                "99999999999999999999999",
+            ] {
+                for typed in [
+                    args(&[flag, value, "do a thing"]),
+                    args(&["do a thing", flag, value]),
+                ] {
+                    let err = parse_invocation(&typed).expect_err("must refuse");
+                    assert!(err.contains(flag), "{typed:?}: {err}");
+                }
+            }
+            let err = parse_invocation(&args(&["do a thing", flag])).expect_err("refused");
+            assert!(err.contains(flag), "{flag} ending the line: {err}");
+        }
+    }
+
+    /// The last value wins, as it does for `--effort`, so a wrapper that appends a flag to a line
+    /// it was given can change it.
+    #[test]
+    fn the_last_value_given_for_a_limit_is_the_one_in_force() {
+        let invocation = parse_invocation(&args(&[
+            "--max-rounds",
+            "9",
+            "--max-rounds",
+            "3",
+            "--max-tokens",
+            "10",
+            "--max-tokens",
+            "20",
+            "go",
+        ]))
+        .expect("parses");
+        assert_eq!(invocation.limits.rounds, Some(3));
+        assert_eq!(invocation.limits.tokens, Some(20));
+    }
+
+    /// A manifest run plans before it makes a round of tool calls, so a limit on rounds has nothing
+    /// to count and a limit it accepted and did not hold would cost what it was given to bound. A
+    /// turn is never refused, and neither is a manifest run given no limit.
+    #[test]
+    fn a_manifest_run_refuses_the_limit_flags_by_name() {
+        let both = RunLimits {
+            rounds: Some(3),
+            tokens: Some(100),
+        };
+        let rounds = RunLimits {
+            rounds: Some(3),
+            tokens: None,
+        };
+        let tokens = RunLimits {
+            rounds: None,
+            tokens: Some(100),
+        };
+
+        let refused = limit_not_with_a_manifest(Mode::Manifest, rounds).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+        let refused = limit_not_with_a_manifest(Mode::Manifest, tokens).expect("refused");
+        assert!(refused.contains("--max-tokens"), "{refused}");
+        let refused = limit_not_with_a_manifest(Mode::Manifest, both).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+
+        assert_eq!(limit_not_with_a_manifest(Mode::Turn, both), None);
+        assert_eq!(
+            limit_not_with_a_manifest(Mode::Manifest, RunLimits::default()),
+            None
+        );
+    }
+
+    /// A goal run sends the work back as further turns, and each counts a limit from nothing, so a
+    /// limit given with `--goal` would bound each round and let the run spend it eleven times over.
+    /// It is refused by name, as it is for a manifest run. A run with no goal is never refused, and
+    /// neither is a goal run given no limit.
+    #[test]
+    fn a_goal_run_refuses_the_limit_flags_by_name() {
+        let both = RunLimits {
+            rounds: Some(3),
+            tokens: Some(100),
+        };
+        let rounds = RunLimits {
+            rounds: Some(3),
+            tokens: None,
+        };
+        let tokens = RunLimits {
+            rounds: None,
+            tokens: Some(100),
+        };
+
+        let refused = limit_not_with_a_goal(true, rounds).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+        assert!(refused.contains("--goal"), "{refused}");
+        let refused = limit_not_with_a_goal(true, tokens).expect("refused");
+        assert!(refused.contains("--max-tokens"), "{refused}");
+        let refused = limit_not_with_a_goal(true, both).expect("refused");
+        assert!(refused.contains("--max-rounds"), "{refused}");
+
+        assert_eq!(limit_not_with_a_goal(false, both), None);
+        assert_eq!(limit_not_with_a_goal(true, RunLimits::default()), None);
+    }
+
+    /// Either flag may lead the line, as the other task flags do: `bravebot --max-rounds 3 "task"`
+    /// is a one-shot run and not an unknown option.
+    #[test]
+    fn a_limit_flag_may_lead_the_line_like_the_other_task_flags() {
+        for flag in ["--max-rounds", "--max-tokens"] {
+            assert!(TASK_FLAGS.contains(&flag), "{flag}");
+            assert!(
+                flags::is_a_one_shot(&args(&[flag, "3", "go"]), false),
+                "{flag}"
+            );
         }
     }
 
@@ -5616,6 +6304,7 @@ mod tests {
             "auth",
             "permissions",
             "sessions",
+            "stats",
             "attach",
             "completion",
             "import-providers",

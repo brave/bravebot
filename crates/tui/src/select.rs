@@ -105,6 +105,18 @@ pub struct Click {
     count: u8,
 }
 
+impl Click {
+    /// Which press of its run this was.
+    pub fn count(&self) -> u8 {
+        self.count
+    }
+
+    /// The cell the press landed on, as a row and a column.
+    pub fn cell(&self) -> (u16, u16) {
+        (self.row, self.column)
+    }
+}
+
 /// Which press of a run this one is: 1 for a lone press, 2 for a double click, 3 for a triple
 /// click. A fourth press starts the count again.
 ///
@@ -338,7 +350,32 @@ pub fn text(buffer: &Buffer, selection: &Selection) -> String {
 /// [`text`], with the rows in `joined` running on into the row below them without a line break:
 /// one line of text the screen had to draw over two rows.
 pub fn text_joining(buffer: &Buffer, selection: &Selection, joined: &[u16]) -> String {
+    text_wrapping(buffer, selection, joined, &[])
+}
+
+/// [`text_joining`], and with the rows in `wrapped` running on from the row above them as a
+/// paragraph does: its words wrapped by the width of the screen and not by anything its author
+/// wrote.
+///
+/// Each row comes with whether the wrap broke the line at a blank, which is put back as one space,
+/// or inside a word, which gets none. The screen cannot tell the two apart, since a word ending in
+/// the last column loses its blank, so the layout records which it was.
+///
+/// `wrapped` holds screen rows of the transcript, and another pane drawn beside it shares their
+/// numbers, so it is read only for a selection that began in the transcript, or on a screen that
+/// records no panes and is the transcript's alone, as the scroller is.
+pub fn text_wrapping(
+    buffer: &Buffer,
+    selection: &Selection,
+    joined: &[u16],
+    wrapped: &[(u16, bool)],
+) -> String {
     let selection = &selection.resolved(buffer);
+    let wrapped = if matches!(selection.pane, Pane::Transcript | Pane::Screen) {
+        wrapped
+    } else {
+        &[]
+    };
     let area = buffer.area.intersection(selection.bounds);
     let (start, end) = selection.ends();
 
@@ -354,9 +391,14 @@ pub fn text_joining(buffer: &Buffer, selection: &Selection, joined: &[u16]) -> S
             }
         }
 
-        let continues = row > area.top() && joined.contains(&(row - 1));
-        if !out.is_empty() && !continues {
+        let above = row.checked_sub(1).filter(|_| row > area.top());
+        let continues = above.is_some_and(|above| joined.contains(&above));
+        let soft = above.and_then(|_| wrapped.iter().find(|(r, _)| *r == row));
+        if !out.is_empty() && !continues && soft.is_none() {
             out.push('\n');
+        }
+        if soft.is_some_and(|(_, at_blank)| *at_blank) && !out.is_empty() {
+            out.push(' ');
         }
         out.push_str(line.trim_end());
     }
@@ -399,6 +441,66 @@ mod tests {
         let rows: Vec<Line> = lines.iter().map(|l| Line::raw(l.to_string())).collect();
         Paragraph::new(rows).render(buffer.area, &mut buffer);
         buffer
+    }
+
+    /// A row the wrap cut at a word gives back the blank it stood on, and one cut inside a word
+    /// does not.
+    #[test]
+    fn a_wrapped_row_joins_the_row_below_it() {
+        let buffer = screen(&["one two", "three", "abcdefghijklmnopqrst", "uvw"]);
+        let mut selection = Selection::in_pane(0, 0, Pane::Transcript, Rect::new(0, 0, 20, 4));
+        selection.extend_to(3, 19);
+        assert_eq!(
+            text_wrapping(&buffer, &selection, &[], &[(1, true), (3, false)]),
+            "one two three\nabcdefghijklmnopqrstuvw",
+        );
+        // The same rows with no wrap recorded stay as the lines they were drawn as.
+        assert_eq!(
+            text_wrapping(&buffer, &selection, &[], &[]),
+            "one two\nthree\nabcdefghijklmnopqrst\nuvw",
+        );
+    }
+
+    /// A word that ends in the last column loses its blank, so the row below looks like one cut
+    /// inside a word. What the layout recorded decides, not where the text ends.
+    #[test]
+    fn a_blank_dropped_at_the_last_column_is_still_a_space() {
+        let buffer = screen(&["aaaa bbbbb ccccccccc", "eeee"]);
+        let mut selection = Selection::in_pane(0, 0, Pane::Transcript, Rect::new(0, 0, 20, 2));
+        selection.extend_to(1, 19);
+        assert_eq!(
+            text_wrapping(&buffer, &selection, &[], &[(1, true)]),
+            "aaaa bbbbb ccccccccc eeee",
+        );
+        assert_eq!(
+            text_wrapping(&buffer, &selection, &[], &[(1, false)]),
+            "aaaa bbbbb ccccccccceeee",
+        );
+    }
+
+    /// The row above a selection's first row is not part of it, so the blank it ends on is not
+    /// either.
+    #[test]
+    fn a_selection_starting_on_a_wrapped_row_has_no_leading_blank() {
+        let buffer = screen(&["one two", "three"]);
+        let mut selection = Selection::in_pane(1, 0, Pane::Transcript, Rect::new(0, 0, 20, 2));
+        selection.extend_to(1, 19);
+        assert_eq!(
+            text_wrapping(&buffer, &selection, &[], &[(1, true)]),
+            "three"
+        );
+    }
+
+    /// The rows are screen rows, and the panel beside the transcript is drawn on the same ones.
+    #[test]
+    fn a_wrap_in_the_transcript_does_not_join_the_rows_of_another_pane() {
+        let buffer = screen(&["panel one", "panel two"]);
+        let mut selection = Selection::in_pane(0, 0, Pane::Hint, Rect::new(0, 0, 20, 2));
+        selection.extend_to(1, 19);
+        assert_eq!(
+            text_wrapping(&buffer, &selection, &[], &[(1, true)]),
+            "panel one\npanel two",
+        );
     }
 
     #[test]
