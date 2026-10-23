@@ -158,6 +158,11 @@ fn with_account(
                     .into(),
             );
         }
+        // Said in the sentence of the refusal, which does not send the person to sign in again:
+        // a new sign-in is not what changes it.
+        bravebot_agent::chatgpt::AccountModels::Refused(refusal) => {
+            warnings.push(format!("Could not load models from ChatGPT: {refusal}."));
+        }
         bravebot_agent::chatgpt::AccountModels::Absent => {}
     }
 }
@@ -479,6 +484,25 @@ mod tests {
         assert_eq!(rows, std::slice::from_ref(&elsewhere));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].starts_with("Could not load models from ChatGPT."));
+
+        // A listing refused for a code that names the account is told in the refusal's sentence, which
+        // is not the unreadable listing's and does not name signing in again.
+        use bravebot_aichat::responses::protocol::Refusal;
+        for (refusal, said) in [
+            (Refusal::NotPermitted, "does not allow this ChatGPT account"),
+            (Refusal::UsageLimit, "has reached its usage limit"),
+        ] {
+            let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
+            with_account(&mut rows, &mut warnings, AccountModels::Refused(refusal));
+            assert_eq!(rows, std::slice::from_ref(&elsewhere));
+            assert_eq!(warnings.len(), 1, "{refusal:?}");
+            assert!(warnings[0].contains(said), "{refusal:?}: {}", warnings[0]);
+            assert!(
+                !warnings[0].contains("sign in") && !warnings[0].contains("auth login"),
+                "{refusal:?}: {}",
+                warnings[0]
+            );
+        }
 
         let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
         with_account(&mut rows, &mut warnings, AccountModels::Absent);

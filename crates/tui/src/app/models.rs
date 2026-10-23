@@ -116,7 +116,8 @@ pub(super) fn account_rows(
     match account {
         bravebot_agent::chatgpt::AccountModels::Offered(rows) => in_reading_order(rows, chosen),
         bravebot_agent::chatgpt::AccountModels::Absent
-        | bravebot_agent::chatgpt::AccountModels::Unreadable => Vec::new(),
+        | bravebot_agent::chatgpt::AccountModels::Unreadable
+        | bravebot_agent::chatgpt::AccountModels::Refused(_) => Vec::new(),
     }
 }
 

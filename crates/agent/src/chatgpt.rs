@@ -11,6 +11,7 @@
 //! the next request would present a refresh token the server has already replaced.
 
 use bravebot_aichat::models::Model;
+use bravebot_aichat::responses::protocol::Refusal;
 use bravebot_aichat::{AccountAccess, AccountFailure, ChatError, RenewalFailure};
 use bravebot_config::provider::Provider;
 use bravebot_config::{Config, Secret};
@@ -73,9 +74,14 @@ pub enum AccountModels {
     /// none, which the service answered and is not a failure.
     Offered(Vec<Model>),
     /// A sign-in is stored and the listing could not be had: the token could not be renewed, the
-    /// request failed or was refused, or the reply was not a listing. Nothing is offered, and the
-    /// picker says the models could not be loaded.
+    /// request failed or was refused for its token or its status, or the reply was not a listing.
+    /// Nothing is offered, and the picker says the models could not be loaded.
     Unreadable,
+    /// A sign-in is stored and the serving host refused the listing in a code that names the
+    /// account ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Nothing is offered,
+    /// and the desktop picker says so in that clause's sentence, which does not send the person to
+    /// sign in again.
+    Refused(Refusal),
 }
 
 /// The account's models for a picker, asked of the serving host with the stored sign-in.
@@ -144,6 +150,9 @@ fn account_models_from<S: Sink>(
                     }
                     Err(_) => return AccountModels::Unreadable,
                 };
+            }
+            Err(ChatError::Account(AccountFailure::Named(refusal))) => {
+                return AccountModels::Refused(refusal);
             }
             Err(_) => return AccountModels::Unreadable,
         }
@@ -562,6 +571,40 @@ mod tests {
             );
             assert_eq!(offered, expected, "{failure:?}");
         }
+    }
+
+    /// CHATGPT-9 and CHATGPT-8: a listing refused with a code that says the account may not be used
+    /// this way is not asked for again with a replacement, which would not change it, and nothing is
+    /// offered. The one replacement a picker makes is for a token the host turned away alone.
+    #[test]
+    fn a_listing_refused_for_a_listed_code_is_not_replaced_or_asked_again() {
+        let (endpoint, received) = answering(vec![
+            (
+                401,
+                r#"{"error":{"code":"subscription_sharing_invalid_user"}}"#,
+            ),
+            (200, LISTING),
+        ]);
+        let mut access =
+            Held::new(Ok("placeholder-token-8c1f")).replacing_with("placeholder-token-2e90");
+
+        let offered = account_models_from(
+            &configured("{}"),
+            &mut access,
+            &account_at(&endpoint),
+            &mut RecordingSink::new(),
+            &Egress::new(),
+        );
+
+        assert_eq!(offered, AccountModels::Refused(Refusal::NotPermitted));
+        assert!(access.refused.is_empty(), "a token was replaced");
+        received.recv().expect("the listing was asked for");
+        assert!(
+            received
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the listing was asked for again"
+        );
     }
 
     /// CHATGPT-9: an entry with the id keeps it, so no model of the account is offered and the

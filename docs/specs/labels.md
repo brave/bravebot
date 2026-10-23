@@ -183,7 +183,7 @@ guards:
       - crates/aichat/src/anthropic.rs: 2
       - crates/aichat/src/generate_content.rs: 2
       - crates/aichat/src/responses.rs: 1
-      - crates/aichat/src/lib.rs: 2
+      - crates/aichat/src/lib.rs: 3
       - crates/aichat/src/models.rs: 2
       - crates/aichat/src/ollama.rs: 1
       - crates/bedrock/src/lib.rs: 2

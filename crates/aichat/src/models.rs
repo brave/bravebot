@@ -369,7 +369,9 @@ fn read_listing<S: Sink, T: serde::de::DeserializeOwned>(
     url: &str,
     egress: &Egress,
 ) -> Result<T, ChatError> {
-    let response = egress.fetch(policy, request, Label::untrusted_public())?;
+    let response = egress
+        .fetch(policy, request, Label::untrusted_public())
+        .map_err(|error| crate::failure_of_refusal(policy, error))?;
     let label = response.body.label();
     let (bytes, _) = policy
         .decode_transport("gateway models", label)
@@ -439,7 +441,8 @@ pub fn list_from_account<S: Sink>(
     let request = Request::get(&url)
         .header("accept", "application/json")
         .socket_header(name, value)
-        .refusing_redirects();
+        .refusing_redirects()
+        .reading_a_refusal();
 
     let listed: AccountListing = read_listing(policy, request, &url, egress)?;
     Ok(offered_by_account(provider, listed.models))
