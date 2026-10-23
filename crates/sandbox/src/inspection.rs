@@ -45,7 +45,10 @@ impl Inspection {
 /// ending the process, because a refusal to start would make the product unusable on a system where
 /// the remedy is outside the program.
 #[cfg(target_os = "linux")]
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "`prctl` takes integers and marks this process non-dumpable"
+)]
 pub fn refuse_same_user_inspection() -> Inspection {
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let set = unsafe {
@@ -101,7 +104,10 @@ mod tests {
     /// Runs the check for the test above, and does nothing when run on its own with the others.
     /// The kernel's own record is read back, not the answer the call gave.
     #[test]
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "sets and reads the dumpable flag with `prctl`, which takes integers"
+    )]
     fn the_marked_process_reads_back_non_dumpable() {
         if std::env::var_os(CHILD).is_none() {
             return;

@@ -71747,7 +71747,10 @@ fn accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later(
         scratch
     };
     let calls = || {
-        #[cfg_attr(not(unix), allow(unused_mut))]
+        #[cfg_attr(
+            not(unix),
+            allow(unused_mut, reason = "only the unix call below pushes to it")
+        )]
         let mut calls = vec![
             writing("src/a.rs", "fn main() {}\n"),
             writing(".git/hooks/pre-commit", "#!/bin/sh\necho ran\n"),

@@ -205,10 +205,27 @@ fn names_an_exemption(path: &Path) -> bool {
     if path.extension().is_none_or(|extension| extension != "rs") {
         return false;
     }
-    std::fs::read_to_string(path)
-        .expect("a source file")
-        .lines()
-        .any(|line| line.trim().starts_with("#[allow(") && line.contains("unsafe_code"))
+    allows_unsafe_code(&std::fs::read_to_string(path).expect("a source file"))
+}
+
+/// Whether `source` has an `#[allow(...)]` that names `unsafe_code`. rustfmt wraps an attribute
+/// whose reason is long over several lines, and the line holding `)]` ends it.
+fn allows_unsafe_code(source: &str) -> bool {
+    let mut lines = source.lines();
+    while let Some(line) = lines.next() {
+        if !line.trim().starts_with("#[allow(") {
+            continue;
+        }
+        let mut attribute = line.trim().to_string();
+        while !attribute.contains(")]") {
+            let Some(next) = lines.next() else { break };
+            attribute.push_str(next.trim());
+        }
+        if attribute.contains("unsafe_code") {
+            return true;
+        }
+    }
+    false
 }
 
 /// The rule itself: nothing compiles here without having answered the question.
@@ -321,4 +338,31 @@ fn allowing_unsafe_at_a_root_is_not_a_declaration() {
         declaration("#![deny(unsafe_code, unused_crate_dependencies)] // why\n"),
         Declaration::Denied
     );
+}
+
+/// A site that allows unsafe code is found whether its attribute is on one line or wrapped over
+/// several, and an allow of another lint beside it is not one. A reader of the single-line form
+/// alone stops finding the sites whose reason is long enough for rustfmt to wrap, and the rule
+/// above then calls a crate that has them an exemption-free one.
+#[test]
+fn an_exemption_is_found_on_one_line_or_wrapped_and_only_for_unsafe_code() {
+    let exempting = [
+        "#[allow(unsafe_code)]\nfn f() {}\n",
+        "    #[allow(unsafe_code, reason = \"a call\")]\n    fn f() {}\n",
+        "#[allow(\n    unsafe_code,\n    reason = \"a call\"\n)]\nfn f() {}\n",
+        "#[allow(\n    clippy::too_many_arguments,\n    unsafe_code,\n    reason = \"a call\"\n)]\n",
+    ];
+    for source in exempting {
+        assert!(allows_unsafe_code(source), "not found in:\n{source}");
+    }
+
+    let not_exempting = [
+        "#[allow(dead_code)]\nfn f() {}\n",
+        "#[allow(\n    dead_code,\n    reason = \"a call\"\n)]\nfn unsafe_code() {}\n",
+        "#[deny(unsafe_code)]\nfn f() {}\n",
+        "// #[allow(unsafe_code)] is how a site says it\nfn f() {}\n",
+    ];
+    for source in not_exempting {
+        assert!(!allows_unsafe_code(source), "found in:\n{source}");
+    }
 }

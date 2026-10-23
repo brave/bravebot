@@ -88,7 +88,7 @@ fn constant(id: &str, catalogs: &[Catalog], from: &[&Catalog]) -> String {
         .join(", ");
 
     format!(
-        "\n#[allow(dead_code)]\npub fn {}() -> &'static str {{\n    \
+        "\n#[allow(dead_code, reason = \"every message in the catalog is generated, used or not\")]\npub fn {}() -> &'static str {{\n    \
          const TEXT: [&str; {}] = [{table}];\n    TEXT[crate::locale() as usize]\n}}\n",
         snake_case(id),
         catalogs.len()
@@ -126,10 +126,10 @@ fn structure(id: &str, catalogs: &[Catalog], from: &[&Catalog], args: &[(String,
         .collect::<String>();
 
     let mut out = format!(
-        "\n#[allow(dead_code)]\npub struct {name}<{parameters}> {{\n{fields}}}\n\n\
-         #[allow(dead_code)]\nimpl<{bounds}> {name}<{parameters}> {{\n    \
+        "\n#[allow(dead_code, reason = \"every message in the catalog is generated, used or not\")]\npub struct {name}<{parameters}> {{\n{fields}}}\n\n\
+         #[allow(dead_code, reason = \"every message in the catalog is generated, used or not\")]\nimpl<{bounds}> {name}<{parameters}> {{\n    \
          // A locale that says the same thing without one of the arguments leaves it unread.\n    \
-         #[allow(unused_variables)]\n    \
+         #[allow(unused_variables, reason = \"a locale that says it without an argument leaves it unread\")]\n    \
          pub fn render(self) -> String {{\n        let mut out = String::new();\n"
     );
     for (arg, selects) in args {
@@ -363,5 +363,35 @@ mod tests {
             generated.contains(r#"["hello", "hello"]"#),
             "the omitting locale's slot is not the reference's text:\n{generated}"
         );
+    }
+
+    /// The generated code silences `dead_code` on every message and `unused_variables` on the
+    /// arguments a locale leaves unread. It is compiled with the rest of the crate, so
+    /// `clippy::allow_attributes_without_reason` reads it, once for each of the thousands of
+    /// messages. No source file holds these attributes, so the check of the source files
+    /// cannot see them, and a message with arguments and one without take different paths here.
+    #[test]
+    fn every_allow_the_generated_code_carries_gives_a_reason() {
+        let catalogs = vec![
+            catalog("en-US", &format!("greeting = hello\n{ROUNDS}")),
+            catalog("fr", ROUNDS_IN_FRENCH),
+        ];
+        let generated = messages(&catalogs, &catalogs[0]);
+
+        let allows: Vec<&str> = generated
+            .match_indices("#[allow(")
+            .map(|(at, _)| generated[at..].lines().next().expect("a line"))
+            .collect();
+        assert!(
+            allows.len() >= 4,
+            "a message and a message with arguments generate four, so the generator changed what \
+             it writes and this test reads the wrong text:\n{generated}"
+        );
+        for allow in allows {
+            assert!(
+                allow.contains(", reason = \"") && allow.ends_with("\")]"),
+                "the generated code allows a lint with no reason: {allow}"
+            );
+        }
     }
 }

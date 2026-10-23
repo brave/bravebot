@@ -77,7 +77,7 @@ pub fn session(
 /// settings file answers nothing: a rule is a decision about a session somebody is sitting in
 /// front of (BG-8). A question about starting a server is held for whoever attaches, so nothing a
 /// person did not see is started (BG-7).
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(unix), allow(dead_code, reason = "only the unix host calls it"))]
 pub(crate) fn hosted(hosting: crate::host::Hosting) -> ExitCode {
     run(
         false,
