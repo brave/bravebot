@@ -20,6 +20,16 @@ export const DEFAULT_RESULTS = 20;
 // Where the settings are kept in chrome.storage.local.
 export const SETTINGS_KEY = "tools";
 
+// Where the blocked sites are kept, beside the settings: a list of origins such
+// as "https://mail.example.com" that a person wrote in the options page.
+export const BLOCKED_SITES_KEY = "blocked_sites";
+
+// How many history entries a search looks at while a site is blocked. Entries
+// at a blocked site are dropped after the search, so a search that asked the
+// browser for no more than it returns would come back short, or empty, where
+// the newest matches were all at a blocked site.
+const BLOCKED_SCAN_LIMIT = 10 * MAX_RESULTS;
+
 // Which tools may run until a person changes it in the options page. Only the
 // platform check starts on: it tells nothing about the person. Every other tool
 // reaches what they have open, visited or saved, so it reads nothing until they
@@ -60,6 +70,118 @@ export class ToolError extends Error {
 export async function settings(chrome) {
   const stored = await chrome.storage.local.get(SETTINGS_KEY);
   return { ...DEFAULT_SETTINGS, ...(stored[SETTINGS_KEY] ?? {}) };
+}
+
+// The origins a person blocked, in the order they wrote them. A stored value
+// that is not a list of strings is a failure, not an empty list: a list that
+// cannot be read must not leave every site open.
+export async function blockedSites(chrome) {
+  const stored = await chrome.storage.local.get(BLOCKED_SITES_KEY);
+  const list = stored[BLOCKED_SITES_KEY] ?? [];
+  if (!Array.isArray(list) || list.some((site) => typeof site !== "string")) {
+    throw new ToolError(
+      "the blocked sites in the BraveBot extension's options cannot be read",
+    );
+  }
+  return list;
+}
+
+// The origin of a URL, which is how the blocked sites are written, or null
+// where it has none. A blob: URL has the origin of the page that made it. A
+// view-source: URL shows the page named after it.
+function originOf(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  try {
+    const { origin } = new URL(value.replace(/^view-source:/i, ""));
+    return origin === "null" ? null : origin;
+  } catch {
+    return null;
+  }
+}
+
+// What a web host looks like once the URL parser has lowercased it and turned
+// a name outside ASCII into punycode. The parser also takes `*` and `,` in a
+// host, so https://*.bank.example would be kept as an origin no page has, and
+// the site it was meant to cover would stay open.
+const HOST = /^(?:[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.?|\[[0-9a-f:.]+\])$/;
+
+// Whether a line is one address. The parser puts whatever follows the first
+// `/` into the path, so `https://a.example/, https://b.example/` would be kept
+// as the first site and lose the second without a word.
+function oneAddress(entry) {
+  return !/\s/.test(entry) && entry.indexOf("://") === entry.lastIndexOf("://");
+}
+
+// The blocked sites a person wrote, as the origins to keep and the lines that
+// are not one HTTP or HTTPS address of a host. A path after the origin is
+// dropped, since the list is of sites, and a site named twice is kept once.
+function parseBlockedSites(input) {
+  const sites = [];
+  const rejected = [];
+  for (const line of input.split(/\r?\n/)) {
+    const entry = line.trim();
+    if (entry === "") {
+      continue;
+    }
+    const origin =
+      oneAddress(entry) && webUrl(entry) && HOST.test(new URL(entry).hostname)
+        ? originOf(entry)
+        : null;
+    if (origin === null) {
+      rejected.push(entry);
+    } else if (!sites.includes(origin)) {
+      sites.push(origin);
+    }
+  }
+  return { sites, rejected };
+}
+
+// Keeps the sites in `input` as the blocked list. A line that is not one HTTP
+// or HTTPS address stops the save and is returned, so the options page can say
+// which. Saving the others would drop a site whose line was mistyped.
+export async function saveBlockedSites(chrome, input) {
+  const { sites, rejected } = parseBlockedSites(input);
+  if (rejected.length === 0) {
+    await chrome.storage.local.set({ [BLOCKED_SITES_KEY]: sites });
+  }
+  return { sites, rejected };
+}
+
+// Whether `url` is at one of the blocked origins. Origins are compared as
+// written: https://example.com does not cover https://www.example.com or
+// http://example.com.
+function isBlocked(sites, url) {
+  const origin = originOf(url);
+  return origin !== null && sites.includes(origin);
+}
+
+// Whether `frame` is at a blocked site or inside a frame that is. What a
+// blocked frame embeds is part of what that site shows, so it goes with it.
+function behindBlocked(sites, frames, frame) {
+  let current = frame;
+  for (let depth = 0; current && depth <= frames.length; depth += 1) {
+    if (isBlocked(sites, current.url)) {
+      return true;
+    }
+    const parent = current.parentFrameId;
+    current = frames.find((candidate) => candidate.frameId === parent);
+  }
+  return false;
+}
+
+// What a call that names a blocked site is told. It goes back to the session,
+// so it names the list and nothing of the site.
+const BLOCKED_MESSAGE =
+  "that site is in the blocked sites list in the BraveBot extension's options";
+
+// Refuses a call that names a blocked site, before any tab is looked for:
+// whether one is open is not told.
+function refuseBlocked(sites, url) {
+  if (isBlocked(sites, url)) {
+    throw new ToolError(BLOCKED_MESSAGE);
+  }
 }
 
 // A string argument that has to be there and have something in it.
@@ -191,22 +313,37 @@ export const TOOLS = {
     return { os, arch, nacl_arch };
   },
 
+  // A tab whose page or next page is at a blocked site is left out. A tab that
+  // has not committed has no URL yet and a title that is the address it is
+  // loading, so the address it is going to counts as well.
   async list_tabs(chrome) {
+    const sites = await blockedSites(chrome);
     const tabs = await chrome.tabs.query({});
-    return tabs.map((tab) => ({
-      id: tab.id,
-      window_id: tab.windowId,
-      title: tab.title ?? "",
-      url: tab.url ?? "",
-    }));
+    return tabs
+      .filter(
+        (tab) =>
+          !isBlocked(sites, tab.url) && !isBlocked(sites, tab.pendingUrl),
+      )
+      .map((tab) => ({
+        id: tab.id,
+        window_id: tab.windowId,
+        title: tab.title ?? "",
+        url: tab.url ?? "",
+      }));
   },
 
+  // Frames at a blocked site, and frames inside one, are left out of the list,
+  // as tabs are.
   async list_frames(chrome, params) {
     const url = text(params, "url");
+    const sites = await blockedSites(chrome);
+    refuseBlocked(sites, url);
     const tab = await tabAt(chrome, url);
     const frames = await framesAt(chrome, tab, url);
     return frames
-      .filter((frame) => webUrl(frame.url))
+      .filter(
+        (frame) => webUrl(frame.url) && !behindBlocked(sites, frames, frame),
+      )
       .map((frame) => ({ url: frame.url, top: frame.frameId === 0 }));
   },
 
@@ -222,6 +359,11 @@ export const TOOLS = {
     const url = text(params, "url");
     const frameUrl =
       params?.frame_url === undefined ? undefined : text(params, "frame_url");
+    const sites = await blockedSites(chrome);
+    refuseBlocked(sites, url);
+    if (frameUrl !== undefined) {
+      refuseBlocked(sites, frameUrl);
+    }
     const tab = await tabAt(chrome, url);
     let frame;
     if (frameUrl !== undefined) {
@@ -231,8 +373,12 @@ export const TOOLS = {
           INVALID_PARAMS,
         );
       }
-      const matches = (await framesAt(chrome, tab, url)).filter(
-        (candidate) => candidate.url === frameUrl,
+      const frames = await framesAt(chrome, tab, url);
+      // A frame inside a blocked one is not found, as it is not listed.
+      const matches = frames.filter(
+        (candidate) =>
+          candidate.url === frameUrl &&
+          !behindBlocked(sites, frames, candidate),
       );
       if (matches.length === 0) {
         throw new ToolError(`no frame in ${url} is at ${frameUrl}`);
@@ -296,27 +442,34 @@ export const TOOLS = {
 
   async search_history(chrome, params) {
     const query = text(params, "query");
+    const sites = await blockedSites(chrome);
+    const wanted = count(params);
     // Without a start time the history API searches the last 24 hours only.
     const items = await chrome.history.search({
       text: query,
       startTime: 0,
-      maxResults: count(params),
+      maxResults: sites.length === 0 ? wanted : BLOCKED_SCAN_LIMIT,
     });
-    return items.map((item) => ({
-      title: item.title ?? "",
-      url: item.url ?? "",
-      last_visit:
-        item.lastVisitTime === undefined
-          ? null
-          : new Date(item.lastVisitTime).toISOString(),
-    }));
+    return items
+      .filter((item) => !isBlocked(sites, item.url))
+      .slice(0, wanted)
+      .map((item) => ({
+        title: item.title ?? "",
+        url: item.url ?? "",
+        last_visit:
+          item.lastVisitTime === undefined
+            ? null
+            : new Date(item.lastVisitTime).toISOString(),
+      }));
   },
 
   async search_bookmarks(chrome, params) {
     const query = text(params, "query");
+    const sites = await blockedSites(chrome);
     const nodes = await chrome.bookmarks.search(query);
     return nodes
       .filter((node) => typeof node.url === "string")
+      .filter((node) => !isBlocked(sites, node.url))
       .slice(0, count(params))
       .map((node) => ({ title: node.title ?? "", url: node.url }));
   },
@@ -325,12 +478,15 @@ export const TOOLS = {
   // the person's cookies, so the URL is the one they read in the question. The
   // tab is closed and the call fails if the page that commits is on another
   // host: a redirect to a host nobody was shown is not what was approved. The
-  // reply carries the committed URL and no page content.
+  // reply carries the committed URL and no page content. A site on the blocked
+  // list is not opened, and a tab that commits at one is closed.
   async open_tab(chrome, params) {
     const url = text(params, "url");
     if (!webUrl(url)) {
       throw new ToolError("url must be an HTTP or HTTPS URL", INVALID_PARAMS);
     }
+    const sites = await blockedSites(chrome);
+    refuseBlocked(sites, url);
     const { tab, event } = await openedTab(chrome, () =>
       chrome.tabs.create({ url, active: false }),
     );
@@ -348,6 +504,10 @@ export const TOOLS = {
       throw new ToolError(
         `the tab opened for ${url} went to another host, so it was closed`,
       );
+    }
+    if (isBlocked(sites, event.url)) {
+      await close();
+      throw new ToolError(BLOCKED_MESSAGE);
     }
     return { url: event.url };
   },

@@ -45,3 +45,29 @@ compares the head they are merging against the head that was approved.
 
 Whether a substantive push after an approval should require a re-review is open. Answering it means
 changing the setting or adding a check, and both change this page.
+
+## The npm-publish environment
+
+`publish-npm.yml` runs the file at the ref it is dispatched on, and the npm trusted-publisher record
+checks the repository and the workflow filename, not the ref. The `platform` and `publish` jobs, the
+two that hold `id-token: write`, therefore name `environment: npm-publish`
+([RELEASE-11](../specs/releases.md#RELEASE-11)). The environment is a repository setting, so this
+page is where it is recorded:
+
+| Setting | Value |
+|---|---|
+| Environment name | `npm-publish` |
+| Required reviewers | a maintainer who is not the person dispatching |
+| Prevent self-review | true |
+| Deployment branches and tags | `v*` tags and `main` (narrows the ref; the reviewer is the control) |
+
+On npmjs.com, each of the seven packages' trusted-publisher record names the environment
+`npm-publish` beside the repository and `publish-npm.yml`. A dispatch from a ref that is neither a
+tag nor `main`, or one nobody approves, then publishes nothing. Read the live values with a
+maintainer's token:
+
+```sh
+gh api repos/brave/bravebot/environments/npm-publish
+```
+
+`make check-security` holds only that each job with the grant names an environment.

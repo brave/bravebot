@@ -59,7 +59,7 @@ Present whether or not an agent ever runs.
 | Registries | `~/.npmrc`, `~/.yarnrc.yml`; `~/.pypirc`, `~/.config/pip/pip.conf`; `~/.m2/settings.xml`, `~/.gradle/gradle.properties`; `~/.cargo/credentials.toml`, `~/.nuget/NuGet/NuGet.Config`, `~/.composer/auth.json`, `~/.gem/credentials`; `~/.cache/huggingface/token`, `GOPRIVATE` + netrc |
 | IaC & secrets | `~/.terraformrc`, `~/.terraform.d/credentials.tfrc.json`; `~/.pulumi/credentials.json`; `~/.vault-token`; `~/.config/sops/age/keys.txt`, `*.agekey`, vault password files; `~/.gitlab-runner/config.toml`; the 1Password CLI's `~/.config/op/` |
 | Databases | `~/.pgpass`, `~/.my.cnf`, `~/.mylogin.cnf`; DBeaver `credentials-config.json` under `~/.local/share/DBeaverData/` or `~/Library/DBeaverData/`, JetBrains password safe, TablePlus, pgAdmin `~/.pgadmin/pgadmin4.db` |
-| IDE & agent | `claude_desktop_config.json` in `~/Library/Application Support/Claude/`; another agent's own auth: `~/.claude/.credentials.json` at mode 0600, or the login keychain item it falls back from, `~/.claude.json`, `~/.codex/`, `~/.gemini/` and `~/.local/share/opencode/auth.json`; `settings.json`, Settings Sync, extension storage: `~/.config/Code/`, `~/Library/Application Support/Code/`; `~/.config/JetBrains/*/options/`; agent transcripts / tool logs: session dirs, undo history; `~/.config/github-copilot/hosts.json` |
+| IDE & agent | `claude_desktop_config.json` in `~/Library/Application Support/Claude/`; another agent's own auth: `~/.claude/.credentials.json` at mode 0600, or the login keychain item it falls back from, `~/.claude.json`, `~/.codex/`, `~/.gemini/` and `~/.local/share/opencode/auth.json`; `settings.json`, Settings Sync, extension storage: `~/.config/Code/`, `~/Library/Application Support/Code/`; `~/.config/JetBrains/*/options/`; agent transcripts / tool logs: session dirs, undo history, and this agent's own `~/.bravebot/sessions/`; `~/.config/github-copilot/hosts.json` |
 | Browser | `Login Data`, `Cookies`, `Web Data`, `Local State`; `logins.json`, `key4.db`, `cookies.sqlite`; `userDataDir`, `storageState.json` outside the tree |
 | Certs & signing | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore` outside the tree; mkcert `rootCA-key.pem`; `~/.android/debug.keystore`, release keystores; `~/Library/MobileDevice/Provisioning Profiles/`, App Store Connect `.p8`; code-signing certs: OS keychain / cert store |
 | Network & host | `*.ovpn`, `~/.config/openconnect/`; SMB credential files under the home directory; the X display's cookie `~/.Xauthority` |
@@ -121,8 +121,8 @@ features anything here implements.
 
 | Group | Where it lives |
 | --- | --- |
-| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; `~/.bravebot/leo-premium.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the imported subscription's signed credential batch, deliberately not the OS keychain; `~/.bravebot/gateway-keys.json`, kept the same way, the gateway keys `bravebot auth login gateway` stored, one per provider id. With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
-| What it keeps beside that | `~/.bravebot/history`, every submitted prompt across runs; `~/.bravebot/sessions/<project-key>/<id>.json` and its trail beside it, and the record holds the conversation rather than a title, so it carries whatever file content the planner was shown; `~/.bravebot/mcp.json`, which holds each value `bravebot mcp add -e NAME=value` stored for a server, often an API key, at a mode of 0600 on Unix (values for an HTTP server's headers are read from the environment at launch and never stored); `/export`, which writes a transcript as markdown inside the working directory |
+| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; `~/.bravebot/leo-premium.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the imported subscription's signed credential batch, deliberately not the OS keychain; `~/.bravebot/gateway-keys.json`, kept the same way, the gateway keys `bravebot auth login gateway` stored, one per provider id; `~/.bravebot/chatgpt-account.json`, kept the same way, the access token and refresh token `bravebot auth login chatgpt` stored for a ChatGPT account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)). With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
+| What it keeps beside that | `~/.bravebot/history`, every submitted prompt across runs; `~/.bravebot/sessions/<project-key>/<id>.json` and its trail beside it, and the record holds the conversation rather than a title, so it carries whatever file content the planner was shown until nothing has written the record for the retention period, 30 days where none is stated ([state-directory.md](state-directory.md#STATE-4)); `~/.bravebot/mcp.json`, which holds each value `bravebot mcp add -e NAME=value` stored for a server, often an API key, at a mode of 0600 on Unix (values for an HTTP server's headers are read from the environment at launch and never stored); `/export`, which writes a transcript as markdown inside the working directory |
 | Its own project settings | `.bravebot/settings.json` and `.bravebot/settings.local.json` in a checkout, a layer over the one at home, which on some machines carries credentials |
 | Minted access, by a turn | `~/.ssh/`, then deploy key or `authorized_keys`; `gh auth login`, `~/.config/gh/hosts.yml`; `aws iam create-access-key` → `~/.aws/credentials`; `gcloud iam service-accounts keys create`; `az ad sp create-for-rbac`; `npm token create`, `docker login`, `helm registry login` |
 | Generated by a turn, stored outside the tree | `~/.ngrok2/ngrok.yml`, `~/.cloudflared/*.json`; `mkcert -install` |
@@ -140,10 +140,11 @@ the only answer that costs no one a decision, and the only one that works before
 Everything outside the working tree has it already: `read_file`, `write_file`, `edit_file` and
 `search` resolve a path and refuse one that lands outside, symlinks included. Its strict form
 covers what the agent authenticates with, `~/.bravebot/leo-premium.json`,
-`~/.bravebot/gateway-keys.json` and the credentials that sign a model request, which CRED-14 puts out of reach of every program, prompt and record with no
+`~/.bravebot/gateway-keys.json`, `~/.bravebot/chatgpt-account.json` and the credentials that sign a model request, which CRED-14 puts out of reach of every program, prompt and record with no
 legitimate exception. A program a turn runs under the confined default is refused `~/.bravebot` as
-it is refused `~/.ssh` ([SANDBOX-12](sandboxing.md#SANDBOX-12)), and no `allowRead` or `allowWrite`
-row, scope variable or `/reach` grant lifts that. Two things get past it: a command a turn runs
+it is refused `~/.ssh` ([SANDBOX-12](sandboxing.md#SANDBOX-12)), except `~/.bravebot/sessions`,
+which it reads and never writes, as it reads `~/.ssh/config`. No `allowRead` or `allowWrite`
+row, scope variable or `/reach` grant lifts the rest, and none grants a write there. Two things get past it: a command a turn runs
 with `sandbox` off, and `/add-dir`, which makes a named directory reachable for the session.
 
 **2. Something else performs the action.** The agent asks for an outcome and never sees a secret.
@@ -283,7 +284,7 @@ whatever its tier, which is why the record reaches past the two tiers CRED-25 as
 
 `verified-by: bravebot_config::lib::every_credential_in_the_record_stands_at_a_tier_the_walk_arrived_at`
 `verified-by: bravebot_config::lib::an_imported_subscription_is_a_credential_this_configuration_holds`
-`verified-by: bravebot_cli::main::each_tier_a_credential_can_stand_at_is_reported_in_its_own_words`
+`verified-by: bravebot_cli::doctor::each_tier_a_credential_can_stand_at_is_reported_in_its_own_words`
 `verified-by: bravebot_cli::running::doctor_names_the_tier_of_every_credential_it_accounts_for`
 `verified-by: bravebot_cli::running::doctor_accounts_for_an_imported_subscription_at_the_tier_its_walk_stopped_at`
 
@@ -305,9 +306,9 @@ disagree are a disagreement rather than a silence.
 
 `verified-by: bravebot_config::lib::a_credentials_walk_holds_one_drop_per_gate_it_failed_and_stops_at_its_tier`
 `verified-by: bravebot_config::lib::every_drop_this_configuration_records_is_one_nobody_attempted`
-`verified-by: bravebot_cli::main::a_reason_is_reported_for_exactly_the_drops_the_record_holds`
-`verified-by: bravebot_cli::main::a_drop_is_reported_with_the_gate_and_the_answer_the_record_holds`
-`verified-by: bravebot_cli::main::every_drop_has_its_own_account_of_the_condition_it_failed`
+`verified-by: bravebot_cli::doctor::a_reason_is_reported_for_exactly_the_drops_the_record_holds`
+`verified-by: bravebot_cli::doctor::a_drop_is_reported_with_the_gate_and_the_answer_the_record_holds`
+`verified-by: bravebot_cli::doctor::every_drop_has_its_own_account_of_the_condition_it_failed`
 `verified-by: bravebot_cli::running::doctor_accounts_for_every_drop_of_each_credentials_walk`
 
 <a id="CRED-4"></a>
@@ -435,7 +436,7 @@ a leak runs before anybody goes to the surface [CRED-25](#CRED-25) names. So a c
 briefly has a figure and one at Held may, which is one direction rather than two.
 
 `verified-by: bravebot_config::lib::a_credential_at_held_briefly_is_sized_against_detection`
-`verified-by: bravebot_cli::main::how_soon_a_leak_is_noticed_is_reported_for_exactly_the_credentials_the_record_sizes`
+`verified-by: bravebot_cli::doctor::how_soon_a_leak_is_noticed_is_reported_for_exactly_the_credentials_the_record_sizes`
 
 <a id="CRED-11"></a>
 ### CRED-11: a turn does not copy a credential somewhere weaker than where it was
@@ -609,6 +610,10 @@ That is a stronger answer than a redaction rule and it is why this clause does n
 is owed there is the test, which scans the trail for every secret the process holds.
 
 `verified-by: bravebot_bedrock::credentials::this_agents_own_credentials_reach_none_of_the_aws_cli_this_crate_starts`
+`verified-by: bravebot_cli::push_identity::a_program_started_here_is_not_handed_this_agents_own_credentials`
+`verified-by: bravebot_cli::running::doctor_push_identity_hands_none_of_this_agents_credentials_to_the_programs_it_starts`
+`verified-by: bravebot_agent::usability::a_program_the_suite_starts_is_not_handed_this_agents_signing_key`
+`verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_this_agents_signing_key`
 `verified-by: bravebot_bedrock::credentials::the_machines_own_aws_configuration_still_reaches_the_cli`
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`
@@ -795,6 +800,9 @@ the fingerprint and the preview. A finding is written whatever was done about it
 refused, what was approved and what the person declined are equally things in their tree. The
 screen alone is not enough: a line drawn while nobody was looking is gone when the turn ends, and
 the scan exists to tell a person what their own repository holds.
+
+A file nothing has written for the retention period is removed when a session starts, and the
+acceptances beside it are not ([state-directory.md](state-directory.md#STATE-4)).
 
 The record is best effort and fails toward silence. No state directory, a full disk, a read-only
 home: each means the findings do not outlive the session, which is where they were before the
@@ -1060,7 +1068,9 @@ hold. CRED-15's scan of what a turn reads reports the same way and reaches this 
 than the other one does. What exists is the record and one surface that reads it, `doctor`, which
 reports
 what would end each credential this configuration holds, a gateway's bearer token and an imported
-subscription's credential batch included. A gateway key stored with `bravebot auth login gateway`
+subscription's credential batch included, and the ChatGPT sign-in of a machine that made one
+([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)), which is reported from its file rather than from the
+configuration, since the file is held on every machine that made a sign-in. A gateway key stored with `bravebot auth login gateway`
 is named as stored, since neither the environment nor a settings file shows where it came from, and
 the account of ending it names `bravebot auth logout gateway` beside revoking it at the gateway. A
 file of those keys it cannot read is named, and the report ends on the failure status, since every
@@ -1072,10 +1082,12 @@ writing a second one.
 `verified-by: bravebot_config::lib::a_gateway_token_is_a_credential_this_configuration_holds`
 `verified-by: bravebot_config::provider::the_host_a_token_would_be_ended_at_carries_no_other_part_of_the_endpoint`
 `verified-by: bravebot_bedrock::credentials::a_session_token_is_what_says_what_would_end_a_credential`
-`verified-by: bravebot_cli::main::every_held_credential_has_its_own_account_of_what_would_end_it`
-`verified-by: bravebot_cli::main::a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it`
-`verified-by: bravebot_cli::main::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
-`verified-by: bravebot_cli::main::a_stored_gateway_key_is_named_as_stored_and_never_printed`
+`verified-by: bravebot_cli::doctor::every_held_credential_has_its_own_account_of_what_would_end_it`
+`verified-by: bravebot_cli::doctor::a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it`
+`verified-by: bravebot_cli::doctor::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
+`verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
+`verified-by: bravebot_cli::doctor::a_stored_gateway_key_is_named_as_stored_and_never_printed`
+`verified-by: bravebot_cli::running::doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it`
 `verified-by: bravebot_cli::running::doctor_names_a_stored_gateway_key_without_printing_it`
 `verified-by: bravebot_cli::running::doctor_fails_on_a_file_of_gateway_keys_it_cannot_read`
 
@@ -1127,12 +1139,12 @@ it is recorded like everything else the walk decides.
 
 `verified-by: bravebot_config::lib::a_derived_credential_records_whether_it_is_bound_to_its_presenter`
 `verified-by: bravebot_config::lib::a_credentials_binding_does_not_move_its_tier`
-`verified-by: bravebot_cli::main::a_derived_credential_is_reported_as_a_bearer_secret_in_words_that_keep_the_answers_apart`
+`verified-by: bravebot_cli::doctor::a_derived_credential_is_reported_as_a_bearer_secret_in_words_that_keep_the_answers_apart`
 
 **What exists.** The record carries `Held::binding`, which says `Bearer` with the answer the gate
 walk uses (`Refused` for an AWS session, whose issuer offers no bound form, and `NotAttempted` for an
-imported subscription batch, which nobody has asked) for the two derived credentials, and nothing for
-the credentials issued once and held as issued. `doctor` reports it on a `binding` line. No
+imported subscription batch and the ChatGPT sign-in, which nobody has asked) for the three derived
+credentials, and nothing for the credentials issued once and held as issued. `doctor` reports it on a `binding` line. No
 credential is yet held in a sender-constrained form, and nothing here requests one: `Binding::SenderConstrained`
 is the value a credential takes when a form is asked for and granted.
 
@@ -1197,7 +1209,10 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   with `r` for every session in the directory until the line is deleted from the record. That is
   what the keys say they do, and it is why they are keyed by the resolved file and offered only on a
   question about a credential. Keying on the value instead would ask again at every rotation, which
-  is the question the person pressed the key to stop.
+  is the question the person pressed the key to stop. A directory removed and made again at the same
+  path is covered by the entries recorded for the one before it: the record names a directory by its
+  path and holds nothing that identifies the directory standing there, where the startup answer holds
+  its identity ([TRUST-23](trust-map.md#TRUST-23)).
 
 - **A value a command generates gets less than one a write tool creates.** CRED-16 reads what a
   turn wrote in its own words, and a redirection is a file a program the turn started opened for
@@ -1293,6 +1308,15 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   all, including an answer about a file the new directory still reaches, which is asked about
   again: telling those apart would mean renaming each answer for the new directory, to save one
   question per file.
+
+- **An answer to read a file is filed under its name, so what the name leads to later is covered.**
+  Agreeing that a file may be read is kept under the name it has from the root. After a link on that
+  path is pointed somewhere else, the same name reaches another file without a question, and a file
+  whose bytes are replaced at the same path is covered in the same way for the rest of the session.
+  A write is kept under the file it lands in, so a retargeted link asks again there, and replaced
+  bytes are covered as they are for a read. Keying a read on where it lands, as a write is, would
+  close the link case. Only keying on the bytes closes the other, and it asks again after every edit
+  the agent makes itself.
 
 - **Half of CRED-14 is pinned and half is argued.** The tests on it are the environment of a program
   this agent starts. That what it holds reaches no session record rests on

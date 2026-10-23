@@ -5,19 +5,13 @@
 // stills, so the width is sampled while it moves. The other is that a column comes back
 // where it was rather than at the default — which only shows up if the column was dragged
 // somewhere non-default first, so the run starts by doing exactly that.
-import { _electron as electron } from 'playwright-core'
+import { checker, launch } from './drive-support.mjs'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
-
-const launch = () => electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+const { check, problems } = checker()
 
 /** Whichever columns are folded, unfolded — the state on disk outlives any one run. */
 async function unfoldAll(page) {

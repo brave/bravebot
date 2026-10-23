@@ -20,11 +20,17 @@ pub struct Filesystem {
     pub pinned: Vec<List>,
     /// The person's own entries a pinned list left out, for a report.
     pub unread: Vec<(List, Entry)>,
+    /// Whether the person asked for the temporary directory to be held back from every stage
+    /// (`sandbox.holdBackTemporaryDirectory`, SANDBOX-22).
+    pub hold_back_temporary: bool,
 }
 
 /// The answer for flags, the settings layers and the managed layer, none read from the machine here.
 pub fn resolve(flags: &Lists, settings: &Settings, managed: &Managed) -> Filesystem {
-    let mut out = Filesystem::default();
+    let mut out = Filesystem {
+        hold_back_temporary: settings.sandbox_holds_back_temporary_directory(),
+        ..Filesystem::default()
+    };
     let own = settings.sandbox_filesystem();
     for list in crate::settings::FILESYSTEM_LISTS {
         let mut entries: Vec<Entry> = own.of(list).iter().chain(flags.of(list)).cloned().collect();
@@ -89,6 +95,14 @@ pub fn sandbox_filesystem() -> Lists {
         .get()
         .map(|settled| settled.lists.clone())
         .unwrap_or_default()
+}
+
+/// Whether the settled settings hold the temporary directory back from every stage, which is
+/// false where nothing settled them.
+pub fn holds_back_temporary_directory() -> bool {
+    SETTLED
+        .get()
+        .is_some_and(|settled| settled.hold_back_temporary)
 }
 
 /// The settled answer with what was pinned, for a report.

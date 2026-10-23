@@ -4,6 +4,7 @@ title: request_path
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
 guards:
   - symbol: Policy::record_path_reach
 documented-by: docs/website/docs/reference/tools.md
@@ -31,6 +32,7 @@ other. A call without a path is answered with an error and asks nobody.
 `verified-by: bravebot_agent::tools::request_path_is_offered_with_run_and_takes_a_path_a_flag_and_a_reason`
 `verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
 `verified-by: bravebot_agent::turn::a_request_for_a_path_is_asked_about_with_no_reason_a_blank_one_or_a_given_one`
+`verified-by: bravebot_agent::turn::a_request_for_a_path_that_names_none_or_a_flag_that_is_no_boolean_asks_nobody`
 
 <a id="PATHREQ-2"></a>
 ### PATHREQ-2: only a yes grants, and a run with nobody to ask refuses
@@ -49,8 +51,9 @@ project file or permission rule grants one in advance.
 ### PATHREQ-3: a path an `allowWrite` row refuses is refused, and not asked about
 
 `~`, `/`, a drive root, the home directory and any directory above it, `~/.ssh`, `~/.bravebot`, a
-credential location and any path holding a wildcard are refused whatever the person would answer.
-The result says so without asking, says what is true of the path that made it refuse (it holds
+credential location and any path holding a wildcard are refused whatever the person would answer;
+a request to read `~/.bravebot/sessions` or a path inside it is the one exception, and a request to
+write there is refused like the rest of `~/.bravebot`. The result says so without asking, says what is true of the path that made it refuse (it holds
 credentials, a write there could leave code that runs later, it is too broad, or the person's own
 deny list covers it) and not which setting decided it, and for a request to write points at the
 `run` argument that lets the person approve one line ([SANDBOX-29](../sandboxing.md#SANDBOX-29))
@@ -60,6 +63,7 @@ where the session would accept it.
 program should not have put.
 
 `verified-by: bravebot_sandbox::rules::a_request_is_refused_where_an_allow_write_entry_is`
+`verified-by: bravebot_sandbox::rules::only_a_read_of_the_session_records_is_granted_in_the_state_directory`
 `verified-by: bravebot_agent::turn::a_path_that_is_refused_as_a_row_is_refused_as_a_request_and_not_asked`
 `verified-by: bravebot_agent::turn::a_refused_path_request_says_why_and_points_a_write_at_the_unconfined_line`
 
@@ -86,10 +90,18 @@ Under the sandbox mode `off` there is no profile to add to, and a workspace that
 `read-only` a request to write is refused and a request to read is accepted
 ([SANDBOX-22](../sandboxing.md#SANDBOX-22)), so the mode that answers every question does not hand
 back the writes the mode withholds. The result says the request is not accepted, and nobody is
-asked.
+asked. A session that accepts no request does not point the planner at the route: the `run`
+description and the sentence after a failed step name neither `request_path` nor `run`'s `scopes`
+argument there ([SANDBOX-19](../sandboxing.md#SANDBOX-19)). The mode that answers every question
+does not give the programs of such a session the rows a request would have added either: a write
+beside the session's directories is refused by the operating system, and the sentence, the trail and
+`/status` say nothing of a reach through `request_path`
+([SANDBOX-28](../sandboxing.md#SANDBOX-28)).
 
 `verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
+`verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
+`verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
 
 <a id="PATHREQ-6"></a>
 ### PATHREQ-6: a delegate has no such tool
@@ -98,6 +110,7 @@ The tool is in the set no delegate is offered, and a call naming it anyway is an
 unknown name ([DELEGATE-12](../delegation.md#DELEGATE-12)).
 
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
+`verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 
 <a id="PATHREQ-7"></a>
 ### PATHREQ-7: a yes does not reach the file tools, except where the mode that answers every question gave it
@@ -122,20 +135,34 @@ that holds the project is opened, and the result says that no delegate is given 
 is open ([CHECKOUT-7](../checkouts.md#CHECKOUT-7)). The result tells the planner which tools now
 reach the path, so it does not ask the person to run `/add-dir`.
 
+The planner cannot see the permission mode and is not told it. The tool's description states the
+exception as applying where the person has turned permission prompts off. A file tool's refusal for
+a path outside the workspace says that a `request_path` for the directory is granted without a
+question and opens it to the file tools, and says it only where the session does grant one unasked,
+which a session that accepts no request for a path ([PATHREQ-5](#PATHREQ-5)) does not. The planner
+then makes the call when it would succeed and does not put the person a question that opens
+nothing. Elsewhere, which includes the sandbox mode `off` and a workspace that is not trusted, the
+refusal names `/add-dir` alone. A skill that depends on the exception says the same and does not
+branch on the mode.
+
 The same mode needs no request for programs either, under the sandbox mode `workspace-write` on macOS and
-Linux: the lead session's stages are given at the start what a request for writing would be
-granted ([SANDBOX-28](../sandboxing.md#SANDBOX-28)), so a `run` is not refused before the planner
-asks. The file tools are not given that reach, and the request is still how they are.
+Linux, in a workspace the person has trusted: the lead session's stages are given at the start what a
+request for writing would be granted ([SANDBOX-28](../sandboxing.md#SANDBOX-28)), so a `run` is not
+refused before the planner asks. The file tools are not given that reach, and the request is still
+how they are.
 
 **Why.** The text a planner chose is the only thing that decides the path, which is the reason a
 person's yes does not vouch for it. In bypass the person has already declared that nothing a session
 does needs their word, and a session that stops on a question nobody is there to answer is the one
-failure the mode exists to avoid: `pr-fix` makes a worktree beside the project, and its edits stop at
-the first file tool.
+failure the mode exists to avoid: `pr-fix` makes a worktree outside the project when
+`BRAVEBOT_PR_WORKTREES` names a directory there, and its edits stop at the first file tool.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_does_not_let_the_file_tools_touch_it`
 `verified-by: bravebot_agent::turn::outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
+`verified-by: bravebot_agent::turn::a_file_tool_refusal_names_request_path_only_where_a_grant_is_unasked`
+`verified-by: bravebot_agent::turn::a_file_tool_refusal_names_request_path_only_where_the_session_accepts_one`
+`verified-by: bravebot_agent::tools::request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_inside_the_project_is_not_opened`
 `verified-by: bravebot_agent::turn::under_bypass_a_file_or_a_kept_in_workspace_is_not_opened`

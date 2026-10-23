@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpa
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { _electron as electron } from 'playwright-core'
+import { inheritedEnv, launchWorld, listening } from './drive-world.mjs'
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const root = mkdtempSync(join(tmpdir(), 'bravebot-walkthrough-'))
@@ -43,23 +43,21 @@ const server = createServer(async (req, res) => {
     res.end(`data: ${JSON.stringify({ model: 'test', choices: [{ index: 0, delta, finish_reason: delta.tool_calls ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 9, total_tokens: 21 } })}\n\ndata: [DONE]\n\n`)
   } catch (error) { failures.push(String(error)); res.writeHead(500); res.end('Fixture assertion failed') }
 })
-await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+await listening(server)
 function writeFixtureSettings(model) {
   writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({ provider: { local: { options: { baseURL: `http://127.0.0.1:${server.address().port}/v1`, apiKey: fixtureToken }, models: { test: {} } } }, model }))
 }
 writeFixtureSettings('local/test')
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter(k => process.env[k]).map(k => [k, process.env[k]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost' })
+const env = Object.assign(inheritedEnv(), { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), NO_PROXY: '127.0.0.1,localhost' })
 async function until(predicate, label) {
   const deadline = Date.now() + 20000
   while (!await predicate()) { assert(Date.now() < deadline, `${label} timed out; fixture errors: ${failures}`); await delay(50) }
 }
 try {
   // Under xvfb the GPU process's GL start can hold the hidden window's first paint past a click's timeout on a fresh runner.
-  app = await electron.launch({ args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11', '--disable-gpu'] : []), `--user-data-dir=${profile}`], env, timeout: 40000 })
-  page = await app.firstWindow(); page.setDefaultTimeout(15000)
-  await page.setViewportSize({ width: 1350, height: 900 })
-  const uiErrors = []; page.on('pageerror', error => uiErrors.push(error.message))
+  const world = await launchWorld({ profile, env, linuxArgs: ['--disable-gpu'], timeout: 15000, viewport: { width: 1350, height: 900 } })
+  app = world.app; page = world.page
+  const uiErrors = world.errors
   await app.evaluate(({ dialog }, project) => {
     globalThis.walkthroughPicker = { path: project, calls: [] }
     dialog.showOpenDialog = async (_window, options) => {
@@ -382,6 +380,71 @@ try {
   assert.equal(probe.asked.length, 2, 'a text file is not asked about')
   assert.deepEqual([probe.opened, probe.shown], [[target('tool.command'), target('notes.txt')], []])
   console.log('PASS: Open in default app asks about a program, and opens a document without asking')
+
+  // 7c: the planner's questions are put one at a time with their position, a skip moves on to the
+  // next question, and the planner gets one result with a paragraph per question (ASK-6).
+  await page.setViewportSize({ width: 1350, height: 900 })
+  await page.getByRole('button', { name: 'New chat', exact: true }).click()
+  await page.getByRole('button', { name: "Don't trust", exact: true }).click()
+  const questions = [
+    { header: 'Colour', question: 'Which colour is the release?', options: [{ label: 'Blue' }, { label: 'Green', detail: 'The newer one' }] },
+    { header: 'Name', question: 'What is the release called?' },
+    { header: 'Platforms', question: 'Which platforms does it ship for?', multiple: true, options: [{ label: 'Linux' }, { label: 'macOS' }] },
+  ]
+  steps.push(
+    () => tool('ask_user', { questions }),
+    body => {
+      const result = lastTool(body)
+      const paragraphs = result.split('\n\n').slice(1)
+      assert(result.startsWith('Result of ask_user:'), result)
+      assert.equal(paragraphs.length, 3, `one paragraph per question: ${result}`)
+      assert.deepEqual(paragraphs[0].split('\n'), [questions[0].question, 'The user chose: Green'])
+      assert.equal(paragraphs[1].split('\n')[0], questions[1].question)
+      assert.match(paragraphs[1], /The user declined to answer\./, 'the skipped question reads as a decline')
+      assert.deepEqual(paragraphs[2].split('\n'), [questions[2].question, 'The user chose:', '- Linux', '- macOS'])
+      return content('The release is green for both platforms.')
+    },
+  )
+  const beforeAsk = await send('Ask me about the release before you write anything.')
+  const series = page.locator('.confirm.ask')
+  const position = series.locator('.confirm-head .path')
+  const next = series.getByRole('button', { name: 'Next', exact: true })
+  const lastly = series.getByRole('button', { name: 'Answer', exact: true })
+  // Only the question being put is on screen, and the others wait their turn.
+  const onlyAsking = async (at, text) => {
+    await position.getByText(`the agent is asking (${at} of 3)`, { exact: true }).waitFor()
+    assert.equal(await series.locator('.ask-question').count(), 1, 'one question at a time')
+    assert.equal(await series.locator('.ask-question .question').innerText(), text)
+    for (const other of questions.filter(one => one.question !== text)) assert.equal(await series.getByText(other.question, { exact: true }).count(), 0, `${other.question} is not drawn yet`)
+  }
+  // The pressed button is shut once the next question is drawn, so focus has to be put in the card.
+  const focusInCard = () => page.evaluate(() => Boolean(document.activeElement?.closest('.confirm.ask')))
+  await onlyAsking(1, questions[0].question)
+  assert.equal(await next.isDisabled(), true, 'nothing picked is not an answer')
+  await series.locator('.choice').filter({ hasText: 'Green' }).click()
+  assert.equal(await next.isDisabled(), false)
+  await next.click()
+  await onlyAsking(2, questions[1].question)
+  assert.equal(await focusInCard(), true, 'focus left the card when the next question was drawn')
+  assert.equal(await series.locator('.choice.picked').count(), 0, 'a pick does not carry to the next question')
+  assert.equal(await next.isDisabled(), true)
+  await series.getByRole('button', { name: 'Skip', exact: true }).click()
+  await onlyAsking(3, questions[2].question)
+  assert.equal(await focusInCard(), true, 'focus left the card when a skip drew the next question')
+  assert.equal(await lastly.isDisabled(), true)
+  await series.locator('.choice').filter({ hasText: 'Linux' }).click()
+  // Another conversation and back draws the card again, at the question it was on with its pick.
+  await page.locator('.session').filter({ hasText: 'Reply with manual check ready.' }).click()
+  assert.equal(await page.locator('.confirm.ask').count(), 0, 'another conversation does not show the series')
+  await page.locator('.session').filter({ hasText: 'Waiting for your answer' }).click()
+  await onlyAsking(3, questions[2].question)
+  assert.equal(await series.locator('.choice.picked').innerText(), 'Linux', 'the pick was lost')
+  await series.locator('.choice').filter({ hasText: 'macOS' }).click()
+  await lastly.click()
+  await done(beforeAsk)
+  assert.deepEqual(await series.locator('.asked-answer .given').allInnerTexts(), ['Green', 'Declined', 'Linux, macOS'])
+  assert.equal(await series.locator('.choice').count(), 0, 'an answered series offers nothing')
+  console.log('PASS: questions are put one at a time with their position, a skip moves on, and the planner reads each answer')
 
   // 8: settings narrow layout and cleanup assertions.
   await page.setViewportSize({ width: 560, height: 780 })

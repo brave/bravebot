@@ -1,3 +1,4 @@
+import { COMPOSER_INPUT, SIDEBAR_TAB } from '../../drive-support.mjs'
 // A bot, working — which is the only way to show the part that matters.
 //
 // `12-bots` can show the tab, the faces and the form without spending a token. It cannot show the
@@ -35,7 +36,7 @@ export default {
   async run(s) {
     const { page } = s
 
-    const tab = page.locator('.sidebar-tabs [role="option"]').nth(1)
+    const tab = page.locator(SIDEBAR_TAB).nth(1)
     if (!(await tab.count())) s.skip('this build has no bots tab')
     await s.click(tab)
     await page.waitForTimeout(600)
@@ -59,7 +60,7 @@ export default {
     // --- the purpose, which nobody typed ----------------------------------------------------
 
     await s.say('Ask it something ordinary', 'Nothing in the prompt says what this bot is for.')
-    await s.slowType('.composer textarea', 'What should I know about this checkout?')
+    await s.slowType(COMPOSER_INPUT, 'What should I know about this checkout?')
     await s.click('.composer .send')
     await page.waitForTimeout(1200)
 
@@ -115,7 +116,7 @@ export default {
     // name is also what a person does once they know their bot keeps one.
     await s.say('Now ask it to remember', 'Memory is a file in the checkout, and the bot edits it.')
     await s.slowType(
-      '.composer textarea',
+      COMPOSER_INPUT,
       'Add two things to your memory file: the tide tables are regenerated every Thursday, ' +
         'and nothing under src/data should be edited by hand.',
     )
@@ -161,9 +162,9 @@ export default {
     // --- resumed -----------------------------------------------------------------------------
 
     await s.say('Leave, and come back', 'Its page lists the conversation, and opening it resumes it.', 2.6)
-    await s.click(page.locator('.sidebar-tabs [role="option"]').first())
+    await s.click(page.locator(SIDEBAR_TAB).first())
     await page.waitForTimeout(600)
-    await s.click(page.locator('.sidebar-tabs [role="option"]').nth(1))
+    await s.click(page.locator(SIDEBAR_TAB).nth(1))
     await page.waitForTimeout(500)
     await s.click(row.locator('.bot-open-button'))
     await page.locator('[data-test="bot-conversations"] .bot-history-row').first().waitFor()

@@ -16,8 +16,10 @@ bravebot
 
 ## Install
 
-The install downloads the release binary for your platform and verifies its checksum. macOS, Linux
-and Windows are supported, on both x86_64 and arm64. To build from source instead, see
+npm installs the binary for your platform from its own package, `@brave/bravebot-<platform>-<arch>`,
+and runs no install script, so `--ignore-scripts` does not affect it. `--omit=optional` leaves that
+package out, and then `bravebot` exits saying the binary is missing. macOS, Linux and Windows are
+supported, on both x86_64 and arm64. To build from source instead, see
 [Development](development.md).
 
 On macOS and Linux there is an install script, for a machine with no npm on it:
@@ -49,9 +51,50 @@ Running the line again is how an install made this way is updated. The script re
 the binary, so a second run with no directory named replaces that one rather than leaving two on
 your `PATH`.
 
+On Windows there is a PowerShell script, for a machine with no Node on it. It needs no
+Administrator:
+
+```powershell
+irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+```
+
+It fetches the newest release for the architecture your PowerShell reports, checks it against the
+published checksum, and checks that the binary's Authenticode signature is valid and was made by `Brave
+Software, Inc.`. It writes nothing if either check fails. It puts `bravebot.exe` in
+`%LOCALAPPDATA%\Programs\bravebot`, and `INSTALL_DIR` puts it somewhere else:
+
+```powershell
+$env:INSTALL_DIR = "$HOME\bin"; irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+```
+
+It adds the directory to the end of your user `PATH`, keeping every other entry as it was, and to
+the PowerShell session it ran in, so `bravebot` runs by name there at once and in terminals you open
+afterwards. A directory already on your `PATH` is not added again. To keep your `PATH` as it is, set
+`BRAVEBOT_NO_MODIFY_PATH` to anything before the line, and the script names the directory for you to
+add yourself:
+
+```powershell
+$env:BRAVEBOT_NO_MODIFY_PATH = "1"; irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+```
+
+To install a release other than the newest, run the script as a script block and give it a version.
+It takes three numbers, with or without a leading `v`, and checks that release exactly as it checks
+the newest:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1))) 1.2.3
+```
+
+Running the first line again is how an install made this way is updated. The script records where it
+put the binary in `.bravebot\installed-by-powershell` under your profile directory, so a second run
+with no directory named replaces that one. Windows may not let a `bravebot.exe` that is running be
+replaced. The script then installs nothing and says so: close every session of it and run the line
+again. The script needs PowerShell on Windows, since the signature check is
+`Get-AuthenticodeSignature`, and in any other PowerShell it installs nothing.
+
 ### Check a download by hand
 
-Both installers check the binary before they write it, and refuse when it does not verify. To check
+The installers check the binary before they write it, and refuse when it does not verify. To check
 a release yourself, download the asset for your platform from the
 [releases page](https://github.com/brave/bravebot/releases), then:
 
@@ -127,8 +170,12 @@ serve it. `doctor` says the same and fails. See
 A session that opens on a version something newer has replaced says so, once, under the trust
 question, and gives the line that updates the copy you are running. The notice names the version you
 are running rather than the newer one, which may have moved by the time you update: the npm command for an npm
-install, the script again for a script install. A build from source is told nothing, since neither
-line would update one.
+install, the script again for a script install, the PowerShell script again for a PowerShell script
+install, `brew upgrade --cask bravebot` for a copy a Homebrew cask installed and `winget upgrade
+Brave.Bravebot` for one WinGet installed. A package manager's copy is recognised by the directory the
+manager keeps it in. A build from source is told nothing,
+since none of those lines would update one. A package can arrive after the release it follows, and
+until it does the manager says there is nothing to upgrade.
 
 Nothing about it waits. The notice comes from an answer an earlier launch wrote down, and the
 request that refreshes it, at most one an hour whether or not it learned anything, runs behind the session
@@ -139,7 +186,9 @@ Every way this can fail is silence: no network, a registry that will not answer,
 unexpected shape. A registry that cannot be reached today does not withdraw a version it announced
 earlier, so the notice keeps showing until the registry answers with something else. A version that is not three numbers is never announced either, release candidates
 included. An [incognito session](using/sessions.md#a-session-that-leaves-nothing-behind) still
-reads an answer an ordinary session left, and neither records one nor asks.
+reads an answer an ordinary session left, and neither records one nor asks. A launch that cannot
+write the record of its last check, because there is no home directory or the state directory is not
+writable, does not ask the registry at all.
 
 ## Uninstall
 
@@ -165,7 +214,19 @@ the directory is not yours to write to:
 sudo rm /usr/local/bin/bravebot
 ```
 
-Neither route touches `~/.bravebot`. It holds your settings, prompt history, session records, themes,
+A PowerShell script install is one binary as well, and the script wrote down where it put it:
+
+```powershell
+Get-Content "$env:USERPROFILE\.bravebot\installed-by-powershell"
+```
+
+The file is under the directory `HOME` names where that is set, which is where bravebot keeps its
+state directory too, so use `$env:HOME` in its place there. It holds the full path of `bravebot.exe`, which is under `%LOCALAPPDATA%\Programs\bravebot`
+unless `INSTALL_DIR` named somewhere else. Remove `bravebot.exe` at that path, and the directory
+that held it if nothing else is in it. The script added that directory to your user `PATH` unless
+`BRAVEBOT_NO_MODIFY_PATH` was set, so remove that entry too.
+
+No route touches `~/.bravebot`. It holds your settings, prompt history, session records, themes,
 MCP declarations and any imported subscription, so removing the binary leaves all of that for a later
 install to find. To remove it too:
 
@@ -187,10 +248,10 @@ Brave Bot asks whether you trust the working directory before anything else.
 - **Decline** and nothing is trusted. The session still works. Every write is shown to you
   first, and files are read into quarantine rather than into the model's context.
 
-The answer belongs to the session, not to the directory: every fresh session asks again, whatever
-you answered last time. `--resume` restores the answer that session's own user gave. Press `r`
-instead of `y` and later sessions started in exactly that directory trust it without asking, until
-you run `/forget-trust` ([Remembering the answer](security/trust.md#remembering-the-answer)).
+A yes is kept: later sessions started in that directory trust it without asking, until you run
+`/forget-trust` ([Remembering the answer](security/trust.md#remembering-the-answer)). A no is not
+kept, so the next session asks again, and you can work in the directory either way. `--resume`
+restores the answer that session's own user gave.
 
 What that answer means in detail, and every other way a path comes to be trusted, is
 [Trusted directories](security/trust.md).
@@ -239,8 +300,10 @@ A `run` prompt shows the compiled plan: every step, the binary each resolved to,
 every file the line would write. A step whose name reached its binary through a link, such as a
 virtualenv's `python`, shows the link and then the binary, as `link -> binary`. The prompt also says
 what the command is confined to, which is the directories the session was opened on and what each
-program in the line brings beyond them, such as the credentials a `git push` needs. On Windows,
-where nothing confines a program, it says the command is not sandboxed instead:
+program in the line brings beyond them, such as the credentials a `git push` needs. On Linux and
+Windows, when a program in the line other than git can write more than the temporary directory, the
+heading also warns that it can write a repository's hooks and configuration, which git runs later
+with no sandbox. Where the command runs with no sandbox, the prompt says it is not sandboxed instead:
 
 ```
   y run it    a always    n don't    ctrl-c stop the turn

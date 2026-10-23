@@ -22,6 +22,7 @@
 // checkout as it was, and is a better shot than an approval nobody meant to give.
 
 import { join } from 'node:path'
+import { COMPOSER_IDLE, COMPOSER_INPUT } from '../../drive-support.mjs'
 
 /** How each of the five reads on screen, in the order somebody meets them. */
 const QUESTIONS = {
@@ -130,8 +131,12 @@ async function answerEverything(s, { shot }) {
       await s.say('Declined', 'Which is a real answer: the turn is told no and carries on.', 2.4)
     }
     if (kind === 'ask') {
+      // One question is on screen at a time and Next puts the following one, so this runs once per
+      // question: the card is still asking when the loop comes back to it.
+      const position = ((await card.locator('.confirm-head .path').textContent()) ?? '').trim()
+      if (position.startsWith('the agent is asking')) await s.say('One at a time', position, 1.6)
       const blocks = await card.locator('.ask-question').all()
-      for (const [n, block] of blocks.entries()) {
+      for (const block of blocks) {
         const choices = block.locator('.choices .choice')
         const offered = await choices.count()
 
@@ -141,7 +146,7 @@ async function answerEverything(s, { shot }) {
           // default being accepted, which is the one thing this card is not.
           await s.spotlight(block.locator('.choices'), 1.6)
           await s.unspot()
-          const pick = choices.nth(n % offered)
+          const pick = choices.nth(seen % offered)
           const label = ((await pick.locator('.label').textContent()) ?? '').trim()
           await s.click(pick)
           // The choice says so itself once taken; if it did not, the click missed.
@@ -154,7 +159,8 @@ async function answerEverything(s, { shot }) {
           await s.slowType(block.locator('.typed').first(), 'whichever reads best at the call site')
         }
       }
-      await s.say('Answered here', 'In the transcript, where the question was — and nowhere else.', 2.4)
+      const closing = ((await card.locator('.confirm-actions .approve').first().textContent()) ?? '').trim() === 'Answer'
+      if (closing) await s.say('Answered here', 'In the transcript, where the question was, and nowhere else.', 2.4)
     }
 
     await s.shot(`${shot}-${seen}-${kind}`)
@@ -221,7 +227,7 @@ export default {
     // conversation acquires some. Filmed the other way round, this card never appears.
     await s.say('Ask it something', 'A real turn, against a real model.')
     await s.slowType(
-      '.composer textarea',
+      COMPOSER_INPUT,
       // Verbatim from `drive-ask.mjs`, which this borrows rather than re-invents: it is the
       // wording already known to make this agent reach for the question instead of simulating
       // one in its reply, and the second call gives the loop above a repeat to prove itself on.
@@ -240,12 +246,12 @@ export default {
     await s.say('The answers are in the record', 'Beside the questions they answer.', 2.4)
 
     // --- a command, and then permission to read what it printed ------------------------------
-    if (!(await page.locator('.composer textarea:not([disabled])').isVisible().catch(() => false))) {
+    if (!(await page.locator(COMPOSER_IDLE).isVisible().catch(() => false))) {
       s.skip('the first turn never finished, so there is no composer to use')
     }
     await s.say('The other direction', 'Before it acts, it asks.')
     await s.slowType(
-      '.composer textarea',
+      COMPOSER_INPUT,
       'Run `wc -l src/lib/tides.ts` here and tell me how many lines it printed.',
     )
     await s.click('.composer .send')

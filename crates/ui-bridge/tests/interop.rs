@@ -6,6 +6,10 @@
 //!
 //! No model is involved: this writes a record the way a finished turn does and reads it
 //! back the way `bravebot --resume` does.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_aichat::protocol::Message;
 use bravebot_core::programs::TrustedPrograms;
@@ -64,6 +68,7 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 42,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -132,6 +137,7 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 0,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -156,7 +162,8 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
             | bravebot_agent::conversation::Said::Tool { line: t, .. } => Some(t.as_str()),
             // A message the agent composed reports the tag it was recorded with beside its words.
             // Nothing in this conversation is one.
-            bravebot_agent::conversation::Said::Composed { .. } => None,
+            bravebot_agent::conversation::Said::Composed { .. }
+            | bravebot_agent::conversation::Said::Sent { .. } => None,
         })
         .collect();
 
@@ -188,6 +195,7 @@ fn resuming_a_session_started_under_a_definition_stops_recording_it() {
         conversation: &snapshot,
         turns,
         tokens: 1,
+        split: Default::default(),
         spend: &spend,
         timing: &timing,
         model: None,
@@ -279,6 +287,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
                     conversation: bravebot_agent::Conversation::new().snapshot(),
                     turns: 0,
                     tokens: 0,
+                    split: Default::default(),
                     spend: BTreeMap::new(),
                     timing: BTreeMap::new(),
                     cached: None,
@@ -301,6 +310,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 10,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &timing,
             model: None,
@@ -334,6 +344,7 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
             conversation: &state.conversation.snapshot(),
             turns: state.turns,
             tokens: state.tokens,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &state.timing,
             model: None,
@@ -433,6 +444,7 @@ fn two_prompt_session(project: &std::path::Path, trust: Option<&TrustStore>) -> 
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 30,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -529,6 +541,7 @@ fn a_session_holding_imported_words_is_not_forked() {
             conversation: &snapshot,
             turns: 1,
             tokens: 10,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -805,6 +818,7 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
             conversation: &state.conversation.snapshot(),
             turns: state.turns,
             tokens: 5,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -985,6 +999,7 @@ fn a_session_written_by(project: &std::path::Path, front: sessions::Front) -> St
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 10,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,

@@ -17,7 +17,7 @@ use bravebot_sandbox::rules::Lists;
 use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 /// How long one stage may run before it is stopped and counted as failed. A cold `cargo build` is
@@ -502,7 +502,13 @@ fn start(
         routes: Vec::new(),
     };
 
-    let mut command = Command::new(&started_as);
+    let withheld = bravebot_config::scrub::withheld();
+    let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(&started_as),
+        inherits,
+        unconfined_path(confinement),
+    );
     command.args(&args).current_dir(&places.session);
     for name in HOST_VARIABLES {
         command.env_remove(name);
@@ -522,7 +528,8 @@ fn start(
     {
         command.env("RUSTUP_HOME", Path::new(&real).join(".rustup"));
     }
-    crate::scrub::apply(&mut command);
+    // After the suite's own variables, so a name a person's `run.scrubEnv` lists is still removed.
+    inherits.withhold(&mut command);
 
     let mut command = match confinement {
         Some(confinement) => confinement
@@ -571,7 +578,7 @@ const LOGIN_VARIABLES: &[&str] = &[
 /// a keychain, is never asked for. This runs `gh auth token` with the account's own home. It
 /// judges the two runs by exit status alone and sends the token to the null device. A machine with
 /// no `gh`, or whose `gh` holds no login outside the sandbox, gets no row: there is nothing for the
-/// sandbox to have taken away.
+/// sandbox to have taken away. A `gh` found only where [`find`] leaves out is no `gh`.
 pub fn login_row(root: &Path) -> Result<Option<Row>, Unavailable> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let (Some(gh), Some(home)) = (find("gh", &path), std::env::var_os("HOME")) else {
@@ -643,12 +650,18 @@ fn ask_for_the_login(
         environment: Vec::new(),
         routes: Vec::new(),
     };
-    let mut command = Command::new(gh);
+    let withheld = bravebot_config::scrub::withheld();
+    let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(gh),
+        inherits,
+        unconfined_path(confinement),
+    );
     command.args(&args).current_dir(session).env("HOME", home);
     for name in LOGIN_VARIABLES {
         command.env_remove(name);
     }
-    crate::scrub::apply(&mut command);
+    inherits.withhold(&mut command);
     let mut command = match confinement {
         Some(confinement) => confinement
             .wrap(command, &step, session)
@@ -677,10 +690,29 @@ fn find_from(program: &str, session: &Path, path: &OsStr) -> Option<PathBuf> {
     find(program, path)
 }
 
+/// `program` as [SANDBOX-30] finds a program this process starts itself, in the absolute entries of
+/// `path` that lie outside every directory a confined stage may write.
+///
+/// Some of what the suite starts has no confinement and the person's access: the stored login's
+/// first `gh`, a workflow's setup stages, and a refused row's control run. One found only in a
+/// directory left out reads as not installed, as it does for every other program started this way.
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
 fn find(program: &str, path: &OsStr) -> Option<PathBuf> {
-    std::env::split_paths(path)
-        .map(|directory| directory.join(program))
-        .find(|candidate| executable(candidate))
+    bravebot_sandbox::programs::find_on(OsStr::new(program), path)
+}
+
+/// The `PATH` a program is started with: for one started with no confinement, the entries its own
+/// lookups may search, so a `gh`, `sh` or `git` that starts another program by name does not find
+/// one in a directory [SANDBOX-30] leaves out. A confined program is given the `PATH` a session's
+/// stage is given.
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
+fn unconfined_path(confinement: Option<&Confinement>) -> bravebot_sandbox::programs::SearchPath {
+    match confinement {
+        Some(_) => bravebot_sandbox::programs::SearchPath::Inherited,
+        None => bravebot_sandbox::programs::SearchPath::Reduced,
+    }
 }
 
 fn executable(path: &Path) -> bool {
@@ -943,6 +975,38 @@ fn search_and_edit_workflows() -> Vec<Workflow> {
             ))
             .stage(shell("cd tree && patch -s a.txt < ../change.patch"))
             .needing(&["sed", "awk", "diff", "patch"]),
+        Workflow::new("search", "xargs passes a list of files to one program")
+            .file("tree/a.txt", "one\ntwo\nthree\n")
+            .file("tree/sub/b.txt", "two\n")
+            .stage(shell(
+                "find tree -name '*.txt' | xargs grep -l two | grep -q tree/a.txt",
+            ))
+            .needing(&["find", "xargs", "grep"]),
+        // macOS sort sizes its buffer from the physical memory size. Under the profile this
+        // suite applies, a refused query is a warning on standard error and sort still exits
+        // zero, so each sort's standard error has to be empty for the stage to pass.
+        Workflow::new("search", "sort and uniq count lines")
+            .file("words.txt", "b\na\nb\n")
+            .stage(shell("test -z \"$(sort words.txt 2>&1 > sorted.txt)\""))
+            .stage(shell("uniq -c sorted.txt > counts.txt"))
+            .stage(shell(
+                "test -z \"$(sort -rn counts.txt 2>&1 > ranked.txt)\"",
+            ))
+            .stage(shell("head -n 1 ranked.txt | grep -q '2 b'"))
+            .needing(&["sort", "uniq", "head", "grep"]),
+        // macOS find treats an argument limit it cannot read as fatal only when its environment
+        // is over about 3 KB, so the stage sets a large variable as an account's own would be.
+        Workflow::new(
+            "search",
+            "find -exec {} + passes a list of files to one program",
+        )
+        .file("tree/a.txt", "one\ntwo\nthree\n")
+        .file("tree/sub/b.txt", "two\n")
+        .stage(shell(
+            "PAD=$(printf '%08000d' 0); export PAD; \
+                 find tree -name '*.txt' -exec grep -l two {} + | grep -q tree/a.txt",
+        ))
+        .needing(&["find", "grep"]),
         Workflow::new("editor", "vim edits a file and less shows it")
             .file("note.txt", "one\n")
             .stage(Stage::new(

@@ -67,7 +67,14 @@ your own ssh files name and asks which one to offer, once per owner, and keeps t
 On Linux, on a kernel whose Landlock is older than its ninth version, a program also reaches every
 unix socket that has a path, whatever these settings say: the ssh agent's, with every key it holds,
 `docker.sock`, and the session bus, through which `systemd-run --user` starts a program outside the
-sandbox.
+sandbox. On Linux, signals are not scoped. On macOS a stage signals only processes its own profile started. A connection to an abstract unix socket made outside the stage (the
+X server, the session bus on some systems) is refused only on a kernel with Landlock's sixth version
+or later, and is reachable below it.
+
+Under the default mode on Linux and macOS every program writes every toolchain's cache, since a
+program is as often a script or a `make` target as one build. A postinstall script run by `npm ci`
+can therefore leave something in `~/.cargo/registry` for a later `cargo build`. `strict` holds each
+program to the cache of its own toolchain.
 :::
 
 ## What this defends against
@@ -109,11 +116,32 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **A program the agent was allowed to run.** On Linux and macOS a program can read the machine
   except the places that hold a credential (ssh private keys, cloud and container logins,
   keychains other than the macOS login keychain file that `gh` and `git` use, browser profiles and
-  password stores) and can write only the directories the session
-  was opened on, its scratch directory, the system temporary directory and the toolchain caches. A
+  password stores, shell and database histories, the logins and transcripts of other coding agents
+  (`~/.claude`, `~/.codex`, `~/.gemini`), mail, chat and editor data, and `~/.bravebot`, where the
+  gateway keys, the Leo Premium token and the MCP server list are, which no
+  `allowRead` entry, scope or `/reach` grant lifts, except that a program reads, and never writes,
+  the session records in `~/.bravebot/sessions`) and can write only the directories the session
+  was opened on, its scratch directory, the system temporary directory (unless you [hold it back](../customize/configuration.md#sandboxholdbacktemporarydirectory)) and the toolchain caches. A
   command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` the
   agent socket, never a private key. The files a tool reads by name to do its job, such as the `gh`
-  login, `~/.npmrc` and `~/.netrc`, are readable. On macOS a program cannot listen on a port of the
+  login, `~/.npmrc` and `~/.netrc`, are readable. So are the shell startup files, `~/.gitconfig`,
+  `~/.pgpass`, `~/.my.cnf`, `~/.vault-token` and the configuration of tools such as `helm`, `glab`,
+  `doctl` and `rclone`.
+
+  A transcript can hold what you pasted, and a program that can read the session records could send
+  them out wherever the network is open. Close the network with `--run-network closed` if that
+  matters for a run.
+
+  A stage that starts `claude`, `codex`, `gemini`, `opencode`, `sops` (with an age key in its
+  default place) or `pass` cannot read the location that program keeps its data in. The same holds
+  for a graphical program that checks the X display's cookie, and for a session opened inside a
+  refused location. Name the location in `sandbox.filesystem.allowRead`, or in `allowWrite` where
+  the program also writes there.
+
+  The refused locations are listed one at a time, so a browser channel or application the list does
+  not name is readable.
+
+  On macOS a program cannot listen on a port of the
   machine unless the planner asks for `loopback` on that line and you approve it, and only `git`
   itself writes a `.git`, so a script, `make`, `npm` or `gh` that runs git to commit, check out or
   clone is refused. On Windows a program runs in a container that reaches only the directories the
@@ -126,10 +154,11 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Four deliberate exceptions
+## Seven deliberate exceptions
 
-Brave Bot looks at untrusted bytes to decide something in four places, three in the policy layer
-and one in the search, all written down rather than left to be found.
+Brave Bot looks at untrusted bytes to decide something in seven places, three in the policy layer
+and four in the agent, the search, the diagnostics sentence, reading a repository's history and
+telling a text file from a binary one, all written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the
@@ -163,6 +192,34 @@ who owns one of the files can set those numbers, make the model spend searches p
 result, and make one search read a very large file.
 They cannot choose which files are searched, how the result is labelled, or any destination, and the
 model never sees a line of text from the file.
+
+**Counting a language server's diagnostics.** The `lsp` tool's `diagnostics` operation tells the model
+how many errors a language server found, the line each starts on (up to 20, then how many more), and
+a count of warnings and of other notes. The server computes those numbers from the file asked about
+and from the files it indexed that file against, including files you did not vouch for. A file's
+message, code and source are never carried: the model gets a reference it cannot read, and every word
+of the sentence is Brave Bot's own. An attacker who owns such a file can set the counts, choose which
+line numbers are named, and choose whether the sentence says no errors were reported yet, which is
+worded as nothing stronger than that. They cannot choose the path, any destination, or put a word of
+their own in front of the model.
+
+**Searching a repository's history.** A repository's history can hold files from paths you did not
+vouch for, and reading it searches or compares their bytes. Which lines match and whether the
+answer is cut short are decided by those bytes, so one such file makes the whole answer untrusted,
+and the model is given a reference to it. What reaches the model is the answer's size and whether
+it was cut short. An attacker who owns one of the files can set those, and tell the model by a
+count whether the pattern it chose matched. A page boundary that earlier files' matching lines
+decided can stop the walk before later files, but every path is recorded before its file is read, so
+those bytes cannot steer the label. They cannot choose how the answer is labelled or any
+destination, and the model never sees a line of text from the file.
+
+**Telling a text file from a binary one.** When the model reads a file you did not vouch for, Brave
+Bot does not hand back text. It checks the start of the file for a NUL byte or a heap of control
+characters, and either refuses in its own words that the file is binary, or gives the model a
+reference with the file's size. An attacker who owns the file chooses which of those two results the
+model sees, and can put the file out of reach of the component that reads it later. That is one bit
+beside a size they already set. They cannot choose how the result is labelled, any destination, or
+put a word of their own in front of the model.
 
 ## What leaves the process
 
@@ -201,6 +258,16 @@ Both are read from the environment on purpose and set on every client explicitly
 a library's default, so what is in force is a decision here and not a property of a dependency's
 version. `bravebot doctor` reports both, which is where to look first when a connection fails.
 
+A process started from a launcher or a service has no shell profile, so the six names below
+(`SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`) may also be
+set in the `env` block of `~/.bravebot/settings.json` or of a `--settings` file outside the project, in
+upper case. A name exported in the environment wins, and the certificate pair and the proxy each
+come whole from one place, so a bundle in a file is never added to an exported directory. `NO_PROXY`
+is the one name read on its own. A `.bravebot/settings.json` or `.bravebot/settings.local.json` arrives
+with a checkout, and a proxy or an authority it chose would decide where conversation content goes and
+who can read it, so one named there decides nothing and `bravebot doctor` names the file. `doctor`
+also names the file that supplied the roots or the proxy, without the proxy's value.
+
 **Certificate authorities.** A build ships a set of them, and `SSL_CERT_FILE` (a bundle) or
 `SSL_CERT_DIR` (a directory of them) names others **in their place**. What they name replaces the
 shipped set rather than adding to it, because that is what every other client on the machine does with
@@ -219,6 +286,9 @@ with `NO_PROXY` naming the hosts that bypass it. `doctor` names the proxy by pro
 the hosts it is not used for, and whether it requires a credential; the credential itself is never
 printed, because a diagnostic is something people paste into issues. A proxy whose protocol this build
 cannot connect through is not used at all, and `doctor` says that one was named and is not the route.
+A variable that is set but whose value cannot be read as a proxy address (not a URL, no host, or a
+scheme no proxy speaks) is named by `doctor` on its own line, without its value. The next variable in
+the order above is still tried, and `doctor` ends on a configuration error for it.
 
 A proxy carries request bodies, which here means conversation content. It can read them only where it
 also terminates TLS, which takes an authority this process trusts and therefore one of the two
@@ -253,14 +323,14 @@ flag, `/sandbox`, the settings files and the managed file, and is reported as `w
 nothing looser, so a checkout cannot unconfine whoever opens it. Its `strict` is not obeyed where your
 settings or the managed file chose `read-only`, since `strict` writes the session's directories. A managed file that pins a mode is a
 floor: a flag or a setting looser than it stops the session from starting, and `bravebot doctor`
-says which files disagree. A pin of `strict` also refuses `read-only`, and a pin of `read-only` also
-refuses `strict`, since `strict` writes the session's directories. `read-only` stops writes on this
-machine only: the network stays as `run.network` sets it, and `git push` or `gh pr create` still
-reaches the remote with your credentials. Under it the agent's file tools write nothing either,
+says which files disagree. A pin of `strict` also refuses `read-only` (on Windows, where `read-only` reads no more than `strict`, a pin of `strict` keeps it), and a pin of `read-only` also
+refuses `strict`, since `strict` writes the session's directories. A refusal of a mode looser than a pin says which of reading and writing the mode does more of, and names the pinned mode to use. `strict` is refused on a Linux kernel below Landlock ABI 9, which is Linux 7.1, because a program there reaches every unix socket that has a path, such as the session bus, the ssh agent and `docker.sock`. The refusal says so. Under `workspace-write` and `read-only` on such a kernel, the opening screen, `/status` and `bravebot doctor` each show a line saying that programs reach sockets with a path. A local MCP server reaches these sockets under every mode. `read-only` also closes the network
+for every program whatever `run.network` says, and lends none the remote credentials, so `git push`
+and `gh pr create` fail. Under it the agent's file tools write nothing either,
 a manifest run that writes a file is refused, a delegate is not given a checkout of its own, a
 command line that redirects output into a file is refused, and a request from the agent to write a
 path is refused, all of these even in accept-edits mode and with `--dangerously-skip-permissions`.
-Redirecting to `/dev/null` still runs. The desktop app reads `off` as
+Redirecting to `/dev/null` still runs. Under `read-only`, `/add-dir` and `--add-dir` add a directory to read and never to write, a build, a formatter or `git commit` in the session's directories fails whichever step runs it, and programs can write the temporary directory and the paths your own `allowWrite` entries and remembered write grants name. A write grant held before the switch to `read-only` gives its read and not its write until the mode returns to `workspace-write`. A request to read a path is accepted; choose another sandbox mode to let programs write the project. `/checkouts apply`, which you type, is not held to the mode. A program that a stage runs opens its own redirections under its profile, so with an `allowWrite` entry `sh -c 'make > build/log'` can write there. The desktop app reads `off` as
 `workspace-write`. When the mode is not `workspace-write`, the opening screen and `/status` say so,
 and `bravebot doctor` and `/sandbox` say what chose it.
 
@@ -269,13 +339,108 @@ rather than running unconfined. A profile starts denying everything and grants a
 a policy that would confine nothing is rejected rather than applied, and a write grant on the root
 directory, or on a drive root on Windows, confines nothing and is rejected the same way. The network
 is denied unless it was asked for. On macOS, a process that is given the network reaches a unix
-socket only under a directory it may write, so a Docker daemon's socket elsewhere stays out of reach. A backend reports what the kernel actually enforces rather than what it was asked for,
+socket only under a directory it may write, so a Docker daemon's socket elsewhere stays out of reach. A refusal of a read or write inside such a directory also refuses a connect beneath it, so a socket under a `denyWrite` path, or under `~/.docker` in a session opened on the home directory, stays out of reach. A backend reports what the kernel actually enforces rather than what it was asked for,
 and a policy demanding something it cannot deliver is refused.
 
 **A policy is granted as written, or it is refused.** A backend that cannot install a grant for one of
 the paths refuses the whole policy and names that path, rather than confining the process to the rest
 of them. Running under fewer paths than the policy names while the record says the policy was applied
 is the same silent degradation, reached one grant at a time.
+
+**A directory inside a credential location is refused.** A stage is not started when a directory the
+session was opened on is, or lies inside, a place that holds a credential such as `~/.ssh`. On macOS
+a read and write grant at such a path would lift the refusal, so the directory would hand the keys to
+every program. A directory above a credential location, your home directory among them, is still
+granted and the location inside it stays refused. `/add-dir`, `--add-dir` and
+`additionalDirectories` refuse the same directories before they are added. A file tool refused for a
+path inside such a location does not point at `/add-dir` or `request_path`, which would refuse it
+too. For a read it suggests dropping the file on the window, for a write it suggests the unconfined
+line where the session accepts one, and for the location itself it suggests nothing. When a confined step fails,
+the profile line printed with the failure ends with a fixed sentence, the same in every mode and for
+exit 1 and exit 2: a credential location such as `~/.ssh`, `~/.aws` or `~/.kube` cannot be added with
+`/add-dir` or `--add-dir`, and where the mode accepts a request, a credential scope is how a line
+reaches one. On Windows a container
+cannot be refused a path inside a grant, so a stage is also refused when a session directory holds a
+credential location, and `bravebot doctor` reports a `denyRead` or `denyWrite` entry inside a granted
+directory as not in force.
+
+**More places a stage cannot reach.** The browser relay's default directory `~/.bravebot-browser`,
+which holds the secret that drives the browser, is refused like `~/.bravebot` (a relay told to use
+another directory is not covered, and neither is a state directory that `BRAVEBOT_HOME` puts
+somewhere other than `~/.bravebot`). On Windows `gcloud` and `gpg` keep their data under
+`~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, and those are refused too, with the browser
+profiles under `~/AppData/Local` (`BraveSoftware`, `Google/Chrome`, `Chromium`, `Microsoft/Edge`) and
+`~/AppData/Roaming/Mozilla`, and the Windows stores for credentials, keys and vaults under
+`Microsoft` in `~/AppData/Local` and `~/AppData/Roaming` (`Credentials`, `Protect`, `Crypto` and
+`Vault`). A session opened on `~/AppData/Local` or on `~/AppData/Roaming/Microsoft` is refused. On macOS a
+credential directory that is a link (a dotfile manager's `~/.ssh`, say) is refused where it stands and
+where it leads. On macOS, when the session is opened on your home directory or above it, a stage also
+cannot write the places it cannot read, nor the shell startup files (`~/.zshenv`, `~/.zprofile`,
+`~/.zshrc`, `~/.zlogin`, `~/.bash_profile`, `~/.bash_login`, `~/.bashrc`, `~/.profile`) or
+`~/Library/LaunchAgents`, because what is written there runs later outside the sandbox. They stay
+readable.
+
+In bypass mode, and for a path a `request_path` call asks to write, a stage is also refused writes to
+the persistence locations: the shell startup and logout files (`~/.zshenv`, `~/.zprofile`,
+`~/.zshrc`, `~/.zlogin`, `~/.zlogout`, `~/.bash_profile`, `~/.bash_login`, `~/.bashrc`,
+`~/.bash_aliases`, `~/.bash_logout` and `~/.profile`), `~/.config/fish`, `~/.xprofile`,
+`~/.xsessionrc`, `~/Library/LaunchAgents`, `~/.config/systemd/user`, `~/.config/autostart`,
+`~/.config/environment.d`, `~/.gitconfig` and `~/.config/git/config`. Reads are not affected. A stage
+therefore cannot run `git config --global`. The locations are fixed paths, so a `ZDOTDIR` or
+`XDG_CONFIG_HOME` that moves one leaves the moved file writable, and a `PATH` directory such as
+`~/.local/bin` stays writable.
+
+**On macOS a stage reaches only a fixed list of system services.** The pasteboard and LaunchServices
+(opening a file or URL in another application) are refused. A program that needs another service,
+such as a file watcher built on FSEvents or Spotlight, loses that feature. The certificate trust
+services are in the list only for a stage allowed to reach the network. A stage held to a host list
+has them, and macOS fetches a certificate's issuer from its own process, so the host list does not
+bound that one request.
+
+**On Linux every program starts in a session of its own**, so it has no controlling terminal and
+cannot type into yours, which kernels before 6.10 would otherwise allow. A terminal's interrupt and
+hangup do not reach it.
+
+**A `PATH=` assignment on a `run` line chooses nothing a stage may read.** The directories a stage's
+programs are read from come from Brave Bot's own `PATH`, and a program location that is, holds or lies
+inside a credential location is left out.
+
+**A program Brave Bot starts itself is never one a stage wrote.** The AWS CLI, the clipboard tools,
+`osascript` and the inhibitor `/caffeinate` start outside the sandbox, so each is looked up only in
+absolute `PATH` entries that lie outside every directory a stage may write. Someone whose only `aws`
+is in an activated virtualenv, or in the session's own directory, is told it is not installed until
+it is installed elsewhere. In bypass mode in a trusted directory, a stage may write every path your
+account can write, so an `aws` in a directory your account owns (a Homebrew prefix, say) is found
+until the first stage runs and reads as not installed after that, until Brave Bot exits.
+[Hooks](../customize/hooks.md), language servers and the editor that Ctrl-G opens are looked up the same way when named without a path.
+The editor, a hook, the AWS CLI, the clipboard tools and `osascript` are also started with a `PATH` of
+those same entries only, in the order written, so a program any of them starts by name (an `env`
+shebang, an `$EDITOR` of `env vim`, or a bare `credential_process` command) is not found in a
+directory a stage may write. A program the editor, a hook, the CLI or a clipboard tool needs that lives only in such a directory,
+for example a tool run from a project's `node_modules/.bin`, is not found by it. `bravebot doctor --push-identity` looks up
+`ssh-keygen`, `ssh` and `git` the same way, leaving out the directory it ran in and the checkout
+holding it, reports one found only there as absent, and starts them without Brave Bot's own credentials and
+with a `PATH` of those same entries only, so a `ProxyCommand` in your ssh configuration that names a bare
+program does not find one a stage wrote. The inhibitor `/caffeinate` starts is given a `PATH` of those
+same entries only as well, so a program `systemd-inhibit` starts by name is not found in a directory a
+stage may write.
+
+**The remote scope can write `~/.ssh/known_hosts`.** A stage that carries it can add a host key or a
+`@cert-authority` line to that file, and your own ssh trusts the line afterwards. Read the
+command before you approve a stage with that scope.
+
+**Signing a commit needs the `signing` scope.** A confined `git commit`, `rebase` or `merge` that
+signs with ssh is lent the one public key your `~/.gitconfig` or `~/.config/git/config` names, found
+through an `[includeIf "gitdir:..."]` block that matches the session's directory, and the ssh agent
+socket, never a private key. A `run` can ask for it by name with `scopes: ["signing"]`; you are asked
+every time and it is not remembered. The key is also searched among the `*.pub` files in `~/.ssh`
+whose key the agent holds, up to 32. A `user.signingkey` set in the repository's own configuration is
+not read, and a failed step's profile line says so.
+
+A signing step never reads a private key, so "No private key found" means the ssh agent does not hold
+the configured key. It does not mean the key file is missing or that the sandbox hides it. Run
+`ssh-add` on the key and try again. Where the session accepts it, the agent is also told the one commit
+line can be run with `unconfined: true`, which you are asked to approve.
 
 **On macOS a write grant does not reach a `.git`.** git runs the commands a repository's
 configuration and hooks name, unconfined, the next time anybody runs git there, so a confined process
@@ -321,8 +486,12 @@ holds. A grant over paths can neither withhold nor hand over what sits in a vari
 or an agent socket does, so which of its own variables a program is trusted with stays the caller's
 decision rather than something that differs per platform. On macOS a confined process cannot use
 `sysctl(KERN_PROCARGS2)` to read another process's exec-time environment, including bravebot's.
-Machine-information queries needed by ordinary tools remain available. This does not erase the
-kernel's saved environment or protect it from an unconfined process of the same user.
+Machine-information queries needed by ordinary tools remain available, including the system-wide
+limit on argument size that `xargs` and `find -exec {} +` read. This does not erase the
+kernel's saved environment or protect it from an unconfined process of the same user. On Linux the
+terminal interface also marks itself non-dumpable before it reads its command line, so a stage cannot
+read its environment (and the keys you exported) from `/proc`. If the kernel refuses the mark, a
+message is printed and the run goes on.
 
 Confinement does not cover the rest of the system. A processor is a model call made by our own code,
 and a program you asked for runs with the access your own shell would give it. Everywhere else, the
@@ -335,6 +504,17 @@ Every run uses a container profile of its own, so a leftover entry names a conta
 exists and never a standing grant to something still running. A file or directory created so a
 write grant has something to name is reachable by your account and nobody else. A policy that
 requires denying subprocesses is refused there, because the container cannot enforce it.
+
+A stage and its children run in a job object, so a cancel, a timeout or Brave Bot exiting ends them,
+and a stage that cannot be put in a job does not start. Each stage gets a console of its own with no
+window. A program that asks a question on the console rather than on its input waits until it is
+cancelled or times out, and the code page is the system's, not one set with `chcp`.
+
+A stage running `cmd` or `cmd.exe` is refused where `cmd.exe` would read the line differently from
+how Brave Bot quotes it. That is when an argument holds a quotation mark, `&`, `|`, `<`, `>`, `^`,
+`(`, `)`, `%`, `!`, `,`, `;`, `=` or a line end, or when the first argument after `/c`, `/k` or
+`/r` is quoted and another follows it. Run the program directly instead. One argument after the
+switch still starts.
 
 ## Data collection, usage, and retention
 

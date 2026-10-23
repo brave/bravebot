@@ -222,7 +222,7 @@ pub fn gating_capability(tool: &str) -> Option<Capability> {
         // thereby been given one.
         "lsp" => Some(Capability::LanguageServer),
         "read_file" | "list_files" | "search" | "read_git" | "repo_map" | "spawn_processor"
-        | "load_skill" => Some(Capability::FileRead),
+        | "load_skill" | "search_skills" => Some(Capability::FileRead),
         // A delegate is a model call, and every kind holds this so it can make its own. What a
         // delegate it spawns may hold is its own set narrowed again, so this adds nothing to it.
         "spawn_agent" => Some(Capability::WebFetch),
@@ -313,11 +313,24 @@ pub struct Definition {
     /// no server's tool. `Some` selects out of the parent's by alias, so a name the parent holds
     /// no grant for selects nothing, and a kind holding no server holds none whatever this says.
     servers: Option<Vec<String>>,
+    /// The definitions and kinds a delegate of this one may start, where the definition named any
+    /// (DELEGATE-30).
+    ///
+    /// `None` is every one the run's own set holds. `Some` selects out of that set by name, so a
+    /// name nothing in it goes by selects nothing. Met with the one a replacement replaced, as
+    /// `tools:` is, so a later definition can shorten the list and cannot lengthen it.
+    spawns: Option<Vec<String>>,
     /// The rounds the definition asked for, where it asked for a number.
     ///
     /// `None` is the kind's own bound. Held to the kind's ceiling where it is read rather than
     /// where it is set, so a replacement loaded as a narrower kind is held to that kind's.
     rounds: Option<usize>,
+    /// The most tokens the definition lets one delegate spend, where it names a figure.
+    ///
+    /// `None` is no budget, so only the rounds bound it. Met with the one it replaced rather
+    /// than taken over, since a figure only restricts and a later definition may lower it and
+    /// may not take it away.
+    budget: Option<u64>,
     /// Whether a run under it keeps a memory, a file in the working directory named after it.
     ///
     /// Set only for a name a path segment can be made of, which is decided where the file is read.
@@ -360,7 +373,9 @@ impl Definition {
             tools: None,
             skills: None,
             servers: None,
+            spawns: None,
             rounds: None,
+            budget: None,
             memory: false,
             checkout: false,
             writes: Vec::new(),
@@ -387,7 +402,9 @@ impl Definition {
             tools,
             skills: None,
             servers: None,
+            spawns: None,
             rounds: None,
+            budget: None,
             memory: false,
             checkout: false,
             writes: Vec::new(),
@@ -461,6 +478,18 @@ impl Definition {
         self
     }
 
+    /// The names of the delegates it asked to be allowed to start, before the run's own set
+    /// narrows them.
+    pub fn spawns(&self) -> Option<&[String]> {
+        self.spawns.as_deref()
+    }
+
+    /// Let a delegate of this definition start only the delegates of these names.
+    pub fn with_spawns(mut self, spawns: Vec<String>) -> Self {
+        self.spawns = Some(spawns);
+        self
+    }
+
     /// How many rounds its delegate may make: the number it asked for held to its kind's
     /// ceiling, or its kind's own where it asked for none.
     pub fn rounds(&self) -> usize {
@@ -479,6 +508,17 @@ impl Definition {
     /// Ask for this many rounds, which its kind's ceiling still holds.
     pub fn with_rounds(mut self, rounds: usize) -> Self {
         self.rounds = Some(rounds);
+        self
+    }
+
+    /// The most tokens its delegate may spend, where its definition names a figure.
+    pub fn budget(&self) -> Option<u64> {
+        self.budget
+    }
+
+    /// Hold its delegate to this many tokens, beyond which it loses its tools and answers.
+    pub fn with_budget(mut self, tokens: u64) -> Self {
+        self.budget = Some(tokens);
         self
     }
 
@@ -818,10 +858,15 @@ impl Definitions {
             }
         }
 
+        definition.budget = match (definition.budget, existing.budget) {
+            (Some(asked), Some(held)) => Some(asked.min(held)),
+            (asked, held) => asked.or(held),
+        };
         definition.kind = loaded;
         definition.writes = writes;
         definition.tools = tools;
         definition.servers = servers;
+        definition.spawns = meet(definition.spawns.as_deref(), existing.spawns.as_deref());
         definition.checkout |= existing.checkout;
         *existing = definition;
 
@@ -842,6 +887,22 @@ impl Definitions {
             writes_confined_to,
             replaced,
         })
+    }
+
+    /// The set with only the entries these names select, in the order the set holds them.
+    ///
+    /// A name nothing here goes by selects nothing, and no entry is added, so what comes back can
+    /// only be smaller (DELEGATE-30). The three kinds are not exempt: a definition that lists
+    /// `reader` alone has no `worker` to start.
+    pub fn only(&self, names: &[String]) -> Self {
+        Self {
+            entries: self
+                .entries
+                .iter()
+                .filter(|entry| names.contains(&entry.name))
+                .cloned()
+                .collect(),
+        }
     }
 
     /// Whether a definition may go by this name, which is any name but a kind's own.
@@ -896,12 +957,15 @@ impl Definitions {
 /// reads.
 pub const MAX_DEPTH: usize = 3;
 
-/// How many delegates one turn's whole tree may hold, however they are arranged.
+/// How many delegates one turn's whole tree may hold running at once, where the settings name no
+/// other figure.
 ///
-/// On the tree rather than on each node, so the bound on a turn's delegated work is this many
-/// delegates at their kinds' rounds and not a product of fan-outs at every level. Four full
-/// fan-outs of a single call.
-pub const MAX_DELEGATES: u32 = 32;
+/// On the tree rather than on each node, so the bound on the delegates running at once is this many
+/// and not a product of fan-outs at every level. A delegate that has ended gives its place back
+/// ([`Place`]), so a turn may start more than this many over its life and never has more than this
+/// many going at once. Six delegates that each hand four to six parts to nested readers need 30 to
+/// 42 places together, which this holds with room over.
+pub const DEFAULT_MAX_RUNNING_DELEGATES: u32 = 64;
 
 /// Which delegate a record is about.
 ///
@@ -995,49 +1059,80 @@ impl std::fmt::Display for DelegateId {
     }
 }
 
-/// The places left in one turn's tree of delegates.
+/// The places held in one turn's tree of delegates.
 ///
-/// One count, shared by every run in the tree, so siblings running at once draw on the same
-/// [`MAX_DELEGATES`] rather than each on its own. Carried in a [`DelegateSpec`] and nowhere
-/// else, so a run can only reach its tree's count through the kernel that spawned it.
-#[derive(Clone, Default)]
-pub(crate) struct Tree(std::sync::Arc<std::sync::atomic::AtomicU32>);
+/// One count, shared by every run in the tree, so siblings running at once draw on the same bound
+/// rather than each on its own. Carried in a [`DelegateSpec`] and nowhere else, so a run can only
+/// reach its tree's count through the kernel that spawned it.
+#[derive(Clone)]
+pub(crate) struct Tree(std::sync::Arc<Places>);
+
+/// What a [`Tree`] counts, and the most it may hold.
+struct Places {
+    held: std::sync::atomic::AtomicU32,
+    bound: u32,
+}
 
 impl Tree {
+    /// A tree that holds at most `bound` places at once.
+    pub(crate) fn bounded(bound: u32) -> Self {
+        Self(std::sync::Arc::new(Places {
+            held: std::sync::atomic::AtomicU32::new(0),
+            bound,
+        }))
+    }
+
+    /// The most places it holds at once.
+    pub(crate) fn bound(&self) -> u32 {
+        self.0.bound
+    }
+
     /// Take one place, or nothing where the tree is full.
-    pub(crate) fn claim(&self) -> bool {
+    pub(crate) fn claim(&self) -> Option<Place> {
         use std::sync::atomic::Ordering;
-        let mut held = self.0.load(Ordering::SeqCst);
+        let mut held = self.0.held.load(Ordering::SeqCst);
         loop {
-            if held >= MAX_DELEGATES {
-                return false;
+            if held >= self.0.bound {
+                return None;
             }
-            match self
-                .0
-                .compare_exchange_weak(held, held + 1, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => return true,
+            match self.0.held.compare_exchange_weak(
+                held,
+                held + 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Some(Place(self.clone())),
                 Err(now) => held = now,
             }
         }
     }
 }
 
-impl Tree {
-    /// Give back a place [`Tree::claim`] took, for a delegate that was approved and then did not
-    /// start. Never below none.
-    pub(crate) fn release(&self) {
-        use std::sync::atomic::Ordering;
-        let mut held = self.0.load(Ordering::SeqCst);
-        while held > 0 {
-            match self
-                .0
-                .compare_exchange_weak(held, held - 1, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => return,
-                Err(now) => held = now,
-            }
-        }
+/// A bound of [`DEFAULT_MAX_RUNNING_DELEGATES`], which is the tree of a turn whose settings name
+/// no other.
+impl Default for Tree {
+    fn default() -> Self {
+        Self::bounded(DEFAULT_MAX_RUNNING_DELEGATES)
+    }
+}
+
+/// One place in a [`Tree`], given back when this is dropped.
+///
+/// Held by the [`DelegateSpec`] of the delegate that took it, and so by every copy of that spec the
+/// delegate's own run makes. The last of them goes when the delegate's thread ends, whichever way
+/// it ended: it reported, it failed, a person stopped it, it reached its round bound, or its thread
+/// panicked. A delegate that was approved and then never started drops its spec unused and gives
+/// the place back the same way. Nothing returns a place by calling for it, so no route to an end
+/// can be the one that forgot to, and a place cannot be returned twice.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Place(Tree);
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        self.0
+            .0
+            .held
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -1052,8 +1147,8 @@ impl Eq for Tree {}
 
 impl std::fmt::Debug for Tree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let held = self.0.load(std::sync::atomic::Ordering::SeqCst);
-        write!(f, "Tree({held} of {MAX_DELEGATES})")
+        let held = self.0.held.load(std::sync::atomic::Ordering::SeqCst);
+        write!(f, "Tree({held} of {})", self.0.bound)
     }
 }
 
@@ -1064,7 +1159,7 @@ impl std::fmt::Debug for Tree {
 /// text carried, and a person typed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckoutRefusal {
-    /// `isolation` held something other than `"checkout"`.
+    /// `isolation` held something other than `"checkout"` or `"checkout_with_changes"`.
     UnknownIsolation,
     /// A reader writes nothing, so a checkout separates it from nobody.
     Reader,
@@ -1133,6 +1228,8 @@ pub struct DelegateSpec {
     tools: Option<Vec<String>>,
     /// The skills its definition named, where it named any, not yet met with what the turn found.
     skills: Option<Vec<String>>,
+    /// The names its definition allowed it to start, where it named any (DELEGATE-30).
+    spawns: Option<Vec<String>>,
     /// The standing part of what it is told about itself, from the definition that selected it.
     prompt: String,
     /// Whether the definition that selected it keeps a memory.
@@ -1146,8 +1243,15 @@ pub struct DelegateSpec {
     task: String,
     capabilities: CapabilitySet,
     rounds: usize,
-    /// The tree it belongs to, which is the one the delegates it spawns draw on.
-    tree: Tree,
+    /// The most tokens it may spend, where one is fixed: the least of its definition's figure,
+    /// the call's and what its parent had left.
+    budget: Option<u64>,
+    /// The place it holds in its tree, and through it the tree, which is the one the delegates it
+    /// spawns draw on.
+    ///
+    /// Shared by every copy of the spec, since the delegate's own run copies it. The place goes
+    /// back when the last copy does, which is when the delegate's thread ends.
+    place: std::sync::Arc<Place>,
     /// What the context of the run that wrote its task held, which its own context starts
     /// holding: a task written by a planner shown private content may carry it.
     holds: Confidentiality,
@@ -1160,7 +1264,7 @@ impl DelegateSpec {
         task: impl Into<String>,
         capabilities: CapabilitySet,
         rounds: usize,
-        tree: Tree,
+        place: Place,
     ) -> Self {
         let kind = definition.kind();
         let tools = definition.tools().map(|named| {
@@ -1180,6 +1284,7 @@ impl DelegateSpec {
             effort: definition.effort().map(str::to_string),
             tools,
             skills: definition.skills().map(<[String]>::to_vec),
+            spawns: definition.spawns().map(<[String]>::to_vec),
             prompt: definition.prompt().to_string(),
             memory: definition.keeps_memory(),
             checkout: definition.asks_for_checkout(),
@@ -1187,13 +1292,32 @@ impl DelegateSpec {
             task: task.into(),
             capabilities,
             rounds,
-            tree,
+            budget: definition.budget(),
+            place: std::sync::Arc::new(place),
             holds: Confidentiality::Public,
         }
     }
 
     pub(crate) fn holding(mut self, held: Confidentiality) -> Self {
         self.holds = held;
+        self
+    }
+
+    /// Lower the budget to this figure where it is below the one it carries. A figure from the
+    /// call or the parent's remainder can only restrict what a vouched definition set
+    /// (DELEGATE-29), so it never raises it.
+    pub(crate) fn budgeted_to(mut self, tokens: Option<u64>) -> Self {
+        self.budget = match (self.budget, tokens) {
+            (Some(held), Some(asked)) => Some(held.min(asked)),
+            (held, asked) => held.or(asked),
+        };
+        self
+    }
+
+    /// Meet the names its definition allowed it to start with those the run that started it may,
+    /// so a list further down can shorten what is above it and never lengthen it (DELEGATE-30).
+    pub(crate) fn spawning_within(mut self, above: Option<&[String]>) -> Self {
+        self.spawns = meet(self.spawns.as_deref(), above);
         self
     }
 
@@ -1216,7 +1340,9 @@ impl DelegateSpec {
     /// Where it may not, it is offered no way to, and [`crate::policy::Policy::before_delegate`]
     /// refuses the call anyway.
     pub fn may_delegate(&self) -> bool {
-        self.id.depth() < MAX_DEPTH && !self.named_out_delegating()
+        self.id.depth() < MAX_DEPTH
+            && !self.named_out_delegating()
+            && !self.spawns.as_ref().is_some_and(Vec::is_empty)
     }
 
     /// Whether its definition named the tools it may use and left `spawn_agent` out.
@@ -1227,7 +1353,7 @@ impl DelegateSpec {
     }
 
     pub(crate) fn tree(&self) -> &Tree {
-        &self.tree
+        &self.place.0
     }
 
     /// What the planner named to get this, and what the person watching is shown.
@@ -1263,6 +1389,12 @@ impl DelegateSpec {
     /// turn found is offered.
     pub fn skills(&self) -> Option<&[String]> {
         self.skills.as_deref()
+    }
+
+    /// The names its definition allowed it to start, where it named any, and `None` where it may
+    /// start whatever the run's set holds.
+    pub(crate) fn spawns(&self) -> Option<&[String]> {
+        self.spawns.as_deref()
     }
 
     /// The standing instruction its definition carried, empty where there was none.
@@ -1315,6 +1447,11 @@ impl DelegateSpec {
         self.rounds
     }
 
+    /// How many tokens it may spend before it has to answer, where a figure was fixed.
+    pub fn budget(&self) -> Option<u64> {
+        self.budget
+    }
+
     /// The delegate as the audit trail describes it: what it is and what it holds, never the
     /// task, which can be long.
     pub fn describe(&self) -> String {
@@ -1332,8 +1469,12 @@ impl DelegateSpec {
         } else {
             format!("a {} delegate ({})", self.definition, self.kind)
         };
+        let budget = match self.budget {
+            Some(tokens) => format!(" and {tokens} tokens"),
+            None => String::new(),
+        };
         format!(
-            "{} is {what} holding {held} for at most {} rounds",
+            "{} is {what} holding {held} for at most {} rounds{budget}",
             self.id, self.rounds
         )
     }
@@ -1459,6 +1600,11 @@ impl Addressed {
 mod tests {
     use super::*;
     use crate::capability::ServerAlias;
+
+    /// A place in a tree of its own, for a spec a test builds by hand.
+    fn a_place() -> Place {
+        Tree::default().claim().expect("a new tree has room")
+    }
 
     /// A record writes a delegate's number down and reads it back, and what it reads is checked as
     /// a path: a position of zero, a sign, a path past the depth limit and stray text are none.
@@ -1919,6 +2065,32 @@ mod tests {
         }
     }
 
+    /// A budget only restricts, so a later definition of the name may lower it and may not take
+    /// it away: the project file that replaces a person's own cannot spend more than theirs.
+    #[test]
+    fn a_later_definition_meets_the_budget_of_the_one_it_replaces() {
+        let named = |budget: Option<u64>| {
+            let definition =
+                Definition::from_file("reviewer", "reviews", Kind::Reader, None, "", "a file");
+            match budget {
+                Some(tokens) => definition.with_budget(tokens),
+                None => definition,
+            }
+        };
+        let after = |first: Option<u64>, second: Option<u64>| {
+            let mut definitions = Definitions::default();
+            definitions.insert(named(first));
+            definitions.insert(named(second));
+            definitions.get("reviewer").expect("selectable").budget()
+        };
+
+        assert_eq!(after(Some(500), Some(900)), Some(500));
+        assert_eq!(after(Some(900), Some(500)), Some(500));
+        assert_eq!(after(Some(500), None), Some(500));
+        assert_eq!(after(None, Some(500)), Some(500));
+        assert_eq!(after(None, None), None);
+    }
+
     /// A bound is not authority, so a replacement's own number is the one in force, as its body
     /// is. It is held to the ceiling of the kind it is loaded as, so a project that could not
     /// widen a `reader` to a `worker` cannot have a worker's ceiling either.
@@ -2235,6 +2407,59 @@ mod tests {
         );
     }
 
+    /// DELEGATE-30. A replacement's `spawns:` list is met with the one it replaces, so a later
+    /// file can shorten what a person wrote and cannot lengthen it, and one naming none inherits
+    /// it rather than handing back the whole set.
+    #[test]
+    fn a_later_definition_cannot_widen_the_spawn_list_of_the_one_it_replaces() {
+        let list = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let named = |spawns: Option<Vec<String>>, origin: &str| {
+            let definition = Definition::from_file(
+                "coordinator",
+                "starts the others",
+                Kind::Worker,
+                None,
+                "",
+                origin,
+            );
+            match spawns {
+                Some(spawns) => definition.with_spawns(spawns),
+                None => definition,
+            }
+        };
+        let mut definitions = Definitions::default();
+        definitions.insert(named(Some(list(&["reader"])), "~/.bravebot/agents/c.md"));
+        definitions.insert(named(
+            Some(list(&["reader", "worker"])),
+            ".bravebot/agents/c.md",
+        ));
+        assert_eq!(
+            definitions.get("coordinator").unwrap().spawns(),
+            Some(list(&["reader"]).as_slice()),
+            "a project's longer list widened the person's"
+        );
+        definitions.insert(named(None, ".bravebot/agents/d.md"));
+        assert_eq!(
+            definitions.get("coordinator").unwrap().spawns(),
+            Some(list(&["reader"]).as_slice()),
+            "a replacement naming none handed back every delegate"
+        );
+    }
+
+    /// DELEGATE-30. Selecting by name only takes away, three kinds included.
+    #[test]
+    fn selecting_by_name_keeps_only_the_names_and_adds_none() {
+        let all = Definitions::default();
+        let names = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(all.only(&names(&["reader"])).names(), ["reader"]);
+        assert_eq!(
+            all.only(&names(&["worker", "reader", "elsewhere"])).names(),
+            ["reader", "worker"],
+            "the set's own order, and no name it does not hold"
+        );
+        assert!(all.only(&[]).is_empty());
+    }
+
     /// The other spelling of the same widening, and the one no kind moves in. A `tools:` line is
     /// a narrowing of its own kind, so a replacement of the same kind that names no tools would
     /// hand back everything the earlier file had taken away.
@@ -2536,7 +2761,7 @@ mod tests {
             "find out whether the tests pass",
             Kind::Checker.capabilities(),
             80,
-            Tree::default(),
+            a_place(),
         );
 
         let described = spec.describe();
@@ -2568,7 +2793,7 @@ mod tests {
             "check the diff",
             Kind::Reader.capabilities(),
             60,
-            Tree::default(),
+            a_place(),
         );
 
         let described = spec.describe();
@@ -2604,7 +2829,7 @@ mod tests {
             "check the diff",
             Kind::Reader.capabilities(),
             60,
-            Tree::default(),
+            a_place(),
         );
 
         assert_eq!(spec.tools(), Some(["read_file".to_string()].as_slice()));
@@ -2631,7 +2856,7 @@ mod tests {
             "read something",
             Kind::Reader.capabilities(),
             60,
-            Tree::default(),
+            a_place(),
         );
         assert_eq!(spec.model(), Some("haiku"));
     }
@@ -2647,7 +2872,7 @@ mod tests {
                 "read something",
                 Kind::Reader.capabilities(),
                 60,
-                Tree::default(),
+                a_place(),
             )
         };
         let plain =
@@ -2677,7 +2902,7 @@ mod tests {
                 "review something",
                 Kind::Reader.capabilities(),
                 60,
-                Tree::default(),
+                a_place(),
             )
         };
 
@@ -2720,6 +2945,41 @@ mod tests {
         ));
         assert_eq!(
             definitions.get("reviewer").expect("selectable").skills(),
+            None
+        );
+    }
+
+    /// DELEGATE-27: the effort a delegate asks for is the latest definition's, in both directions,
+    /// because how hard a model is asked to think changes what a run costs and not what it may
+    /// do. A project naming a level replaces a person's own, and one naming none returns the
+    /// delegate to the level of the turn that starts it.
+    #[test]
+    fn a_later_definition_takes_over_the_effort_the_one_it_replaces_named() {
+        let mut definitions = Definitions::default();
+        definitions.insert(
+            Definition::from_file("reviewer", "global", Kind::Reader, None, "", "home")
+                .with_effort("low"),
+        );
+        let admitted = definitions.insert(
+            Definition::from_file("reviewer", "project", Kind::Reader, None, "", "project")
+                .with_effort("high"),
+        );
+        assert_eq!(admitted, Admitted::AsWritten);
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").effort(),
+            Some("high")
+        );
+
+        definitions.insert(Definition::from_file(
+            "reviewer",
+            "again",
+            Kind::Reader,
+            None,
+            "",
+            "again",
+        ));
+        assert_eq!(
+            definitions.get("reviewer").expect("selectable").effort(),
             None
         );
     }
@@ -2903,7 +3163,7 @@ mod tests {
                 "migrate",
                 Kind::Worker.capabilities(),
                 60,
-                Tree::default(),
+                a_place(),
             )
             .asks_for_checkout()
         );
@@ -2928,7 +3188,7 @@ mod tests {
                 "review",
                 Kind::Reader.capabilities(),
                 60,
-                Tree::default(),
+                a_place(),
             )
             .asks_for_checkout()
         );
@@ -3039,26 +3299,95 @@ mod tests {
         );
     }
 
-    /// One count for the tree, shared by every handle on it, and it stops at the bound rather
-    /// than wrapping or going over.
+    /// One count for the tree, shared by every handle on it. It stops at the bound rather than
+    /// wrapping or going over, and a place that is dropped is a place the next claim takes, so
+    /// what the bound holds is the places in hand at once.
     #[test]
     fn a_tree_holds_at_most_its_bound_across_every_handle() {
-        let tree = Tree::default();
+        let tree = Tree::bounded(5);
         let sibling = tree.clone();
-        let claimed = (0..MAX_DELEGATES * 2)
-            .filter(|n| {
-                if n % 2 == 0 {
-                    tree.claim()
-                } else {
-                    sibling.claim()
-                }
-            })
-            .count();
-        assert_eq!(claimed, MAX_DELEGATES as usize);
-        assert!(!tree.claim() && !sibling.claim());
+        let claim = |n: u32| {
+            if n.is_multiple_of(2) {
+                tree.claim()
+            } else {
+                sibling.claim()
+            }
+        };
+        let mut held: Vec<Place> = (0..10).filter_map(claim).collect();
+        assert_eq!(held.len(), 5);
+        assert!(tree.claim().is_none() && sibling.claim().is_none());
+
+        held.truncate(3);
+        let taken: Vec<Place> = (0..6).filter_map(claim).collect();
+        assert_eq!(
+            taken.len(),
+            2,
+            "two places were given back, and the tree took another number than that"
+        );
+        assert!(tree.claim().is_none() && sibling.claim().is_none());
+
         assert!(
-            Tree::default().claim(),
+            Tree::bounded(5).claim().is_some(),
             "another turn's tree shared this one's count"
+        );
+    }
+
+    /// A delegate's thread that panics has ended like any other, so the place its spec held goes
+    /// back and the turn that started it is not left holding one for a run that is gone.
+    #[test]
+    fn a_place_goes_back_when_the_delegates_thread_panics() {
+        let tree = Tree::bounded(1);
+        let spec = DelegateSpec::new(
+            DelegateId::nth(1),
+            &Definition::of_kind(Kind::Reader),
+            "look",
+            Kind::Reader.capabilities(),
+            10,
+            tree.claim().expect("a new tree has room"),
+        );
+        assert!(tree.claim().is_none(), "the one place was not held");
+
+        let ended = std::thread::spawn(move || {
+            let _held = spec;
+            panic!("the delegate's thread died");
+        })
+        .join();
+        assert!(ended.is_err(), "the thread did not panic");
+        assert!(
+            tree.claim().is_some(),
+            "the place of a delegate that panicked was not given back"
+        );
+    }
+
+    /// The delegate's own run copies its spec, so the place is the last copy's to give back. One
+    /// copy dropped while another is alive leaves the place held, and the two together give back
+    /// one place and no more: a place given back twice would be a place nobody took.
+    #[test]
+    fn a_place_goes_back_when_the_last_copy_of_its_spec_does() {
+        let tree = Tree::bounded(1);
+        let spec = DelegateSpec::new(
+            DelegateId::nth(1),
+            &Definition::of_kind(Kind::Reader),
+            "look",
+            Kind::Reader.capabilities(),
+            10,
+            tree.claim().expect("a new tree has room"),
+        );
+        let copy = spec.clone();
+        assert!(tree.claim().is_none(), "the one place was not held");
+
+        drop(spec);
+        assert!(
+            tree.claim().is_none(),
+            "a copy of the spec was still running and its place went back"
+        );
+
+        drop(copy);
+        let first = tree.claim();
+        assert!(first.is_some(), "the place did not go back");
+        assert!(
+            tree.claim().is_none(),
+            "dropping two copies gave back more than the one place taken"
         );
     }
 }

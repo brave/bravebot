@@ -194,11 +194,62 @@ impl Ssh for Machine {
     }
 }
 
+/// The directories a confined stage opened here could have written: the one this command ran in
+/// and the checkout holding it, which is the nearest ancestor with a `.git`.
+///
+/// This is a new process, so [`bravebot_sandbox::programs`] knows of no session. A checkout's
+/// `bin` first on `PATH` would otherwise be searched for the programs started below.
+fn checkout(cwd: &Path) -> Vec<PathBuf> {
+    let mut directories = vec![cwd.to_path_buf()];
+    if let Some(root) = cwd
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        && root != cwd
+    {
+        directories.push(root.to_path_buf());
+    }
+    directories
+}
+
+/// Leave out of the lookup for programs the directory this command ran in and the checkout holding
+/// it. A command that starts programs with no session of its own calls this before its first
+/// lookup.
+pub(crate) fn keep_out_where_this_ran() {
+    if let Ok(cwd) = std::env::current_dir() {
+        for directory in checkout(&cwd) {
+            bravebot_sandbox::programs::keep_out(&directory);
+        }
+    }
+}
+
+/// A command for `program`, with this agent's own credentials taken off it.
+///
+/// Every program this file starts is built here: they run unconfined with the person's access to
+/// `~/.ssh`, and [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) keeps what this
+/// agent authenticates with out of reach of such a program. Its `PATH` is reduced to the entries
+/// the lookup searches, so a program `ssh` starts by name from the person's configuration, a
+/// `ProxyCommand` among them, is not one a stage wrote ([SANDBOX-30]).
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
+fn started(program: &Path) -> std::process::Command {
+    bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    )
+}
+
 /// Standard output and standard error of `program`, run to completion within [`WAIT`].
+///
+/// `program` is found as [SANDBOX-30] says, and one found only where a stage could have written is
+/// not started: it reads as absent.
+///
+/// [SANDBOX-30]: ../../../docs/specs/sandboxing.md
 fn run(program: &str, args: &[&std::ffi::OsStr]) -> Option<String> {
     use std::io::Read;
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(program)
+    use std::process::Stdio;
+    let found = bravebot_sandbox::programs::find(std::ffi::OsStr::new(program))?;
+    let mut child = started(&found)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -286,6 +337,7 @@ pub fn run_command(argument: Option<&str>) -> ExitCode {
     let Ok(argument) = named(argument) else {
         return fail(Ending::Argument, t!(cli_doctor_push_identity_argument));
     };
+    keep_out_where_this_ran();
     let Some(home) = bravebot_agent::home::profile() else {
         return fail(Ending::Failed, t!(doctor_push_no_home));
     };
@@ -500,6 +552,132 @@ mod tests {
             !shown.contains(&t!(doctor_push_chosen_by).to_string()),
             "{shown}"
         );
+    }
+
+    /// What a command was told to unset, which is how `env_remove` reads back: a name a child will
+    /// not be handed is present here with no value, and one left alone is absent altogether.
+    fn withheld_from(command: &std::process::Command) -> Vec<String> {
+        let mut names: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Every program this command starts is built by [`started`], so the one place that removes this
+    /// agent's own credentials covers all three. Rejects a command built without `env_remove`,
+    /// which hands the signing key to whatever `ssh-keygen` resolves to.
+    #[test]
+    fn a_program_started_here_is_not_handed_this_agents_own_credentials() {
+        let mut expected = bravebot_config::scrub::own_credentials();
+        expected.sort();
+
+        assert_eq!(withheld_from(&started(Path::new("/usr/bin/ssh"))), expected);
+    }
+
+    /// The directory the command ran in and the checkout holding it are both left out of the lookup.
+    /// Rejects a lookup that leaves out only the directory itself, which finds a repository's
+    /// `bin` when the command runs in a subdirectory.
+    #[test]
+    fn the_checkout_holding_the_directory_is_left_out_with_it() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/push-identity-checkout");
+        let _ = std::fs::remove_dir_all(&root);
+        let here = root.join("crates").join("cli");
+        std::fs::create_dir_all(&here).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+
+        assert_eq!(checkout(&here), [here.clone(), root]);
+    }
+
+    /// A directory under no checkout is left out by itself. Rejects a lookup that leaves out the
+    /// checkout alone, which finds the `bin` of a project that has no `.git`.
+    #[test]
+    fn a_directory_under_no_checkout_is_left_out_by_itself() {
+        let here = Path::new("/bravebot-no-such-directory/project");
+
+        assert_eq!(checkout(here), [here.to_path_buf()]);
+    }
+
+    /// SANDBOX-30: `ssh` reads the person's configuration, and a `ProxyCommand` there names a
+    /// program that is looked up on the `PATH` it was started with. A file a confined stage wrote
+    /// under that name in a directory the command leaves out, first on `PATH`, must not be the one
+    /// that runs. The test binary runs again with `PATH` holding the checkout's `.venv/bin`, an
+    /// installed directory and the system directories, in that order. `ssh` in the installed
+    /// directory is `#!/usr/bin/env interp`, and each `interp` records that it ran. A program
+    /// started with bravebot's whole `PATH` runs the planted one.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_ssh_starts_by_name_is_never_one_a_stage_may_have_written() {
+        use crate::test_support::Scratch;
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str = "push_identity::tests::a_program_ssh_starts_by_name_is_never_one_a_stage_may_have_written";
+        const SESSION: &str = "BRAVEBOT_TEST_PUSH_IDENTITY_SESSION";
+        const INSTALLED: &str = "BRAVEBOT_TEST_PUSH_IDENTITY_INSTALLED";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            std::fs::write(session.join("ran"), "").unwrap();
+            bravebot_sandbox::programs::keep_out(&session);
+
+            let answer = run("ssh", &[]);
+            assert!(answer.is_some(), "the installed ssh was not started");
+            assert!(
+                !session.join("planted-ran").exists(),
+                "a program ssh starts by name was looked up in a directory a stage may write"
+            );
+            assert!(
+                session.join("installed-ran").exists(),
+                "ssh did not run the installed interpreter"
+            );
+            return;
+        }
+
+        let session = Scratch::new("push-identity-session");
+        let installed = Scratch::new("push-identity-installed");
+        let planted = session.path.join(".venv/bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        let write = |directory: &Path, name: &str, body: String| {
+            let file = directory.join(name);
+            std::fs::write(&file, body).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let records =
+            |marker: &str| format!("#!/bin/sh\n: > '{}'\n", session.path.join(marker).display());
+        write(&planted, "interp", records("planted-ran"));
+        write(&installed.path, "interp", records("installed-ran"));
+        write(
+            &installed.path,
+            "ssh",
+            "#!/usr/bin/env interp\n".to_string(),
+        );
+        let path = std::env::join_paths([
+            planted,
+            installed.path.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        let own = bravebot_sandbox::programs::Resolved::own_executable().unwrap();
+        let child = bravebot_sandbox::programs::start(
+            &own,
+            bravebot_sandbox::programs::Inherits::All,
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        )
+        .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+        .env(SESSION, &session.path)
+        .env(INSTALLED, &installed.path)
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+
+        let ran = session.path.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
     }
 
     /// The argument is `<host>/<owner>` and nothing else.

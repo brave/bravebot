@@ -4,6 +4,9 @@
 //! Asked before any session exists, and read by no model: the names reach a question the person
 //! answers, and the one written becomes the `model` field of later requests on that answer. Choosing
 //! which name to offer from them is therefore not a planner branching on fetched bytes.
+//!
+//! The bounded request is shared with [`crate::lm_studio`] and [`crate::llama_server`], which ask
+//! the same way of the two other servers the import offers (IMPORT-12).
 
 use bravebot_config::import::Installed;
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -18,7 +21,7 @@ use std::time::Duration;
 ///
 /// A few hundred bytes name one model, so this is thousands of them, and a larger body is not a
 /// listing this is worth parsing for.
-const LISTING_BYTES: usize = 1024 * 1024;
+pub(crate) const LISTING_BYTES: usize = 1024 * 1024;
 
 /// How long a start waits on the server.
 ///
@@ -38,12 +41,43 @@ const TIMEOUTS: Timeouts = Timeouts {
 /// One `GET {host}/api/tags`, held to that address. A refused connection, a timeout, an error
 /// status, a redirect anywhere else, a body past [`LISTING_BYTES`] and a body that is not a
 /// listing are all `None`, and none is said: an Ollama that is not running is the ordinary case.
+///
+/// Once a listing is read, one `GET {host}/api/ps` names the window each loaded model runs with.
+/// A model that is not loaded, or an answer to that request that cannot be read, leaves `window`
+/// `None` and says nothing.
 pub fn installed<S: Sink>(host: &str, sink: &mut S) -> Option<Vec<Installed>> {
-    let url = format!("{host}/api/tags");
-    // The one destination is the address `OLLAMA_HOST` or the default names, which the caller has
+    let bytes = fetch(host, "api/tags", "ollama", sink)?;
+    let listing: Listing = serde_json::from_slice(&bytes).ok()?;
+    let loaded: Vec<Running> = fetch(host, "api/ps", "ollama", sink)
+        .and_then(|bytes| serde_json::from_slice::<Processes>(&bytes).ok())
+        .map(|processes| processes.models)
+        .unwrap_or_default();
+    Some(
+        listing
+            .models
+            .into_iter()
+            .map(|model| Installed {
+                window: loaded
+                    .iter()
+                    .find(|running| running.name == model.name)
+                    .and_then(|running| running.context_length)
+                    .filter(|window| *window > 0),
+                name: model.name,
+                modified_at: model.modified_at,
+                capabilities: model.capabilities,
+            })
+            .collect(),
+    )
+}
+
+/// The body of one `GET {host}/{path}` to the server `name`, bounded and held to the address, or
+/// `None` where it did not come back as a body within [`LISTING_BYTES`].
+pub(crate) fn fetch<S: Sink>(host: &str, path: &str, name: &str, sink: &mut S) -> Option<Vec<u8>> {
+    let url = format!("{host}/{path}");
+    // The one destination is the address the variable or the default names, which the caller has
     // already found to be this machine. Nothing fetched chooses it.
     let mut routing = Routing::new();
-    routing.insert_trusted("ollama", url.as_str());
+    routing.insert_trusted(name, url.as_str());
     let mut policy = Policy::begin(
         routing,
         ReleasePlan::new(),
@@ -60,23 +94,9 @@ pub fn installed<S: Sink>(host: &str, sink: &mut S) -> Option<Vec<Installed>> {
         .ok()?;
     let label = response.body.label();
     let (bytes, _) = policy
-        .decode_transport("ollama models", label)
+        .decode_transport(&format!("{name} models"), label)
         .decode(response.body);
-    if bytes.len() > LISTING_BYTES {
-        return None;
-    }
-    let listing: Listing = serde_json::from_slice(&bytes).ok()?;
-    Some(
-        listing
-            .models
-            .into_iter()
-            .map(|model| Installed {
-                name: model.name,
-                modified_at: model.modified_at,
-                capabilities: model.capabilities,
-            })
-            .collect(),
-    )
+    (bytes.len() <= LISTING_BYTES).then_some(bytes)
 }
 
 /// What `/api/tags` answers, holding only what the import reads.
@@ -86,6 +106,21 @@ pub fn installed<S: Sink>(host: &str, sink: &mut S) -> Option<Vec<Installed>> {
 #[derive(Deserialize)]
 struct Listing {
     models: Vec<Listed>,
+}
+
+/// What `/api/ps` answers: the models loaded now.
+#[derive(Deserialize)]
+struct Processes {
+    models: Vec<Running>,
+}
+
+#[derive(Deserialize)]
+struct Running {
+    #[serde(default)]
+    name: String,
+    /// The window the model was loaded with, in tokens.
+    #[serde(default)]
+    context_length: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -102,46 +137,11 @@ struct Listed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stand_in::{http, serve, serve_paths};
     use bravebot_core::event::RecordingSink;
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::TcpListener;
     use std::thread;
     use std::time::Instant;
-
-    /// A server on this machine answering one connection with `response`, and its base URL.
-    fn serve(response: Vec<u8>) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let port = listener.local_addr().expect("addr").port();
-        thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                answer(stream, &response);
-            }
-        });
-        format!("http://127.0.0.1:{port}")
-    }
-
-    fn answer(mut stream: TcpStream, response: &[u8]) {
-        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-        let mut line = String::new();
-        while reader.read_line(&mut line).unwrap_or(0) > 0 {
-            if line == "\r\n" || line == "\n" {
-                break;
-            }
-            line.clear();
-        }
-        let _ = stream.write_all(response);
-        let _ = stream.flush();
-    }
-
-    fn http(status: &str, body: &[u8]) -> Vec<u8> {
-        let mut response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        )
-        .into_bytes();
-        response.extend_from_slice(body);
-        response
-    }
 
     const LISTING: &str = r#"{"models":[
         {"name":"qwen3-coder:30b","model":"qwen3-coder:30b","modified_at":"2026-09-16T14:07:58.84902-04:00",
@@ -170,14 +170,67 @@ mod tests {
                     name: "qwen3-coder:30b".to_string(),
                     modified_at: "2026-09-16T14:07:58.84902-04:00".to_string(),
                     capabilities: Some(vec!["completion".to_string(), "tools".to_string()]),
+                    window: None,
                 },
                 Installed {
                     name: "llama3:latest".to_string(),
                     modified_at: "2024-06-05T09:46:42.558935-04:00".to_string(),
                     capabilities: None,
+                    window: None,
                 },
             ]
         );
+    }
+
+    /// IMPORT-10: a model that is loaded carries the window it was loaded with, matched by name, so
+    /// a different model's figure is not read as this one's, and a model that is not loaded carries
+    /// none.
+    #[test]
+    fn a_loaded_model_carries_the_window_it_runs_with() {
+        let ps = r#"{"models":[
+            {"name":"llama3:latest","context_length":4096},
+            {"name":"other:1b","context_length":999}
+        ]}"#;
+        let host = serve_paths(vec![
+            ("/api/tags", http("200 OK", LISTING.as_bytes())),
+            ("/api/ps", http("200 OK", ps.as_bytes())),
+        ]);
+
+        let listed = asked(&host).expect("a listing");
+
+        let windows: Vec<_> = listed.iter().map(|m| (m.name.as_str(), m.window)).collect();
+        assert_eq!(
+            windows,
+            [("qwen3-coder:30b", None), ("llama3:latest", Some(4096))]
+        );
+    }
+
+    /// IMPORT-10: what is running is a second question that may fail without costing the first: a
+    /// listing is still a listing where `/api/ps` is an error, is not JSON, or states no figure, and
+    /// no model is then given a window.
+    #[test]
+    fn a_failed_question_about_what_is_loaded_leaves_the_listing_without_windows() {
+        for (status, body) in [
+            (
+                "500 Internal Server Error",
+                r#"{"models":[{"name":"llama3:latest","context_length":4096}]}"#,
+            ),
+            ("200 OK", "not json"),
+            ("200 OK", r#"{"models":[{"name":"llama3:latest"}]}"#),
+            (
+                "200 OK",
+                r#"{"models":[{"name":"llama3:latest","context_length":0}]}"#,
+            ),
+        ] {
+            let host = serve_paths(vec![
+                ("/api/tags", http("200 OK", LISTING.as_bytes())),
+                ("/api/ps", http(status, body.as_bytes())),
+            ]);
+
+            let listed = asked(&host).expect("a listing");
+
+            assert!(listed.iter().all(|m| m.window.is_none()), "{status} {body}");
+        }
     }
 
     /// IMPORT-10: a listing is small, and a body past the bound is somebody else's server or a

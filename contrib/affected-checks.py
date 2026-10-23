@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-AREAS = ("rust", "ui", "build", "installers", "docs", "npm", "deps")
+AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "npm", "deps")
 EVERYTHING = frozenset(AREAS)
 NOTHING = frozenset()
 
@@ -38,15 +38,17 @@ DECIDES = ("Makefile", "contrib/affected-checks.py")
 DECIDES_UNDER = (".github/workflows/",)
 
 # Outside crates/, and read by a test all the same.
-READ_BY_RUST = (
-    "docs/specs/layering.md", "docs/specs/credential-protection.md", "docs/specs/sandboxing.md",
-)
+READ_BY_RUST = ("CHANGELOG.md",)
+
+# Read by a test, and by the build of the agent crate, which carries each spec's clause headings.
+READ_BY_RUST_UNDER = ("docs/specs/",)
 
 # Outside crates/, run by the installer tests themselves rather than read as data: a change to
 # one is a change to what those tests exercise, whatever else reads it.
 READ_BY_INSTALLER_TESTS = {
     "install.sh": frozenset({"rust"}),
-    "npm/scripts/postinstall.js": frozenset({"npm", "rust"}),
+    "install.ps1": frozenset({"rust"}),
+    "npm/scripts/stage-platform-package.js": frozenset({"npm", "rust"}),
 }
 
 # The scripts that build, fuse and check the Windows installers. CI runs them only in the jobs
@@ -78,7 +80,7 @@ PACKAGE_FILES = (
 
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "README.md", "CHANGELOG.md", "LICENSE", "SECURITY.md", ".gitignore", ".envrc.example",
+    "README.md", "LICENSE", "SECURITY.md", ".gitignore", ".envrc.example",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -90,11 +92,12 @@ DESKTOP = ("ui-bridge", "ui-files")
 # gates cover what it checks short of linking every target.
 ALWAYS = (
     "check-scripts", "check-spec", "check-security", "check-locales", "check-versions",
-    "check-narration", "check-reviewdog",
+    "check-narration", "check-pr-body", "check-reviewdog",
 )
 HOST = {
     "rust": ("check",),
     "ui": ("check-ui", "check-agent-client"),
+    "mobile": ("check-mobile",),
     "docs": ("check-docs",),
     "npm": ("check-npm",),
     "deps": ("check-deps",),
@@ -112,6 +115,8 @@ def classify(path, desktop):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
         return frozenset({"npm"})
+    if path == "contrib/check-lint-increase.py":
+        return frozenset({"rust"})
     if path == "Dockerfile.cross":
         return frozenset({"build"})
     parts = path.split("/")
@@ -124,7 +129,7 @@ def classify(path, desktop):
         elif parts[2:] == ["build.rs"]:
             found.add("build")
         return frozenset(found)
-    if path in READ_BY_RUST:
+    if path in READ_BY_RUST or path.startswith(READ_BY_RUST_UNDER):
         return frozenset({"rust"})
     if path in READ_BY_INSTALLER_TESTS:
         return READ_BY_INSTALLER_TESTS[path]
@@ -134,16 +139,17 @@ def classify(path, desktop):
         # The job for the desktop UI runs the extension's tests, and a Rust test reads its files.
         return frozenset({"rust", "ui"})
     if path.startswith("packages/agent-client/"):
-        # The client's tests run in the job for the desktop UI against the built bridge. Only the
-        # wire contract file is also read by a Rust test.
+        # The client's tests run in the job for the desktop UI against the built bridge, and the
+        # mobile app links the client and builds it first. Only the wire contract file is also
+        # read by a Rust test.
         name = path[len("packages/agent-client/"):]
-        found = {"ui"}
+        found = {"ui", "mobile"}
         if name == "test-fixtures/wire-contract.json":
             found.add("rust")
         if name in PACKAGE_FILES:
             found.add("npm")
         return frozenset(found)
-    for under, area in (("docs/website/", "docs"), ("ui/", "ui")):
+    for under, area in (("docs/website/", "docs"), ("ui/", "ui"), ("mobile/", "mobile")):
         if path.startswith(under):
             lockfile = path[len(under):] in PACKAGE_FILES
             return frozenset({area, "npm"} if lockfile else {area})
@@ -311,7 +317,9 @@ CASES = (
     ("docs/specs/layering.md", {"rust"}),
     ("docs/specs/credential-protection.md", {"rust"}),
     ("docs/specs/sandboxing.md", {"rust"}),
-    ("docs/specs/routing.md", NOTHING),
+    ("CHANGELOG.md", {"rust"}),
+    ("docs/specs/routing.md", {"rust"}),
+    ("docs/specs/tools/read-file.md", {"rust"}),
     ("docs/website/docs/intro.md", {"docs"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
     ("docs/website/pnpm-lock.yaml", {"docs", "npm"}),
@@ -325,16 +333,23 @@ CASES = (
     ("ui/scripts/package.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/fuses.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/windows-installer.test.mjs", {"ui"}),
-    ("packages/agent-client/src/common/client.ts", {"ui"}),
-    ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui"}),
-    ("packages/agent-client/package-lock.json", {"ui", "npm"}),
-    ("packages/agent-client/pnpm-lock.yaml", {"ui", "npm"}),
-    ("packages/agent-client/pnpm-workspace.yaml", {"ui", "npm"}),
+    ("packages/agent-client/src/common/client.ts", {"ui", "mobile"}),
+    ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui", "mobile"}),
+    ("packages/agent-client/package-lock.json", {"ui", "mobile", "npm"}),
+    ("packages/agent-client/pnpm-lock.yaml", {"ui", "mobile", "npm"}),
+    ("packages/agent-client/pnpm-workspace.yaml", {"ui", "mobile", "npm"}),
+    ("mobile/src/App.tsx", {"mobile"}),
+    ("mobile/ios/Bravebot.xcodeproj/project.pbxproj", {"mobile"}),
+    ("mobile/package.json", {"mobile", "npm"}),
+    ("mobile/pnpm-lock.yaml", {"mobile", "npm"}),
+    ("mobile/pnpm-workspace.yaml", {"mobile", "npm"}),
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),
+    ("contrib/check-lint-increase.py", {"rust"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
-    ("npm/scripts/postinstall.js", {"npm", "rust"}),
+    ("npm/scripts/stage-platform-package.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
+    ("install.ps1", {"rust"}),
     ("package-lock.json", {"npm"}),
     ("pnpm-lock.yaml", {"npm"}),
     ("pnpm-workspace.yaml", {"npm"}),
@@ -434,11 +449,11 @@ def selftest():
         env, run, write = fixture_git(root)
         run("init", "-q", "-b", "main")
         write("crates/tui/src/moved.rs", "fn moved() {}\n")
-        write("docs/specs/routing.md", "old\n")
+        write("docs/development/checks.md", "old\n")
         run("add", ".")
         run("commit", "-q", "-m", "base")
         run("checkout", "-q", "-b", "prose")
-        write("docs/specs/routing.md", "new\n")
+        write("docs/development/checks.md", "new\n")
         run("commit", "-q", "-am", "prose only")
         run("checkout", "-q", "-b", "move", "main")
         run("mv", "crates/tui/src/moved.rs", "docs/moved.rs")
@@ -477,10 +492,10 @@ def selftest():
         unmerged = pull_request_paths(root, pull_request)
         checks.append(("a checkout that is not a merge answers nothing", unmerged is None, unmerged))
 
-        write("docs/specs/routing.md", "edited, not committed\n")
+        write("docs/development/checks.md", "edited, not committed\n")
         write("ui/new.ts", "untracked\n")
         got = branch_paths(root, "main", env=env)
-        wanted = ["docs/specs/routing.md", "ui/new.ts"]
+        wanted = ["docs/development/checks.md", "ui/new.ts"]
         checks.append(("a branch is its commits, its edits and its new files, not the base's",
                        got == wanted, got))
 

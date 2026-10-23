@@ -26,8 +26,9 @@
 // Like the other drivers this perturbs `bravebot-ui.json`, and it puts its own key back: the bots
 // list is this driver's to write and the rest of that file is somebody's arrangement of the window.
 
-import { _electron as electron } from 'playwright-core'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { checker, launch, SIDEBAR_TAB } from './drive-support.mjs'
+import { appState, locateProfile } from './drive-profile.mjs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
@@ -41,30 +42,14 @@ mkdirSync('/tmp/bravebot-ui', { recursive: true })
 // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
 const exactly = (name) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
-
-const launch = () => electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+const { check, problems } = checker()
 
 // Where the app keeps what it remembers, asked of the app rather than composed here: `userData` is
 // Electron's to decide and differs by platform. A launch of its own, because this driver's key has
 // to be cleared before the first launch that is measured — a bot left behind by an earlier run
 // would be a row these assertions did not make.
-const naming = await launch()
-const userData = await naming.evaluate(({ app }) => app.getPath('userData'))
-await naming.close()
-
-const stateFile = join(userData, 'bravebot-ui.json')
-const readState = () => {
-  try {
-    return JSON.parse(readFileSync(stateFile, 'utf8'))
-  } catch {
-    return {}
-  }
-}
+const { userData, stateFile } = await locateProfile()
+const { readState, putKey } = appState(stateFile)
 
 // What was there before this ran, so it can be there after. This driver's two keys only.
 //
@@ -80,17 +65,6 @@ const readState = () => {
 // not the key.
 const MINE = ['release-notes', 'triage']
 const hadView = readState().view
-
-const putKey = (key, value) => {
-  const state = readState()
-  if (value === undefined) delete state[key]
-  else state[key] = value
-  try {
-    writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8')
-  } catch {
-    // The app has not written the file yet, which is a state it handles on every first launch.
-  }
-}
 
 // Each bot gets a home folder the app makes under its own data directory. Removed at the end,
 // since these two are this driver's.
@@ -140,7 +114,7 @@ await page.waitForTimeout(2500)
 
 // --- the column has two lists ----------------------------------------------------------
 
-const tabs = page.locator('.sidebar-tabs [role="option"]')
+const tabs = page.locator(SIDEBAR_TAB)
 check((await tabs.count()) === 2, 'the column offers two lists')
 check(
   (await tabs.nth(0).getAttribute('aria-selected')) !== null,
@@ -178,7 +152,7 @@ await makeBot(page, 'Triage', 'Read new issues and say which are duplicates.')
 // The list is the main process's; the window reads it back the way it does after saving one.
 await page.reload()
 await page.waitForTimeout(2000)
-await page.locator('.sidebar-tabs [role="option"]').nth(1).click()
+await page.locator(SIDEBAR_TAB).nth(1).click()
 await page.waitForTimeout(400)
 
 // Located by name rather than by position. The list holds whatever bots the person running this
@@ -261,7 +235,7 @@ const backRow = (name) =>
 const backMine = backRow('Release Notes (weekly)')
 
 check(
-  (await back.locator('.sidebar-tabs [role="option"]').nth(1).getAttribute('aria-selected')) !== null,
+  (await back.locator(SIDEBAR_TAB).nth(1).getAttribute('aria-selected')) !== null,
   'the column comes back on the tab it was left on',
 )
 check(
@@ -438,7 +412,7 @@ check(
 // are in the DOM and invisible. The same courtesy `drive-panels.mjs` pays when it turns every
 // panel back on — and the restore below is not enough on its own, since it puts back whatever
 // this driver *found*, which may itself have been a bots tab left by an interrupted run.
-await back.locator('.sidebar-tabs [role="option"]').first().click()
+await back.locator(SIDEBAR_TAB).first().click()
 await back.waitForTimeout(300)
 
 await second_app.close()

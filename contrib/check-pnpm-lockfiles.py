@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lints the pnpm lockfiles of the three JavaScript projects that are not the Rust workspace.
+"""Lints the pnpm lockfiles of the four JavaScript projects that are not the Rust workspace.
 
 A lockfile is the whole of what an install fetches, so a hand-edited or tool-edited entry that
 points a package at a different host, a local directory or a git repository changes what runs on
@@ -12,7 +12,9 @@ npm lockfiles and cannot read pnpm's, so this holds the same rules for pnpm-lock
   the project's own package.json names, so a bump of that dependency is a change to package.json
   and the lockfile together and nothing else needs editing;
 - no entry resolves to a directory or a link, and no version is a file, link, workspace or URL
-  reference;
+  reference, except that a project's own package.json may name a link to a package in this tree
+  listed in ALLOWED_LINKS under the same name, and that link may then appear as that dependency's
+  version;
 - the file has packages, so a lockfile that lost its entries fails instead of passing empty.
 
 The file is machine-written and regular, so it is read line by line. Standard library only, like
@@ -32,9 +34,14 @@ LOCKFILES = (
     "ui/pnpm-lock.yaml",
     "docs/website/pnpm-lock.yaml",
     "packages/agent-client/pnpm-lock.yaml",
+    "mobile/pnpm-lock.yaml",
 )
 
 ALLOWED_GIT_REPOS = ("brave/leo",)
+
+# Packages in this tree a project may link to rather than install, by the name it depends on them
+# under and the specifier its manifest spells.
+ALLOWED_LINKS = {"@brave/agent-client": "link:../packages/agent-client"}
 
 INTEGRITY = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
 REGISTRY_RESOLUTION = re.compile(r"\{integrity: (" + INTEGRITY.pattern + r")\}")
@@ -90,6 +97,12 @@ def allowed_git_sources(manifest):
     return urls
 
 
+def allowed_links(manifest):
+    """The dependency names whose link the manifest spells as this tree allows."""
+    names = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
+    return {name: spec for name, spec in names.items() if ALLOWED_LINKS.get(name) == spec}
+
+
 def lint(text, manifest):
     """Every rule the lockfile text breaks, as a list of messages."""
     problems = []
@@ -100,6 +113,7 @@ def lint(text, manifest):
     if not packages:
         problems.append("no entries under packages:")
     git_sources = allowed_git_sources(manifest)
+    links = allowed_links(manifest)
     for key, body in packages.items():
         resolutions = [line.strip() for line in body if line.startswith("    resolution:")]
         if len(resolutions) != 1:
@@ -119,10 +133,14 @@ def lint(text, manifest):
                 problems.append(f"{key}: resolution is not an sha512 integrity alone: {resolution}")
         else:
             problems.append(f"{key}: not a registry version or an allowed git source")
+    dependency = None
     for line in top.get("importers", []):
+        named = re.match(r"^      (\S.*):$", line)
+        if named:
+            dependency = named.group(1).strip("'\"")
         match = re.match(r"^\s+version: (\S+)$", line)
         if match and FOREIGN_VERSION.match(match.group(1)):
-            if not any(match.group(1).startswith(url) for url in git_sources):
+            if links.get(dependency) != match.group(1) and not any(match.group(1).startswith(url) for url in git_sources):
                 problems.append(f"importers: version {match.group(1)} is not a registry version")
     for line in top.get("snapshots", []):
         match = re.match(r"^      \S.*: (.+)$", line)
@@ -261,6 +279,36 @@ def selftest():
         CLEAN.replace("version: 19.1.0\n\npackages", "version: link:../react\n\npackages"),
         MANIFEST,
         "importers: version link:../react",
+    )
+    linked = CLEAN.replace(
+        "      react:\n        specifier: ^19.0.0\n        version: 19.1.0\n",
+        "      react:\n        specifier: ^19.0.0\n        version: 19.1.0\n"
+        "      '@brave/agent-client':\n        specifier: link:../packages/agent-client\n"
+        "        version: link:../packages/agent-client\n",
+    )
+    expect(
+        "link to a package this tree allows, named in the manifest",
+        linked,
+        {**MANIFEST, "dependencies": {**MANIFEST["dependencies"], "@brave/agent-client": "link:../packages/agent-client"}},
+        None,
+    )
+    expect(
+        "link to an allowed package that the manifest does not name",
+        linked,
+        MANIFEST,
+        "importers: version link:../packages/agent-client",
+    )
+    expect(
+        "link to an allowed directory under a name this tree does not allow",
+        linked.replace("'@brave/agent-client'", "other"),
+        {**MANIFEST, "dependencies": {**MANIFEST["dependencies"], "other": "link:../packages/agent-client"}},
+        "importers: version link:../packages/agent-client",
+    )
+    expect(
+        "link to a directory this tree does not allow, named in the manifest",
+        linked.replace("../packages/agent-client", "../elsewhere"),
+        {**MANIFEST, "dependencies": {**MANIFEST["dependencies"], "@brave/agent-client": "link:../elsewhere"}},
+        "importers: version link:../elsewhere",
     )
     expect(
         "file dependency in a snapshot",

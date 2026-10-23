@@ -17,18 +17,14 @@
 // Costs nothing: it opens a stored session rather than sending a prompt. The save sheet is
 // modal and would hang the run, so `dialog.showSaveDialog` is replaced in the main process —
 // the same trick `drive-menu.mjs` plays on `Menu.prototype.popup`.
-import { _electron as electron } from 'playwright-core'
+import { checker, launch } from './drive-support.mjs'
 import { mkdirSync, existsSync, readFileSync, statSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 const OUT = '/tmp/bravebot-ui'
 mkdirSync(OUT, { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 const skip = (what) => console.log(`  --   ${what}`)
 
 const written = []
@@ -36,7 +32,7 @@ const cleanup = () => {
   for (const path of written) rmSync(path, { force: true })
 }
 
-const app = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+const app = await launch()
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message))

@@ -29,7 +29,8 @@ use crate::confirm::{
     WriteDecision, WriteRequest,
 };
 use crate::report::{
-    Activity, DelegateId, Delegation, Landing, Phase, Printed, Reported, Reporter, Returned, Shown,
+    Activity, DelegateId, Delegation, HeardMessage, Landing, Phase, Printed, Reported, Reporter,
+    Returned, SentMessage, Shown,
 };
 use bravebot_aichat::{Subscription, SubscriptionCredential};
 use bravebot_core::ask::{Answer, Asking};
@@ -308,6 +309,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn phase(&mut self, phase: Phase);
         fn narration(&mut self, text: String);
         fn streaming(&mut self, text: String);
+        fn thinking(&mut self, text: String);
         fn composing(&mut self, call: Option<&'static str>);
         fn notice(&mut self, text: String);
         fn quarantined(&mut self, shown: Shown);
@@ -323,6 +325,8 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn hook_started(&mut self, moment: &'static str, program: String);
         fn hook_finished(&mut self);
         fn interjected(&mut self, said: String);
+        fn session_message(&mut self, heard: HeardMessage);
+        fn message_sent(&mut self, sent: SentMessage);
         fn delegate_started(&mut self, delegation: Delegation);
         fn delegate_waiting(&mut self, delegate: DelegateId);
     }
@@ -460,6 +464,16 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_message(
+        &mut self,
+        request: &crate::confirm::MessageRequest,
+    ) -> crate::confirm::MessageDecision {
+        self.asked(
+            |held| held.confirm_message(request),
+            |refuse| refuse.confirm_message(request),
+        )
+    }
+
     fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
         self.asked(
             |held| held.confirm_move(request),
@@ -575,6 +589,7 @@ mod tests {
                 }],
                 ..Default::default()
             }],
+            ..Default::default()
         }
     }
 
@@ -685,6 +700,13 @@ mod tests {
 
             fn confirm_host(&mut self, _request: &crate::confirm::HostRequest) -> Decision {
                 Decision::Reject
+            }
+
+            fn confirm_message(
+                &mut self,
+                _request: &crate::confirm::MessageRequest,
+            ) -> crate::confirm::MessageDecision {
+                crate::confirm::MessageDecision::Decline
             }
 
             fn confirm_move(

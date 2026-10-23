@@ -239,6 +239,13 @@ where
 mod tests {
     use super::*;
 
+    /// ASK-9: a spend limit is a decision about the person's money, so its question waits for them.
+    /// Rejects: a flag set on every question the driver puts.
+    #[test]
+    fn the_spend_limit_question_is_never_closed_when_nobody_answers() {
+        assert!(!asking(900, Limit::tokens(500), None).closes_when_idle);
+    }
+
     #[test]
     fn a_limit_is_none_until_one_is_set_and_zero_clears_it() {
         let limit = SpendLimit::default();

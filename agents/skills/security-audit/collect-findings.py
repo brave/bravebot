@@ -13,14 +13,24 @@ of.
 """
 
 import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
+
+_shared = importlib.util.spec_from_file_location(
+    "work_dir", Path(__file__).resolve().parents[2] / "work_dir.py"
+)
+workdir = importlib.util.module_from_spec(_shared)
+_shared.loader.exec_module(workdir)
+
+read_manifest = workdir.read_manifest
 
 ERROR = "error"
 WARNING = "warning"
 
 CONFIRMED, DROPPED, UNCLEAR = "CONFIRMED", "DROPPED", "UNCLEAR"
+VERDICTS = (CONFIRMED, DROPPED, UNCLEAR)
 IMPACTS = ("high", "medium", "low")
 
 # A confirmed candidate's severity follows its impact, because impact is the thing a reader was asked
@@ -62,34 +72,98 @@ def merge(candidate, verdict):
     }
 
 
+def settle(entry, candidate, verdict, findings, dropped, unclear, alongside=()):
+    """File one candidate under what its verdict says.
+
+    `alongside` holds the other candidates a confirmed verdict stands for, so the finding names every
+    lane that reported the defect.
+    """
+    decided = (verdict.get("verdict") or "").upper()
+    if decided == CONFIRMED:
+        finding = merge(candidate, verdict)
+        lanes = [one.get("lane") for one in alongside if one.get("lane") != candidate.get("lane")]
+        if lanes:
+            finding["also_reported_by"] = list(dict.fromkeys(lanes))
+        # A site only the other lane named is still a site of the defect, and a fix that misses it is
+        # not a fix.
+        sites = list(finding["evidence"])
+        for one in alongside:
+            for site in [one.get("place"), *(one.get("evidence") or [])]:
+                if isinstance(site, str) and site and site not in sites:
+                    sites.append(site)
+        finding["evidence"] = sites
+        findings.append(finding)
+    elif decided == UNCLEAR:
+        unclear.append({**entry, "reason": verdict.get("reason")})
+    else:
+        dropped.append(
+            {
+                **entry,
+                "reason": verdict.get("reason"),
+                "existing_issue": verdict.get("existing_issue"),
+            }
+        )
+
+
 def load_verdicts(manifest):
-    """Apply each verdict, and report a candidate whose verifier left nothing."""
+    """Apply each verdict, and report a candidate whose verifier left nothing.
+
+    A verification may cover several candidates. The verdict is the first one's. Each of the others is
+    named in the verdict's `grouped` list: one it calls the same defect shares the verdict, and one it
+    calls a different defect takes the verdict the verifier gave it under `separate`. A candidate the
+    verdict does not account for is unverified, since nobody decided it.
+    """
     findings, dropped, unclear, missing = [], [], [], []
     for entry in manifest.get("verifications", []):
         path = Path(entry["results_file"])
         candidate = entry["candidate"]
+        others = entry.get("also") or []
         if not path.exists():
-            missing.append(entry)
+            missing.extend([entry, *[hold(entry, one) for one in others]])
             continue
         try:
             verdict = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as problem:
-            missing.append({**entry, "problem": str(problem)})
-            continue
-        decided = (verdict.get("verdict") or "").upper()
-        if decided == CONFIRMED:
-            findings.append(merge(candidate, verdict))
-        elif decided == UNCLEAR:
-            unclear.append({**entry, "reason": verdict.get("reason")})
-        else:
-            dropped.append(
-                {
-                    **entry,
-                    "reason": verdict.get("reason"),
-                    "existing_issue": verdict.get("existing_issue"),
-                }
+            missing.extend(
+                {**one, "problem": str(problem)}
+                for one in [entry, *[hold(entry, one) for one in others]]
             )
+            continue
+
+        # Keyed by the number as text, so a verifier that writes 2 and one that writes "2" are read alike.
+        said = {
+            str(one.get("number")): one
+            for one in verdict.get("grouped") or []
+            if isinstance(one, dict)
+        }
+        separate = verdict.get("separate") if isinstance(verdict.get("separate"), dict) else {}
+        same = [one for one in others if (said.get(str(one["number"])) or {}).get("same_defect") is True]
+        settle(entry, candidate, verdict, findings, dropped, unclear, [one["candidate"] for one in same])
+        for one in same:
+            # Dropped or unsettled, the candidates it stands for are reported beside the first, so a
+            # reader counting what a lane returned finds every one of them.
+            if (verdict.get("verdict") or "").upper() != CONFIRMED:
+                settle(hold(entry, one), one["candidate"], verdict, findings, dropped, unclear)
+        for one in others:
+            if one in same:
+                continue
+            own = separate.get(str(one["number"]))
+            decided = (own.get("verdict") or "").upper() if isinstance(own, dict) else ""
+            if (said.get(str(one["number"])) or {}).get("same_defect") is False and decided in VERDICTS:
+                settle(hold(entry, one), one["candidate"], own, findings, dropped, unclear)
+            else:
+                missing.append({**hold(entry, one), "problem": "its verifier did not decide it"})
     return findings, dropped, unclear, missing
+
+
+def hold(entry, one):
+    """A verification's entry as one of its grouped candidates would be reported."""
+    return {
+        **{key: value for key, value in entry.items() if key not in ("also", "candidate")},
+        "lane": one.get("lane"),
+        "summary": one.get("summary"),
+        "candidate": one["candidate"],
+    }
 
 
 def render(findings, mechanical, dropped, unclear, missing, manifest):
@@ -110,7 +184,8 @@ def render(findings, mechanical, dropped, unclear, missing, manifest):
         lines.append("")
         lines.append("confirmed")
         for item in sorted(findings, key=lambda f: rank.get(f["impact"], 3)):
-            lines.append(f"  {item['impact']:<6} [{item['lane']}] {item['summary']}")
+            lanes = ", ".join([item["lane"], *item.get("also_reported_by", [])])
+            lines.append(f"  {item['impact']:<6} [{lanes}] {item['summary']}")
             if item.get("place"):
                 lines.append(f"         at {item['place']}")
             if item.get("gain"):
@@ -139,24 +214,16 @@ def render(findings, mechanical, dropped, unclear, missing, manifest):
 
     high = sum(1 for f in findings if f["impact"] == "high")
     lines.append("")
+    candidates = sum(1 + len(one.get("also") or []) for one in manifest.get("verifications", []))
     lines.append(
         f"{len(manifest.get('lanes', []))} lanes, "
-        f"{len(manifest.get('verifications', []))} candidates, "
+        f"{candidates} candidates, "
         f"{len(findings)} confirmed ({high} high), {len(dropped)} dropped, "
         f"{len(mechanical)} mechanical"
     )
     if not findings and not mechanical:
         lines.append("nothing survived verification, and the mechanical pass is clean")
     return "\n".join(lines)
-
-
-def read_manifest(work_dir):
-    """The parsed `manifest.json` of a work directory, or None after saying there is none."""
-    path = Path(work_dir) / "manifest.json"
-    if not path.exists():
-        print(f"no manifest at {path}", file=sys.stderr)
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def main():
@@ -176,7 +243,18 @@ def main():
     failed = any(f["severity"] == ERROR for f in everything)
 
     if args.json:
-        print(json.dumps({"findings": everything, "dropped": dropped, "failed": failed}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "findings": everything,
+                    "dropped": dropped,
+                    "unclear": unclear,
+                    "unverified": missing,
+                    "failed": failed,
+                },
+                indent=2,
+            )
+        )
     else:
         print(render(findings, mechanical, dropped, unclear, missing, manifest))
     return 1 if failed else 0

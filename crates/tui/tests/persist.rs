@@ -61,7 +61,7 @@ fn with_temp_home<T>(name: &str, body: impl FnOnce() -> T) -> T {
     let _guard = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     proxy_listener();
 
-    let dir = std::env::temp_dir().join(format!("bravebot-home-{name}"));
+    let dir = std::env::temp_dir().join(format!("bravebot-home-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch home");
 
@@ -223,7 +223,7 @@ fn a_session_recalls_a_prompt_stored_by_an_earlier_session() {
 
         assert_eq!(session.input(), "a question from before");
         assert_eq!(session.history.position(), Some((1, 1)));
-        assert!(!session.history.can_narrow());
+        assert_eq!(session.history.next_scope(), None);
     });
 }
 
@@ -643,6 +643,50 @@ fn a_pick_the_managed_layer_refuses_is_set_aside_and_names_the_file() {
     });
 }
 
+/// CLI-31. A model and a level the command line named are in force over a recorded pick and both
+/// files, and record nothing: the next session opens on the pick it would have without that line.
+/// A session that went through `choose_model` or `choose_effort` would put the line's choice where
+/// the person's own picks go.
+#[test]
+fn a_model_and_a_level_the_command_line_named_are_recorded_nowhere() {
+    use bravebot_aichat::protocol::Effort;
+    with_temp_home("named-on-the-line", || {
+        store::save_model("picked");
+        store::save_effort(Some(Effort::Low));
+        let settings = settings(r#"{"model": "mine", "effort": "max"}"#, "{}");
+
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_model(&settings, &a_config(|_| None));
+        session.adopt_effort(&settings);
+        assert_eq!(session.model(), Some("picked"));
+        assert_eq!(session.effort(), Some(Effort::Low));
+
+        session.name_model("named".to_string());
+        session.name_effort(Effort::High);
+        assert_eq!(
+            session.model(),
+            Some("named"),
+            "a recorded pick outranked the line"
+        );
+        assert_eq!(
+            session.effort(),
+            Some(Effort::High),
+            "a recorded pick outranked the line"
+        );
+
+        assert_eq!(
+            store::load_model().as_deref(),
+            Some("picked"),
+            "the line rewrote the pick"
+        );
+        assert_eq!(
+            store::load_effort(),
+            Some(Effort::Low),
+            "the line rewrote the level"
+        );
+    });
+}
+
 /// The effort choice outlives the session that made it, the same way the model choice does.
 #[test]
 fn a_chosen_effort_is_read_back_next_session() {
@@ -800,5 +844,36 @@ fn a_launch_whose_stamp_cannot_be_written_does_not_ask() {
             connected_within(listener, std::time::Duration::from_secs(10)),
             "with the name free the same launch did not ask, so the silence above proves nothing"
         );
+    });
+}
+
+/// The width the border was dragged to outlives the session, and a file that is no width leaves
+/// the panel at 36 columns rather than at whatever it made of the text.
+#[test]
+fn the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36() {
+    use ratatui::layout::Rect;
+    with_temp_home("panel-width", || {
+        let wide = bravebot_tui::state::Laid {
+            columns: 120,
+            panes: vec![(bravebot_tui::select::Pane::Panel, Rect::new(84, 0, 36, 20))],
+            ..bravebot_tui::state::Laid::default()
+        };
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_panel();
+        assert_eq!(session.panel_columns(120), 36, "started with a width");
+        session.note_layout(wide);
+        assert!(session.begin_panel_drag(3, 84));
+        session.drag_panel_to(70);
+        session.end_panel_drag();
+
+        let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+        next.adopt_panel();
+        assert_eq!(next.panel_columns(120), 50, "the width was not read back");
+
+        let file = store::directory().expect("a home").join("panel-width");
+        std::fs::write(&file, "wide\n").expect("write the width");
+        let mut corrupt = bravebot_tui::state::Session::new("test").with_stored_history();
+        corrupt.adopt_panel();
+        assert_eq!(corrupt.panel_columns(120), 36, "a corrupt width was used");
     });
 }

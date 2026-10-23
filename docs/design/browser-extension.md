@@ -111,4 +111,6 @@ not read the untrusted list itself.
   with a clear error instead of hanging.
 - **Consent:** the extension's own UI gates every tool that reaches tabs, frames, history or
   bookmarks. A frame read names both its outer tab URL and its exact frame URL; one approval never
-  widens to every embedded origin. The MCP layer doesn't enforce this.
+  widens to every embedded origin. A list of blocked sites in the same options page is a second
+  control: no tool lists, searches, reads or opens a site on it, whatever is switched on
+  ([BROWSER-17](../specs/browser.md#BROWSER-17)). The MCP layer doesn't enforce this.

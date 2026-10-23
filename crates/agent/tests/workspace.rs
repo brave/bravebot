@@ -1,11 +1,23 @@
 //! Tests for the label-aware file tools, exercised against a real temporary directory.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 mod repository;
+
+#[allow(
+    dead_code,
+    reason = "test-support/aliases.rs is shared with turn.rs, and this file never asks Consumer::DenyRule"
+)]
+#[path = "../test-support/aliases.rs"]
+mod aliases;
 
 use bravebot_agent::SessionScratch;
 use bravebot_agent::workspace::{Match, Matches, Paging, Remedy, Workspace, WorkspaceError};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, Principle, RecordingSink};
+use bravebot_core::file_authority::FileAuthority;
 use bravebot_core::label::{Integrity, Label};
 use bravebot_core::policy::{Denial, Policy, ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
@@ -31,7 +43,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-workspace-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-workspace-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -261,6 +274,690 @@ fn an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelli
         );
     }
     assert!(policy.finish());
+}
+
+/// A path or a body of bytes that the caller wrote and no untrusted content shaped.
+fn trusted_text(text: &str) -> Labelled<String> {
+    Labelled::trusted(text.to_string())
+}
+
+/// A policy over a trusted workspace, reading the trust of a map made for the volume the
+/// workspace is on, with `distrusted` recorded as untrusted.
+fn alias_policy<'a>(
+    workspace: &Workspace,
+    sink: &'a mut RecordingSink,
+    distrusted: Option<&str>,
+) -> Policy<'a, RecordingSink> {
+    let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+    trust.trust(".");
+    if let Some(name) = distrusted {
+        trust.distrust(name);
+    }
+    Policy::begin(routing(), ReleasePlan::new(), all_file_capabilities(), sink)
+        .expect("policy")
+        .with_trust(trust)
+        .with_root(workspace.root())
+}
+
+/// The read of a file recorded untrusted under one name has to carry that record under every other
+/// name the volume opens it by (TRUST-2). A name the map keys differently reads the workspace's
+/// trust instead, so a fetched page is quarantined only when the planner asks for it as it was
+/// first written. A row the map does not join lists the issue that tracks it, and fails once the
+/// map joins it, so the TRUST-2 table is revised with the fix.
+#[test]
+fn each_alias_in_the_table_reads_a_distrusted_file_as_untrusted_unless_it_is_a_listed_gap() {
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let scratch = Scratch::new(&format!("alias-read-{index}"));
+        if !aliases::prepare(&scratch.path, row) {
+            continue;
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut sink = RecordingSink::new();
+        let mut policy = alias_policy(&workspace, &mut sink, Some(row.name));
+
+        let sibling = workspace
+            .read(&mut policy, &trusted_text(aliases::CONTROL))
+            .expect("the control file opens");
+        assert_eq!(
+            sibling.label().integrity,
+            Integrity::Trusted,
+            "{}: the workspace is not trusted, so an untrusted read shows nothing",
+            row.kind
+        );
+        let control = workspace
+            .read(&mut policy, &trusted_text(row.name))
+            .expect("the file opens under its own name");
+        assert_eq!(
+            control.label().integrity,
+            Integrity::Untrusted,
+            "{}: the record about {:?} did not reach a read of {:?}",
+            row.kind,
+            row.name,
+            row.name
+        );
+        let through = workspace
+            .read(&mut policy, &trusted_text(row.alias))
+            .unwrap_or_else(|error| panic!("{}: {:?} did not open: {error}", row.kind, row.alias));
+        aliases::expect(
+            row,
+            aliases::Consumer::TrustRead,
+            through.label().integrity == Integrity::Untrusted,
+        );
+    }
+}
+
+/// Two names the volume holds apart are two files, so a record about one decides nothing about the
+/// other, in either polarity (TRUST-2). The table above asks the opposite question, whether names of
+/// one file share a rule. A step that turns a name into a key can also join different files, which
+/// no row of that table would show: trimming whitespace from the ends of a name made `note.md ` and
+/// `note.md` one rule. Every pair of awkward names is made in a scratch directory and asked of the
+/// volume; a pair that is two files there has to be two rules, unless the names are one group, which
+/// a refusal joins on purpose.
+#[test]
+fn two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group() {
+    let names = aliases::held_names();
+    let mut asked = 0;
+    for (index, (first, first_group)) in names.iter().enumerate() {
+        for (second, second_group) in &names[index + 1..] {
+            let scratch = Scratch::new(&format!("two-rules-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let joined = first_group == second_group;
+            let root = scratch.path.to_str().expect("scratch path is text");
+
+            for (named, other) in [(first, second), (second, first)] {
+                let mut refused = TrustStore::new(root);
+                refused.trust(".");
+                refused.distrust(named);
+                assert_eq!(
+                    refused.integrity_of(other),
+                    if joined {
+                        Some(Integrity::Untrusted)
+                    } else {
+                        Some(Integrity::Trusted)
+                    },
+                    "a refusal about {named:?} decided the other file {other:?}"
+                );
+
+                let mut vouched = TrustStore::new(root);
+                vouched.trust(named);
+                assert_eq!(
+                    vouched.integrity_of(other),
+                    None,
+                    "a trust about {named:?} reached the other file {other:?}"
+                );
+            }
+        }
+    }
+    assert!(
+        asked > aliases::least_pairs(),
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
+/// The key of every awkward name, the label a read of it gets and whether a second writer to it is
+/// refused have to tell two files the volume holds apart from one file with two names (TRUST-2).
+/// The test above asks the trust map about the names alone. A step that joins two files can sit
+/// in the key the workspace builds for a name, or in the key a writer is reserved under, which that
+/// test does not call, so the same pairs are asked of both. A refusal and a writer in flight reach
+/// the other name of a group on purpose, and nothing else.
+#[test]
+fn two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group()
+{
+    let names = aliases::held_names();
+    let mut asked = 0;
+    for (index, (first, first_group)) in names.iter().enumerate() {
+        for (second, second_group) in &names[index + 1..] {
+            let scratch = Scratch::new(&format!("two-keys-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let joined = first_group == second_group;
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let through = |name: &str| format!("./{name}");
+
+            let authority =
+                FileAuthority::new(bravebot_agent::workspace::trust_store(workspace.root()));
+            assert_ne!(
+                authority.key(first),
+                authority.key(second),
+                "{first:?} and {second:?} are two files and have one key"
+            );
+
+            for (named, other) in [(first, second), (second, first)] {
+                let mut sink = RecordingSink::new();
+                let mut policy = alias_policy(&workspace, &mut sink, Some(&through(named)));
+                let read = workspace
+                    .read(&mut policy, &trusted_text(&through(other)))
+                    .unwrap_or_else(|error| panic!("{other:?} did not open: {error}"));
+                assert_eq!(
+                    read.label().integrity,
+                    if joined {
+                        Integrity::Untrusted
+                    } else {
+                        Integrity::Trusted
+                    },
+                    "a distrust of {named:?} did not leave a read of {other:?} as the table says"
+                );
+
+                let authority =
+                    FileAuthority::new(bravebot_agent::workspace::trust_store(workspace.root()));
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    all_file_capabilities(),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_file_authority(authority.clone())
+                .with_root(workspace.root());
+                let held = authority
+                    .capture()
+                    .begin(named)
+                    .unwrap_or_else(|| panic!("the first writer to {named:?} was refused"));
+                let refused = matches!(
+                    workspace.write(
+                        &mut policy,
+                        &trusted_text(&through(other)),
+                        &trusted_text("a second writer"),
+                    ),
+                    Err(WorkspaceError::Contended { .. })
+                );
+                assert_eq!(
+                    refused, joined,
+                    "a writer to {named:?} did not leave a write to {other:?} as the table says"
+                );
+                held.complete(Integrity::Trusted);
+            }
+        }
+    }
+    assert!(
+        asked > aliases::least_pairs(),
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
+/// A listing reports two names the volume holds apart as two entries, each as the volume spells
+/// it, and trusts each by the rule about that name (TRUST-2). A refusal about one name reaches a
+/// listing of the other only where the two are one group. The walk turns a path into the text the
+/// map is asked about, so a step there that trims or re-spells a name would show as one entry
+/// standing for two files, or as a refusal landing on the wrong one.
+#[test]
+fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule() {
+    let names = aliases::held_names();
+    let mut asked = 0;
+    for (index, (first, first_group)) in names.iter().enumerate() {
+        for (second, second_group) in &names[index + 1..] {
+            let scratch = Scratch::new(&format!("listing-pairs-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let joined = first_group == second_group;
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let integrity_of_listing = |distrusted: Option<&str>| {
+                let mut sink = RecordingSink::new();
+                let mut policy = alias_policy(&workspace, &mut sink, distrusted);
+                workspace
+                    .list(&mut policy, &trusted_text("."), None, None)
+                    .expect("list")
+                    .label()
+                    .integrity
+            };
+            let files = || list_under(&scratch.path, ".", "**");
+
+            assert_eq!(
+                integrity_of_listing(None),
+                Integrity::Trusted,
+                "a listing of {first:?} and {second:?} is not trusted under a trusted workspace"
+            );
+            let mut expected = vec![first.to_string(), second.to_string()];
+            expected.sort();
+            assert_eq!(
+                files(),
+                expected,
+                "{first:?} and {second:?} are two files and not two entries"
+            );
+
+            for (named, other) in [(first, second), (second, first)] {
+                assert_eq!(
+                    integrity_of_listing(Some(named)),
+                    Integrity::Untrusted,
+                    "a distrust of {named:?} did not reach a listing that holds it"
+                );
+                let path = scratch.path.join(named);
+                std::fs::remove_file(&path).expect("remove the named file");
+                assert_eq!(
+                    files(),
+                    [other.to_string()],
+                    "the listing is of {other:?} alone"
+                );
+                assert_eq!(
+                    integrity_of_listing(Some(named)),
+                    if joined {
+                        Integrity::Untrusted
+                    } else {
+                        Integrity::Trusted
+                    },
+                    "a distrust of {named:?} did not leave a listing of {other:?} as the table says"
+                );
+                std::fs::write(&path, aliases::CONTENT).expect("restore the named file");
+            }
+        }
+    }
+    assert!(
+        asked > aliases::least_pairs(),
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
+/// Names a rule's text cannot spell, each with the issue that tracks it. A path specifier with
+/// whitespace at an end is reported and not read, since the whitespace is as likely padding as part
+/// of the name, so a name with whitespace at an end and a name of whitespace alone have no rule. A
+/// `*` is always a wildcard, so no rule is about the file called `*.md` and nothing else. The test
+/// below fails for a name listed here that a rule can spell, so the list is revised with the fix.
+const NOT_SPELLABLE_IN_A_RULE: &[(&str, &str)] = &[
+    ("a.md ", "#2864"),
+    ("a.md\t", "#2864"),
+    ("a.md\n", "#2864"),
+    ("a.md\u{a0}", "#2864"),
+    ("a.md\u{3000}", "#2864"),
+    ("*.md", "#2864"),
+    (" ", "#2864"),
+    ("\t", "#2864"),
+    ("\u{a0}", "#2864"),
+    ("\u{3000}", "#2864"),
+];
+
+/// A rule about one name is a rule about no other file the volume holds apart from it, whatever
+/// the polarity (TRUST-2, PERM-7). Deny and ask rules are about every canonically equivalent
+/// spelling of a name, which is one group of the awkward names, and an allow rule is about the
+/// spelling it was written in. The key a rule is matched under is built apart from the trust map's,
+/// so a step in it that trims, folds or decodes would join two files there without showing in the
+/// pair tests above.
+#[test]
+fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
+    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject, Unreadable};
+
+    let names = aliases::held_names();
+    let mut asked = 0;
+    for (index, (first, first_group)) in names.iter().enumerate() {
+        for (second, second_group) in &names[index + 1..] {
+            let scratch = Scratch::new(&format!("rule-pairs-{index}-{asked}"));
+            if !aliases::two_files(&scratch.path, first, second) {
+                continue;
+            }
+            asked += 1;
+            let folds_case = bravebot_agent::workspace::trust_store(&scratch.path).folds_case();
+
+            for (named, other) in [(first, second), (second, first)] {
+                let spellable = !NOT_SPELLABLE_IN_A_RULE
+                    .iter()
+                    .any(|(listed, _)| listed == named);
+                for ruling in [Ruling::Deny, Ruling::Ask, Ruling::Allow] {
+                    for (subject, verb) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
+                        let text = vec![format!("{verb}(./{named})")];
+                        let none: Vec<String> = Vec::new();
+                        let (deny, ask, allow) = match ruling {
+                            Ruling::Deny => (&text, &none, &none),
+                            Ruling::Ask => (&none, &text, &none),
+                            Ruling::Allow => (&none, &none, &text),
+                        };
+                        let (permissions, rejected) = Permissions::parse(
+                            deny,
+                            ask,
+                            allow,
+                            &Anchors {
+                                folds_case,
+                                ..Anchors::none()
+                            },
+                        );
+                        let decides = |path: &str| {
+                            permissions.for_path(subject, path) == Decision::Ruled(ruling)
+                        };
+                        if !spellable {
+                            let decides_a_file = aliases::AWKWARD_NAMES
+                                .iter()
+                                .any(|(another, _)| decides(another));
+                            if named.trim() != *named {
+                                // Told, and in force for no file, so it is never read as the rule
+                                // about another one.
+                                assert!(
+                                    rejected.len() == 1
+                                        && rejected[0].reason == Unreadable::WhitespaceAtAnEnd
+                                        && !decides_a_file,
+                                    "a rule for {named:?} must be reported for its whitespace and \
+                                     decide no file, and a name a rule can spell is removed from \
+                                     NOT_SPELLABLE_IN_A_RULE"
+                                );
+                                continue;
+                            }
+                            let about_that_file_alone = decides(named)
+                                && names
+                                    .iter()
+                                    .all(|(another, _)| another == named || !decides(another));
+                            assert!(
+                                rejected.is_empty() && !about_that_file_alone,
+                                "a rule for {named:?} is now rejected or is about that file alone: \
+                                 remove it from NOT_SPELLABLE_IN_A_RULE"
+                            );
+                            continue;
+                        }
+                        assert!(rejected.is_empty(), "{text:?} did not parse");
+                        assert!(decides(named), "{text:?} did not decide {named:?}");
+                        let joined = first_group == second_group && ruling != Ruling::Allow;
+                        assert_eq!(
+                            decides(other),
+                            joined,
+                            "{text:?} ({ruling:?}) decided the other file {other:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        asked > aliases::least_pairs(),
+        "only {asked} pairs were two files: the alphabet is not being used"
+    );
+}
+
+/// Fetched bytes written through one name of a file are what every name of it reads back, so the
+/// trust the earlier trusted write recorded cannot stay on the other name (TRUST-4). A row the map
+/// does not join lists the issue that tracks it.
+#[test]
+fn each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap() {
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let scratch = Scratch::new(&format!("alias-write-{index}"));
+        if !aliases::prepare(&scratch.path, row) {
+            continue;
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut sink = RecordingSink::new();
+        let mut policy = alias_policy(&workspace, &mut sink, None);
+
+        workspace
+            .write(&mut policy, &trusted_text(row.name), &trusted_text("ours"))
+            .expect("trusted bytes are written");
+        workspace
+            .write(
+                &mut policy,
+                &trusted_text(row.alias),
+                &Labelled::new("a fetched page".to_string(), Label::untrusted_public()),
+            )
+            .unwrap_or_else(|error| panic!("{}: {:?} did not write: {error}", row.kind, row.alias));
+
+        let mut read = |spelling: &str| {
+            workspace
+                .read(&mut policy, &trusted_text(spelling))
+                .expect("the file is read")
+                .label()
+                .integrity
+        };
+        let (under_the_alias, under_the_name) = (read(row.alias), read(row.name));
+        assert_eq!(
+            read(aliases::CONTROL),
+            Integrity::Trusted,
+            "{}: a write to one file distrusted another, so a name reading untrusted shows nothing",
+            row.kind
+        );
+        assert_eq!(
+            under_the_alias,
+            Integrity::Untrusted,
+            "{}: the write was not recorded under the name it was made through",
+            row.kind
+        );
+        aliases::expect(
+            row,
+            aliases::Consumer::TrustWrite,
+            under_the_name == Integrity::Untrusted,
+        );
+    }
+}
+
+/// A second writer to a file is refused while the first is open, whichever name of the file it
+/// uses (TRUST-4). Reserved by a name the map keys differently, two writes to one file overlap and
+/// the later publication decides the label of bytes the earlier one wrote. The second write goes
+/// through `Workspace::write`, which keys the reservation as a turn does, with another file written
+/// in the same state to show that only this file is held.
+#[test]
+fn each_alias_in_the_table_is_refused_as_a_second_writer_unless_it_is_a_listed_gap() {
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let scratch = Scratch::new(&format!("alias-writer-{index}"));
+        if !aliases::prepare(&scratch.path, row) {
+            continue;
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_file_authority(authority.clone())
+        .with_root(workspace.root());
+
+        let first = authority
+            .capture()
+            .begin(row.name)
+            .unwrap_or_else(|| panic!("{}: the first writer was refused", row.kind));
+        workspace
+            .write(
+                &mut policy,
+                &trusted_text(aliases::CONTROL),
+                &trusted_text("another file"),
+            )
+            .unwrap_or_else(|error| {
+                panic!("{}: a file nobody holds was refused: {error}", row.kind)
+            });
+        let second = workspace.write(
+            &mut policy,
+            &trusted_text(row.alias),
+            &trusted_text("a second writer"),
+        );
+        let refused = match second {
+            Err(WorkspaceError::Contended { .. }) => true,
+            Ok(_) => false,
+            Err(error) => panic!(
+                "{}: {:?} was refused for another reason: {error}",
+                row.kind, row.alias
+            ),
+        };
+        aliases::expect(row, aliases::Consumer::WriterReservation, refused);
+        first.complete(Integrity::Trusted);
+    }
+}
+
+/// The lookup of a program bravebot starts itself leaves out a `PATH` entry that is a directory a
+/// stage may write under every name the volume opens it by (SANDBOX-30). The rows that spell a
+/// directory another way are asked: the directory spelled as the name is recorded, and the entry is
+/// spelled as the alias. The installed copy of the program beside it is the one found, so a lookup
+/// that leaves out every entry fails the row rather than passing it. A row the lookup does not
+/// leave out lists the issue that tracks it. The scratch directory is below `target`, since the
+/// system temporary directory is left out whatever is recorded and would pass every row.
+#[cfg(unix)]
+#[test]
+fn each_alias_in_the_table_that_spells_a_directory_is_left_out_of_a_program_lookup_unless_it_is_a_listed_gap()
+ {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// Removes the directory when a row fails as well as when it passes.
+    struct Removed(PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    for (index, row) in aliases::ALIASES.iter().enumerate() {
+        let directory = |spelling: &str| {
+            std::path::Path::new(spelling)
+                .parent()
+                .expect("a name is in a directory")
+                .to_path_buf()
+        };
+        let (recorded, spelled) = (directory(row.name), directory(row.alias));
+        if recorded == spelled {
+            continue;
+        }
+        let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("bravebot-alias-program-{index}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+        let _removed = Removed(root.clone());
+        if aliases::prepare(&root, row) {
+            let stored = match row.made {
+                aliases::Made::StoredAsTheAlias => row.alias,
+                _ => row.name,
+            };
+            let program = std::path::Path::new(stored)
+                .file_name()
+                .expect("a name is a file");
+            let executable = std::fs::Permissions::from_mode(0o755);
+            std::fs::set_permissions(root.join(stored), executable.clone()).expect("mode");
+            let installed = root.join("installed");
+            std::fs::create_dir_all(&installed).expect("directory");
+            std::fs::write(installed.join(program), "#!/bin/sh\n").expect("installed copy");
+            std::fs::set_permissions(installed.join(program), executable).expect("mode");
+            let entry = root.join(&spelled);
+            let path = std::env::join_paths([&entry, &installed]).expect("a PATH");
+
+            let found = bravebot_sandbox::programs::find_in(
+                program,
+                &path,
+                std::slice::from_ref(&root.join(&recorded)),
+            );
+
+            let left_out = match found {
+                Some(found) if found == installed.join(program) => true,
+                Some(found) if found == entry.join(program) => false,
+                other => panic!(
+                    "{}: the lookup found {other:?}, which is neither the file in the entry nor \
+                     the installed copy",
+                    row.kind
+                ),
+            };
+            aliases::expect(row, aliases::Consumer::ProgramLookup, left_out);
+        }
+    }
+}
+
+/// One file in two Unicode forms of its name: `cafe` followed by a combining acute accent, and
+/// `caf` followed by the precomposed letter. APFS stores a name as it was created and opens it
+/// under any canonically equivalent form, and so does a Linux directory with `casefold` set.
+const DECOMPOSED_NAME: &str = "cafe\u{301}.md";
+const PRECOMPOSED_NAME: &str = "caf\u{e9}.md";
+
+/// On a volume that opens a file under any canonically equivalent form of its name, the distrust
+/// rule written about `cafe\u{301}.md` is about the file read as `caf\u{e9}.md`. Whichever form the
+/// planner types, the fetched page the rule was written for has to come back untrusted, or naming
+/// the file in the other form launders it into trusted content. A volume that holds the two forms
+/// apart has two files, and the rule reaches the second one as well (TRUST-2), so the test writes
+/// both names and asserts the same thing on either kind of volume.
+#[test]
+fn a_canonically_equivalent_spelling_of_a_distrusted_file_is_read_as_untrusted() {
+    let scratch = Scratch::new("equivalent-spelled-past-a-rule");
+    std::fs::write(scratch.path.join(DECOMPOSED_NAME), "a fetched page").unwrap();
+    std::fs::write(scratch.path.join(PRECOMPOSED_NAME), "a fetched page").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for (refused, read_as) in [
+        (DECOMPOSED_NAME, PRECOMPOSED_NAME),
+        (PRECOMPOSED_NAME, DECOMPOSED_NAME),
+    ] {
+        // The state a turn leaves behind after writing a fetched page into a vouched-for tree: the
+        // workspace is trusted, and the file that page landed in is not.
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+        trust.trust(".");
+        trust.distrust(refused);
+
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust);
+
+        let contents = workspace
+            .read(&mut policy, &Labelled::trusted(read_as.to_string()))
+            .expect("the same file opens under either form");
+        assert_eq!(
+            contents.label().integrity,
+            Integrity::Untrusted,
+            "a rule about {refused:?} did not reach the file read as {read_as:?}"
+        );
+        assert!(policy.finish());
+    }
+}
+
+/// The same file through its write: fetched bytes written under one form of the name are what both
+/// forms read, whichever form an earlier trusted write used, so the second spelling must not keep
+/// the trust the first write recorded. A volume that holds the forms apart has two files, and the
+/// trusted one is still read as untrusted because the weakest rule among equivalent spellings
+/// decides each (TRUST-2), so the assertion is the same on either kind of volume.
+#[test]
+fn an_untrusted_write_through_a_canonically_equivalent_spelling_is_read_back_untrusted_under_either()
+ {
+    for (trusted_form, untrusted_form) in [
+        (DECOMPOSED_NAME, PRECOMPOSED_NAME),
+        (PRECOMPOSED_NAME, DECOMPOSED_NAME),
+    ] {
+        let scratch = Scratch::new("equivalent-spelled-rewrite");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut trust = bravebot_agent::workspace::trust_store(workspace.root());
+        trust.trust(".");
+
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy")
+        .with_trust(trust)
+        .with_root(workspace.root());
+
+        workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted(trusted_form.to_string()),
+                &Labelled::trusted("ours".to_string()),
+            )
+            .expect("trusted bytes are written");
+        workspace
+            .write(
+                &mut policy,
+                &Labelled::trusted(untrusted_form.to_string()),
+                &Labelled::new("a fetched page".to_string(), Label::untrusted_public()),
+            )
+            .expect("the fetched page is written");
+
+        for spelling in [trusted_form, untrusted_form] {
+            let contents = workspace
+                .read(&mut policy, &Labelled::trusted(spelling.to_string()))
+                .expect("the file is read");
+            assert_eq!(
+                contents.label().integrity,
+                Integrity::Untrusted,
+                "{spelling:?} read the fetched page as trusted content after it was written as \
+                 {untrusted_form:?} over a trusted write as {trusted_form:?}"
+            );
+        }
+        assert!(policy.finish());
+    }
 }
 
 /// The other half of that rule, at the spelling the reduction exists for. `/add-dir` will accept a
@@ -622,6 +1319,89 @@ fn an_untrusted_path_cannot_be_written() {
 
     assert!(error.to_string().contains("injection blocked"));
     assert!(!scratch.path.join("evil.txt").exists());
+}
+
+/// WRITE-6. A whole-file write of the planner's text carries the planner's format: LF, and no
+/// byte order mark. Over a file that uses CRLF and starts with one, that is a change to every
+/// line of the file, so the person approving the write sees the whole file as modified and the
+/// bytes that land differ from the ones the editor and the rest of the tooling expect.
+///
+/// The format is read from the pre-image, so it is read only where the trust map vouches for the
+/// file. An unvouched pre-image converts nothing, and converts nothing quietly: the label is
+/// asked before the gate, so an ordinary write over a file nobody vouched for leaves the turn
+/// clean rather than recording a blocked gate.
+#[test]
+fn a_replaced_files_format_is_detected_and_applied() {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let reformatted = |policy: &mut Policy<'_, RecordingSink>, existing: Labelled<String>| {
+        let body = Labelled::trusted("one\ntwo\n".to_string());
+        let shaped = bravebot_agent::workspace::in_the_replaced_files_format(
+            policy,
+            "write_file",
+            &existing,
+            body,
+        );
+        let proof = policy.authorise_content_release("test", "contents");
+        shaped.declassify(&proof)
+    };
+
+    // A file the map vouches for, using CRLF and carrying a mark: the body takes both.
+    assert_eq!(
+        reformatted(
+            &mut policy,
+            Labelled::trusted("\u{feff}old\r\nlines\r\n".to_string())
+        ),
+        "\u{feff}one\r\ntwo\r\n",
+    );
+    // CRLF alone, so a mark is not invented.
+    assert_eq!(
+        reformatted(
+            &mut policy,
+            Labelled::trusted("old\r\nlines\r\n".to_string())
+        ),
+        "one\r\ntwo\r\n",
+    );
+    // A mark alone, so the endings are left as the planner wrote them.
+    assert_eq!(
+        reformatted(
+            &mut policy,
+            Labelled::trusted("\u{feff}old\nlines\n".to_string())
+        ),
+        "\u{feff}one\ntwo\n",
+    );
+    // An LF file with no mark: nothing to apply, and the body is unchanged.
+    assert_eq!(
+        reformatted(&mut policy, Labelled::trusted("old\nlines\n".to_string())),
+        "one\ntwo\n",
+    );
+    // A file holding both endings is replaced whole, so it comes out consistently CRLF rather
+    // than half converted. `edit_file` leaves a mixed file alone, because it replaces a passage
+    // and has the file's other lines to preserve.
+    assert_eq!(
+        reformatted(&mut policy, Labelled::trusted("old\r\nlines\n".to_string())),
+        "one\r\ntwo\r\n",
+    );
+
+    // A file nobody vouched for: no conversion, and no denial recorded for it.
+    assert_eq!(
+        reformatted(
+            &mut policy,
+            Labelled::new("old\r\nlines\r\n".to_string(), Label::untrusted_private())
+        ),
+        "one\ntwo\n",
+    );
+    assert!(
+        policy.finish(),
+        "an ordinary write over an unvouched file recorded a blocked gate"
+    );
 }
 
 /// Private content must not be released by a write until it is declassified.
@@ -2354,6 +3134,255 @@ fn a_binary_file_is_reported_as_binary() {
     );
 }
 
+/// `text` as a Windows tool writes it: UTF-16 after a byte order mark, with CRLF line ends.
+fn utf16_file(text: &str, little: bool) -> Vec<u8> {
+    let mark: [u8; 2] = if little { [0xFF, 0xFE] } else { [0xFE, 0xFF] };
+    let units = text.encode_utf16().flat_map(|unit| {
+        if little {
+            unit.to_le_bytes()
+        } else {
+            unit.to_be_bytes()
+        }
+    });
+    mark.into_iter().chain(units).collect()
+}
+
+/// The page `read_file` shows the planner, which is decoded where the file is in another
+/// encoding.
+fn shown_page(
+    workspace: &Workspace,
+    policy: &mut Policy<'_, RecordingSink>,
+    name: &str,
+) -> Result<Labelled<bravebot_agent::workspace::Page>, WorkspaceError> {
+    match workspace.read_page_unless_unchanged(policy, &trusted_text(name), 1, 10, None)? {
+        bravebot_agent::workspace::Reading::Page { page, .. } => Ok(page),
+        other => panic!("a read with no earlier token answered {other:?}"),
+    }
+}
+
+/// A file read for the planner may be in another encoding, and the planner is shown its text. A
+/// Windows tool's UTF-16 source is the common case: every character holds a null byte, which the
+/// binary sniff refuses, so the mark is what says it is text. Either byte order reads, the line
+/// ends are the file's own, and the page says how it was decoded.
+#[test]
+fn a_utf16_file_with_a_mark_pages_as_its_text_in_either_byte_order() {
+    let scratch = Scratch::new("page-utf16");
+    let text = "one\r\ntwo é 😀\r\n";
+    std::fs::write(scratch.path.join("le.txt"), utf16_file(text, true)).unwrap();
+    std::fs::write(scratch.path.join("be.txt"), utf16_file(text, false)).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = alias_policy(&workspace, &mut sink, None);
+
+    for (name, decoding) in [
+        ("le.txt", bravebot_filetype::Decoding::Utf16Le),
+        ("be.txt", bravebot_filetype::Decoding::Utf16Be),
+    ] {
+        let page = shown_page(&workspace, &mut policy, name)
+            .unwrap_or_else(|e| panic!("{name} should page as text: {e}"));
+        let page = policy
+            .read_trusted_content("test", &page)
+            .expect("the page is trusted");
+        assert_eq!(page.lines, ["one", "two é 😀"], "{name}");
+        assert_eq!(page.total_lines, 2, "{name}");
+        assert_eq!(page.decoding, decoding, "{name}");
+    }
+}
+
+/// Latin-1 text with one accented character is not UTF-8 and is not binary. The page shows the
+/// byte that is not UTF-8 as U+FFFD, and says that it did.
+#[test]
+fn a_file_with_a_stray_invalid_byte_pages_with_a_replacement_character() {
+    let scratch = Scratch::new("page-latin1");
+    std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = alias_policy(&workspace, &mut sink, None);
+
+    let page = shown_page(&workspace, &mut policy, "latin1.txt")
+        .expect("a stray invalid byte pages as text");
+    let page = policy
+        .read_trusted_content("test", &page)
+        .expect("the page is trusted");
+    assert_eq!(page.lines, ["caf\u{FFFD} au lait"]);
+    assert_eq!(page.decoding, bravebot_filetype::Decoding::Utf8Replaced);
+}
+
+/// A file that is UTF-8 as it stands says nothing about a decoding, so a page of an ordinary file
+/// carries no note.
+#[test]
+fn a_utf8_file_pages_without_a_decoding() {
+    let scratch = Scratch::new("page-utf8");
+    std::fs::write(scratch.path.join("a.txt"), "héllo\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let page = workspace.page("a.txt", 1, 10).expect("page");
+    assert_eq!(page.lines, ["héllo"]);
+    assert_eq!(page.decoding, bravebot_filetype::Decoding::Utf8);
+}
+
+/// The mark is what makes the nulls text. The same nulls without it are a binary file, in a page
+/// the planner is shown as well as in one a slot is filled from.
+#[test]
+fn nulls_without_a_byte_order_mark_are_still_binary() {
+    let scratch = Scratch::new("page-nulls-no-mark");
+    std::fs::write(scratch.path.join("data.bin"), b"o\0n\0e\0\n\0").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    assert!(matches!(
+        shown_page(&workspace, &mut policy, "data.bin"),
+        Err(WorkspaceError::Binary { .. })
+    ));
+    assert!(matches!(
+        workspace.page("data.bin", 1, 10),
+        Err(WorkspaceError::Binary { .. })
+    ));
+}
+
+/// The text a whole read returns is written back by an edit, so a decoding of another encoding
+/// is not offered to it. The refusal says the file is text in another encoding, since "binary"
+/// would contradict the page the planner was just shown, and never names a decoding error.
+#[test]
+fn a_whole_read_of_a_file_that_is_not_utf8_is_refused_as_another_encoding() {
+    let scratch = Scratch::new("read-not-utf8");
+    std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    std::fs::write(
+        scratch.path.join("wide.txt"),
+        utf16_file("one\ntwo\n", true),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    for name in ["latin1.txt", "wide.txt"] {
+        let error = workspace
+            .read(&mut policy, &trusted_text(name))
+            .expect_err("text in another encoding is not what an edit writes back");
+        assert!(
+            matches!(error, WorkspaceError::NotUtf8 { .. }),
+            "{name}: expected the other-encoding refusal, got {error:?}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("encoding other than UTF-8"),
+            "{name}: unhelpful message: {message}"
+        );
+        assert!(
+            !message.contains("binary") && !message.contains("did not contain valid"),
+            "{name}: the file was called binary or a decoding error leaked: {message}"
+        );
+    }
+}
+
+/// What a deferred read fills a slot with is written back to a file or handed to a program as the
+/// file, so a slot is filled from the file's own UTF-8 or not at all, and so is the page a plan
+/// reads into one. A decoding in its place would write U+FFFD over the byte it replaced, or a
+/// different encoding over the file.
+#[test]
+fn a_slot_is_never_filled_from_a_decoding_of_another_encoding() {
+    let scratch = Scratch::new("slot-not-utf8");
+    std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    std::fs::write(
+        scratch.path.join("wide.txt"),
+        utf16_file("one\ntwo\n", false),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = alias_policy(&workspace, &mut sink, None);
+    for name in ["latin1.txt", "wide.txt"] {
+        let error = workspace
+            .page(name, 1, usize::MAX)
+            .expect_err("a slot must not hold a decoding");
+        assert!(
+            matches!(error, WorkspaceError::NotUtf8 { .. }),
+            "{name}: expected the other-encoding refusal, got {error:?}"
+        );
+        // The page a plan reads goes into a slot too, so it is held to the same text.
+        let error = workspace
+            .read_page(&mut policy, &trusted_text(name), 1, 10)
+            .expect_err("a plan's page must not hold a decoding");
+        assert!(
+            matches!(error, WorkspaceError::NotUtf8 { .. }),
+            "{name}: expected the other-encoding refusal from a plan's page, got {error:?}"
+        );
+    }
+}
+
+/// A deferred read reserves the slot above, so it answers the question the slot's fill would: a
+/// UTF-16 file is reported as binary at the moment the planner asks, not as text and then refused
+/// when something needs its bytes.
+#[test]
+fn a_deferred_read_of_a_utf16_file_is_reported_as_binary() {
+    let scratch = Scratch::new("survey-utf16");
+    std::fs::write(
+        scratch.path.join("wide.txt"),
+        utf16_file("one\ntwo\n", true),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    assert!(matches!(
+        workspace.survey("wide.txt"),
+        Err(WorkspaceError::Binary { .. })
+    ));
+}
+
+/// The label comes from the path and from nothing a file holds. A decoded UTF-16 page is trusted
+/// where the map vouches for the path and untrusted where it does not, as a UTF-8 file would be.
+#[test]
+fn a_decoded_page_is_labelled_by_its_path_alone() {
+    let scratch = Scratch::new("page-decoded-label");
+    std::fs::create_dir_all(scratch.path.join("fetched")).unwrap();
+    let bytes = utf16_file("one\ntwo\n", true);
+    std::fs::write(scratch.path.join("wide.txt"), &bytes).unwrap();
+    std::fs::write(scratch.path.join("fetched/wide.txt"), &bytes).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("fetched");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_trust(trust);
+
+    for (name, integrity) in [
+        ("wide.txt", Integrity::Trusted),
+        ("fetched/wide.txt", Integrity::Untrusted),
+    ] {
+        let page = shown_page(&workspace, &mut policy, name)
+            .unwrap_or_else(|e| panic!("{name} should page: {e}"));
+        assert_eq!(page.label().integrity, integrity, "{name}");
+    }
+}
+
 /// Every failure a tool reports to the planner is worded about the name the caller passes, and
 /// none of them keeps the path the call was made on.
 ///
@@ -2394,6 +3423,10 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
+            remedy: Remedy::Inside,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
             remedy: Remedy::Open,
         },
         WorkspaceError::Escapes {
@@ -2407,6 +3440,14 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         WorkspaceError::Escapes {
             path: carried.to_string(),
             remedy: Remedy::DropOrOpenEndsCheckouts,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::OpenItself,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
+            remedy: Remedy::OpenItselfEndsCheckouts,
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
@@ -2432,6 +3473,9 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
             path: carried.to_string(),
         },
         WorkspaceError::Binary {
+            path: carried.to_string(),
+        },
+        WorkspaceError::NotUtf8 {
             path: carried.to_string(),
         },
         WorkspaceError::TooLarge {
@@ -3038,7 +4082,8 @@ fn a_refusal_outside_the_workspace_says_what_the_person_can_do() {
 }
 
 /// A directory inside the root cannot be opened, and a `..` that comes back into the root reaches
-/// no file that the path without it does not, so a refusal of either offers nothing.
+/// no file that the path without it does not, so a refusal of either names no directory to open,
+/// no drop and no absolute spelling.
 #[test]
 fn a_refusal_that_opening_a_directory_would_not_cure_offers_nothing() {
     let scratch = Scratch::new("refusal-no-remedy");
@@ -3064,6 +4109,175 @@ fn a_refusal_that_opening_a_directory_would_not_cure_offers_nothing() {
         assert!(
             !told.contains("add-dir") && !told.contains("drop") && !told.contains("absolute"),
             "{typed}: a remedy that does not reach the file was offered: {told}"
+        );
+    }
+}
+
+/// A task that names the working directory in full leads the planner to spell its files that way.
+/// The path is inside the workspace and the relative spelling reaches it, so the refusal says that:
+/// a sentence that the path resolves outside the workspace is untrue, and a planner given no
+/// spelling repeats the call or goes to another tool for the same file.
+///
+/// Every spelling that lands inside the root gets the sentence, whichever call made it, so the
+/// rows are the root itself, a directory, a file, a name nothing is at yet, a `.` segment, a
+/// doubled separator and a link to the root. The relative spelling of each reaches the file.
+#[test]
+fn an_absolute_path_inside_the_workspace_is_refused_by_saying_it_is_inside() {
+    let scratch = Scratch::new("refusal-inside");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::fs::write(scratch.path.join("main.rs"), "fn main() {}").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let root = workspace.root().display().to_string();
+    refuse_each_as_inside(
+        &workspace,
+        &mut policy,
+        &[
+            format!("{root}/main.rs"),
+            format!("{root}/./main.rs"),
+            format!("{root}//main.rs"),
+        ],
+        &[root.clone(), format!("{root}/sub")],
+    );
+    #[cfg(unix)]
+    {
+        let holder = Scratch::new("refusal-inside-holder");
+        let link = holder.path.join("to-root");
+        std::os::unix::fs::symlink(workspace.root(), &link).unwrap();
+        refuse_each_as_inside(
+            &workspace,
+            &mut policy,
+            &[format!("{}/main.rs", link.display())],
+            &[format!("{}/sub", link.display())],
+        );
+    }
+
+    let fresh = format!("{root}/sub/fresh.txt");
+    let error = workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(fresh.clone()),
+            &Labelled::trusted("text".to_string()),
+        )
+        .expect_err("a write by the full name is refused");
+    assert_told_it_is_inside(&error, &fresh);
+    assert!(
+        !scratch.path.join("sub/fresh.txt").exists(),
+        "the refused write landed"
+    );
+
+    for relative in ["main.rs", "./main.rs"] {
+        workspace
+            .read(&mut policy, &Labelled::trusted(relative.to_string()))
+            .unwrap_or_else(|error| panic!("{relative} was refused: {error:?}"));
+    }
+    for relative in [".", "sub"] {
+        workspace
+            .list(
+                &mut policy,
+                &Labelled::trusted(relative.to_string()),
+                None,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{relative} was refused: {error:?}"));
+    }
+}
+
+fn refuse_each_as_inside<S: bravebot_core::event::Sink>(
+    workspace: &Workspace,
+    policy: &mut Policy<'_, S>,
+    reads: &[String],
+    listings: &[String],
+) {
+    for typed in reads {
+        let error = workspace
+            .read(policy, &Labelled::trusted(typed.clone()))
+            .expect_err("a read by the full name is refused");
+        assert_told_it_is_inside(&error, typed);
+    }
+    for typed in listings {
+        let error = workspace
+            .list(policy, &Labelled::trusted(typed.clone()), None, None)
+            .expect_err("a listing by the full name is refused");
+        assert_told_it_is_inside(&error, typed);
+    }
+}
+
+/// The refusal says the path is inside the workspace and names the spelling that is taken, and
+/// offers nothing that only a path outside could use.
+fn assert_told_it_is_inside(error: &WorkspaceError, typed: &str) {
+    assert!(
+        matches!(
+            error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Inside,
+                ..
+            }
+        ),
+        "{typed}: {error:?}"
+    );
+    let told = error.describe(typed);
+    for said in ["inside the workspace", "relative to the workspace root"] {
+        assert!(told.contains(said), "{typed}: {said} was not said: {told}");
+    }
+    // The name the caller typed is echoed in the sentence, and a directory's name may hold a word.
+    let sentence = told.replace(typed, "");
+    for untrue in ["outside", "add-dir", "drop"] {
+        assert!(
+            !sentence.contains(untrue),
+            "{typed}: {untrue} was said of a path inside the workspace: {told}"
+        );
+    }
+}
+
+/// A path that does leave the workspace is still told it leaves it, and the sentence for a path
+/// inside is not given to a name because it starts with the root. The landing of a name decides
+/// which sentence it gets.
+#[cfg(unix)]
+#[test]
+fn a_path_that_leaves_the_workspace_is_still_refused_as_leaving_it() {
+    let scratch = Scratch::new("refusal-still-outside");
+    let elsewhere = outside("refusal-still-outside");
+    std::fs::write(elsewhere.path.join("todo.txt"), "a list").unwrap();
+    std::os::unix::fs::symlink(&elsewhere.path, scratch.path.join("escape-dir")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let root = workspace.root().display().to_string();
+    for typed in [
+        // Spelled from the top, not under the root.
+        elsewhere.path.join("todo.txt").display().to_string(),
+        // Spelled under the root, landing outside it through a link.
+        format!("{root}/escape-dir/todo.txt"),
+        // Spelled relative, landing outside it through a link.
+        "escape-dir/todo.txt".to_string(),
+    ] {
+        let error = workspace
+            .read(&mut policy, &Labelled::trusted(typed.clone()))
+            .expect_err("a path that lands outside the workspace is refused");
+        let told = error.describe(&typed);
+        assert!(
+            told.contains("resolves outside the workspace"),
+            "{typed}: not told it leaves the workspace: {told}"
+        );
+        assert!(
+            !told.contains("inside the workspace"),
+            "{typed}: told a path outside the workspace that it is inside: {told}"
         );
     }
 }
@@ -3957,7 +5171,7 @@ fn the_sessions_own_directory_stays_reachable_where_reads_stay_in_the_workspace(
     let mut workspace = Workspace::new(&scratch.path)
         .expect("workspace")
         .with_reads_kept_inside(true);
-    workspace.open_scratch(Some(given.clone()));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -4643,6 +5857,53 @@ fn a_relative_look_sees_a_change_while_the_working_directory_stands() {
     assert_ne!(first, second, "a change in the file did not move the token");
 }
 
+/// FSWATCH-3: a look observes the size, the modification time and whether the file is there, and
+/// nothing from inside it. Same size and time with other bytes is the same look, so a look that
+/// hashed or read content would differ; one byte more or a second later is a different look, so a
+/// look that dropped the size or the time would match.
+#[test]
+fn a_look_observes_size_time_and_presence_and_nothing_inside_the_file() {
+    let scratch = Scratch::new("look-shape");
+    let path = scratch.path.join("notes.md");
+    std::fs::write(&path, "one\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let root = workspace.root().to_path_buf();
+    let first = workspace.look("notes.md", &root);
+    assert!(matches!(first, bravebot_agent::watch::Looked::Saw(_)));
+
+    std::fs::write(&path, "two\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    assert_eq!(
+        workspace.look("notes.md", &root),
+        first,
+        "other bytes of the same size and time changed the look"
+    );
+
+    std::fs::write(&path, "three\n").unwrap();
+    stamp(&path, 1_700_000_000);
+    assert_ne!(
+        workspace.look("notes.md", &root),
+        first,
+        "a longer file at the same time looked the same"
+    );
+
+    std::fs::write(&path, "one\n").unwrap();
+    stamp(&path, 1_700_000_100);
+    assert_ne!(
+        workspace.look("notes.md", &root),
+        first,
+        "a file of the same size a minute later looked the same"
+    );
+
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        workspace.look("notes.md", &root),
+        bravebot_agent::watch::Looked::Absent,
+        "a removed file was not reported absent"
+    );
+}
+
 /// An absolute path does not mean the working directory: it is legal only inside a directory the
 /// user added by name, so a directory that survived the move survives with its watch. Ending
 /// every watch on a move would take this one with it, and the answer that allowed it still holds.
@@ -4707,6 +5968,44 @@ fn moving_to_something_that_is_not_a_directory_is_refused() {
     assert!(matches!(error, WorkspaceError::Io { .. }));
 
     assert_eq!(workspace.root(), root, "a refused move moved the workspace");
+}
+
+/// Naming a directory to open and naming one to move to are refused for the same three reasons,
+/// in the same words, with the name as the person typed it. A fault in the checks they share
+/// shows in one of them or the other, so each reason is asked of both.
+#[test]
+fn opening_and_moving_to_a_directory_refuse_a_bad_name_the_same_way() {
+    let scratch = Scratch::new("directory-name-refusals");
+    std::fs::write(scratch.path.join("notes.md"), "a note").unwrap();
+    let outside = Scratch::new("directory-name-refusals-outside");
+    std::fs::write(outside.path.join("notes.md"), "a note").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let file = outside.path.join("notes.md").to_str().unwrap().to_string();
+    let missing = outside.path.join("nowhere").to_str().unwrap().to_string();
+
+    let refused = |error: WorkspaceError, name: &str, reason: &str, caller: &str| {
+        assert!(
+            matches!(&error, WorkspaceError::Invalid { path, reason: r } if path == name && *r == reason),
+            "{caller}({name}): {error:?}"
+        );
+    };
+    for (name, reason) in [
+        ("relative/dir", "must be an absolute path"),
+        (file.as_str(), "must be a directory"),
+    ] {
+        let opened = workspace.resolve_directory(name).expect_err(name);
+        refused(opened, name, reason, "resolve_directory");
+        let moved = workspace.change_root(name).expect_err(name);
+        refused(moved, name, reason, "change_root");
+    }
+    let opened = workspace.resolve_directory(&missing).expect_err("missing");
+    let moved = workspace.change_root(&missing).expect_err("missing");
+    for error in [opened, moved] {
+        assert!(
+            matches!(&error, WorkspaceError::Io { path, .. } if *path == missing),
+            "{error:?}"
+        );
+    }
 }
 
 /// A tree is the expensive thing to put in a context, and most questions about a project are
@@ -4825,6 +6124,66 @@ fn a_pattern_does_not_hide_the_directories_a_bounded_walk_stopped_at() {
     );
 }
 
+/// LIST-5: a depth of N walks N directory levels, the one named included, so a depth of two or
+/// three stops one level at a time and names the directories it stopped at by their full paths.
+/// A walk that read any depth past one as unbounded, or counted from the first level below the
+/// directory, would list a different set of files or none of the stopping points.
+#[test]
+fn a_depth_of_two_or_more_walks_that_many_levels_and_names_where_it_stopped() {
+    let scratch = Scratch::new("list-depth-levels");
+    std::fs::create_dir_all(scratch.path.join("a/b/c")).unwrap();
+    std::fs::write(scratch.path.join("top.txt"), "0").unwrap();
+    std::fs::write(scratch.path.join("a/one.txt"), "1").unwrap();
+    std::fs::write(scratch.path.join("a/b/two.txt"), "2").unwrap();
+    std::fs::write(scratch.path.join("a/b/c/three.txt"), "3").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut listed = Vec::new();
+    for depth in [2, 3] {
+        let listing = workspace
+            .list(
+                &mut policy,
+                &Labelled::trusted(".".to_string()),
+                None,
+                Some(depth),
+            )
+            .expect("list succeeds");
+        let proof = policy.authorise_content_release("test", "paths");
+        let listing = listing.declassify(&proof);
+        listed.push((listing.files.clone(), listing.directories.clone()));
+    }
+
+    assert_eq!(
+        listed[0],
+        (
+            vec!["a/one.txt".to_string(), "top.txt".to_string()],
+            vec!["a/b".to_string()]
+        ),
+        "a depth of 2 is the directory and the one level below it"
+    );
+    assert_eq!(
+        listed[1],
+        (
+            vec![
+                "a/b/two.txt".to_string(),
+                "a/one.txt".to_string(),
+                "top.txt".to_string()
+            ],
+            vec!["a/b/c".to_string()]
+        ),
+        "a depth of 3 is one level further, stopping at the next directory down"
+    );
+}
+
 /// The default is what every existing caller gets, so a listing nobody bounded still walks the
 /// whole tree and reports no boundary: a directory in that listing is one the walk went into.
 #[test]
@@ -4928,6 +6287,16 @@ fn search_summary(
     workspace: &Workspace,
     output: bravebot_agent::workspace::SearchOutput,
 ) -> bravebot_agent::workspace::Matches {
+    search_shaped(workspace, output, 1, 0)
+}
+
+/// [`search_summary`] for any output, from the match at `offset` and with `context` lines around each.
+fn search_shaped(
+    workspace: &Workspace,
+    output: bravebot_agent::workspace::SearchOutput,
+    offset: usize,
+    context: usize,
+) -> bravebot_agent::workspace::Matches {
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
         routing(),
@@ -4943,8 +6312,8 @@ fn search_summary(
             &Labelled::trusted(".".to_string()),
             None,
             true,
-            1,
-            0,
+            offset,
+            context,
             output,
         )
         .expect("grep succeeds");
@@ -5106,6 +6475,44 @@ fn a_search_says_when_its_include_selected_no_files() {
     assert_eq!(found.searched, 1);
 }
 
+/// SEARCH-4: the pattern is compiled before any file is opened. A search whose `include` selects no
+/// file opens none, so a pattern compiled when a file is first read would never be compiled and the
+/// search would report an empty result for a pattern that never ran. A list of patterns is compiled
+/// whole, so a good pattern ahead of a bad one does not hide it.
+#[test]
+fn a_pattern_that_will_not_compile_is_reported_when_no_file_is_opened() {
+    let scratch = Scratch::new("grep-bad-pattern-no-files");
+    std::fs::write(scratch.path.join("a.rs"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    for patterns in [&["(unclosed"][..], &["needle", "(unclosed"][..]] {
+        for case_sensitive in [true, false] {
+            let needles: Vec<Labelled<String>> = patterns.iter().map(|p| trusted_text(p)).collect();
+            let refused = workspace.grep(
+                &mut policy,
+                &needles,
+                &trusted_text("."),
+                Some(&trusted_text("*.py")),
+                case_sensitive,
+                1,
+            );
+            assert!(
+                matches!(refused, Err(WorkspaceError::Pattern { .. })),
+                "{patterns:?} with case_sensitive={case_sensitive} was not reported: {:?}",
+                refused.as_ref().map(|_| ())
+            );
+        }
+    }
+}
+
 /// A search aimed at `directory` under `permissions`, for the tests that name a path other than the
 /// root.
 fn search_at(
@@ -5251,6 +6658,41 @@ fn a_search_cannot_name_a_file_outside_the_workspace() {
         );
     }
     let _ = std::fs::remove_file(&outside);
+}
+
+/// SEARCH-11: a file named outright is searched even where a walk from above would skip its
+/// directory. A skip applied to the names along a named file's path would make `vendor/pkg/lib.rs`
+/// unsearchable by name. The walk from the root is the control: it reaches none of these files, so
+/// the matches below come from naming them.
+#[test]
+fn a_file_named_outright_is_searched_where_a_walk_from_above_would_skip_its_directory() {
+    let scratch = Scratch::new("grep-one-file-in-skipped-directory");
+    let named = [
+        "vendor/pkg/lib.rs",
+        "node_modules/dep/index.js",
+        ".worktrees/feature/mine.rs",
+        ".claude/worktrees/pr-fix/mine.rs",
+    ];
+    for file in named {
+        let path = scratch.path.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "a needle\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let walked = search_at(&workspace, denying(&[]), ".", None).expect("grep");
+    assert!(
+        walked.matches.is_empty(),
+        "a walk from above entered a skipped directory: {:?}",
+        walked.matches
+    );
+
+    for file in named {
+        let found = search_at(&workspace, denying(&[]), file, None).expect("grep");
+        let hits: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+        assert_eq!(hits, [file], "{file} was named and not searched");
+        assert_eq!(found.considered, 1, "{file}");
+    }
 }
 
 /// Brace groups are the spelling everybody writes. Matched literally they select nothing,
@@ -5401,6 +6843,74 @@ fn a_search_skips_a_linked_worktree_under_dot_worktrees() {
         1,
     );
     assert_eq!(named.matches.len(), 1, "naming the worktree found nothing");
+}
+
+/// SEARCH-7: a search that names a directory with a skipped name reads it, and only a walk from
+/// above steps over it. The skip applies to the entries a walk meets below its start, so a named
+/// directory is read whatever it is called and whatever skipped directory sits above it. The walk
+/// from the root is the control: it reaches none of these directories.
+#[test]
+fn a_search_that_names_a_skipped_directory_reads_it() {
+    let scratch = Scratch::new("grep-names-a-skipped-directory");
+    for dir in [
+        "vendor/pkg",
+        "build",
+        ".worktrees/feature",
+        ".claude/worktrees/pr-fix",
+    ] {
+        std::fs::create_dir_all(scratch.path.join(dir)).unwrap();
+        std::fs::write(scratch.path.join(dir).join("hit.rs"), "needle\n").unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let walked = search_at(&workspace, denying(&[]), ".", None).expect("grep");
+    assert!(
+        walked.matches.is_empty(),
+        "a walk from above entered a skipped directory: {:?}",
+        walked.matches
+    );
+
+    for (named, reached) in [
+        ("vendor", "vendor/pkg/hit.rs"),
+        ("vendor/pkg", "vendor/pkg/hit.rs"),
+        ("build", "build/hit.rs"),
+        (".worktrees", ".worktrees/feature/hit.rs"),
+        (".claude/worktrees", ".claude/worktrees/pr-fix/hit.rs"),
+    ] {
+        let found = search_at(&workspace, denying(&[]), named, None).expect("grep");
+        let paths: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+        assert_eq!(paths, [reached], "naming {named} did not read it");
+    }
+}
+
+/// SEARCH-7: `.claude/worktrees` is a two-segment name. A directory called `worktrees` anywhere else
+/// holds a project's own files, and a sibling of `worktrees` under `.claude` is not a linked
+/// worktree, so a skip decided by one segment alone drops matches the search was asked for.
+#[test]
+fn a_directory_called_worktrees_is_skipped_only_beneath_dot_claude() {
+    let scratch = Scratch::new("grep-worktrees-name");
+    for file in [
+        "top.md",
+        "docs/worktrees/guide.md",
+        ".claude/other/notes.md",
+        ".claude/worktrees/pr-fix/copy.md",
+    ] {
+        let path = scratch.path.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "needle\n").unwrap();
+    }
+
+    let found = search_in(&scratch.path, &["needle"], None, true, 1);
+    let mut paths: Vec<&str> = found.matches.iter().map(|m| m.path.as_str()).collect();
+    paths.sort_unstable();
+    assert_eq!(
+        paths,
+        [
+            ".claude/other/notes.md",
+            "docs/worktrees/guide.md",
+            "top.md"
+        ]
+    );
 }
 
 /// A cap the caller cannot ask past is a cap that loses whatever is behind it. Saying the answer
@@ -5701,6 +7211,39 @@ fn a_search_does_not_open_a_file_a_deny_rule_covers() {
     );
 }
 
+/// The listing of `directory`, one level deep, in a workspace holding `secrets/key.pem` and
+/// `keep.txt` under a rule that covers `secrets/**`.
+///
+/// Bounded to one level, because that is the only shape in which a directory is named in the
+/// result at all: a walk with no depth descends rather than reporting where it stopped, so an
+/// unbounded listing has no directories to check and an assertion about them would hold whatever
+/// the rules said.
+fn listing_under_a_directory_rule(
+    workspace: &Workspace,
+    directory: &str,
+) -> bravebot_agent::workspace::Listing {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy")
+    .with_permissions(denying(&["Read(secrets/**)"]));
+
+    let listing = workspace
+        .list(
+            &mut policy,
+            &Labelled::trusted(directory.to_string()),
+            None,
+            Some(1),
+        )
+        .expect("list succeeds");
+    let proof = policy.authorise_content_release("test", "paths");
+    listing.declassify(&proof)
+}
+
 /// A rule covering a directory is written against every file in it, so the walk does not descend
 /// and does not name the directory either: a listing that reported the name would answer the
 /// question the rule exists to refuse.
@@ -5712,30 +7255,7 @@ fn a_listing_does_not_enumerate_a_tree_a_deny_rule_covers() {
     std::fs::write(scratch.path.join("keep.txt"), "public").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let mut sink = RecordingSink::new();
-    let mut policy = Policy::begin(
-        routing(),
-        ReleasePlan::new(),
-        all_file_capabilities(),
-        &mut sink,
-    )
-    .expect("policy")
-    .with_permissions(denying(&["Read(secrets/**)"]));
-
-    // Bounded to one level, because that is the only shape in which a directory is named in the
-    // result at all: a walk with no depth descends rather than reporting where it stopped, so an
-    // unbounded listing has no directories to check and the assertion below would hold whatever
-    // the rules said.
-    let listing = workspace
-        .list(
-            &mut policy,
-            &Labelled::trusted(".".to_string()),
-            None,
-            Some(1),
-        )
-        .expect("list succeeds");
-    let proof = policy.authorise_content_release("test", "paths");
-    let listing = listing.declassify(&proof);
+    let listing = listing_under_a_directory_rule(&workspace, ".");
 
     assert_eq!(
         listing.files,
@@ -5745,6 +7265,38 @@ fn a_listing_does_not_enumerate_a_tree_a_deny_rule_covers() {
     assert!(
         listing.directories.is_empty(),
         "a denied directory was named as a place the tree continues: {:?}",
+        listing.directories
+    );
+}
+
+/// A directory a rule covers is covered under its name beneath a second path to an open tree too
+/// (PERM-7), so a listing by that path neither descends into it nor names it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_listing_of_a_second_path_to_the_tree_does_not_name_a_directory_a_deny_rule_covers() {
+    let scratch = Scratch::new("list-denied-second-path");
+    std::fs::create_dir_all(scratch.path.join("secrets")).unwrap();
+    std::fs::write(scratch.path.join("secrets/key.pem"), "private").unwrap();
+    std::fs::write(scratch.path.join("keep.txt"), "public").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let second = std::path::Path::new("/System/Volumes/Data")
+        .join(workspace.root().strip_prefix("/").unwrap())
+        .to_string_lossy()
+        .into_owned();
+    workspace
+        .add_directory(&second)
+        .expect("the second path opens");
+
+    let listing = listing_under_a_directory_rule(&workspace, &second);
+
+    assert_eq!(
+        listing.files,
+        vec![format!("{second}/keep.txt")],
+        "a denied tree was enumerated under the second path to it"
+    );
+    assert!(
+        listing.directories.is_empty(),
+        "a denied directory was named under the second path to its tree: {:?}",
         listing.directories
     );
 }
@@ -5909,6 +7461,180 @@ fn a_denied_file_does_not_spend_a_searchs_budget() {
     );
 }
 
+/// The paths a search of `directory` matched, whether a rule kept a file out, and whether the walk
+/// stopped at its cap.
+#[cfg(unix)]
+fn searched(workspace: &Workspace, rules: &[&str], directory: &str) -> (Vec<String>, bool, bool) {
+    let found = search_at(workspace, denying(rules), directory, None).expect("grep succeeds");
+    let mut paths: Vec<String> = found.matches.iter().map(|m| m.path.clone()).collect();
+    paths.sort();
+    (paths, found.withheld, found.unvisited)
+}
+
+/// A rule is about the file, so a hard link to a file it covers is not read through the link's own
+/// name (PERM-7), whichever directory the call names: the other names of a file are asked of the
+/// whole tree, not of the part a walk covers. A link to a file no rule covers, or any link with no
+/// rule in force, is searched as before.
+#[cfg(unix)]
+#[test]
+fn a_search_does_not_open_a_hard_link_to_a_file_a_deny_rule_covers() {
+    let scratch = Scratch::new("grep-denied-hard-link");
+    std::fs::create_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=needle\n").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "needle\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join(".env"),
+        scratch.path.join("docs/readme.txt"),
+    )
+    .unwrap();
+    std::fs::hard_link(
+        scratch.path.join("notes.md"),
+        scratch.path.join("docs/notes-copy.md"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (paths, withheld, unvisited) = searched(&workspace, &["Read(./.env)"], ".");
+    assert_eq!(
+        paths,
+        ["docs/notes-copy.md", "notes.md"],
+        "a hard link to a denied file was searched, or a link to a file no rule covers was not"
+    );
+    assert!(withheld, "the planner was not told a rule kept a file out");
+    assert!(!unvisited);
+
+    let (paths, withheld, _) = searched(&workspace, &["Read(./.env)"], "docs");
+    assert_eq!(
+        paths,
+        ["docs/notes-copy.md"],
+        "a search of the directory holding the link read the denied file the walk did not reach"
+    );
+    assert!(withheld);
+
+    let (paths, withheld, _) = searched(&workspace, &[], ".");
+    assert_eq!(
+        paths,
+        [".env", "docs/notes-copy.md", "docs/readme.txt", "notes.md"],
+        "with no rule in force a file with two names was left out"
+    );
+    assert!(!withheld);
+}
+
+/// A second path to an open tree, which macOS gives every directory under `/System/Volumes/Data`,
+/// is a second spelling of every file in it (PERM-7). A search of the tree by that path reaches
+/// each file under a name a rule written about the first path does not match.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_search_of_a_second_path_to_the_tree_does_not_open_a_file_a_deny_rule_covers() {
+    let scratch = Scratch::new("grep-denied-second-path");
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=needle\n").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "needle\n").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let second = std::path::Path::new("/System/Volumes/Data")
+        .join(workspace.root().strip_prefix("/").unwrap())
+        .to_string_lossy()
+        .into_owned();
+    workspace
+        .add_directory(&second)
+        .expect("the second path opens");
+
+    let (paths, withheld, _) = searched(&workspace, &["Read(./.env)"], &second);
+    assert_eq!(
+        paths,
+        [format!("{second}/notes.md")],
+        "a file a rule covers was searched under the second path to its tree"
+    );
+    assert!(withheld);
+}
+
+/// Where the walk for a file's other names cannot finish, a rule about a path may be about the
+/// file, so the file is left out as a call that names it is refused (PERM-7). Here the walk for the
+/// other names reads every directory, an ignored one included, and stops at the cap that the search
+/// itself, which skips that directory, stays under.
+#[cfg(unix)]
+#[test]
+fn a_search_leaves_out_a_file_with_two_names_where_the_walk_for_the_other_name_gives_up() {
+    let scratch = Scratch::new("grep-denied-hard-link-cap");
+    std::fs::create_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("node_modules")).unwrap();
+    for n in 0..12 {
+        std::fs::write(scratch.path.join(format!("node_modules/f{n}.js")), "x\n").unwrap();
+    }
+    std::fs::write(scratch.path.join(".env"), "SECRET_TOKEN=needle\n").unwrap();
+    std::fs::write(scratch.path.join("notes.md"), "needle\n").unwrap();
+    std::fs::hard_link(
+        scratch.path.join(".env"),
+        scratch.path.join("docs/readme.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(Some(8), None);
+
+    let (paths, withheld, unvisited) = searched(&workspace, &["Read(./.env)"], ".");
+    assert_eq!(
+        paths,
+        ["notes.md"],
+        "a file with two names was searched though its other names could not be listed"
+    );
+    assert!(withheld);
+    assert!(
+        !unvisited,
+        "the search itself stayed under its cap, so the cap is the other walk's"
+    );
+
+    let (paths, _, _) = searched(&workspace, &[], ".");
+    assert_eq!(
+        paths,
+        [".env", "docs/readme.txt", "notes.md"],
+        "with no rule in force the second walk was made, and a file was left out"
+    );
+}
+
+/// A name that is not UTF-8 has no spelling a rule can be written about (PATH-003), and its lossy
+/// rendering is the name of a different file, so a file with such a name is left out where a rule
+/// is in force and nothing else is: another file with two names is still searched, and so is the
+/// file named by the invalid name's lossy rendering.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_search_leaves_out_a_file_with_a_name_no_rule_can_be_written_about_and_only_that_file() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let scratch = Scratch::new("grep-denied-hard-link-bytes");
+    let write = |name: &str| std::fs::write(scratch.path.join(name), "needle\n").unwrap();
+    write("plain.txt");
+    write("pair-a.txt");
+    write("link-\u{FFFD}");
+    std::fs::hard_link(
+        scratch.path.join("plain.txt"),
+        scratch.path.join(OsStr::from_bytes(b"link-\xff")),
+    )
+    .unwrap();
+    std::fs::hard_link(
+        scratch.path.join("pair-a.txt"),
+        scratch.path.join("pair-b.txt"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (paths, withheld, _) = searched(&workspace, &["Read(./.env)"], ".");
+    assert!(withheld);
+    assert!(
+        !paths.iter().any(|path| path == "plain.txt"),
+        "a file with a second name no rule can spell was searched: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path == "link-\u{FFFD}"),
+        "the file named like the invalid name's rendering was left out: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|path| path == "pair-a.txt")
+            && paths.iter().any(|path| path == "pair-b.txt"),
+        "a name that cannot be spelled stopped the search of a file whose names can: {paths:?}"
+    );
+}
+
 /// `read_dir` order is the filesystem's, so a walk that stops at a cap used to keep an
 /// arbitrary subset and the same search could answer differently on two machines. What is
 /// kept is still partial; it now has to be the same partial answer every time.
@@ -6035,7 +7761,10 @@ fn a_destination_outside_the_workspace_is_refused() {
 #[test]
 fn a_destination_reached_through_a_symlink_out_of_the_workspace_is_refused() {
     let scratch = Scratch::new("confines-symlink");
-    let outside = std::env::temp_dir().join("bravebot-workspace-confines-target");
+    let outside = std::env::temp_dir().join(format!(
+        "bravebot-workspace-confines-target-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).expect("target directory");
     std::os::unix::fs::symlink(&outside, scratch.path.join("link")).expect("symlink");
@@ -6054,7 +7783,10 @@ fn a_destination_reached_through_a_symlink_out_of_the_workspace_is_refused() {
 #[test]
 fn a_destination_reached_through_a_dangling_symlink_out_of_the_workspace_is_refused() {
     let scratch = Scratch::new("confines-dangling");
-    let outside = std::env::temp_dir().join("bravebot-workspace-confines-dangling-target");
+    let outside = std::env::temp_dir().join(format!(
+        "bravebot-workspace-confines-dangling-target-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).expect("target directory");
     std::os::unix::fs::symlink(outside.join("out.txt"), scratch.path.join("link.txt"))
@@ -6073,7 +7805,10 @@ fn a_destination_reached_through_a_dangling_symlink_out_of_the_workspace_is_refu
 #[test]
 fn a_destination_inside_a_directory_the_user_added_is_confined() {
     let scratch = Scratch::new("confines-added");
-    let other = std::env::temp_dir().join("bravebot-workspace-confines-added-other");
+    let other = std::env::temp_dir().join(format!(
+        "bravebot-workspace-confines-added-other-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&other);
     std::fs::create_dir_all(&other).expect("other directory");
 
@@ -6600,7 +8335,7 @@ fn a_rewind_with_one_path_linked_out_still_puts_the_others_back() {
 /// since the type ends up in a `data:` URI.
 #[test]
 fn the_media_type_comes_from_the_extension() {
-    use bravebot_agent::workspace::media_for;
+    use bravebot_filetype::by_name::media_for;
     assert_eq!(media_for("shot.png"), Some("image/png"));
     assert_eq!(media_for("photo.jpg"), Some("image/jpeg"));
     assert_eq!(media_for("photo.jpeg"), Some("image/jpeg"));
@@ -6616,7 +8351,7 @@ fn the_media_type_comes_from_the_extension() {
 /// mentions one is not one either.
 #[test]
 fn a_file_that_names_no_picture_is_not_one() {
-    use bravebot_agent::workspace::media_for;
+    use bravebot_filetype::by_name::media_for;
     for named in [
         "src/main.rs",
         "notes.txt",
@@ -6686,7 +8421,7 @@ fn a_file_in_the_sessions_own_directory_is_reachable_by_its_absolute_path() {
     let given = SessionScratch::create().expect("a directory of its own");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -6727,7 +8462,7 @@ fn a_write_in_the_sessions_own_directory_is_not_kept_for_an_undo() {
     std::fs::write(given.path().join("workings.txt"), "the first pass").expect("already there");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -6780,7 +8515,7 @@ fn a_write_in_the_sessions_own_directory_leaves_the_budget_for_the_project() {
     std::fs::write(&heavy, vec![b'x'; MAX_REWIND_BYTES]).expect("an intermediate file");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -6833,7 +8568,7 @@ fn the_sessions_own_directory_is_not_one_the_user_added() {
     let given = SessionScratch::create().expect("a directory of its own");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     assert!(workspace.added_directories().is_empty());
     assert_eq!(workspace.scratch(), Some(given.path()));
@@ -6847,7 +8582,7 @@ fn the_sessions_own_directory_cannot_be_added_by_name() {
     let given = SessionScratch::create().expect("a directory of its own");
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let error = workspace
         .add_directory(given.path().to_str().expect("utf-8 path"))
@@ -6868,7 +8603,7 @@ fn the_working_directory_cannot_be_moved_into_the_sessions_own_directory() {
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
     let root = workspace.root().to_path_buf();
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     for refused in [given.path(), inside.as_path()] {
         let error = workspace
@@ -6897,7 +8632,9 @@ fn a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_ru
     std::os::unix::fs::symlink(&holder, base.join("link")).unwrap();
 
     let mut workspace = Workspace::new(holder.join("work")).expect("workspace");
-    workspace.open_scratch(Some(holder.join("given")));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(
+        holder.join("given"),
+    ));
 
     // A rule about the canonical name and nothing else. The workspace was answered about nothing, so
     // a name that reaches no rule reads untrusted and the reduction is the whole of what is tested.
@@ -6937,19 +8674,29 @@ fn a_second_spelling_of_a_file_in_the_sessions_own_directory_reaches_the_same_ru
     );
 }
 
-/// The reach is that directory and nothing around it. The temporary directory holds every other
-/// session's, and whatever else on the machine puts files there.
+/// The reach is that directory and nothing around it. The directory it sits in holds every other
+/// session's, and the temporary directory around that holds whatever else on the machine puts
+/// files there.
 #[test]
 fn the_temporary_directory_around_it_stays_unreachable() {
     let project = Scratch::new("scratch-neighbours");
     let given = SessionScratch::create().expect("a directory of its own");
-    // The temporary directory is shared, so the name carries this process and the moment: a fixed
-    // one is a name a concurrent run of this suite writes and removes underneath us.
-    let neighbour = given
-        .path()
-        .parent()
-        .expect("a temporary directory")
-        .join(format!(
+    let around = [
+        given
+            .path()
+            .parent()
+            .expect("the directory it sits in")
+            .to_path_buf(),
+        std::env::temp_dir().canonicalize().expect("temporary"),
+    ];
+
+    let mut workspace = Workspace::new(&project.path).expect("workspace");
+    workspace.open_scratch(given.directory());
+
+    for directory in around {
+        // The temporary directory is shared, so the name carries this process and the moment: a
+        // fixed one is a name a concurrent run of this suite writes and removes underneath us.
+        let neighbour = directory.join(format!(
             "bravebot-workspace-scratch-neighbour-{}-{}.txt",
             std::process::id(),
             std::time::SystemTime::now()
@@ -6957,29 +8704,31 @@ fn the_temporary_directory_around_it_stays_unreachable() {
                 .expect("a clock past the epoch")
                 .as_nanos()
         ));
-    std::fs::write(&neighbour, "somebody else's").unwrap();
+        std::fs::write(&neighbour, "somebody else's").unwrap();
 
-    let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
 
-    let mut sink = RecordingSink::new();
-    let mut policy = Policy::begin(
-        routing(),
-        ReleasePlan::new(),
-        all_file_capabilities(),
-        &mut sink,
-    )
-    .expect("policy");
+        let read = workspace.read(
+            &mut policy,
+            &Labelled::trusted(neighbour.display().to_string()),
+        );
+        // Before the assertion, so a failing run leaves nothing behind in a shared directory either.
+        let _ = std::fs::remove_file(&neighbour);
+        let error = read.expect_err("a file beside the session's directory must be refused");
 
-    let read = workspace.read(
-        &mut policy,
-        &Labelled::trusted(neighbour.display().to_string()),
-    );
-    // Before the assertion, so a failing run leaves nothing behind in a shared directory either.
-    let _ = std::fs::remove_file(&neighbour);
-    let error = read.expect_err("a file beside the session's directory must be refused");
-
-    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+        assert!(
+            matches!(error, WorkspaceError::Escapes { .. }),
+            "{}: {error:?}",
+            directory.display()
+        );
+    }
 }
 
 /// A symlink out of it is refused, exactly as one out of an added directory is: the reach is where
@@ -6998,7 +8747,7 @@ fn a_symlink_out_of_the_sessions_own_directory_is_refused() {
     .unwrap();
 
     let mut workspace = Workspace::new(&project.path).expect("workspace");
-    workspace.open_scratch(Some(given.path().to_path_buf()));
+    workspace.open_scratch(given.directory());
 
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -7031,7 +8780,9 @@ fn shared_file_authority_preserves_aliases_scratch_added_paths_and_independent_w
     workspace
         .add_directory(added.path.to_str().unwrap())
         .unwrap();
-    workspace.open_scratch(Some(session.path.canonicalize().unwrap()));
+    workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(
+        session.path.canonicalize().unwrap(),
+    ));
     let mut trust = TrustStore::new(workspace.root());
     trust.distrust(".");
     trust.distrust(added.path.canonicalize().unwrap().to_str().unwrap());
@@ -8007,6 +9758,183 @@ fn a_checkout_is_refused_where_it_would_overlap_a_tree_the_session_opened() {
     assert!(!scratch.path.join(".git/worktrees").exists());
 }
 
+/// CHECKOUT-7. The delegate's workspace is rooted at its checkout, so the working directory is not
+/// reachable from it by its absolute path, and the checkout is not reachable from the session's
+/// workspace or from another delegate's checkout. Each tree first reads its own file by a relative
+/// path, so a refusal of the other tree's file can only come from the confinement.
+#[test]
+fn the_working_directory_and_a_checkout_are_not_reachable_from_each_other() {
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-reach", &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("README"), "uncommitted\n").unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let in_the_working_directory = trusted_text(&scratch.path.join("README").display().to_string());
+    let in_the_checkout = trusted_text(&made.root().join("README").display().to_string());
+
+    for reading in [&made, &workspace] {
+        reading
+            .read(&mut policy, &trusted_text("README"))
+            .expect("a workspace reads its own file");
+    }
+
+    let error = made
+        .read(&mut policy, &in_the_working_directory)
+        .expect_err("the working directory is reachable from the checkout");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+    let error = workspace
+        .read(&mut policy, &in_the_checkout)
+        .expect_err("the checkout is reachable from the session's workspace");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+
+    let sibling = workspace
+        .checkout_for(
+            &policy,
+            &state.path,
+            bravebot_core::delegate::DelegateId::nth(2),
+        )
+        .expect("a checkout for another delegate");
+    let error = sibling
+        .read(&mut policy, &in_the_checkout)
+        .expect_err("the checkout is reachable from another delegate's");
+    assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+}
+
+/// CHECKOUT-7. The directories the parent opened beside its working directory stay reachable from
+/// the delegate's workspace, by the same absolute path.
+#[test]
+fn a_directory_the_parent_opened_is_still_reachable_from_its_delegates_checkout() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-reach-opened", &[("README", "hello\n")]);
+    let other = outside("checkout-reach-opened");
+    std::fs::write(other.path.join("notes.md"), "a note").unwrap();
+    let opened = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    made.read(
+        &mut policy,
+        &trusted_text(&opened.join("notes.md").display().to_string()),
+    )
+    .expect("a directory the parent opened is reachable from the checkout");
+}
+
+/// CHECKOUT-7. The session's own directory outside the project stays reachable from the delegate's
+/// workspace by the same absolute path, for a read and for a write, so a delegate leaves its
+/// intermediate files where the session does.
+#[test]
+fn the_sessions_own_directory_is_still_reachable_from_its_delegates_checkout() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-reach-session-dir", &[("README", "hello\n")]);
+    let given = SessionScratch::create().expect("a directory of its own");
+    std::fs::write(given.path().join("workings.txt"), "first pass").unwrap();
+    workspace.open_scratch(given.directory());
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let named = given.path().join("workings.txt").display().to_string();
+    made.read(&mut policy, &trusted_text(&named))
+        .expect("a file in the session's own directory is readable from the checkout");
+    made.write(
+        &mut policy,
+        &trusted_text(&named),
+        &trusted_text("second pass"),
+    )
+    .expect("a file in the session's own directory is writable from the checkout");
+    assert_eq!(
+        std::fs::read_to_string(given.path().join("workings.txt")).unwrap(),
+        "second pass"
+    );
+}
+
+/// CHECKOUT-7, PERM-16. Where the settings keep the file tools inside the workspace, a delegate's
+/// checkout keeps them inside its root: a directory the parent already had open is reached by none
+/// of a read, a write, a listing and a search, though the checkout's own files are.
+#[test]
+fn the_rule_holding_the_file_tools_to_the_workspace_holds_inside_a_checkout() {
+    let (_scratch, state, mut workspace) =
+        repository_with_a_state_directory("checkout-reach-kept-inside", &[("README", "hello\n")]);
+    let other = outside("checkout-reach-kept-inside");
+    std::fs::write(other.path.join("notes.md"), "a note").unwrap();
+    let opened = workspace
+        .add_directory(other.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let workspace = workspace.with_reads_kept_inside(true);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    // Each tool works on the checkout's own tree, so the refusals below come from the confinement
+    // and not from a tool that refuses everything in a checkout.
+    made.read(&mut policy, &trusted_text("README"))
+        .expect("the checkout reads its own file");
+    made.write(
+        &mut policy,
+        &trusted_text("inside.md"),
+        &trusted_text("written"),
+    )
+    .expect("the checkout writes in its own tree");
+    made.list(&mut policy, &trusted_text("."), None, None)
+        .expect("the checkout lists its own tree");
+    made.grep(
+        &mut policy,
+        std::slice::from_ref(&trusted_text("hello")),
+        &trusted_text("."),
+        None,
+        true,
+        1,
+    )
+    .expect("the checkout searches its own tree");
+    let directory = trusted_text(&opened.display().to_string());
+    let errors = [
+        made.read(
+            &mut policy,
+            &trusted_text(&opened.join("notes.md").display().to_string()),
+        )
+        .err(),
+        made.write(
+            &mut policy,
+            &trusted_text(&opened.join("fresh.md").display().to_string()),
+            &trusted_text("written"),
+        )
+        .err(),
+        made.list(&mut policy, &directory, None, None).err(),
+        made.grep(
+            &mut policy,
+            std::slice::from_ref(&trusted_text("note")),
+            &directory,
+            None,
+            true,
+            1,
+        )
+        .err(),
+    ];
+    let reached: Vec<&str> = ["read", "write", "list", "grep"]
+        .into_iter()
+        .zip(errors)
+        .filter(|(_, error)| !matches!(error, Some(WorkspaceError::Escapes { .. })))
+        .map(|(tool, _)| tool)
+        .collect();
+    assert!(
+        reached.is_empty(),
+        "these tools reached a directory outside the checkout: {reached:?}"
+    );
+    assert!(!opened.join("fresh.md").exists());
+}
+
 /// TRACE-1. The refusal for an opened directory carries a fixed cause that names the directory a
 /// person opened, and a directory held by neither the working directory nor the checkouts gives
 /// the other cause.
@@ -8266,6 +10194,260 @@ fn a_read_refusal_for_a_directory_holding_the_workspace_says_what_opening_it_cos
         .describe(&held);
     assert!(
         told.contains("permissions.readsStayInWorkspace") && !told.contains("checkout"),
+        "{told}"
+    );
+}
+
+/// CHECKOUT-7, TRUST-10. A directory the planner names is refused with that directory as the one
+/// to open, and the warning about checkouts is given when that directory holds the working
+/// directory, not when its parent does.
+///
+/// The failures this rejects are offering the directory a path is in whatever the path names, which
+/// sends a person to open the parent of a sibling and warns that doing so ends checkouts when
+/// opening the sibling does not, and leaving the warning off every directory, which hides it for the
+/// directory that holds the working directory.
+#[test]
+fn a_directory_the_planner_names_is_offered_as_itself() {
+    let holder = Scratch::new("directory-remedy-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(sibling.join("notes.txt"), "a note").unwrap();
+
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let pattern = [Labelled::trusted("note".to_string())];
+
+    let beside = sibling.display().to_string();
+    let listed = workspace
+        .list(&mut policy, &Labelled::trusted(beside.clone()), None, None)
+        .expect_err("a directory beside the workspace is outside it");
+    let searched = workspace
+        .grep(
+            &mut policy,
+            &pattern,
+            &Labelled::trusted(beside.clone()),
+            None,
+            true,
+            1,
+        )
+        .expect_err("a search of it is refused too");
+    for error in [listed, searched] {
+        assert!(
+            matches!(
+                &error,
+                WorkspaceError::Escapes {
+                    remedy: Remedy::OpenItself,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        let told = error.describe(&beside);
+        assert!(
+            told.contains("open the directory this path names") && told.contains("/add-dir"),
+            "{told}"
+        );
+        assert!(
+            !told.contains("the directory it is in"),
+            "the parent of a directory was offered as the one to open: {told}"
+        );
+        assert!(
+            !told.contains("checkout"),
+            "a sibling that holds nothing was warned about: {told}"
+        );
+    }
+
+    let holding = holder.path.display().to_string();
+    let error = workspace
+        .list(&mut policy, &Labelled::trusted(holding.clone()), None, None)
+        .expect_err("the directory above the workspace is outside it");
+    assert!(
+        matches!(
+            &error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::OpenItselfEndsCheckouts,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let told = error.describe(&holding);
+    assert!(
+        told.contains("open the directory this path names")
+            && told.contains("no delegate is given a checkout"),
+        "{told}"
+    );
+    assert!(!told.contains("the directory it is in"), "{told}");
+}
+
+/// CHECKOUT-7, TRUST-10. A file, and a name nothing is at yet, is still offered through the
+/// directory it is in, and that directory is the one asked about checkouts.
+///
+/// The failures this rejects are reading any path outside the workspace as a directory to open,
+/// and reading a name that does not exist yet as one, which would offer a person the file's own
+/// name to `/add-dir`, where nothing can be opened.
+#[test]
+fn a_file_or_a_new_name_is_still_offered_through_the_directory_it_is_in() {
+    let holder = Scratch::new("file-remedy-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(sibling.join("notes.txt"), "a note").unwrap();
+
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let text = Labelled::trusted("text".to_string());
+
+    let existing = sibling.join("notes.txt").display().to_string();
+    let read = workspace
+        .read(&mut policy, &Labelled::trusted(existing.clone()))
+        .expect_err("a file beside the workspace is outside it");
+    let new_beside = sibling.join("new.txt").display().to_string();
+    let written = workspace
+        .write(&mut policy, &Labelled::trusted(new_beside.clone()), &text)
+        .expect_err("a new file there is refused too");
+    for (error, named) in [(read, &existing), (written, &new_beside)] {
+        let told = error.describe(named);
+        assert!(told.contains("open the directory it is in"), "{told}");
+        assert!(
+            !told.contains("this path names"),
+            "a file was offered as a directory to open: {told}"
+        );
+        assert!(!told.contains("checkout"), "{told}");
+    }
+
+    let new_in_holder = holder.path.join("new.txt").display().to_string();
+    let error = workspace
+        .write(
+            &mut policy,
+            &Labelled::trusted(new_in_holder.clone()),
+            &text,
+        )
+        .expect_err("a new file beside the workspace is outside it");
+    assert!(
+        matches!(
+            &error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::OpenEndsCheckouts,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let told = error.describe(&new_in_holder);
+    assert!(
+        told.contains("open the directory it is in")
+            && told.contains("no delegate is given a checkout"),
+        "{told}"
+    );
+}
+
+/// DROP-5. A read that names a directory outside the workspace is not told it can drop it, since a
+/// dropped directory attaches nothing.
+///
+/// The failure this rejects is turning every open-it remedy into an open-or-drop one for a read,
+/// which offers the planner a route that ends in another refusal.
+#[test]
+fn a_read_naming_a_directory_outside_the_workspace_is_not_told_to_drop_it() {
+    let holder = Scratch::new("read-directory-remedy-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let beside = sibling.display().to_string();
+    let error = workspace
+        .read(&mut policy, &Labelled::trusted(beside.clone()))
+        .expect_err("a directory beside the workspace is outside it");
+    assert!(
+        matches!(
+            &error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::OpenItself,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let told = error.describe(&beside);
+    assert!(!told.contains("drop"), "{told}");
+    assert!(
+        told.contains("open the directory this path names"),
+        "{told}"
+    );
+}
+
+/// PERM-16. Where `permissions.readsStayInWorkspace` keeps the file tools inside the workspace, a
+/// directory beside it is refused as the setting's doing and not offered to be opened, since
+/// `/add-dir` would refuse it.
+///
+/// The failure this rejects is deciding that a path names a directory before asking whether the
+/// setting keeps the tools inside, which sends a person to `/add-dir` for a directory it cannot
+/// open.
+#[test]
+fn a_directory_is_not_offered_to_be_opened_where_reads_stay_in_the_workspace() {
+    let holder = Scratch::new("kept-directory-remedy-holder");
+    let project = holder.path.join("project");
+    let sibling = holder.path.join("sibling");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_reads_kept_inside(true);
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let beside = sibling.display().to_string();
+    let error = workspace
+        .list(&mut policy, &Labelled::trusted(beside.clone()), None, None)
+        .expect_err("the setting keeps the tools inside the workspace");
+    assert!(
+        matches!(
+            &error,
+            WorkspaceError::Escapes {
+                remedy: Remedy::Kept,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let told = error.describe(&beside);
+    assert!(
+        told.contains("permissions.readsStayInWorkspace") && !told.contains("/add-dir"),
         "{told}"
     );
 }
@@ -8996,6 +11178,322 @@ fn read_git_in_a_checkout_is_answered_without_reading_its_dot_git() {
     assert!(log.contains("first"), "{log}");
 }
 
+/// CHECKOUT-12. A question asked through a delegate's policy, which reads a relative name under its
+/// checkout, holds the trust of the person's `.git` against the live map: a path under it
+/// distrusted after the checkout was made declines the question, as it does in the working
+/// directory.
+#[test]
+fn read_git_in_a_checkout_holds_the_live_trust_of_the_working_directorys_dot_git() {
+    use bravebot_agent::git::{Declined, Query};
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-live-git-trust", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let rooted = authority.rooted_at(made.checkout().expect("a checkout").key());
+    let mut delegate = policy.with_file_authority(rooted);
+    assert!(
+        asked_in(&made, &mut delegate, Query::Log)
+            .unwrap()
+            .contains("first"),
+        "the checkout was not read before the distrust"
+    );
+
+    let distrusted = format!("{}/.git/refs/heads/x", workspace.root().display());
+    assert!(authority.publish(&distrusted, Integrity::Untrusted));
+
+    for query in [Query::Log, Query::Status] {
+        let refused = asked_in(&made, &mut delegate, query);
+        assert!(
+            matches!(
+                refused,
+                Err(WorkspaceError::Git {
+                    declined: Declined::Untrusted,
+                    ..
+                })
+            ),
+            "{query:?}: {refused:?}"
+        );
+    }
+}
+
+/// CHECKOUT-12, GIT-7. A working directory whose path is not UTF-8 gets no checkout, since the
+/// checkout's git files name the source by a path that is text. The question a delegate asks of
+/// a checkout is therefore never keyed by the path a lossy rendering of it spells, where another
+/// directory holds a repository the map trusts. A directory whose name is the lossy rendering
+/// is text and is answered. Linux only: other hosts' file systems cannot hold the name.
+#[cfg(target_os = "linux")]
+#[test]
+fn read_git_in_a_checkout_declines_a_working_directory_whose_path_is_not_text() {
+    use bravebot_agent::git::Query;
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("checkout-live-git-trust-bytes");
+    let state = Scratch::new("checkout-live-git-trust-bytes-state");
+    let lookalike = scratch.path.join("root-\u{FFFD}");
+    std::fs::create_dir(&lookalike).unwrap();
+    repository::commit_files(&lookalike, &[("README", "lookalike\n")], "first");
+    let invalid = scratch.path.join(std::ffi::OsStr::from_bytes(b"root-\xff"));
+    std::fs::create_dir(&invalid).unwrap();
+    repository::commit_files(&invalid, &[("README", "invalid\n")], "first");
+
+    let workspace = Workspace::new(&lookalike).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let rooted = authority.rooted_at(made.checkout().expect("a checkout").key());
+    let mut delegate = policy.with_file_authority(rooted);
+    assert!(
+        asked_in(&made, &mut delegate, Query::Log)
+            .unwrap()
+            .contains("first"),
+        "the name that is text"
+    );
+
+    let workspace = Workspace::new(&invalid).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let refused = workspace.checkout_for(&policy, &state.path, d1());
+    assert!(
+        refused.is_err(),
+        "a path that is not text was given a checkout"
+    );
+}
+
+/// GIT-7, GIT-8, CHECKOUT-12. A directory is one whose repository `read_git` opens as a question
+/// about its history would: a repository of its own below the root is, and so is a delegate's
+/// checkout, whose `.git` is a file; a linked worktree, whose `.git` is a file the driver has no
+/// record of, a repository the map does not trust and one a deny rule covers are not. A directory
+/// below a repository's root is judged by that repository, and below a linked worktree by the
+/// worktree's `.git` file rather than the repository above it.
+#[test]
+fn read_git_opens_the_directories_a_question_would_open() {
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("read-git-opens", &[("README", "hello\n")]);
+    let plain = workspace.root().join("plain");
+    std::fs::create_dir_all(plain.join("inner")).unwrap();
+    repository::commit_files(&plain, &[("README", "elsewhere\n")], "second");
+    let linked = workspace.root().join("linked");
+    std::fs::create_dir_all(linked.join("inner")).unwrap();
+    std::fs::write(linked.join(".git"), "gitdir: ../.git/worktrees/linked\n").unwrap();
+    let below = workspace.root().join("below");
+    std::fs::create_dir(&below).unwrap();
+
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    assert!(
+        workspace.read_git_opens(&policy, workspace.root()),
+        "the session's own repository was not opened"
+    );
+    assert!(
+        workspace.read_git_opens(&policy, &below),
+        "a directory below the root of a repository was judged by itself"
+    );
+    assert!(
+        workspace.read_git_opens(&policy, &plain)
+            && workspace.read_git_opens(&policy, &plain.join("inner")),
+        "a repository of its own below the root was not opened"
+    );
+    assert!(
+        !workspace.read_git_opens(&policy, &linked),
+        "a linked worktree was opened although its .git is a file"
+    );
+    assert!(
+        !workspace.read_git_opens(&policy, &linked.join("inner")),
+        "a directory in a linked worktree was judged by the repository above the worktree"
+    );
+
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    std::fs::write(made.root().join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
+    std::fs::create_dir(made.root().join("inner")).unwrap();
+    assert!(
+        made.read_git_opens(&policy, made.root())
+            && made.read_git_opens(&policy, &made.root().join("inner")),
+        "a delegate's checkout was declined for a .git file it is never read through"
+    );
+
+    let mut sink = RecordingSink::new();
+    let untrusted = checkout_policy(&workspace, &mut sink, &["README"], &[]);
+    assert!(
+        !workspace.read_git_opens(&untrusted, workspace.root()),
+        "a repository the map does not trust was opened"
+    );
+    let mut sink = RecordingSink::new();
+    let fenced = checkout_policy(&workspace, &mut sink, &["."], &["Read(./.git)"]);
+    assert!(
+        !workspace.read_git_opens(&fenced, workspace.root()),
+        "a repository a deny rule covers was opened"
+    );
+}
+
+/// GIT-7. A directory in a directory the person added is judged by the repository above it inside
+/// that directory, as one in the session's own directory is, and a directory in an added tree no
+/// repository holds is not opened.
+#[test]
+fn read_git_opens_a_repository_in_a_directory_that_was_added() {
+    let (_scratch, _state, workspace) =
+        repository_with_a_state_directory("read-git-opens-added", &[("README", "hello\n")]);
+    let other = Scratch::new("read-git-opens-added-other");
+    repository::commit_files(&other.path, &[("README", "added\n")], "added");
+    let mut added = workspace.clone();
+    let opened = added
+        .add_directory(other.path.to_str().expect("utf-8"))
+        .expect("added");
+    std::fs::create_dir_all(opened.join("inner")).unwrap();
+    let bare = Scratch::new("read-git-opens-added-bare");
+    let bare_opened = added
+        .add_directory(bare.path.to_str().expect("utf-8"))
+        .expect("added");
+
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(
+        &added,
+        &mut sink,
+        &[".", opened.to_str().unwrap(), bare_opened.to_str().unwrap()],
+        &[],
+    );
+    assert!(
+        added.read_git_opens(&policy, &opened.join("inner")),
+        "a directory below the root of a repository in an added directory was not judged by it"
+    );
+    assert!(
+        !added.read_git_opens(&policy, &bare_opened),
+        "an added directory no repository holds was opened, perhaps as the one above it"
+    );
+}
+
+/// GIT-7. `read_git` is asked about a repository by a name that is text, so one whose directory
+/// name is not UTF-8 is not one it opens, although the name a lossy rendering of it spells holds a
+/// repository it does, while a directory with such a name inside a repository with a name that is
+/// text is judged by that repository. Linux only: other hosts' file systems cannot hold the name.
+#[cfg(target_os = "linux")]
+#[test]
+fn read_git_opens_no_repository_whose_name_is_not_text() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_scratch, _state, workspace) =
+        repository_with_a_state_directory("read-git-opens-bytes", &[("README", "hello\n")]);
+    let lookalike = workspace.root().join("repo-\u{FFFD}");
+    std::fs::create_dir(&lookalike).unwrap();
+    repository::commit_files(&lookalike, &[("README", "lookalike\n")], "lookalike");
+    let invalid = workspace
+        .root()
+        .join(std::ffi::OsStr::from_bytes(b"repo-\xff"));
+    std::fs::create_dir(&invalid).unwrap();
+    repository::commit_files(&invalid, &[("README", "invalid\n")], "invalid");
+    let inside = lookalike.join(std::ffi::OsStr::from_bytes(b"inner-\xff"));
+    std::fs::create_dir(&inside).unwrap();
+
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    assert!(
+        workspace.read_git_opens(&policy, &lookalike),
+        "the repository under the name that is text was not opened"
+    );
+    assert!(
+        !workspace.read_git_opens(&policy, &invalid),
+        "a repository whose name is not text was judged by its lossy lookalike"
+    );
+    assert!(
+        workspace.read_git_opens(&policy, &inside),
+        "a directory whose name is not text was not judged by the repository above it"
+    );
+}
+
+/// Keeps two checkouts, `c1` and `c2`, each naming `README` as a candidate, and then removes the
+/// directory of the first by hand. Returns the workspaces they were made for.
+fn keep_two_checkouts_and_remove_the_first_by_hand(
+    workspace: &Workspace,
+    policy: &Policy<'_, RecordingSink>,
+    state: &std::path::Path,
+) -> Vec<Workspace> {
+    use bravebot_agent::workspace::Retired;
+    let authority = policy.file_authority();
+    let made: Vec<Workspace> = (0..2)
+        .map(|_| {
+            let made = workspace
+                .checkout_for(policy, state, d1())
+                .expect("a checkout");
+            let info = made.checkout().unwrap();
+            info.record_typed("README");
+            assert_eq!(info.retire(&authority), Retired::Kept);
+            made
+        })
+        .collect();
+    std::fs::remove_dir_all(made[0].root()).unwrap();
+    made
+}
+
+/// CHECKOUT-15. A kept checkout whose directory was removed by hand is not removed again by its
+/// number: the session no longer keeps it, as for a number it never had. The checkout beside it is
+/// still removed by its own.
+#[test]
+fn a_checkout_removed_by_hand_is_not_removed_again_by_its_number() {
+    use bravebot_agent::workspace::Unremoved;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-hand-removed", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = keep_two_checkouts_and_remove_the_first_by_hand(&workspace, &policy, &state.path);
+    let mut trust = policy.file_authority().snapshot();
+
+    assert_eq!(
+        workspace.remove_session_checkout("c1", &mut trust),
+        Err(Unremoved::NoSuch)
+    );
+    workspace
+        .remove_session_checkout("c2", &mut trust)
+        .expect("the checkout beside it was not removed by its own number");
+    assert!(!made[1].root().exists(), "the directory was left");
+}
+
+/// CHECKOUT-14. A file of a kept checkout whose directory was removed by hand is refused as a
+/// checkout the session does not keep, not as a file missing from one. The checkout beside it still
+/// reads.
+#[test]
+fn a_file_of_a_checkout_removed_by_hand_is_refused_as_no_such_checkout() {
+    use bravebot_agent::workspace::CheckoutRead;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-hand-removed-read", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    keep_two_checkouts_and_remove_the_first_by_hand(&workspace, &policy, &state.path);
+
+    let read = |id: &str| workspace.read_checkout_file(&policy, id, "README", &Default::default());
+    assert_eq!(read("c1").unwrap_err(), CheckoutRead::NoSuchCheckout);
+    assert!(
+        read("c2").is_ok(),
+        "the checkout beside it was not read by its own number"
+    );
+}
+
+/// CHECKOUT-13. The status over a kept checkout whose directory was removed by hand is declined as
+/// no repository, as for a number the session never had. The checkout beside it has a status.
+#[test]
+fn the_status_of_a_checkout_removed_by_hand_is_declined_as_no_repository() {
+    use bravebot_agent::git::Declined;
+    let (_scratch, state, workspace) =
+        repository_with_a_state_directory("checkout-hand-removed-status", &[("README", "hello\n")]);
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = keep_two_checkouts_and_remove_the_first_by_hand(&workspace, &policy, &state.path);
+    made[1].checkout().unwrap().mark_worked_in();
+
+    assert_eq!(
+        workspace.checkout_status(&mut policy, "c1").unwrap_err(),
+        Declined::NoRepository
+    );
+    workspace
+        .checkout_status(&mut policy, "c2")
+        .expect("the checkout beside it had no status");
+}
+
 /// CHECKOUT-13. The status over a session's checkout lists the files a program wrote there, which
 /// no tool recorded, and the ones it deleted apart from the rest, without reading `<checkout>/.git`.
 #[test]
@@ -9035,6 +11533,359 @@ fn a_checkouts_status_lists_what_changed_there_and_what_was_deleted() {
     assert!(
         workspace.checkout_status(&mut policy, "c9").is_err(),
         "a checkout the session keeps nothing for had a status"
+    );
+}
+
+/// A repository whose working tree and index match its one commit, in a scratch directory with a
+/// state directory beside it, for a test that then changes the working tree.
+fn checked_out_repository(name: &str, files: &[(&str, &str)]) -> (Scratch, Scratch, Workspace) {
+    let (scratch, state, workspace) = repository_with_a_state_directory(name, files);
+    repository::check_out(&scratch.path, files);
+    (scratch, state, workspace)
+}
+
+/// CHECKOUT-23. The changes the working directory's status lists are put into a checkout and the
+/// deletions taken out of it, so the checkout's own status lists the same files, and nothing is
+/// written in the working directory. A file the index lost and the working directory still holds is
+/// carried and not taken out.
+#[test]
+fn the_changes_carried_into_a_checkout_read_as_the_working_directorys_status_does() {
+    use bravebot_agent::workspace::{CarryBound, StatusRead};
+    let committed = [
+        ("README", "hello\n"),
+        ("gone.txt", "bye\n"),
+        ("keep.txt", "kept\n"),
+        ("untouched.txt", "same\n"),
+    ];
+    let (scratch, state, workspace) = repository_with_a_state_directory("carry-status", &committed);
+    // `git rm --cached keep.txt`: the index lost it and the file is still there.
+    repository::check_out(
+        &scratch.path,
+        &[
+            ("README", "hello\n"),
+            ("gone.txt", "bye\n"),
+            ("untouched.txt", "same\n"),
+        ],
+    );
+    std::fs::write(scratch.path.join("keep.txt"), "kept\n").unwrap();
+    std::fs::write(scratch.path.join("README"), "changed\n").unwrap();
+    std::fs::remove_file(scratch.path.join("gone.txt")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("new/dir")).unwrap();
+    std::fs::write(scratch.path.join("new/dir/file.txt"), "fresh\n").unwrap();
+
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let plan = workspace.plan_carry(&mut policy);
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert_eq!(carried.status, StatusRead::Complete);
+    assert_eq!(
+        carried.written,
+        ["README", "keep.txt", "new/dir/file.txt"],
+        "{carried:?}"
+    );
+    assert_eq!(carried.removed, ["gone.txt"]);
+    assert!(carried.left.is_empty(), "{:?}", carried.left);
+    let in_checkout = |name: &str| std::fs::read_to_string(made.root().join(name));
+    assert_eq!(in_checkout("README").unwrap(), "changed\n");
+    assert_eq!(in_checkout("new/dir/file.txt").unwrap(), "fresh\n");
+    assert_eq!(
+        in_checkout("keep.txt").unwrap(),
+        "kept\n",
+        "a file the working directory still holds was taken out of the checkout"
+    );
+    assert_eq!(in_checkout("untouched.txt").unwrap(), "same\n");
+    assert!(
+        !made.root().join("gone.txt").exists(),
+        "a file the working directory deleted was left in the checkout"
+    );
+
+    let listed = workspace
+        .checkout_status(&mut policy, "c1")
+        .expect("the checkout's status");
+    assert_eq!(listed.changed, ["README", "new/dir/file.txt"]);
+    assert_eq!(listed.removed, ["gone.txt"]);
+    // The working directory is as the test left it.
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("README")).unwrap(),
+        "changed\n"
+    );
+    assert!(!scratch.path.join("gone.txt").exists());
+    assert!(!scratch.path.join(".git/worktrees/c1/new").exists());
+}
+
+/// CHECKOUT-23. A file is carried with the label its path has in the map at the moment its bytes
+/// are copied: where another run wrote untrusted bytes into the working directory after the
+/// checkout was made and the paths were listed, the checkout's copy is untrusted too.
+#[test]
+fn a_file_distrusted_after_the_checkout_was_made_is_carried_untrusted() {
+    use bravebot_agent::workspace::CarryBound;
+    let (scratch, state, workspace) = checked_out_repository(
+        "carry-label",
+        &[("README", "hello\n"), ("other.txt", "o\n")],
+    );
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let authority = policy.file_authority();
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let key = made.checkout().unwrap().key().to_string();
+    assert!(authority.is_trusted(&format!("{key}/README")));
+    std::fs::write(scratch.path.join("README"), "poisoned\n").unwrap();
+    std::fs::write(scratch.path.join("other.txt"), "also\n").unwrap();
+    let plan = workspace.plan_carry(&mut policy);
+    assert!(authority.publish(
+        &format!("{}/README", workspace.root().display()),
+        Integrity::Untrusted
+    ));
+
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert_eq!(carried.written, ["README", "other.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(made.root().join("README")).unwrap(),
+        "poisoned\n"
+    );
+    assert!(
+        !authority.is_trusted(&format!("{key}/README")),
+        "bytes written untrusted in the working directory were carried as trusted"
+    );
+    assert!(
+        authority.is_trusted(&format!("{key}/other.txt")),
+        "a file nobody distrusted lost its trust"
+    );
+}
+
+/// CHECKOUT-23. A path that cannot be carried is named with the reason and the checkout keeps what
+/// the commit has there: a link, a file past the ceiling on one file, and whatever would take the
+/// checkout past the bound on bytes. A small file after one that did not fit is still carried.
+#[test]
+fn a_path_that_cannot_be_carried_is_named_with_why() {
+    use bravebot_agent::workspace::{CarryBound, NotCarried};
+    let (scratch, state, workspace) =
+        checked_out_repository("carry-left", &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("a.txt"), "aaaa").unwrap();
+    std::fs::write(scratch.path.join("b.txt"), "bbbbbbbb").unwrap();
+    std::fs::write(scratch.path.join("c.txt"), "c").unwrap();
+    let huge = std::fs::File::create(scratch.path.join("huge.bin")).unwrap();
+    huge.set_len(17 * 1024 * 1024).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("README", scratch.path.join("link")).unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let plan = workspace.plan_carry(&mut policy);
+
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let carried = workspace.carry_into(
+        &mut policy,
+        &plan,
+        &made,
+        CarryBound {
+            files: 100,
+            bytes: 6,
+        },
+    );
+
+    // In name order: a.txt (4 bytes) fits, b.txt (8) would pass the bytes, c.txt (1) still fits.
+    assert_eq!(carried.written, ["a.txt", "c.txt"], "{carried:?}");
+    let left: std::collections::BTreeMap<&str, NotCarried> = carried
+        .left
+        .iter()
+        .map(|(path, why)| (path.as_str(), *why))
+        .collect();
+    assert_eq!(left["b.txt"], NotCarried::OverTheBound, "{left:?}");
+    assert_eq!(left["huge.bin"], NotCarried::TooLarge, "{left:?}");
+    #[cfg(unix)]
+    assert_eq!(left["link"], NotCarried::Linked, "{left:?}");
+    assert!(!made.root().join("b.txt").exists());
+    assert!(!made.root().join("huge.bin").exists());
+    assert!(!made.root().join("link").exists());
+}
+
+/// CHECKOUT-23, PATH-003. A file whose name is not UTF-8 is left out, and the file whose name is
+/// the lossy rendering of it is carried as itself. The status says it left a name out, and a name
+/// with no lookalike leaves no path to carry or to report as left. Linux only: other hosts' file
+/// systems cannot hold the name.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_file_whose_name_is_not_text_is_left_out_and_its_lossy_lookalike_is_carried_as_itself() {
+    use bravebot_agent::workspace::{CarryBound, StatusRead};
+    use std::os::unix::ffi::OsStrExt;
+    let (scratch, state, workspace) =
+        checked_out_repository("carry-not-text", &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("tool-\u{FFFD}"), "lookalike\n").unwrap();
+    std::fs::write(
+        scratch.path.join(std::ffi::OsStr::from_bytes(b"tool-\xff")),
+        "invalid\n",
+    )
+    .unwrap();
+    std::fs::write(
+        scratch
+            .path
+            .join(std::ffi::OsStr::from_bytes(b"alone-\xff")),
+        "alone\n",
+    )
+    .unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let plan = workspace.plan_carry(&mut policy);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert_eq!(carried.written, ["tool-\u{FFFD}"], "{carried:?}");
+    assert!(
+        carried.left.is_empty(),
+        "a path was named that no file in the working directory has: {:?}",
+        carried.left
+    );
+    assert_eq!(
+        carried.status,
+        StatusRead::Partial,
+        "a name that is not text was left out and the status said it was complete"
+    );
+    assert_eq!(
+        std::fs::read_to_string(made.root().join("tool-\u{FFFD}")).unwrap(),
+        "lookalike\n",
+        "the lookalike was given the bytes of the file whose name is not text"
+    );
+    for name in [&b"tool-\xff"[..], &b"alone-\xff"[..]] {
+        assert!(
+            !made.root().join(std::ffi::OsStr::from_bytes(name)).exists(),
+            "a file whose name is not text was carried"
+        );
+    }
+}
+
+/// CHECKOUT-23. A checkout is given no more files than its bound, the files taken out of it count
+/// against that bound before any is written, and what is over is named.
+#[test]
+fn a_checkout_is_given_no_more_files_than_its_bound() {
+    use bravebot_agent::workspace::CarryBound;
+    let (scratch, state, workspace) = checked_out_repository(
+        "carry-file-bound",
+        &[("README", "hello\n"), ("gone.txt", "bye\n")],
+    );
+    std::fs::remove_file(scratch.path.join("gone.txt")).unwrap();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(scratch.path.join(name), name).unwrap();
+    }
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let plan = workspace.plan_carry(&mut policy);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+
+    let carried = workspace.carry_into(
+        &mut policy,
+        &plan,
+        &made,
+        CarryBound {
+            files: 3,
+            bytes: 1024,
+        },
+    );
+
+    assert_eq!(carried.removed, ["gone.txt"]);
+    assert_eq!(carried.written, ["a.txt", "b.txt"], "{carried:?}");
+    assert_eq!(
+        carried.past_the_bound, 1,
+        "a path past the bound was not counted: {carried:?}"
+    );
+    assert!(carried.left.is_empty(), "{:?}", carried.left);
+    assert!(!made.root().join("c.txt").exists());
+}
+
+/// CHECKOUT-23. A script the working directory holds as runnable by its owner is carried as
+/// runnable by its owner alone, and a file it does not is carried readable by its owner alone.
+#[cfg(unix)]
+#[test]
+fn a_carried_script_is_runnable_by_its_owner_alone_and_nothing_else_is() {
+    use bravebot_agent::workspace::CarryBound;
+    use std::os::unix::fs::PermissionsExt;
+    let (scratch, state, workspace) =
+        checked_out_repository("carry-modes", &[("README", "hello\n")]);
+    std::fs::write(scratch.path.join("run.sh"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        scratch.path.join("run.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("notes.txt"), "notes\n").unwrap();
+    std::fs::set_permissions(
+        scratch.path.join("notes.txt"),
+        std::fs::Permissions::from_mode(0o666),
+    )
+    .unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let plan = workspace.plan_carry(&mut policy);
+
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert_eq!(carried.written, ["notes.txt", "run.sh"], "{carried:?}");
+    let mode = |name: &str| {
+        std::fs::metadata(made.root().join(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    assert_eq!(
+        mode("run.sh"),
+        0o700,
+        "a script was not carried as runnable"
+    );
+    assert_eq!(
+        mode("notes.txt"),
+        0o600,
+        "a file that is not a script was carried runnable or readable by others"
+    );
+}
+
+/// CHECKOUT-23. A directory the working directory replaced with a file is carried as that file,
+/// which needs the files the directory held taken out first, and a file it replaced with a
+/// directory is taken out of the checkout.
+#[test]
+fn a_directory_replaced_by_a_file_is_carried_and_a_file_replaced_by_a_directory_is_taken_out() {
+    use bravebot_agent::workspace::CarryBound;
+    let (scratch, state, workspace) = checked_out_repository(
+        "carry-flip",
+        &[("docs/a.md", "a\n"), ("tool", "was a file\n")],
+    );
+    std::fs::remove_dir_all(scratch.path.join("docs")).unwrap();
+    std::fs::write(scratch.path.join("docs"), "now a file\n").unwrap();
+    std::fs::remove_file(scratch.path.join("tool")).unwrap();
+    std::fs::create_dir(scratch.path.join("tool")).unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let plan = workspace.plan_carry(&mut policy);
+
+    let carried = workspace.carry_into(&mut policy, &plan, &made, CarryBound::FIXED);
+
+    assert!(carried.left.is_empty(), "{:?}", carried.left);
+    assert_eq!(
+        std::fs::read_to_string(made.root().join("docs")).unwrap(),
+        "now a file\n"
+    );
+    assert!(
+        !made.root().join("tool").exists(),
+        "a file the working directory replaced with a directory was left in the checkout"
     );
 }
 
@@ -9517,6 +12368,67 @@ fn a_summary_past_the_listing_cap_keeps_the_whole_total() {
     );
 }
 
+/// SEARCH-12: the offset and `context` do not apply to a `files` or a `count` result, since no line
+/// is returned. An offset applied to a survey leaves the first files and matches out of it, and the
+/// survey then reads as the whole tree. Lines are the control. The same offset and context cut a
+/// lines result, so a whole survey shows the arguments are read and set aside for a survey.
+#[test]
+fn a_files_or_count_result_is_not_cut_by_an_offset_or_context() {
+    use bravebot_agent::workspace::SearchOutput;
+    let scratch = Scratch::new("search-summary-offset-context");
+    std::fs::write(
+        scratch.path.join("a.txt"),
+        "needle\nbetween\nneedle\nneedle\nneedle\nneedle\n",
+    )
+    .unwrap();
+    std::fs::write(scratch.path.join("b.txt"), "needle\nneedle\nafter\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let tallied = |found: &bravebot_agent::workspace::Matches| {
+        found
+            .tallies
+            .iter()
+            .map(|t| (t.path.clone(), t.lines))
+            .collect::<Vec<_>>()
+    };
+
+    let lines = search_shaped(&workspace, SearchOutput::Lines, 6, 2);
+    assert_eq!(
+        lines.matches.len(),
+        2,
+        "an offset of 6 into 7 matches leaves 2, so the offset is honoured for lines"
+    );
+    assert!(!lines.context.is_empty(), "context is honoured for lines");
+
+    let files = search_shaped(&workspace, SearchOutput::Files, 6, 2);
+    assert_eq!(
+        tallied(&files)
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .collect::<Vec<_>>(),
+        ["a.txt", "b.txt"],
+        "an offset dropped files from the list"
+    );
+
+    let count = search_shaped(&workspace, SearchOutput::Count, 6, 2);
+    assert_eq!(
+        tallied(&count),
+        [("a.txt".to_string(), 5), ("b.txt".to_string(), 2)],
+        "an offset left matches out of the count"
+    );
+    assert_eq!(count.matched, 7);
+
+    for (output, found) in [("files", &files), ("count", &count)] {
+        assert!(found.matches.is_empty(), "{output} returned lines");
+        assert!(found.context.is_empty(), "{output} returned context lines");
+        assert!(!found.context_truncated, "{output}");
+        assert_eq!(
+            found.paging(),
+            None,
+            "{output} offered a page to continue from"
+        );
+    }
+}
+
 /// A repository map of `directory`, with `trust` as the trust map and `permissions` as the rules.
 fn map_of(
     workspace: &Workspace,
@@ -9767,6 +12679,36 @@ fn a_repo_map_says_when_the_file_cap_stopped_it() {
     assert_eq!(map.files, 5);
 }
 
+/// A tree with a directory that cannot be opened is not the tree the map shows, and a map that says
+/// nothing reads as complete. The files beside the directory are still mapped.
+#[cfg(unix)]
+#[test]
+fn a_repo_map_says_when_a_directory_could_not_be_opened() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("map-unreadable");
+    let locked = scratch.path.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(scratch.path.join("kept.rs"), "pub fn kept_function() {}\n").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A superuser opens it anyway, which leaves nothing to observe.
+    if std::fs::read_dir(&locked).is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: a mode 000 directory can be opened here, so none is unreadable");
+        return;
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let map = map_of(&workspace, trust, None, ".");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (map, _) = map.expect("an unreadable nested directory failed the map");
+
+    assert!(map.unreadable, "the missing directory was not reported");
+    assert!(!map.truncated, "a directory left out was reported as a cap");
+    assert!(map.body.contains("kept_function"), "{}", map.body);
+    assert_eq!(map.files, 1);
+}
+
 /// The argument names a directory; a file there is refused in the tool's words, not left to the
 /// filesystem's "Not a directory".
 #[test]
@@ -9848,4 +12790,128 @@ fn moving_the_working_directory_forgets_the_directories_worked_in() {
         .expect("the working directory moves");
 
     assert!(workspace.touched_directories().is_empty());
+}
+
+/// INSTR-16: moving the root drops the files a session touched and what it was told about the rules
+/// they loaded, for the reason INSTR-14 drops the directories. Kept, `src/lib.rs` would load a rule
+/// under the new root for a file nothing there touched, and a rule added again under the new root
+/// would never be said.
+#[test]
+fn moving_the_working_directory_forgets_the_files_touched_and_the_rules_told_of() {
+    let scratch = Scratch::new("moved-touched-files");
+    std::fs::create_dir_all(scratch.path.join("inner")).unwrap();
+    std::fs::write(scratch.path.join("README.md"), "").unwrap();
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    workspace.record_touch("src/lib.rs");
+    workspace.record_mention("README.md");
+    assert_eq!(workspace.touched_files(), ["src/lib.rs", "README.md"]);
+    assert!(workspace.take_telling(".bravebot/rules/rust.md"));
+
+    workspace
+        .change_root(scratch.path.join("inner").to_str().expect("utf-8 path"))
+        .expect("the working directory moves");
+
+    assert!(workspace.touched_files().is_empty());
+    assert!(
+        workspace.take_telling(".bravebot/rules/rust.md"),
+        "what the person was told under the old root was kept"
+    );
+}
+
+/// INSTR-16: a file the person names with `@` is a touch for the rules and not for the directories
+/// of INSTR-14, and a name that leaves the root, or names it, records nothing, so a planner cannot
+/// make a rule load for a file outside the project.
+#[test]
+fn a_name_typed_with_at_records_the_file_and_not_its_directory() {
+    let scratch = Scratch::new("mention-records-file");
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(project.join("pkg")).unwrap();
+    std::fs::write(project.join("pkg/a.rs"), "").unwrap();
+    std::fs::write(scratch.path.join("outside.rs"), "").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    workspace.record_mention("pkg/a.rs");
+    workspace.record_mention("../outside.rs");
+    workspace.record_mention(".");
+    workspace.record_touch("../outside/b.rs");
+
+    assert_eq!(workspace.touched_files(), ["pkg/a.rs"]);
+    assert!(workspace.touched_directories().is_empty());
+}
+
+/// INSTR-16: a file a tool touched is recorded by the name the planner typed, beside the directories
+/// INSTR-14 records, and by that spelling alone: a link in the name is not followed.
+#[test]
+fn a_touched_file_is_recorded_by_the_spelling_the_planner_typed() {
+    let scratch = Scratch::new("touch-records-file");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    workspace.record_touch("./pkg/../pkg/a.rs");
+    workspace.record_touch("pkg/a.rs");
+
+    assert_eq!(workspace.touched_files(), ["pkg/a.rs"]);
+    assert_eq!(workspace.touched_directories(), ["pkg"]);
+}
+
+/// INSTR-16: the record keeps at most 1024 files, so a planner reading through a large tree cannot
+/// make every turn compare every rule with thousands of names. The first 1024 stay and the one past
+/// them is not recorded, and a name typed with `@` is held to the same count.
+#[test]
+fn the_files_touched_stop_at_a_thousand_and_twenty_four() {
+    let scratch = Scratch::new("touch-files-cap");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for n in 0..1100 {
+        workspace.record_touch(&format!("f{n:04}.rs"));
+    }
+    workspace.record_mention("mentioned.rs");
+
+    let files = workspace.touched_files();
+    assert_eq!(files.len(), 1024);
+    assert_eq!(files.first().map(String::as_str), Some("f0000.rs"));
+    assert_eq!(files.last().map(String::as_str), Some("f1023.rs"));
+}
+
+/// INSTR-16: a front end that builds a workspace for each turn gives it what the session kept, and
+/// what the session touched and what the person was told about its rules are among it. Without them
+/// every turn would start with no file touched, and a rule would be gone one turn after the file
+/// that loaded it.
+#[test]
+fn a_workspace_given_what_the_session_kept_has_the_files_it_touched() {
+    let scratch = Scratch::new("kept-touched");
+    std::fs::write(scratch.path.join("README.md"), "").unwrap();
+    let first = Workspace::new(&scratch.path).expect("workspace");
+    first.record_touch("pkg/a.rs");
+    first.record_mention("README.md");
+    assert!(first.take_telling(".bravebot/rules/rust.md"));
+    let kept = first.kept_between_turns();
+
+    let next_turn = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_kept_between_turns(&kept);
+
+    assert_eq!(next_turn.touched_files(), ["pkg/a.rs", "README.md"]);
+    assert_eq!(next_turn.touched_directories(), ["pkg"]);
+    assert!(!next_turn.take_telling(".bravebot/rules/rust.md"));
+    let stranger = Workspace::new(&scratch.path).expect("workspace");
+    assert!(stranger.touched_files().is_empty());
+}
+
+/// INSTR-16: a name typed with `@` is a file named only where a file is there. A directory is not a
+/// file, and a glob such as `src/**` matches the name of the directory it is for, so recording one
+/// would load a rule for a file nobody named. A name that is nothing is not a file either.
+#[test]
+fn a_name_typed_with_at_that_is_a_directory_or_nothing_is_not_a_file() {
+    let scratch = Scratch::new("mention-needs-a-file");
+    std::fs::create_dir_all(scratch.path.join("src")).unwrap();
+    std::fs::write(scratch.path.join("src/lib.rs"), "").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    workspace.record_mention("src");
+    workspace.record_mention("src/");
+    workspace.record_mention("missing.rs");
+    assert!(workspace.touched_files().is_empty());
+
+    workspace.record_mention("src/lib.rs");
+    assert_eq!(workspace.touched_files(), ["src/lib.rs"]);
 }

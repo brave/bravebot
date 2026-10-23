@@ -7,4 +7,12 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
+
+[dev-dependencies]
+# Test-only. The tables in src/canonical/tables.rs are checked against the crate that publishes
+# them, over every code point. The runtime has no dependency (CRED-18).
+unicode-normalization = { workspace = true }

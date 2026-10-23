@@ -28,7 +28,14 @@ it interactively, or say so on the command line:
 bravebot --dangerously-skip-permissions -p "fix the failing test"
 ```
 
-That flag lifts the refusal of effects, because a flag you typed is an instruction rather than a guess
+If the run only needs to edit files, `--accept-edits` is the narrower grant: writes go through, and
+commands, fetches and a write that would create a credential are still refused.
+
+```sh
+bravebot --accept-edits -p "apply the lint fixes"
+```
+
+`--dangerously-skip-permissions` lifts the refusal of every effect, because a flag you typed is an instruction rather than a guess
 made in your name. It does not lift the second half: the planner's questions are declined in that mode
 too, since they are not permissions. It is a mode for a container with no network and nothing in it
 worth losing. See [modes](../security/permissions.md#answering-in-advance-modes).
@@ -57,15 +64,17 @@ nobody is watching cannot be asked to trust a tree. See
 A run starts with nothing trusted, so the planner reads project files only through a processor or a
 file named with `--file`. `--trust-workspace` trusts the working directory and everything under it
 for this run, as answering yes to the startup question does, and nothing else: directories from
-`--add-dir` stay untrusted and no record is written.
+`--add-dir` stay untrusted and no record is written. Trusting the directory opens reads only: a
+write is still refused unless the run was given `--accept-edits` or `--dangerously-skip-permissions`.
 
 ```sh
 bravebot --trust-workspace -p "summarise what src/ does"
 ```
 
-A run in a directory where a session once kept the answer (`r` at the startup question), or inside
-the git worktree whose root it was kept about, opens trusting the directory without the flag, and says so on stderr with how to take it back. The flag is read from
-the command line only, so a settings file or a checkout cannot turn it on.
+A run in a directory where a session once kept a yes (`y` at the startup question), or inside the
+git worktree whose root it was kept about, opens trusting the directory without the flag, and says so
+on stderr with how to take it back. The flag is read from the command line only, so a settings file
+or a checkout cannot turn it on.
 
 ## Piped input is untrusted and private, always
 
@@ -134,6 +143,22 @@ refusal and change in token usage, then the same object as the last line, so a s
 progress or tell a hung run from a slow one. [The reference](../reference/cli.md#--json-stream)
 lists the events.
 
+## Sending several turns to one process
+
+```sh
+bravebot --input-format lines --trust-input-lines <<'EOF'
+{"type":"prompt","text":"review the diff"}
+{"type":"prompt","text":"now fix what you found"}
+EOF
+```
+
+`--input-format lines` reads JSON lines on stdin for as many turns as it is sent. A `prompt` starts a
+turn over the conversation the last one left, a `steer` reaches the turn that is running, an `answer`
+replies to a question the agent asked, and a `stop` ends the turn in flight. Each turn ends with its
+own result object. Where nobody typed `--trust-input-lines`, the text of a line is a program's words
+and the agent is given a reference to it, never the words. [The reference](../reference/cli.md#--input-format-lines)
+has the lines and the events.
+
 ## Sending a follow-up to an earlier run
 
 ```sh
@@ -141,7 +166,9 @@ id=$(bravebot --json -p "review the diff" | jq -r '.session')
 bravebot -p "now fix what you found" --resume "$id"
 ```
 
-A one-shot run is written down as a session, and `--json` names it under `session`. `--resume <id>`
+A one-shot run is written down as a session, and `--json` names it under `session`. The record carries
+the turn's timing and the time the run began, and the run's audit trail is kept beside it, so a resumed
+session shows both without `--trace`. `--resume <id>`
 or `--continue` with a task runs that task as one more turn of it, so a script can chain a review, a
 fix and a summary over one conversation instead of restating it each time. Piped input stays a
 reference, and `--incognito` writes nothing, so there is no id to pass on.
@@ -176,11 +203,19 @@ each thing it reads.
 The gates are the same ones in both modes. What changes is the scope of the precommitment, from one
 turn to a whole run.
 
+The two planning calls run on the run's model. Each processing step runs on the model
+[`--processor-model`](../reference/cli.md#--processor-model-name) or the
+[`processorModel`](../customize/configuration.md#processormodel) setting names, so a plan can be made
+on a stronger model and carried out on a cheaper one.
+
 A plan that fails validation **fails the run whole**: nothing is half adopted, no step is patched to
 make a plan usable, and nothing re-plans once a step has read something. Where every effect will land
 is fixed before the first byte is read, and the driver cannot insert, skip, reorder or invent a step.
 A destination has to be text, so a plan that filled one with a number or a list is refused whole
-rather than reaching the step that would have used it. An unknown mode name is refused rather than
+rather than reaching the step that would have used it. The same holds for the `contents` of a
+`write_file` step and the `instruction` of a processor step: a number or a list there is refused with
+"'contents' must be text" or "'instruction' must be text", where it used to be written as an empty
+file. An unknown mode name is refused rather than
 guessed, since guessing would run the mode you did not ask for.
 
 A session can start one of these runs too, with `/manifest`. See
@@ -261,6 +296,11 @@ A one-shot run carries a limit of 200 rounds of tool calls, where an interactive
 On the limiting round the planner is offered no tools and told it has none left, so it answers with
 what it has.
 
+[`--max-rounds <n>`](../reference/cli.md#--max-rounds-n-and---max-tokens-n) lowers that limit, and
+[`--max-tokens <n>`](../reference/cli.md#--max-rounds-n-and---max-tokens-n) adds one on the tokens a
+run may spend. A run that reaches either stops, without the planner's answer, and ends on status 8,
+so a job can tell a run that was cut short from one that finished.
+
 ## Exit codes
 
 A failure exits non-zero, and **the status says which failure it was**. A configuration error, a
@@ -276,6 +316,8 @@ explanation on stdout.
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` asked for |
+| 7 | `BB1007` | worked towards the condition `--goal` gave, and it did not hold |
+| 8 | `BB1008` | reached the limit `--max-rounds` or `--max-tokens` gave it, and stopped before going past it |
 
 A status is never renumbered and never given a second meaning, so a script can branch on one: "the
 endpoint was not there, try again", "the configuration is wrong, fail the build" and "a gate refused
@@ -301,9 +343,15 @@ the wrong thing to search for.
 | `--trace` | print the audit trail to stderr |
 | `--model <name>` | the model this run asks for |
 | `--advisor <name>` | a model the planner may put a question to |
+| `--processor-model <name>` | the model processors run on, in place of the `processorModel` setting |
 | `--json` | one result object on stdout, in the reply's place |
 | `--json-stream` | one event per line on stdout as the run goes, then the result object |
+| `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line; implies `--json-stream` |
+| `--trust-input-lines` | treat those lines as your own words and not a program's |
 | `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
+| `--goal <condition>` | keep working until a judge says the condition holds; a condition that never does ends on status 7 |
+| `--max-rounds <n>` | stop the run when the agent asks for a round of tool calls past this many; ends on status 8 |
+| `--max-tokens <n>` | stop the run before a request once this many tokens are spent; ends on status 8 |
 | `--settings <path>` | read a settings file above the ones found, for this run |
 | `--mode manifest` | plan the whole run first, then walk the plan |
 

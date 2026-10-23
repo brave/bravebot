@@ -21,6 +21,7 @@
 // rather than the only one.
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { SIDEBAR_TAB } from '../../drive-support.mjs'
 
 const NAME = 'Harbour Watch'
 const PURPOSE =
@@ -58,7 +59,7 @@ export default {
       for (const folder of bot.folders) rmSync(join(folder, '.bravebot-ui', 'bots', `${bot.slug}.md`), { force: true })
     }
 
-    const tab = page.locator('.sidebar-tabs [role="option"]').nth(1)
+    const tab = page.locator(SIDEBAR_TAB).nth(1)
     if (!(await tab.count())) s.skip('this build has no bots tab')
 
     await s.say('Bots', 'The left column holds two lists. This is the other one.', 2.2)

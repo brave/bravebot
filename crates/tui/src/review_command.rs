@@ -30,10 +30,10 @@ pub struct Asked {
     pub focus: Option<String>,
 }
 
-const STAGED: &str = "staged";
-const SINCE: &str = "since";
-const COMMIT: &str = "commit";
-const PULL_REQUEST: &str = "pr";
+pub(crate) const STAGED: &str = "staged";
+pub(crate) const SINCE: &str = "since";
+pub(crate) const COMMIT: &str = "commit";
+pub(crate) const PULL_REQUEST: &str = "pr";
 
 /// The longest ref or address accepted. Longer than any real one.
 const LONGEST: usize = 200;

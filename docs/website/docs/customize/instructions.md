@@ -21,18 +21,20 @@ happens, rather than to ask the planner for it, see [Hooks](hooks.md). For a who
 planner loads only when the task calls for it, see [Skills](skills.md). For a kind of delegate the
 planner can hand a sub-task to, see [Delegate definitions](agents.md).
 
-## The ten sources
+## The twelve sources
 
 | File | Applies to |
 |---|---|
 | `~/.bravebot/AGENTS.md` | every project |
 | `~/.bravebot/skills/<name>/SKILL.md` | every project |
 | `~/.bravebot/agents/<name>.md` | every project |
+| `~/.bravebot/rules/<name>.md` | every project, every turn or once a file its `paths` match is touched |
 | `<workspace>/AGENTS.md`, else `CLAUDE.md`, else `.claude/CLAUDE.md` | this project |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.claude/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.agents/skills/<name>/SKILL.md` | this project |
 | `<workspace>/.bravebot/agents/<name>.md` | this project |
+| `<workspace>/.bravebot/rules/<name>.md` | this project, every turn or once a file its `paths` match is touched |
 | `<workspace>/<directory>/AGENTS.md` | this project, once a turn has worked in that directory |
 | `<workspace>/<directory>/.bravebot/skills/<name>/SKILL.md` | this project, once a turn has worked in that directory |
 
@@ -58,6 +60,38 @@ import inside a nested file is not followed. Only `.bravebot/skills` is read bel
 not when it is only listed or searched, and a session remembers up to 64 of them until `/cd` moves
 the project.
 
+**A rule file loads when a turn touches a file it names.** A convention that applies to one kind of
+file, in any directory, does not have to be in every request. Put it in
+`.bravebot/rules/<name>.md` (or `~/.bravebot/rules/<name>.md` for every project) with a `paths` list
+in its frontmatter:
+
+```markdown
+---
+paths:
+  - "**/*.rs"
+  - "Cargo.{toml,lock}"
+---
+
+Run `cargo clippy` before saying a Rust change is done.
+```
+
+The rule stays out of the system prompt until the planner has read or written a file one of the
+globs matches, or you name one with `@`. It is then added before the next request, after
+everything else in the prompt, and stays for the rest of the session. The prompt tells the planner
+that the mode and any words you gave on the command line stand where a rule disagrees with them.
+You are told once which rule was added and which file matched it. A glob with no `/` matches a file
+name at any depth, as in `*.rs`, and one with a `/` is read from the project root. A leading `/`
+or `./` names the project root's own files, so `/Cargo.toml` is the one beside `.bravebot`, and a
+glob ending in `/` names everything below that directory. The
+globs are the ones `list_files` takes: `*`, `**`, `?` and `{a,b}`, with no `[abc]`. A rule with no
+`paths` is in every turn, after the `AGENTS.md` of its own directory, and `paths: []` never loads.
+
+Only a name the planner typed to a file tool or you typed after `@` counts. A name a listing, a
+search or a command printed does not. Each rule file goes through the trust check and the `deny`
+rules like `AGENTS.md`: a project directory you have not vouched for is reported with a count, and
+no name or text. The session remembers up to 1024 touched files, and `/cd` and a resumed session
+start with none.
+
 **The project's file is looked for under three names, and the first that exists is the one.** Not all
 three: a repository holding two of them holds one set of instructions under two names, and reading
 both would say everything twice in a system prompt that goes out afresh every request.
@@ -69,7 +103,8 @@ kept there is optional, so absence is a case to do without rather than a reason 
 
 `HOME` is what names it. Stock Windows sets no `HOME`, so there `USERPROFILE` is read after it and
 the first of the two that is set wins: that is the platform stating where the profile is, the same
-thing `HOME` does on Unix, rather than a guess past an answer. See
+thing `HOME` does on Unix, rather than a guess past an answer. `BRAVEBOT_HOME`, holding an absolute
+path, names the directory itself ahead of both. See
 [Configuration](configuration.md) for the rest of what lives in that directory.
 
 Note the two roots are spelled differently. Your own skills and delegate definitions sit directly
@@ -123,7 +158,7 @@ expanded.
 ## Words from the command line
 
 [`--append-system-prompt`](../reference/cli.md#--system-prompt-prompt-and---append-system-prompt-prompt)
-adds its words as a ninth source that is not a file. It is read last, after the project's
+adds its words as a source that is not a file. It is read last, after the project's
 `AGENTS.md`, so where the two disagree the words win. It is held by the running process, so it is in
 every turn of the run and in the stored session of none: resuming without the flag runs without it.
 
@@ -154,6 +189,29 @@ out the task.
 Sources are resolved afresh every turn, so editing `AGENTS.md` mid-session takes effect on the next
 thing you send. A source that is not there is not an error. No `AGENTS.md`, no skills directory, no
 user directory at all: each is the ordinary case and offers nothing.
+
+### Size
+
+Because every request carries them, a long instructions file costs its length on every turn of the
+session. Two fixed figures apply to sources that have passed the trust gate, and both only ever
+warn: a source is never dropped or cut short for its size.
+
+| Over | What happens |
+|---|---|
+| 16384 bytes in one file | The file loads, and you are told which file it is and how big |
+| 32768 bytes across all sources | You are told the total, once, at the source that crosses it |
+
+```
+AGENTS.md is 41232 bytes, and every request this session sends carries it
+```
+
+However large a file is, it still reaches the prompt. Half a conventions document is worse than a
+whole one that cost a sentence to say so: the rules that happened to be in the second half would be
+gone with no sign of it, and the first half would read as the whole.
+
+Both the figures and the notices concern files that are there. A source that is absent is still
+silent, and the check is a byte count: nothing a file says decides whether it loads or what is said
+about it. `--append-system-prompt` is not measured, since there is no file behind it.
 
 ## Where you are working
 
@@ -275,6 +333,10 @@ directory nobody vouched for has to be absent.
 What was skipped is counted, never named. A directory in an untrusted project can be given a name
 that reads like an instruction, and that name would otherwise be on your screen as though the agent
 had written it.
+
+A skipped skill directory is left out of that count only when a skill with the same directory name,
+from a more specific root you vouched for and that is read later, takes its place. A built-in skill,
+one in `~/.bravebot` and one from a less specific root do not cover it, so it is still counted.
 
 The notice is said when it is learned, before the first request goes out, rather than when the turn
 ends. A turn that fails or is cancelled has already told you what it was working without.

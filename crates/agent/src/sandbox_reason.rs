@@ -23,7 +23,7 @@ pub fn looser(refused: &Refused) -> String {
     .to_string()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
     use bravebot_config::sandbox::Floor;

@@ -69,6 +69,31 @@ fn alone() -> &'static AtomicBool {
     &ALONE
 }
 
+/// Whether the terminal last reported being in front of the person.
+fn in_front() -> &'static AtomicBool {
+    static IN_FRONT: AtomicBool = AtomicBool::new(true);
+    &IN_FRONT
+}
+
+/// Whether the terminal is believed to be in front of the person.
+///
+/// `true` until the terminal reports being left, so one that reports no change of focus is always
+/// taken to be in front. Kept here rather than by the readers that act on it, because a prompt
+/// discards the events that are not keys and a report it discarded would leave the answer wrong
+/// until the next one.
+pub fn terminal_is_in_front() -> bool {
+    in_front().load(Ordering::Relaxed)
+}
+
+/// Take what an event handed out says about the terminal's focus.
+fn note_focus(event: &TermEvent) {
+    match event {
+        TermEvent::FocusGained => in_front().store(true, Ordering::Relaxed),
+        TermEvent::FocusLost => in_front().store(false, Ordering::Relaxed),
+        _ => {}
+    }
+}
+
 /// Whether the last event handed out arrived on its own.
 ///
 /// `true` where the terminal had one event waiting, which is what a person pressing a key looks
@@ -127,6 +152,32 @@ pub fn poll(timeout: Duration) -> io::Result<bool> {
     event::poll(timeout)
 }
 
+/// Whether the next event waiting is one a frame may wait out: the pointer's, or a change of size.
+///
+/// A drag arrives as a stream of positions and a frame for each would trail the pointer, so a burst
+/// of them is drawn once, and dragging a window edge is the same stream of sizes. A key, a paste or
+/// a focus change is not that: the person is looking at the screen for the result, so it is drawn
+/// as soon as it has been handled, however many more are queued behind it. Answers `false` where
+/// nothing is waiting.
+///
+/// Reads what the terminal has waiting into the queue, as a [`read`] would, so a caller asking
+/// this and then reading sees the events in the order they were written.
+pub fn next_is_a_stream() -> io::Result<bool> {
+    if pending().is_empty() {
+        if !event::poll(Duration::ZERO)? {
+            return Ok(false);
+        }
+        gather()?;
+    }
+    Ok(pending()
+        .front()
+        .is_some_and(|(event, _)| is_a_stream(event)))
+}
+
+fn is_a_stream(event: &TermEvent) -> bool {
+    matches!(event, TermEvent::Mouse(_) | TermEvent::Resize(..))
+}
+
 /// The next event, blocking until there is one.
 ///
 /// Hands out what is buffered before reading the terminal again, so the order the terminal wrote
@@ -136,6 +187,7 @@ pub fn poll(timeout: Duration) -> io::Result<bool> {
 pub fn read() -> io::Result<TermEvent> {
     if let Some((event, on_its_own)) = pending().pop_front() {
         alone().store(on_its_own, Ordering::Relaxed);
+        note_focus(&event);
         return Ok(event);
     }
 
@@ -149,6 +201,7 @@ pub fn read() -> io::Result<TermEvent> {
         )
     })?;
     alone().store(on_its_own, Ordering::Relaxed);
+    note_focus(&event);
     Ok(event)
 }
 
@@ -210,6 +263,29 @@ mod tests {
 
     fn key(code: KeyCode) -> TermEvent {
         TermEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// A frame may wait out a drag or a resize and nothing else. A key waiting behind another key is a person
+    /// typing, and holding its frame back is the stutter the coalescing was never meant to cause.
+    #[test]
+    fn only_a_stream_of_positions_or_sizes_is_an_event_a_frame_waits_out() {
+        use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+        let drag = TermEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(is_a_stream(&drag));
+        assert!(is_a_stream(&TermEvent::Resize(80, 24)));
+        for other in [
+            key(KeyCode::Char('a')),
+            released(KeyCode::Char('a')),
+            TermEvent::Paste("pasted".into()),
+            TermEvent::FocusGained,
+        ] {
+            assert!(!is_a_stream(&other), "{other:?} was coalesced like a drag");
+        }
     }
 
     /// One event waiting is what a person pressing a key looks like, since nothing fills the buffer
@@ -302,7 +378,9 @@ mod tests {
     /// because the queue and the flag are process globals: split up, these assertions would race
     /// each other under parallel execution rather than testing anything. Nothing else in this crate
     /// touches either, and `read` is called exactly as many times as there are events queued, so a
-    /// fault fails here instead of reaching the terminal a test does not have.
+    /// fault fails here instead of reaching the terminal a test does not have. It ends with the
+    /// focus flag, which `read` sets from the events it hands out and which is a global for the
+    /// same reason.
     #[test]
     fn the_queue_is_answered_before_the_terminal_and_in_arrival_order() {
         assert!(
@@ -336,5 +414,52 @@ mod tests {
         }
 
         assert!(pending().is_empty(), "the queue held something back");
+
+        // `next_is_a_stream` looks at the front of a non-empty queue without taking it, so a key
+        // waiting behind a drag is not reported until the drag has been read.
+        let drag = TermEvent::Mouse(ratatui::crossterm::event::MouseEvent {
+            kind: ratatui::crossterm::event::MouseEventKind::Moved,
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        for (front, behind, stream) in [
+            (key(KeyCode::Char('a')), drag.clone(), false),
+            (drag, key(KeyCode::Char('a')), true),
+        ] {
+            {
+                let mut queue = pending();
+                queue.push_back((front, true));
+                queue.push_back((behind, false));
+            }
+            assert_eq!(
+                next_is_a_stream().expect("a queue with events in it cannot reach the terminal"),
+                stream,
+                "the answer was not about the event at the front of the queue"
+            );
+            assert_eq!(pending().len(), 2, "asking took an event out of the queue");
+            pending().clear();
+        }
+
+        // A prompt reads through `read` and throws away every event that is not a key, so a report
+        // of the terminal being left or returned to is noted where it is read, and a person who
+        // comes back while a question is open is in front when the turn ends.
+        assert!(
+            terminal_is_in_front(),
+            "nothing had reported the terminal left"
+        );
+        for (reported, in_front) in [
+            (TermEvent::FocusLost, false),
+            (key(KeyCode::Char('a')), false),
+            (TermEvent::FocusGained, true),
+        ] {
+            pending().push_back((reported.clone(), true));
+            assert_eq!(read().expect("an event was queued"), reported);
+            assert_eq!(
+                terminal_is_in_front(),
+                in_front,
+                "{reported:?} left the focus wrong"
+            );
+        }
     }
 }

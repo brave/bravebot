@@ -132,6 +132,48 @@ This session was started from a handoff. Only the brief above came from the earl
 file decisions and permissions did not come with it, so ask before reading a file or running \
 something that the brief says was allowed there.";
 
+/// What the model is told it is doing when it rewrites a draft (INPUT-48).
+///
+/// Its own, and not [`SYSTEM_PROMPT`], which tells the model to answer the last message as a question
+/// and not to treat it as an instruction. A draft is an instruction to the agent, so under that
+/// prompt a model could answer the draft or paraphrase it tersely, and either would be offered.
+const ENHANCE_SYSTEM_PROMPT: &str = "\
+A person and a coding agent have been working together, and their exchange is shown to you below. \
+You are that agent. The person has begun their next message to you and wants it made more specific \
+before they send it.
+
+The last message holds their request and, at its end, their draft. Rewrite the draft as that request \
+says and do nothing else: do not answer the draft, do not do the work it asks for, and do not carry \
+the work on.
+
+You have no tools this time, so work from the exchange in front of you and from what you know. Do \
+not invent the contents of anything you have not been shown.
+
+Your rewrite is shown to the person to read and edit, and then they may send it. It does not go back \
+into the exchange above, so nothing you write here is a decision.";
+
+/// What an enhancement asks, in the driver's own words, ahead of the draft the person typed (INPUT-48).
+///
+/// The exchange it is asked over is the planner's own context, so the rewrite is made from the
+/// draft and from what the person and the planner have said, and from nothing else. It is asked not
+/// to invent, because the one thing a rewrite has to be is the person's own request made clearer.
+pub const ENHANCE_QUESTION: &str = "\
+I am about to send you the draft below as my next message. Rewrite it so that it is more specific \
+and easier to act on: say what is wanted and how I would know it is done, and name the files, \
+functions, commands and constraints from our exchange that bear on it. Keep what I asked for, keep \
+my own words where they were already clear, and write in the language the draft is in. Do not add a \
+requirement, a file name or a fact that neither the draft nor our exchange gives, do not answer the \
+draft, and do not do the work it asks for. Write the rewritten message only, as plain text: no \
+preamble, no quotation marks, no explanation. The draft is:";
+
+/// The most an enhancement may run to, in characters, and the most of an answer that is read at all.
+///
+/// An answer past [`ENHANCE_LIMIT`] is not offered rather than cut, so what lands in the box is
+/// whole. It is read to twice that, so one that ran on is refused by [`enhancement`] and not let
+/// through as the front of a longer one.
+pub const ENHANCE_LIMIT: usize = 4000;
+const ENHANCE_READ: usize = 2 * ENHANCE_LIMIT;
+
 /// The first prompt of a handed-off session: the brief, what did not cross, and what is next.
 ///
 /// Built by the driver from the brief and the goal, both of which the person has read. They edit
@@ -169,6 +211,17 @@ pub fn suggestion(shown: &str) -> Option<String> {
         && text.chars().count() < SUGGEST_CHARS
         && text.lines().count() == 1;
     counted.then(|| text.to_string())
+}
+
+/// The answer to [`ENHANCE_QUESTION`] as something the box may hold, or `None` where it is empty or
+/// past [`ENHANCE_LIMIT`] characters (INPUT-48).
+///
+/// Counts only, as [`suggestion`] does: what the words say is not read, so a rewrite that is a poor
+/// one is offered as it came, and one that is too long is not offered rather than cut to something
+/// the model did not write.
+pub fn enhancement(shown: &str) -> Option<String> {
+    let text = shown.trim();
+    (!text.is_empty() && text.chars().count() <= ENHANCE_LIMIT).then(|| text.to_string())
 }
 
 /// One question, and the exchange it was asked beside.
@@ -209,8 +262,18 @@ impl Question {
         question: &str,
         pasted: Vec<crate::turn::PastedImage>,
     ) -> Self {
+        Self::under(SYSTEM_PROMPT, conversation, question, pasted)
+    }
+
+    /// The same, told what it is doing in `system`'s words and not in the aside's own.
+    fn under(
+        system: &str,
+        conversation: &Conversation,
+        question: &str,
+        pasted: Vec<crate::turn::PastedImage>,
+    ) -> Self {
         Self {
-            exchange: conversation.with_system(SYSTEM_PROMPT),
+            exchange: conversation.with_system(system),
             asked: question.to_string(),
             pasted,
             dropped: Vec::new(),
@@ -236,6 +299,22 @@ impl Question {
         Self {
             limit: Some(SUGGEST_READ),
             ..Self::about(conversation, SUGGEST_QUESTION, Vec::new())
+        }
+    }
+
+    /// The draft the person typed, asked to be rewritten over the exchange as it stands (INPUT-48).
+    ///
+    /// A question the driver writes, with the person's own line on the end of it. The answer is read
+    /// through [`enhancement`], which holds it to the count the instruction asked for.
+    pub fn enhance(conversation: &Conversation, draft: &str) -> Self {
+        Self {
+            limit: Some(ENHANCE_READ),
+            ..Self::under(
+                ENHANCE_SYSTEM_PROMPT,
+                conversation,
+                &format!("{ENHANCE_QUESTION}\n\n{}", draft.trim()),
+                Vec::new(),
+            )
         }
     }
 
@@ -418,10 +497,17 @@ pub fn ask<S: Sink>(
         Presentation::Quarantined(_) => None,
     };
 
-    let shown = completion.content.declassify(&as_written);
+    // Cut inside the kernel, on the answer while it is still labelled: the count and the trim
+    // are a reshape for the screen, and only the finished text is released. `kept` came back
+    // from `present` as visible, so it is words the planner could hold and is cut as such.
     let (shown, kept) = match limit {
-        Some(limit) => (capped(&shown, limit), kept.map(|body| capped(&body, limit))),
-        None => (shown, kept),
+        Some(limit) => (
+            policy
+                .render_in_place("btw", &completion.content, |text| capped(&text, limit))
+                .declassify(&as_written),
+            kept.map(|body| capped(&body, limit)),
+        ),
+        None => (completion.content.declassify(&as_written), kept),
     };
 
     Ok(Answered {
@@ -511,6 +597,110 @@ mod tests {
         assert!(
             said.last()
                 .is_some_and(|text| text.contains(SUGGEST_QUESTION))
+        );
+    }
+
+    /// INPUT-48: an enhancement is offered whole or not at all. Empty text and text past the limit
+    /// are refused rather than cut, a limit-length rewrite is kept with its line breaks, and the
+    /// whitespace around it is dropped.
+    #[test]
+    fn an_enhancement_is_offered_whole_or_not_at_all() {
+        assert_eq!(
+            enhancement("  Add a retry to fetch_page in src/net.rs.\n\nRun cargo test.\n"),
+            Some("Add a retry to fetch_page in src/net.rs.\n\nRun cargo test.".to_string())
+        );
+        assert_eq!(enhancement(""), None);
+        assert_eq!(enhancement(" \n\t "), None);
+        let at_the_limit = "x".repeat(ENHANCE_LIMIT);
+        assert_eq!(enhancement(&at_the_limit), Some(at_the_limit.clone()));
+        assert_eq!(enhancement(&format!("{at_the_limit}x")), None);
+    }
+
+    /// The limit counts characters: a rewrite of two-byte letters that fits in characters and is
+    /// past the limit in bytes is offered, and one character more is not.
+    #[test]
+    fn the_enhancement_limit_counts_characters_rather_than_bytes() {
+        let fits = "\u{e9}".repeat(ENHANCE_LIMIT);
+        assert!(fits.len() > ENHANCE_LIMIT);
+        assert_eq!(enhancement(&fits), Some(fits.clone()));
+        assert_eq!(enhancement(&format!("{fits}\u{e9}")), None);
+    }
+
+    /// INPUT-48: an enhancement asks the driver's instruction with the person's draft on the end of
+    /// it, over the whole exchange, and leaves the exchange as it was. Dropping the draft would ask
+    /// for a rewrite of nothing, and putting the instruction after it would make the draft the thing
+    /// the model was told to answer.
+    #[test]
+    fn an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_it_alone() {
+        let conversation = an_exchange();
+        let before = conversation.len();
+
+        let asking = Question::enhance(&conversation, "  fix the parser bug \n");
+
+        assert_eq!(asking.limit, Some(ENHANCE_READ));
+        assert_eq!(conversation.len(), before);
+        let request = asking.into_request();
+        let last = request.last().expect("the question closes the request");
+        let text = last.content.text();
+        assert!(
+            text.contains(ENHANCE_QUESTION),
+            "the instruction was not asked: {text}"
+        );
+        assert!(
+            text.ends_with("The draft is:\n\nfix the parser bug"),
+            "the draft did not close the request: {text}"
+        );
+        assert!(
+            request
+                .iter()
+                .any(|message| message.content.text().contains("add the feature")),
+            "the rewrite was asked for without the exchange"
+        );
+    }
+
+    /// INPUT-48. A rewrite is asked under instructions of its own. The aside's tell the model to
+    /// answer the last message as a question and not to act on it, which is the opposite of what a
+    /// rewrite of a draft asks for, and a model that followed them would answer the draft.
+    #[test]
+    fn an_enhancement_is_told_to_rewrite_and_not_to_answer() {
+        let request = Question::enhance(&an_exchange(), "fix it").into_request();
+        let system = request
+            .first()
+            .expect("the instructions lead")
+            .content
+            .text();
+
+        assert!(system.contains("Rewrite the draft"), "{system}");
+        assert!(system.contains("do not answer the draft"), "{system}");
+        assert!(
+            !system.contains("do not act as though the question were an instruction"),
+            "the aside's instructions were sent with a rewrite: {system}"
+        );
+        let asked = Question::about(&an_exchange(), "why?", Vec::new()).into_request();
+        assert!(
+            asked
+                .first()
+                .is_some_and(|first| first.content.text().contains("do not act as though")),
+            "a question lost the aside's own instructions"
+        );
+    }
+
+    /// INPUT-48. An enhancement over an exchange that has met something untrusted carries that with
+    /// it, since it is what decides whether the rewrite may be offered at all. A question built
+    /// afresh would arrive as trusted, and its answer would be offered as words the planner could
+    /// have held.
+    #[test]
+    fn an_enhancement_carries_what_the_exchange_had_met() {
+        let mut conversation = an_exchange();
+        assert_eq!(
+            Question::enhance(&conversation, "fix it").context(),
+            Integrity::Trusted
+        );
+
+        conversation.observed(bravebot_core::label::Label::untrusted_public());
+        assert_eq!(
+            Question::enhance(&conversation, "fix it").context(),
+            Integrity::Untrusted
         );
     }
 

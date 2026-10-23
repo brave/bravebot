@@ -34,7 +34,7 @@ const RUN_IT: usize = 1;
 const STOP: usize = 2;
 
 /// The last call the planner made and how many times in a row it has made it.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Repeats {
     last: Option<(String, String)>,
     count: usize,
@@ -153,6 +153,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ASK-9: a repeated call runs only on the person's say, so its question waits for them.
+    /// Rejects: a flag set on every question the driver puts.
+    #[test]
+    fn the_repeated_call_question_is_never_closed_when_nobody_answers() {
+        assert!(!asking("read_file", 3).closes_when_idle);
+    }
 
     fn call(name: &str, arguments: &str) -> ToolCall {
         serde_json::from_value(serde_json::json!({

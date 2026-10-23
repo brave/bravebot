@@ -8,8 +8,9 @@ argument for the label it carries; then a plan naming files, the clause and the 
 
     python3 agents/skills/security-audit/draft-issues.py --work-dir "$WORK_DIR"
 
-This writes files. `post-issues.py` is what files them, and it reads what this wrote, so a body can
-be edited between the two steps and the edit is what gets posted.
+This writes files. Each draft is handed to the `issue-poster` definition (agents/agents/issue-poster.md),
+which files it from the body this wrote, so a body can be edited between the two steps and the edit is
+what gets posted.
 
 The text helpers are `check-spec`'s. Two skills writing issue bodies against the same specs should
 quote a clause and excerpt a line the same way, and a second copy would be a second thing to fix.
@@ -65,6 +66,7 @@ KIND_LABEL = {
     "labelled-impl": "bug",
     "unpinned-action": "bug",
     "unpinned-image": "bug",
+    "unverified-download": "bug",
     "exception-count-disagreement": "documentation",
     "exception-count-unstated": "documentation",
     "construction-unpinned": "spec-coverage",
@@ -112,8 +114,7 @@ IMPACT_LINE = {
 }
 
 FOUND_BY = (
-    "Found by the `security-audit` skill: the `{lane}` lane read the code and a second pass tried to "
-    "disprove the finding before it was drafted. Filed by a tool rather than by a person, so nothing "
+    "Found by the `security-audit` skill: {readers}. Filed by a tool rather than by a person, so nothing "
     "here is triaged and no `importance`, `urgency` or `size` has been judged. The verifier's reason "
     "for letting it stand: {reason}"
 )
@@ -129,6 +130,19 @@ AREAS = ("trust", "tools", "turns", "interface", "cli", "delegation", "backends"
 # The build and the tracker rather than the product. There is no `area/` for it, and a finding about a
 # workflow belongs to whoever owns the pipeline.
 INFRASTRUCTURE = "infrastructure"
+
+
+def readers_of(finding):
+    """Who read the code and found it: the lane, and every other lane whose candidate the verifier
+    judged to be the same defect."""
+    lanes = list(dict.fromkeys([finding.get("lane") or "unknown", *finding.get("also_reported_by", [])]))
+    named = [f"`{one}`" for one in lanes]
+    if len(named) == 1:
+        return f"the {named[0]} lane read the code and a second pass tried to disprove the finding before it was drafted"
+    return (
+        f"the {', '.join(named[:-1])} and {named[-1]} lanes each read the code, and one second pass "
+        "tried to disprove the finding for all of them before it was drafted"
+    )
 
 
 def label_set(finding):
@@ -411,7 +425,7 @@ def body_for(finding, screen=None, session=None):
     if finding.get("source") == "audit":
         lines.append(
             FOUND_BY.format(
-                lane=finding.get("lane") or "unknown",
+                readers=readers_of(finding),
                 reason=prose(finding.get("verified_reason") or "not recorded"),
             )
         )
@@ -477,9 +491,9 @@ def report(drafts, out):
             )
     lines.append("")
     counted = f"{len(drafts)} draft" + ("" if len(drafts) == 1 else "s")
-    lines.append(f"{counted} in {out}. Post them with:")
+    lines.append(f"{counted} in {out}. Hand each one to the issue-poster definition (agents/agents/issue-poster.md):")
     lines.append("")
-    lines.append(f"  python3 agents/skills/security-audit/post-issues.py --work-dir {out.parent}")
+    lines.append(f"  title, labels and body file of each draft are listed above; bodies are in {out}")
     waiting = sum(1 for one in drafts if one["screen_wanted"] and not one["has_screen"])
     if waiting:
         lines.append(

@@ -10,6 +10,7 @@
 //! and compile a root set into the binary, and a version that changed either would change what
 //! this program trusts with nothing in this repository saying so.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -17,8 +18,12 @@ use std::sync::OnceLock;
 use ureq::Proxy;
 use ureq::ProxyProtocol;
 use ureq::config::ConfigBuilder;
-use ureq::tls::{Certificate, PemItem, RootCerts, TlsConfig, parse_pem};
+use ureq::tls::{Certificate, ClientCert, PemItem, PrivateKey, RootCerts, TlsConfig, parse_pem};
 use ureq::typestate::AgentScope;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, RustlsConnector,
+    Transport as WireTransport,
+};
 
 /// The variable naming a file of certificates to trust instead of the built-in set.
 pub const CERTIFICATE_FILE: &str = "SSL_CERT_FILE";
@@ -26,12 +31,30 @@ pub const CERTIFICATE_FILE: &str = "SSL_CERT_FILE";
 /// The variable naming a directory of them.
 pub const CERTIFICATE_DIRECTORY: &str = "SSL_CERT_DIR";
 
+/// The variable naming the file that holds the certificate (and its chain) this process presents to a
+/// server that asks for one.
+pub const CLIENT_CERTIFICATE: &str = "BRAVEBOT_CLIENT_CERT";
+
+/// The variable naming the file that holds that certificate's private key, unencrypted.
+pub const CLIENT_KEY: &str = "BRAVEBOT_CLIENT_KEY";
+
 /// The variables a proxy is named in, in the order the transport reads them. Each is read in lower
 /// case as well, which is the form some networks hand out, and the first one set wins.
 pub const PROXY_VARIABLES: &[&str] = &["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"];
 
 /// The variable naming the hosts a proxy is not used for.
 pub const NO_PROXY: &str = "NO_PROXY";
+
+/// The names a settings file may state in place of the environment, which is BACKEND-33's reading of
+/// these six and no others. A caller that owns the settings hands them to [`Transport::settle`].
+pub const SETTINGS_NAMES: [&str; 6] = [
+    CERTIFICATE_FILE,
+    CERTIFICATE_DIRECTORY,
+    "ALL_PROXY",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    NO_PROXY,
+];
 
 /// Which certificate authorities a server is validated against.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +124,12 @@ impl fmt::Display for TrustError {
 
 impl std::error::Error for TrustError {}
 
+/// What a settings file stated, set once by [`Transport::settle`].
+static FROM_FILE: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+
+/// What the environment and that file resolved to, read once for the whole process.
+static SHARED: OnceLock<Transport> = OnceLock::new();
+
 /// What every HTTP client in this process trusts, and what it goes through.
 pub struct Transport {
     roots: TrustRoots,
@@ -117,6 +146,32 @@ pub struct Transport {
     unparseable_proxies: Vec<String>,
     /// What `NO_PROXY` held, for the report. The transport library reads it for itself.
     no_proxy: Option<String>,
+    /// Whether the roots came from a settings file because the environment named none.
+    roots_from_file: bool,
+    /// Whether the proxy came from a settings file because the environment named none.
+    proxy_from_file: bool,
+    /// The certificate and key the environment named, once both loaded and agreed with each other.
+    client: Option<ClientCert>,
+    /// The paths the environment named for them, whether or not they could be used.
+    client_paths: ClientPaths,
+    /// Every named path that could not be used, in the order the paths are read.
+    client_problems: Vec<TrustError>,
+}
+
+/// The two files a client certificate is named by.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClientPaths {
+    pub certificate: Option<PathBuf>,
+    pub key: Option<PathBuf>,
+}
+
+impl ClientPaths {
+    fn from_env(lookup: impl Fn(&str) -> Option<OsString>) -> Self {
+        Self {
+            certificate: named_path(&lookup, CLIENT_CERTIFICATE),
+            key: named_path(&lookup, CLIENT_KEY),
+        }
+    }
 }
 
 impl Transport {
@@ -126,31 +181,113 @@ impl Transport {
     /// turn, each model roster and each update check; and because two clients resolving the
     /// environment at different moments could disagree about what this process trusts.
     pub fn shared() -> &'static Self {
-        static SHARED: OnceLock<Transport> = OnceLock::new();
         SHARED.get_or_init(Self::from_env)
     }
 
+    /// Hand over what a settings file stated for [`SETTINGS_NAMES`], before the first call to
+    /// [`Transport::shared`] resolves them.
+    ///
+    /// Returns whether they will be read: false where something already resolved the transport, or
+    /// where an earlier call settled it, since a value arriving after the answer is a value that
+    /// decides nothing and the caller is the one to say so. A blank value names nothing, as it does
+    /// in the environment, and a name outside the six is not kept.
+    pub fn settle(values: impl IntoIterator<Item = (String, String)>) -> bool {
+        FROM_FILE.set(stated_names(values)).is_ok() && SHARED.get().is_none()
+    }
+
+    /// What a settings file states and the environment does not, resolved as [`Transport::shared`]
+    /// resolves it with an environment that names nothing.
+    ///
+    /// Exists so a test can hold the route and the roots a file produces to what a client is built
+    /// with, which is otherwise reachable only through the process-wide answer every other test in
+    /// the suite shares.
+    pub fn stated_by_file(values: impl IntoIterator<Item = (String, String)>) -> Self {
+        let stated = stated_names(values);
+        Self::from_sources(
+            &|_| None,
+            &|name| stated.get(name).map(OsString::from),
+            || None,
+        )
+    }
+
     fn from_env() -> Self {
-        let lookup = |name: &str| std::env::var_os(name);
-        // Which variables the reader below passes over, read for the report alone. It skips a value
-        // that is not a uri and goes on to the next variable, so without this the route it chose and
-        // the variable somebody set are two different statements and the report makes only the
-        // first.
-        let unparseable = unparseable_proxy_variables(&lookup);
-        let mut transport = Self::resolve(
-            TrustRoots::from_env(lookup),
+        let stated = FROM_FILE.get();
+        Self::from_sources(
+            &|name| std::env::var_os(name),
+            &|name| {
+                stated
+                    .and_then(|values| values.get(name))
+                    .map(OsString::from)
+            },
             // The transport library's own reader, so the variables it looks at and the `NO_PROXY`
             // exceptions it honours are the ones every other client of it honours. Called here
             // rather than left to its default, so a release that stopped calling it changes
             // nothing about this program and the tests below fail rather than the proxy quietly
             // going away.
-            Proxy::try_from_env(),
-        );
-        transport.unparseable_proxies = unparseable;
-        transport.no_proxy = [NO_PROXY, "no_proxy"]
-            .iter()
-            .find_map(|name| std::env::var(name).ok())
-            .filter(|value| !value.is_empty());
+            Proxy::try_from_env,
+        )
+    }
+
+    /// The environment and a settings file, the environment first (NET-7, NET-8).
+    ///
+    /// Each answer comes whole from one of the two: the roots from the environment if it names
+    /// either path, and the proxy from the environment if it names any of the three variables,
+    /// whether or not they parse. Mixing them name by name would let a file's `ALL_PROXY` outrank an
+    /// exported `HTTPS_PROXY`, which is the file beating the environment through the order the
+    /// variables are read in.
+    fn from_sources(
+        environment: &impl Fn(&str) -> Option<OsString>,
+        file: &impl Fn(&str) -> Option<OsString>,
+        environment_proxy: impl FnOnce() -> Option<Proxy>,
+    ) -> Self {
+        let (roots, roots_from_file) = match TrustRoots::from_env(environment) {
+            TrustRoots::Bundled => match TrustRoots::from_env(file) {
+                TrustRoots::Bundled => (TrustRoots::Bundled, false),
+                named => (named, true),
+            },
+            named => (named, false),
+        };
+        let no_proxy_of = |lookup: &dyn Fn(&str) -> Option<OsString>| {
+            [NO_PROXY, "no_proxy"]
+                .iter()
+                .find_map(|name| lookup(name).and_then(|value| value.into_string().ok()))
+                .filter(|value| !value.is_empty())
+        };
+        let names_a_proxy = |lookup: &dyn Fn(&str) -> Option<OsString>| {
+            PROXY_VARIABLES.iter().any(|variable| {
+                [variable.to_string(), variable.to_ascii_lowercase()]
+                    .iter()
+                    .any(|name| lookup(name).is_some_and(|value| !value.is_empty()))
+            })
+        };
+
+        let from_the_file = !names_a_proxy(environment) && names_a_proxy(file);
+        let mut transport = if from_the_file {
+            // `NO_PROXY` in the environment still wins over the file's, as every name does, and
+            // applies to a route the file stated.
+            let no_proxy = no_proxy_of(environment).or_else(|| no_proxy_of(file));
+            let proxy = proxy_stated(file, no_proxy.as_deref());
+            let mut transport = Self::resolve(roots, proxy);
+            transport.unparseable_proxies = unparseable_proxy_variables(file);
+            transport.no_proxy = no_proxy;
+            transport.roots_from_file = roots_from_file;
+            transport.proxy_from_file = true;
+            transport
+        } else {
+            // Which variables the reader below passes over, read for the report alone. It skips a
+            // value that is not a uri and goes on to the next variable, so without this the route it
+            // chose and the variable somebody set are two different statements and the report makes
+            // only the first.
+            let unparseable = unparseable_proxy_variables(environment);
+            let mut transport = Self::resolve(roots, environment_proxy());
+            transport.unparseable_proxies = unparseable;
+            transport.no_proxy = no_proxy_of(environment);
+            transport.roots_from_file = roots_from_file;
+            transport
+        };
+        // The environment alone: a pair of files is a credential's address, and a settings file is
+        // not where NET-11 reads one from.
+        transport.use_client_pair(ClientPaths::from_env(environment));
         transport
     }
 
@@ -184,6 +321,24 @@ impl Transport {
         transport
     }
 
+    /// The transport with a client certificate named, and nothing else stated.
+    ///
+    /// Exists so what a report says about a certificate that loaded, one that did not and a pair
+    /// that disagree can be held to in a test, as [`Transport::stated`] does for the roots.
+    pub fn stated_with_client_pair(certificate: Option<&Path>, key: Option<&Path>) -> Self {
+        let mut transport = Self::resolve(TrustRoots::Bundled, None);
+        transport.use_client_pair(ClientPaths {
+            certificate: certificate.map(Path::to_path_buf),
+            key: key.map(Path::to_path_buf),
+        });
+        transport
+    }
+
+    fn use_client_pair(&mut self, paths: ClientPaths) {
+        (self.client, self.client_problems) = load_client_pair(&paths);
+        self.client_paths = paths;
+    }
+
     fn resolve(roots: TrustRoots, proxy: Option<Proxy>) -> Self {
         let (certificates, trust_problems) = match &roots {
             TrustRoots::Bundled => (Vec::new(), Vec::new()),
@@ -208,7 +363,23 @@ impl Transport {
             unusable_proxy,
             unparseable_proxies: Vec::new(),
             no_proxy: None,
+            roots_from_file: false,
+            proxy_from_file: false,
+            client: None,
+            client_paths: ClientPaths::default(),
+            client_problems: Vec::new(),
         }
+    }
+
+    /// Whether the roots in force are what a settings file named, the environment naming none, so
+    /// a report can say which file to edit.
+    pub fn roots_from_file(&self) -> bool {
+        self.roots_from_file
+    }
+
+    /// Whether the proxy in force is what a settings file named, on the same terms.
+    pub fn proxy_from_file(&self) -> bool {
+        self.proxy_from_file
     }
 
     /// Where the trust roots come from.
@@ -230,6 +401,24 @@ impl Transport {
     /// certificate at all leaves behind.
     pub fn trusts_nothing(&self) -> bool {
         !matches!(self.roots, TrustRoots::Bundled) && self.certificates.is_empty()
+    }
+
+    /// The files the environment named for a client certificate, loaded or not.
+    pub fn client_paths(&self) -> &ClientPaths {
+        &self.client_paths
+    }
+
+    /// Whether a certificate and key were named, loaded and agree, so that a server asking for one
+    /// is given it.
+    pub fn presents_client_certificate(&self) -> bool {
+        self.client.is_some()
+    }
+
+    /// Why each named path that could not be used cannot be, in the order the paths are read.
+    ///
+    /// While there is one, every TLS handshake is refused ([`Transport::agent_config_builder`]).
+    pub fn client_problems(&self) -> &[TrustError] {
+        &self.client_problems
     }
 
     /// The proxy in force, named by protocol, host and port alone.
@@ -286,11 +475,23 @@ impl Transport {
     /// The one place either is set. A caller adds its own timeouts and builds.
     pub fn agent_config_builder(&self) -> ConfigBuilder<AgentScope> {
         ureq::Agent::config_builder()
-            .tls_config(TlsConfig::builder().root_certs(self.root_certs()).build())
+            .tls_config(
+                TlsConfig::builder()
+                    .root_certs(self.root_certs())
+                    .client_cert(self.client.clone())
+                    .build(),
+            )
             .proxy(self.proxy.clone())
     }
 
     fn root_certs(&self) -> RootCerts {
+        // A certificate that was named and cannot be presented refuses every handshake, the way a
+        // named root that held nothing does, rather than letting a request go to a server that
+        // would have been given it without one. Nothing trusted is the one answer every client
+        // built from this configuration, the subscription client included, already understands.
+        if !self.client_problems.is_empty() {
+            return RootCerts::new_with_certs(&[]);
+        }
         match self.roots {
             TrustRoots::Bundled => RootCerts::WebPki,
             // Whatever the named paths held, which is nothing where none of them held anything.
@@ -315,7 +516,186 @@ impl fmt::Debug for Transport {
             .field("unusable_proxy", &self.unusable_proxy)
             .field("unparseable_proxies", &self.unparseable_proxies)
             .field("no_proxy", &self.no_proxy)
+            .field("client_paths", &self.client_paths)
+            .field("client_problems", &self.client_problems)
             .finish()
+    }
+}
+
+/// The certificate and key two paths name, or what is wrong with them.
+///
+/// Nothing is named, nothing is loaded and nothing is wrong. One named without the other is a
+/// problem on the one that was named: a certificate with no key cannot answer a server, and a
+/// request sent without it is the failure this setting exists to prevent.
+fn load_client_pair(paths: &ClientPaths) -> (Option<ClientCert>, Vec<TrustError>) {
+    let (certificate, key) = match (&paths.certificate, &paths.key) {
+        (None, None) => return (None, Vec::new()),
+        (Some(certificate), None) => {
+            return (None, vec![missing_half(certificate, CLIENT_KEY)]);
+        }
+        (None, Some(key)) => return (None, vec![missing_half(key, CLIENT_CERTIFICATE)]),
+        (Some(certificate), Some(key)) => (certificate, key),
+    };
+
+    let certificates = std::fs::read(certificate)
+        .map_err(|e| unusable(certificate, e))
+        .and_then(|bytes| match from_pem(&bytes) {
+            found if found.is_empty() => Err(holds_nothing(certificate)),
+            found => Ok(found),
+        });
+    let private_key = std::fs::read(key)
+        .map_err(|e| unusable(key, e))
+        .and_then(|bytes| private_key_in(key, &bytes));
+
+    match (certificates, private_key) {
+        (Ok(certificates), Ok(private_key)) => {
+            let pair = ClientCert::new_with_certs(&certificates, private_key);
+            if agrees(&pair) {
+                (Some(pair), Vec::new())
+            } else {
+                (None, vec![mismatched(key, certificate)])
+            }
+        }
+        (certificates, private_key) => (
+            None,
+            [certificates.err(), private_key.err()]
+                .into_iter()
+                .flatten()
+                .collect(),
+        ),
+    }
+}
+
+fn private_key_in(path: &Path, bytes: &[u8]) -> Result<PrivateKey<'static>, TrustError> {
+    let found = parse_pem(bytes)
+        .filter_map(Result::ok)
+        .find_map(|item| match item {
+            PemItem::PrivateKey(key) => Some(key),
+            _ => None,
+        });
+    match found {
+        Some(key) => Ok(key),
+        // The PEM reader skips a section it has no kind for, so an encrypted key reads as a file
+        // holding none, which would send somebody looking for a key that is plainly there.
+        None if String::from_utf8_lossy(bytes).contains("ENCRYPTED PRIVATE KEY") => {
+            Err(TrustError {
+                path: path.to_path_buf(),
+                detail: "is an encrypted key, which this build cannot decrypt; give it an \
+                         unencrypted copy"
+                    .to_string(),
+            })
+        }
+        None => Err(TrustError {
+            path: path.to_path_buf(),
+            detail: "holds no private key".to_string(),
+        }),
+    }
+}
+
+fn missing_half(named: &Path, other: &str) -> TrustError {
+    TrustError {
+        path: named.to_path_buf(),
+        detail: format!("is named without {other}, and a certificate needs its key"),
+    }
+}
+
+fn mismatched(key: &Path, certificate: &Path) -> TrustError {
+    TrustError {
+        path: key.to_path_buf(),
+        detail: format!(
+            "does not match the certificate in {}, or is a kind of key this build cannot use",
+            certificate.display()
+        ),
+    }
+}
+
+thread_local! {
+    /// Set while [`agrees`] expects a panic and has seen to it.
+    static PROBING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the TLS library accepts this certificate with this key.
+///
+/// The library checks the two against each other when it builds a connection's configuration, and
+/// answers a pair that disagree by panicking, at the first request. So the build is run here, once,
+/// on a stand-in connection that carries no bytes and goes nowhere, and a panic or an error from it
+/// is a pair that cannot be used. Only an error from the stand-in's own transport, which comes
+/// after the configuration was accepted, is a pair that can.
+///
+/// The panic is caught and its report is withheld, for this thread only: a hook that suppressed
+/// every thread's would hide a real panic that happened to coincide.
+fn agrees(pair: &ClientCert) -> bool {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !PROBING.with(std::cell::Cell::get) {
+                previous(info);
+            }
+        }));
+    });
+
+    let config = ureq::Agent::config_builder()
+        .tls_config(
+            TlsConfig::builder()
+                .root_certs(RootCerts::new_with_certs(&[]))
+                .client_cert(Some(pair.clone()))
+                .build(),
+        )
+        .proxy(None)
+        .build();
+    let agent = ureq::Agent::with_parts(
+        config,
+        Connector::chain(NowhereConnector, RustlsConnector::default()),
+        ureq::unversioned::resolver::DefaultResolver::default(),
+    );
+    PROBING.with(|probing| probing.set(true));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        agent.get("https://127.0.0.1/").call()
+    }));
+    PROBING.with(|probing| probing.set(false));
+    matches!(outcome, Ok(Err(ureq::Error::Io(e))) if e.to_string() == NOWHERE)
+}
+
+const NOWHERE: &str = "no connection was made";
+
+/// A connection to nowhere, for [`agrees`] to put TLS on.
+#[derive(Debug)]
+struct NowhereConnector;
+
+impl Connector for NowhereConnector {
+    type Out = Nowhere;
+
+    fn connect(
+        &self,
+        details: &ConnectionDetails,
+        _: Option<()>,
+    ) -> Result<Option<Nowhere>, ureq::Error> {
+        Ok(Some(Nowhere(LazyBuffers::new(
+            details.config.input_buffer_size(),
+            details.config.output_buffer_size(),
+        ))))
+    }
+}
+
+#[derive(Debug)]
+struct Nowhere(LazyBuffers);
+
+impl WireTransport for Nowhere {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        &mut self.0
+    }
+
+    fn transmit_output(&mut self, _: usize, _: NextTimeout) -> Result<(), ureq::Error> {
+        Err(ureq::Error::Io(std::io::Error::other(NOWHERE)))
+    }
+
+    fn await_input(&mut self, _: NextTimeout) -> Result<bool, ureq::Error> {
+        Err(ureq::Error::Io(std::io::Error::other(NOWHERE)))
+    }
+
+    fn is_open(&mut self) -> bool {
+        false
     }
 }
 
@@ -431,6 +811,47 @@ fn unparseable_proxy_variables(lookup: &impl Fn(&str) -> Option<OsString>) -> Ve
         }
     }
     named
+}
+
+/// The names of [`SETTINGS_NAMES`] a file stated with something in them. A blank value names nothing,
+/// as it does in the environment, and a name outside the six is not kept.
+fn stated_names(values: impl IntoIterator<Item = (String, String)>) -> BTreeMap<String, String> {
+    values
+        .into_iter()
+        .filter(|(name, value)| SETTINGS_NAMES.contains(&name.as_str()) && !value.trim().is_empty())
+        .collect()
+}
+
+/// The first of the proxy variables a lookup holds that reads as a proxy, carrying `no_proxy`'s
+/// exceptions where there are any.
+///
+/// The environment's own reader attaches `NO_PROXY` to the proxy it builds, and a proxy made from
+/// a string does not, so the exceptions are added here through the library's builder from the
+/// parts of the parsed proxy rather than by parsing the uri a second way.
+fn proxy_stated(
+    lookup: &impl Fn(&str) -> Option<OsString>,
+    no_proxy: Option<&str>,
+) -> Option<Proxy> {
+    PROXY_VARIABLES.iter().find_map(|variable| {
+        let value = lookup(variable)?.into_string().ok()?;
+        let proxy = Proxy::new(&value).ok()?;
+        let Some(exceptions) = no_proxy else {
+            return Some(proxy);
+        };
+        let mut builder = Proxy::builder(proxy.protocol())
+            .host(proxy.host())
+            .port(proxy.port());
+        if let Some(username) = proxy.username() {
+            builder = builder.username(username);
+        }
+        if let Some(password) = proxy.password() {
+            builder = builder.password(password);
+        }
+        for entry in exceptions.split(',').map(str::trim) {
+            builder = builder.no_proxy(entry);
+        }
+        Some(builder.build().unwrap_or(proxy))
+    })
 }
 
 /// Whether this build can actually connect through a proxy of this protocol.
@@ -971,5 +1392,433 @@ mod tests {
             config.tls_config().root_certs(),
             RootCerts::WebPki
         ));
+    }
+
+    /// The environment and a settings file as the process resolves them, with the exported proxy
+    /// reader stood in for by `exported`, which is what the library's own would have built from the
+    /// environment lookup.
+    fn resolved(
+        exported: &[(&str, &str)],
+        stated: &[(&str, &str)],
+        exported_proxy: Option<&str>,
+    ) -> Transport {
+        Transport::from_sources(&environment(exported), &environment(stated), || {
+            exported_proxy.and_then(|uri| Proxy::new(uri).ok())
+        })
+    }
+
+    fn proxy_port_of(transport: &Transport) -> Option<u16> {
+        transport
+            .agent_config_builder()
+            .build()
+            .proxy()
+            .map(Proxy::port)
+    }
+
+    fn bypasses(transport: &Transport, host: &str) -> bool {
+        let uri: ureq::http::Uri = format!("https://{host}/").parse().expect("a uri");
+        transport
+            .agent_config_builder()
+            .build()
+            .proxy()
+            .is_some_and(|proxy| proxy.is_no_proxy(&uri))
+    }
+
+    /// NET-8: a launcher that hands the process no shell profile is the case this exists for, so a
+    /// proxy a settings file states is the route a client is built with.
+    #[test]
+    fn a_proxy_a_settings_file_states_is_the_one_a_client_carries() {
+        let transport = resolved(&[], &[("HTTPS_PROXY", "http://proxy.corp:3128")], None);
+
+        assert_eq!(proxy_port_of(&transport), Some(3128));
+        assert_eq!(
+            transport.proxy_summary().as_deref(),
+            Some("http://proxy.corp:3128")
+        );
+        assert!(transport.proxy_from_file());
+    }
+
+    /// The environment wins as a whole: a file's `ALL_PROXY` is read before an exported
+    /// `HTTPS_PROXY` by the order the variables are read in, and has to lose to it all the same.
+    #[test]
+    fn an_exported_proxy_beats_the_file_whatever_names_each_used() {
+        let transport = resolved(
+            &[("HTTPS_PROXY", "http://exported.corp:3129")],
+            &[("ALL_PROXY", "http://stated.corp:3128")],
+            Some("http://exported.corp:3129"),
+        );
+
+        assert_eq!(proxy_port_of(&transport), Some(3129));
+        assert!(!transport.proxy_from_file());
+    }
+
+    /// An exported variable that names no usable route is still the environment speaking, and is
+    /// reported as such: falling through to the file would make the report deny what was exported.
+    #[test]
+    fn an_exported_proxy_that_does_not_parse_is_not_replaced_by_the_file() {
+        let transport = resolved(
+            &[("HTTPS_PROXY", "ht tp://proxy.corp")],
+            &[("ALL_PROXY", "http://stated.corp:3128")],
+            None,
+        );
+
+        assert_eq!(proxy_port_of(&transport), None);
+        assert_eq!(transport.unparseable_proxies(), ["HTTPS_PROXY"]);
+        assert!(!transport.proxy_from_file());
+    }
+
+    /// A file's value that is not a proxy address is named like the environment's, and is not a
+    /// route.
+    #[test]
+    fn a_proxy_in_the_file_that_does_not_parse_is_named_and_is_not_the_route() {
+        let transport = resolved(&[], &[("HTTPS_PROXY", "ht tp://proxy.corp")], None);
+
+        assert_eq!(proxy_port_of(&transport), None);
+        assert_eq!(transport.unparseable_proxies(), ["HTTPS_PROXY"]);
+    }
+
+    /// The exceptions go with a route the file stated, which the library attaches only to a proxy
+    /// it read itself, and the credential in the uri survives the rebuilding that attaches them.
+    #[test]
+    fn a_file_proxy_honours_the_no_proxy_it_is_given_and_keeps_its_credential() {
+        let transport = resolved(
+            &[],
+            &[
+                ("HTTPS_PROXY", "http://alice:s3cret@proxy.corp:3128"),
+                ("NO_PROXY", "internal.corp, .lan,"),
+            ],
+            None,
+        );
+
+        assert!(bypasses(&transport, "internal.corp"));
+        assert!(bypasses(&transport, "build.lan"));
+        assert!(!bypasses(&transport, "api.example"));
+        assert_eq!(transport.no_proxy(), Some("internal.corp, .lan,"));
+        assert!(transport.proxy_is_authenticated());
+        assert_eq!(
+            transport.proxy_summary().as_deref(),
+            Some("http://proxy.corp:3128")
+        );
+    }
+
+    /// `NO_PROXY` is the exception to the file's whole-answer rule: an exported one applies to a
+    /// route the file stated and the file's own is not consulted beside it.
+    #[test]
+    fn an_exported_no_proxy_applies_to_a_file_proxy_in_place_of_the_files() {
+        let transport = resolved(
+            &[("NO_PROXY", "exported.corp")],
+            &[
+                ("HTTPS_PROXY", "http://proxy.corp:3128"),
+                ("NO_PROXY", "stated.corp"),
+            ],
+            None,
+        );
+
+        assert!(bypasses(&transport, "exported.corp"));
+        assert!(!bypasses(&transport, "stated.corp"));
+        assert_eq!(transport.no_proxy(), Some("exported.corp"));
+    }
+
+    /// NET-7: a certificate bundle a settings file names is what is trusted where the environment
+    /// names none.
+    #[test]
+    fn a_certificate_file_a_settings_file_names_is_what_is_trusted() {
+        let transport = resolved(&[], &[("SSL_CERT_FILE", "/etc/corp/ca.pem")], None);
+
+        assert_eq!(
+            transport.roots(),
+            &TrustRoots::Named {
+                file: Some(PathBuf::from("/etc/corp/ca.pem")),
+                directory: None,
+            }
+        );
+        assert!(transport.roots_from_file());
+    }
+
+    /// The pair is taken whole from the environment, as the proxy is: an exported directory beside
+    /// a file's bundle is the exported statement, and the bundle is not added to it.
+    #[test]
+    fn exported_roots_replace_the_files_rather_than_joining_them() {
+        let transport = resolved(
+            &[("SSL_CERT_DIR", "/etc/exported")],
+            &[("SSL_CERT_FILE", "/etc/corp/ca.pem")],
+            None,
+        );
+
+        assert_eq!(
+            transport.roots(),
+            &TrustRoots::Named {
+                file: None,
+                directory: Some(PathBuf::from("/etc/exported")),
+            }
+        );
+        assert!(!transport.roots_from_file());
+    }
+
+    /// Nothing stated anywhere changes nothing: the built-in roots, no route, no file named.
+    #[test]
+    fn nothing_stated_in_either_place_leaves_the_defaults() {
+        let transport = resolved(&[], &[], None);
+
+        assert_eq!(transport.roots(), &TrustRoots::Bundled);
+        assert_eq!(proxy_port_of(&transport), None);
+        assert!(!transport.roots_from_file() && !transport.proxy_from_file());
+    }
+
+    /// Only the six names are read from a file, and a blank value names nothing, as in the
+    /// environment.
+    #[test]
+    fn a_settings_file_hands_over_the_six_names_and_nothing_else() {
+        let kept = stated_names([
+            (
+                "HTTPS_PROXY".to_string(),
+                "http://proxy.corp:3128".to_string(),
+            ),
+            ("ALL_PROXY".to_string(), "   ".to_string()),
+            ("https_proxy".to_string(), "http://lower.corp:1".to_string()),
+            ("AWS_REGION".to_string(), "eu-west-1".to_string()),
+        ]);
+
+        assert_eq!(
+            kept.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["HTTPS_PROXY"]
+        );
+    }
+
+    const CLIENT_A_KEY: [&str; 3] = [
+        "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNI5exiW0VUAX6Zlh",
+        "2xpQpP9Ul/tkSYnXIk0Ew/P6G1qhRANCAAQvxnDQ3AYHDeZGt/rINkorQdR29nsI",
+        "WLbY1tX9vPGoIPii3RoRH2ndnu4qv35pTOL5ZPoT6W8ZF4tEue2KzaW7",
+    ];
+    const CLIENT_B_KEY: [&str; 3] = [
+        "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgelZvU4tWD/NVOwfb",
+        "DUI00URNX/zgu9ybKgXU2Pkdqj+hRANCAASN8kQiMv+SDHgFjaKHKIt5KF7D8gLJ",
+        "SYjcDrZ4lZT8NTj0TPvc+G/EN5tEtwRz/9/RGamARW++a28XqN8cntww",
+    ];
+    const CLIENT_A_CERTIFICATE: [&str; 10] = [
+        "MIIBmTCCAT+gAwIBAgIUGoEm4tLRujtRq+Z9SYoo7mpaVTgwCgYIKoZIzj0EAwIw",
+        "ITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1jbGllbnQtYTAgFw0yNjEwMjIxNjQ5",
+        "MjJaGA8yMTI2MDkyODE2NDkyMlowITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1j",
+        "bGllbnQtYTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABC/GcNDcBgcN5ka3+sg2",
+        "SitB1Hb2ewhYttjW1f288agg+KLdGhEfad2e7iq/fmlM4vlk+hPpbxkXi0S57YrN",
+        "pbujUzBRMB0GA1UdDgQWBBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAfBgNVHSMEGDAW",
+        "gBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49",
+        "BAMCA0gAMEUCIQDV/pEMcyED9IfcGuf4pke2It4Kj4yubw6uM0lrqz5ymgIgRKEK",
+        "slJ1+wh5R7cmgoS2bui3Umrk+r+pU9FokD8FYZM=",
+        "",
+    ];
+
+    /// PEM armour assembled rather than written, so no literal in this file is a private key to a
+    /// scanner. The bodies are throwaway keys made for these tests and used for nothing else.
+    fn armoured(kind: &str, body: &[&str]) -> String {
+        let mut pem = format!("-----BEGIN {kind}-----\n");
+        for line in body.iter().filter(|line| !line.is_empty()) {
+            pem.push_str(line);
+            pem.push('\n');
+        }
+        pem.push_str(&format!("-----END {kind}-----\n"));
+        pem
+    }
+
+    fn client_certificate_a() -> String {
+        armoured("CERTIFICATE", &CLIENT_A_CERTIFICATE)
+    }
+
+    fn client_key(body: &[&str]) -> String {
+        armoured(&format!("{} KEY", "PRIVATE"), body)
+    }
+
+    /// The transport the environment makes of two files, written into a scratch directory.
+    fn with_client_files(
+        name: &str,
+        certificate: Option<&str>,
+        key: Option<&str>,
+    ) -> (Transport, PathBuf, PathBuf) {
+        let directory = scratch(name);
+        let certificate_path = directory.join("client.crt");
+        let key_path = directory.join("client.key");
+        let mut pairs = Vec::new();
+        if let Some(certificate) = certificate {
+            std::fs::write(&certificate_path, certificate).expect("certificate");
+            pairs.push((CLIENT_CERTIFICATE, certificate_path.to_str().unwrap()));
+        }
+        if let Some(key) = key {
+            std::fs::write(&key_path, key).expect("key");
+            pairs.push((CLIENT_KEY, key_path.to_str().unwrap()));
+        }
+        let transport = Transport::from_sources(&environment(&pairs), &|_| None, || None);
+        (transport, certificate_path, key_path)
+    }
+
+    /// Whether a client built from the transport refuses every handshake, which is what trusting
+    /// nothing is.
+    fn refuses_every_handshake(transport: &Transport) -> bool {
+        let config = transport.agent_config_builder().build();
+        matches!(config.tls_config().root_certs(), RootCerts::Specific(roots) if roots.is_empty())
+    }
+
+    /// NET-11: a certificate and its key, both named, are what a client presents.
+    #[test]
+    fn a_certificate_and_key_that_agree_are_what_a_client_presents() {
+        let (transport, ..) = with_client_files(
+            "client-pair-agrees",
+            Some(&client_certificate_a()),
+            Some(&client_key(&CLIENT_A_KEY)),
+        );
+
+        assert!(transport.client_problems().is_empty());
+        assert!(transport.presents_client_certificate());
+        let config = transport.agent_config_builder().build();
+        assert!(config.tls_config().client_cert().is_some());
+        assert!(!refuses_every_handshake(&transport));
+    }
+
+    /// NET-11: naming nothing presents nothing, and an empty variable names nothing, as it does
+    /// for the roots.
+    #[test]
+    fn naming_no_client_certificate_presents_none() {
+        let transport = Transport::from_sources(
+            &environment(&[(CLIENT_CERTIFICATE, ""), (CLIENT_KEY, "")]),
+            &|_| None,
+            || None,
+        );
+
+        assert!(!transport.presents_client_certificate());
+        assert!(transport.client_problems().is_empty());
+        assert_eq!(transport.client_paths(), &ClientPaths::default());
+        let config = transport.agent_config_builder().build();
+        assert!(config.tls_config().client_cert().is_none());
+    }
+
+    /// NET-11: a key that belongs to a different certificate is refused by the key's path, and every
+    /// handshake with it. The library would otherwise panic at the first request.
+    #[test]
+    fn a_key_that_does_not_belong_to_the_certificate_is_refused_with_its_path() {
+        let (transport, certificate, key) = with_client_files(
+            "client-pair-mismatch",
+            Some(&client_certificate_a()),
+            Some(&client_key(&CLIENT_B_KEY)),
+        );
+
+        assert!(!transport.presents_client_certificate());
+        let [problem] = transport.client_problems() else {
+            panic!("one problem expected: {:?}", transport.client_problems());
+        };
+        assert_eq!(problem.path, key);
+        assert!(
+            problem.detail.contains(&certificate.display().to_string()),
+            "{problem}"
+        );
+        assert!(refuses_every_handshake(&transport));
+        let config = transport.agent_config_builder().build();
+        assert!(config.tls_config().client_cert().is_none());
+    }
+
+    /// NET-11: a path that cannot be read is named with the reason, and the request is refused
+    /// rather than sent without the certificate.
+    #[test]
+    fn a_certificate_file_that_cannot_be_read_is_refused_with_its_path() {
+        let directory = scratch("client-certificate-missing");
+        let key = directory.join("client.key");
+        std::fs::write(&key, client_key(&CLIENT_A_KEY)).expect("key");
+        let certificate = directory.join("absent.crt");
+        let transport = Transport::from_sources(
+            &environment(&[
+                (CLIENT_CERTIFICATE, certificate.to_str().unwrap()),
+                (CLIENT_KEY, key.to_str().unwrap()),
+            ]),
+            &|_| None,
+            || None,
+        );
+
+        let [problem] = transport.client_problems() else {
+            panic!("one problem expected: {:?}", transport.client_problems());
+        };
+        assert_eq!(problem.path, certificate);
+        assert!(refuses_every_handshake(&transport));
+    }
+
+    /// NET-11: both files are read, so two bad paths are two problems and not the first of them.
+    #[test]
+    fn every_client_file_that_cannot_be_used_is_reported() {
+        let (transport, certificate, key) = with_client_files(
+            "client-both-bad",
+            Some("not a certificate\n"),
+            Some("not a key\n"),
+        );
+
+        let paths: Vec<&Path> = transport
+            .client_problems()
+            .iter()
+            .map(|problem| problem.path.as_path())
+            .collect();
+        assert_eq!(paths, [certificate.as_path(), key.as_path()]);
+        assert!(refuses_every_handshake(&transport));
+    }
+
+    /// NET-11: a certificate without its key cannot answer a server, and the request that would have
+    /// gone without one is refused instead.
+    #[test]
+    fn a_certificate_named_without_a_key_is_refused_and_so_is_a_key_without_a_certificate() {
+        let (transport, certificate, _) =
+            with_client_files("client-no-key", Some(&client_certificate_a()), None);
+        let [problem] = transport.client_problems() else {
+            panic!("one problem expected: {:?}", transport.client_problems());
+        };
+        assert_eq!(problem.path, certificate);
+        assert!(problem.detail.contains(CLIENT_KEY), "{problem}");
+        assert!(refuses_every_handshake(&transport));
+
+        let (transport, _, key) = with_client_files(
+            "client-no-certificate",
+            None,
+            Some(&client_key(&CLIENT_A_KEY)),
+        );
+        let [problem] = transport.client_problems() else {
+            panic!("one problem expected: {:?}", transport.client_problems());
+        };
+        assert_eq!(problem.path, key);
+        assert!(problem.detail.contains(CLIENT_CERTIFICATE), "{problem}");
+        assert!(refuses_every_handshake(&transport));
+    }
+
+    /// NET-11: an encrypted key is named as that. The PEM reader skips it, and "holds no private
+    /// key" would send a person looking for a key that is plainly in the file.
+    #[test]
+    fn an_encrypted_key_is_refused_as_encrypted() {
+        let (transport, _, key) = with_client_files(
+            "client-encrypted-key",
+            Some(&client_certificate_a()),
+            Some(&armoured(
+                "ENCRYPTED PRIVATE KEY",
+                &["MIHsMFcGCSqGSIb3DQEFDTBKMCkG"],
+            )),
+        );
+
+        let [problem] = transport.client_problems() else {
+            panic!("one problem expected: {:?}", transport.client_problems());
+        };
+        assert_eq!(problem.path, key);
+        assert!(problem.detail.contains("encrypted"), "{problem}");
+        assert!(refuses_every_handshake(&transport));
+    }
+
+    /// NET-11: neither the key nor the certificate reaches a `Debug` print, which is what a trace
+    /// or a panic message holds.
+    #[test]
+    fn a_debug_print_of_the_transport_holds_the_paths_and_none_of_the_key() {
+        let (transport, certificate, key) = with_client_files(
+            "client-debug",
+            Some(&client_certificate_a()),
+            Some(&client_key(&CLIENT_A_KEY)),
+        );
+
+        let printed = format!("{transport:?}");
+        assert!(printed.contains(&key.display().to_string()), "{printed}");
+        assert!(printed.contains(&certificate.display().to_string()));
+        for line in CLIENT_A_KEY {
+            assert!(!printed.contains(line), "key material in {printed}");
+        }
+        assert!(!printed.contains(CLIENT_A_CERTIFICATE[0]));
     }
 }

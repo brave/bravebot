@@ -14,6 +14,7 @@ import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
+import { agentInfo, oneModelList } from './acceptance-fixture.mjs'
 import { CASES } from './shown-cases.mjs'
 
 const output = process.env.SHOWN_OUTPUT || join(tmpdir(), 'bravebot-shown')
@@ -33,7 +34,7 @@ try {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
 
-  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow }, { directory, id, info, models }) => {
     const now = Math.floor(Date.now() / 1000)
     const row = { id, title: 'Write the release notes', updated: now - 60, directory, project: 'sample-project', branch: 'main', bytes: 20 }
     const emit = (event, data) => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session: 's-' + id })
@@ -43,13 +44,13 @@ try {
     const replace = (name, fn) => { ipcMain.removeHandler(name); ipcMain.handle(name, fn) }
     replace('bravebot:request', async (_, method, p = {}) => {
       if (method.endsWith('.reply')) { globalThis.shown.replies.push({ method, ...p }); return { ok: {} } }
-      if (method === 'agent.info') return { ok: { configured: true, build: '0.9.0 (abc1234)', version: '1' } }
+      if (method === 'agent.info') return { ok: info }
       if (method === 'session.list') return { ok: { sessions: [row] } }
-      if (method === 'models.list') return { ok: { defaultModel: 'sample/fast', warnings: [], models: [{ id: 'sample/fast', name: 'Fast model', provider: 'Sample', premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] }] } }
+      if (method === 'models.list') return { ok: models }
       if (method === 'session.open') return { ok: { session: 's-' + id, model: 'sample/fast', record: { ...row, started: 1, turns: 1, tokens: 100, build: 'fixture' }, said: [{ kind: 'user', text: 'Write the release notes from the changelog.', prompt: 0 }], todos: { rows: [] }, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
       return { ok: {} }
     })
-  }, { directory, id })
+  }, { directory, id, info: agentInfo, models: oneModelList })
   const emit = (event, data) => app.evaluate((_, v) => globalThis.shown.emit(v.event, v.data), { event, data })
   const replies = () => app.evaluate(() => globalThis.shown.replies)
   // A decided card folds to one row without the words its locator found it by, so the reply is what is waited on.

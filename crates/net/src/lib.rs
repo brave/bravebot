@@ -39,7 +39,7 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::{Denial, Policy};
 use bravebot_core::value::Labelled;
 use std::fmt;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Response bodies are truncated past this size.
 pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -137,7 +137,17 @@ pub enum EgressError {
     /// from which of the transport's bounds ended the read, never from anything a server sent.
     OutOfTime { url: String },
     /// The server returned a non-success status.
-    Status { url: String, status: u16 },
+    Status {
+        url: String,
+        status: u16,
+        /// How long the server asked for the next request to wait, where its `Retry-After` header
+        /// parsed.
+        ///
+        /// A number of seconds read out of the header and clamped to [`LONGEST_RETRY_AFTER`],
+        /// never the header's text. It only ever sets a timer, so a server that writes nonsense
+        /// there gets the caller's own backoff and one that writes a huge figure gets an hour.
+        retry_after: Option<Duration>,
+    },
     /// The caller asked to stop while the request was still being waited on.
     Stopped { url: String },
 }
@@ -168,7 +178,7 @@ impl fmt::Display for EgressError {
             Self::OutOfTime { url } => {
                 write!(f, "the reply from {url} ran past the time it was given")
             }
-            Self::Status { url, status } => write!(f, "{url} returned HTTP {status}"),
+            Self::Status { url, status, .. } => write!(f, "{url} returned HTTP {status}"),
             Self::Stopped { url } => write!(f, "the request to {url} was stopped"),
         }
     }
@@ -219,7 +229,15 @@ impl EgressError {
             Self::MissingLocation { .. } => Self::MissingLocation { url },
             Self::Stopped { .. } => Self::Stopped { url },
             Self::OutOfTime { .. } => Self::OutOfTime { url },
-            Self::Status { status, .. } => Self::Status { url, status },
+            Self::Status {
+                status,
+                retry_after,
+                ..
+            } => Self::Status {
+                url,
+                status,
+                retry_after,
+            },
             // The detail here is this crate's own sentence about a shape, so it survives.
             Self::InvalidUrl { detail, .. } => Self::InvalidUrl { url, detail },
             Self::InsecureRedirect { .. } => Self::InsecureRedirect { url },
@@ -237,6 +255,70 @@ impl EgressError {
             },
         }
     }
+}
+
+/// The longest wait a `Retry-After` header is taken to ask for.
+///
+/// Whatever a server writes is clamped to this, so the number a caller sets a timer from is bounded
+/// by this program rather than by the server. The caller decides how much of it to wait out.
+pub const LONGEST_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// The wait a `Retry-After` value asks for, as of `now`.
+///
+/// Either whole seconds or an HTTP date in the IMF-fixdate form (`Sun, 06 Nov 1994 08:49:37 GMT`),
+/// the two forms RFC 9110 gives it. A date already past asks for no wait. Anything else, including
+/// a sign, a fraction, or one of the obsolete date forms, is not a figure and reads as absent.
+fn retry_after(value: &str, now: SystemTime) -> Option<Duration> {
+    let value = value.trim();
+    let asked = if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) {
+        // A figure too large for a u64 is still a long wait, so it clamps rather than vanishes.
+        Duration::from_secs(value.parse().unwrap_or(u64::MAX))
+    } else {
+        let at = UNIX_EPOCH + Duration::from_secs(http_date_seconds(value)?);
+        at.duration_since(now).unwrap_or(Duration::ZERO)
+    };
+    Some(asked.min(LONGEST_RETRY_AFTER))
+}
+
+/// Seconds since the epoch of an IMF-fixdate, or `None` where `value` is not one.
+fn http_date_seconds(value: &str) -> Option<u64> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let parts: Vec<&str> = value.split(' ').collect();
+    let [day_name, day, month, year, time, zone] = parts[..] else {
+        return None;
+    };
+    if !DAYS.iter().any(|d| day_name.strip_suffix(',') == Some(d)) || zone != "GMT" {
+        return None;
+    }
+    let day: u64 = day.parse().ok().filter(|d| (1..=31).contains(d))?;
+    let month = MONTHS.iter().position(|m| *m == month)? as u64 + 1;
+    let year: u64 = year.parse().ok().filter(|y| (1970..=9999).contains(y))?;
+    let clock: Vec<u64> = time
+        .split(':')
+        .map(|n| n.parse().ok())
+        .collect::<Option<_>>()?;
+    let [hour, minute, second] = clock[..] else {
+        return None;
+    };
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    // Days from the epoch to the civil date, counting March as the first month so the leap day
+    // is the last day of the year.
+    let (y, m) = if month <= 2 {
+        (year - 1, month + 9)
+    } else {
+        (year, month - 3)
+    };
+    let era = y / 400;
+    let year_of_era = y % 400;
+    let day_of_year = (153 * m + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
 /// Statuses a server uses to say "not now" rather than "no".
@@ -344,8 +426,17 @@ impl Streamed<'_> {
                 }
                 Ok(Some(Labelled::new(buffer, self.label)))
             }
-            Err(e) => Err(body_failure(&self.requested, e)),
+            Err(e) => Err(body_failure(&self.requested, &e)),
         }
+    }
+
+    /// How many bytes [`Streamed::next_chunk`] has handed back so far.
+    ///
+    /// The stream's own count of what it moved, so a caller reporting a size reads a number and
+    /// not the released bytes. The one byte past the cap that is read to learn the body was cut is
+    /// never handed back and so is not counted.
+    pub fn handed_back(&self) -> usize {
+        self.read.min(self.cap)
     }
 
     /// Whether the cap stopped the read before the body ended.
@@ -384,6 +475,9 @@ pub struct Request {
     pub body: Option<Vec<u8>>,
     /// How long the reply may take, where the request says. Otherwise [`Timeouts::reply`].
     pub reply: Option<ReplyBound>,
+    /// The longest gap between two pieces of the reply, where the request says. Otherwise
+    /// [`Timeouts::idle`].
+    pub idle: Option<Duration>,
     /// Whether a reply from this machine is waited on for as long as it takes. See
     /// [`Request::patient_on_this_machine`].
     pub patient_on_this_machine: bool,
@@ -416,6 +510,7 @@ impl Request {
             socket_headers: Vec::new(),
             body: None,
             reply: None,
+            idle: None,
             patient_on_this_machine: false,
         }
     }
@@ -428,6 +523,7 @@ impl Request {
             socket_headers: Vec::new(),
             body: Some(body),
             reply: None,
+            idle: None,
             patient_on_this_machine: false,
         }
     }
@@ -459,6 +555,18 @@ impl Request {
     /// As [`Request::reply_within`], for a reply that begins at once and may then run for `bound`.
     pub fn stream_within(mut self, bound: Duration) -> Self {
         self.reply = Some(ReplyBound::Begun(bound));
+        self
+    }
+
+    /// Allow `gap` between two pieces of the reply rather than [`Timeouts::idle`], in either
+    /// direction.
+    ///
+    /// For a caller whose person stated how long a quiet reply is waited on. The gap is the only
+    /// bound this moves: the wait for the reply to begin and the time the whole of it may take stay
+    /// whatever [`Request::reply_within`], [`Request::stream_within`] or [`Timeouts::reply`] say, so a
+    /// gap longer than those leaves the reply to be ended by them.
+    pub fn idle_within(mut self, gap: Duration) -> Self {
+        self.idle = Some(gap);
         self
     }
 
@@ -501,8 +609,9 @@ impl Egress {
     /// As [`Egress::new`], with different bounds on how long a request may take.
     ///
     /// Exists so the bounds can be exercised in a test at a scale a test can wait for, and for the
-    /// one request a start waits on before it has said anything: asking a local Ollama what it
-    /// serves (`bravebot_aichat::ollama`). Every other request takes the defaults.
+    /// requests a start waits on before it has said anything: asking a local Ollama, LM Studio or
+    /// llama-server what it serves (`bravebot_aichat::ollama`, `lm_studio` and `llama_server`).
+    /// Every other request takes the defaults.
     pub fn with_timeouts(timeouts: Timeouts) -> Self {
         Self::with_transport(timeouts, Transport::shared())
     }
@@ -513,6 +622,23 @@ impl Egress {
     /// states them so that what the environment resolves to can be pinned without setting a
     /// variable for every other test in the process.
     fn with_transport(timeouts: Timeouts, transport: &Transport) -> Self {
+        Self::resolving_through(
+            timeouts,
+            transport,
+            ureq::unversioned::resolver::DefaultResolver::default,
+        )
+    }
+
+    /// As [`Egress::with_transport`], with the system's lookup replaced by what `system` makes,
+    /// once for each of the two agents.
+    ///
+    /// Each agent still wraps it as the product does, so a test that makes `system` fail is
+    /// reading how the product reports that failure and not a stand-in's.
+    fn resolving_through<R: ureq::unversioned::resolver::Resolver>(
+        timeouts: Timeouts,
+        transport: &Transport,
+        system: impl Fn() -> R,
+    ) -> Self {
         // ureq gives a phase the earliest of its own deadline and the deadlines of the phases
         // before it (`Timeout::preceeding`, ureq 3.4 src/timings.rs), which its configuration
         // does not say. A number handed over here therefore bounds the phase it names *and* the
@@ -550,10 +676,15 @@ impl Egress {
         let guarded = ureq::Agent::with_parts(
             config.clone(),
             ureq::unversioned::transport::DefaultConnector::default(),
-            address::GuardedResolver::new(),
+            address::GuardedResolver::over(address::Lookup::new(system()), address::is_public),
+        );
+        let agent = ureq::Agent::with_parts(
+            config,
+            ureq::unversioned::transport::DefaultConnector::default(),
+            address::Lookup::new(system()),
         );
         Self {
-            agent: config.into(),
+            agent,
             guarded,
             timeouts,
         }
@@ -622,11 +753,12 @@ impl Egress {
         label: Label,
         cancel: Option<&Cancel>,
     ) -> Result<Response, EgressError> {
-        // Never stoppable: the body is read to its end below, where no token is looked at.
+        // Never stoppable: the body is read to its end below, and a stop pressed meanwhile is not
+        // acted on.
         let (status, content_type, reader) = self.fetch_checked(policy, &request, cancel, false)?;
         // The URL the caller asked for, not the one the body is arriving from: a redirect chain
         // ends somewhere a server chose, and this failure is reported to whoever asked.
-        let (body, truncated) = read_capped(reader).map_err(|e| body_failure(&request.url, e))?;
+        let (body, truncated) = read_capped(reader).map_err(|e| body_failure(&request.url, &e))?;
 
         Ok(Response {
             status,
@@ -676,7 +808,14 @@ impl Egress {
     /// header, so each of the errors it can build names a place the caller never asked about.
     /// Rewriting them here rather than at each construction is what keeps that true: a new arm in
     /// there cannot forget a discipline it does not have to apply.
-    #[allow(clippy::type_complexity)]
+    ///
+    /// A body that fails while it is read is reported from here too, by the reader this hands back,
+    /// so a request that got past the status is written to the diagnostic log however its body is
+    /// then read.
+    #[expect(
+        clippy::type_complexity,
+        reason = "the status, content type and boxed body reader return together, and both callers destructure the tuple"
+    )]
     fn fetch_checked<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -691,9 +830,19 @@ impl Egress {
             outcome => outcome,
         };
         if let Err(error) = &outcome {
-            log_failure(&request.url, error, started.elapsed());
+            log_failure(&request.url, error, None, started.elapsed());
         }
-        outcome
+        outcome.map(|(status, content_type, reader)| {
+            let reader: Box<dyn std::io::Read + Send> = Box::new(LoggedBody {
+                reader,
+                url: request.url.clone(),
+                status,
+                started,
+                cancel: cancel.cloned(),
+                written: false,
+            });
+            (status, content_type, reader)
+        })
     }
 
     /// Whether a connection to `url` would end on this machine: its host is one, and no proxy
@@ -706,7 +855,10 @@ impl Egress {
     }
 
     /// The redirect loop itself: send, revalidate, follow, and hand back the body reader unread.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the same status, content type and body reader tuple, destructured by fetch_checked, its one caller"
+    )]
     fn follow<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -760,7 +912,11 @@ impl Egress {
             }
 
             if !(200..300).contains(&status) {
-                return Err(EgressError::Status { url, status });
+                return Err(EgressError::Status {
+                    url,
+                    status,
+                    retry_after: response.4,
+                });
             }
 
             return Ok((status, response.2, response.3));
@@ -822,12 +978,14 @@ impl Egress {
     }
 }
 
-/// What one hop answers with: status, location, content-type, and the body reader.
+/// What one hop answers with: status, location, content-type, the body reader, and the wait the
+/// server asked for.
 type Sent = (
     u16,
     Option<String>,
     Option<String>,
     Box<dyn std::io::Read + Send>,
+    Option<Duration>,
 );
 
 /// One hop, on whichever thread calls it.
@@ -859,14 +1017,14 @@ fn send(
             for (name, value) in headers {
                 builder = builder.header(name, value);
             }
-            within(builder, timeouts, request.reply, patient).call()
+            within(builder, timeouts, request, patient).call()
         }
         Method::Post => {
             let mut builder = agent.post(url);
             for (name, value) in headers {
                 builder = builder.header(name, value);
             }
-            let builder = within(builder, timeouts, request.reply, patient);
+            let builder = within(builder, timeouts, request, patient);
             match &request.body {
                 Some(bytes) => builder.send(&bytes[..]),
                 None => builder.send_empty(),
@@ -896,7 +1054,7 @@ fn send(
         Err(e) => {
             return Err(EgressError::Transport {
                 url: url.to_string(),
-                detail: e.to_string(),
+                detail: call_failure(&e).to_string(),
                 transient: is_transient_call(&e),
             });
         }
@@ -912,16 +1070,19 @@ fn send(
     };
     let location = header("location");
     let content_type = header("content-type");
+    let retry_after =
+        header("retry-after").and_then(|value| retry_after(&value, SystemTime::now()));
 
     Ok((
         status,
         location,
         content_type,
         Box::new(response.into_body().into_reader()),
+        retry_after,
     ))
 }
 
-/// `builder` with the bound the request states on its reply, where it states one.
+/// `builder` with the bounds the request states on its reply, where it states any.
 ///
 /// A whole reply sets the same three phases [`Egress::with_transport`] sets from
 /// [`Timeouts::reply`], for the reason given there: each bounds the phases after it, so leaving one
@@ -931,12 +1092,15 @@ fn send(
 /// sets only the last, which ureq counts from the headers arriving, and the two before it keep the
 /// wait for them at the agent's.
 ///
+/// A request that states its own gap between two pieces of the reply sets the body's bound alone,
+/// which ureq counts afresh on every read and carries into no other phase.
+///
 /// A patient one lifts every bound from the request going out onwards, since each carries into the
 /// phases after it. Connecting keeps its bound, which carries only into sending the headers.
 fn within<B>(
     builder: ureq::RequestBuilder<B>,
     timeouts: Timeouts,
-    reply: Option<ReplyBound>,
+    request: &Request,
     patient: bool,
 ) -> ureq::RequestBuilder<B> {
     if patient {
@@ -948,7 +1112,11 @@ fn within<B>(
             .timeout_recv_body(None)
             .build();
     }
-    match reply {
+    let builder = match request.idle {
+        Some(gap) => builder.config().timeout_recv_body(Some(gap)).build(),
+        None => builder,
+    };
+    match request.reply {
         None => builder,
         Some(ReplyBound::Whole(bound)) => builder
             .config()
@@ -965,8 +1133,13 @@ fn within<B>(
 /// Writes a failed request to the diagnostic log: the host asked, what kind of failure, the status
 /// where there was one, and how long it took. The URL is the caller's, never a redirect target, and
 /// only its host is kept; the failure's own text can carry what a server said, so it is not.
-fn log_failure(url: &str, error: &EgressError, elapsed: Duration) {
-    if let Some(fields) = failure_fields(url, error, elapsed) {
+///
+/// `replied` is the status a reply began with, for a failure that came after it began.
+fn log_failure(url: &str, error: &EgressError, replied: Option<u16>, elapsed: Duration) {
+    if let Some(mut fields) = failure_fields(url, error, elapsed) {
+        if let Some(status) = replied {
+            fields.push(("status", bravebot_diag::Field::num(status)));
+        }
         bravebot_diag::error("net.fetch", &fields);
     }
 }
@@ -1007,9 +1180,14 @@ const STOP_CHECK: Duration = Duration::from_millis(50);
 
 /// Whether a failure to send or to read the reply is worth another attempt.
 ///
-/// Everything here is the connection giving out: a timeout, a socket that went away, a name
-/// that did not resolve because the machine's network was not up yet. A protocol error or a
-/// malformed URL is the request being wrong, and sending it again would be wrong again.
+/// Everything here is the connection giving out: a timeout, a socket that went away, a network
+/// that is down, a name that did not resolve because the machine's network was not up yet. A
+/// protocol error or a malformed URL is the request being wrong, and sending it again would be
+/// wrong again.
+///
+/// A name that failed to resolve is [`ureq::Error::HostNotFound`] by the time it gets here, because
+/// [`address::Lookup`] reports it so: ureq's own error for it is an I/O error of a kind that
+/// [`is_transient_io`] cannot name.
 fn is_transient_call(error: &ureq::Error) -> bool {
     match error {
         ureq::Error::Timeout(_) | ureq::Error::ConnectionFailed | ureq::Error::HostNotFound => true,
@@ -1023,7 +1201,7 @@ fn is_transient_call(error: &ureq::Error) -> bool {
 /// ureq names the reply's own deadline, [`Timeouts::reply`] or the bound its request stated, as
 /// the wait for the response, which it keeps counting from the headers while the body arrives. Any
 /// other failure, the gap bound among them, is the connection's.
-fn body_failure(url: &str, error: std::io::Error) -> EgressError {
+fn body_failure(url: &str, error: &std::io::Error) -> EgressError {
     let cause = error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<ureq::Error>());
@@ -1037,8 +1215,92 @@ fn body_failure(url: &str, error: std::io::Error) -> EgressError {
     }
     EgressError::Transport {
         url: url.to_string(),
-        detail: error.to_string(),
-        transient: is_transient_io(&error),
+        detail: cause
+            .map_or_else(|| io_failure(error), call_failure)
+            .to_string(),
+        transient: is_transient_io(error),
+    }
+}
+
+/// A reply's body reader that writes a failed read to the diagnostic log as it fails.
+///
+/// The request that owns the body got past `fetch_checked` on a 2xx status, so nothing there saw
+/// what became of the rest of it. Writing the failure here covers a body read whole and one read
+/// in pieces without either having to remember to, and the kind written is the one the caller is
+/// told because both come from [`body_failure`].
+struct LoggedBody {
+    reader: Box<dyn std::io::Read + Send>,
+    /// The URL the caller asked for, which is not necessarily the one the body is arriving from.
+    url: String,
+    /// The status the reply began with, which the failure names.
+    status: u16,
+    /// When the request began, which the failure is timed from.
+    started: std::time::Instant,
+    /// The caller's token. A read that ends after a person stopped the request is a stop, whatever
+    /// ended it, and DIAG-7 does not count a stopped request as a failure.
+    cancel: Option<Cancel>,
+    /// Whether the failure is written already, so a caller that reads again after it adds no line.
+    written: bool,
+}
+
+impl std::io::Read for LoggedBody {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        // An interrupted read is repeated, as `Read` says to, so it is never where a body failed
+        // and the caller is never told it was.
+        let read = loop {
+            match self.reader.read(buffer) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                read => break read,
+            }
+        };
+        if let Err(error) = &read
+            && !self.written
+            && !self.cancel.as_ref().is_some_and(Cancel::is_cancelled)
+        {
+            self.written = true;
+            log_failure(
+                &self.url,
+                &body_failure(&self.url, error),
+                Some(self.status),
+                self.started.elapsed(),
+            );
+        }
+        read
+    }
+}
+
+/// The sentence a failed call is reported as, chosen by which failure it was.
+///
+/// The transport's own text for a failure is never used: a TLS handshake that fails on the name
+/// prints every name the server's certificate presented, and ureq quotes back a URI it could not
+/// use, so that text is the server's, and a failure's text reaches the planner as the driver's own
+/// words. Matching on the variant reads nothing a server wrote.
+fn call_failure(error: &ureq::Error) -> &'static str {
+    match error {
+        ureq::Error::Timeout(_) => "the request timed out",
+        ureq::Error::HostNotFound => "the host could not be found",
+        ureq::Error::ConnectionFailed => "the connection could not be made",
+        ureq::Error::Tls(_) | ureq::Error::Rustls(_) | ureq::Error::Pem(_) => {
+            "the TLS handshake failed"
+        }
+        ureq::Error::Io(e) => io_failure(e),
+        _ => "the request did not complete",
+    }
+}
+
+/// The same for a failure of the connection, by the kind of I/O error and never its message.
+///
+/// A rustls error that reaches the caller as an I/O error is `InvalidData`, which is also what a
+/// reply that could not be parsed is, so that kind says only that what came back was unusable.
+fn io_failure(error: &std::io::Error) -> &'static str {
+    use std::io::ErrorKind::*;
+    match error.kind() {
+        TimedOut => "the request timed out",
+        ConnectionRefused => "the connection was refused",
+        ConnectionReset | ConnectionAborted | BrokenPipe => "the connection was reset",
+        UnexpectedEof => "the connection closed before the reply was complete",
+        InvalidData => "the reply could not be used, or the TLS handshake failed",
+        _ => "the connection failed",
     }
 }
 
@@ -1054,6 +1316,9 @@ fn is_transient_io(error: &std::io::Error) -> bool {
             | BrokenPipe
             | NotConnected
             | WouldBlock
+            | NetworkUnreachable
+            | HostUnreachable
+            | NetworkDown
     )
 }
 
@@ -1169,6 +1434,9 @@ fn read_capped(mut reader: Box<dyn std::io::Read>) -> Result<(Vec<u8>, bool), st
 mod tests {
     use super::*;
 
+    /// Serialises the tests that read the process-wide diagnostic log.
+    static DIAG_LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// The one way out is built from the shared transport, so the certificate authorities and the
     /// proxy a machine states reach the gated path rather than only whichever client happened to
     /// be configured with them. A client built from the library's own defaults here would leave
@@ -1186,6 +1454,154 @@ mod tests {
             config.tls_config().root_certs(),
             ureq::tls::RootCerts::WebPki
         ));
+    }
+
+    /// `url` as the client reads it, written out in full with the port it connects to, or `None`
+    /// where the client cannot read it, has no host to connect to, or has no default port for its
+    /// scheme.
+    fn as_the_client_reads(url: &str) -> Option<String> {
+        let uri: ureq::http::Uri = url.parse().ok()?;
+        let scheme = uri.scheme_str()?.to_ascii_lowercase();
+        let default = match scheme.as_str() {
+            "http" => 80,
+            "https" => 443,
+            _ => return None,
+        };
+        let port = uri.port_u16().unwrap_or(default);
+        let host = uri
+            .host()
+            .filter(|host| !host.is_empty())?
+            .to_ascii_lowercase();
+        Some(format!("{scheme}://{host}:{port}/"))
+    }
+
+    /// Whether a hop left the declared socket is decided by `socket_of`, and where the bytes go is
+    /// decided by the client's parser. The two have to read one port from one url, so each url
+    /// here is read by the client as well: a url the client reads a port from keeps that port in
+    /// its socket, and a url it reads none from, although a `:` follows the host, names no socket
+    /// for a comparison to find equal to another that names none.
+    #[test]
+    fn a_socket_is_the_one_the_client_connects_to() {
+        for url in [
+            "http://h/a",
+            "https://h/a",
+            "HTTP://H:00080/c",
+            "http://h:0080/a",
+            "http://h:65535/a",
+            "http://h:065535/b",
+            "https://[::1]/x",
+            "http://[::1]:8080/x",
+            "http://u@h:81/a",
+            "http://h:81@h2:82/a",
+            "http://h:80?x=1",
+        ] {
+            let read = as_the_client_reads(url).expect("the client reads the url");
+            let socket = bravebot_core::url::socket_of(url);
+            assert!(socket.is_some(), "{url}");
+            assert_eq!(
+                socket,
+                bravebot_core::url::socket_of(&read),
+                "{url} is not the socket the client connects to"
+            );
+        }
+
+        for url in [
+            "http://127.0.0.1:/a",
+            "https://127.0.0.1:/b",
+            "http://h:abc/a",
+            "http://h:99999/a",
+            "http://h:65536/a",
+            "http://h:-80/a",
+            "http://h: 80/a",
+            "http://h:8o/a",
+            "http://h:80:90/a",
+            "http://h:?x=1",
+            "http://[::1]:/a",
+            "http://[::1]:abc/a",
+            "http://[::1]:99999/a",
+            "http://[::1]8080/a",
+            "http://[::1/a",
+        ] {
+            let read = url
+                .parse::<ureq::http::Uri>()
+                .ok()
+                .and_then(|uri| uri.port_u16());
+            assert_eq!(read, None, "the client reads a port from {url}");
+            assert_eq!(bravebot_core::url::socket_of(url), None, "{url}");
+        }
+    }
+
+    /// The rows above are the ones that went wrong. This is every combination of the pieces an
+    /// authority is written from, so a url nobody thought to list is held to the same thing: where
+    /// the client reads a url and a socket is reported for it, they are the same socket, and a url
+    /// the client reads with no port or a plain one always has a socket.
+    #[test]
+    fn no_url_the_client_reads_is_given_a_socket_it_does_not_connect_to() {
+        let schemes = ["http", "HTTPS", "ws", "ftp"];
+        let users = ["", "u@", "u:p@", "u@v@"];
+        // Whether each piece is written plainly: a host with nothing after it but a port, and a
+        // port that is none or digits that fit. Only a url written that way is owed a socket.
+        let hosts = [
+            ("h", true),
+            ("H", true),
+            ("[::1]", true),
+            ("[::1", false),
+            ("::1", false),
+            ("", false),
+            ("[::1]x", false),
+            ("[]", false),
+            ("h%41", false),
+        ];
+        let ports = [
+            ("", true),
+            (":", false),
+            (":80", true),
+            (":0", true),
+            (":+1", false),
+            (":x", false),
+            (":65536", false),
+            (":1:2", false),
+            (":080", true),
+            (":443", true),
+        ];
+        let rests = ["", "/p", "?q@z:9", "#f"];
+
+        let (mut compared, mut owed) = (0, 0);
+        for scheme in schemes {
+            for user in users {
+                for (host, plain_host) in hosts {
+                    for (port, plain_port) in ports {
+                        for rest in rests {
+                            let plain = plain_host && plain_port;
+                            let url = format!("{scheme}://{user}{host}{port}{rest}");
+                            let socket = bravebot_core::url::socket_of(&url);
+                            if matches!(scheme, "ws" | "ftp") {
+                                assert_eq!(socket, None, "{url} is not one the client connects to");
+                            }
+                            let Some(read) = as_the_client_reads(&url) else {
+                                continue;
+                            };
+                            if plain {
+                                owed += 1;
+                                assert!(socket.is_some(), "{url} is read by the client");
+                            }
+                            if let Some(socket) = socket {
+                                compared += 1;
+                                assert_eq!(
+                                    Some(socket),
+                                    bravebot_core::url::socket_of(&read),
+                                    "{url} is not the socket the client connects to"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            compared > 100 && owed > 100,
+            "{compared} compared, {owed} owed a socket"
+        );
     }
 
     /// Only a connection that ends here is waited on without bounds. A name that merely sounds
@@ -1315,6 +1731,49 @@ mod tests {
         );
     }
 
+    /// A failure's text is the part of it a caller formats into a message the planner reads, so
+    /// it is chosen by which failure it was. A TLS handshake that fails on the name prints every
+    /// name the server's certificate presented, and the transport quotes back a URI it could
+    /// not use, so neither text may survive, and no kind of failure may fall back to the
+    /// transport's own words.
+    #[test]
+    fn a_call_failure_is_worded_by_its_kind_and_never_by_the_transport() {
+        let sentinel = "SENTINEL-CERTIFICATE-NAME";
+        let tls_as_io = || {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid peer certificate: only valid for {sentinel}"),
+            )
+        };
+        let failures = [
+            (ureq::Error::Io(tls_as_io()), "TLS handshake"),
+            (ureq::Error::BadUri(sentinel.into()), "did not complete"),
+            (
+                ureq::Error::Tls("SENTINEL-CERTIFICATE-NAME"),
+                "TLS handshake",
+            ),
+            (
+                ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    sentinel,
+                )),
+                "refused",
+            ),
+            (ureq::Error::HostNotFound, "could not be found"),
+        ];
+        for (error, wording) in failures {
+            let said = call_failure(&error);
+            assert!(!said.contains(sentinel), "{error:?} was worded as {said}");
+            assert!(said.contains(wording), "{error:?} was worded as {said}");
+        }
+
+        let body = body_failure("https://example.com/", &tls_as_io());
+        assert!(
+            !body.to_string().contains(sentinel),
+            "a body failure carried the I/O error's message: {body}"
+        );
+    }
+
     /// The classification a retry rests on. Getting it wrong in one direction repeats a request
     /// that will fail identically, and in the other abandons one that would have worked.
     #[test]
@@ -1350,6 +1809,250 @@ mod tests {
         );
     }
 
+    /// A machine whose network is down reports it as one of three kinds, and a request that is not
+    /// sent again once the network is back ends a turn that has run for many rounds. The kinds a
+    /// request that is wrong or refused gives stay one attempt, so the three are named rather than
+    /// every kind being worth another try.
+    #[test]
+    fn a_network_that_is_down_is_worth_another_attempt() {
+        use std::io::ErrorKind::*;
+        let url = "https://example.com/";
+        for kind in [NetworkUnreachable, HostUnreachable, NetworkDown] {
+            let call = ureq::Error::Io(std::io::Error::from(kind));
+            assert!(is_transient_call(&call), "{kind:?} was sent once");
+            let body = body_failure(url, &std::io::Error::from(kind));
+            assert!(body.is_transient(), "{kind:?} on a body was sent once");
+        }
+        for kind in [PermissionDenied, InvalidData, Other] {
+            let call = ureq::Error::Io(std::io::Error::from(kind));
+            assert!(!is_transient_call(&call), "{kind:?} was asked again");
+            let body = body_failure(url, &std::io::Error::from(kind));
+            assert!(!body.is_transient(), "{kind:?} on a body was asked again");
+        }
+    }
+
+    /// How a lookup fails. An I/O error is what ureq reports for the system's: its kind is
+    /// `Uncategorized`, which a test cannot construct and a `match` cannot name, so the test
+    /// chooses a kind, and a message the failure must not repeat.
+    #[derive(Debug, Clone, Copy)]
+    enum Failure {
+        Io(std::io::ErrorKind),
+        BadUri,
+        TimedOut,
+    }
+
+    const LOOKUP_TEXT: &str = "SENTINEL-LOOKUP-FAILURE";
+
+    #[derive(Debug)]
+    struct FailedLookup(Failure);
+
+    impl ureq::unversioned::resolver::Resolver for FailedLookup {
+        fn resolve(
+            &self,
+            _: &ureq::http::Uri,
+            _: &ureq::config::Config,
+            _: ureq::unversioned::transport::NextTimeout,
+        ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+            Err(match self.0 {
+                Failure::Io(kind) => ureq::Error::Io(std::io::Error::new(kind, LOOKUP_TEXT)),
+                Failure::BadUri => ureq::Error::BadUri(LOOKUP_TEXT.into()),
+                Failure::TimedOut => ureq::Error::Timeout(ureq::Timeout::Resolve),
+            })
+        }
+    }
+
+    /// The kinds an I/O error from a failed lookup may carry. None is in [`is_transient_io`], so a
+    /// failed lookup is sent again only where it is recognised as a lookup.
+    const LOOKUP_KINDS: [std::io::ErrorKind; 4] = [
+        std::io::ErrorKind::Other,
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::NotFound,
+        std::io::ErrorKind::InvalidInput,
+    ];
+
+    /// The request a backend makes: no fetch in flight, so it goes out on the agent that is not
+    /// guarded, and a person's turn rests on whether this one is sent again.
+    fn requested(egress: &Egress, request: Request) -> Result<Response, EgressError> {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "ask the model");
+        let mut sink = bravebot_core::event::NullSink;
+        let Ok(mut policy) = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        ) else {
+            panic!("policy begins");
+        };
+        egress.fetch(&mut policy, request, Label::untrusted_public())
+    }
+
+    /// What a request fails with when the lookup does, on each of the two agents: the backend's
+    /// and the one a fetch in flight is sent with, which resolve through resolvers of their own.
+    fn failed_on_both_agents(failure: Failure) -> [(&'static str, EgressError); 2] {
+        let egress = Egress::resolving_through(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+            || FailedLookup(failure),
+        );
+        [
+            (
+                "a backend's request",
+                requested(&egress, Request::get("http://backend.example.test/v1"))
+                    .expect_err("the lookup failed"),
+            ),
+            (
+                "a fetch in flight",
+                fetched(&egress, Request::get("http://docs.example.test/page"))
+                    .expect_err("the lookup failed"),
+            ),
+        ]
+    }
+
+    /// A name that did not resolve is a network that was not up yet, so the request is sent again
+    /// and the person is told the host could not be found rather than that the connection failed.
+    /// Whatever kind the I/O error carries, since the kind a failed lookup really has cannot be
+    /// matched.
+    #[test]
+    fn a_request_whose_name_did_not_resolve_is_worth_another_attempt() {
+        for kind in LOOKUP_KINDS {
+            for (sent, error) in failed_on_both_agents(Failure::Io(kind)) {
+                assert!(
+                    matches!(
+                        &error,
+                        EgressError::Transport { detail, transient: true, .. }
+                            if detail == "the host could not be found"
+                    ),
+                    "{sent} with a lookup failing as {kind:?}: {error:?}"
+                );
+                assert!(error.is_transient());
+                assert!(!error.to_string().contains(LOOKUP_TEXT), "{error}");
+            }
+        }
+    }
+
+    /// Only a lookup that failed as an I/O error is reported as a host not found. A URL the lookup
+    /// could not use is the request being wrong, and a lookup that ran out of time says so.
+    #[test]
+    fn a_lookup_that_failed_another_way_is_reported_as_it_failed() {
+        for (failure, transient, said) in [
+            (Failure::BadUri, false, "the request did not complete"),
+            (Failure::TimedOut, true, "the request timed out"),
+        ] {
+            for (sent, error) in failed_on_both_agents(failure) {
+                assert!(
+                    matches!(
+                        &error,
+                        EgressError::Transport { detail, transient: t, .. }
+                            if detail == said && *t == transient
+                    ),
+                    "{sent} with a lookup failing as {failure:?}: {error:?}"
+                );
+            }
+        }
+    }
+
+    /// The two tests above feed the wrapper an error of a kind the test chose, so they would still
+    /// pass if ureq's own lookup stopped reporting a failed name as an I/O error. This asks the
+    /// system for a name reserved never to exist (RFC 6761). A network that answers every name
+    /// leaves nothing to observe, and so does a lookup that did not finish in time, so those skip.
+    #[test]
+    fn the_systems_own_failed_lookup_is_reported_as_a_host_not_found() {
+        use ureq::unversioned::resolver::{DefaultResolver, Resolver};
+        use ureq::unversioned::transport::{NextTimeout, time::Duration as Bound};
+
+        let lookup = address::Lookup::new(DefaultResolver::default());
+        let uri: ureq::http::Uri = "http://no-such-host.invalid/".parse().expect("a URI");
+        let outcome = lookup.resolve(
+            &uri,
+            &ureq::config::Config::default(),
+            NextTimeout {
+                after: Bound::Exact(Duration::from_secs(20)),
+                reason: ureq::Timeout::Resolve,
+            },
+        );
+        match outcome {
+            Err(ureq::Error::HostNotFound) => {}
+            Ok(_) => eprintln!("skipped: this network resolves a name reserved never to exist"),
+            Err(ureq::Error::Timeout(_)) => eprintln!("skipped: the lookup did not finish in 20s"),
+            Err(other) => panic!("a failed lookup was reported as {other:?}"),
+        }
+    }
+
+    /// `Retry-After` is whole seconds or an HTTP date, bounded, and a figure only: a value that
+    /// is neither is absent, so the caller's own backoff applies rather than a guess.
+    #[test]
+    fn a_retry_after_is_read_as_seconds_or_a_date_and_bounded() {
+        let now = UNIX_EPOCH + Duration::from_secs(784_111_777); // Sun, 06 Nov 1994 08:49:37 GMT
+        let read = |value: &str| retry_after(value, now);
+
+        assert_eq!(read("2"), Some(Duration::from_secs(2)));
+        assert_eq!(read(" 120 "), Some(Duration::from_secs(120)));
+        assert_eq!(read("0"), Some(Duration::ZERO));
+        assert_eq!(
+            read("Sun, 06 Nov 1994 08:50:37 GMT"),
+            Some(Duration::from_secs(60)),
+            "a date is the wait until it"
+        );
+        assert_eq!(
+            read("Sun, 06 Nov 1994 08:49:00 GMT"),
+            Some(Duration::ZERO),
+            "a date already past asks for no wait"
+        );
+        // Larger than anything a caller should set a timer from, including one too large to parse.
+        assert_eq!(read("86400"), Some(LONGEST_RETRY_AFTER));
+        assert_eq!(read("99999999999999999999999"), Some(LONGEST_RETRY_AFTER));
+
+        for not_a_figure in [
+            "",
+            "soon",
+            "-5",
+            "+5",
+            "1.5",
+            "2 seconds",
+            "Sunday, 06-Nov-94 08:50:37 GMT",
+            "Sun Nov  6 08:50:37 1994",
+            "Sun, 06 Nov 1994 08:50:37 PST",
+            "Sun, 31 Foo 1994 08:50:37 GMT",
+            "Sun, 06 Nov 1994 25:50:37 GMT",
+        ] {
+            assert_eq!(
+                read(not_a_figure),
+                None,
+                "{not_a_figure:?} was taken as a wait"
+            );
+        }
+    }
+
+    /// The header reaches the failure as a number, from the answer to the request that was sent.
+    #[test]
+    fn a_status_carries_the_wait_the_server_asked_for_and_nothing_it_wrote() {
+        let status = |header: &str| {
+            let (port, _) = serve_counting(vec![format!(
+                "HTTP/1.1 429 Too Many Requests\r\n{header}Content-Length: 0\r\nConnection: close\r\n\r\n"
+            )]);
+            let outcome = fetched(
+                &Egress::new(),
+                Request::get(format!("http://127.0.0.1:{port}/")),
+            );
+            match outcome {
+                Err(EgressError::Status {
+                    status: 429,
+                    retry_after,
+                    ..
+                }) => retry_after,
+                other => panic!("expected a 429, got {other:?}"),
+            }
+        };
+
+        assert_eq!(status("Retry-After: 7\r\n"), Some(Duration::from_secs(7)));
+        assert_eq!(status("Retry-After: 999999\r\n"), Some(LONGEST_RETRY_AFTER));
+        assert_eq!(status("Retry-After: later\r\n"), None);
+        assert_eq!(status(""), None);
+    }
+
     /// A server saying "not now" is temporary; a server saying "no" is not.
     #[test]
     fn only_the_statuses_that_mean_not_now_are_worth_another_attempt() {
@@ -1357,6 +2060,7 @@ mod tests {
             EgressError::Status {
                 url: "https://example.com".into(),
                 status,
+                retry_after: None,
             }
             .is_transient()
         };
@@ -1379,6 +2083,7 @@ mod tests {
         let refused = EgressError::Status {
             url: "https://example.com/".to_string(),
             status: 503,
+            retry_after: None,
         };
         assert!(failure_fields("https://example.com/", &refused, Duration::ZERO).is_some());
     }
@@ -1390,6 +2095,8 @@ mod tests {
     #[test]
     fn a_failed_request_is_logged_as_host_status_and_kind_only() {
         use std::io::{BufRead, BufReader, Write};
+
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
 
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback");
         let port = listener.local_addr().expect("addr").port();
@@ -1454,6 +2161,103 @@ mod tests {
         for leaked in ["hunter2", "private", "token", "SERVERBODY", "Unavailable"] {
             assert!(!log.contains(leaked), "{leaked} reached the log: {log}");
         }
+    }
+
+    /// An interrupted read is repeated and the body goes on, so it is not where the body failed
+    /// and the caller is not told it was. A body that does fail is written once, however often it
+    /// is read afterwards, since the request failed once.
+    #[test]
+    fn a_read_that_is_repeated_is_not_written_as_a_body_that_failed() {
+        use std::io::Read;
+
+        /// Interrupted once, then holds `"ok"`, then fails with `error` on every read after it.
+        struct Flaky {
+            interrupted: bool,
+            sent: bool,
+            error: std::io::ErrorKind,
+        }
+        impl Read for Flaky {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if !std::mem::replace(&mut self.interrupted, true) {
+                    return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+                }
+                if !std::mem::replace(&mut self.sent, true) {
+                    buffer[..2].copy_from_slice(b"ok");
+                    return Ok(2);
+                }
+                Err(std::io::Error::from(self.error))
+            }
+        }
+
+        /// Points the log nowhere again when an assertion panics.
+        struct Unconfigure;
+        impl Drop for Unconfigure {
+            fn drop(&mut self) {
+                bravebot_diag::configure(bravebot_diag::Level::Error, None);
+            }
+        }
+
+        let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        bravebot_diag::configure(bravebot_diag::Level::Error, Some(tmp.path().to_path_buf()));
+        let unconfigure = Unconfigure;
+        let mut body = LoggedBody {
+            reader: Box::new(Flaky {
+                interrupted: false,
+                sent: false,
+                error: std::io::ErrorKind::ConnectionReset,
+            }),
+            url: "http://repeated.example/page".into(),
+            status: 200,
+            started: std::time::Instant::now(),
+            cancel: None,
+            written: false,
+        };
+
+        let mut buffer = [0u8; 8];
+        let first = body
+            .read(&mut buffer)
+            .expect("the interrupted read is repeated");
+        assert_eq!(&buffer[..first], b"ok");
+        // Other tests in this binary fail requests while the log is configured, so only the lines
+        // naming this body's host are this test's.
+        let written = || -> Vec<String> {
+            let lines = std::fs::read_dir(tmp.path().join(bravebot_diag::DIRECTORY))
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .flat_map(|e| {
+                            std::fs::read_to_string(e.path())
+                                .unwrap_or_default()
+                                .lines()
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            lines
+                .into_iter()
+                .filter(|line| line.contains("host=repeated.example"))
+                .collect()
+        };
+        assert!(
+            written().is_empty(),
+            "a repeated read was written: {:?}",
+            written()
+        );
+
+        assert!(body.read(&mut buffer).is_err());
+        assert!(body.read(&mut buffer).is_err());
+        let lines = written();
+        drop(unconfigure);
+
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].contains("ERROR net.fetch host=repeated.example kind=transport")
+                && lines[0].contains("status=200"),
+            "{lines:?}"
+        );
     }
 
     #[test]
@@ -1578,6 +2382,12 @@ mod tests {
     /// bytes inside one. Nothing about the gate is under test here; it is how the caller under
     /// test reads a chunk too.
     fn drain(mut stream: Streamed<'_>) -> (usize, bool) {
+        let total = drain_by_ref(&mut stream);
+        (total, stream.truncated())
+    }
+
+    /// The same, leaving the stream for the caller to ask about afterwards.
+    fn drain_by_ref(stream: &mut Streamed<'_>) -> usize {
         let mut routing = bravebot_core::policy::Routing::new();
         routing.insert_trusted("task", "read a stream");
         let mut sink = bravebot_core::event::NullSink;
@@ -1594,7 +2404,24 @@ mod tests {
         while let Some(chunk) = stream.next_chunk().expect("the read succeeds") {
             total += decoding.decode(chunk).0.len();
         }
-        (total, stream.truncated())
+        total
+    }
+
+    /// The size a download reports is the stream's own count, so it has to be the bytes handed
+    /// back: all of a body that ended at the cap, the cap's worth of one that was cut, and not
+    /// the one extra byte read to learn it was cut.
+    #[test]
+    fn a_stream_counts_the_bytes_it_handed_back_and_not_the_one_it_read_to_find_the_cut() {
+        for (body, cap) in [(5000, 3000), (3000, 3000), (2000, 3000)] {
+            let mut stream = streamed(vec![b'x'; body]).capped_at(cap);
+            let released = drain_by_ref(&mut stream);
+            assert_eq!(released, body.min(cap));
+            assert_eq!(
+                stream.handed_back(),
+                released,
+                "a {body}-byte body under a cap of {cap}"
+            );
+        }
     }
 
     fn streamed(body: Vec<u8>) -> Streamed<'static> {
@@ -1709,7 +2536,10 @@ mod tests {
             Timeouts::default(),
             &Transport::stated(TrustRoots::Bundled, None, None),
         )
-        .guarded_by(address::GuardedResolver::over(resolver, admits));
+        .guarded_by(address::GuardedResolver::over(
+            address::Lookup::new(resolver),
+            admits,
+        ));
         (egress, lookups)
     }
 

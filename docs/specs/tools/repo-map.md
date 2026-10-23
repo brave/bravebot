@@ -49,6 +49,8 @@ nobody vouched for could raise its own declaration to the top of the map by ment
 `verified-by: bravebot_agent::repo_map::a_mention_in_the_declaring_file_earns_nothing`
 `verified-by: bravebot_agent::repo_map::a_name_declared_in_many_places_shares_its_credit`
 `verified-by: bravebot_agent::repo_map::the_same_sources_give_the_same_map`
+`verified-by: bravebot_agent::repo_map::a_name_is_credited_once_for_each_file_that_mentions_it_however_often_it_is_named`
+`verified-by: bravebot_agent::repo_map::declarations_that_rank_alike_are_kept_in_path_order_when_the_budget_cuts_them`
 
 <a id="MAP-3"></a>
 ### MAP-3: a file holding what looks like a credential contributes nothing
@@ -87,3 +89,6 @@ exist when the map was cut off.
 `verified-by: bravebot_agent::repo_map::a_path_too_long_for_the_budget_does_not_empty_the_map`
 `verified-by: bravebot_agent::workspace::a_repo_map_says_when_the_file_cap_stopped_it`
 `verified-by: bravebot_agent::workspace::a_repo_map_of_a_file_is_refused`
+`verified-by: bravebot_agent::repo_map::a_budget_outside_the_range_gives_the_map_of_the_nearest_end`
+`verified-by: bravebot_agent::tools::a_map_says_each_way_it_fell_short_and_a_whole_one_says_nothing`
+`verified-by: bravebot_agent::workspace::a_repo_map_says_when_a_directory_could_not_be_opened`

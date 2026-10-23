@@ -6,6 +6,7 @@ Each script loads this module by path and binds the names it uses, so a fix made
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
@@ -15,14 +16,29 @@ from pathlib import Path
 from types import SimpleNamespace
 
 BASE_REPO = "brave/bravebot"
-GITHUB_URL = re.compile(r"(?:^|[@/])github\.com[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+# `github.com`, or an ssh config alias for it such as `github-work` (`git@github-work:owner/repo.git`).
+# An alias is a single word after `github-`, so `github-evil.example.com` is a different host.
+GITHUB_URL = re.compile(r"(?:^|[@/])github(?:\.com|-[\w-]+)[:/]+([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+# A directory to hold the pull request worktrees. Relative to the main clone unless absolute.
+WORKTREES_ENV = "BRAVEBOT_PR_WORKTREES"
 PULL_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)")
+ISSUE_URL = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/issues/(\d+)")
 OURS = re.compile(r"^<{7}(?: |$)")
 THEIRS = re.compile(r"^>{7}(?: |$)")
 MAKE_FAILED = re.compile(r"^make(?:\[\d+\])?: \*\*\*")
 SPEC_RECORDS = {"agents/unverified-clauses.txt", "agents/renumbered-clauses.txt"}
 LOCK_RESOLVES = ["cargo", "metadata", "--locked", "--format-version", "1"]
 PUSH_DENIED = re.compile(r"Permission to \S+ denied to ")
+REASON_WIDTH = 120
+# How much of what git said when a rebase stopped is shown: this many lines, each cut to this width.
+REASON_LINES = 3
+WIDTH = 300
+REBASE_STATES = ("rebase-merge", "rebase-apply")
+# The directory of the repository's common git directory that `make hooks` fills, which no branch
+# tracks. Git runs hooks from here and nowhere else, since a pull request's worktree would otherwise
+# run the hooks that pull request tracks, as whoever runs the script.
+HOOKS_DIR = "bravebot-hooks"
+HOOKS_DIRS = {}
 
 
 def die(message):
@@ -30,10 +46,54 @@ def die(message):
     sys.exit(1)
 
 
+def printed(done):
+    """A finished command's stderr, then its stdout with a JSON error object cut to `message` and `errors`."""
+    # gh api states the reason in that JSON and only a one-line status on stderr; a partial GraphQL response also carries `data`.
+    out = done.stdout.strip()
+    try:
+        body = json.loads(out)
+    except (ValueError, RecursionError):
+        body = None
+    if isinstance(body, dict):
+        reason = {key: body[key] for key in ("message", "errors") if body.get(key)}
+        if reason:
+            out = json.dumps(reason)
+    return "\n".join(part for part in (done.stderr.strip(), out) if part)
+
+
+def hooks_dir(cwd):
+    """The directory git runs hooks from for the repository `cwd` is in, or None outside one.
+
+    It does not exist until `make hooks` creates it. The common git directory of a path does not change
+    while a script runs, so a resolved answer is kept rather than asked for again before every git command.
+    """
+    key = str(Path(cwd or ".").resolve())
+    if key not in HOOKS_DIRS:
+        try:
+            done = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=cwd, capture_output=True, text=True)
+        except OSError:
+            return None
+        if done.returncode:
+            return None
+        HOOKS_DIRS[key] = Path(key, done.stdout.strip()).resolve() / HOOKS_DIR
+    return HOOKS_DIRS[key]
+
+
+def hooks_note(main):
+    """One line saying that no hook runs, or an empty string when `make hooks` has created the directory."""
+    directory = hooks_dir(main)
+    if directory is None or directory.is_dir():
+        return ""
+    return f"hooks: none run, {directory} does not exist; `make hooks` in {main} creates it"
+
+
 def run(*args, cwd=None, check=True, env=None):
-    done = subprocess.run(args, cwd=cwd, capture_output=True, text=True, env=env)
+    # A `-c` reaches the commands git starts itself, such as the commits a rebase makes, and outranks
+    # whatever `core.hooksPath` the repository's config holds.
+    command = ("git", "-c", f"core.hooksPath={hooks_dir(cwd) or os.devnull}", *args[1:]) if args[0] == "git" else args
+    done = subprocess.run(command, cwd=cwd, capture_output=True, text=True, env=env)
     if check and done.returncode:
-        die(f"{' '.join(map(str, args))} failed:\n{(done.stderr or done.stdout).strip()}")
+        die(f"{' '.join(map(str, args))} failed:\n{printed(done)}")
     return done
 
 
@@ -57,6 +117,19 @@ def pr_number(arg):
     return int(bare[1])
 
 
+def issue_number(arg):
+    """The number of a brave/bravebot issue named by a link, `#12` or `12`."""
+    url = ISSUE_URL.search(arg)
+    if url:
+        if f"{url[1]}/{url[2]}".lower() != BASE_REPO:
+            die(f"{arg} is not a {BASE_REPO} issue")
+        return int(url[3])
+    bare = re.fullmatch(r"#?(\d+)", arg.strip())
+    if bare is None:
+        die(f"{arg} is neither an issue number nor a {BASE_REPO} issue URL")
+    return int(bare[1])
+
+
 def github_remotes(listing):
     """`git remote -v` as {owner/repo: (remote, url)}, the first remote naming a repo winning."""
     found = {}
@@ -70,9 +143,30 @@ def github_remotes(listing):
 
 
 def fork_url(repo, like):
+    # Only the scheme is taken from the base remote. An ssh alias there names the account that owns
+    # the base remote's key, which is not necessarily the account that owns the fork.
     if like.startswith("https://"):
         return f"https://github.com/{repo}.git"
     return f"git@github.com:{repo}.git"
+
+
+def worktree_path(main, number, issue=False):
+    """Where a pull request's worktree goes: `.worktrees/pr-<n>` in the main clone, which git ignores.
+
+    That is inside the workspace, so the file tools reach it. `BRAVEBOT_PR_WORKTREES` names another
+    directory, where the name also carries the clone's so that clones can share one. An issue's
+    worktree is `issue-<n>` in either place, so it never shares a name with a pull request of the
+    same number.
+    """
+    chosen = os.environ.get(WORKTREES_ENV)
+    if chosen:
+        return main / Path(chosen).expanduser() / f"{main.name}-{'issue-' if issue else ''}{number}"
+    return main / ".worktrees" / f"{'issue' if issue else 'pr'}-{number}"
+
+
+def standard_path(pr):
+    """Where the worktree of `pr` would be made, which an issue's plan states itself."""
+    return getattr(pr, "standard", None) or worktree_path(pr.main, pr.number)
 
 
 def local_branch(head, base, number):
@@ -91,19 +185,112 @@ def marker_ranges(text):
     return ranges
 
 
-def worktrees(here):
-    """{branch: path} for every worktree on a branch, and the main worktree's path.
+def rebasing(tree):
+    """The branch a rebase in `tree` is rewriting, which `git worktree list` does not name while it runs."""
+    done = run("git", "rev-parse", "--absolute-git-dir", cwd=tree, check=False)
+    if done.returncode:
+        return None
+    for name in REBASE_STATES:
+        head = Path(done.stdout.strip(), name, "head-name")
+        if head.is_file():
+            ref = head.read_text(encoding="utf-8", errors="replace").strip()
+            return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else None
+    return None
 
+
+def worktrees(here):
+    """({branch: checkout}, main) for every worktree on a branch, and the main worktree's path.
+
+    A checkout has the worktree's `path`, whether it is `locked`, and the `reason` given for the lock.
+    A worktree in the middle of a rebase is listed as detached and still holds the branch it is rewriting.
     A worktree whose directory was deleted is still listed until pruned; it holds nothing.
     """
-    found, path, main = {}, None, None
-    for line in git("worktree", "list", "--porcelain", cwd=here).splitlines():
-        if line.startswith("worktree "):
-            path = Path(line[len("worktree "):])
-            main = main or path
-        elif line.startswith("branch refs/heads/") and path.exists():
-            found[line[len("branch refs/heads/"):]] = path
+    found, main = {}, None
+    for record in git("worktree", "list", "--porcelain", cwd=here).split("\n\n"):
+        path = branch = None
+        detached = locked = False
+        reason = ""
+        for line in record.splitlines():
+            if line.startswith("worktree "):
+                path = Path(line[len("worktree "):])
+            elif line.startswith("branch refs/heads/"):
+                branch = line[len("branch refs/heads/"):]
+            elif line == "detached":
+                detached = True
+            elif line == "locked" or line.startswith("locked "):
+                locked, reason = True, line[len("locked "):]
+        main = main or path
+        if path is None or not path.exists():
+            continue
+        branch = branch or (rebasing(path) if detached else None)
+        if branch:
+            found[branch] = SimpleNamespace(path=path, locked=locked, reason=reason)
     return found, main
+
+
+def lock_reason(held):
+    """The reason a worktree was locked with, on one line and no longer than a short sentence."""
+    shown = "".join(one if one.isprintable() else "?" for one in held.reason)
+    if not shown:
+        return "no reason given"
+    return shown if len(shown) <= REASON_WIDTH else shown[:REASON_WIDTH] + "..."
+
+
+def same_place(one, other):
+    return os.path.realpath(one) == os.path.realpath(other)
+
+
+def reuse_note(pr):
+    """One line for a branch already checked out where a new worktree would not go, else an empty string."""
+    standard = standard_path(pr)
+    if not pr.checked_out or same_place(pr.tree, standard):
+        return ""
+    tree, main, here = (Path(os.path.realpath(one)) for one in (pr.tree, pr.main, pr.here))
+    facts = []
+    if tree == main:
+        facts.append("the main clone itself")
+    elif tree == here:
+        facts.append("the checkout this was run from")
+    elif not any(tree.is_relative_to(root) for root in (main, here)):
+        facts.append(f"outside the main clone {pr.main}, so the file tools refuse it until it is opened")
+    if pr.held.locked:
+        facts.append(f"locked: {lock_reason(pr.held)}")
+    where = f" ({'; '.join(facts)})" if facts else ""
+    note = f"reused: {pr.branch} is already checked out in {pr.tree}{where}, so it is used rather than a new worktree"
+    if tree not in (main, here):
+        quoted = shlex.quote(str(pr.tree))
+        unlock = f"git worktree unlock {quoted}; " if pr.held.locked else ""
+        note += f". For a new one at {standard}, the person removes it: {unlock}git worktree remove {quoted}"
+    return note
+
+
+def announce(pr):
+    """Say which worktree a step works in, where it is when not the standard place, and when no hooks run."""
+    print(f"worktree {pr.tree}", flush=True)
+    note = reuse_note(pr)
+    if note:
+        print(note, flush=True)
+    hooks = hooks_note(pr.main)
+    if hooks:
+        print(hooks, flush=True)
+
+
+def refuse_locked(pr, script, words, allowed):
+    """Stop a step that would work in a locked worktree, which something else may be using, unless the person agreed.
+
+    `words` are the step's arguments as given, so the command offered for running it again is the same step.
+    A session started in the worktree chose it, so the lock does not stand between it and the step.
+    """
+    if not pr.checked_out or not pr.held.locked or allowed or same_place(pr.tree, pr.here):
+        return
+    quoted = shlex.quote(str(pr.tree))
+    die(
+        f"{pr.tree} is locked ({lock_reason(pr.held)}), so something else may be using it, and no worktree "
+        f"was touched. Ask the person, unless they have already agreed for this pull request: to work in it "
+        f"anyway, run `{script} {shlex.join([*words, '--use-locked'])}`; to use "
+        f"{standard_path(pr)} instead, they unlock and remove it themselves: "
+        f"git worktree unlock {quoted}; git worktree remove {quoted}"
+    )
 
 
 def pull(number, view, here, remotes, create, script):
@@ -128,6 +315,7 @@ def pull(number, view, here, remotes, create, script):
     base, head = view["baseRefName"], view["headRefName"]
     branch = local_branch(head, base, number)
     checked_out, main = worktrees(here)
+    held = checked_out.get(branch)
     return SimpleNamespace(
         number=number,
         url=view["url"],
@@ -141,8 +329,10 @@ def pull(number, view, here, remotes, create, script):
         head_remote=head_remote,
         onto=f"{base_remote}/{base}",
         tip=f"{head_remote}/{head}",
-        tree=checked_out.get(branch) or main.parent / f"{main.name}-{number}",
-        checked_out=branch in checked_out,
+        main=main,
+        held=held,
+        tree=held.path if held else worktree_path(main, number),
+        checked_out=held is not None,
     )
 
 
@@ -163,7 +353,7 @@ def rev(ref, cwd):
 
 
 def rebase_dir(tree):
-    for name in ("rebase-merge", "rebase-apply"):
+    for name in REBASE_STATES:
         path = Path(tree, git("rev-parse", "--git-path", name, cwd=tree))
         if path.is_dir():
             return path
@@ -340,3 +530,201 @@ def push_head(pr, tree, tip):
         die(f"git {' '.join(args)} failed:\n{(done.stderr or done.stdout).strip()}")
     if key:
         print(f"pushed as the ssh-agent key {key}")
+
+
+def add_worktree(pr):
+    """Prune, fetch the base and the head, and give the branch a worktree if it has none."""
+    git("worktree", "prune", cwd=pr.here)
+    fetch(pr.here, pr.base_remote, pr.base)
+    fetch(pr.here, pr.head_remote, pr.head)
+    tree = pr.tree
+    if not pr.checked_out:
+        if tree.exists():
+            die(f"{tree} exists and is not a worktree on {pr.branch}")
+        if succeeds("rev-parse", "--verify", "--quiet", f"refs/heads/{pr.branch}", cwd=pr.here):
+            git("worktree", "add", str(tree), pr.branch, cwd=pr.here)
+        else:
+            git("worktree", "add", "-b", pr.branch, str(tree), pr.tip, cwd=pr.here)
+
+
+def catch_up_with_pull(pr, tree):
+    """Fast-forward the worktree to the pull request's head, or say what stops it."""
+    if git("status", "--porcelain", "--untracked-files=no", cwd=tree):
+        die(f"{tree} has uncommitted changes")
+
+    def subjects(ref):
+        return set(git("log", "--format=%s", f"{pr.onto}..{ref}", cwd=tree).splitlines())
+
+    if succeeds("merge-base", "--is-ancestor", "HEAD", pr.tip, cwd=tree):
+        git("merge", "--ff-only", "--quiet", pr.tip, cwd=tree)
+    elif succeeds("merge-base", "--is-ancestor", pr.tip, "HEAD", cwd=tree):
+        print(f"{pr.branch} has commits the pull request does not; they are kept")
+    elif not subjects(pr.tip) <= subjects("HEAD"):
+        die(f"{pr.branch} in {tree} and {pr.tip} have diverged")
+
+
+def rebase_onto(pr, tree):
+    """Rebase onto the base unless already on it. Returns what git printed to stderr."""
+    if succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
+        return ""
+    resolved_log(tree).unlink(missing_ok=True)
+    done = run("git", "rebase", pr.onto, cwd=tree, check=False)
+    if done.returncode and rebase_dir(tree) is None:
+        die(f"git rebase {pr.onto} failed:\n{(done.stderr or done.stdout).strip()}")
+    return done.stderr
+
+
+def resolve_or_stop(tree):
+    """Stage the resolved files and continue the rebase.
+
+    Returns None after printing the files that still hold conflict markers, and git's stderr otherwise.
+    """
+    files = unmerged(tree)
+    left = [
+        one
+        for one in files
+        if Path(tree, one).is_file()
+        and marker_ranges(Path(tree, one).read_text(encoding="utf-8", errors="replace"))
+    ]
+    if left:
+        print("markers remain:")
+        for name in left:
+            print(f"  {describe(tree, name)}")
+        return None
+    if files:
+        git("add", "-A", "--", *files, cwd=tree)
+        remember_resolved(tree, files)
+    resume = ["git", "rebase", "--continue"]
+    env = {**os.environ, "GIT_EDITOR": "true"}
+    done = run(*resume, cwd=tree, check=False, env=env)
+    if done.returncode and rebase_dir(tree) is not None:
+        # git refuses while a pick it could not commit sits staged; only then is it committed here.
+        committed = commit_unsigned_pick(tree)
+        if committed is not None:
+            if committed.returncode:
+                return committed.stderr
+            done = run(*resume, cwd=tree, check=False, env=env)
+    if done.returncode and rebase_dir(tree) is None:
+        die(f"git rebase --continue failed:\n{(done.stderr or done.stdout).strip()}")
+    return done.stderr
+
+
+def pick_target(tree, line):
+    """The commit a todo or done line picks, or None for any other line."""
+    words = line.split()
+    if len(words) < 2 or words[0] not in ("pick", "p"):
+        return None
+    found = run("git", "rev-parse", "--verify", "--quiet", f"{words[1]}^{{commit}}", cwd=tree, check=False)
+    return found.stdout.strip() or None
+
+
+def commit_unsigned_pick(tree):
+    """Commit a pick that git left staged because it could not write the commit.
+
+    git refuses `rebase --continue` while changes are staged. Most failures also put the same pick back at
+    the head of the todo list, and that copy is dropped so the pick is not applied twice. The commit keeps
+    the pick's message and author, and is signed as the person's configuration says. Returns None when the
+    rebase is not stopped that way, else the `git commit` result, which is a failure when signing failed
+    again; the todo list is then left as it was.
+    """
+    state = rebase_dir(tree)
+    stopped = run("git", "rev-parse", "--verify", "--quiet", "REBASE_HEAD^{commit}", cwd=tree, check=False)
+    if state is None or stopped.returncode or unmerged(tree) or succeeds("diff", "--cached", "--quiet", cwd=tree):
+        return None
+    sha = stopped.stdout.strip()
+    done = (state / "done").read_text(encoding="utf-8").splitlines() if (state / "done").is_file() else []
+    if not done or pick_target(tree, done[-1]) != sha:
+        return None
+    todo = state / "git-rebase-todo"
+    lines = todo.read_text(encoding="utf-8").splitlines(keepends=True) if todo.is_file() else []
+    committed = run("git", "commit", "--no-edit", "-C", "REBASE_HEAD", cwd=tree, check=False)
+    if not committed.returncode and lines and pick_target(tree, lines[0]) == sha:
+        todo.write_text("".join(lines[1:]), encoding="utf-8")
+    return committed
+
+
+def stop_reason(text):
+    """What git said when a rebase stopped, from its first error on, without the hints that follow."""
+    lines = [one.strip() for one in re.split(r"[\r\n]+", text)]
+    lines = [one for one in lines if one and not one.startswith(("hint:", "Rebasing ("))]
+    first = next((n for n, one in enumerate(lines) if one.startswith(("error:", "fatal:"))), len(lines) - 1)
+    return [one[:WIDTH] for one in lines[max(first, 0) :][:REASON_LINES]]
+
+
+def conflict_listing(pr, tree, files, script):
+    """The conflicted files with their marker ranges, and the base's recent commits on them."""
+    state = rebase_dir(tree)
+
+    def read(name):
+        path = state / name
+        return path.read_text().strip() if path.is_file() else ""
+
+    print("conflicts:")
+    for name in files:
+        print(f"  {describe(tree, name)}")
+    onto, orig = read("onto"), read("orig-head")
+    fork = run("git", "merge-base", orig, onto, cwd=tree, check=False).stdout.strip()
+    if fork:
+        touching = git("log", "--oneline", "--no-decorate", "-n", "10", f"{fork}..{onto}", "--", *files, cwd=tree)
+        if touching:
+            print(f"{pr.onto} commits on these files:")
+            print("\n".join(f"  {line}" for line in touching.splitlines()))
+    print(f"resolve each range, then: {script} continue {pr.number}")
+
+
+def report(pr, script, said=""):
+    """Say where the rebase stands. `said` is what git printed when it last stopped."""
+    tree = pr.tree
+    state = rebase_dir(tree)
+    if state is None:
+        if not succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
+            die(f"{pr.branch} is not on {pr.onto}; `{script} start {pr.number}`")
+        tip, now = rev(pr.tip, tree), rev("HEAD", tree)
+        if now == tip:
+            print(f"{pr.url} is already on {pr.onto}; nothing to push")
+            return 0
+        count = git("rev-list", "--count", f"{pr.onto}..HEAD", cwd=tree)
+        print(f"{count} commit(s) on {pr.onto} {rev(pr.onto, tree)[:8]}: {tip[:8]} -> {now[:8]}")
+        print(f"next: {script} push {pr.number}")
+        return 0
+
+    def read(name):
+        path = state / name
+        return path.read_text().strip() if path.is_file() else ""
+
+    number, total = (read("msgnum"), read("end")) if (state / "msgnum").is_file() else (read("next"), read("last"))
+    step = f" at {number}/{total}" if number and total else ""
+    stopped = run("git", "log", "-1", "--format=%h %s", "REBASE_HEAD", cwd=tree, check=False)
+    print(f"stopped{step}: {stopped.stdout.strip()}")
+    files = unmerged(tree)
+    if not files:
+        reason = stop_reason(said)
+        print("stopped without a conflict" + ("; git said:" if reason else ""))
+        for line in reason:
+            print(f"  {line}")
+        print(f"see `git -C {tree} status`")
+        return 1
+    conflict_listing(pr, tree, files, script)
+    return 1
+
+
+def push(pr, script):
+    """Push the rebased head over the one `start` fetched, refusing to unsign or to drop uncommitted work."""
+    tree = pr.tree
+    if rebase_dir(tree):
+        die(f"finish the rebase first: `{script} continue {pr.number}`")
+    if git("status", "--porcelain", "--untracked-files=no", cwd=tree):
+        die(f"{tree} has uncommitted changes; commit them first")
+    if not succeeds("merge-base", "--is-ancestor", pr.onto, "HEAD", cwd=tree):
+        die(f"{pr.branch} is not on {pr.onto}; `{script} start {pr.number}`")
+    tip, now = rev(pr.tip, tree), rev("HEAD", tree)
+    if now == tip:
+        print(f"{pr.url} is already at {now[:8]}; nothing to push")
+        return 0
+    refuse_unsigning(pr, tip, now, tree)
+    hooks = hooks_note(pr.main)
+    if hooks:
+        print(hooks, flush=True)
+    push_head(pr, tree, tip)
+    print(f"pushed {tip[:8]} -> {now[:8]} to {pr.tip}\n{pr.url}")
+    return 0

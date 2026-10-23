@@ -1,26 +1,29 @@
-// TRUST-23 and TRUST-24 in the window: a yes remembered at the trust question settles the next
+// TRUST-23 and TRUST-24 in the window: a yes at the trust question is kept and settles the next
 // session started in that directory, which says so above its transcript, and Forget in
-// Permissions makes the next one ask again. Real Electron and bridge, across two launches with one
-// home; only the file picker is substituted.
+// Permissions makes the next one ask again. The question has two answers and no separate one to
+// remember. Real Electron and bridge, across two launches with one home; only the file picker is
+// substituted.
+//
+// The project's name ends in a space, so the question and the list of what is kept draw the
+// directory as the agent spells it (PROMPT-1): quoted, with the space as `␣`, and not as a name
+// that reads like the one without it.
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { inheritedEnv, launchWorld } from './drive-world.mjs'
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-remembered-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
+const home = join(root, 'home'), project = join(root, 'project '), profile = join(root, 'profile')
+const spelledProject = `"${project.slice(0, -1)}\u2423"`
 for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, { recursive: true })
 const shots = '/tmp/bravebot-ui'
 mkdirSync(shots, { recursive: true })
 
 async function launch(drive) {
-  const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter(k => process.env[k]).map(k => [k, process.env[k]]))
-  Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config') })
-  const app = await electron.launch({ args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`], env, timeout: 40000 })
+  const env = Object.assign(inheritedEnv(), { HOME: home, XDG_CONFIG_HOME: join(home, '.config') })
+  const { app, page, errors } = await launchWorld({ profile, env, timeout: 15000 })
   try {
-    const page = await app.firstWindow(); page.setDefaultTimeout(15000)
-    const errors = []; page.on('pageerror', error => errors.push(error.message))
     await app.evaluate(({ dialog }, path) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
     }, project)
@@ -32,7 +35,7 @@ async function launch(drive) {
 }
 
 const trust = (page) => page.getByRole('dialog', { name: 'Project trust', exact: true })
-const banner = (page) => page.locator('.entries .session-banner', { hasText: 'Trust is remembered' })
+const banner = (page) => page.locator('.entries .session-banner', { hasText: 'You trusted this directory' })
 const openProject = (page) => page.getByRole('button', { name: 'Open project', exact: true }).click()
 
 try {
@@ -40,15 +43,25 @@ try {
   await launch(async (page) => {
     await openProject(page)
     const asked = trust(page)
-    const remember = asked.getByRole('button', { name: 'Trust and remember', exact: true })
-    await remember.waitFor()
+    const yes = asked.getByRole('button', { name: 'Trust and remember', exact: true })
+    await yes.waitFor()
+    assert.equal(await asked.locator('[data-test="trust-approve"]').innerText(), 'Trust and remember', 'the yes is the one that keeps')
+    assert.equal(await asked.locator('[data-test="trust-remember"]').count(), 0, 'there is no separate answer to remember')
+    assert.equal(await asked.locator('code.path').innerText(), spelledProject, 'the question draws the directory as spelled')
     record = (await asked.locator('.aside code').innerText()).trim()
-    assert.ok(record.startsWith(join(home, '.bravebot', 'trusted')), `the offer names the record: ${record}`)
+    assert.ok(record.startsWith(join(home, '.bravebot', 'trusted')), `the question names the record: ${record}`)
+    // RUN-5: the question says what a yes also grants, in the words the terminal draws.
+    assert.match(
+      await asked.locator('[data-test="trust-confined-lines"]').innerText(),
+      /without asking when the sandbox confines it/,
+      'the question says that confined lines run without asking',
+    )
     await page.screenshot({ path: `${shots}/remembered-1-offered.png` })
-    await remember.click()
+    await yes.click()
     await asked.waitFor({ state: 'hidden' })
     await banner(page).waitFor()
-    assert.ok(existsSync(record), 'remembering wrote the record it named')
+    assert.ok(existsSync(record), 'a yes wrote the record it named')
+    assert.match(readFileSync(record, 'utf8'), /"confined_lines":true/, 'the entry says the question said so')
     await page.screenshot({ path: `${shots}/remembered-2-kept.png` })
   })
 
@@ -57,15 +70,20 @@ try {
     const shown = banner(page)
     await shown.waitFor()
     assert.match(await shown.innerText(), /chats started here are not asked/)
-    assert.equal(await trust(page).count(), 0, 'a remembered yes asks nothing')
+    assert.equal(await trust(page).count(), 0, 'a kept yes asks nothing')
     await page.screenshot({ path: `${shots}/remembered-3-not-asked.png` })
 
     await shown.getByRole('button', { name: 'Manage', exact: true }).click()
     const forget = page.getByRole('button', { name: 'Forget', exact: true })
     await forget.waitFor()
+    assert.equal(
+      await page.locator('[data-test="remembered-root"]').innerText(),
+      `for ${spelledProject}`,
+      'the list names the directory the answer is about as spelled',
+    )
     await page.screenshot({ path: `${shots}/remembered-4-permissions.png` })
     await forget.click()
-    await page.getByText('No answer is remembered for this directory.', { exact: true }).waitFor()
+    await page.getByText('Nothing is kept for this directory.', { exact: true }).waitFor()
     assert.equal(existsSync(record), false, 'forgetting removed the record')
     assert.equal(await shown.count(), 0, 'the banner went with the answer')
     await page.getByRole('button', { name: 'Done', exact: true }).click()
@@ -74,7 +92,7 @@ try {
     await trust(page).waitFor()
     await page.screenshot({ path: `${shots}/remembered-5-asked-again.png` })
   })
-  console.log(`Remembered trust verified across two launches. Screenshots in ${shots}/remembered-*.png`)
+  console.log(`Kept trust verified across two launches. Screenshots in ${shots}/remembered-*.png`)
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

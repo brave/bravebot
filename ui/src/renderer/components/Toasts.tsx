@@ -7,8 +7,8 @@ export function Toasts(): React.JSX.Element {
   return (
     <div className="status-toasts" role="status" aria-live="polite">
       {toasts.map((toast) => (
-        <Alert key={toast.id} type="success" size="small" isToast className="status-toast" data-test="status-toast">
-          <Icon name="check-circle-filled" slot="icon" />
+        <Alert key={toast.id} type={toast.kind === 'note' ? 'info' : 'success'} size="small" isToast className="status-toast" data-test="status-toast">
+          <Icon name={toast.kind === 'note' ? 'info-outline' : 'check-circle-filled'} slot="icon" />
           <span slot="title">{toast.title}</span>
           {toast.body && <span className="status-toast-body">{toast.body}</span>}
           <Button slot="content-after" kind="plain-faint" fab size="tiny" aria-label="Dismiss" onClick={() => dismissToast(toast.id)}>

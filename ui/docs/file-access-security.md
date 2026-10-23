@@ -70,10 +70,25 @@ it is not pinned to a project root. It is written to a name of its own and renam
 place, never opened by the name the turn will name, so a link left at the briefing's path is
 displaced instead of written through.
 Previews never send content to a model. A file goes to a model only with a send, either
-picked through the native picker, which the `attachment` check above covers, or named with
-`@` in the prompt. The bridge reads those names back out of the prompt at `turn.send` and
-surveys each with the agent's own read, confined to the session's workspace, before the turn
-starts. See [security](security.md).
+picked through the native picker, which the `attachment` check above covers, named with
+`@` in the prompt, or dropped on the window. The bridge reads `@` names back out of the prompt
+at `turn.send` and surveys each with the agent's own read, confined to the session's workspace,
+before the turn starts. A picture pasted into the composer is not a file on the disk. The main
+process reads it off the clipboard itself and sends its bytes (PASTE-11). See
+[security](security.md).
+
+A dropped file may be anywhere on the disk (DROP-3), so it does not go through the project
+helper. `src/main/drops.ts` resolves the path the preload took from a trusted drop event with
+`realpath`, grants it only if `lstat` of the resolved path is a regular file, and keeps the
+resolved path against an opaque id bound to the session. A folder is refused. What the file is,
+and whether it is over the agent's 8 MiB cap, are the bridge's answer to `drops.classify` for the
+resolved path and the size `lstat` found, so a picture or PDF over the cap is refused with the
+bridge's note. At send, the resolved path is checked again with `lstat`, so a file removed, or
+replaced by a link since the drop, refuses the send with its name. One that grew past the cap is
+refused by `turn.send`, with the same note. The agent reads the
+file after that check, so a swap between the check and the read is not caught here. The page
+draws a dropped picture's thumbnail from the preload, which decodes it in the sandboxed renderer
+rather than in the main process.
 
 Drafts are stored locally in `experience.json` with mode 0600; clearing a draft removes
 its saved text. Memory history retains up to 30 revisions. Reset preserves revisions for

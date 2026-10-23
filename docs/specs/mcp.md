@@ -12,9 +12,10 @@ documented-by: docs/website/docs/customize/mcp-servers.md
 
 ## Scope
 
-Tools that come from outside this repository, over stdio or HTTP. What such a server returns, what
-it is allowed to do, and why the tools bravebot ships are not built this way. Confinement of a
-stdio server is [sandboxing.md](sandboxing.md).
+Tools that come from outside this repository, over stdio or HTTP, and the prompts such a server
+offers a person. What such a server returns, what it is allowed to do, and why the tools bravebot
+ships are not built this way. Confinement of a stdio server is [sandboxing.md](sandboxing.md). How
+a person runs a prompt is [commands.md](commands.md).
 
 ## Why the built-in tools stay native
 
@@ -98,6 +99,7 @@ Non-text content is ignored rather than guessed at, and several text parts are j
 
 `verified-by: bravebot_mcp::protocol::tool_result_text_is_joined`
 `verified-by: bravebot_mcp::protocol::non_text_content_is_ignored`
+`verified-by: bravebot_mcp::protocol::a_block_of_another_type_is_ignored_even_when_it_carries_text`
 
 <a id="MCP-7"></a>
 ### MCP-7: the transport is parsed strictly
@@ -184,3 +186,121 @@ statement of which ones rather than a switch that restores them all.
 
 `verified-by: bravebot_mcp::stdio::a_server_does_not_receive_this_processes_environment`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
+
+<a id="MCP-10"></a>
+### MCP-10: a server's prompts are asked for only where it declared them, drawn for a person, and never offered to the planner
+
+A server that said in its handshake that it has prompts is asked for them, a page at a time as its
+tools are. The list is drawn as a tool list is. Each prompt is its word, its description cleaned of
+every control character and every character that reorders or hides text and cut at the length a
+tool's is, and its arguments by name with whether each is required, and nothing else the server
+sent: what an argument's own description says is dropped. A prompt is refused, and counted without
+being named, where its word is not one a tool may be named (letters, digits, `-` and `_`), where
+its word is listed twice, and where its arguments cannot be read as a list of names. The list is
+labelled untrusted and public.
+
+The list is for a person's screen. Nothing of it is in the tools the planner is offered, in the
+list a person is asked to vouch for ([mcp-servers.md](mcp-servers.md)), or in any message the
+planner is sent.
+
+A server that did not declare prompts is sent no request for them and offers none. The declaration
+is an object, as the protocol writes it. Where one that declared them rejects the request with a
+protocol error, it is kept for its tools with no prompts and the person is told, without what the
+server wrote beside the error. Any other failure of the request is a failure of its handshake, as
+a failure to list its tools is (MCP-5), since a request that ran out of time stopped the process.
+A list that held entries the client refused says how many.
+
+**Why.** A prompt's word and description are a server's words, and a menu is where a sentence
+composed as an instruction is read as one by whoever is choosing. The word is one a tool may be
+named for that reason, and the sentence is cleaned and cut. The declaration is what the protocol
+has a server make before a client asks, and it is what keeps a request away from a server that has
+no such method: a stdio server may never answer a method it does not have, and a request that is
+not answered stops the process and takes the server's tools with it.
+
+`verified-by: bravebot_mcp::stdio::a_server_that_declares_prompts_lists_them`
+`verified-by: bravebot_mcp::stdio::a_server_that_declares_no_prompts_is_not_asked_for_any`
+`verified-by: bravebot_mcp::http::a_prompt_text_is_labelled_untrusted_and_private`
+`verified-by: bravebot_mcp::http::a_remote_server_that_declares_no_prompts_is_not_asked_for_any`
+`verified-by: bravebot_mcp::protocol::a_prompt_list_is_content_and_is_not_printed`
+`verified-by: bravebot_mcp::protocol::a_prompt_word_that_is_not_a_function_name_is_refused_and_counted`
+`verified-by: bravebot_mcp::protocol::a_prompt_word_listed_twice_is_refused_both_times`
+`verified-by: bravebot_mcp::protocol::a_prompts_arguments_are_drawn_as_names_and_whether_they_are_required`
+`verified-by: bravebot_mcp::protocol::a_prompt_list_in_pages_is_read_whole`
+`verified-by: bravebot_mcp::protocol::a_server_declares_prompts_in_its_handshake`
+`verified-by: bravebot_agent::servers::a_remote_server_that_declares_prompts_is_started_with_them_and_the_refused_are_counted`
+`verified-by: bravebot_agent::servers::a_remote_server_that_rejects_its_prompt_list_is_kept_for_its_tools_and_the_person_is_told`
+`verified-by: bravebot_agent::servers::a_local_server_that_declares_prompts_is_started_with_them`
+`verified-by: bravebot_agent::mcp::a_prompt_list_reaches_a_screen_and_never_the_planner`
+
+<a id="MCP-11"></a>
+### MCP-11: a prompt a person runs is fetched with the arguments they typed, and its text is untrusted and private
+
+A prompt is fetched when a person runs it ([commands.md](commands.md)). The request carries its
+name and the arguments the person typed, as strings, and nothing a server listed: the name and the
+arguments are the person's words and the list decides neither. The call needs the capability a
+tool call needs (MCP-2), and a `deny` rule that covers the server and the word refuses it before
+anything is sent, as it refuses a tool call.
+
+The text of the messages is labelled as a tool's result is (MCP-1): untrusted, and private, because
+what a server read to compose it may be the person's own. The role a message says it was written
+as is not read, so a message a server dresses as the assistant's is the same text. Only text
+content is taken and the messages are joined in order (MCP-6). A result with no text content, one
+of pictures and embedded resources alone, is a failure and not an empty prompt (MCP-5). A rejection
+is reported as the method and the code, and a reply this client will not parse as what was being
+read (MCP-8).
+
+Nobody is asked before the request. The line that runs the prompt is the person's own and holds the
+arguments, which are what the server is sent. Choosing to run a prompt does not vouch for what it
+says: the planner is given a reference to the text and never the text.
+
+**Why.** A prompt's text is a server's output, and it is the kind of output written to be read as
+instructions, so what it is labelled cannot depend on who asked for it. Asking the person again
+would put a question in front of a line they had just sent, with nothing to add to what the line
+says.
+
+`verified-by: bravebot_mcp::stdio::a_prompt_text_is_labelled_untrusted_and_private`
+`verified-by: bravebot_mcp::http::a_prompt_text_is_labelled_untrusted_and_private`
+`verified-by: bravebot_mcp::stdio::getting_a_prompt_without_the_capability_is_refused`
+`verified-by: bravebot_mcp::http::getting_a_remote_prompt_without_the_capability_is_refused`
+`verified-by: bravebot_mcp::stdio::a_prompt_the_server_rejects_is_reported_as_the_method_and_the_code`
+`verified-by: bravebot_mcp::protocol::prompt_text_is_joined_from_text_content_only`
+`verified-by: bravebot_mcp::protocol::a_prompt_result_with_no_text_says_so`
+`verified-by: bravebot_mcp::stdio::a_prompt_with_no_text_is_a_failure_and_not_an_empty_prompt`
+`verified-by: bravebot_mcp::http::a_remote_prompt_with_no_text_is_a_failure_and_not_an_empty_prompt`
+`verified-by: bravebot_mcp::protocol::get_params_carry_the_name_and_string_arguments`
+`verified-by: bravebot_agent::mcp::a_prompt_a_person_ran_reaches_the_server_with_their_arguments_and_the_planner_gets_a_reference`
+`verified-by: bravebot_agent::mcp::a_prompt_the_server_rejects_is_said_and_not_guessed_at`
+`verified-by: bravebot_agent::mcp::a_rule_that_denies_a_name_refuses_the_prompt_before_anything_is_sent`
+
+<a id="MCP-12"></a>
+### MCP-12: a local server that announces a change to its tools has its list read again and put to a person as a first list is
+
+A stdio server that declared `capabilities.tools.listChanged` as `true` in its handshake may write
+`notifications/tools/list_changed`, a message with that method and no id, at any time. Where one is
+seen, whether while a request was waiting for its reply or between two requests, the next turn the
+person asks for reads `tools/list` again, applies the filters the declaration gave, records in the
+trail that the server announced a change, and says so to the person. None of the server's tools is
+offered until the list it gives now is put to the person and vouched for, whatever was answered
+about the list before it ([SERVERS-8](mcp-servers.md#SERVERS-8)). A list that cannot be read offers
+none of the server's tools. A server that did not declare it is not read as having announced a
+change, whatever it writes.
+
+The notice's parameters are not read. The one bit taken from it is that the method was named, which
+only ever brings forward a question the person would be asked about a new server anyway.
+
+**Why.** What a person vouched for was a list as it stood, and a changed list is a different one. A
+tool a server added or redescribed after the vouch must not reach the planner under it. The earlier
+answer is not carried over by comparing the two lists, since that comparison would be a decision
+taken from the server's bytes ([LABEL-8](labels.md#LABEL-8)).
+
+**A known cost.** A remote server is not read this way. Its requests are one POST each and no
+stream is held open between them, so a notice has nowhere to arrive. A prompt a server adds after it
+starts is not offered until it starts again, whether or not it announces the change.
+
+`verified-by: bravebot_mcp::stdio::a_tool_list_change_the_server_announced_is_found_once_and_the_list_read_again`
+`verified-by: bravebot_agent::mcp::a_tool_list_that_cannot_be_read_again_offers_none_of_the_servers_tools`
+`verified-by: bravebot_mcp::stdio::a_notice_from_a_server_that_did_not_declare_it_is_ignored`
+`verified-by: bravebot_mcp::protocol::a_server_declares_tool_list_changes_in_its_handshake`
+`verified-by: bravebot_mcp::protocol::only_a_message_with_the_method_and_no_id_is_the_notice`
+`verified-by: bravebot_agent::mcp::a_tool_list_the_server_announced_a_change_to_is_put_to_the_person_again_before_it_is_offered`
+`verified-by: bravebot_agent::mcp::a_tool_list_read_again_after_a_change_is_held_to_the_declarations_filters`

@@ -29,6 +29,10 @@ pub enum Ending {
     Unreachable,
     /// The run finished and its reply does not match the schema it was given.
     Schema,
+    /// The run worked towards the condition `--goal` gave and stopped without it being met.
+    Unmet,
+    /// The run reached a limit it was given on the command line and stopped before going past it.
+    Limit,
 }
 
 impl Ending {
@@ -45,6 +49,8 @@ impl Ending {
             Self::Refused => 4,
             Self::Unreachable => 5,
             Self::Schema => 6,
+            Self::Unmet => 7,
+            Self::Limit => 8,
         }
     }
 
@@ -61,6 +67,8 @@ impl Ending {
             Self::Refused => "refused",
             Self::Unreachable => "unreachable",
             Self::Schema => "schema",
+            Self::Unmet => "unmet",
+            Self::Limit => "limit",
         }
     }
 
@@ -126,11 +134,24 @@ pub fn fail(ending: Ending, message: impl Display) -> ExitCode {
 ///
 /// A manifest run carries the failure that stopped it rather than a sentence about one, so a step
 /// that lost the backend is classified here exactly as a turn's own round is.
+///
+/// A limit the command line gave is told apart from a failure: the run did what it was told to do
+/// at that point, and a caller reading status 1 would take it for something that went wrong.
 pub fn ending_of(error: &bravebot_agent::TurnError) -> Ending {
     match error {
-        bravebot_agent::TurnError::Chat(backend) if backend.is_unreachable() => Ending::Unreachable,
+        bravebot_agent::TurnError::Chat(backend) => ending_of_a_request(backend),
+        bravebot_agent::TurnError::LimitReached(_) => Ending::Limit,
         bravebot_agent::TurnError::Manifest { cause, .. } => ending_of(cause),
         _ => Ending::Failed,
+    }
+}
+
+/// Which ending a request that failed has: the backend not being there is told apart, and every
+/// other failure of one is a failure.
+pub fn ending_of_a_request(failure: &bravebot_agent::backend::BackendError) -> Ending {
+    match failure.is_unreachable() {
+        true => Ending::Unreachable,
+        false => Ending::Failed,
     }
 }
 
@@ -151,6 +172,8 @@ mod tests {
             Ending::Refused,
             Ending::Unreachable,
             Ending::Schema,
+            Ending::Unmet,
+            Ending::Limit,
         ];
 
         let mut seen: Vec<u8> = endings.iter().map(|e| e.status()).collect();
@@ -175,6 +198,8 @@ mod tests {
         );
         assert_eq!(Ending::Unreachable.identifier().as_deref(), Some("BB1005"));
         assert_eq!(Ending::Schema.identifier().as_deref(), Some("BB1006"));
+        assert_eq!(Ending::Unmet.identifier().as_deref(), Some("BB1007"));
+        assert_eq!(Ending::Limit.identifier().as_deref(), Some("BB1008"));
     }
 
     /// Said in front of the message rather than instead of it: the sentence is what tells the
@@ -186,6 +211,31 @@ mod tests {
         let said = String::from_utf8(written).expect("utf-8");
 
         assert_eq!(said, "BB1003: l'adresse n'a pas de schema\n");
+    }
+
+    /// A run that stopped at a limit its caller gave it did what it was told to. A caller reading
+    /// status 1 for it would take it for something that went wrong, and one reading status 0 would
+    /// take a run that was cut short for a finished one.
+    #[test]
+    fn a_run_stopped_at_its_limit_is_told_apart_from_a_failure() {
+        use bravebot_agent::TurnError;
+        use bravebot_agent::turn::LimitReached;
+
+        let rounds = TurnError::LimitReached(LimitReached::Rounds { most: 3 });
+        let tokens = TurnError::LimitReached(LimitReached::Tokens {
+            most: 100,
+            spent: 140,
+            rounds: 2,
+        });
+        assert_eq!(ending_of(&rounds), Ending::Limit);
+        assert_eq!(ending_of(&tokens), Ending::Limit);
+        assert_eq!(Ending::Limit.status(), 8);
+        assert_eq!(Ending::Limit.name(), "limit");
+        assert!(!Ending::Limit.ok());
+        assert_ne!(
+            ending_of(&TurnError::Cancelled { attempts: None }),
+            Ending::Limit
+        );
     }
 
     /// A manifest run used to reach the command line as a sentence about what stopped it, so

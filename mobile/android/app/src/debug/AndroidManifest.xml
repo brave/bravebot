@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Debug builds fetch their JavaScript from Metro. The app has no network target yet, so release builds ask for no network. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>

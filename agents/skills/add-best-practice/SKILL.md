@@ -18,11 +18,13 @@ documents use, under a stable id, without duplicating a rule, a check or a spec.
 ## Step 0: Work in a worktree
 
 Make a worktree on a branch of its own from the latest `upstream/main`, and do every step below
-there. The checkout the user started from is left alone.
+there. The checkout the user started from is left alone. Run these in the main clone. The worktree
+goes in `.worktrees/`, which is inside the workspace and ignored by git, so the file tools reach it
+without `/add-dir`.
 
 ```sh
 git fetch upstream main
-git worktree add -b add-best-practice-<topic> ../bravebot-add-best-practice-<topic> upstream/main
+git worktree add -b add-best-practice-<topic> .worktrees/add-best-practice-<topic> upstream/main
 ```
 
 ---
@@ -244,6 +246,8 @@ entry, the index row and nothing else, with no co-attribution trailer and no em 
    ```sh
    git push -u origin HEAD
    gh pr create --repo brave/bravebot --head <fork-owner>:<branch> --base main --title "best practices: <the rule>" --body "$(cat <<'EOF'
+   Not covered: none
+
    ## Summary
    - Adds `<ID>` to `docs/best-practices/<document>.md`: <the rule>.
    - <Why it is not a check and not a spec clause.>
@@ -254,6 +258,10 @@ entry, the index row and nothing else, with no co-attribution trailer and no em 
    EOF
    )"
    ```
+   The first line is the pull request's `Not covered:` line, which `make check-pr-body` requires of
+   a pull request opened by `netzenbot`, the account this skill opens it as. Where the rule leaves a case undone, write `Not covered:` alone on that line and a
+   bullet per case below it, each naming the issue that tracks it, as
+   [commits.md](../../../docs/development/commits.md#opening-the-pull-request) describes.
 4. Report the pull request URL.
 
 Do not push, open the pull request or merge without the user having asked for the pull request. If

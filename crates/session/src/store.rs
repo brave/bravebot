@@ -103,6 +103,9 @@ fn now() -> u64 {
 /// The history file inside the global state directory.
 const HISTORY_FILE: &str = "history";
 
+/// Held while the history file is appended to or replaced.
+const HISTORY_LOCK_FILE: &str = "history.lock";
+
 /// The chosen model, one line, inside the global state directory.
 const MODEL_FILE: &str = "model";
 
@@ -118,6 +121,13 @@ const EFFORT_FILE: &str = "effort";
 /// sees one name.
 const EDITING_FILE: &str = "editor-mode";
 
+/// The language the person chose with `/language`, one locale tag, inside the global state
+/// directory.
+///
+/// Named for the settings key rather than for the command, as the editing style's file is, so
+/// somebody looking at the file and at `language` in a settings file sees one name.
+const LANGUAGE_FILE: &str = "language";
+
 /// The standing answer about auto-vetting, one word, inside the global state directory.
 ///
 /// Named for the setting rather than for the type, as the editing style's file is, so somebody
@@ -126,6 +136,10 @@ const VETTING_FILE: &str = "vetting";
 
 /// Whether the info panel was last left open, one word, inside the global state directory.
 const PANEL_FILE: &str = "panel";
+
+/// How many columns the info panel was last dragged to, a number, inside the global state
+/// directory.
+const PANEL_WIDTH_FILE: &str = "panel-width";
 
 /// Whether the person has read what `/caffeinate` does and turned it on, one word, inside the
 /// global state directory.
@@ -142,6 +156,12 @@ const MAX_MODEL_BYTES: usize = 128;
 /// A name is only looked up in the built-in set and in `~/.bravebot/themes`. Bounded so a corrupt
 /// file cannot turn into an absurd lookup.
 const MAX_THEME_BYTES: usize = 128;
+
+/// The longest language tag worth reading back.
+///
+/// The tag is only matched against the catalogs that shipped, so what is bounded here is a file
+/// anybody with the account can edit being handed on at any length.
+const MAX_LANGUAGE_BYTES: usize = 128;
 
 /// The longest style of editing worth reading back.
 ///
@@ -289,19 +309,62 @@ pub fn append_history(entry: &Entry) {
     }
 
     let line = format!("{}\n", encode(entry));
+    // Held so a removal that is rewriting the file cannot rename over this line. An append that
+    // cannot take the lock is still written, since losing one prompt here is worse than racing.
+    let _lock = lock_history(&dir);
     let _ = bravebot_agent::home::append_to_file(&dir.join(HISTORY_FILE))
         .and_then(|mut file| file.write_all(line.as_bytes()));
 }
 
+/// Hold the history file's lock until the returned handle is dropped.
+fn lock_history(dir: &std::path::Path) -> Option<std::fs::File> {
+    let file = bravebot_agent::home::append_to_file(&dir.join(HISTORY_LOCK_FILE)).ok()?;
+    file.lock().ok()?;
+    Some(file)
+}
+
+/// Remove the one stored line that is `entry`, leaving every other stored prompt in place.
+///
+/// For a cancelled prompt. The stored file is read again under the lock rather than replaced with
+/// this session's list, because other sessions have appended to it since this one loaded it. The
+/// newest matching line is the one removed, which is the one this session wrote. Nothing is
+/// written when no line matches.
+pub fn remove_history_entry(entry: &Entry) {
+    let Some(dir) = writable() else {
+        return;
+    };
+    let Some(_lock) = lock_history(&dir) else {
+        return;
+    };
+    let path = dir.join(HISTORY_FILE);
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let mut entries = parse_history(&contents);
+    let Some(at) = entries.iter().rposition(|stored| stored == entry) else {
+        return;
+    };
+    entries.remove(at);
+    write_history(&dir, &entries);
+}
+
 /// Rewrite the file with exactly these entries.
 ///
-/// Used to drop a cancelled prompt and to enforce the cap. Written to a temporary file and
-/// renamed so an interrupted write cannot leave a half-truncated history.
+/// Replaces whatever is stored, so a caller that holds only what it loaded at the start would take
+/// away what other sessions added since. A cancelled prompt is removed with
+/// [`remove_history_entry`]. Written to a temporary file and renamed so an interrupted write
+/// cannot leave a half-truncated history.
 pub fn save_history(entries: &[Entry]) {
     let Some(dir) = writable() else {
         return;
     };
-    if bravebot_agent::home::create_directory(&dir).is_err() {
+    let _lock = lock_history(&dir);
+    write_history(&dir, entries);
+}
+
+/// Write the entries within the cap. The caller holds the lock.
+fn write_history(dir: &std::path::Path, entries: &[Entry]) {
+    if bravebot_agent::home::create_directory(dir).is_err() {
         return;
     }
 
@@ -530,6 +593,73 @@ pub fn save_editing(word: &str) {
     }
 }
 
+/// The language tag the person chose with `/language`, or `None` if they never have.
+///
+/// Global rather than per-directory: which language somebody reads is not a property of a
+/// checkout. Read for every session, an incognito one included, since it decides what the
+/// interface says and nothing about what the session keeps.
+///
+/// Read ahead of the command line, for every command, so a file that is not a regular file or that
+/// has grown past what a tag can be is no choice rather than something every start waits on.
+pub fn load_language() -> Option<String> {
+    use std::io::Read;
+    let path = directory()?.join(LANGUAGE_FILE);
+    // Asked before the open, which a pipe would block.
+    if !std::fs::metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_LANGUAGE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    parse_language(&String::from_utf8_lossy(&bytes))
+}
+
+/// Read the tag out of the file's contents.
+///
+/// Separate from the I/O so the rules are testable. A blank or over-long file is no choice at all,
+/// which leaves the settings file and the environment to answer. Whether the tag names a catalog is
+/// the caller's to decide: a tag nobody translated is read as the reference, as it is from the
+/// environment.
+pub fn parse_language(contents: &str) -> Option<String> {
+    let tag = contents.lines().next()?.trim();
+    if tag.is_empty() || tag.len() > MAX_LANGUAGE_BYTES {
+        return None;
+    }
+    Some(tag.to_string())
+}
+
+/// Record the language tag the person chose, or forget the choice where they asked for none, and
+/// say whether that was done.
+///
+/// Written to a temporary file and renamed, so an interrupted write leaves the previous choice
+/// rather than half a tag. Unlike its neighbours this answers whether the write happened, because
+/// a language applies from the next start and nothing in this session changes with it: a choice
+/// that could not be kept has no other effect for the person to notice.
+pub fn save_language(tag: Option<&str>) -> bool {
+    let Some(dir) = writable() else {
+        return false;
+    };
+    if bravebot_agent::home::create_directory(&dir).is_err() {
+        return false;
+    }
+
+    // Removed rather than written empty, as the effort level is: asking for no choice is asking for
+    // the state before there was one. A file that is not there is already that state.
+    let Some(tag) = tag else {
+        return match std::fs::remove_file(dir.join(LANGUAGE_FILE)) {
+            Ok(()) => true,
+            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+        };
+    };
+
+    let temporary = dir.join("language.tmp");
+    bravebot_agent::home::write_file(&temporary, format!("{tag}\n").as_bytes()).is_ok()
+        && std::fs::rename(&temporary, dir.join(LANGUAGE_FILE)).is_ok()
+}
+
 /// The standing answer about auto-vetting, or `None` where nobody has recorded one.
 ///
 /// Resolved through [`writable`] rather than [`directory`], which is the one read here that is,
@@ -623,6 +753,46 @@ pub fn save_panel(open: bool) {
     let temporary = dir.join("panel.tmp");
     if bravebot_agent::home::write_file(&temporary, format!("{word}\n").as_bytes()).is_ok() {
         let _ = std::fs::rename(&temporary, dir.join(PANEL_FILE));
+    }
+}
+
+/// The width the person last dragged the info panel to, or `None` where they never did.
+///
+/// Global as the open/closed choice is: it is about their screen and not about a checkout.
+pub fn load_panel_width() -> Option<u16> {
+    let path = directory()?.join(PANEL_WIDTH_FILE);
+    parse_panel_width(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Read the width out of the file's contents.
+///
+/// A single whole number, after trimming. Anything else is no choice and the panel keeps its
+/// default. How far the number may reach is the interface's to decide, since it depends on the
+/// terminal; a number that cannot be a width at all is refused here.
+pub fn parse_panel_width(contents: &str) -> Option<u16> {
+    contents
+        .lines()
+        .next()?
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|width| *width > 0)
+}
+
+/// Record the width the person dragged the info panel to.
+///
+/// Written as [`save_panel`] is: to a temporary file and renamed, best-effort.
+pub fn save_panel_width(width: u16) {
+    let Some(dir) = writable() else {
+        return;
+    };
+    if bravebot_agent::home::create_directory(&dir).is_err() {
+        return;
+    }
+
+    let temporary = dir.join("panel-width.tmp");
+    if bravebot_agent::home::write_file(&temporary, format!("{width}\n").as_bytes()).is_ok() {
+        let _ = std::fs::rename(&temporary, dir.join(PANEL_WIDTH_FILE));
     }
 }
 
@@ -1045,6 +1215,21 @@ and this?
         }
     }
 
+    /// A file that does not hold a plain positive number is no width, so the panel keeps its 36
+    /// columns rather than taking whatever a half-written or hand-edited file made of it.
+    #[test]
+    fn only_a_positive_whole_number_is_a_panel_width() {
+        assert_eq!(parse_panel_width("40\n"), Some(40));
+        assert_eq!(parse_panel_width("  52  \n"), Some(52));
+        for contents in ["", "\n", "0\n", "-3\n", "wide\n", "40.5\n", "99999999\n"] {
+            assert_eq!(
+                parse_panel_width(contents),
+                None,
+                "{contents:?} became a width"
+            );
+        }
+    }
+
     /// Only the word the interface writes is an agreement, so a stray or half-written file does not
     /// turn `/caffeinate` on without the warning being read.
     #[test]
@@ -1126,5 +1311,100 @@ and this?
         assert_eq!(parse_theme(&huge), None);
         let exact = "x".repeat(MAX_THEME_BYTES);
         assert_eq!(parse_theme(&exact).as_deref(), Some(exact.as_str()));
+    }
+
+    #[test]
+    fn a_stored_language_is_read_back_without_its_newline() {
+        assert_eq!(parse_language("fr\n").as_deref(), Some("fr"));
+    }
+
+    #[test]
+    fn an_empty_language_file_is_not_a_choice() {
+        for contents in ["", "\n", "   \n"] {
+            assert_eq!(
+                parse_language(contents),
+                None,
+                "{contents:?} became a choice"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_first_language_line_is_read() {
+        assert_eq!(parse_language("fr\nja\n").as_deref(), Some("fr"));
+    }
+
+    #[test]
+    fn an_over_long_language_tag_is_not_a_choice() {
+        let huge = "x".repeat(MAX_LANGUAGE_BYTES + 1);
+        assert_eq!(parse_language(&huge), None);
+        let exact = "x".repeat(MAX_LANGUAGE_BYTES);
+        assert_eq!(parse_language(&exact).as_deref(), Some(exact.as_str()));
+    }
+
+    /// The language is read before the command line is, for every command. A pipe where the file
+    /// should be blocks the open, so a read that did not ask what the path is would hold up every
+    /// start of the program.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_where_the_language_file_should_be_is_no_choice_and_holds_nothing_up() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        assert!(save_language(Some("fr")));
+        let path = directory().expect("a state directory").join(LANGUAGE_FILE);
+        std::fs::remove_file(&path).expect("the saved file");
+        let made = std::process::Command::new("mkfifo").arg(&path).status();
+        if !made.is_ok_and(|status| status.success()) {
+            eprintln!("mkfifo is not installed, so a pipe is not tried");
+            return;
+        }
+
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sent.send(load_language());
+        });
+
+        assert_eq!(
+            received
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("the read waited on the pipe"),
+            None
+        );
+    }
+
+    /// Only the first line is a tag, so a file grown past the bound still answers with it. A read
+    /// that refused a file for its size, or stopped short of the first line, would drop a choice
+    /// the person made.
+    #[test]
+    fn a_language_file_grown_large_still_answers_with_its_first_line() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        assert!(save_language(Some("fr")));
+        let path = directory().expect("a state directory").join(LANGUAGE_FILE);
+        std::fs::write(&path, format!("fr\n{}", "x".repeat(1 << 20))).expect("a large file");
+
+        assert_eq!(load_language().as_deref(), Some("fr"));
+    }
+
+    /// A choice that was written is the one read back, a second replaces the first, and asking for
+    /// none leaves nothing to read, whether or not there was one. A save that reported success
+    /// without writing, or a clear that left the file, answers differently from one of these.
+    #[test]
+    fn a_saved_language_is_read_back_replaced_and_forgotten() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        assert_eq!(load_language(), None);
+        assert!(save_language(None), "forgetting nothing is done already");
+
+        assert!(save_language(Some("fr")));
+        assert_eq!(load_language().as_deref(), Some("fr"));
+        assert!(save_language(Some("en-US")));
+        assert_eq!(load_language().as_deref(), Some("en-US"));
+
+        assert!(save_language(None));
+        assert_eq!(load_language(), None);
     }
 }

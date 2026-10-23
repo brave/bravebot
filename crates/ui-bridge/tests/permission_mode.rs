@@ -5,6 +5,12 @@
 //! Driven through the binary against a model service of the test's own. Whether a write landed is
 //! read off the disk, and whether anything was asked is read off what the bridge said.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;

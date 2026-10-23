@@ -69,9 +69,6 @@ const MAX_ALIAS: usize = 64;
 /// What the digested form starts with, so a later change to that form cannot collide with this one.
 const DIGEST_FORM: &str = "bravebot-mcp-declaration-1";
 
-/// What a vouched tool list's digested form starts with, so no list digests alike with a declaration.
-const LIST_FORM: &str = "bravebot-mcp-tool-list-1";
-
 /// The longest word a server's tool may be offered under.
 pub const MAX_TOOL: usize = 64;
 
@@ -217,7 +214,8 @@ pub enum Problem {
     Reads,
     /// `directory` is not an absolute path.
     Directory,
-    /// `url` is missing, is not a string, is not `http` or `https`, or names no host.
+    /// `url` is missing, is not a string, is not `http` or `https`, names no host, or writes a
+    /// port that is not a number up to 65535.
     Url,
     /// `url` carries a user or a password.
     Credentials,
@@ -1190,7 +1188,11 @@ fn absolute(directory: &str) -> Result<(), Problem> {
     }
 }
 
-/// A url to reach a server at: `http` or `https`, a host, and no user or password.
+/// A url to reach a server at: `http` or `https`, a host, a port where it writes one that is a
+/// number up to 65535, and no user or password.
+///
+/// A `:` with no port after it, or with something else, is refused. The client connects to the
+/// scheme's default there, which is not the socket the url spells.
 ///
 /// No credential in the url: the url is drawn wherever the declaration is, at the question and in
 /// `get`, so a token written into it is a token on the screen. A stored value is drawn only where it
@@ -1211,11 +1213,19 @@ fn remote(url: &str) -> Result<(), Problem> {
     if authority.contains('@') {
         return Err(Problem::Credentials);
     }
-    let host = match authority.strip_prefix('[') {
-        Some(bracketed) => bracketed.split(']').next().unwrap_or_default(),
-        None => authority.split(':').next().unwrap_or_default(),
+    let (host, after) = match authority.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']').ok_or(Problem::Url)?,
+        None => authority.split_at(authority.find(':').unwrap_or(authority.len())),
     };
-    match host.is_empty() {
+    let port = match after.strip_prefix(':') {
+        Some(digits) => {
+            !digits.is_empty()
+                && digits.bytes().all(|b| b.is_ascii_digit())
+                && digits.parse::<u16>().is_ok()
+        }
+        None => after.is_empty(),
+    };
+    match host.is_empty() || !port {
         true => Err(Problem::Url),
         false => Ok(()),
     }
@@ -1246,15 +1256,6 @@ impl Digest {
     /// The first eight hex characters, which is what a prompt shows.
     pub fn short(&self) -> String {
         self.to_string()[..8].to_string()
-    }
-
-    /// What a vouch for a tool list binds to: SHA-256 over the list as it was drawn.
-    ///
-    /// Over the text a person was shown and nothing else, so a list the server words differently
-    /// on its next start is a list nobody has seen.
-    pub fn of_list(text: &str) -> Self {
-        let form = serde_json::json!([LIST_FORM, text]);
-        Self(Sha256::digest(form.to_string().as_bytes()).into())
     }
 }
 
@@ -1403,7 +1404,6 @@ fn entry(alias: &str, value: &serde_json::Value) -> Entry {
 /// ```text
 /// 4f1c9a2e...  weather
 /// changed docs
-/// tools 4f1c9a2e... 9b03d7c1...
 /// ```
 ///
 /// The alias is not what was approved: [`Approvals::approves`] asks about a digest and nothing else,
@@ -1411,21 +1411,16 @@ fn entry(alias: &str, value: &serde_json::Value) -> Entry {
 /// server nobody has been asked about from one that changed since somebody answered, which a
 /// project path recorded by answer 2 may pre-answer and this may not (SERVERS-5).
 ///
-/// A `tools` line is a vouch for a tool list: the declaration it was listed by, and the digest of
-/// the list as it was drawn. One list per declaration, since a server started from one declaration
-/// has one list to offer at a time, and a list that changed is asked about again (SERVERS-8).
+/// A `tools` line, which an earlier version wrote as a vouch for a tool list, is passed over and
+/// dropped the next time the file is written: a list is asked about every session (SERVERS-8).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Approvals {
     approved: BTreeMap<Digest, BTreeSet<String>>,
     changed: BTreeSet<String>,
-    lists: BTreeMap<Digest, Digest>,
 }
 
 /// The word a line recording a changed declaration starts with.
 const CHANGED: &str = "changed";
-
-/// The word a line recording a vouched tool list starts with.
-const TOOLS: &str = "tools";
 
 impl Approvals {
     /// Read the approvals in a state directory.
@@ -1452,13 +1447,6 @@ impl Approvals {
                 [CHANGED, alias] if is_alias(alias) => {
                     approvals.changed.insert(alias.to_string());
                 }
-                [TOOLS, declaration, list] => {
-                    if let (Some(declaration), Some(list)) =
-                        (Digest::parse(declaration), Digest::parse(list))
-                    {
-                        approvals.lists.insert(declaration, list);
-                    }
-                }
                 [hex, alias @ ..] if alias.len() <= 1 && alias.iter().all(|a| is_alias(a)) => {
                     let Some(digest) = Digest::parse(hex) else {
                         continue;
@@ -1470,17 +1458,6 @@ impl Approvals {
             }
         }
         approvals
-    }
-
-    /// The digest of the tool list vouched for under this declaration, where one was.
-    pub fn vouched_list(&self, declaration: &Digest) -> Option<Digest> {
-        self.lists.get(declaration).copied()
-    }
-
-    /// Record a vouch for the tool list a server started from `declaration` drew, replacing any
-    /// earlier one: a list that changed and was vouched for again is the list now.
-    pub fn vouch_list(&mut self, declaration: Digest, list: Digest) {
-        self.lists.insert(declaration, list);
     }
 
     /// Whether this digest was approved.
@@ -1516,16 +1493,10 @@ impl Approvals {
     /// digest is dropped here, and what is kept of it is that its alias changed, which approves
     /// nothing. Called whenever the declarations are rewritten, so the two files agree about what
     /// is approved.
-    ///
-    /// A vouched list is kept while a declaration still resolves to the digest it was listed by,
-    /// approved or not: a server a project path started has a list somebody vouched for too.
     pub fn keep_only(&mut self, declarations: &Declarations) {
         let mut kept = Self::default();
         for Entry { alias, declaration } in declarations.entries() {
             let digest = declaration.as_ref().ok().map(Declaration::digest);
-            if let Some(list) = digest.and_then(|digest| self.vouched_list(&digest)) {
-                kept.lists.extend(digest.map(|digest| (digest, list)));
-            }
             match digest {
                 Some(digest) if self.approves(&digest) => {
                     kept.approved.entry(digest).or_default().insert(alias);
@@ -1544,8 +1515,7 @@ impl Approvals {
         *self = kept;
     }
 
-    /// The file's text, one approval per line, then one changed alias per line, then one vouched
-    /// list per line.
+    /// The file's text, one approval per line, then one changed alias per line.
     pub fn to_text(&self) -> String {
         let mut text = String::new();
         for (digest, aliases) in &self.approved {
@@ -1560,9 +1530,6 @@ impl Approvals {
         }
         for alias in &self.changed {
             text.push_str(&format!("{CHANGED} {alias}\n"));
-        }
-        for (declaration, list) in &self.lists {
-            text.push_str(&format!("{TOOLS} {declaration} {list}\n"));
         }
         text
     }
@@ -2038,6 +2005,66 @@ mod tests {
         }
     }
 
+    /// The client connects to the scheme's default where a url writes a `:` and no port after it,
+    /// or one that is not a number up to 65535. A declaration like that would name a socket other
+    /// than the one it spells, and the person approving it would have read the wrong one.
+    #[test]
+    fn a_url_writing_a_port_that_is_not_one_is_refused() {
+        for url in [
+            "http://127.0.0.1:/mcp",
+            "https://127.0.0.1:/mcp",
+            "http://h:",
+            "http://h:?x=1",
+            "http://h:abc/mcp",
+            "http://h:99999/mcp",
+            "http://h:65536/mcp",
+            "http://h:+80/mcp",
+            "http://h:-80/mcp",
+            "http://h:80:90/mcp",
+            "http://[::1]:/mcp",
+            "http://[::1]:abc/mcp",
+            "http://[::1]:99999/mcp",
+            "http://[::1]8080/mcp",
+            "http://[::1/mcp",
+        ] {
+            assert_eq!(Declaration::http(url.into()), Err(Problem::Url), "{url}");
+        }
+        for url in [
+            "http://h/mcp",
+            "http://h:8080/mcp",
+            "http://h:0080/mcp",
+            "http://h:65535/mcp",
+            "http://h:80?x=1",
+            "http://[::1]/mcp",
+            "http://[::1]:65535/mcp",
+        ] {
+            assert!(Declaration::http(url.into()).is_ok(), "{url}");
+        }
+    }
+
+    /// A file an earlier version wrote can hold a url with a `:` and no port. The entry is no longer
+    /// a declaration, and it is listed with that and kept as it was written, so that editing the
+    /// url in the file is the way forward and nothing the person wrote is lost.
+    #[test]
+    fn a_stored_url_with_a_colon_and_no_port_is_reported_and_kept_as_written() {
+        let stored = r#"{"transport": "http", "url": "https://weather.example.com:/mcp"}"#;
+        let text = format!(r#"{{"servers": {{"weather": {stored}}}}}"#);
+        let mut declarations = Declarations::parse(&text).unwrap();
+        assert_eq!(
+            declarations.get("weather").unwrap().declaration,
+            Err(Problem::Url)
+        );
+
+        let other = Declaration::http("https://other.example.com".into()).unwrap();
+        declarations.insert("other", &other);
+        let rewritten = Declarations::parse(&declarations.to_text()).unwrap();
+        assert_eq!(
+            rewritten.servers.get("weather"),
+            Some(&serde_json::from_str::<serde_json::Value>(stored).unwrap())
+        );
+        assert_eq!(rewritten.get("other").unwrap().declaration, Ok(other));
+    }
+
     #[test]
     fn a_directory_is_absolute() {
         assert_eq!(
@@ -2509,58 +2536,18 @@ mod tests {
         assert!(projects.contains(&other));
     }
 
+    /// A file an earlier version wrote carries a `tools` line per vouched list. The approval beside
+    /// it still reads, the line is passed over, and the next write drops it, so nothing is left to
+    /// vouch for a list nobody was asked about.
     #[test]
-    fn a_vouched_list_reads_back_beside_the_approval_it_was_listed_by() {
-        let mut approvals = Approvals::default();
-        approvals.approve("weather", weather().digest());
-        let list = Digest::of_list("[]");
-        approvals.vouch_list(weather().digest(), list);
-        let read = Approvals::parse(&approvals.to_text());
-        assert_eq!(read, approvals);
-        assert_eq!(read.vouched_list(&weather().digest()), Some(list));
-        assert!(read.approves(&weather().digest()));
-        assert_ne!(
-            Digest::of_list("[]"),
-            Digest::of_list("[ ]"),
-            "a list drawn differently digested alike"
-        );
-    }
-
-    /// A list is vouched for under a declaration, so a declaration rewritten to something else takes
-    /// its vouch with it, and one that is still there keeps it whether or not its digest is approved:
-    /// a project path starts a server nobody approved by digest, and its list was still vouched for.
-    #[test]
-    fn a_vouched_list_lasts_as_long_as_its_declaration_resolves() {
-        let mut declarations = Declarations::default();
-        declarations.insert("weather", &weather());
-        let mut approvals = Approvals::default();
-        approvals.vouch_list(weather().digest(), Digest::of_list("[]"));
-        approvals.keep_only(&declarations);
-        assert_eq!(
-            approvals.vouched_list(&weather().digest()),
-            Some(Digest::of_list("[]")),
-            "a vouch was dropped while its declaration still resolved"
-        );
-
-        let pinned = Declaration::stdio(
-            words(&["npx", "-y", "@dangahagan/weather-mcp@1.0.0"]),
-            words(&["PATH"]),
-            None,
-        )
-        .expect("a declaration");
-        declarations.insert("weather", &pinned);
-        approvals.keep_only(&declarations);
-        assert_eq!(approvals.vouched_list(&weather().digest()), None);
-        assert_eq!(approvals.vouched_list(&pinned.digest()), None);
-    }
-
-    #[test]
-    fn a_line_that_is_not_a_vouch_is_passed_over() {
+    fn a_tools_line_an_earlier_version_wrote_is_passed_over_and_dropped() {
         let digest = weather().digest();
-        let read = Approvals::parse(&format!(
-            "tools {digest}\ntools {digest} nothing\ntools {digest} {digest} more\n"
-        ));
-        assert_eq!(read, Approvals::default());
+        let before = format!("{digest} weather\ntools {digest} {digest}\nchanged docs\n");
+        let read = Approvals::parse(&before);
+
+        assert!(read.approves(&digest));
+        assert!(read.changed("docs", &Digest::parse(&"0".repeat(64)).expect("a digest")));
+        assert_eq!(read.to_text(), format!("{digest} weather\nchanged docs\n"));
     }
 
     #[test]

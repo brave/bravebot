@@ -196,6 +196,20 @@ struct ListedByGateway {
     /// The window, where the gateway reports one.
     #[serde(default)]
     context_length: Option<u64>,
+    /// The window as Anthropic's listing states it, which is the only place it is named this.
+    ///
+    /// A field of its own rather than a second name for the one above, since a gateway stating both
+    /// would fail to decode as a duplicate, and held as it arrived because a gateway may state it in
+    /// a form that is not a whole number, and a roster that cannot be read offers nothing.
+    #[serde(default)]
+    max_input_tokens: Option<serde_json::Value>,
+    /// What the model can do, in the shape Anthropic's listing gives: an object with a `supported`
+    /// flag under each capability.
+    ///
+    /// Held as it arrived and read for one capability, because another gateway may put something
+    /// else under the same name and a roster that fails to decode offers nothing.
+    #[serde(default)]
+    capabilities: Option<serde_json::Value>,
     /// What the model accepts, which is where a gateway says whether it can call tools.
     ///
     /// Absent for a gateway that does not report it, and then nothing is filtered: a roster that
@@ -210,6 +224,21 @@ struct ListedByGateway {
     /// that needs one.
     #[serde(default)]
     architecture: Option<Architecture>,
+}
+
+impl ListedByGateway {
+    /// Whether the listing says this model reads no effort level.
+    ///
+    /// Only an explicit `false`: a listing that does not mention the capability, or states it in
+    /// another shape, is not a listing claiming none.
+    fn states_no_effort(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.get("effort"))
+            .and_then(|effort| effort.get("supported"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+    }
 }
 
 /// The modality half of what a gateway reports about one model.
@@ -243,10 +272,16 @@ struct Architecture {
 ///
 /// A service that cannot be asked is answered from the list compiled in for it, with no request,
 /// and its rows are built as a listing's are, so a pick off them is recorded and routed the same.
+///
+/// `headers` is what the block's `options.headers` asked for, resolved by the caller from the same
+/// environment the token came from. The roster request carries them because a gateway that needs a
+/// header to route a request needs it to answer a listing too, and a roster asked without one is a
+/// person seeing no models with nothing local to explain it.
 pub fn list_from_gateway<S: Sink>(
     policy: &mut Policy<'_, S>,
     provider: &bravebot_config::provider::Provider,
     token: Option<&str>,
+    headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
     // Vertex AI has no listing a key can call, so asking would carry the key to be answered 404.
@@ -261,7 +296,7 @@ pub fn list_from_gateway<S: Sink>(
         return Ok(offered_by_gateway(provider, listed));
     }
 
-    if token.is_some() {
+    if token.is_some() && provider.answers_for_an_account() {
         // Any failure falls through to the wide roster: a gateway with no such route answers 404,
         // one that has it under another name answers something undecodable, and neither is a reason
         // to offer nothing when a list that does work is one request away.
@@ -270,13 +305,21 @@ pub fn list_from_gateway<S: Sink>(
             provider,
             provider.account_models_url(),
             token,
+            headers,
             egress,
         ) {
             return Ok(offered_by_gateway(provider, listed));
         }
     }
 
-    let listed = fetch_listing(policy, provider, provider.models_url(), token, egress)?;
+    let listed = fetch_listing(
+        policy,
+        provider,
+        provider.models_url(),
+        token,
+        headers,
+        egress,
+    )?;
     Ok(offered_by_gateway(provider, listed))
 }
 
@@ -286,12 +329,30 @@ fn fetch_listing<S: Sink>(
     provider: &bravebot_config::provider::Provider,
     url: String,
     token: Option<&str>,
+    headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
     let mut request = Request::get(&url).header("accept", "application/json");
+    for (name, value) in provider.fixed_headers() {
+        request = request.header(*name, *value);
+    }
     if let Some(token) = token {
         let (name, value) = provider.credential_header(token);
-        request = request.header(name, value);
+        // An Anthropic or a Google key stays on the socket the request was addressed to, as the
+        // request for a reply keeps it. The other credential headers are left as they were.
+        request = match provider.protocol() {
+            bravebot_config::provider::Protocol::Messages
+            | bravebot_config::provider::Protocol::GenerateContent => {
+                request.socket_header(name, value)
+            }
+            bravebot_config::provider::Protocol::ChatCompletions
+            | bravebot_config::provider::Protocol::Responses => request.header(name, value),
+        };
+    }
+    // Carried, never read: `Request::header` appends, and a name this request already set is
+    // refused where the block is read rather than compared against here.
+    for (name, value) in headers {
+        request = request.header(name.clone(), value.expose());
     }
 
     let response = egress.fetch(policy, request, Label::untrusted_public())?;
@@ -352,7 +413,14 @@ fn offered_by_gateway(
                 provider
                     .model(&entry.id)
                     .and_then(|model| model.context_window)
+                    .or(provider.context_window)
                     .or(entry.context_length)
+                    // Zero is a placeholder rather than a window, as it is on the Brave roster.
+                    .or(entry
+                        .max_input_tokens
+                        .as_ref()
+                        .and_then(serde_json::Value::as_u64)
+                        .filter(|window| *window > 0))
                     .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
             ),
             // A gateway states its parameters per model, and reasoning is not one field but two:
@@ -365,7 +433,8 @@ fn offered_by_gateway(
             // A refusal outranks the row either way round. A listing is what the gateway says it
             // would do and a refusal is what it did, so a row still advertising the parameter it
             // has already turned a request down for describes nothing that will be sent again.
-            reads_effort: crate::reads_effort(&provider.chat_completions_url(), &entry.id)
+            reads_effort: crate::reads_effort(&provider.completion_url(), &entry.id)
+                && !entry.states_no_effort()
                 && entry
                     .supported_parameters
                     .as_ref()
@@ -706,6 +775,30 @@ mod tests {
         assert_eq!(models[0].conversation_tokens, Some(32_000));
     }
 
+    /// A block listing no models keeps the window of a local server in `options.contextWindow`.
+    /// It outranks the window a roster reports, and a roster that reports none gets it instead of
+    /// the assumed one, which is the regression an Ollama import's figure would otherwise suffer.
+    #[test]
+    fn a_provider_window_is_taken_for_fetched_models() {
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"ollama": {
+                "options": {"baseURL": "http://localhost:11434/v1", "contextWindow": 4096}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        let models = from_gateway(
+            &provider,
+            r#"{"data": [{"id": "plain"}, {"id": "reported", "context_length": 262144}]}"#,
+        );
+        assert_eq!(models[0].conversation_tokens, Some(4096));
+        assert_eq!(models[1].conversation_tokens, Some(4096));
+    }
+
     /// Every turn here calls tools, so a chat-only model is a choice that produces an agent which
     /// cannot read or write anything. Dropped on the same grounds as on the Brave roster.
     #[test]
@@ -753,6 +846,131 @@ mod tests {
         assert!(models[0].reads_effort);
     }
 
+    fn anthropic() -> bravebot_config::provider::Provider {
+        let serde_json::Value::Object(root) =
+            serde_json::from_str(r#"{"provider": {"anthropic": {"env": ["ANTHROPIC_API_KEY"]}}}"#)
+                .expect("json")
+        else {
+            panic!("not an object");
+        };
+        bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider")
+    }
+
+    /// The shape Anthropic's listing answers with, as its reference gives it: the window under
+    /// `max_input_tokens` and what the model can do as an object with a `supported` flag under each
+    /// capability. The names are the provider's id in front of what a request carries, and the
+    /// window is the one the model states, since the default is far below it.
+    #[test]
+    fn an_anthropic_listing_is_offered_under_the_providers_id_with_the_window_it_states() {
+        let models = from_gateway(
+            &anthropic(),
+            r#"{"data": [
+                {"type": "model", "id": "claude-opus-5-5", "display_name": "Claude Opus 5.5",
+                 "created_at": "2026-09-21T00:00:00Z", "max_input_tokens": 1000000,
+                 "max_tokens": 128000,
+                 "capabilities": {"effort": {"supported": true, "low": {"supported": true}}}},
+                {"type": "model", "id": "claude-haiku-4-5", "display_name": "Claude Haiku 4.5",
+                 "max_input_tokens": 200000, "max_tokens": 64000}
+            ], "has_more": false, "first_id": "claude-opus-5-5", "last_id": "claude-haiku-4-5"}"#,
+        );
+
+        let keys: Vec<&str> = models.iter().map(|m| m.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["anthropic/claude-opus-5-5", "anthropic/claude-haiku-4-5"]
+        );
+        assert_eq!(models[0].conversation_tokens, Some(1_000_000));
+        assert_eq!(models[1].conversation_tokens, Some(200_000));
+        assert_eq!(models[0].provider.as_deref(), Some("anthropic"));
+    }
+
+    /// A zero where a window belongs is a placeholder, and a budget taken from it would compact
+    /// before a turn could start.
+    #[test]
+    fn an_anthropic_window_of_zero_or_nothing_is_the_assumed_one() {
+        let models = from_gateway(
+            &anthropic(),
+            r#"{"data": [
+                {"id": "claude-zero", "max_input_tokens": 0},
+                {"id": "claude-null", "max_input_tokens": null},
+                {"id": "claude-absent"}
+            ]}"#,
+        );
+        for model in &models {
+            assert_eq!(
+                model.conversation_tokens,
+                Some(bravebot_config::provider::CONTEXT_WINDOW),
+                "{}",
+                model.key
+            );
+        }
+    }
+
+    /// Anthropic's listing says per model whether an effort level is read, and a model it says reads
+    /// none is not offered one. Only an explicit `false` says so: a row that does not mention the
+    /// capability, or that states it in another shape, is not a row claiming none.
+    #[test]
+    fn an_anthropic_model_the_listing_says_reads_no_effort_says_so() {
+        let models = from_gateway(
+            &anthropic(),
+            r#"{"data": [
+                {"id": "reads", "capabilities": {"effort": {"supported": true}}},
+                {"id": "reads-none", "capabilities": {"effort": {"supported": false}}},
+                {"id": "silent"},
+                {"id": "no-effort-key", "capabilities": {"batch": {"supported": true}}}
+            ]}"#,
+        );
+        let reads: Vec<(&str, bool)> = models
+            .iter()
+            .map(|model| (model.key.as_str(), model.reads_effort))
+            .collect();
+        assert_eq!(
+            reads,
+            [
+                ("anthropic/reads", true),
+                ("anthropic/reads-none", false),
+                ("anthropic/silent", true),
+                ("anthropic/no-effort-key", true),
+            ]
+        );
+    }
+
+    /// A window stated as a float, a string or a negative number is not a window, and does not stop the
+    /// rest of the roster being read: a roster that fails to decode offers nothing at all.
+    #[test]
+    fn a_window_in_a_form_that_is_not_a_whole_number_leaves_the_roster_readable() {
+        let models = from_gateway(
+            &anthropic(),
+            r#"{"data": [
+                {"id": "as-a-float", "max_input_tokens": 200000.5},
+                {"id": "as-text", "max_input_tokens": "200000"},
+                {"id": "as-negative", "max_input_tokens": -1},
+                {"id": "as-a-whole-number", "max_input_tokens": 200000}
+            ]}"#,
+        );
+        let windows: Vec<Option<u64>> = models.iter().map(|m| m.conversation_tokens).collect();
+        let assumed = Some(bravebot_config::provider::CONTEXT_WINDOW);
+        assert_eq!(windows, [assumed, assumed, assumed, Some(200_000)]);
+    }
+
+    /// Another gateway may put something else under `capabilities`, and a roster that fails to
+    /// decode offers nothing at all, so no shape of the field may stop the rest being read.
+    #[test]
+    fn a_gateway_stating_capabilities_in_another_shape_still_has_its_roster_read() {
+        let models = from_gateway(
+            &gateway(),
+            r#"{"data": [
+                {"id": "as-a-list", "capabilities": ["chat", "tools"]},
+                {"id": "as-text", "capabilities": "chat"},
+                {"id": "as-nothing", "capabilities": null}
+            ]}"#,
+        );
+        assert_eq!(models.len(), 3);
+        assert!(models.iter().all(|model| model.reads_effort));
+    }
+
     /// A roster describing no parameters leaves the level to be judged by the service, and the
     /// judgment is the only description of the field there is. A row that went on claiming a level
     /// is read after the service refused it would show somebody a charge they chose and stopped
@@ -776,6 +994,7 @@ mod tests {
                 caching: true,
                 cache_ttl: false,
                 effort: true,
+                ..crate::Refusals::default()
             },
         );
 
@@ -807,6 +1026,7 @@ mod tests {
                 caching: false,
                 cache_ttl: false,
                 effort: true,
+                ..crate::Refusals::default()
             },
         );
 
@@ -859,6 +1079,7 @@ mod tests {
                 caching: false,
                 cache_ttl: false,
                 effort: true,
+                ..crate::Refusals::default()
             },
         );
 

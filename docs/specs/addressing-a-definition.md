@@ -5,6 +5,8 @@ status: normative
 governs:
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/completion.rs
+  - crates/tui/src/state/settings.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/transcript.rs
   - crates/tui/src/render/prompt.rs
@@ -14,10 +16,17 @@ governs:
   - crates/agent/src/agents.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/delegate_end.rs
+  - crates/agent/src/turn/setup.rs
+  - crates/agent/src/turn/round_steps.rs
   - crates/agent/src/turn/prompts.rs
   - crates/agent/src/turn/task.rs
+  - crates/agent/src/turn/sentences.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/status.rs
@@ -91,7 +100,8 @@ the three clauses standing in the way is about a run nobody is watching. That is
 A definition supplies four things to the run a person addresses: the prompt, the narrowing, the
 model, and the skills it names ([DELEGATE-23](delegation.md#DELEGATE-23)).
 [MEMORY-4](definition-memory.md#MEMORY-4) adds a fifth: where the memory it keeps is, which the run
-reads itself. It supplies nothing else, and in particular it does not
+reads itself. A `spawns:` line ([DELEGATE-30](delegation.md#DELEGATE-30)) holds the run to the
+delegates it names, as it holds a delegate. It supplies nothing else, and in particular it does not
 make the run a delegate. The person is at the keyboard, so the run holds the screen, the confirmer,
 the task list and the way to ask a question, exactly as any turn of theirs does.
 
