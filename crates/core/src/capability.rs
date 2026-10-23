@@ -5,8 +5,9 @@
 //! decide its own output is trustworthy.
 //!
 //! The set here is deliberately coding-shaped. Anything domain-specific belongs
-//! behind MCP rather than in this enum. See [`Capability::WebFetch`] for the one
-//! general-purpose fetch primitive.
+//! behind MCP or behind a connector definition rather than in this enum. See
+//! [`Capability::WebFetch`] for the one general-purpose fetch primitive, and
+//! [`Capability::Connector`] for the one that reaches an account through an authority.
 
 use crate::label::Label;
 use std::fmt;
@@ -29,6 +30,25 @@ impl ServerAlias {
 }
 
 impl fmt::Display for ServerAlias {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The local name of one installed connector definition.
+///
+/// The file name the person installed it under, and never a name the authority or the service
+/// reported: a grant is written against it, so it has to be something a person chose.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConnectorName(String);
+
+impl ConnectorName {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+}
+
+impl fmt::Display for ConnectorName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
@@ -80,6 +100,14 @@ pub enum Capability {
     /// reportable anyway is LSP-3's separate argument about structure, made where the
     /// answer is rendered rather than by a label here.
     LanguageServer,
+    /// Fetch from or act on an account through the credential authority, under the connector
+    /// definition installed with this name. The authority holds the credential and makes the
+    /// call; this process sends it the locked routing and receives an outcome.
+    ///
+    /// Output is untrusted and private: a service answers with what other people wrote, from an
+    /// account that is the person's. Named per connector for the reason [`Capability::McpCall`]
+    /// is named per server, so a grant for one service is no grant for another.
+    Connector(ConnectorName),
 }
 
 impl Capability {
@@ -93,7 +121,7 @@ impl Capability {
     /// The alias in the MCP variant stands for every server. What a capability observes is a
     /// property of the protocol, and that is the question a walk over this list asks. Which
     /// server a grant is about is [`CapabilitySet`]'s question rather than this one.
-    pub fn all() -> [Self; 8] {
+    pub fn all() -> [Self; 9] {
         [
             Self::FileRead,
             Self::FileWrite,
@@ -103,6 +131,7 @@ impl Capability {
             Self::WebFetch,
             Self::McpCall(ServerAlias::new("any")),
             Self::LanguageServer,
+            Self::Connector(ConnectorName::new("any")),
         ]
     }
 
@@ -122,6 +151,8 @@ impl Capability {
             // A server may hold the person's own data, a mailbox or a calendar, and this client
             // cannot tell what a given call read from it.
             Self::McpCall(_) => Some(Label::untrusted_private()),
+            // Other people's words, from the person's own account.
+            Self::Connector(_) => Some(Label::untrusted_private()),
             // Effects produce no labelled observation.
             Self::FileWrite | Self::GitWrite => None,
             // Command output can contain anything the workspace contains.
@@ -142,6 +173,7 @@ impl Capability {
             Self::WebFetch => "web_fetch",
             Self::McpCall(_) => "mcp_call",
             Self::LanguageServer => "language_server",
+            Self::Connector(_) => "connector",
         }
     }
 }
@@ -154,6 +186,7 @@ impl fmt::Display for Capability {
             // which server was asked for, and with a grant per server that is the whole
             // of what the reader needs.
             Self::McpCall(alias) => write!(f, "mcp_call:{alias}"),
+            Self::Connector(name) => write!(f, "connector:{name}"),
             other => f.write_str(other.as_str()),
         }
     }
@@ -282,6 +315,17 @@ mod tests {
     fn pure_effects_have_no_output_label() {
         assert_eq!(Capability::FileWrite.output_label(), None);
         assert_eq!(Capability::GitWrite.output_label(), None);
+    }
+
+    #[test]
+    fn a_connector_is_untrusted_private_and_granted_per_connector() {
+        let github = Capability::Connector(ConnectorName::new("github"));
+        assert_eq!(github.output_label(), Some(Label::untrusted_private()));
+        assert_eq!(github.to_string(), "connector:github");
+        // A grant is written against the connector's name, so one service's is not another's.
+        let granted = CapabilitySet::from_iter([github.clone()]);
+        assert!(granted.contains(&github));
+        assert!(!granted.contains(&Capability::Connector(ConnectorName::new("gmail"))));
     }
 
     #[test]
