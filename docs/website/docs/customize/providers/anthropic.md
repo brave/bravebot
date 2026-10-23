@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 1
 title: Anthropic
 description: Reach Claude with an Anthropic API key through its Messages API, and what the block, the roster, the reply ceiling and prompt caching do.
 ---

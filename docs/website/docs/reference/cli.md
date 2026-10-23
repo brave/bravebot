@@ -1015,7 +1015,7 @@ bravebot import-providers
 Reads what Claude Code and opencode configured in your home directory, and asks a running Ollama, LM
 Studio and llama-server on this machine what each serves, shows what it would add to
 `~/.bravebot/settings.json`, and asks once for each. It takes no arguments, needs a terminal to ask on, and refuses in an incognito session. See
-[Importing from Claude Code, opencode or a local model server](../customize/configuration.md#importing-from-claude-code-opencode-or-a-local-model-server).
+[Importing from Claude Code, opencode or a local model server](../customize/importing.md).
 
 ## `mcp`
 
