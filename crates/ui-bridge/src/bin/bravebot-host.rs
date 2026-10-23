@@ -41,12 +41,9 @@ fn main() {
 
     // As soon as this process knows it is serving, so a panic in anything that follows is covered.
     // A build with nowhere to send reports, or a person who switched them off, gets nothing from
-    // this call (CRASH-3, CRASH-4). Nothing in this process engages incognito mode, so the directory
-    // is the person's own; if something did, `writable` would answer none and nothing would start.
-    bravebot_backtrace::start(
-        bravebot_backtrace::Process::Host,
-        bravebot_agent::home::writable(),
-    );
+    // this call (CRASH-3, CRASH-4). The directory is the one `home::writable` names, which is none
+    // under incognito mode, so nothing would start if this process ever engaged it.
+    bravebot_backtrace::start(bravebot_backtrace::Process::Host);
 
     // The host serves real sessions, so it does not run where a process of the same user may be
     // able to copy the descriptors of its channel.

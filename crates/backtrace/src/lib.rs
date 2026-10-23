@@ -79,19 +79,28 @@ static STARTED: OnceLock<PathBuf> = OnceLock::new();
 
 /// Begin reporting for this process, if it is to.
 ///
-/// `state` is the directory a report is left in, or `None` where nothing may be written: no home,
-/// or an incognito session. The caller passes the answer that already says so (`home::writable`),
-/// so this keeps no second opinion about incognito. Called once, as early as the state directory is
-/// known and incognito has been engaged, so a panic in what follows is covered.
+/// The directory a report is left in is the one every other write to the state directory asks for
+/// (`home::writable`), which is none for an incognito session and for a machine with no home, so
+/// the answer about incognito is kept in that one place and no caller passes a directory of its
+/// own. Called once, as early as incognito has been engaged and before the first thing that could
+/// panic in a way worth reporting.
 ///
 /// Does nothing when the person switched reports off, when the build has nowhere to send them, or
-/// when `state` is `None` ([`plan`] is the whole of that decision).
-pub fn start(process: Process, state: Option<PathBuf>) {
+/// when there is no directory ([`plan`] is the whole of that decision).
+pub fn start(process: Process) {
+    start_with(process, bravebot_config::crash_report_endpoint());
+}
+
+/// As [`start`], with the address stated. Exists so the whole of a launch, the state directory and
+/// incognito and the switches included, can be run against a server a test owns, since a test build
+/// has no address of its own. The product has one answer for it and it is [`start`]'s.
+#[doc(hidden)]
+pub fn start_with(process: Process, endpoint: Option<String>) {
     let environment = std::env::var(CRASH_REPORTS).ok();
     if let Some((state, endpoint)) = plan(
-        state,
+        bravebot_agent::home::writable(),
         environment.as_deref(),
-        bravebot_config::crash_report_endpoint(),
+        endpoint,
         Settings::written_crash_reports,
     ) {
         begin(process, state, endpoint);
@@ -235,14 +244,14 @@ mod tests {
     }
 
     /// CRASH-5: with no state directory, which is what an incognito session and a machine with no
-    /// home are given, nothing starts: not the hook, not the notice, not a request.
+    /// home are given, nothing starts. The launch itself, with incognito engaged and the directory
+    /// the environment names, is `tests/incognito.rs`.
     #[test]
     fn with_no_state_directory_nothing_starts() {
         assert_eq!(plan(None, None, address(), || None), None);
-        start(Process::Cli, None);
+        assert_eq!(plan(None, Some("1"), address(), || Some(true)), None);
         assert!(STARTED.get().is_none());
         assert!(!notice_due());
-        notice_given();
     }
 
     /// CRASH-3: a build that was given nowhere to send reports reports nothing, and does not leave

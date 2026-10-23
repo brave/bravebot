@@ -113,6 +113,8 @@ clone is not the person's statement about what their machine sends.
 `verified-by: bravebot_backtrace::lib::either_switch_turns_reports_off`
 `verified-by: bravebot_backtrace::lib::either_switch_stops_a_launch_that_would_report`
 `verified-by: bravebot_backtrace::lib::the_settings_file_is_not_read_when_another_answer_has_already_said_no`
+`verified-by: bravebot_backtrace::incognito::the_environment_switch_leaves_no_state_directory_and_sends_nothing`
+`verified-by: bravebot_backtrace::incognito::the_persons_settings_file_stops_a_launch_and_a_string_does_not`
 `verified-by: bravebot_config::settings::only_the_persons_own_file_says_whether_crash_reports_go`
 `verified-by: bravebot_config::settings::only_a_boolean_turns_crash_reports_off`
 `verified-by: bravebot_config::settings::the_crash_reports_key_is_not_reported_as_unread`
@@ -121,16 +123,25 @@ clone is not the person's statement about what their machine sends.
 ### CRASH-5: a session with no state directory leaves no report and sends none
 
 An incognito session, and a machine with no home directory, are given no state directory. They
-install no hook, write no file, send no request and say nothing about reports.
+install no hook, write no file, create no directory, send no request and say nothing about reports.
+The directory is the one every other write to the state directory asks for, and it is asked for
+inside the function every executable calls, so an executable passes no directory of its own. Each of
+`bravebot`, `bravebot-host`, `bravebot-rpc` and `bravebot-acp` calls that function once with its own
+word, and an executable the workspace builds that does not report says why.
 
 **Why.** An incognito session adds nothing to the state directory ([incognito.md](incognito.md)),
-and a report left there would be the trace the mode exists to avoid. The entry point passes the
-answer `home::writable` gives for every other write, so there is no second opinion about incognito
-to keep in step with the first.
+and a report left there would be the trace the mode exists to avoid. Deciding the directory in one
+place leaves an executable nothing to get wrong about it and no second opinion about incognito to
+keep in step with the first.
 
 `verified-by: bravebot_backtrace::lib::with_no_state_directory_nothing_starts`
+`verified-by: bravebot_backtrace::incognito::an_incognito_launch_leaves_no_state_directory_and_sends_nothing`
+`verified-by: bravebot_backtrace::incognito::an_ordinary_launch_leaves_one_report_and_sends_nothing_while_panicking`
+`verified-by: bravebot_cli::crash_reports::every_reporting_executable_starts_it_once_with_its_own_word`
+`verified-by: bravebot_cli::crash_reports::an_executable_that_does_not_report_names_nothing_of_the_crate`
+`verified-by: bravebot_cli::crash_reports::every_executable_the_workspace_builds_says_whether_it_reports`
+`verified-by: bravebot_cli::crash_reports::the_scan_sees_a_split_call_skips_comments_and_finds_every_function`
 `verified-by: bravebot_cli::running::an_incognito_session_writes_no_log`
-`verified-by: by-construction (each entry point passes the answer of bravebot_agent::home::writable, which is none for an incognito session, as the test above shows for the log that is written the same way)`
 
 <a id="CRASH-6"></a>
 ### CRASH-6: a report is sent by a later launch, in the background, and few are kept
@@ -247,6 +258,11 @@ that the project's count of distinct `guid`s is a count of reports.
 
 - **A message built at run time is lost.** `expect("...")` and `unwrap()` on an `Err` arrive as
   built strings, so the file and line are what say what failed.
+
+- **No test runs an executable with an address baked in.** A test build has none, so the shared
+  start function is run in child processes with an address a test states, and the executables are
+  held to calling it by reading their sources. What an executable does with a baked address once
+  it has called the function is what the child processes show.
 
 - **The desktop application and the editor integration send without saying so.** `bravebot-host`,
   `bravebot-rpc` and `bravebot-acp` have no startup screen, and the one-shot and `--plain` modes
