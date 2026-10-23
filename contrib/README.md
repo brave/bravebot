@@ -69,6 +69,11 @@ fails when a lint reports more sites in a crate than it did at the base. Nothing
 tree, so no list falls behind the code. Both runs use one toolchain on one host, so a clippy release
 that finds more sites, and code that only another platform compiles, change both counts alike.
 
+`allow_attributes` is counted too, with far fewer sites: an `#[allow]` that remains is one that
+`unsafe_code` or `dead_code` needs on a platform where the lint does not fire, since an `#[expect]`
+there would fail the other platform's build. A new one is written `#[expect(lint, reason = "...")]`,
+or, where it has to stay an `#[allow]`, marked `#[expect(clippy::allow_attributes, reason = "...")]`.
+
 A site that is right is marked where it is with `#[expect(clippy::lint, reason = "...")]`, which
 clippy does not report. A lint that reaches zero belongs in `[workspace.lints.clippy]`, which then
 refuses the first new site on its own.

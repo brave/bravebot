@@ -33,6 +33,9 @@ ROOT = Path(__file__).resolve().parent.parent
 # belongs in `[workspace.lints.clippy]` instead, which refuses the first one. These are the
 # restriction and pedantic lints whose sites are a judgement at each place rather than a fault,
 # and none is in the `nursery` group, which reports differently from one release to the next.
+# `allow_attributes` has few sites and is here anyway: what is left is an `#[allow]` that must stay
+# one because `unsafe_code` and `dead_code` hold on one platform and not another, where an
+# `#[expect]` the other platform never fulfils fails its build.
 LINTS = (
     "let_underscore_must_use",
     "expect_used",
@@ -51,6 +54,7 @@ LINTS = (
     "fn_params_excessive_bools",
     "undocumented_unsafe_blocks",
     "multiple_unsafe_ops_per_block",
+    "allow_attributes",
 )
 
 # Only code under these is counted: what ships, from the crates, and not a build script's output
@@ -166,6 +170,12 @@ def render(grown):
         "Fix each site, or where the code is right mark it with "
         '`#[expect(clippy::<lint>, reason = "...")]`, which clippy does not report.'
     )
+    if any(lint == "allow_attributes" for lint, *_ in grown):
+        lines.append(
+            'Write `#[expect(<lint>, reason = "...")]` in place of an `#[allow]`; where a platform '
+            "the lint does not fire on builds the code, keep the `#[allow(<lint>, reason = \"...\")]` "
+            'and mark it `#[expect(clippy::allow_attributes, reason = "...")]`.'
+        )
     return "\n".join(lines)
 
 
@@ -258,6 +268,13 @@ class Reading(unittest.TestCase):
         self.assertIn("clippy::panic reports 2 sites in a, and 1 at the base:", text)
         self.assertIn("  crates/a/src/lib.rs:9", text)
         self.assertIn("#[expect(clippy::<lint>", text)
+
+    def test_an_allow_attribute_is_counted_and_the_report_says_to_write_expect(self):
+        output = self.line("allow_attributes", "crates/a/src/lib.rs", 8)
+        self.assertEqual(sites(output), {("allow_attributes", "crates/a/src/lib.rs", 8, 1)})
+        text = render([("allow_attributes", "a", 0, 1, ["crates/a/src/lib.rs:8"])])
+        self.assertIn("#[expect(<lint>", text)
+        self.assertNotIn("#[expect(<lint>", render([("panic", "a", 0, 1, ["crates/a/src/lib.rs:8"])]))
 
     def test_the_command_reads_the_code_that_ships_with_every_lint_it_counts(self):
         command = clippy_command()
