@@ -1847,6 +1847,34 @@ mod tests {
             );
         }
 
+        /// A report the planner read is shown to the person as the same words, with no quarantine
+        /// margin: marking it would claim a confinement the report is not under.
+        #[test]
+        fn a_report_the_planner_read_is_drawn_plain() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "reader", "read the log");
+            session.delegate_finished(
+                id,
+                "answered after 1 round".to_string(),
+                false,
+                Some(Reported::Said("PLAIN-REPORT-WORDS".to_string())),
+            );
+
+            let screen = rendered(&session);
+            let plain = screen
+                .lines()
+                .find(|row| row.contains("PLAIN-REPORT-WORDS"))
+                .expect("the report was not drawn at all");
+            assert!(
+                !plain.contains(QUARANTINE_BAR),
+                "a report the planner read was drawn in the quarantine margin: {plain}"
+            );
+            assert!(
+                !screen.contains(QUARANTINE_BAR),
+                "the screen carries a quarantine margin for a report that was never kept: {screen}"
+            );
+        }
+
         /// A delegate that could not finish answered nothing, so there is nothing to draw under
         /// the line saying so. A block that invented one would be putting words in its mouth.
         #[test]
@@ -2957,6 +2985,33 @@ mod tests {
             assert!(
                 drawn_over(&session).height < open.height,
                 "the rows the box gave up did not go to the transcript"
+            );
+        }
+
+        /// What is offered beneath the box goes with it: the commands a typed slash lists are drawn
+        /// under the prompt at rest and are not drawn under the scroller, which would otherwise
+        /// leave rows of choices that no key from in here can take.
+        #[test]
+        fn the_scroller_draws_nothing_offered_beneath_the_box() {
+            let mut session = reading();
+            session.close_scroller();
+            session.type_char('/');
+            let (at_rest, _) = screen(&session);
+            assert!(
+                at_rest.contains("/help"),
+                "nothing was offered beneath the box at rest, so the scroller proves nothing: {at_rest}"
+            );
+
+            session.open_scroller();
+            let (drawn, _) = screen(&session);
+            assert!(
+                !drawn.contains("/help"),
+                "a command was still offered under the scroller: {drawn}"
+            );
+            assert_eq!(
+                drawn_over(&session).height,
+                23,
+                "the offer kept rows from the transcript"
             );
         }
 
@@ -8154,6 +8209,34 @@ mod tests {
             !drawn.contains(DETAIL_MARKER),
             "the note was drawn hanging off nothing: {drawn}"
         );
+    }
+
+    /// A note is drawn at the column a reply's text and a prompt's text start in, so it lines up
+    /// with the rest of the transcript. A note at the margin, or indented past the reply, reads as a different kind
+    /// of line.
+    #[test]
+    fn a_note_starts_in_the_column_a_replys_text_starts_in() {
+        let mut session = Session::new("none");
+        for c in "my own prompt".chars() {
+            session.type_char(c);
+        }
+        session.submit();
+        session.complete("the reply text", Vec::new(), 0);
+        session.note("trusting /tmp/x");
+
+        let lines: Vec<String> = transcript_lines(&session, 90, 24)
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        let column = |word: &str| {
+            lines
+                .iter()
+                .find_map(|line| line.find(word).map(|at| line[..at].chars().count()))
+                .unwrap_or_else(|| panic!("{word} was not drawn: {lines:?}"))
+        };
+        assert!(column("the reply text") > 0, "{lines:?}");
+        assert_eq!(column("trusting"), column("the reply text"), "{lines:?}");
+        assert_eq!(column("trusting"), column("my own prompt"), "{lines:?}");
     }
 
     /// ADDRESS-12. The name above a reply is the one the driver matched, so a reply claiming to be
