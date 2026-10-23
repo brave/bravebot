@@ -81,7 +81,13 @@ rules to keep in step with the first, and the second set is the one nobody reads
 <a id="BG-2"></a>
 ### BG-2: only a line a person typed starts one
 
-`bravebot --bg "prompt"` starts a background session whose first turn is the prompt as typed.
+`bravebot --bg "prompt"` starts a background session whose first turn is the prompt as typed. A
+one-shot option given as a word of its own after the prompt is refused by name, the first that
+appears, rather than joined into it: `--model`, `--effort`, `--advisor`, `--file`, `--session-ref`,
+`--add-dir`, `--trust-workspace`, `--trace`, `--json`, `--json-stream`, `--output-schema`, `--mode`,
+`--max-rounds`, `--max-tokens` and `--goal`. None of them reaches the session; the match is the word
+standing alone, so a prompt whose own sentence uses one of those words keeps running as the prompt
+it is.
 `/bg` between two turns of a foreground session hands that conversation to a background session and
 ends the foreground process once the record is written. The new process resumes that record and
 opens idle. `/bg` typed while a turn is running waits for the turn to end ([CMD-8](commands.md#CMD-8)),
