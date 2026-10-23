@@ -320,6 +320,8 @@ const api = {
     attachments?: string[]
     drops?: string[]
     pastes?: string[]
+    /** This is the host's held draft, edited or not; the bridge decides which bot it is for. */
+    brief?: boolean
   }): Promise<Answer<{ turn: number }>> {
     return ipcRenderer.invoke('bravebot:bots:send', request) as Promise<Answer<{ turn: number }>>
   },

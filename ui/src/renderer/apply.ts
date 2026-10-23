@@ -28,7 +28,7 @@ export function apply(
       case 'turn.started':
         return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0,
           sandboxMode: message.data.sandbox ?? old.sandboxMode,
-          entries: t.beginTurn(old.entries, message.data.turn) }
+          entries: t.beginTurn(old.entries, message.data.turn, message.data.consulted) }
       case 'turn.interjected':
         return taken(old)
       case 'audit':
@@ -97,6 +97,21 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedMcpMove(message.data)] }
       case 'host.request':
         return { ...old, entries: [...old.entries, t.askedHost(message.data)] }
+      case 'consult.request':
+        return { ...old, entries: [...old.entries, t.askedConsult(message.data)] }
+      case 'consult.ended':
+        return { ...old, entries: [...old.entries, t.narrated(message.data.message)] }
+      // Drafting holds the session as a turn does, and ends with `consult.brief`, not `turn.done`.
+      // Each bot named before this one that may not be consulted is said, then passed over (CONSULT-10).
+      case 'consult.drafting':
+        return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, tokens: 0,
+          brief: { bot: message.data.bot, row: message.data.row, line: message.data.line, drafting: true, message: null },
+          entries: [...old.entries, ...(message.data.skipped ?? []).map((reason) => t.narrated(reason))] }
+      case 'consult.brief':
+        return { ...old, running: false, phase: null, checking: null, hook: null, composing: null,
+          brief: message.data.brief === null ? null
+            : { bot: message.data.bot, line: message.data.line, drafting: false, message: message.data.message },
+          entries: message.data.brief === null ? [...old.entries, t.narrated(message.data.message)] : old.entries }
       // A server has up to a minute to answer its handshake, and the turn says nothing else
       // while it waits, so the wait is named where the phase is.
       case 'mcp.starting':
@@ -137,7 +152,7 @@ export function apply(
           hook: null,
           composing: null,
           thinking: '',
-          entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
+          entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn, message.data.consulted)],
           awaitingOrdinal: null,
           archived: message.data.archived,
           rewind: message.data.rewind ?? [],

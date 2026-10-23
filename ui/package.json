@@ -43,6 +43,7 @@
     "drive:ask": "pnpm run bridge && electron-vite build && node scripts/drive-ask.mjs",
     "drive:at-mentions": "pnpm run bridge && electron-vite build && node scripts/drive-at-mentions.mjs",
     "package": "pnpm run bridge && electron-vite build && node scripts/package.mjs",
+    "drive:consult": "pnpm run bridge && electron-vite build && node scripts/drive-consult.mjs",
     "drive:menu": "pnpm run bridge && electron-vite build && node scripts/drive-menu.mjs",
     "drive:session-list": "pnpm run bridge && electron-vite build && node scripts/drive-session-list.mjs",
     "drive:about": "pnpm run build && node scripts/drive-about.mjs",

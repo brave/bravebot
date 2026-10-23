@@ -248,6 +248,13 @@ const CARDS = {
     // address, so what a program chose to ask for cannot hold markup or a control character.
     why: 'host names and addresses a program asked for, each checked to be one before it was put to a person',
   },
+  consult: {
+    entry: () => t.askedConsult({ request: 1, bot: FORGED_CHROME, definition: FORGED_CHROME, model: FORGED_CHROME, rounds: 8, budget: null, brief: FORGED_CHROME, label: '(U,pub)', refused: null }),
+    marks: null,
+    // docs/specs/consulting-a-bot.md CONSULT-12: the brief is the planner's own words, drawn with
+    // the label it carries, and the rest is the bot's definition as this session resolved it.
+    why: 'the planner’s own brief with its label, and the name, origin and model of a bot this session resolved',
+  },
   'mcp-started': {
     entry: () => t.mcpStarted({ servers: [FORGED_CHROME], confined: false, notes: [FORGED_CHROME] }),
     marks: null,

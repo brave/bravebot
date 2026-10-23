@@ -16,6 +16,7 @@ import type {
   AskRequest,
   Change,
   ConfirmRequest,
+  ConsultRequest,
   CutOff,
   ExposureRequest,
   HostRequest,
@@ -40,7 +41,8 @@ import type {
 import type { ExportTurn } from '../shared/export'
 
 export type Entry = (
-  | { kind: 'turn-start'; id: string; number: number }
+  /** `bot` is the bot the turn consults, so its rows are drawn under its name. */
+  | { kind: 'turn-start'; id: string; number: number; bot?: string }
   /**
    * Something the person typed.
    *
@@ -49,7 +51,8 @@ export type Entry = (
    * conversation but the window does not know where, and a fork is refused rather than guessed.
    */
   | { kind: 'user'; id: string; text: string; prompt?: number }
-  | { kind: 'assistant'; id: string; text: string }
+  /** `bot` is the bot a line consulted, where this is its reply rather than the session's. */
+  | { kind: 'assistant'; id: string; text: string; bot?: string }
   /** `command` is the words of `text` that are a command to run, where a notice names one. */
   | { kind: 'narration'; id: string; text: string; command?: string | null }
   /**
@@ -173,6 +176,8 @@ export type Entry = (
   | { kind: 'mcp-move'; id: string; request: McpMoveRequest; decision: 'approve' | 'reject' | null }
   /** Hosts a confined program asked for that the allowed-hosts list does not cover, awaiting a decision. */
   | { kind: 'host'; id: string; request: HostRequest; decision: 'approve' | 'reject' | null }
+  /** A consult the host proposed, awaiting a person's yes before anything is sent (CONSULT-12). */
+  | { kind: 'consult'; id: string; request: ConsultRequest; decision: 'approve' | 'reject' | null }
   /** What starting the session's MCP servers came to. */
   | { kind: 'mcp-started'; id: string; started: McpStarted }
   /**
@@ -249,6 +254,8 @@ export function fromSaid(said: Said[]): Entry[] {
           label: entry.label,
           text: entry.text,
         } as const
+      case 'consulted':
+        return { kind: 'assistant', id: nextId(), text: entry.text ?? entry.kept ?? '', bot: entry.bot } as const
       default: {
         // A tag from a newer agent than this window. Drawn as a plain message and never as one of
         // the interface's own rows: those rows assert something about the conversation that this
@@ -312,6 +319,7 @@ export const askedMcpTools = (request: McpToolsRequest): Entry => ({ kind: 'mcp-
 export const askedMcpCall = (request: McpCallRequest): Entry => ({ kind: 'mcp-call', id: nextId(), request, decision: null, remember: false })
 export const askedMcpMove = (request: McpMoveRequest): Entry => ({ kind: 'mcp-move', id: nextId(), request, decision: null })
 export const askedHost = (request: HostRequest): Entry => ({ kind: 'host', id: nextId(), request, decision: null })
+export const askedConsult = (request: ConsultRequest): Entry => ({ kind: 'consult', id: nextId(), request, decision: null })
 export const mcpStarted = (started: McpStarted): Entry => ({ kind: 'mcp-started', id: nextId(), started })
 export const planAsked = (text: string): Entry => ({ kind: 'plan-task', id: nextId(), text })
 export const planReplied = (text: string, record: string | null): Entry => ({ kind: 'plan-reply', id: nextId(), text, record })
@@ -328,8 +336,10 @@ export const askedQuestions = (request: AskRequest): Entry => ({
   request,
   answers: null,
 })
-export const replied = (text: string, turn?: number): Entry => ({ kind: 'assistant', id: nextId(), text, turn })
-export const turnStarted = (number: number): Entry => ({ kind: 'turn-start', id: nextId(), number })
+export const replied = (text: string, turn?: number, bot?: string | null): Entry =>
+  ({ kind: 'assistant', id: nextId(), text, turn, ...(bot ? { bot } : {}) })
+export const turnStarted = (number: number, bot?: string | null): Entry =>
+  ({ kind: 'turn-start', id: nextId(), number, ...(bot ? { bot } : {}) })
 
 /**
  * The same entries, with `id`'s prompt numbered as the agent numbered it.
@@ -346,7 +356,7 @@ export function number(entries: Entry[], id: string, prompt: number | null | und
 }
 
 /** Keep notices below the prompt even if a worker reports activity before turn.started. */
-export function beginTurn(entries: Entry[], number: number): Entry[] {
+export function beginTurn(entries: Entry[], number: number, bot?: string | null): Entry[] {
   if (entries.some((entry) => entry.kind === 'turn-start' && entry.number === number)) return entries
   let at = entries.length
   for (let index = entries.length - 1; index >= 0; index--) {
@@ -354,7 +364,7 @@ export function beginTurn(entries: Entry[], number: number): Entry[] {
     if (entry.kind === 'assistant' || entry.kind === 'turn-start') break
     if (entry.kind === 'user' || entry.kind === 'consolidation' || entry.kind === 'watch') { at = index + 1; break }
   }
-  return [...entries.slice(0, at), turnStarted(number), ...entries.slice(at)]
+  return [...entries.slice(0, at), turnStarted(number, bot), ...entries.slice(at)]
 }
 
 /**
@@ -421,6 +431,7 @@ export const REPLY = {
   'mcp-call': 'mcp-call.reply',
   'mcp-move': 'mcp-move.reply',
   host: 'host.reply',
+  consult: 'consult.reply',
 } as const
 
 /** Which kinds of question a person can answer with a yes or a no. */
@@ -610,6 +621,7 @@ export function searchableText(entry: Entry): string {
     case 'mcp-call': return [entry.request.name, ...entry.request.arguments.map((argument) => `${argument.name} ${argument.value}`)].join(' ')
     case 'mcp-move': return [entry.request.alias, entry.request.declared, entry.request.destination].join(' ')
     case 'host': return entry.request.hosts.join(' ')
+    case 'consult': return [entry.request.bot, entry.request.model, entry.request.brief].join(' ')
     case 'mcp-started': return [...entry.started.servers, ...entry.started.notes].join(' ')
     case 'plan-ended': return [entry.ended.problem ?? '', entry.ended.attempt?.plan ?? '', ...(entry.ended.attempt?.steps ?? [])].join(' ')
     case 'vouch': return [entry.request.path, entry.request.preview].join(' ')

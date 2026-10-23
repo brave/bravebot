@@ -60,6 +60,11 @@ export interface Bot {
   /** Inference model; null uses the configured default for older bots. */
   model: string | null
   /**
+   * Whether a line in another session may consult it with `@name` (CONSULT-16). False writes
+   * `consult: off` into its definition. Absent in a store written before this, which is true.
+   */
+  consult: boolean
+  /**
    * The folder its conversations with no project run in, made by the main process under its own
    * data directory. Never one a window named. Main-written.
    */
@@ -243,6 +248,7 @@ export function parseBots(value: unknown, homeFor?: (slug: string) => string): S
       purpose,
       avatar,
       model,
+      consult,
       home,
       directory,
       definition,
@@ -277,6 +283,7 @@ export function parseBots(value: unknown, homeFor?: (slug: string) => string): S
       purpose,
       avatar: isText(avatar) ? avatar : slug,
       model: isBotModel(model) && model !== null ? model : null,
+      consult: consult !== false,
       home: placed,
       definition: isSlug(definition) ? definition : null,
       session: isSessionId(session) ? session : null,

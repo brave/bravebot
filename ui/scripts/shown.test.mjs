@@ -64,7 +64,7 @@ const { Ledger, rowsOf, mayAnswer, leftWords, NOT_MEASURED } = await load('src/r
 const ENTRY = {
   confirm: t.asked, run: t.askedRun, output: t.askedOutput, vet: t.askedVet, vouch: t.askedVouch, fetch: t.askedFetch,
   server: t.askedServer, manifest: t.askedManifest, exposure: t.askedExposure, 'mcp-server': t.askedMcpServer,
-  'mcp-tools': t.askedMcpTools, 'mcp-call': t.askedMcpCall, 'mcp-move': t.askedMcpMove, host: t.askedHost, ask: t.askedQuestions,
+  'mcp-tools': t.askedMcpTools, 'mcp-call': t.askedMcpCall, 'mcp-move': t.askedMcpMove, host: t.askedHost, consult: t.askedConsult, ask: t.askedQuestions,
 }
 
 const draw = (entry) =>
@@ -231,6 +231,7 @@ const CONDITIONAL = {
   // The sentences that say what a yes does come after the last token in their cards.
   exposure: { request: CASES.exposure.request, phrases: ['Keeping it back keeps this file’s text from the model'] },
   host: { request: CASES.host.request, phrases: ['A yes lets every command the model runs'] },
+  consult: { request: CASES.consult.request, phrases: ['Nothing is sent unless you say yes'] },
 }
 
 test('the warnings and closing sentences no case token sits in are rows the card marks as deciding', () => {

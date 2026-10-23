@@ -40,6 +40,16 @@ export interface Interjection {
   staged: Staged[]
 }
 
+/** A brief for a bot, while the host drafts it (`drafting`) and once it waits in the composer. */
+export interface Briefing {
+  bot: string
+  /** The model the bot runs on and its bound, named before the brief goes (CONSULT-10). */
+  row?: string
+  line: string
+  drafting: boolean
+  message: string | null
+}
+
 /** What the app is doing, which decides most of what the interface offers. */
 export interface Live {
   model: string | null
@@ -173,6 +183,11 @@ export interface Live {
   attachments?: FileAttachment[]
   /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
   sendRefused?: string | null
+  /**
+   * A brief the host is drafting, or has drafted into the composer, for the bot a line named
+   * (CONSULT-5). `line` is what Esc puts back; the bridge holds which bot the draft is for.
+   */
+  brief?: Briefing | null
   /** What drops and pastes staged in this session's composer, and the counter its markers are numbered by. */
   staging?: Staging
 }

@@ -186,6 +186,16 @@ export const CASES = {
     tokens: ['zqh01.example.com', 'zqh60.example.com'],
     standing: [],
   },
+  consult: {
+    kind: 'consult',
+    event: 'consult.request',
+    request: {
+      request: 117, bot: 'zqk01', definition: `~/.bravebot/agents/${'bots/'.repeat(40)}zqk02.md`, model: 'zqk03', rounds: 8, budget: 20000,
+      brief: `zqk04 ${range(40).map(() => filler(12)).join('\n')} zqk05`, label: '(U,pub)', refused: null,
+    },
+    tokens: ['zqk01', 'zqk02', 'zqk03', 'zqk04', 'zqk05'],
+    standing: [],
+  },
   ask: {
     kind: 'ask',
     event: 'ask.request',

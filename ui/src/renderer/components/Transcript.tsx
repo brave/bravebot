@@ -1,7 +1,7 @@
 import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
-import { memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
@@ -21,7 +21,7 @@ import { Toasts } from './Toasts'
 import { ForkIcon } from './ForkIcon'
 import { ago, contextMenu } from './Sessions'
 import { Markdown } from './Markdown'
-import { BotAvatar, type Doing } from './BotAvatar'
+import { BotAvatar, BotFace, type Doing } from './BotAvatar'
 import type { Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
 import { conversationPreferences, setConversation } from '../experience'
@@ -39,6 +39,7 @@ import { pointForPrompt, undoRow } from '../rewind'
 import { ShownContext, leftWords, mayAnswer, useShown, type OnScreen } from '../shown'
 import { showToast } from '../toasts'
 import { EMPTY_STAGING, named, stageDrop, stagePaste, withoutMarker, type Staging } from '../staging'
+import type { Briefing } from '../live'
 import type { Drop } from '../../shared/drops'
 import type { Paste } from '../../shared/pastes'
 
@@ -72,6 +73,7 @@ interface Live {
   /** The points this session can be put back to, newest first. */
   rewind?: RewindPoint[]
   sendRefused?: string | null
+  brief?: Briefing | null
   staging?: Staging
 }
 
@@ -115,6 +117,8 @@ interface Props {
   onResumeQueued: () => void
   onRemoveQueued: (index: number) => void
   onDismissRefusal: () => void
+  /** Put the person's line back in place of the brief drafted from it. */
+  onDropBrief: () => void
   live: Live | null
   /** A saved manifest run being read. Drawn in place of a session, which it is not. */
   reading?: SavedRun | null
@@ -294,7 +298,7 @@ export function Transcript({
   onQueue,
   onInterject,
   interjected,
-  queued, queuePaused, onResumeQueued, onDismissRefusal,
+  queued, queuePaused, onResumeQueued, onDismissRefusal, onDropBrief,
   onRemoveQueued,
   live,
   bot,
@@ -499,6 +503,7 @@ export function Transcript({
   const resumeQueued = useEvent(onResumeQueued)
   const removeQueued = useEvent(onRemoveQueued)
   const dismissRefusal = useEvent(onDismissRefusal)
+  const dropBrief = useEvent(onDropBrief)
   const setup = useEvent(onSetup)
   const checkBackend = useEvent(onCheckBackend)
   const diagnostics = useEvent(onDiagnostics)
@@ -854,6 +859,8 @@ export function Transcript({
           onResumeQueued={resumeQueued}
           refusal={live.sendRefused ?? null}
           onDismissRefusal={dismissRefusal}
+          brief={live.brief ?? null}
+          onDropBrief={dropBrief}
           onRemoveQueued={removeQueued}
           backendReady={backendReady}
           onSetup={setup}
@@ -1097,8 +1104,16 @@ const EntryList = memo(function EntryList({
   const lastReply = useMemo(() => [...entries].reverse().find((entry) => entry.kind === 'assistant')?.id, [entries])
   const undoing = useMemo(() => undoRow(entries, rewind), [entries, rewind])
   const undo = useMemo(() => rewind[0] && { running, onUndo: () => onRewind(rewind[0]!.steps) }, [rewind, running, onRewind])
-  return <>
-    {grouped.map((run) =>
+  // A bot defined outside the window is known here once it has answered, so its tag is drawn too.
+  const known = useContext(BotFaces)
+  const faces = useMemo(() => {
+    const all = new Map(known)
+    for (const entry of entries) {
+      if (entry.kind === 'assistant' && entry.bot && !all.has(entry.bot)) all.set(entry.bot, { name: entry.bot, avatar: entry.bot })
+    }
+    return all
+  }, [known, entries])
+  const drawn = (run: Run): React.JSX.Element => (
       run.kind === 'run' ? (
         <ToolRun key={run.id} entries={run.entries} active={current?.has(run.id) ?? false} />
       ) : (
@@ -1137,10 +1152,40 @@ const EntryList = memo(function EntryList({
               copy={run.entry.kind === 'assistant' ? run.entry.text : undefined}
               undo={run.entry.id === undoing ? undo : undefined} />}
         </div>
-      ),
-    )}
-  </>
+      ))
+  return <BotFaces.Provider value={faces}>
+    {consults(grouped).map((part) => part.kind === 'consult' ? (
+      <section key={part.id} className="consult-group" data-bot={part.bot}>
+        <ConsultedBy slug={part.bot} />
+        <InConsult.Provider value={true}>{part.runs.map(drawn)}</InConsult.Provider>
+      </section>
+    ) : drawn(part.run))}
+  </BotFaces.Provider>
 })
+
+/**
+ * The runs, with each consult's gathered under its bot: from the `turn-start` the bridge marked with
+ * the bot it routed to, up to that bot's reply. The bot is the bridge's, never a model's (CONSULT-11).
+ */
+function consults(all: Run[]): ({ kind: 'row'; run: Run } | { kind: 'consult'; id: string; bot: string; runs: Run[] })[] {
+  const parts: ({ kind: 'row'; run: Run } | { kind: 'consult'; id: string; bot: string; runs: Run[] })[] = []
+  let open: { kind: 'consult'; id: string; bot: string; runs: Run[] } | null = null
+  for (const run of all) {
+    const entry = run.kind === 'run' ? null : run.entry
+    if (entry && (entry.kind === 'turn-start' || entry.kind === 'user')) open = null
+    if (entry?.kind === 'turn-start' && entry.bot) {
+      open = { kind: 'consult', id: `consult-${entry.id}`, bot: entry.bot, runs: [] }
+      parts.push(open)
+    }
+    if (open) open.runs.push(run)
+    else parts.push({ kind: 'row', run })
+    if (open && entry?.kind === 'assistant' && entry.bot === open.bot) open = null
+  }
+  return parts
+}
+
+/** Whether a row is drawn inside its consult's group, which already says whose it is. */
+const InConsult = createContext(false)
 
 const nothing = (): undefined => undefined
 const NO_POINTS: RewindPoint[] = []
@@ -1792,6 +1837,50 @@ type RowProps = {
   forkable: boolean
 }
 
+/** The bots this window knows, by slug, so a consulted reply can show whose it is. */
+export const BotFaces = createContext<ReadonlyMap<string, Pick<Bot, 'name' | 'avatar'>>>(new Map())
+
+/**
+ * Whose reply a consulted one is: the bot's face, its name and its `@` slug. A bot defined outside
+ * this window has no stored seed, so its face is drawn from its slug, as `parseBots` repairs one.
+ */
+function ConsultedBy({ slug }: { slug: string }): React.JSX.Element {
+  const known = useContext(BotFaces).get(slug)
+  return (
+    <div className="consulted-by">
+      <BotAvatar seed={known?.avatar ?? slug} size={28} doing="open" />
+      <span className="consulted-name">{known?.name ?? slug}</span>
+      <span className="consulted-slug">@{slug} · consulted</span>
+    </div>
+  )
+}
+
+// An `@` word that can name a bot, as `bravebot-mentions` reads one: a slug at the start of a word,
+// with only closing punctuation after it, so `@notes.md` is a file and `@dev-bot,` is a bot.
+const BOT_TAG = /(^|\s)@([a-z0-9]+(?:-[a-z0-9]+)*)(?=[,.;:!?)]*(?:\s|$))/g
+
+/** A line with each `@` tag of a known bot drawn with its face. The words are the line's, as typed. */
+function Tagged({ text }: { text: string }): React.JSX.Element {
+  const faces = useContext(BotFaces)
+  const parts: React.ReactNode[] = []
+  let from = 0
+  for (const found of text.matchAll(BOT_TAG)) {
+    const slug = found[2]!
+    const face = faces.get(slug)
+    if (!face) continue
+    const at = found.index + found[1]!.length
+    parts.push(text.slice(from, at))
+    parts.push(
+      <span key={at} className="bot-tag" data-bot={slug} title={face.name}>
+        <BotFace seed={face.avatar} size={18} />@{slug}
+      </span>,
+    )
+    from = at + 1 + slug.length
+  }
+  parts.push(text.slice(from))
+  return <>{parts}</>
+}
+
 /**
  * One transcript entry, drawn.
  *
@@ -1853,12 +1942,13 @@ function Card({
   forkable,
 }: RowProps): React.JSX.Element {
   const answerable = entry.interrupted !== true
+  const inConsult = useContext(InConsult)
   switch (entry.kind) {
     case 'turn-start': return <></>
     case 'user':
       return (
         <div className="bubble user">
-          <div className="bubble-text">{entry.text}</div>
+          <div className="bubble-text"><Tagged text={entry.text} /></div>
           {/* Inside the row rather than beside it. The wrapper this row sits in is
               `display: contents` and has no box to hang anything off, and the bubble is the
               only thing here that knows where the row actually is on screen. */}
@@ -1887,7 +1977,8 @@ function Card({
     case 'assistant':
       // The only formatted surface in the app. See Markdown.tsx for why it is the only one.
       return (
-        <div className="bubble assistant">
+        <div className={`bubble assistant${entry.bot ? ' consulted' : ''}`} data-bot={entry.bot}>
+          {entry.bot && !inConsult && <ConsultedBy slug={entry.bot} />}
           <Markdown text={entry.text} />
         </div>
       )
@@ -2821,6 +2912,70 @@ function Card({
       )
     }
 
+    case 'consult': {
+      const { request, decision } = entry
+      const budget = request.budget === null ? '' : ` and ${request.budget} tokens`
+      return (
+        <div className="confirm consult">
+          <div className="confirm-head" data-deciding="all">
+            <span className="intent">consult a bot</span>
+          </div>
+
+          <p className="permission-scope" data-deciding="all">
+            The planner proposes asking the bot <code>{request.bot}</code>, defined in{' '}
+            <code>{request.definition}</code>. It answers on <code>{request.model}</code>, up to{' '}
+            {request.rounds} rounds{budget}.
+          </p>
+
+          {/* The brief is the host's own words and all the bot is given, drawn as text. */}
+          <div className="permission-scope" data-deciding="all">
+            <strong>The brief, labelled {request.label}, which is all the bot is given:</strong>
+            <pre className="consult-brief">{request.brief}</pre>
+          </div>
+
+          {request.refused !== null ? (
+            <>
+              {/* CONSULT-10: a bot that cannot be consulted here is named as refused, and no yes is offered. */}
+              <p className="permission-scope consult-refused" data-deciding="all">
+                This bot cannot be consulted: {request.refused}. Nothing will be sent, and no other
+                model is asked in its place.
+              </p>
+              {!answerable ? (
+                <Unanswered />
+              ) : decision !== null ? (
+                <div className="decided reject">You closed this consult</div>
+              ) : (
+                <Answers>
+                  <button className="reject" onClick={() => onDecide('consult', request.request, false)}>
+                    Close
+                  </button>
+                </Answers>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="permission-scope" data-deciding="all">
+                Nothing is sent unless you say yes. The bot’s reply comes back to the planner as the
+                result of its proposal, shown or kept as a reference by what the bot read while answering.
+              </p>
+
+              <YesOrNo
+                kind="consult"
+                request={request.request}
+                answerable={answerable}
+                decision={decision}
+                onDecide={onDecide}
+                reject="Don’t send it"
+                approve="Yes, send it"
+                approved="You sent this consult"
+                rejected="You did not send this consult"
+              />
+            </>
+          )}
+        </div>
+      )
+    }
+
     case 'mcp-started': {
       const { servers, notes } = entry.started
       return (
@@ -3022,6 +3177,8 @@ function waitingOn(kind: t.Asking['kind']): string {
       return 'Answer the moved MCP server'
     case 'host':
       return 'Answer the hosts'
+    case 'consult':
+      return 'Answer the consult'
     case 'vouch':
       return 'Answer the vouch'
     case 'ask':

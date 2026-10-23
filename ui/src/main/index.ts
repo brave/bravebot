@@ -188,9 +188,10 @@ async function sendBotTurn(
     attachments?: unknown
     composed?: 'consolidation'
     staged?: { drops?: unknown; pastes?: unknown }
+    brief?: boolean
   },
 ): Promise<{ ok?: unknown; error?: BotFailure }> {
-  const { grounded, nudge = false, recall = true, model, attachments, composed, staged } = options
+  const { grounded, nudge = false, recall = true, model, attachments, composed, staged, brief = false } = options
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
   // The folder the agent confirmed this session runs in, never one the window named. A bot only
@@ -219,6 +220,7 @@ async function sendBotTurn(
   // Left off entirely for the ordinary case, for the same reason `recall` is: a person typed it,
   // and the agent's default for an absent tag says exactly that.
   if (composed) params.composed = composed
+  if (brief) params.brief = true
   const selectedModel = held.model ?? model
   if (selectedModel !== undefined) params.model = selectedModel
   if (held.definition !== null) {
@@ -497,6 +499,8 @@ const ALLOWED = new Set([
   'mcp-call.reply',
   'mcp-move.reply',
   'host.reply',
+  'consult.reply',
+  'consult.brief',
   'ask.reply',
   'trust.reply',
   'permissions.list',
@@ -824,7 +828,7 @@ app.whenReady().then(() => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
-      const { session, slug, prompt, grounded, model, attachments, drops, pastes } = value as Record<string, unknown>
+      const { session, slug, prompt, grounded, model, attachments, drops, pastes, brief } = value as Record<string, unknown>
       if (!isSessionId(session) || typeof prompt !== 'string') {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
@@ -852,6 +856,7 @@ app.whenReady().then(() => {
         model: model as string | null | undefined,
         attachments,
         staged: { drops, pastes },
+        brief: brief === true,
       })
     },
   )

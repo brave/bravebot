@@ -13,6 +13,10 @@ export interface MentionEntry {
   /** The path as it is written in a line: each whitespace character and backslash behind a backslash (NAME-8). From the bridge. */
   written: string
   directory: boolean
+  /** CONSULT-3: a bot the line would consult, listed above the files, with `path` its name. */
+  bot?: boolean
+  /** For a bot, its model and bound, as the terminal lists them. */
+  note?: string | null
 }
 
 /** The bridge's answer to `mentions.offer` for one line and one cursor row. */

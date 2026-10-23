@@ -88,7 +88,7 @@ test('making a bot saves nothing unless the agent names the definition it wrote'
     // MEMORY-9: an edit rewrites the definition it has, and defines nothing new.
     calls.length = 0
     const edited = await storage.saveFormBot({ ...saved, purpose: 'Build sites', model: null }, async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
-    assert.deepEqual(calls, [['bot.redefine', { name: 'web-dev-2', purpose: 'Build sites' }]])
+    assert.deepEqual(calls, [['bot.redefine', { name: 'web-dev-2', purpose: 'Build sites', consult: true }]])
     assert.equal(edited.definition, 'web-dev-2')
     assert.equal(storage.bot(fresh.slug).purpose, 'Build sites')
 
@@ -102,7 +102,7 @@ test('making a bot saves nothing unless the agent names the definition it wrote'
     // The model picker is an edit too, and names the model the file is to carry.
     calls.length = 0
     const switched = await storage.saveBotModel(storage.bot(fresh.slug), 'provider/model-b', async (method, params) => { calls.push([method, params]); return { name: 'web-dev-2' } })
-    assert.deepEqual(calls, [['bot.redefine', { name: 'web-dev-2', purpose: 'Build sites', model: 'provider/model-b' }]])
+    assert.deepEqual(calls, [['bot.redefine', { name: 'web-dev-2', purpose: 'Build sites', model: 'provider/model-b', consult: true }]])
     assert.equal(switched.model, 'provider/model-b')
     await assert.rejects(storage.saveBotModel(switched, null, async () => { throw new Error('refused') }), /refused/)
     assert.equal(storage.bot(fresh.slug).model, 'provider/model-b')

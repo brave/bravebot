@@ -24,7 +24,7 @@ import { Fold } from './Fold'
 
 /** What a window may say about a bot. Everything else about one is the main process's. */
 /** A new bot needs a name and a purpose. An edit of one that is kept sends only what it changes. */
-export interface BotFormValue { slug?: string; avatar?: string; model?: string | null; name?: string; purpose?: string }
+export interface BotFormValue { slug?: string; avatar?: string; model?: string | null; consult?: boolean; name?: string; purpose?: string }
 
 interface Props {
   bots: Bot[]

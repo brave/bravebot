@@ -116,6 +116,11 @@ export type Said =
    * `text` is not.
    */
   | { kind: 'session_message'; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
+  /**
+   * A bot's reply to a line that consulted it with `@name` (CONSULT-11). `text` is null where the
+   * reply was kept from the host, and `kept` is then the sentence the terminal draws for it.
+   */
+  | { kind: 'consulted'; bot: string; definition: string; model: string; label: string; text: string | null; kept: string | null }
 
 export interface TodoRow {
   content: string
@@ -453,6 +458,8 @@ export interface TurnDone {
   consolidating?: boolean
   turn: number
   reply: string
+  /** The bot the turn's line consulted, whose reply `reply` is (CONSULT-2), or `null`. */
+  consulted?: string | null
   model: string
   steps: number
   clean: boolean
@@ -785,6 +792,23 @@ export interface HostRequest {
   hosts: string[]
 }
 
+/**
+ * A consult the host proposed (CONSULT-12). Nothing is sent unless a person says yes. The brief
+ * is the host's own words and all the bot is given, so it is drawn as text.
+ */
+export interface ConsultRequest {
+  request: number
+  bot: string
+  definition: string
+  model: string
+  rounds: number
+  budget: number | null
+  brief: string
+  label: string
+  /** Why the bot cannot be consulted on this machine, or `null` (CONSULT-10). Nothing is sent. */
+  refused: string | null
+}
+
 /** What starting a session's MCP servers came to: the ones started, and why each other was not. */
 export interface McpStarted { servers: string[]; confined: boolean; notes: string[] }
 
@@ -957,7 +981,8 @@ export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
   /** `shownDirectory` and `shownKeeping` are `directory` and `keeping` spelled as `ConfirmRequest.shownPath` is. Draw those. */
   'trust.request': { directory: string; shownDirectory: string; keeping?: string | null; shownKeeping?: string | null; confinedLines?: string | null }
-  'turn.started': { turn: number; sandbox?: SandboxMode }
+  /** `consulted` is the bot the turn consults, whose every row is drawn under its name (CONSULT-11). */
+  'turn.started': { turn: number; sandbox?: SandboxMode; consulted?: string | null }
   /** The planner has read the oldest line sent with `turn.interject`. `prompt` is the words it was given. */
   'turn.interjected': { prompt: string }
   'watch.fired': { number: number; path: string }
@@ -1001,6 +1026,13 @@ export interface EventMap {
   'mcp-call.request': McpCallRequest
   'mcp-move.request': McpMoveRequest
   'host.request': HostRequest
+  'consult.request': ConsultRequest
+  /** Sent where the next bot a line named could not be consulted (CONSULT-9). */
+  'consult.ended': { message: string }
+  /** The host has begun drafting a brief for the bot a line named (CONSULT-5). */
+  'consult.drafting': { bot: string; row: string; line: string; skipped: string[] }
+  /** The host's draft, held by the bridge until a `turn.send` with `brief` sends it; `null` where none came. */
+  'consult.brief': { bot: string; row?: string; line: string; brief: string | null; private?: boolean; send?: boolean; message: string }
   /** Sent as a session's first turn starts the MCP servers its project requests. */
   'mcp.starting': { servers: string[] }
   'mcp.started': McpStarted

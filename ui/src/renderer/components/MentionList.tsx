@@ -16,21 +16,23 @@ export function MentionList({ entries, active, onActive, onChoose }: {
 }): React.JSX.Element {
   return (
     <div className="mention-list" data-test="mention-list">
-      <div className="mention-rows" role="listbox" aria-label="Project files">
+      <div className="mention-rows" role="listbox" aria-label="Bots and project files">
         {entries.map((entry, index) => {
           const name = entry.path.replace(/\/$/, '')
-          const slash = name.lastIndexOf('/')
+          const slash = entry.bot ? -1 : name.lastIndexOf('/')
           return (
-            <div key={entry.path} role="option" aria-selected={index === active} data-test="mention-option"
+            <div key={`${entry.bot ? 'bot' : 'file'}:${entry.path}`} role="option" aria-selected={index === active}
+              data-test="mention-option" data-bot={entry.bot ? 'true' : undefined}
               className={index === active ? 'mention-option active' : 'mention-option'}
               ref={index === active ? (row) => row?.scrollIntoView({ block: 'nearest' }) : undefined}
               onMouseEnter={() => onActive(index)}
               onMouseDown={(event) => { event.preventDefault(); onChoose(entry) }}>
-              {entry.directory ? <Icon name="folder" /> : <FileGlyph name={name} />}
+              {entry.bot ? <Icon name="robot" /> : entry.directory ? <Icon name="folder" /> : <FileGlyph name={name} />}
               <span className="mention-path">
                 {slash >= 0 && <span className="mention-parent">{name.slice(0, slash + 1)}</span>}
                 <span className="mention-name">{name.slice(slash + 1)}{entry.directory ? '/' : ''}</span>
               </span>
+              {entry.bot && entry.note && <span className="mention-note">{entry.note}</span>}
             </div>
           )
         })}
