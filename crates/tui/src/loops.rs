@@ -1,6 +1,7 @@
 //! Repeating a prompt the person typed.
 //!
-//! `/loop` holds one line and sends it again on a schedule. The line is settled the moment it is
+//! `/loop` holds a line and sends it again on a schedule, and a session holds a few such loops at
+//! once, each numbered the way a watch is. The line is settled the moment it is
 //! typed and never changes afterwards: a tick is the same prompt as the first one, so nothing a
 //! turn reads, writes or says can decide what the next turn asks for. A planner may say *when* the
 //! next tick happens, within an hour, and that is the whole of what it may say.
@@ -73,8 +74,15 @@ const SHORT_UNITS: [(&str, u64); 4] = [("s", 1), ("m", 60), ("h", 3_600), ("d", 
 /// The word that introduces an interval written at the end of a sentence.
 const EVERY: &str = "every";
 
-/// The word that ends the loop that is running, rather than starting one over it.
+/// The word that ends a loop, rather than starting one over it.
 const STOP: &str = "stop";
+
+/// How many loops a session holds at once.
+///
+/// Low, because every tick of every loop is a turn with the whole conversation re-sent, and the
+/// cost of that is the one number here nobody sees growing. A sixth is refused rather than
+/// replacing one, since the person typed the other five.
+pub const MAX_LIVE: usize = 5;
 
 /// How the moment of the next tick is decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +91,8 @@ pub enum Pacing {
     Every(Duration),
     /// Nobody gave one, so each tick's turn says when the next is due.
     SelfPaced,
+    /// `/after`: one tick, once the delay is up, and then nothing.
+    Once(Duration),
 }
 
 /// What `/loop` was asked for.
@@ -112,8 +122,8 @@ pub enum Held {
 pub enum Asked {
     /// The bare word: say what is repeating, or that nothing is.
     Report,
-    /// End the loop that is running.
-    Stop,
+    /// End a loop: the one with this number, or the only one where none was named.
+    Stop(Option<usize>),
     /// Start a loop over this line.
     Start(Request),
     /// An interval with nothing to send, answered by saying what the command needs.
@@ -153,8 +163,8 @@ pub fn parse(argument: &str) -> Asked {
     // the reading happens again in [`interval`]: `stop every 5m` is somebody ending the loop that
     // runs every five minutes, and a loop sending the bare word `stop` to a model is nothing
     // anybody means by anything.
-    if is_stop(argument) {
-        return Asked::Stop;
+    if let Some(which) = stop_of(argument) {
+        return Asked::Stop(which);
     }
 
     // The front of the line first. A token that is nothing but a number and a unit letter was
@@ -175,12 +185,26 @@ pub fn parse(argument: &str) -> Asked {
     })
 }
 
-/// The reserved word, however somebody's terminal capitalised it.
+/// The reserved word, however somebody's terminal capitalised it, and the loop it names where it
+/// names one.
 ///
 /// Case-insensitive because the miss is not a message: a line that is the word and is not read as
-/// one becomes a loop sending `Stop` to a model until somebody presses Ctrl-C twice.
-fn is_stop(line: &str) -> bool {
-    line.eq_ignore_ascii_case(STOP)
+/// one becomes a loop sending `Stop` to a model until somebody presses Ctrl-C twice. The number is
+/// the whole of what follows the word and nothing else is read as one, so `stop 2 the deploy` is
+/// still a line to repeat. A number too large to be a loop's names none, and is said to.
+fn stop_of(line: &str) -> Option<Option<usize>> {
+    if line.eq_ignore_ascii_case(STOP) {
+        return Some(None);
+    }
+    let (word, number) = line.split_once(char::is_whitespace)?;
+    let number = number.trim();
+    if !word.eq_ignore_ascii_case(STOP)
+        || number.is_empty()
+        || !number.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(Some(number.parse().unwrap_or(usize::MAX)))
 }
 
 /// A request from an interval and what is left of the line, where anything is left.
@@ -188,17 +212,54 @@ fn interval(asked: Duration, prompt: &str) -> Asked {
     if prompt.is_empty() {
         return Asked::Unreadable;
     }
-    if is_stop(prompt) {
-        return Asked::Stop;
+    if let Some(which) = stop_of(prompt) {
+        return Asked::Stop(which);
     }
+    let (held, adjusted) = bound(asked);
+    Asked::Start(Request {
+        pacing: Pacing::Every(held),
+        prompt: prompt.to_string(),
+        adjusted,
+    })
+}
+
+/// A wait the person gave, held to the bounds, and which way it moved where it did.
+fn bound(asked: Duration) -> (Duration, Option<Held>) {
     let held = asked.clamp(FLOOR, MAX_AGE);
     let adjusted = match held {
         _ if held == asked => None,
         _ if held == FLOOR => Some(Held::Raised(held)),
         _ => Some(Held::Capped(held)),
     };
-    Asked::Start(Request {
-        pacing: Pacing::Every(held),
+    (held, adjusted)
+}
+
+/// What `/after` was asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Delayed {
+    /// Send this line once, when the delay is up.
+    Start(Request),
+    /// No delay, or a delay with nothing after it, answered by saying what the command needs.
+    Unreadable,
+}
+
+/// Read the argument to `/after`: a delay at the front of the line, and the line to send once.
+///
+/// The delay is read the way [`leading_interval`] reads an interval, and only there: a line that
+/// does not begin with one is not a request, since a trailing `every` clause means repetition and
+/// this does not repeat. The rest of the line is sent unchanged, so `/after 5m /status` sends the
+/// seven characters `/status` and runs nothing.
+pub fn parse_after(argument: &str) -> Delayed {
+    let argument = argument.trim();
+    let Some((asked, prompt)) = leading_interval(argument) else {
+        return Delayed::Unreadable;
+    };
+    if prompt.is_empty() {
+        return Delayed::Unreadable;
+    }
+    let (held, adjusted) = bound(asked);
+    Delayed::Start(Request {
+        pacing: Pacing::Once(held),
         prompt: prompt.to_string(),
         adjusted,
     })
@@ -213,6 +274,15 @@ pub(crate) fn request(argument: &str) -> Request {
     parse(argument)
         .started()
         .unwrap_or_else(|| panic!("{argument:?} started no loop"))
+}
+
+/// The request in an argument that arms `/after`, for the tests of what a held line then does.
+#[cfg(test)]
+pub(crate) fn request_after(argument: &str) -> Request {
+    match parse_after(argument) {
+        Delayed::Start(request) => request,
+        Delayed::Unreadable => panic!("{argument:?} armed nothing"),
+    }
 }
 
 /// An interval written as the first word, and the rest of the line.
@@ -291,6 +361,9 @@ fn multiply(count: &str, worth: u64) -> Option<Duration> {
 /// A loop that is running.
 #[derive(Debug, Clone)]
 pub struct Running {
+    /// Which loop this is, as `/loop` lists it and `/loop stop` names it. Given when it joins a
+    /// session's loops, and never reused within that session.
+    number: usize,
     /// The line every tick sends. Settled when it was typed and never written to again.
     prompt: String,
     /// The pictures pasted into the line, which the first tick takes and no later one has.
@@ -323,8 +396,11 @@ pub struct Running {
 
 impl Running {
     /// Start a loop, with nothing due: the caller dispatches the first tick straight away.
+    ///
+    /// Not for [`Pacing::Once`], whose one tick is the delay away: see [`Running::after`].
     pub fn begin(request: Request) -> Self {
         Self {
+            number: 0,
             prompt: request.prompt,
             pasted: Vec::new(),
             attached: Vec::new(),
@@ -337,6 +413,23 @@ impl Running {
             ticks: 0,
             quiet: 0,
         }
+    }
+
+    /// Start a loop that sends its line once, with that one tick due when the delay is up.
+    ///
+    /// Nothing is sent now, so unlike [`Running::begin`] the caller dispatches nothing.
+    pub fn after(request: Request, now: Instant) -> Self {
+        let mut running = Self::begin(request);
+        if let Pacing::Once(delay) = running.pacing {
+            running.began = now;
+            running.due = now.checked_add(delay);
+        }
+        running
+    }
+
+    /// Whether this sends its line once and goes, rather than repeating it.
+    pub fn once(&self) -> bool {
+        matches!(self.pacing, Pacing::Once(_))
     }
 
     /// Carry what the line named, for the first tick and no other.
@@ -372,6 +465,7 @@ impl Running {
     /// to say one: what it gives is the wait until the next look, which it is asked for again then.
     pub fn armed(prompt: String, wakeup: Wakeup, now: Instant) -> Self {
         Self {
+            number: 0,
             prompt,
             // Nothing pasted, nothing dropped, and nothing to settle: what a turn asks to look at
             // again is a line out of the conversation, and no box was open for anybody to paste into
@@ -387,6 +481,10 @@ impl Running {
             ticks: 0,
             quiet: usize::from(wakeup.quiet),
         }
+    }
+
+    pub fn number(&self) -> usize {
+        self.number
     }
 
     pub fn prompt(&self) -> &str {
@@ -411,8 +509,11 @@ impl Running {
     }
 
     /// What the turn running now needs to know about being a tick, where it is one.
+    ///
+    /// Nothing for a line sent once: that turn is the person's prompt arriving later, and telling it
+    /// it is inside a loop would send it looking for a way to say when to run again.
     pub fn tick(&self) -> Option<Tick> {
-        self.running.then_some(Tick {
+        (self.running && !self.once()).then_some(Tick {
             number: self.ticks,
             self_paced: self.self_paced(),
             unpaceable: false,
@@ -437,6 +538,7 @@ impl Running {
         match self.pacing {
             Pacing::Every(every) => t!(status_loop_every, every = spell(every)),
             Pacing::SelfPaced => t!(status_loop_self_paced).to_string(),
+            Pacing::Once(_) => t!(status_loop_once).to_string(),
         }
     }
 
@@ -454,8 +556,11 @@ impl Running {
     }
 
     /// Whether the loop has run longer than a loop may run.
+    ///
+    /// Never a line sent once: its delay is already held to [`MAX_AGE`], and it would otherwise end
+    /// at the very moment it was due.
     pub fn aged_out(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.began) >= MAX_AGE
+        !self.once() && now.saturating_duration_since(self.began) >= MAX_AGE
     }
 
     /// Whether a tick should be dispatched now.
@@ -511,9 +616,14 @@ impl Running {
         }
         self.running = false;
 
-        if let Pacing::Every(every) = self.pacing {
-            self.due = now.checked_add(every);
-            return true;
+        match self.pacing {
+            Pacing::Every(every) => {
+                self.due = now.checked_add(every);
+                return true;
+            }
+            // Sent, so removed.
+            Pacing::Once(_) => return false,
+            Pacing::SelfPaced => {}
         }
 
         match wakeup {
@@ -534,6 +644,137 @@ impl Running {
             }
             None => false,
         }
+    }
+}
+
+/// The loops a session holds, oldest first.
+///
+/// A loop is numbered when it joins and keeps the number until it ends, and a number is not handed
+/// out twice: `/loop stop 2` typed after loop 2 ended and another began would otherwise end a loop
+/// the person never meant.
+#[derive(Debug, Clone, Default)]
+pub struct Loops {
+    live: Vec<Running>,
+    /// The number the next loop to join is given, less one.
+    issued: usize,
+}
+
+impl Loops {
+    pub fn is_empty(&self) -> bool {
+        self.live.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.live.len()
+    }
+
+    /// Whether another loop would be refused.
+    pub fn is_full(&self) -> bool {
+        self.live.len() >= MAX_LIVE
+    }
+
+    pub fn as_slice(&self) -> &[Running] {
+        &self.live
+    }
+
+    /// Every loop, oldest first.
+    pub fn iter(&self) -> std::slice::Iter<'_, Running> {
+        self.live.iter()
+    }
+
+    /// The oldest loop, which is the only one in a session that holds one.
+    pub fn oldest(&self) -> Option<&Running> {
+        self.live.first()
+    }
+
+    /// The number the next loop will be given.
+    pub fn next_number(&self) -> usize {
+        self.issued + 1
+    }
+
+    /// Add a loop and say which number it is. The caller has checked [`Loops::is_full`].
+    pub fn start(&mut self, mut running: Running) -> usize {
+        self.issued += 1;
+        running.number = self.issued;
+        self.live.push(running);
+        self.issued
+    }
+
+    pub fn get_mut(&mut self, number: usize) -> Option<&mut Running> {
+        self.live
+            .iter_mut()
+            .find(|running| running.number == number)
+    }
+
+    /// The answer is what lets `/loop stop <n>` tell a number that never ran from one already ended.
+    pub fn stop(&mut self, number: usize) -> bool {
+        let before = self.live.len();
+        self.live.retain(|running| running.number != number);
+        self.live.len() != before
+    }
+
+    /// The count is what the stop notice reports to the person.
+    pub fn stop_all(&mut self) -> usize {
+        let count = self.live.len();
+        self.live.clear();
+        count
+    }
+
+    /// The loop whose tick is in flight. At most one, because ticks go one at a time.
+    pub fn in_flight(&self) -> Option<&Running> {
+        self.live.iter().find(|running| running.ticking())
+    }
+
+    pub fn in_flight_mut(&mut self) -> Option<&mut Running> {
+        self.live.iter_mut().find(|running| running.ticking())
+    }
+
+    /// The loop whose tick is due soonest, and so the one that goes next.
+    ///
+    /// Ties go to the older loop, which is the one `/loop` lists first. A loop with a tick in
+    /// flight is never due again, so it is not in the running.
+    pub fn next_due(&self, now: Instant) -> Option<usize> {
+        self.live
+            .iter()
+            .filter(|running| running.due(now))
+            .min_by_key(|running| (running.due, running.number))
+            .map(|running| running.number)
+    }
+
+    /// The loop that goes next whether or not its moment has come: the earliest one armed, else a
+    /// loop that has not ticked at all, and one with a tick in flight only when nothing else is.
+    pub fn next_to_go(&self) -> Option<usize> {
+        self.live
+            .iter()
+            .min_by_key(|running| {
+                (
+                    running.ticking(),
+                    running.due.is_none(),
+                    running.due,
+                    running.number,
+                )
+            })
+            .map(|running| running.number)
+    }
+
+    /// When the soonest armed tick is due, which is what the row under the box counts down to.
+    pub fn soonest(&self, now: Instant) -> Option<Duration> {
+        self.live
+            .iter()
+            .filter_map(|running| running.until(now))
+            .min()
+    }
+
+    /// End every loop that has outlived a loop, and give back the numbers that went.
+    pub fn age_out(&mut self, now: Instant) -> Vec<usize> {
+        let gone: Vec<usize> = self
+            .live
+            .iter()
+            .filter(|running| running.aged_out(now))
+            .map(|running| running.number)
+            .collect();
+        self.live.retain(|running| !running.aged_out(now));
+        gone
     }
 }
 
@@ -567,7 +808,7 @@ mod tests {
     fn every(request: &Request) -> Duration {
         match request.pacing {
             Pacing::Every(duration) => duration,
-            Pacing::SelfPaced => panic!("expected an interval"),
+            Pacing::SelfPaced | Pacing::Once(_) => panic!("expected an interval"),
         }
     }
 
@@ -707,7 +948,7 @@ mod tests {
     #[test]
     fn stop_on_its_own_ends_the_loop() {
         for line in ["stop", "  stop  "] {
-            assert_eq!(parse(line), Asked::Stop, "{line}");
+            assert_eq!(parse(line), Asked::Stop(None), "{line}");
         }
     }
 
@@ -717,7 +958,7 @@ mod tests {
     #[test]
     fn the_word_ends_the_loop_whatever_its_case() {
         for line in ["Stop", "STOP", "  StOp  "] {
-            assert_eq!(parse(line), Asked::Stop, "{line}");
+            assert_eq!(parse(line), Asked::Stop(None), "{line}");
         }
     }
 
@@ -727,8 +968,97 @@ mod tests {
     #[test]
     fn an_interval_beside_the_word_still_ends_the_loop() {
         for line in ["stop every 5m", "5m stop", "  STOP every 1h  "] {
-            assert_eq!(parse(line), Asked::Stop, "{line}");
+            assert_eq!(parse(line), Asked::Stop(None), "{line}");
         }
+    }
+
+    /// LOOP-15: the number is the whole of what follows the word, with or without an interval.
+    #[test]
+    fn stop_and_a_number_ends_that_loop() {
+        for (line, number) in [
+            ("stop 2", 2),
+            ("STOP   13 ", 13),
+            ("stop 2 every 5m", 2),
+            ("5m stop 4", 4),
+        ] {
+            assert_eq!(parse(line), Asked::Stop(Some(number)), "{line}");
+        }
+        assert_eq!(
+            parse("stop 99999999999999999999999"),
+            Asked::Stop(Some(usize::MAX)),
+            "a number too large for a loop names none, and is not a line to repeat"
+        );
+    }
+
+    /// A number is a number and nothing else: anything after it makes the line a sentence.
+    #[test]
+    fn a_number_with_words_around_it_is_still_a_line_to_repeat() {
+        for line in [
+            "stop 2 the deploy",
+            "stop two",
+            "stop -1",
+            "stop 2.5",
+            "stop #2",
+        ] {
+            assert!(
+                matches!(parse(line), Asked::Start(_)),
+                "{line} did not start a loop"
+            );
+        }
+    }
+
+    /// LOOP-17: the soonest due tick goes first, ties go to the older loop, and a loop with a tick
+    /// in flight is not in the running.
+    #[test]
+    fn the_soonest_due_loop_goes_next_and_a_tie_goes_to_the_older() {
+        let now = Instant::now();
+        let ago = |secs| now - Duration::from_secs(secs);
+        let mut loops = Loops::default();
+        loops.start(Running::armed(
+            "a".into(),
+            Wakeup::asked(60, false),
+            ago(100),
+        ));
+        loops.start(Running::armed(
+            "b".into(),
+            Wakeup::asked(60, false),
+            ago(300),
+        ));
+        loops.start(Running::armed(
+            "c".into(),
+            Wakeup::asked(60, false),
+            ago(300),
+        ));
+        assert_eq!(
+            loops.next_due(now),
+            Some(2),
+            "the earliest due, older on a tie"
+        );
+
+        let mut running = loops.get_mut(2).expect("loop 2");
+        running.dispatching();
+        assert_eq!(
+            loops.next_due(now),
+            Some(3),
+            "a tick in flight is not due again"
+        );
+        running = loops.get_mut(3).expect("loop 3");
+        running.dispatching();
+        assert_eq!(loops.next_due(now), Some(1));
+    }
+
+    /// LOOP-15: a number is never reused, because a stale `/loop stop N` typed after loop N ended
+    /// would otherwise end a different loop.
+    #[test]
+    fn a_number_is_never_issued_twice() {
+        let mut loops = Loops::default();
+        let one = loops.start(Running::begin(request("5m a")));
+        let two = loops.start(Running::begin(request("5m b")));
+        assert!(loops.stop(two));
+        assert!(!loops.stop(two), "a loop ended twice");
+        let three = loops.start(Running::begin(request("5m c")));
+        assert_eq!((one, two, three), (1, 2, 3));
+        assert_eq!(loops.next_number(), 4);
     }
 
     /// The one place in the command where a reserved word could eat a line somebody meant to have
@@ -843,7 +1173,7 @@ mod tests {
             marker: "[Image #1]".to_string(),
             name: "shot.png".to_string(),
             shown: "/home/me/shot.png".to_string(),
-            kind: crate::dropped::Kind::Attachment("image/png"),
+            kind: bravebot_filetype::by_name::Kind::Attachment("image/png"),
         };
         let mut running = Running::begin(request("5m look at [Image #1]")).carrying(
             Vec::new(),
@@ -973,6 +1303,66 @@ mod tests {
         running.dispatching();
         running.ended(Some(Wakeup::asked(60, false)), now);
         assert_eq!(running.quiet(), 0);
+    }
+
+    /// The delay is the first word, as an interval is. A wrong reading takes an `every` clause at the
+    /// end for a delay, which would send a sentence with its last words missing; or reads nothing at
+    /// all and sends the whole line, delay and all.
+    #[test]
+    fn after_reads_a_delay_off_the_front_and_sends_the_rest_unchanged() {
+        let Delayed::Start(request) = parse_after("5m check the deploy every 20m") else {
+            panic!("a delay at the front was not read");
+        };
+        assert_eq!(request.pacing, Pacing::Once(Duration::from_secs(300)));
+        assert_eq!(request.prompt, "check the deploy every 20m");
+        assert_eq!(request.adjusted, None);
+    }
+
+    /// Without a delay in front there is nothing to wait for, and a trailing `every` is repetition,
+    /// which this does not do. A wrong reading sends the line at once or repeats it.
+    #[test]
+    fn after_without_a_leading_delay_is_not_a_request() {
+        for argument in [
+            "",
+            "5m",
+            "check the deploy every 20m",
+            "check the deploy",
+            "minutes of silence",
+        ] {
+            assert_eq!(parse_after(argument), Delayed::Unreadable, "{argument:?}");
+        }
+    }
+
+    /// The delay is held to the bounds a person's interval is, and says which way it moved. Without
+    /// the cap a delay of more than a loop's life would be a schedule that outlives the bound.
+    #[test]
+    fn an_after_delay_outside_the_bounds_is_held_and_reported() {
+        let Delayed::Start(fast) = parse_after("1s check") else {
+            panic!("unread");
+        };
+        assert_eq!(fast.pacing, Pacing::Once(FLOOR));
+        assert_eq!(fast.adjusted, Some(Held::Raised(FLOOR)));
+        let Delayed::Start(slow) = parse_after("30d check") else {
+            panic!("unread");
+        };
+        assert_eq!(slow.pacing, Pacing::Once(MAX_AGE));
+        assert_eq!(slow.adjusted, Some(Held::Capped(MAX_AGE)));
+    }
+
+    /// Not due before the delay, due at it, gone once the turn ends, and not a tick the planner is
+    /// told about. A wrong implementation arms another tick, is due at once, or tells the turn it is
+    /// inside a loop.
+    #[test]
+    fn a_line_sent_once_is_due_at_its_delay_and_is_gone_after_its_turn() {
+        let now = Instant::now();
+        let mut running = Running::after(request_after("5m check"), now);
+        assert!(!running.due(now + Duration::from_secs(299)));
+        assert!(running.due(now + Duration::from_secs(300)));
+        assert!(!running.aged_out(now + MAX_AGE + Duration::from_secs(1)));
+
+        running.dispatching();
+        assert!(running.tick().is_none(), "the turn was told it is a tick");
+        assert!(!running.ended(None, now + Duration::from_secs(301)));
     }
 
     /// A tick already running is not due again. Without this a turn that outlasts its interval

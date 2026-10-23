@@ -12,6 +12,7 @@
 
 use crate::base::{Prelude, under};
 use crate::policy::SandboxPolicy;
+use crate::programs::program_name;
 use std::path::Path;
 
 /// A toolchain that brings a list of its own.
@@ -35,7 +36,8 @@ impl Toolchain {
     /// scripts, and `python3` at a versioned `python3.12`. A program no list knows, `make` or
     /// `just` among them, brings no list.
     pub fn of(resolved: &Path) -> Option<Self> {
-        let name = resolved.file_name()?.to_str()?;
+        let name = program_name(resolved)?;
+        let name = name.as_str();
         match name {
             "cargo" | "rustup" => Some(Self::Cargo),
             "node" | "npm" | "npx" | "npm-cli.js" | "npx-cli.js" => Some(Self::Node),
@@ -54,9 +56,10 @@ impl Toolchain {
     /// run a script and fetch nothing, where `npm`, `npx` and `pip` do. A program that runs
     /// another, `python3 -m pip`, is the program it resolved to and brings none.
     pub fn fetches(self, resolved: &Path) -> bool {
-        let Some(name) = resolved.file_name().and_then(|name| name.to_str()) else {
+        let Some(name) = program_name(resolved) else {
             return false;
         };
+        let name = name.as_str();
         match self {
             Self::Cargo | Self::Go | Self::Maven | Self::Gradle => true,
             Self::Node => name != "node",
@@ -304,6 +307,33 @@ mod tests {
                 Some(toolchain),
                 "{resolved}"
             );
+        }
+    }
+
+    /// On Windows the file a program resolved to keeps its extension, so each list is keyed on the
+    /// name without it. The regression it rejects: comparing the whole file name, which gives a
+    /// Windows `cargo build` no list and, under a closed network, no egress.
+    #[test]
+    fn a_list_is_keyed_on_the_file_without_a_windows_executable_extension() {
+        for (resolved, toolchain, fetches) in [
+            ("C:/Users/p/.cargo/bin/cargo.exe", Toolchain::Cargo, true),
+            ("C:/Program Files/nodejs/node.exe", Toolchain::Node, false),
+            ("C:/Program Files/nodejs/NPX.EXE", Toolchain::Node, true),
+            ("C:/Python312/python.exe", Toolchain::Python, false),
+            ("C:/Python312/Scripts/pip3.12.exe", Toolchain::Python, true),
+            ("C:/Go/bin/go.exe", Toolchain::Go, true),
+            ("C:/gradle/bin/gradle.com", Toolchain::Gradle, true),
+        ] {
+            let path = Path::new(resolved);
+            assert_eq!(Toolchain::of(path), Some(toolchain), "{resolved}");
+            assert_eq!(toolchain.fetches(path), fetches, "{resolved}");
+        }
+        for resolved in [
+            "C:/bin/cargo-deny.exe",
+            "C:/bin/pnpm.exe",
+            "C:/bin/make.exe",
+        ] {
+            assert_eq!(Toolchain::of(Path::new(resolved)), None, "{resolved}");
         }
     }
 

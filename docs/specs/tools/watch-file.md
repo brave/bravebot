@@ -4,6 +4,7 @@ title: watch_file
 status: normative
 governs:
   - crates/agent/src/tools.rs
+  - crates/agent/src/tools/offered.rs
   - crates/agent/src/watch.rs
 documented-by: docs/website/docs/using/watches.md
 ---
@@ -98,6 +99,8 @@ nobody in front of it has no such reader, and a delegate ends when it answers, s
 would outlive everything that could act on one.
 
 `verified-by: bravebot_agent::tools::a_surface_that_keeps_no_watches_is_not_offered_the_tool`
+`verified-by: bravebot_agent::tools::a_call_to_watch_a_file_from_a_delegate_or_a_surface_with_no_watches_is_answered_as_an_unknown_name`
+`verified-by: bravebot_agent::turn::a_run_that_keeps_no_watches_answers_a_call_to_arm_one_as_an_unknown_name`
 
 <a id="ARM-6"></a>
 ### ARM-6: where this tool is offered, the read's description sends a question about one file to it
@@ -118,3 +121,4 @@ leave those cases with nothing.
 
 `verified-by: bravebot_agent::tools::a_read_is_sent_to_the_watch_where_one_can_be_armed`
 `verified-by: bravebot_agent::tools::a_read_is_sent_to_the_schedule_alone_where_no_watch_can_be_armed`
+`verified-by: bravebot_agent::watch_withheld_by_tools::a_read_does_not_name_a_watch_the_command_line_took_away`

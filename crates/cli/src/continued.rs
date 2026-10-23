@@ -7,7 +7,9 @@ use bravebot_agent::turn::Outcome;
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use bravebot_session::rewind::RewindStack;
-use bravebot_session::sessions::{Continuation, Front, Handle, Record, Standing, TurnSnapshot};
+use bravebot_session::sessions::{
+    Continuation, Front, Handle, Record, Split, Standing, TurnSnapshot,
+};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -69,6 +71,7 @@ pub fn rewind_points(
             conversation: conversation.snapshot(),
             turns: record.turns,
             tokens: record.tokens,
+            split: record.split,
             spend: record.spend.clone(),
             timing: record.timing.clone(),
             cached: None,
@@ -104,6 +107,12 @@ pub struct Finished<'a> {
     /// The definition this run was addressed to, which is what the record is to say the session
     /// works under from here (CLI-17).
     pub agent: Option<&'a str>,
+    /// When the run began, in seconds since the epoch: the session's start, since the record is
+    /// only written once the turn is over.
+    pub started: u64,
+    /// What the turn's gates decided, which goes into the session's trail beside the record, as a
+    /// terminal or desktop session's does (SESSION-1, TRACE-5).
+    pub events: &'a [bravebot_session::audit::Stamped],
 }
 
 /// Write the turn down, as a new session or as one more turn of the one it continued.
@@ -123,6 +132,7 @@ pub fn keep(
     let ends = turn.conversation.recounted().len();
     match previous {
         Some((record, rewind)) => {
+            let turn_number = record.turns + 1;
             let mut handle =
                 Handle::resuming(root, &record, Front::Terminal, bravebot_stamp::BUILD);
             handle.set_agent(turn.agent.map(str::to_string));
@@ -132,18 +142,24 @@ pub fn keep(
                     conversation: &snapshot,
                     prompt: turn.prompt,
                     tokens: turn.outcome.tokens,
+                    split: Split::of(turn.outcome.tokens, turn.outcome.output_tokens),
                     model: &turn.outcome.model,
                     trust: turn.trust,
                     begins: turn.begins,
                     ends,
                     prompt_at: turn.prompt_at,
                     rewind: rewind.points(),
+                    timing: turn.outcome.timing,
                 },
             );
+            if written {
+                handle.append_audit(turn_number, turn.events);
+            }
             written.then(|| handle.id().to_string())
         }
         None => {
-            let mut handle = Handle::begin(root, Front::Terminal, bravebot_stamp::BUILD);
+            let mut handle =
+                Handle::begin(root, Front::Terminal, bravebot_stamp::BUILD).began_at(turn.started);
             handle.set_agent(turn.agent.map(str::to_string));
             let history = [bravebot_session::sessions::StoredTurn::completed(
                 1,
@@ -159,8 +175,9 @@ pub fn keep(
                     history: Some(&history),
                     turns: 1,
                     tokens: turn.outcome.tokens,
+                    split: Split::of(turn.outcome.tokens, turn.outcome.output_tokens),
                     spend: &BTreeMap::from([(1, turn.outcome.tokens)]),
-                    timing: &BTreeMap::new(),
+                    timing: &BTreeMap::from([(1, turn.outcome.timing)]),
                     model: Some(&turn.outcome.model),
                     todos: &BTreeMap::new(),
                     asides: &[],
@@ -172,7 +189,11 @@ pub fn keep(
                     checkouts: &[],
                 },
             );
-            handle.resumable().map(str::to_string)
+            let id = handle.resumable().map(str::to_string);
+            if id.is_some() {
+                handle.append_audit(1, turn.events);
+            }
+            id
         }
     }
 }

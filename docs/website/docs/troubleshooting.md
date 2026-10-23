@@ -47,7 +47,10 @@ A failed turn is announced as `turn N failed` with a reason, and a turn you stop
 scroll or resize.
 
 The reason is drawn from a fixed set rather than from whatever the service said, so no error body,
-header, URL or credential is ever quoted back at you. Where the status is known it is appended as
+header, URL or credential is ever quoted back at you. The one figure that comes from a service is
+how long a rate limit asked you to wait: bravebot reads it as a number, waits it out itself when it
+is two minutes or less, and when it is longer says `the service asked for fewer requests, and for a wait of
+about N minutes` so you know when to ask again. Where the status is known it is appended as
 `(HTTP 429)`, and where requests were sent it says `after 3 attempts`, counting retries and
 capability probes.
 
@@ -67,6 +70,12 @@ capability probes.
 
 For the network cases, `bravebot doctor` has a `network` section naming the trust roots in force, the
 proxy, and the hosts it is not used for.
+
+**What the model is told about a failed turn.** The requests after it carry a short note in
+bravebot's own words, with the failure's category and, where it is known, the number of requests
+sent, so asking `what happened?` gets an answer about the failure and not a promise to carry on.
+The note holds no text the service sent, is not drawn in the transcript, and is kept when you
+resume the session.
 
 **A turn failed but I was still charged for it.** That is deliberate. A later error or a stop does
 not undo the cost of requests that already finished, so what completed work spent stays counted in
@@ -163,7 +172,8 @@ or lower `BRAVEBOT_CONTEXT_BUDGET`, if the window your model advertises is large
 **It stopped calling tools and just answered.** A bounded turn reached its round limit: the planner
 is told it has no tools left, so it answers with what it has. Ask again with a narrower task. An
 interactive turn carries no such limit, so this is a one-shot or manifest run, where the default is
-200 rounds.
+200 rounds. A one-shot run given `--max-rounds` or `--max-tokens` does not answer when it reaches
+one: it stops and exits with status 8.
 
 ## Sessions
 
@@ -185,7 +195,8 @@ being read against code that has moved since.
 **`no state directory: … names nothing`**. Nothing resolved a directory to keep things in, so this
 run has no settings of your own, no session to resume, no prompt history and no skills. `doctor`
 names the variables it looked at and what is not kept without one. On Windows `USERPROFILE` answers
-where `HOME` is unset, so a stock install resolves one.
+where `HOME` is unset, so a stock install resolves one. `BRAVEBOT_HOME` answers first when it holds an
+absolute path, and is passed over when it holds anything else.
 
 **A session is not where I expected it.** `doctor` prints the state directory it resolved and the
 variable it came from, which is the quickest way to settle where anything is being written.

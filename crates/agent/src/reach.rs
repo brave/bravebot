@@ -212,6 +212,13 @@ impl Grant {
     ///
     /// A step with an assignment in front of it is covered by none, as it carries no scope: every
     /// program a scope names reads a variable that moves the directory or names a program to run.
+    ///
+    /// A credential scope for a program the scope table gives that scope to covers only a step
+    /// whose whole argument vector the table gives it to as well ([`Scope::of`]). The key is the
+    /// program and the operation word, and the arguments after it can name a program to run
+    /// (`git push --receive-pack=<file>`) or another configuration file (`kubectl --kubeconfig`),
+    /// which a scope the table would refuse is not lent to. A scope for a program the table does
+    /// not name (`/reach aws -- make check`) is keyed on the shape alone.
     pub fn covers(&self, step: &Step) -> bool {
         let Step {
             program: _,
@@ -226,6 +233,14 @@ impl Grant {
             && match &self.operation {
                 Some(operation) => operation_of(args).as_ref() == Some(operation),
                 None => args.is_empty(),
+            }
+            && match &self.reached {
+                Reached::Scope(scope)
+                    if Self::is_global(&self.binary, self.operation.as_deref(), &self.reached) =>
+                {
+                    Scope::of(resolved, args, &[]) == Some(*scope)
+                }
+                _ => true,
             }
     }
 
@@ -248,7 +263,7 @@ impl Grant {
     /// at `~/.ssh` is refused here whatever it was when it was allowed.
     pub fn directory(&self, home: &Path) -> Option<PathBuf> {
         match &self.reached {
-            Reached::Directory(path) => judged_directory(path, home),
+            Reached::Directory(path) => judged_directory(path, home, self.write),
             Reached::Scope(_) => None,
         }
     }
@@ -909,7 +924,7 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
                 Some(rest) => profile.join(rest),
                 None => PathBuf::from(entry),
             };
-            match judged_directory(&named, profile) {
+            match judged_directory(&named, profile, write) {
                 Some(path) => Reached::Directory(path),
                 None => return t!(reach_refused_entry, entry = entry).to_string(),
             }
@@ -1177,6 +1192,51 @@ mod tests {
         assert!(!bare.covers(&step("make", "/usr/bin/make", &["check"])));
     }
 
+    /// A scope for a program the table names covers a step only where the table gives the whole
+    /// argv that scope. The regression it rejects: covering on the program and operation word
+    /// alone, so an argv that names a program to run, or another configuration file, takes the
+    /// scope a fresh stage would be refused. A scope for a program the table does not name stays
+    /// keyed on the shape.
+    #[test]
+    fn a_grant_for_a_program_the_table_names_covers_only_an_argv_the_table_gives_the_scope() {
+        let push = scope_grant("/usr/bin/git", Some("push"), Lifetime::Always);
+        assert!(push.covers(&step("git", "/usr/bin/git", &["push", "origin", "main"])));
+        assert!(!push.covers(&step(
+            "git",
+            "/usr/bin/git",
+            &["push", "--receive-pack=hook", "origin"]
+        )));
+        assert!(!push.covers(&step("git", "/usr/bin/git", &["push", "origin", "ext::sh"])));
+
+        let kubectl = scope_grant("/usr/bin/kubectl", Some("get"), Lifetime::Always);
+        assert!(kubectl.covers(&step("kubectl", "/usr/bin/kubectl", &["get", "pods"])));
+        assert!(!kubectl.covers(&step(
+            "kubectl",
+            "/usr/bin/kubectl",
+            &["get", "pods", "--kubeconfig=k"]
+        )));
+
+        let gh = scope_grant("/usr/bin/gh", Some("repo"), Lifetime::Always);
+        assert!(gh.covers(&step("gh", "/usr/bin/gh", &["repo", "view", "o/r"])));
+        assert!(!gh.covers(&step(
+            "gh",
+            "/usr/bin/gh",
+            &["repo", "clone", "o/r", "--", "--upload-pack=hook"]
+        )));
+
+        let docker = scope_grant("/usr/bin/docker", Some("ps"), Lifetime::Always);
+        assert!(docker.covers(&step("docker", "/usr/bin/docker", &["ps", "-a"])));
+        assert!(!docker.covers(&step("docker", "/usr/bin/docker", &["ps", "--config=dir"])));
+
+        let make = bound_grant(
+            "/usr/bin/make",
+            Reached::Scope(Scope::named("remote").expect("a scope")),
+            Lifetime::Always,
+            &fresh("covers-table"),
+        );
+        assert!(make.covers(&step("make", "/usr/bin/make", &[])));
+    }
+
     /// A step with an assignment in front of it is covered by no grant. The regression it rejects
     /// is a variable such as `GIT_SSH_COMMAND` naming a program to run with the reach a person
     /// gave the command without it.
@@ -1351,6 +1411,7 @@ mod tests {
     #[test]
     fn a_directory_that_holds_a_key_or_does_not_exist_is_refused() {
         let place = Place::new("refused-directory");
+        std::fs::create_dir_all(place.profile.join(".bravebot/logs")).expect("logs");
         let above = place
             .profile
             .parent()
@@ -1363,11 +1424,7 @@ mod tests {
             place.profile.join(".ssh").display().to_string(),
             "~/.ssh".to_string(),
             place.profile.join(".bravebot").display().to_string(),
-            place
-                .profile
-                .join(".bravebot/sessions")
-                .display()
-                .to_string(),
+            place.profile.join(".bravebot/logs").display().to_string(),
             "~/.bravebot".to_string(),
             place.profile.join("missing").display().to_string(),
             "relative/dir".to_string(),
@@ -1383,6 +1440,38 @@ mod tests {
         }
         assert!(place.held("s").is_empty());
         assert!(!Store::new(&place.home).path().exists());
+    }
+
+    /// The session records are the one part of `~/.bravebot` a person may open to a program, and
+    /// only for reading. The regression it rejects: the records refused for a read, which sends
+    /// back every script that reads them for a request, or allowed for a write, which lets a
+    /// program rewrite a transcript a later session resumes from.
+    #[test]
+    fn the_session_records_may_be_reached_for_reading_and_not_for_writing() {
+        let place = Place::new("reach-session-records");
+        let sessions = place.profile.join(".bravebot/sessions");
+        for entry in [
+            sessions.display().to_string(),
+            "~/.bravebot/sessions".to_string(),
+        ] {
+            let refused = t!(reach_refused_entry, entry = entry.as_str()).to_string();
+            assert_ne!(
+                place.say("s", &format!("{entry} -- ls")),
+                refused,
+                "{entry}"
+            );
+            assert_eq!(
+                place.say("s", &format!("{entry} write -- ls")),
+                refused,
+                "{entry}"
+            );
+        }
+        let held = place.held("s");
+        assert!(!held.is_empty());
+        for grant in &held {
+            assert!(!grant.write);
+            assert_eq!(grant.directory(&place.profile), Some(sessions.clone()));
+        }
     }
 
     /// A directory that was fine when it was allowed is judged again when it is used. The

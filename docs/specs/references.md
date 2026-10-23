@@ -7,10 +7,13 @@ governs:
   - crates/ui-bridge/src/mentions.rs
   - crates/config/src/settings.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/reach.rs
   - crates/agent/src/preamble.rs
   - crates/agent/src/skills.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
 documented-by: none (proposed with a first slice; the site page follows when the repository half is built)
 ---
@@ -41,19 +44,21 @@ apply. A later layer's block replaces an earlier one's.
 silently does nothing is the one a person spends an afternoon looking for.
 
 `verified-by: bravebot_config::settings::the_references_block_reads_each_entry_and_names_the_ones_it_cannot_use`
+`verified-by: bravebot_config::settings::a_later_layers_references_block_replaces_an_earlier_ones`
 
 <a id="REFER-2"></a>
 ### REFER-2: only the person's own settings declare a reference
 
 `references` is read from `~/.bravebot/settings.json` and from a file `--settings` names that sits
-outside the workspace. A checkout's `.bravebot/settings.json` and `settings.local.json` are not
-read for it, and each file that wrote the block is reported by `doctor` and by the desktop
+outside the workspace. A checkout's `.bravebot/settings.json` and `settings.local.json`, and a
+`--settings` file that resolves inside the workspace, are not read for it, and each file that wrote the block is reported by `doctor` and by the desktop
 bridge's list of ignored keys.
 
 **Why.** An entry makes a directory reachable and puts its description in front of the planner. A
 checkout that could write either would choose both for whoever opened it.
 
 `verified-by: bravebot_config::settings::a_project_layer_cannot_declare_references`
+`verified-by: bravebot_config::settings::a_named_file_inside_the_workspace_cannot_declare_references`
 
 <a id="REFER-3"></a>
 ### REFER-3: a reference is reachable exactly as a directory opened with `--add-dir` is, and records no trust

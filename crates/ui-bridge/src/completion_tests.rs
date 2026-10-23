@@ -103,6 +103,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             answerers: Default::default(),
             answers: receiver,
             finished,
+            interjections: Default::default(),
         })
     });
     let result = received.recv_timeout(Duration::from_secs(10));

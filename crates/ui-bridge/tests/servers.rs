@@ -9,6 +9,12 @@
 //! settings layer and the declarations from the home directory, and a test in-process would be
 //! reading the developer's.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
+
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;

@@ -34,7 +34,11 @@ was, and the conversation budget stays where it was too.
 | | `env` | variable names that may hold the bearer token, tried in order |
 | | `models` | the models to offer, keyed by the name the gateway knows each by |
 | `options` | `baseURL` | where requests go |
+| | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
+| | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated (bravebot's own field) |
+| | `idleTimeoutMs` | how long a reply may go quiet before it is given up on, in milliseconds, 120000 where unstated (bravebot's own field) |
 | | `apiKey` | a token written into the file directly |
+| | `headers` | extra request headers, keyed by header name |
 | a model | `limit.context` | that model's context window, in prompt tokens |
 | | `options` | anything extra to put in the request body |
 
@@ -44,19 +48,135 @@ rather than refused. opencode's `cost`, `modality` and `package` fields do nothi
 
 ### Where the requests go
 
-**A gateway bravebot already knows an endpoint for needs no `baseURL`.** `openrouter` is the name it
-knows today. Any other id needs one written down, and an entry with neither a known name nor a stated
-endpoint configures no service. A stated `baseURL` always wins, so a known name stays usable against a
-proxy or a private deployment.
+**A gateway bravebot already knows an endpoint for needs no `baseURL`.** `openrouter` and `openai` are
+the names it knows today. Any other id needs one written down, and an entry with neither a known name
+nor a stated endpoint configures no service. A stated `baseURL` always wins, so a known name stays
+usable against a proxy or a private deployment. A known name supplies the endpoint and nothing else:
+the block still says where its credential lives, as [below](#the-credential).
 
 The names it knows are compiled in, and nothing is fetched to resolve one. This value is where a
 bearer credential gets sent, so a service that could decide it could redirect your token by answering
 a request.
 
+### Extra request headers
+
+`options.headers` adds headers to every request this gateway answers, including the one that asks
+for its model list. A gateway in front of several services usually routes on one: a tenant id, a
+routing key, a second credential.
+
+```json
+{
+  "provider": {
+    "acme-gateway": {
+      "env": ["ACME_API_KEY"],
+      "options": {
+        "baseURL": "https://gateway.acme.internal/v1",
+        "headers": {
+          "x-tenant-id": "platform-eng",
+          "x-acme-route": "{env:ACME_ROUTE}"
+        }
+      }
+    }
+  }
+}
+```
+
+A value written as `{env:NAME}` on its own is read from that variable when a request needs it, the
+way a credential is, so exporting a new one takes effect in a session already open and the value
+stays out of a file people paste into issues. A variable holding nothing sends no header. Braces
+inside a longer value are refused rather than substituted.
+
+Header values are treated as credentials: they are in no trace, no error text, and nothing
+`doctor` prints.
+
+**Some names are refused, and the rest of the block still goes.** `host`, `content-length`,
+`content-type`, `transfer-encoding` and `connection` are the request's own framing. So is the
+header your credential goes in, `authorization` or `x-goog-api-key` on a `google-vertex` entry,
+where the entry names a credential at all; an entry naming none may set `authorization` itself. A
+Bedrock entry takes no headers from here, because AWS signs over the headers it sends.
+
+`bravebot doctor` lists every refused header under the gateway block it was written on, with the
+name as you wrote it and which of those reasons refused it, so there is a name to go and edit. The
+value is not printed.
+
+**This is read from your own settings file, the file `--settings` names, and a managed layer only.**
+A `provider` block in a checkout's `.bravebot/settings.json` or `settings.local.json` is ignored
+whole and `bravebot doctor` names the file. A header is where a request goes as much as `baseURL`
+is: a checkout that could add one could send your credential and your context somewhere you did not
+agree to.
+
+### OpenAI
+
+An entry keyed `openai` reaches OpenAI with an API key, through its chat-completions endpoint:
+
+```json
+{
+  "provider": {
+    "openai": {
+      "env": ["OPENAI_API_KEY"]
+    }
+  },
+  "model": "openai/<model id>"
+}
+```
+
+The endpoint is `https://api.openai.com/v1`, and a stated `baseURL` wins, so a proxy or another
+deployment speaking the same protocol is reached by writing where it is. Export the key as
+`OPENAI_API_KEY=<your key>`, or store it with `bravebot auth login gateway openai`. The block has to say
+where the key lives: a block naming no `env`, no `options.apiKey` and no stored key sends none, and
+OpenAI refuses the request. `OPENAI_API_KEY` is a name other OpenAI tools read as well, and naming it
+in `env` is what makes bravebot send the key your shell holds. Like any variable a `provider` block
+names, it is [withheld from the programs bravebot runs](../../reference/run-tool.md#what-a-program-is-handed).
+
+With no `models` key, OpenAI is asked what it serves and `/model` offers everything it lists. The
+listing says nothing about what a model can do, so embedding, speech and image models are in it beside
+the chat models, and so are models OpenAI serves only through its Responses API. An entry reaches those
+by naming `@ai-sdk/openai` in `npm`, as it does in opencode, and without that line picking one fails. A
+block that lists `models` is offered those and no others, which is how to keep the picker to the models
+you use:
+
+```json
+{
+  "provider": {
+    "openai": {
+      "env": ["OPENAI_API_KEY"],
+      "models": { "<model id>": {} }
+    }
+  }
+}
+```
+
+### The Responses API
+
+OpenAI also serves models through its Responses API, and some only through it. An entry that names
+`@ai-sdk/openai` is sent requests there, at `/responses` under its `baseURL`, instead of at
+`/chat/completions`:
+
+```json
+{
+  "provider": {
+    "openai": {
+      "npm": "@ai-sdk/openai",
+      "env": ["OPENAI_API_KEY"],
+      "models": { "<model id>": {} }
+    }
+  }
+}
+```
+
+The SDK decides for every model the entry lists, and the entry's `id` does not matter except for
+`google-vertex`: any other entry naming it, a proxy included, is reached in this protocol. The conversation is never kept at the service
+(`store` is off), the reply is always streamed, and the model's earlier reasoning is not sent back with
+a later request. Pictures are sent, and a document attachment is not. The effort level is sent as
+`reasoning.effort`, with a summary of the reasoning that `/thinking` shows.
+
+A model is named with the id in front, as `openai/<model id>`, in `--model` or the `model` key. Signing
+in with a ChatGPT account instead of a key is not supported.
+
 ### Google Vertex AI
 
-Vertex AI has an OpenAI-compatible endpoint that takes an API key. An entry keyed `google-vertex`
-reaches it:
+Vertex AI is reached with an API key in one of two ways, and whether the entry states a project picks
+between them. With a project, the entry reaches Vertex AI's OpenAI-compatible endpoint:
 
 ```json
 {
@@ -70,19 +190,18 @@ reaches it:
 }
 ```
 
-The host is built from `project` and `location`, which is `global` where you state none, and a
-`project` is required. One holding a character a project id cannot hold, such as `/` or `@`, configures
-nothing rather than sending your key somewhere else. A stated `baseURL` still wins.
+The host is built from `project` and `location`, which is `global` where you state none. A `project`
+holding a character a project id cannot hold, such as `/` or `@`, configures nothing rather than
+sending your key somewhere else. A stated `baseURL` still wins.
 
 The key is read from the variable `env` names and sent in the `x-goog-api-key` header, which is the
 only place Google reads it from. Export it as `GOOGLE_API_KEY=<your key>`, or name another variable in
 `env`. A block naming no `env` and no `options.apiKey` sends no key, and Vertex AI refuses it.
 
 With no block, exporting `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT` is enough, and `VERTEX_LOCATION`
-sets a location other than `global`. Both of the first two are needed, and a block replaces this. The
-service is only asked once a model named `google-vertex/...` is chosen. `GOOGLE_API_KEY` is a name
-other Google tools read as well, so the key you exported for one of them is what is sent here once
-you choose such a model.
+sets a location other than `global`. A block replaces this. The service is only asked once a model
+named `google-vertex/...` is chosen. `GOOGLE_API_KEY` is a name other Google tools read as well, so
+the key you exported for one of them is what is sent here once you choose such a model.
 
 Vertex AI has no model listing a key can call, so `/model` offers a short list of Gemini models
 built into bravebot, which `bravebot doctor` names. A block that lists `models` is offered those
@@ -92,6 +211,36 @@ on the built-in list is named with the id in front, as `google-vertex/google/gem
 `--model` or the `model` key, and one off it is named the same way, as
 `google-vertex/google/gemini-3-flash-preview`. Signing in with Google Cloud credentials instead of a
 key is not supported.
+
+#### Express mode, with a key and no project
+
+An entry that states no `project` is reached in Vertex AI express mode, through Google's native
+`generateContent` API. It needs the key and nothing else:
+
+```json
+{
+  "provider": {
+    "google-vertex": {
+      "env": ["GOOGLE_API_KEY"]
+    }
+  },
+  "model": "google-vertex/google/gemini-2.5-flash"
+}
+```
+
+With no block, exporting `GOOGLE_API_KEY` alone is enough. The request goes to
+`aiplatform.googleapis.com` with no region in the address, and Google chooses where it is served, so
+`location` and `VERTEX_LOCATION` are not read. State a `project` to reach a particular region. An
+entry that states a `baseURL` and no project keeps speaking the OpenAI-compatible protocol to it,
+unless it also states `"npm": "@ai-sdk/google-vertex"`, which says the host takes Vertex's own API.
+The key is sent in `x-goog-api-key`, as above. Tool calls work, and the signature Gemini 3 models attach to a
+call is sent back with it. A model is named as `google-vertex/<publisher>/<model>`, and the publisher
+is `google` for the Gemini models. The thinking level you choose with `/effort` is sent as a thinking
+budget, and a model that refuses one is sent none. Application Default Credentials, service-account
+files and `gcloud auth` tokens are not supported.
+
+Exporting `GOOGLE_API_KEY` for another Google tool also configures this service, and takes the
+variable out of the environment of the programs bravebot starts.
 
 ### The credential
 
@@ -144,8 +293,31 @@ Ollama wants no API key, so its block names none:
 `baseURL` is written down because `ollama` is not one of the names an endpoint is
 [compiled in](#where-the-requests-go) for. There is no `models` key, so Ollama is asked what it has
 pulled and `/model` lists what came back. A first run with nothing configured offers to write this
-block for you where Ollama is running ([Importing from Claude Code, opencode or
-Ollama](../configuration.md#importing-from-claude-code-opencode-or-ollama)).
+block for you where Ollama is running ([Importing from Claude Code, opencode or a local model
+server](../configuration.md#importing-from-claude-code-opencode-or-a-local-model-server)).
+
+LM Studio and llama-server want no key either, so their blocks differ from this one in the name and
+the address. LM Studio's server listens on port `1234` once it is started, and llama-server's on
+`9931` unless it is told another port:
+
+```json
+{
+  "provider": {
+    "lmstudio": {
+      "name": "LM Studio (local)",
+      "options": { "baseURL": "http://127.0.0.1:1234/v1" }
+    },
+    "llama-server": {
+      "name": "llama-server (local)",
+      "options": { "baseURL": "http://127.0.0.1:9931/v1" }
+    }
+  },
+  "model": "lmstudio/qwen/qwen3-coder-30b"
+}
+```
+
+The model names are the ones each server lists: `/model` shows them once the block is in place. A
+first run offers to write either block where the server is running, as it does for Ollama.
 
 ### Which models are offered
 
@@ -183,7 +355,11 @@ keeps working.
 `limit.context` is optional. A model that states none is assumed to have 131,072 prompt tokens, the
 same deliberately low figure a Bedrock tier gets and for the same reason: a budget above the real
 window does not compact a conversation late, it stops compacting it at all. A window a gateway reports
-is taken where the file stated none; a figure in the file outranks it. Following opencode, `limit`
+is taken where the file stated none; a figure in the file outranks it. `options.contextWindow` is the
+figure for every model of the provider that states none, and is the place to keep one for a block
+that lists no models, such as a local Ollama, whose window is one server setting. A model's own
+`limit.context` outranks it, and a gateway's report does not. The Ollama and LM Studio imports write
+it where the server holds the model with fewer than 131,072 tokens. Following opencode, `limit`
 needs `output` alongside `context` or it is not a `limit` and its figure is not read. `output` states
 [how far a reply may run](../configuration.md#how-long-a-reply-may-run).
 
@@ -195,3 +371,51 @@ worse one it silently routes somewhere you did not intend.
 
 It cannot replace what the turn itself built. The settings file names a destination, not what was
 asked.
+
+### Showing a model's thinking
+
+A model that sends its working in a `reasoning_content` field beside its reply has that working drawn
+under [`/thinking`](../../reference/commands.md#thinking) while the reply is still arriving. Nothing in the
+request asks for it, so a model that sends none shows none, and a service that names the field
+differently shows nothing. It is not saved to the session and is not sent back in a later request.
+
+### Retries and a reply gone quiet
+
+A request that fails because the connection gave out, or because the service said it was busy, is
+sent again twice, after a pause of one second and then two. A reply that is still arriving is given
+up on when nothing has come for two minutes. Both are figures you can change for one gateway in its
+`options`:
+
+```json
+{
+  "provider": {
+    "my-gateway": {
+      "options": {
+        "baseURL": "https://gateway.example/v1",
+        "maxRetries": 4,
+        "idleTimeoutMs": 300000
+      }
+    }
+  }
+}
+```
+
+`maxRetries` is how many times a request is sent *again*, so `4` is five requests in all and `0`
+sends each one once. It is at most 7. `idleTimeoutMs` is for a model that thinks for longer than two
+minutes before it writes; it is at most 600000, ten minutes. Both are written as numbers: `"0"` in
+quotes, a fraction, a negative figure and a gap of `0` leave the figure at what it was, and a figure
+above its limit is the limit.
+
+Only the count and the wait change. Which failures are sent again does not: a refused credential or
+a model the service does not have is refused the same way each time, whatever count you gave. A wait
+the service asked for with a `Retry-After`, up to two minutes, is taken before each retry in place of
+the pause, so a large count against a service that keeps asking for it is a long wait.
+
+A gateway on this machine, such as a local Ollama, is waited on through any silence while you can
+stop the turn, so `idleTimeoutMs` does not reach it. `maxRetries` does.
+
+These two are read from your own `settings.json`, from a file `--settings` names, and from the
+machine-level file an administrator keeps. A `.bravebot/settings.json` in a checkout cannot set them,
+as it cannot name a gateway: `bravebot doctor` says so when one tries. Brave's own endpoint and the
+models you reach through the Bedrock tier variables alone have no entry to put them in and keep the
+defaults. An [AWS Bedrock entry](bedrock.md#naming-more-than-three-models) takes the same two.

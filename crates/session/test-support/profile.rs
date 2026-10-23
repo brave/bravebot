@@ -24,6 +24,10 @@ pub fn in_isolated_profile() -> bool {
         .prefix("test-")
         .tempdir_in(profiles)
         .unwrap();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a test runs its own executable again, `std::env::current_exe()`"
+    )]
     // Test-only re-execution stays at the same privileges and makes no trust decision.
     // nosemgrep: rust.lang.security.current-exe.current-exe
     let mut child = std::process::Command::new(std::env::current_exe().unwrap());
@@ -32,6 +36,9 @@ pub fn in_isolated_profile() -> bool {
     for variable in bravebot_agent::home::PROFILE_VARIABLES {
         child.env(variable, profile.path());
     }
+    // It answers before the profile variables, so one in the parent's environment would put the
+    // child's state in the person's own directory.
+    child.env_remove(bravebot_agent::home::STATE_VARIABLE);
     let output = child.output().expect("run isolated session test");
     profile.close().expect("remove isolated session profile");
     assert!(

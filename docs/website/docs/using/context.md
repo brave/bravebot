@@ -15,6 +15,13 @@ Type `@` and a picker opens over the workspace. Directories come first, a prefix
 slash descends into a directory, and Tab completes without disturbing the rest of the sentence.
 Version-control and build directories are not offered.
 
+A fragment of a name finds it in any directory below, so `@mainrs` offers `crates/cli/src/main.rs`
+without a walk through `crates` and `cli`. The letters have to appear in the name in that order and
+case does not matter. Names that match come before paths that match, and the closer match comes
+first. What the directory you are typing in offers stays at the top of the list, followed by at most
+ten names found this way. The search covers the workspace only, skips the directories above, does
+not follow links, and reads at most 10,000 names, starting from the root.
+
 ```
 > why does @crates/cli/src/main.rs read stdin before checking the prompt?
 ```
@@ -35,8 +42,10 @@ reference, and a bare `@` names nothing.
 
 Sending a prompt that ends in a half-typed reference completes it rather than sending the fragment.
 
-A name containing a space is written with a backslash before the space, as in
-`@My\ Documents/notes.md`. Completing it from the picker writes that form for you.
+A name containing whitespace is written with a backslash before each whitespace character, as in
+`@My\ Documents/notes.md`, and a backslash in a name is written as two. Completing it from the picker
+writes that form for you. The picker leaves out a file or folder whose name holds a line break, and a file whose
+name ends in whitespace, because the line is trimmed when it is sent. Name such a file with `--file`.
 
 ## Naming an earlier session: `@session:<id>`
 
@@ -115,6 +124,17 @@ through `osascript`; on Linux it needs `wl-paste` or `xclip`.
 
 - A picture wins over text when the clipboard holds both, since copying an image in a browser leaves
   the page's URL behind as text, and text has another key.
+- **A picture is read as a PNG first, then as a JPEG**, and on macOS last as a TIFF, which is how a
+  GIF or a HEIC copied from an app arrives. A PNG and a JPEG are sent as they are, and a TIFF is
+  sent as a PNG. A TIFF that declares a canvas of more than 134 million pixels is not read.
+- **A file copied in Finder, Explorer or a Linux file manager is treated as a drop.** Ctrl-V reads
+  the files the clipboard names and handles them as if you had dragged them onto the window (see
+  [Dropping a file](#dropping-a-file)): an image or a PDF is carried as bytes, a text file becomes
+  context, and any other type has its path written into the line. The files win over a picture or
+  text beside them on the clipboard. A file whose name is not text or holds a line break refuses the
+  whole copy, and none of the files are pasted. On Linux the file manager has to leave a
+  `text/uri-list` or, as GNOME's do, an `x-special/gnome-copied-files`, which `wl-paste` or `xclip`
+  reads.
 - The picture is inlined into the request, never linked, so no other machine fetches it.
 - The marker is written where the caret is, and the picture goes wherever that text goes. Deleting
   the marker unsends it.
@@ -153,20 +173,28 @@ What happens depends on the type:
 
 | Dropped | Result |
 |---|---|
-| an image or a PDF | carried as bytes, so the model looks at it |
+| an image or a PDF | carried as bytes, so the model looks at it, with a line before them naming the file as `Dropped file: <path>` |
 | a text file | its contents enter the turn as trusted input |
 | anything else | its path is written into the line, as dropping a file always did |
 
 Extensions are recognised whatever their case. Dropping a directory attaches nothing. A dropped PNG
-or JPEG also gets a thumbnail under the box, as a pasted picture does.
+or JPEG also gets a thumbnail under the box, as a pasted picture does. A file copied in a file
+manager and pasted with Ctrl-V is handled the same way.
+
+The path line goes ahead of the bytes in a turn's prompt, in a question beside the work, and in a plan's
+task. A file that cannot be shown to the model is replaced by the sentence `<path> could not be shown to
+you.` A pasted picture carries no path, so on a line that pastes and drops, the numbers in the markers
+can differ from the order the pictures are sent in.
 
 **Onto a line armed with `!`, a drop writes each file's path and attaches nothing**, as dropping a
 file into a shell does. The shell is handed the line as it stands, so there is no marker and no
-trust or reach is granted. A path holding a space, a quote or anything else a shell would read as
-syntax is written in single quotes, so the name reaches the command as one word. The quotes are
-written for the place a word starts: drop the file there, not inside a quote you opened. When a
-dropped file's name holds a control character or a character the terminal draws as nothing, no path
-from that drop is written, and a note says so.
+trust or reach is granted. A path made only of ASCII letters, digits and `_@+:,./-` is written as it
+is. Any other path is written in single quotes, with each `'` and `\` written outside the quotes as
+`\'` and `\\`, so the name reaches the command as one word. This is the quoting `sh`, `bash`, `zsh`
+and `fish` read. Nushell and PowerShell quote differently, `csh` and `tcsh` still expand `!`, and
+the quotes are written for the place a word starts: drop the file there, not inside a quote you
+opened. When a dropped file's name holds a control character or a character the terminal draws as
+nothing, no path from that drop is written, and a note says so.
 
 **A prompt recalled from your history names the file rather than the marker.** Nothing staged beside
 a line outlives the session that staged it. The name is enough: the planner reads it and goes to the
@@ -181,6 +209,27 @@ nothing, an unterminated quote or more than one line makes it a paste instead.
 A screenshot somebody sent you is content you have not read and are vouching for. It goes into the
 turn as trusted input on the strength of the gesture alone.
 :::
+
+### Dropping a file on the desktop app
+
+Drag files onto a conversation in the desktop app and they attach the same way, with the same
+types, markers and grants. Each file gets a marker in the message box where the cursor is and a
+chip above it, with a thumbnail for a picture. Delete the marker, or remove the chip, to take the
+file off. A file whose type nothing takes has its path written into the box. A folder is left out,
+and the app says so. **Plan** is off while a file is attached.
+
+A message you send while a turn is running waits in the queue and keeps its files: it goes as its
+own turn when the running one ends, and carries them then.
+
+### Pasting a picture into the desktop app
+
+Paste a picture into the message box of the desktop app, with Command-V on macOS or Ctrl-V elsewhere, and it attaches
+the way a paste does in the terminal. It gets an `[Image #2]` marker where the cursor is, numbered
+with any files dropped into the same message, and a chip above the box with a thumbnail. Delete the
+marker, or remove the chip, to take it off. A picture wins over the text copied beside it, and a
+paste of text alone lands as text. A picture over 10 MB is refused, and the app says how large it
+was. **Plan** is off while a picture is attached, and a message you send while a turn is
+running keeps its pictures, as it keeps dropped files.
 
 ## Pictures and files on a slash command
 

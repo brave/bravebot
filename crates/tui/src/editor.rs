@@ -18,7 +18,6 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// What to open when nothing is configured, in the order they are tried.
@@ -96,7 +95,7 @@ fn show_through(
     text: &str,
     open: impl FnOnce(&Path) -> Result<(), Failure>,
 ) -> Result<(), Failure> {
-    let path = scratch("transcript");
+    let path = scratch("transcript", "md");
     if let Err(failure) = write_scratch(&path, text) {
         let _ = std::fs::remove_file(&path);
         return Err(failure);
@@ -116,8 +115,61 @@ fn round_trip(
     line: &str,
     open: impl FnOnce(&Path) -> Result<(), Failure>,
 ) -> Result<String, Failure> {
-    let path = scratch("prompt");
-    if let Err(failure) = write_scratch(&path, line) {
+    let mut text = through_a_file(scratch("prompt", "md"), line, open)?;
+    tidy(&mut text);
+    Ok(text)
+}
+
+/// Put the body of a proposed write in front of the user in their editor, and return what they
+/// saved.
+///
+/// The text comes back exactly as the editor wrote it. A prompt is fitted to the box it returns
+/// to, and a file is not: a final newline is part of it, and so are its line endings, which the
+/// write prompt shows the effect of on the screen where the text is approved. `extension` names
+/// the scratch file so the editor chooses the syntax of the file the body is for.
+pub fn edit_body(body: &str, extension: &str) -> Result<String, Failure> {
+    body_round_trip(body, extension, open_in_an_editor)
+}
+
+/// The file half of [`edit_body`], with opening it left to the caller so it can be tested.
+fn body_round_trip(
+    body: &str,
+    extension: &str,
+    open: impl FnOnce(&Path) -> Result<(), Failure>,
+) -> Result<String, Failure> {
+    through_a_file(scratch("write", extension), body, open)
+}
+
+/// What to call the scratch file of a body bound for `path`, so the editor takes it for the kind of
+/// file it is.
+///
+/// The extension of the last component, where it is short and made of letters and digits, and
+/// `txt` otherwise. Nothing else of the name is used: the path is the planner's, and this is a
+/// file name in a shared directory.
+pub fn scratch_extension(path: &str) -> String {
+    Path::new(path)
+        .extension()
+        .and_then(OsStr::to_str)
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension.len() <= MOST_EXTENSION_BYTES
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+        .unwrap_or("txt")
+        .to_string()
+}
+
+/// The longest extension a scratch file takes from a path.
+const MOST_EXTENSION_BYTES: usize = 12;
+
+/// Write `text` to `path`, run `open` on it and read back what is there, removing the file on every
+/// path out.
+fn through_a_file(
+    path: PathBuf,
+    text: &str,
+    open: impl FnOnce(&Path) -> Result<(), Failure>,
+) -> Result<String, Failure> {
+    if let Err(failure) = write_scratch(&path, text) {
         // A write that failed partway leaves a file behind, and one holding a prompt is not
         // something to leave in a shared directory.
         let _ = std::fs::remove_file(&path);
@@ -126,20 +178,18 @@ fn round_trip(
 
     let opened = open(&path);
     let saved = std::fs::read_to_string(&path);
-    // Before either result is examined, so the prompt does not outlive the edit down any path.
+    // Before either result is examined, so the text does not outlive the edit down any path.
     let _ = std::fs::remove_file(&path);
 
     opened?;
-    let mut text = saved.map_err(Failure::Scratch)?;
-    tidy(&mut text);
-    Ok(text)
+    saved.map_err(Failure::Scratch)
 }
 
 /// Where the line is put for the editor to open.
 ///
 /// The system's temporary directory rather than `~/.bravebot`, which is the user's configuration
 /// surface and is read as trusted: scratch files do not belong in it.
-fn scratch(kind: &str) -> PathBuf {
+fn scratch(kind: &str, extension: &str) -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_nanos())
@@ -150,7 +200,7 @@ fn scratch(kind: &str) -> PathBuf {
     // reason a name already taken is refused rather than reused.
     // nosemgrep: rust.lang.security.temp-dir.temp-dir
     std::env::temp_dir().join(format!(
-        "bravebot-{kind}-{}-{stamp}-{nth}.md",
+        "bravebot-{kind}-{}-{stamp}-{nth}.{extension}",
         std::process::id()
     ))
 }
@@ -336,6 +386,10 @@ fn waiting_flag(program: &Path) -> Option<String> {
 /// A non-zero exit is taken at its word and the line is left alone. `vi` spells "discard this"
 /// as `:cq`, which exits 1, and honouring that is the difference between an editor that can be
 /// abandoned and one that cannot.
+///
+/// The editor's own lookups of other programs by name (an `env` shebang, a wrapper script, an
+/// `$EDITOR` of `env vim`) search only the `PATH` entries the lookup that found it searches
+/// (SANDBOX-30).
 fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failure> {
     let name = program
         .file_name()
@@ -343,7 +397,12 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
         .to_string_lossy()
         .into_owned();
 
-    match Command::new(program).args(arguments).arg(path).status() {
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    );
+    match command.args(arguments).arg(path).status() {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(Failure::Editor(match status.code() {
             Some(code) => t!(editor_exited_badly, editor = name, code = code),
@@ -383,7 +442,7 @@ mod tests {
                     let gate = Arc::clone(&gate);
                     std::thread::spawn(move || {
                         gate.wait();
-                        scratch("prompt")
+                        scratch("prompt", "md")
                     })
                 })
                 .collect();
@@ -540,16 +599,36 @@ mod tests {
     }
 
     /// The name only survives while it is the same program. A link repointed at something else is
-    /// not an editor to start on a guess.
+    /// not an editor to start on a guess, and neither is one that no longer resolves: the lookup
+    /// settled on a file, and that file is what runs.
     #[cfg(unix)]
     #[test]
     fn a_name_that_is_no_longer_the_same_program_falls_back_to_the_resolved_path() {
         let scratch = Scratch::new("elsewhere");
-        let real = scratch.program("emacs");
+        let emacs = scratch.program("emacs").canonicalize().unwrap();
+        let asked = scratch.path.join("editor");
 
-        let found = lookup(real.to_str().unwrap(), &scratch.path).expect("the editor is found");
+        scratch.program("vim");
+        std::os::unix::fs::symlink("vim", &asked).expect("link");
+        assert_eq!(
+            started_as(asked.to_str().unwrap(), emacs.clone(), &scratch.path),
+            emacs,
+            "a link repointed at another program was started under its name"
+        );
 
-        assert_eq!(found.canonicalize().unwrap(), real.canonicalize().unwrap());
+        std::fs::remove_file(&asked).expect("unlink");
+        std::os::unix::fs::symlink("gone", &asked).expect("dangling link");
+        assert_eq!(
+            started_as(asked.to_str().unwrap(), emacs.clone(), &scratch.path),
+            emacs,
+            "a link that no longer resolves was started under its name"
+        );
+
+        let relative = started_as("editor", emacs.clone(), &scratch.path);
+        assert_eq!(
+            relative, emacs,
+            "a relative name that no longer resolves was started under its name"
+        );
     }
 
     /// SANDBOX-30: the editor is started unconfined, so a file a confined stage wrote under its
@@ -595,7 +674,7 @@ mod tests {
         let path = std::env::join_paths([session.join(".venv/bin"), system.clone()]).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env(SYSTEM, &system)
@@ -640,7 +719,7 @@ mod tests {
         }
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env("PATH", &bin)
@@ -652,6 +731,225 @@ mod tests {
         let _ = std::fs::remove_dir_all(&session);
         assert!(ran, "the child did not run the test: {report}");
         assert!(child.status.success(), "{report}");
+    }
+
+    /// What an editor did when [`start`] ran it in a child process of the test binary, with programs
+    /// of the same name planted in a directory the session keeps out.
+    #[cfg(unix)]
+    struct Started {
+        /// The editor ran to its end.
+        edited: bool,
+        /// A program planted in the directory the session keeps out ran.
+        planted: bool,
+        /// What the child printed, for a failure.
+        report: String,
+        succeeded: bool,
+    }
+
+    #[cfg(unix)]
+    const STARTED_SESSION: &str = "BRAVEBOT_TEST_EDITOR_STARTED_SESSION";
+    #[cfg(unix)]
+    const STARTED_IN_SESSION: &str = "BRAVEBOT_TEST_EDITOR_STARTED_IN_SESSION";
+    #[cfg(unix)]
+    const STARTED_COMMAND: &str = "BRAVEBOT_TEST_EDITOR_STARTED_COMMAND";
+
+    /// The child half of [`run_started_editor`]: reports whether it ran, so a test returns at once
+    /// when it is the child.
+    #[cfg(unix)]
+    fn started_child() -> bool {
+        let Some(session) = std::env::var_os(STARTED_SESSION) else {
+            return false;
+        };
+        let session = PathBuf::from(session);
+        bravebot_sandbox::programs::keep_out(&session);
+        if std::env::var_os(STARTED_IN_SESSION).is_some() {
+            std::env::set_current_dir(&session).unwrap();
+        }
+        let file = session.join("prompt.md");
+        std::fs::write(&file, "").unwrap();
+        match std::env::var(STARTED_COMMAND) {
+            Ok(command) => {
+                let (program, arguments) = command_line(&command).expect("the editor is found");
+                start(&program, &arguments, &file)
+            }
+            Err(_) => start(&session.join("editor"), &[], &file),
+        }
+        .expect("the editor starts and exits cleanly");
+        true
+    }
+
+    /// Run `start` in a child of this test binary whose `PATH` is `entries` (given the session
+    /// directory and a directory of installed tools). The editor is a script with an `env` shebang,
+    /// or the configured `command` where one is given. A `sh` and a `bravebot-env-tool` that record
+    /// that they ran are planted at `<session>/.venv/bin`, the `sh` also at `<session>/sh`, and the
+    /// installed `bravebot-env-tool` is in the tools directory. The session is kept out of the
+    /// search, and the child runs from it when `in_session`.
+    #[cfg(unix)]
+    fn run_started_editor(
+        test: &str,
+        name: &str,
+        in_session: bool,
+        command: Option<&str>,
+        entries: impl FnOnce(&Path, &Path) -> Vec<PathBuf>,
+    ) -> Started {
+        use std::os::unix::fs::PermissionsExt;
+        let session = crate::testutil::scratch_dir(name);
+        let tools = crate::testutil::scratch_dir(&format!("{name}-tools"));
+        for directory in [&session, &tools] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        std::fs::create_dir_all(session.join(".venv/bin")).unwrap();
+        std::fs::create_dir_all(&tools).unwrap();
+        let script = |path: PathBuf, body: String| {
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let planted = |runs: &str| {
+            format!(
+                "#!/bin/sh\n: > '{}'\nexec {runs} \"$@\"\n",
+                session.join("planted-ran").display()
+            )
+        };
+        script(session.join(".venv/bin/sh"), planted("/bin/sh"));
+        script(session.join("sh"), planted("/bin/sh"));
+        script(
+            session.join(".venv/bin/bravebot-env-tool"),
+            planted(&format!("'{}'", tools.join("bravebot-env-tool").display())),
+        );
+        script(
+            tools.join("bravebot-env-tool"),
+            "#!/bin/sh\n: > \"$1.edited\"\n".to_string(),
+        );
+        script(
+            session.join("editor"),
+            "#!/usr/bin/env sh\n: > \"$1.edited\"\n".to_string(),
+        );
+        let path = std::env::join_paths(entries(&session, &tools)).unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args(["--exact", test, "--test-threads=1", "--nocapture"])
+            .env(STARTED_SESSION, &session)
+            .env("PATH", &path);
+        if in_session {
+            child.env(STARTED_IN_SESSION, "1");
+        }
+        if let Some(command) = command {
+            child.env(STARTED_COMMAND, command);
+        }
+        let child = child.output().unwrap();
+
+        let outcome = Started {
+            edited: session.join("prompt.md.edited").exists(),
+            planted: session.join("planted-ran").exists(),
+            report: String::from_utf8_lossy(&child.stderr).into_owned(),
+            succeeded: child.status.success(),
+        };
+        for directory in [&session, &tools] {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+        outcome
+    }
+
+    /// SANDBOX-30: an editor that is a script with an `env` shebang, or a launcher that runs another
+    /// program by name, looks that program up on the `PATH` it was started with. A `sh` a confined
+    /// stage wrote into a directory the session keeps out, first on that `PATH`, must not be the one
+    /// that runs: the editor is started unconfined, with the person's access to `~/.ssh` and
+    /// `~/.aws`. The system `sh` behind it is the one found, and the editor still runs to its end.
+    #[cfg(unix)]
+    #[test]
+    fn an_editor_that_runs_another_program_by_name_never_runs_one_a_stage_may_have_written() {
+        const TEST: &str = "editor::tests::an_editor_that_runs_another_program_by_name_never_runs_one_a_stage_may_have_written";
+        if started_child() {
+            return;
+        }
+
+        let outcome = run_started_editor(TEST, "editor-env-shebang", false, None, |session, _| {
+            vec![
+                session.join(".venv/bin"),
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ]
+        });
+
+        assert!(outcome.succeeded, "{}", outcome.report);
+        assert!(
+            outcome.edited,
+            "the editor did not run to its end: {}",
+            outcome.report
+        );
+        assert!(
+            !outcome.planted,
+            "the editor looked up `sh` in a directory a stage may write"
+        );
+    }
+
+    /// The same for an editor configured as a command line that names another program for the
+    /// first to run, `env` and a tool here. Only the first word is looked up by the editor's own
+    /// search, so the rest reaches `env` as an argument and is found through the `PATH` `env` was
+    /// started with. The tool installed behind the planted one is the one that runs.
+    #[cfg(unix)]
+    #[test]
+    fn an_editor_configured_as_env_and_a_name_never_runs_one_a_stage_may_have_written() {
+        const TEST: &str = "editor::tests::an_editor_configured_as_env_and_a_name_never_runs_one_a_stage_may_have_written";
+        if started_child() {
+            return;
+        }
+
+        let outcome = run_started_editor(
+            TEST,
+            "editor-env-command",
+            false,
+            Some("env bravebot-env-tool"),
+            |session, tools| {
+                vec![
+                    session.join(".venv/bin"),
+                    tools.to_path_buf(),
+                    PathBuf::from("/usr/bin"),
+                    PathBuf::from("/bin"),
+                ]
+            },
+        );
+
+        assert!(outcome.succeeded, "{}", outcome.report);
+        assert!(
+            outcome.edited,
+            "the installed tool did not run: {}",
+            outcome.report
+        );
+        assert!(
+            !outcome.planted,
+            "`env` looked its argument up in a directory a stage may write"
+        );
+    }
+
+    /// With every entry of the `PATH` a directory the session keeps out, nothing is left to search.
+    /// The editor must then be started with no `PATH` at all: an empty one is read by `execvp` as
+    /// the current directory, which for a session is the directory it writes in. Here the editor
+    /// runs from the session, holding a `sh` of its own, and the system one is the one found.
+    #[cfg(unix)]
+    #[test]
+    fn an_editor_with_no_searched_path_entry_left_does_not_search_the_current_directory() {
+        const TEST: &str = "editor::tests::an_editor_with_no_searched_path_entry_left_does_not_search_the_current_directory";
+        if started_child() {
+            return;
+        }
+
+        let outcome = run_started_editor(TEST, "editor-env-empty", true, None, |session, _| {
+            vec![session.join(".venv/bin")]
+        });
+
+        assert!(outcome.succeeded, "{}", outcome.report);
+        assert!(
+            outcome.edited,
+            "the editor did not run to its end: {}",
+            outcome.report
+        );
+        assert!(
+            !outcome.planted,
+            "the editor looked up `sh` in the directory it was started in"
+        );
     }
 
     /// The four the clause names, wherever the binary ships. A platform that has a list of its
@@ -878,6 +1176,75 @@ mod tests {
         let mut text = "one\r\ntwo\rthree\n".to_string();
         tidy(&mut text);
         assert_eq!(text, "one\ntwo\nthree");
+    }
+
+    /// WRITE-7: the body of a file comes back as the editor wrote it. A prompt is fitted to a box,
+    /// and a file is not: the newline an editor ends it with and its line endings are part of what
+    /// the person approves, and `tidy` here would strip the one and rewrite the other.
+    #[test]
+    fn a_body_comes_back_exactly_as_the_editor_wrote_it() {
+        let written = "fn main() {\r\n    run();\r\n}\r\n\r\n";
+        let saved = body_round_trip("fn main() {}\n", "rs", |path| {
+            std::fs::write(path, written).unwrap();
+            Ok(())
+        })
+        .expect("the round trip completes");
+        assert_eq!(saved, written);
+
+        let untouched = body_round_trip("no final newline", "txt", |_| Ok(()))
+            .expect("the round trip completes");
+        assert_eq!(untouched, "no final newline");
+    }
+
+    /// WRITE-7: a body is as private as a prompt: the file is removed whether the editor worked or
+    /// not, and carries no group or other bit while it is open. The extension is the path's, so the
+    /// editor treats the text as the kind of file it is for.
+    #[cfg(unix)]
+    #[test]
+    fn the_file_a_body_is_edited_in_is_private_named_for_its_kind_and_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut opened = PathBuf::new();
+        let mut mode = 0;
+        body_round_trip("the body", "rs", |path| {
+            opened = path.to_path_buf();
+            mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            Ok(())
+        })
+        .expect("the round trip completes");
+        assert_eq!(opened.extension().and_then(OsStr::to_str), Some("rs"));
+        assert_eq!(mode & 0o077, 0, "the body's file had mode {mode:o}");
+        assert!(!opened.exists(), "the file was left behind after an edit");
+
+        let mut failed = PathBuf::new();
+        let outcome = body_round_trip("the body", "rs", |path| {
+            failed = path.to_path_buf();
+            Err(Failure::Editor("no".to_string()))
+        });
+        assert!(outcome.is_err());
+        assert!(!failed.exists(), "the file was left behind after a failure");
+    }
+
+    /// WRITE-7: the scratch file takes the extension of the last component of the path, where that
+    /// is a few letters or digits, and `txt` for everything else. The path is the planner's, so
+    /// nothing else of it reaches a file name in a shared directory.
+    #[test]
+    fn a_scratch_file_takes_a_plain_extension_from_the_path_and_nothing_else() {
+        for (path, extension) in [
+            ("src/main.rs", "rs"),
+            ("notes.md", "md"),
+            ("archive.tar.gz", "gz"),
+            ("Makefile", "txt"),
+            (".gitignore", "txt"),
+            ("dir.d/file", "txt"),
+            ("ref:1", "txt"),
+            ("odd.r s", "txt"),
+            ("odd.a/b", "txt"),
+            ("odd.\u{fffd}", "txt"),
+            ("long.abcdefghijklmnopqrstuvwxyz", "txt"),
+            ("empty.", "txt"),
+        ] {
+            assert_eq!(scratch_extension(path), extension, "{path}");
+        }
     }
 
     /// A bare GUI editor exits the moment its window opens, and the line would come back

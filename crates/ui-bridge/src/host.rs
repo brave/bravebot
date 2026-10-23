@@ -37,7 +37,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The longest request line the host reads. A line that reaches this without ending is not
 /// answered: the connection ends.
@@ -387,14 +387,9 @@ impl Host {
     /// that is still writing its record is not cut off by the process ending. Returns whether
     /// they had all ended.
     pub fn shutdown(&mut self, limit: Duration) -> bool {
-        let deadline = Instant::now() + limit;
         let mut workers: Vec<Arc<Workers>> = self.bridge.stop_all();
         workers.extend(self.sessions.values().filter_map(|closing| closing.clone()));
-        workers.iter().all(|workers| {
-            deadline
-                .checked_duration_since(Instant::now())
-                .is_some_and(|left| workers.wait_idle(left))
-        })
+        Workers::all_end_within(&workers, limit)
     }
 
     /// Whether output to `connection` still works. A write that failed or timed out has ended it.

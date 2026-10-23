@@ -5,8 +5,11 @@ status: normative
 governs:
   - crates/tui/src/loops.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/entry.rs
+  - crates/tui/src/state/standing.rs
   - crates/tui/src/status.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/hint.rs
@@ -20,8 +23,9 @@ documented-by: docs/website/docs/reference/commands.md
 
 ## Scope
 
-`/loop`: sending one prompt again and again until somebody stops it. What the repeated line is,
-where the interval comes from, when a tick fires, and what ends a loop. A turn that asks to be asked
+`/loop`: sending a prompt again and again until somebody stops it, for as many loops at once as a
+session holds ([LOOP-16](#LOOP-16)). What the repeated line is, where the interval comes from, when
+a tick fires, which loop's tick goes next, and what ends a loop. A turn that asks to be asked
 again starts one too ([LOOP-14](#LOOP-14)), and everything here holds for that loop as well.
 
 Not what a tick then does, which is a turn like any other. The tool a turn uses to say when it
@@ -58,6 +62,7 @@ press. A loop that could run commands would be a way to make this program act on
 nobody was watching, with each firing endorsed by a keystroke made once, long ago.
 
 `verified-by: bravebot_tui::state::a_loop_whose_prompt_looks_like_a_command_still_sends_it_as_a_prompt`
+`verified-by: bravebot_tui::state::a_later_tick_of_a_loop_over_a_command_is_sent_as_a_prompt_and_runs_nothing`
 
 <a id="LOOP-3"></a>
 ### LOOP-3: an interval is read off the front of the argument, or off an `every` clause at its end
@@ -222,12 +227,19 @@ never has and tells the user it is missing. Both were observed before this claus
 
 | What | When |
 |---|---|
-| the person asks | `/loop stop`, which leaves the turn in flight running; typed during one it ends the loop as it is typed, unless a `/loop` is waiting for that turn, which it waits behind ([commands.md](commands.md#CMD-8)) |
-| the person interrupts | Ctrl-C, read against the loop after the turn in flight and the line in the box, and before leaving |
-| a turn is stopped | any turn cancelled while a loop runs, whether or not it was a tick |
+| the person asks | `/loop stop`, or `/loop stop <number>` where several are live ([LOOP-15](#LOOP-15)), which leaves the turn in flight running; typed during one it ends the loop as it is typed, unless a `/loop` is waiting for that turn, which it waits behind ([commands.md](commands.md#CMD-8)) |
+| the person interrupts | Ctrl-C, which ends every loop, read against the loops after the turn in flight and the line in the box, and before leaving |
+| a turn is stopped | any turn cancelled while a loop runs, whether or not it was a tick, which ends every loop |
 | the turn says it is finished | a tick of a self-paced loop that calls `schedule_next` with `stop`, which ends the loop with no further tick |
-| the session moves on | `/clear`, and leaving |
-| age | seven days after it started |
+| the session moves on | `/clear`, and leaving, which end every loop; so does setting a goal |
+| age | seven days after it started, counted for each loop from its own start |
+
+**Why a key ends all of them.** Ctrl-C and a cancelled turn mean "stop what is happening", and a
+key that left some loops running would send the next prompt as though nothing had been said. Ending
+one loop is what the command is for, and it is the only ending that takes a number.
+
+Every ending says so. The note for an ending the person chose by number carries that number, and
+the note for one that ends several carries how many.
 
 Ctrl-C reaches the loop before it reaches the session, so the key that stops a thing that keeps
 happening is not also the key that ends everything. It reaches the half-written line first,
@@ -248,6 +260,7 @@ arriving after its loop has gone would otherwise start a new loop on the line ju
 
 `verified-by: bravebot_tui::app::the_loop_command_ends_the_loop_when_asked_to_stop`
 `verified-by: bravebot_tui::app::asking_to_stop_a_loop_during_a_turn_ends_it_as_it_is_typed`
+`verified-by: bravebot_tui::app::interrupting_ends_every_loop_when_several_are_live`
 `verified-by: bravebot_tui::app::a_tick_whose_loop_was_stopped_mid_turn_starts_no_loop`
 `verified-by: bravebot_tui::app::asking_to_stop_a_loop_that_is_not_running_says_so`
 `verified-by: bravebot_tui::app::interrupting_stops_the_loop_before_it_leaves`
@@ -261,6 +274,9 @@ arriving after its loop has gone would otherwise start a new loop on the line ju
 `verified-by: bravebot_tui::loops::a_loop_older_than_a_week_has_aged_out`
 `verified-by: bravebot_tui::loops::a_turn_that_says_the_loop_is_finished_ends_it_without_a_keepalive`
 `verified-by: bravebot_tui::state::a_turn_that_says_the_loop_is_finished_ends_it_and_says_so`
+`verified-by: bravebot_tui::state::stopping_every_loop_says_how_many_went`
+`verified-by: bravebot_tui::state::a_goal_and_a_clear_end_every_loop`
+`verified-by: bravebot_tui::state::every_loop_past_its_age_ends_and_says_which`
 
 <a id="LOOP-12"></a>
 ### LOOP-12: a loop is never written down
@@ -278,18 +294,19 @@ open.
 <a id="LOOP-13"></a>
 ### LOOP-13: what is going to happen is on the screen
 
-Each tick is announced with its number, and with how many ticks in a row have reported finding
-nothing where there have been any. Three places say a loop is live, and a session with no loop says
-nothing about loops in any of them:
+Each tick is announced with the number of its loop, the one `/loop stop` takes, and its own number
+among that loop's ticks, and with how many ticks in a row have reported finding nothing where there
+have been any. Three places say a loop is live, and a session with no loop says nothing about loops in any
+of them:
 
 | Where | What it says |
 |---|---|
-| the row under the input box, whichever mode it is in | that a loop is live, and when the next tick is due where a moment is known |
-| `/loop`, with no argument | the repeated line, the pacing, when the next tick is due, and how to end it |
-| `/status` | the repeated line, the pacing, and when the next tick is due |
+| the row under the input box, whichever mode it is in | that a loop is live, or how many are, and when the next tick is due where a moment is known |
+| `/loop`, with no argument | each loop under its number: the repeated line, the pacing, when its next tick is due, and how to end one |
+| `/status` | a row for each loop under its number where there are several: the repeated line, the pacing, and when its next tick is due |
 
-The row counts down to the next tick while one is ahead, and says only that a loop is live where no
-moment is known or the moment has passed. It is redrawn at least once a second for as long as a loop
+The row counts down to the soonest next tick while one is ahead, and says only that a loop is live,
+or how many, where no moment is known or the moment has passed. It is redrawn at least once a second for as long as a loop
 is live, whether or not anything else has happened.
 
 **Why the row under the box.** Everything else on the screen is a record of something that has
@@ -311,6 +328,8 @@ to `next in 0s` and sitting there reads as a loop that has stalled rather than o
 **Why the count of quiet ticks.** It is the difference between a loop that is working and a loop
 that has nothing to do, and without it a long watch is twenty identical answers nobody reads.
 
+`verified-by: bravebot_tui::status::the_report_lists_an_after_line_as_sent_later_and_not_as_a_loop`
+`verified-by: bravebot_tui::app::the_bare_loop_command_says_an_after_line_is_sending_later`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live`
 `verified-by: bravebot_tui::render::the_hint_line_says_a_loop_is_live_in_shell_mode_too`
 `verified-by: bravebot_tui::render::the_loop_part_names_a_moment_only_while_one_is_still_ahead`
@@ -322,6 +341,10 @@ that has nothing to do, and without it a long watch is twenty identical answers 
 `verified-by: bravebot_tui::status::a_session_with_no_loop_does_not_mention_one`
 `verified-by: bravebot_tui::loops::quiet_ticks_are_counted_until_one_reports_something`
 `verified-by: bravebot_tui::state::each_tick_is_announced_with_its_number_and_its_quiet_count`
+`verified-by: bravebot_tui::state::a_tick_names_its_loop_by_the_number_stop_takes`
+`verified-by: bravebot_tui::state::the_report_lists_every_loop_with_its_number`
+`verified-by: bravebot_tui::render::the_loop_part_counts_the_loops_where_several_are_live`
+`verified-by: bravebot_tui::status::the_report_has_a_row_per_loop_under_its_number`
 
 <a id="LOOP-14"></a>
 ### LOOP-14: a turn may start a loop over the person's line, and over no other
@@ -355,19 +378,25 @@ asked again then, which is exactly what [LOOP-9](#LOOP-9) already bounds.
 ## What the argument may be
 
 <a id="LOOP-15"></a>
-### LOOP-15: the command reads its argument three ways, and `stop` only as the whole line
+### LOOP-15: the command reads its argument four ways, and `stop` only as the whole line
 
 | The argument | What the command does |
 |---|---|
-| a line, with or without an interval | starts a loop over it, per [LOOP-3](#LOOP-3) |
-| nothing at all | says what is repeating and how to end it, per [LOOP-13](#LOOP-13) |
-| `stop`, in any case, with or without an interval | ends the loop, and says there was none where there was not, per [LOOP-11](#LOOP-11) |
+| a line, with or without an interval | starts a loop over it, per [LOOP-3](#LOOP-3) and [LOOP-16](#LOOP-16) |
+| nothing at all | lists what is repeating and how to end one, per [LOOP-13](#LOOP-13) |
+| `stop`, in any case, with or without an interval | ends the loop where one is live, and says there was none where there was not, per [LOOP-11](#LOOP-11). Where several are live it ends none of them and says it needs a number |
+| `stop` and a number, in any case, with or without an interval | ends the loop with that number, and says so where none has it |
 
-An interval with nothing after it is none of the three: it says what the command needs and starts
+An interval with nothing after it is none of the four: it says what the command needs and starts
 nothing, per [LOOP-3](#LOOP-3). The reserved word is the ending whenever it is the whole of the line
-that would be sent, so `/loop STOP`, `/loop stop every 5m` and `/loop 5m stop` all end the loop,
-while `/loop stop the deploy` is a loop over `stop the deploy` and `/loop stop the deploy every 5m`
-is that line every five minutes.
+that would be sent, with a number after it or without one, so `/loop STOP`, `/loop stop every 5m`,
+`/loop 5m stop` and `/loop stop 2` all end a loop, while `/loop stop the deploy` is a loop over
+`stop the deploy`, `/loop stop 2 the deploy` is a loop over that, and
+`/loop stop the deploy every 5m` is `stop the deploy` every five minutes.
+
+**Why a bare `stop` with several live does not choose.** Whichever it chose would be a guess about a
+turn on a schedule somebody was counting on, and the number is one more word to type. Refusing costs
+a second line; ending the wrong loop costs a watch nobody notices has stopped.
 
 **Why the bare word answers rather than refusing.** The two things a person needs from a command
 about a loop are the two things the transcript cannot give them: what is repeating, and a way to
@@ -396,11 +425,92 @@ ending and not taken as one becomes a loop sending `Stop` until somebody presses
 `verified-by: bravebot_tui::app::the_bare_loop_command_says_what_is_repeating`
 `verified-by: bravebot_tui::app::a_loop_over_a_line_beginning_with_stop_is_still_a_loop`
 `verified-by: bravebot_tui::app::an_interval_with_nothing_after_it_says_what_the_command_needs`
+`verified-by: bravebot_tui::loops::stop_and_a_number_ends_that_loop`
+`verified-by: bravebot_tui::loops::a_number_with_words_around_it_is_still_a_line_to_repeat`
+`verified-by: bravebot_tui::state::stopping_a_loop_by_number_ends_only_that_one`
+`verified-by: bravebot_tui::state::a_bare_stop_with_several_loops_ends_none_of_them`
+`verified-by: bravebot_tui::app::the_loop_command_ends_the_loop_it_names`
+
+## Several loops
+
+<a id="LOOP-16"></a>
+### LOOP-16: a session holds up to five loops, each with a number
+
+A `/loop` over a line starts one more loop and leaves the others running. Each is numbered in the
+order it began, keeps that number until it ends, and is never given a number a loop of this session
+has had. A sixth is refused with a note and ends none of the five. Each loop has its own line,
+pacing, age, tick count and quiet count, and everything in this file holds for each of them.
+
+**Why a number is not reused.** `/loop stop 1` typed after loop 1 ended and another began would
+otherwise end a loop the person did not mean.
+
+**Why refuse rather than replace.** The person typed all five lines, and a loop that went without
+being asked is one more turn on every tick that nobody chose to stop.
+
+`verified-by: bravebot_tui::state::a_second_loop_leaves_the_first_running_and_has_a_number_of_its_own`
+`verified-by: bravebot_tui::state::a_loop_past_the_cap_is_refused_and_no_loop_is_dropped`
+`verified-by: bravebot_tui::state::a_number_that_was_used_is_not_given_to_a_later_loop`
+`verified-by: bravebot_tui::loops::a_number_is_never_issued_twice`
+
+<a id="LOOP-17"></a>
+### LOOP-17: due ticks go one at a time, soonest first
+
+Where several loops are due, one tick goes: the loop whose moment came first, the older loop on a
+tie. The rest are held under [LOOP-6](#LOOP-6) and go as the session is free, each in turn. A turn
+that ends arms the loop whose tick it was and no other.
+
+**Why.** A session runs one turn at a time, and a tick of one loop that interrupted another's would
+cut work half done. Ordering by moment rather than by number keeps a slow loop from holding a fast
+one behind it for longer than its own turn.
+
+`verified-by: bravebot_tui::state::due_ticks_go_one_at_a_time_soonest_first`
+`verified-by: bravebot_tui::state::a_turn_ending_arms_only_the_loop_whose_tick_it_was`
+`verified-by: bravebot_tui::loops::the_soonest_due_loop_goes_next_and_a_tie_goes_to_the_older`
+
+<a id="LOOP-18"></a>
+### LOOP-18: `/after` sends a line once, after a delay, and keeps nothing
+
+`/after 5m check the deploy` sends `check the deploy` once, when the delay has passed and the
+session is idle ([LOOP-6](#LOOP-6)), and then nothing is left. A line typed during a turn is sent
+after that turn ends. The delay is read off the front of the argument as [LOOP-3](#LOOP-3) reads an
+interval, and only there: an `every` clause at the end is repetition, which this is not, so a line
+without a leading delay, and a delay with nothing after it, start nothing and say what the command
+needs. The delay is held to the bounds [LOOP-7](#LOOP-7) sets for an interval, and a person who
+wrote one outside them is told.
+
+The line is the one typed, so [LOOP-1](#LOOP-1) and [LOOP-2](#LOOP-2) carry over: `/after 5m /exit`
+sends the five characters `/exit` and runs nothing. It is one of the session's loops
+([LOOP-16](#LOOP-16)): it has a number, counts towards the five and is refused with a note when five
+are held, replaces a goal as `/loop` does, and ends on the same endings as one
+([LOOP-11](#LOOP-11)), including `/loop stop`, and is never written down ([LOOP-12](#LOOP-12)). It
+goes in the order [LOOP-17](#LOOP-17) gives. Its turn is a prompt like any other and is not told it
+is a tick ([LOOP-10](#LOOP-10)). A picture pasted or a file dropped into the line is not kept: the
+file is held as its name, the picture as words saying it cannot be shown, and the person is told
+about the picture. It is listed beside a loop by `/status` and the bare `/loop`. The row under the
+box counts loops only, and says it is sending later and not that it is looping where an `/after`
+line is all that is held.
+
+**Why a place among the loops and not a kind of its own.** The cap, the numbers, the ordering and
+the endings are already the loops'. A second collection of pending lines would need a rule for which
+of them a tick belongs to, and the person asked for neither.
+
+`verified-by: bravebot_tui::loops::after_reads_a_delay_off_the_front_and_sends_the_rest_unchanged`
+`verified-by: bravebot_tui::loops::after_without_a_leading_delay_is_not_a_request`
+`verified-by: bravebot_tui::loops::an_after_delay_outside_the_bounds_is_held_and_reported`
+`verified-by: bravebot_tui::loops::a_line_sent_once_is_due_at_its_delay_and_is_gone_after_its_turn`
+`verified-by: bravebot_tui::state::an_after_line_is_sent_once_when_its_delay_is_up_and_leaves_no_schedule`
+`verified-by: bravebot_tui::state::a_prompt_typed_while_an_after_line_waits_does_not_use_it_up`
+`verified-by: bravebot_tui::state::an_after_line_joins_the_loops_with_a_number_and_counts_towards_the_cap`
+`verified-by: bravebot_tui::app::the_after_command_holds_the_line_and_sends_nothing_now`
+`verified-by: bravebot_tui::render::the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping`
+`verified-by: bravebot_tui::render::the_hint_line_counts_loops_and_not_a_held_after_line`
+`verified-by: bravebot_tui::app::a_loop_stop_typed_behind_a_waiting_after_waits_behind_it`
+`verified-by: bravebot_tui::app::what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers`
 
 ## Known costs
 
 - **A loop keeps spending.** Every tick is a turn, with the whole conversation re-sent, and
-  nothing here bounds the total. The interval and the session's own life are the only limits, and
+  nothing here bounds the total. Five loops multiply it by five. The interval and the session's own life are the only limits, and
   a five-minute loop left open overnight is a hundred and fifty turns nobody read.
 - **A self-paced loop is paced by the thing it is watching over.** The planner chooses the wait
   from a context it also wrote, so a turn that misjudges what it is waiting for will keep

@@ -14,6 +14,7 @@
 
 use crate::base::{STATE_DIRECTORY, every_credential_directory, under};
 use crate::policy::SandboxPolicy;
+use crate::programs::program_name;
 use crate::signing::Place;
 use crate::toolchain::Toolchain;
 use std::path::{Component, Path, PathBuf};
@@ -44,11 +45,15 @@ pub enum Requested {
     /// Listening on, and connecting to, a port of this machine's own loopback interface. It
     /// reaches no other host and no file.
     Loopback,
+    /// The person choosing again which ssh key a push offers its owner. It lends nothing and adds
+    /// no row: the run prompt numbers the keys ssh could offer even for an owner already chosen
+    /// at an earlier prompt, and the answer is the person's.
+    SshKey,
 }
 
 impl Requested {
     /// Every name the planner may use, in the order it is told them.
-    pub const MENU: [&'static str; 12] = [
+    pub const MENU: [&'static str; 13] = [
         "remote",
         "signing",
         "aws",
@@ -61,15 +66,19 @@ impl Requested {
         "maven",
         "gradle",
         Self::LOOPBACK,
+        Self::SSH_KEY,
     ];
 
     const LOOPBACK: &'static str = "loopback";
+
+    const SSH_KEY: &'static str = "ssh-key";
 
     /// The request a word names, compared exactly: `Remote`, ` aws` and the empty string name none.
     pub fn named(word: &str) -> Option<Self> {
         match word {
             "signing" => Some(Self::Scope(Scope::Signing)),
             Self::LOOPBACK => Some(Self::Loopback),
+            Self::SSH_KEY => Some(Self::SshKey),
             _ => Scope::named(word)
                 .map(Self::Scope)
                 .or_else(|| Toolchain::named(word).map(Self::Toolchain)),
@@ -82,6 +91,7 @@ impl Requested {
             Self::Scope(scope) => scope.name(),
             Self::Toolchain(toolchain) => toolchain.name(),
             Self::Loopback => Self::LOOPBACK,
+            Self::SshKey => Self::SSH_KEY,
         }
     }
 }
@@ -102,10 +112,13 @@ impl Scope {
     /// is not named here: an argv that signs carries it and a `run` call may request it
     /// ([`Requested::named`]), and neither is remembered.
     pub fn named(word: &str) -> Option<Self> {
-        [Self::Remote, Self::Aws, Self::Kubernetes, Self::Docker]
+        Self::REACHABLE
             .into_iter()
             .find(|scope| scope.name() == word)
     }
+
+    /// The scopes `/reach` and a remembered grant can name, in the order they are listed.
+    pub const REACHABLE: [Self; 4] = [Self::Remote, Self::Aws, Self::Kubernetes, Self::Docker];
 
     /// The scope a stage carries, from the file its program resolved to, its argument vector, and
     /// the `NAME=value` assignments written in front of it.
@@ -118,8 +131,8 @@ impl Scope {
         if !environment.is_empty() {
             return None;
         }
-        let name = resolved.file_name()?.to_str()?;
-        match name {
+        let name = program_name(resolved)?;
+        match name.as_str() {
             "git" if a_remote_operation(args) => Some(Self::Remote),
             "git" if a_signing_operation(args) => Some(Self::Signing),
             "gh" if a_command_of_ghs_own(args) => Some(Self::Remote),
@@ -298,7 +311,7 @@ pub fn environment_reach(
                 "" => named,
                 beneath => named.join(beneath),
             };
-            if let Some(path) = judged(&named, how.names == Names::Directory, home)
+            if let Some(path) = judged(&named, how.names == Names::Directory, home, false)
                 && !already_read(scope, &path, home)
                 && !reached.iter().any(|held: &Reach| held.path == path)
             {
@@ -331,14 +344,22 @@ pub fn requested_reach(scope: Scope, home: &Path, environment: &[(String, String
 ///
 /// The same judgement a variable's value gets: absolute, no `..`, not the home or above it, not
 /// `~/.ssh` or `~/.bravebot` or inside either, not `~/.config`, `~/.cache` or `~/Library` whole,
-/// and a link judged by where it leads. It must also be a directory that exists, since a grant of a path nothing is at
-/// reads as a grant of whatever is created there later.
-pub fn judged_directory(named: &Path, home: &Path) -> Option<PathBuf> {
-    judged(named, true, home).filter(|path| path.is_dir())
+/// and a link judged by where it leads. It is also refused where it is, or lies inside, a credential
+/// location of the base's table (`~/.aws`, `~/.gnupg`, a browser profile), as `--add-dir` refuses
+/// it. `~/.bravebot` is the exception for a read (`write` unset) of an entry of it that a stage
+/// reads ([`readable_state_locations`](crate::base::readable_state_locations)), which is judged like
+/// any other directory; a write there is refused. It must also be a directory that exists, since a
+/// grant of a path nothing is at reads as a grant of whatever is created there later.
+pub fn judged_directory(named: &Path, home: &Path, write: bool) -> Option<PathBuf> {
+    judged(named, true, home, !write)
+        .filter(|path| path.is_dir())
+        .filter(|path| !crate::rules::inside_a_credential_location_for(path, home, write))
 }
 
-/// `named` as the sandbox will be told it, or `None` where it is refused.
-fn judged(named: &Path, directory: bool, home: &Path) -> Option<PathBuf> {
+/// `named` as the sandbox will be told it, or `None` where it is refused. `state_read` says the
+/// path is read and not written, so an entry of the state directory that a stage reads is not
+/// refused for being inside it.
+fn judged(named: &Path, directory: bool, home: &Path, state_read: bool) -> Option<PathBuf> {
     if !named.is_absolute() || named.components().any(|part| part == Component::ParentDir) {
         return None;
     }
@@ -353,7 +374,8 @@ fn judged(named: &Path, directory: bool, home: &Path) -> Option<PathBuf> {
         || [named, resolved.as_path()].iter().any(|named| {
             [home, real_home.as_path()].iter().any(|home| {
                 named.starts_with(under(home, ".ssh"))
-                    || named.starts_with(under(home, STATE_DIRECTORY))
+                    || (named.starts_with(under(home, STATE_DIRECTORY))
+                        && !(state_read && crate::rules::reads_readable_state(named, home, false)))
                     || home.starts_with(named)
                     || (directory
                         && [".config", ".cache", "Library"]
@@ -407,18 +429,7 @@ const NAMED_PUBLIC_KEYS_LIMIT: usize = 32;
 /// that cannot be read adds nothing, and the configuration is read to a fixed length and for a
 /// fixed count of keys.
 fn named_public_keys(home: &Path) -> Vec<PathBuf> {
-    use std::io::Read;
-    let Ok(file) = std::fs::File::open(under(home, ".ssh/config")) else {
-        return Vec::new();
-    };
-    let mut configuration = Vec::new();
-    if file
-        .take(SSH_CONFIG_LIMIT)
-        .read_to_end(&mut configuration)
-        .is_err()
-    {
-        return Vec::new();
-    }
+    let configuration = ssh_configuration(home);
     let mut keys: Vec<PathBuf> = Vec::new();
     for line in configuration.split(|byte| *byte == b'\n') {
         // A lossy decode would name a different file than ssh opens.
@@ -441,6 +452,41 @@ fn named_public_keys(home: &Path) -> Vec<PathBuf> {
         }
     }
     keys
+}
+
+/// The bytes of the person's own `~/.ssh/config` up to [`SSH_CONFIG_LIMIT`], or none where it
+/// cannot be read.
+fn ssh_configuration(home: &Path) -> Vec<u8> {
+    use std::io::Read;
+    let mut configuration = Vec::new();
+    let read = std::fs::File::open(under(home, ".ssh/config"))
+        .and_then(|file| file.take(SSH_CONFIG_LIMIT).read_to_end(&mut configuration));
+    match read {
+        Ok(_) => configuration,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// How many `IdentityFile` lines of the person's `~/.ssh/config` name a public key file that
+/// [`candidate_public_keys`] leaves out because a stage could not read it: one that is missing,
+/// is not a regular `*.pub` file, or is in a credential location other than `~/.ssh`. A line that
+/// spells no absolute name adds nothing, since ssh would read it from somewhere this cannot know.
+pub fn refused_identity_files(home: &Path) -> usize {
+    let configuration = ssh_configuration(home);
+    let mut refused: Vec<PathBuf> = Vec::new();
+    for line in configuration.split(|byte| *byte == b'\n') {
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let Some(named) = identity_file(line) else {
+            continue;
+        };
+        if judged_public_key(&named, home).is_none() && !refused.contains(&named) {
+            refused.push(named);
+        }
+    }
+    refused.len()
 }
 
 /// Every public key file ssh could offer a remote for the account whose home is `home`: the ones at
@@ -922,7 +968,8 @@ mod tests {
     #[test]
     fn a_request_is_a_word_of_the_menu_and_nothing_near_it() {
         for word in [
-            "root", "Remote", "Loopback", "", " aws", "aws ", "all", "*", "ssh",
+            "root", "Remote", "Loopback", "", " aws", "aws ", "all", "*", "ssh", "Ssh-key",
+            "ssh_key",
         ] {
             assert_eq!(Requested::named(word), None, "{word:?} named a request");
         }
@@ -951,7 +998,8 @@ mod tests {
             assert!(Requested::MENU.contains(&toolchain.name()));
         }
         assert_eq!(Requested::named("loopback"), Some(Requested::Loopback));
-        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6 + 1);
+        assert_eq!(Requested::named("ssh-key"), Some(Requested::SshKey));
+        assert_eq!(Requested::MENU.len(), scopes.len() + 1 + 6 + 1 + 1);
     }
 
     const GIT: &str = "/usr/bin/git";
@@ -1260,6 +1308,38 @@ mod tests {
             of("/usr/local/bin/docker", "run --config-file a-file an-image"),
             Some(Scope::Docker)
         );
+    }
+
+    /// A program the Windows `PATHEXT` search resolved to `git.exe` is the `git` scope, in any case,
+    /// and a file that only starts with a program's name is not. The regression it rejects: matching
+    /// the file's whole name, which loses every scope on Windows, or stripping any extension, which
+    /// lends `git.exe.bak` the remote.
+    #[test]
+    fn a_scope_is_keyed_on_the_file_without_a_windows_executable_extension() {
+        for (resolved, line, scope) in [
+            (
+                "C:/Program Files/Git/cmd/git.exe",
+                "push origin main",
+                Scope::Remote,
+            ),
+            (
+                "C:/Program Files/GitHub CLI/GH.EXE",
+                "pr create",
+                Scope::Remote,
+            ),
+            ("C:/bin/aws.exe", "s3 ls", Scope::Aws),
+            ("C:/bin/kubectl.exe", "get pods", Scope::Kubernetes),
+            ("C:/bin/docker.exe", "ps", Scope::Docker),
+        ] {
+            assert_eq!(of(resolved, line), Some(scope), "{resolved}");
+        }
+        for resolved in [
+            "C:/bin/git-lfs.exe",
+            "C:/bin/docker-compose.exe",
+            "C:/bin/git.exe.bak",
+        ] {
+            assert_eq!(of(resolved, "push"), None, "{resolved}");
+        }
     }
 
     /// A scope is reach a plan's stage is lent because its operation needs it, so a program
@@ -1583,6 +1663,48 @@ mod tests {
             read,
             [home.join(".ssh/after.pub"), home.join(".ssh/before.pub")]
         );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A line holding bytes that are not UTF-8 is not counted as a refused file: a lossy decode
+    /// would spell its name with U+FFFD, find no such file and report one the person never named.
+    /// The lines either side of it are still counted.
+    #[test]
+    #[cfg(unix)]
+    fn an_identity_file_line_that_is_not_text_is_not_counted_as_refused() {
+        let home = a_home_with("identity-files-not-text-refused", "", &[".ssh/before.pub"]);
+        std::fs::write(
+            home.join(".ssh/config"),
+            b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\n",
+        )
+        .unwrap();
+        assert_eq!(refused_identity_files(&home), 0);
+        std::fs::write(
+            home.join(".ssh/config"),
+            b"IdentityFile ~/.ssh/before\nIdentityFile ~/.ssh/tool-\xff\nIdentityFile ~/.ssh/gone\n",
+        )
+        .unwrap();
+        assert_eq!(refused_identity_files(&home), 1);
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// On a file system that holds a name that is not UTF-8, the file the line spells exists
+    /// beside its lossy lookalike, and it is not counted as refused either.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_identity_file_whose_name_is_not_text_is_not_counted_as_refused() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = a_home_with(
+            "identity-files-not-text-on-disk-refused",
+            "",
+            &[".ssh/tool-\u{FFFD}.pub"],
+        );
+        let spelled = home
+            .join(".ssh")
+            .join(std::ffi::OsStr::from_bytes(b"tool-\xff.pub"));
+        std::fs::write(&spelled, "a key").unwrap();
+        std::fs::write(home.join(".ssh/config"), b"IdentityFile ~/.ssh/tool-\xff\n").unwrap();
+        assert_eq!(refused_identity_files(&home), 0);
         std::fs::remove_dir_all(&home).unwrap();
     }
 
@@ -2014,7 +2136,8 @@ mod tests {
         use std::os::unix::fs::symlink;
         let home = scratch_dir("state-directory-reach");
         let _ = std::fs::remove_dir_all(&home);
-        std::fs::create_dir_all(home.join(".bravebot")).unwrap();
+        std::fs::create_dir_all(home.join(".bravebot/sessions/-repo")).unwrap();
+        std::fs::create_dir_all(home.join(".bravebot/logs")).unwrap();
         std::fs::create_dir_all(home.join(".bravebotx")).unwrap();
         std::fs::write(home.join(".bravebot/gateway-keys.json"), "").unwrap();
         std::fs::write(home.join(".bravebotx/config"), "").unwrap();
@@ -2042,12 +2165,64 @@ mod tests {
 
         for spelled in [
             home.join(".bravebot"),
-            home.join(".bravebot/sessions"),
+            home.join(".bravebot/logs"),
             home.join("to-state"),
         ] {
-            assert_eq!(judged_directory(&spelled, &home), None, "{spelled:?}");
+            for write in [false, true] {
+                assert_eq!(
+                    judged_directory(&spelled, &home, write),
+                    None,
+                    "{spelled:?} write={write}"
+                );
+            }
         }
-        assert!(judged_directory(&home.join(".bravebotx"), &home).is_some());
+        // The session records are read by a stage and are not written by one.
+        for spelled in [
+            home.join(".bravebot/sessions"),
+            home.join(".bravebot/sessions/-repo"),
+        ] {
+            assert!(
+                judged_directory(&spelled, &home, false).is_some(),
+                "{spelled:?}"
+            );
+            assert_eq!(judged_directory(&spelled, &home, true), None, "{spelled:?}");
+        }
+        assert!(judged_directory(&home.join(".bravebotx"), &home, true).is_some());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A remembered directory is refused at every credential location of the base's table and
+    /// inside one, as `--add-dir` refuses it, typed or reached by a link; a neighbour that only
+    /// shares a prefix is not. The regression it rejects: a judgement that names `~/.ssh` and
+    /// `~/.bravebot` alone, which lets `/reach ~/.aws write` lift the base's refusal.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_at_or_inside_a_credential_location_is_refused() {
+        use std::os::unix::fs::symlink;
+        let home = scratch_dir("directory-credential-locations");
+        let _ = std::fs::remove_dir_all(&home);
+        for row in every_credential_directory() {
+            let at = home.join(row);
+            let inner = at.join("inner");
+            std::fs::create_dir_all(&inner).unwrap();
+            let beside = home.join(format!("{row}x"));
+            std::fs::create_dir_all(&beside).unwrap();
+            let link = home.join(format!("link-to-{}", row.replace('/', "-")));
+            symlink(&at, &link).unwrap();
+            for spelled in [&at, &inner, &link] {
+                for write in [false, true] {
+                    assert_eq!(
+                        judged_directory(spelled, &home, write),
+                        None,
+                        "{spelled:?} write={write}"
+                    );
+                }
+            }
+            assert!(
+                judged_directory(&beside, &home, true).is_some(),
+                "{beside:?}"
+            );
+        }
         std::fs::remove_dir_all(&home).unwrap();
     }
 

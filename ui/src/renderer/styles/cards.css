@@ -358,10 +358,6 @@
   padding: 0;
   border: 0;
 }
-.ask-question + .ask-question {
-  padding-top: var(--leo-spacing-l);
-  border-top: 1px solid var(--border-hairline);
-}
 .ask-question legend {
   display: flex;
   align-items: baseline;
@@ -481,6 +477,7 @@
   text-overflow: ellipsis;
   font: var(--type-code);
 }
+.quarantine-head .reach { flex: none; font: var(--type-caption); color: var(--ink-tertiary); }
 .quarantine-head .label { flex: none; font: var(--type-caption); font-family: var(--font-mono); color: var(--ink-tertiary); }
 .quarantine > pre.preview { background: var(--surface-raised); }
 .quarantine-foot {

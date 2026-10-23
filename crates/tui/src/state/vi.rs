@@ -317,6 +317,22 @@ impl Session {
         // first, so a pair that means nothing ends the wait rather than holding it open: one stray
         // press would otherwise swallow every letter after it until something happened to match.
         if let Some(pending) = self.half_typed.take() {
+            // `;` and `,` after an operator are the repeated jump as a motion (INPUT-26), which is
+            // state the session holds and the pair of keys alone cannot name. With nothing to
+            // repeat the pair means nothing, as any other key that is not a motion does.
+            if let (crate::vim::Pending::Operate(operator), ';' | ',', Some(find)) =
+                (pending, c, self.last_find)
+            {
+                let repeated = if c == ';' { find } else { find.reversed() };
+                self.carry_out(crate::vim::Command::Change(
+                    operator,
+                    crate::vim::Extent::To(crate::vim::Motion::ToChar(repeated)),
+                ));
+                // Measuring the stretch recorded the jump as made, which for `,` is the reversed
+                // one: the jump to repeat stays the one the person made, as it does for a bare `,`.
+                self.last_find = Some(find);
+                return;
+            }
             self.carry_out(pending.then(c));
             return;
         }
@@ -1403,7 +1419,11 @@ impl Session {
     }
 
     /// Put the line back as it stood before the last change, and say whether there was one.
-    fn undo_last_change(&mut self) -> bool {
+    ///
+    /// The ordinary box reaches this too, through its own undo chord: vi's `u` loops it by the
+    /// count typed before the key, which the ordinary box has no count in front of a chord for,
+    /// so one press is one step back for either style.
+    pub fn undo_last_change(&mut self) -> bool {
         let Some((line, caret)) = self.undo.pop_back() else {
             return false;
         };
@@ -1411,7 +1431,17 @@ impl Session {
         self.caret = caret;
         self.history.leave();
         self.completion = 0;
-        self.step_back_off_the_end();
+        // The step just popped is not an open run any more, whichever kind of step it was, so the
+        // next character typed in the ordinary box must open one of its own rather than finding
+        // this one still marked open and sharing it, which would leave that typing with no step to
+        // undo at all once the stack is otherwise empty.
+        self.ordinary_run_open = false;
+        // Only where vi's own rule holds that the caret rests on a character rather than past the
+        // last one. The ordinary box has no such rule, and the caret a step was taken with is
+        // wherever the person had put it, past the last character being nowhere unusual there.
+        if self.editing == crate::vim::Editing::Vi {
+            self.step_back_off_the_end();
+        }
         true
     }
 
@@ -1431,7 +1461,19 @@ impl Session {
                 count: recorded,
                 typed,
             } => {
+                // `d,` is recorded as the reversed jump, and measuring it again would record that
+                // jump as the one to repeat. A jump that is the reverse of the one held is that
+                // case, so the held one is put back, as it was when `d,` was typed.
+                let held = self.last_find;
+                let reversed_hold = matches!(
+                    (extent, held),
+                    (crate::vim::Extent::To(crate::vim::Motion::ToChar(f)), Some(h))
+                        if f == h.reversed()
+                );
                 self.change(operator, extent, count.or(recorded));
+                if reversed_hold {
+                    self.last_find = held;
+                }
                 self.type_again(&typed);
             }
             Change::Opened { opening, typed } => {
@@ -2003,18 +2045,15 @@ impl Session {
                 session.move_left();
             }
         };
-        let arrived = |session: &Self| {
-            if find.forwards {
-                session.caret >= end
-            } else {
-                session.caret <= start
-            }
-        };
+        // The first character of the line is on it, and the last place a backward walk looks.
+        let line = start..end;
 
         // Off the character the caret is on before looking, so `f` twice reaches the second occurrence
-        // rather than staying on the first.
+        // rather than staying on the first. A step that leaves the caret where it was has reached an
+        // end of the input, and the character under it is not an occurrence.
+        let mut last = self.caret;
         step(self);
-        while !arrived(self) {
+        while self.caret != last && line.contains(&self.caret) {
             if self.input[self.caret..].starts_with(find.target) {
                 // `t` and `T` stop one character short of the target, on the side the jump came from.
                 if find.short {
@@ -2026,6 +2065,7 @@ impl Session {
                 }
                 return;
             }
+            last = self.caret;
             step(self);
         }
 

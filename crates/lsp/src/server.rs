@@ -12,8 +12,8 @@
 
 use crate::protocol::{
     Diagnostics, Operation, RpcNotification, RpcRequest, RpcResponse, content_length,
-    diagnostics_in, frame, hover_text, initialize_params, locations_in, path_to_uri,
-    position_params, reference_params,
+    diagnostic_text_in, diagnostics_in, frame, hover_text, initialize_params, locations_in,
+    path_to_uri, position_params, reference_params,
 };
 use crate::{Answer, LspError, LspResult};
 use bravebot_core::capability::Capability;
@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// How long a request may wait for the index to settle before answering from what there is.
 ///
@@ -268,6 +268,98 @@ enum Key {
 /// The directory holding one index per workspace, directly under the state directory.
 const CACHE_ROOT: &str = "lsp";
 
+/// The file inside an index directory whose modification time says when a server last started on it.
+///
+/// An index is rewritten deep inside by whatever the server runs, and the directory's own time moves
+/// only when an entry is added or removed directly in it, so neither says whether the index is in
+/// use. A server start stamps this file ([`mark_used`]) and [`remove_unused_indexes`] reads nothing
+/// else.
+const USED_MARKER: &str = ".used";
+
+/// Stamp `index` as used now, by creating or touching its marker.
+///
+/// A marker that is not a plain file is somebody else's and is left alone: opening one by a link
+/// would set the time of whatever it leads to. A failure is dropped, since an index that cannot be
+/// stamped is one that stays unstamped, and a stamp that never lands keeps an index rather than
+/// removing it.
+fn mark_used(index: &Path) {
+    let marker = index.join(USED_MARKER);
+    match std::fs::symlink_metadata(&marker) {
+        Ok(found) if found.is_file() => {
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&marker) {
+                let _ = file.set_modified(SystemTime::now());
+            }
+        }
+        Ok(_) => {}
+        Err(_) => {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let _ = options.open(&marker);
+        }
+    }
+}
+
+/// When a server last started on `index`, or `None` where nothing says.
+fn last_used(index: &Path) -> Option<SystemTime> {
+    let found = std::fs::symlink_metadata(index.join(USED_MARKER)).ok()?;
+    found.is_file().then(|| found.modified().ok()).flatten()
+}
+
+/// Remove every index under `state` that no server has started on since `cutoff`, returning how
+/// many went.
+///
+/// The age is the modification time of the marker a server start stamps and nothing a file holds,
+/// so no byte an index contains decides whether it is kept. An index with no marker is one an
+/// earlier build wrote: it is stamped now and kept, so it is removed once a whole period has gone
+/// by without a server starting on it, rather than on the strength of a time it never recorded.
+/// `state` is the state directory itself.
+///
+/// `in_use` is the workspace of the session that is starting, whose index is kept at any age: a
+/// server is about to start on it, and one removed under that server would be written again while
+/// the server runs.
+///
+/// Only a directory directly under `lsp` is looked at. A link standing as `lsp` or as one of its
+/// entries is stepped over, because where it leads is outside the directory this was given, and
+/// `remove_dir_all` removes a link inside a directory as the link rather than what it points at. A
+/// removal that fails costs that index and nothing more. A server of another process that is running
+/// when its index goes writes it again, so the cost of removing one in use is the time the server
+/// takes to build it.
+pub fn remove_unused_indexes(state: &Path, cutoff: SystemTime, in_use: Option<&Path>) -> usize {
+    let root = state.join(CACHE_ROOT);
+    if !std::fs::symlink_metadata(&root).is_ok_and(|found| found.is_dir()) {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return 0;
+    };
+    let kept = in_use.map(|workspace| cache_under(state, workspace));
+    let mut removed = 0;
+    for entry in entries.filter_map(Result::ok) {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let index = entry.path();
+        if kept.as_deref() == Some(index.as_path()) {
+            continue;
+        }
+        match last_used(&index) {
+            Some(used) if used < cutoff => {
+                if std::fs::remove_dir_all(&index).is_ok() {
+                    removed += 1;
+                }
+            }
+            Some(_) => {}
+            None => mark_used(&index),
+        }
+    }
+    removed
+}
+
 /// Remove an index an earlier build put one directory too deep.
 ///
 /// The state directory's own name used to be appended a second time, so the index landed in
@@ -440,6 +532,7 @@ fn create_cache(path: &Path) -> std::io::Result<()> {
         remove_misplaced_index(state);
     }
     create_private(path)?;
+    mark_used(path);
     #[cfg(unix)]
     {
         // The directory holding one cache per workspace, narrowed for the same reason. This one and
@@ -780,18 +873,19 @@ impl Server {
             language_ids,
         } = spec;
 
-        let mut command = std::process::Command::new(resolved);
-        command.args(&args);
-
         // The user's environment reaches the server, because it runs with their access and a
         // toolchain reads its own variables to work: `CARGO_HOME`, `GOPATH`, `NODE_PATH`. What does
         // not reach it is this agent's own credentials, which is RUN-12 exactly: a person approving a
         // server read what it is and where it will run, and a credential travelling alongside was
         // granted without having been seen. The names come from the caller because which they are is
         // the host's business, the same reason `resolved` is passed in rather than looked up here.
-        for name in withheld {
-            command.env_remove(name);
-        }
+        // Its `PATH` is bravebot's own: it runs the project's interpreter on purpose (LSP-5).
+        let mut command = bravebot_sandbox::programs::start(
+            &bravebot_sandbox::programs::Resolved::found_earlier(resolved),
+            bravebot_sandbox::programs::Inherits::Without(withheld),
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        );
+        command.args(&args);
 
         // Where the index goes, said to each ecosystem in its own spelling. Nothing is written to the
         // workspace, which is LSP-10.
@@ -1125,6 +1219,18 @@ impl Server {
     /// not waited for: [`Diagnostics`]' caller is told through [`Server::is_indexed`] whether what
     /// came back may be short.
     pub fn diagnostics(&mut self, path: &str) -> LspResult<Option<Diagnostics>> {
+        self.last_notice(path, diagnostics_in)
+    }
+
+    /// Send the file and read the last notice the server publishes about it with `read`.
+    ///
+    /// `read` picks what to take out of a notice, so a caller that wants no prose passes a reader
+    /// that never touches it.
+    fn last_notice<T>(
+        &mut self,
+        path: &str,
+        read: impl Fn(&Value, &str, i64) -> Option<T>,
+    ) -> LspResult<Option<T>> {
         let uri = path_to_uri(path);
         // What was already queued predates the bytes about to be sent, so a notice in it describes
         // a version of the file that is gone.
@@ -1151,11 +1257,40 @@ impl Server {
                 return Ok(latest);
             };
             self.note_progress(&message);
-            if let Some(found) = diagnostics_in(&message, &uri, sent) {
+            if let Some(found) = read(&message, &uri, sent) {
                 latest = Some(found);
                 quiet_from = Some(Instant::now());
             }
         }
+    }
+
+    /// The `diagnostics` operation: what the server publishes about a file, in two halves.
+    ///
+    /// LSP-13. The severities and lines are structure and travel as [`Diagnostics`]. The messages
+    /// are content, handed back as a bare string for the caller to label. Both are read from the
+    /// same notice, so the lines the planner is told and the messages it may later vet describe the
+    /// same bytes. A server that publishes nothing in time is [`LspError::NoReport`], not a clean
+    /// file.
+    fn report(&mut self, path: &str) -> LspResult<Answer> {
+        let published = self.last_notice(path, |message, uri, sent| {
+            Some((
+                diagnostics_in(message, uri, sent)?,
+                diagnostic_text_in(message, uri, sent)?,
+            ))
+        })?;
+        let Some((found, text)) = published else {
+            return Err(LspError::NoReport {
+                language: self.served.clone(),
+            });
+        };
+        Ok(Answer {
+            locations: Vec::new(),
+            // Whether there is anything to hand back is read from the count, an integer the
+            // notice reported, and never from the length of the words.
+            text: (found.count() > 0).then_some(text),
+            diagnostics: Some(found),
+            partial: !self.indexed,
+        })
     }
 
     /// Notice a server saying it has finished indexing.
@@ -1243,6 +1378,11 @@ impl Server {
         self.settle();
 
         let operation = question.operation;
+        // Answered from a notice the server publishes, and ahead of the requests below: `method()`
+        // names that notice, which is nothing a client may put as a request.
+        if operation == Operation::Diagnostics {
+            return self.report(question.path);
+        }
         let uri = path_to_uri(question.path);
 
         // The protocol requires a document be opened before it is asked about: a server answers
@@ -1281,9 +1421,8 @@ impl Server {
                 Value::Array(items) if !items.is_empty() => items[0].clone(),
                 _ => {
                     return Ok(Answer {
-                        locations: Vec::new(),
-                        text: None,
                         partial: !self.indexed,
+                        ..Answer::default()
                     });
                 }
             };
@@ -1316,6 +1455,7 @@ impl Server {
             text: (operation == Operation::Hover)
                 .then(|| hover_text(&result))
                 .flatten(),
+            diagnostics: None,
             // LSP-7: an answer given before the index settled is partial, whatever it found.
             partial: !self.indexed,
         })
@@ -1842,6 +1982,50 @@ done
         }
     }
 
+    /// RUN-12: a server is not handed a name its launcher is told to withhold, and is handed the
+    /// rest. The regression it rejects: a start that ignores the names, which hands a server this
+    /// agent's own credentials. The server writes its environment and exits, so the launch fails
+    /// and the file is what it was handed.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_is_not_handed_the_names_it_is_told_to_withhold() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        let seen = tmp.path().join("environment.txt");
+        let script = tmp.path().join("records-its-environment.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\n/usr/bin/env > '{}'\n", seen.display()),
+        )
+        .expect("write the script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let handed = |withheld: &[String]| {
+            // A launch that fails writes to the process-wide diagnostic log.
+            let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = std::fs::remove_file(&seen);
+            // A script written a moment ago can be refused for being open for writing while another
+            // test forks, so it is launched again until it has run.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !seen.exists() && std::time::Instant::now() < deadline {
+                let _ = Server::launch(
+                    Language::Rust,
+                    &script,
+                    tmp.path(),
+                    &tmp.path().join("cache"),
+                    withheld,
+                );
+            }
+            std::fs::read_to_string(&seen)
+                .expect("the server ran")
+                .lines()
+                .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_string()))
+                .collect::<Vec<String>>()
+        };
+
+        assert!(handed(&[]).contains(&"PATH".to_string()));
+        assert!(!handed(&["PATH".to_string()]).contains(&"PATH".to_string()));
+    }
+
     /// LSP-5: nothing starts until a person says so, and a refusal is not a failure of the tool.
     #[test]
     fn starting_a_server_is_put_to_a_person() {
@@ -2117,6 +2301,157 @@ done
         );
     }
 
+    /// Stamp an index's marker as last used `days` ago, standing in for a server start that long
+    /// ago, and put a file in it so removing it is a removal of something.
+    fn index_last_used(state: &Path, name: &str, days: u64) -> PathBuf {
+        let index = state.join(CACHE_ROOT).join(name);
+        std::fs::create_dir_all(index.join("debug")).expect("an index");
+        std::fs::write(
+            index.join("debug").join("derived"),
+            "derived from the workspace",
+        )
+        .expect("write");
+        let marker = index.join(USED_MARKER);
+        std::fs::write(&marker, "").expect("marker");
+        let then = SystemTime::now() - Duration::from_secs(days * 86_400);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&marker)
+            .expect("open marker")
+            .set_modified(then)
+            .expect("age the marker");
+        index
+    }
+
+    fn thirty_days_ago() -> SystemTime {
+        SystemTime::now() - Duration::from_secs(30 * 86_400)
+    }
+
+    /// STATE-4: an index no server has started on for longer than the period goes, and one a server
+    /// started on inside it stays, so the sweep is told apart from one that empties the directory.
+    #[test]
+    fn an_index_no_server_started_on_for_the_period_is_removed_and_a_newer_one_is_kept() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-age");
+        let old = index_last_used(&scratch, "00000000000000aa", 40);
+        let new = index_last_used(&scratch, "00000000000000bb", 3);
+
+        let removed = remove_unused_indexes(&scratch, thirty_days_ago(), None);
+
+        assert_eq!(removed, 1);
+        assert!(!old.exists(), "an index unused for forty days was kept");
+        assert!(
+            new.join("debug").join("derived").is_file(),
+            "an index used three days ago was removed"
+        );
+    }
+
+    /// STATE-4: a server starting on an index is what makes it recent. An index that has been in use
+    /// all along has had nothing added to its top directory for months, so reading the age off the
+    /// directory would remove the one a person is working in.
+    #[test]
+    fn starting_a_server_on_an_index_keeps_it_from_being_removed() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-start");
+        let index = index_last_used(&scratch, "00000000000000cc", 40);
+
+        create_cache(&index).expect("a server starts on it");
+        let removed = remove_unused_indexes(&scratch, thirty_days_ago(), None);
+
+        assert_eq!(removed, 0);
+        assert!(index.join("debug").join("derived").is_file());
+    }
+
+    /// STATE-4: an index an earlier build wrote records no time, so it is not removed on the strength
+    /// of one it never had. It is given a time when first seen and goes once a whole period has
+    /// passed from then.
+    #[test]
+    fn an_index_with_no_recorded_use_is_kept_and_removed_a_period_later() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-legacy");
+        let index = scratch.join(CACHE_ROOT).join("00000000000000dd");
+        std::fs::create_dir_all(&index).expect("an index an earlier build wrote");
+        std::fs::write(index.join("derived"), "derived from the workspace").expect("write");
+
+        assert_eq!(remove_unused_indexes(&scratch, thirty_days_ago(), None), 0);
+        assert!(index.join("derived").is_file(), "removed at first sight");
+        assert!(index.join(USED_MARKER).is_file(), "no time was recorded");
+
+        let a_period_later = SystemTime::now() + Duration::from_secs(60);
+        assert_eq!(remove_unused_indexes(&scratch, a_period_later, None), 1);
+        assert!(!index.exists());
+    }
+
+    /// STATE-1: removal stops at the state directory and steps over links. A link standing as the
+    /// directory of indexes, or as one index, leads outside what the sweep was given, and what is
+    /// there is not this crate's to remove.
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_does_not_follow_a_link_out_of_the_state_directory() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-link");
+        let state = scratch.join("state");
+        let elsewhere = index_last_used(&scratch, "elsewhere", 400);
+        std::fs::create_dir_all(state.join(CACHE_ROOT)).expect("lsp");
+        std::os::unix::fs::symlink(&elsewhere, state.join(CACHE_ROOT).join("linked"))
+            .expect("link an index");
+
+        assert_eq!(remove_unused_indexes(&state, thirty_days_ago(), None), 0);
+        assert!(
+            elsewhere.join("debug").join("derived").is_file(),
+            "an index outside the state directory was removed through a link"
+        );
+
+        let linked_root = scratch.join("linked-state");
+        std::fs::create_dir_all(&linked_root).expect("state");
+        std::os::unix::fs::symlink(
+            elsewhere.parent().expect("the directory holding it"),
+            linked_root.join(CACHE_ROOT),
+        )
+        .expect("link the directory of indexes");
+
+        assert_eq!(
+            remove_unused_indexes(&linked_root, thirty_days_ago(), None),
+            0
+        );
+        assert!(elsewhere.join("debug").join("derived").is_file());
+    }
+
+    /// STATE-4: only an index is looked at. A file sitting in the directory of indexes is not one,
+    /// whatever its age.
+    #[test]
+    fn a_file_among_the_indexes_is_left_where_it_is() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-file");
+        std::fs::create_dir_all(scratch.join(CACHE_ROOT)).expect("lsp");
+        let stray = scratch.join(CACHE_ROOT).join("notes");
+        std::fs::write(&stray, "somebody's own").expect("write");
+
+        assert_eq!(
+            remove_unused_indexes(&scratch, SystemTime::now() + Duration::from_secs(60), None),
+            0
+        );
+        assert!(stray.is_file());
+    }
+
+    /// STATE-4: the index of the workspace the session starting is in is kept at any age, because a
+    /// server is about to start on it. Another workspace's index of the same age is removed beside
+    /// it, so the exemption is the workspace's and not a pass for every old index.
+    #[test]
+    fn the_index_of_the_workspace_being_opened_is_kept_at_any_age() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-in-use");
+        let workspace = scratch.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("a workspace");
+        let name = cache_under(&scratch, &workspace)
+            .file_name()
+            .expect("an index is named")
+            .to_string_lossy()
+            .into_owned();
+        let kept = index_last_used(&scratch, &name, 400);
+        let other = index_last_used(&scratch, "00000000000000ee", 400);
+
+        let removed = remove_unused_indexes(&scratch, thirty_days_ago(), Some(&workspace));
+
+        assert_eq!(removed, 1);
+        assert!(kept.join("debug").join("derived").is_file());
+        assert!(!other.exists(), "another workspace's old index was kept");
+    }
+
     /// LSP-10: two workspaces do not share an index.
     #[test]
     fn the_cache_is_keyed_by_the_workspace() {
@@ -2387,6 +2722,128 @@ done
         assert_ne!(unconfigured, missing);
     }
 
+    #[cfg(unix)]
+    const CANNOT_BE_RUN: &str = "bravebot-lsp-cannot-be-run";
+
+    #[cfg(unix)]
+    fn a_program_that_cannot_be_run(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(CANNOT_BE_RUN).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn no_program_anywhere(_: &str) -> Option<PathBuf> {
+        None
+    }
+
+    /// LSP-6: a question put to `Servers::ask` fails with the sentence for the case it is in, and
+    /// never with an empty answer or a search over the tree. A planner that read any of the three
+    /// as "nothing calls this" would delete a function that is called.
+    ///
+    /// Through the entry point the tool calls rather than the error values: the three sentences
+    /// are only distinct if `ask` reaches the right one for the right cause. The program that
+    /// cannot be run is a file without the execute bit, so the failure is the launch's and the
+    /// server never reaches the protocol.
+    #[cfg(unix)]
+    #[test]
+    fn asking_with_no_server_says_which_of_the_three_cases_it_is() {
+        let scratch = crate::testutil::Scratch::new(CANNOT_BE_RUN);
+        std::fs::create_dir_all(scratch.join("src")).expect("create the workspace");
+        std::fs::write(scratch.join("src").join("a.rs"), "pub struct Held;\n").expect("write");
+        std::fs::write(scratch.join("notes.txt"), "Held\n").expect("write");
+        std::fs::write(scratch.join("server"), "#!/bin/sh\nexit 0\n").expect("write the server");
+
+        let asked_about = |servers: &mut Servers, path: &str| {
+            let started_asking = std::cell::Cell::new(false);
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut routing = bravebot_core::policy::Routing::new();
+            routing.insert_trusted("task", "look up");
+            let mut policy = Policy::begin(
+                routing,
+                bravebot_core::policy::ReleasePlan::new(),
+                bravebot_core::capability::CapabilitySet::from_iter([Capability::LanguageServer]),
+                &mut sink,
+            )
+            .expect("policy");
+            let result = servers.ask(
+                &mut policy,
+                &Question {
+                    operation: Operation::References,
+                    path,
+                    line: 1,
+                    character: 12,
+                    query: None,
+                },
+                &mut |_| {
+                    started_asking.set(true);
+                    true
+                },
+            );
+            (result, started_asking.get())
+        };
+
+        let mut cannot_run = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            a_program_that_cannot_be_run,
+            false,
+            Vec::new,
+        );
+        let mut absent = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            no_program_anywhere,
+            false,
+            Vec::new,
+        );
+
+        let (unconfigured, asked) = asked_about(&mut absent, "notes.txt");
+        let unconfigured =
+            unconfigured.expect_err("a file no server is configured for is no answer");
+        assert!(
+            matches!(&unconfigured, LspError::NoServerFor { path } if path == "notes.txt"),
+            "{unconfigured:?}"
+        );
+        assert!(
+            !asked,
+            "a person was asked to start a server that cannot exist"
+        );
+
+        let (missing, asked) = asked_about(&mut absent, "src/a.rs");
+        let missing = missing.expect_err("a server that is not installed is no answer");
+        assert!(
+            matches!(&missing, LspError::NoBinary { program, .. } if program == "rust-analyzer"),
+            "{missing:?}"
+        );
+        assert!(
+            !asked,
+            "a person was asked to start a server that is not there"
+        );
+
+        let (failed, asked) = asked_about(&mut cannot_run, "src/a.rs");
+        let failed = failed.expect_err("a server that did not start is no answer");
+        assert!(matches!(&failed, LspError::Start { .. }), "{failed:?}");
+        assert!(
+            asked,
+            "the person was not asked before the launch was tried"
+        );
+
+        let said = [
+            unconfigured.to_string(),
+            missing.to_string(),
+            failed.to_string(),
+        ];
+        assert!(
+            said[0].contains("no language server is configured"),
+            "{}",
+            said[0]
+        );
+        assert!(said[1].contains("is not installed"), "{}", said[1]);
+        assert!(said[2].contains("did not start"), "{}", said[2]);
+        for sentence in &said {
+            assert!(!sentence.contains("no references"), "{sentence}");
+        }
+    }
+
     /// A server starts under the spawn gate, so it cannot overlap the creation of a control channel.
     #[cfg(unix)]
     #[test]
@@ -2446,6 +2903,7 @@ done
                 kind: None,
             }],
             text: None,
+            diagnostics: None,
             partial: true,
         };
         assert!(
@@ -2547,22 +3005,29 @@ done
 
     /// LSP-9: the capability is checked before a process is started, so a run that was not granted
     /// one does not get a server launched on its behalf.
+    #[cfg(unix)]
     #[test]
     fn a_request_without_the_capability_is_refused() {
-        use bravebot_core::capability::CapabilitySet;
-
+        let mut servers = Servers::new(root(), None, |_| None, false, Vec::new);
         // The grant a file read gives is not this one, which is the whole clause.
-        let reads_only = CapabilitySet::from_iter([Capability::FileRead]);
-        assert!(
-            reads_only.token_for(&Capability::LanguageServer).is_none(),
-            "file reads must not carry a language server with them"
-        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_holding(&mut sink, [Capability::FileRead]);
 
-        // And an empty set carries nothing, so the default is refusal.
+        let mut asked = false;
+        let refused = servers.ask(&mut policy, &definition_in("/workspace/a.rs"), &mut |_| {
+            asked = true;
+            true
+        });
+
+        assert!(matches!(refused, Err(LspError::Denied(_))), "{refused:?}");
         assert!(
-            CapabilitySet::none()
-                .token_for(&Capability::LanguageServer)
-                .is_none()
+            !asked,
+            "a refused request must not reach the approval prompt"
+        );
+        assert_eq!(
+            servers.running(),
+            0,
+            "a refused request must start no server"
         );
     }
 
@@ -4014,6 +4479,184 @@ done
             servers
                 .diagnostics(&mut policy, &format!("{path}.txt"))
                 .is_none()
+        );
+    }
+    #[cfg(unix)]
+    const DIAGNOSING_ON_REQUEST: &str = "bravebot-lsp-diagnosing-on-request";
+
+    #[cfg(unix)]
+    const DIAGNOSING_NOTHING_ON_REQUEST: &str = "bravebot-lsp-diagnosing-nothing-on-request";
+
+    #[cfg(unix)]
+    const DIAGNOSING_BEFORE_INDEXED: &str = "bravebot-lsp-diagnosing-before-indexed";
+
+    #[cfg(unix)]
+    fn the_server_diagnosing_on_request(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_ON_REQUEST).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_saying_nothing_on_request(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_NOTHING_ON_REQUEST).join("server"))
+    }
+
+    #[cfg(unix)]
+    fn the_server_diagnosing_before_it_is_indexed(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(DIAGNOSING_BEFORE_INDEXED).join("server"))
+    }
+
+    /// LSP-13: the `diagnostics` operation answers with the lines the server found and, apart from
+    /// them, the words it wrote, both read from the one notice that followed the file it was sent.
+    /// A second question sends the file again as a change and reads the notice that follows that.
+    ///
+    /// The script publishes one error on `didOpen` and none on `didChange`. Lines and words that
+    /// came from different notices, or a second answer that read the first one's, would not match
+    /// what each answer is asserted to hold.
+    #[cfg(unix)]
+    #[test]
+    fn the_diagnostics_operation_answers_lines_and_words_from_one_notice() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_ON_REQUEST);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_diagnosing_on_request,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        let question = Question {
+            operation: Operation::Diagnostics,
+            path,
+            line: 1,
+            character: 1,
+            query: None,
+        };
+
+        let opened = ask_with_the_server_approved(&mut servers, &question)
+            .expect("the question starts the server and it reports");
+        assert_eq!(
+            opened.diagnostics,
+            Some(Diagnostics {
+                errors: vec![7],
+                warnings: 0,
+                others: 0
+            })
+        );
+        assert_eq!(opened.text.as_deref(), Some("7:1 error: opened"));
+        assert!(
+            opened.locations.is_empty(),
+            "a diagnostic is not a location"
+        );
+        assert!(!opened.partial);
+        assert_eq!(servers.running(), 1);
+
+        let changed = ask_with_the_server_approved(&mut servers, &question)
+            .expect("the running server reports again");
+        assert_eq!(
+            changed.diagnostics,
+            Some(Diagnostics::default()),
+            "the second answer read the notice from before the file was sent again"
+        );
+        assert_eq!(changed.text, None, "a file with nothing wrong has no words");
+    }
+
+    /// LSP-13 and LSP-6: a server that publishes nothing about the file is not a file with no
+    /// errors. The operation reports that it did not report, in words that cannot be read as a clean
+    /// result, and not as a server that is absent.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_publishes_nothing_is_no_report_and_not_a_clean_file() {
+        let (_launching, scratch, file) =
+            a_workspace_a_server_rejects(DIAGNOSING_NOTHING_ON_REQUEST);
+        std::fs::write(
+            scratch.join("server"),
+            DIAGNOSING_SERVER.replacen("while IFS=", "SILENT=1\nwhile IFS=", 1),
+        )
+        .expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_saying_nothing_on_request,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+
+        let error = ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Diagnostics,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect_err("a server that said nothing has no answer to give");
+        assert!(matches!(error, LspError::NoReport { .. }), "{error:?}");
+        assert!(
+            !error.is_absence_of_a_server(),
+            "a server that ran and was quiet is not an absent one"
+        );
+        let said = error.to_string();
+        assert!(said.contains("does not mean it has no errors"), "{said}");
+        assert!(!said.contains("no errors reported"), "{said}");
+    }
+
+    /// LSP-13 and LSP-7: a report given while the index is still building says it may be short,
+    /// whatever it found. The question that started the server reported it settled, so the test
+    /// puts it back to unsettled and past its wait, which is where a server that never reports its
+    /// indexing finished stands after the bound.
+    #[cfg(unix)]
+    #[test]
+    fn a_report_given_before_the_index_settled_is_partial() {
+        let (_launching, scratch, file) = a_workspace_a_server_rejects(DIAGNOSING_BEFORE_INDEXED);
+        std::fs::write(scratch.join("server"), DIAGNOSING_SERVER).expect("write the server");
+        let mut servers = Servers::new(
+            scratch.to_path_buf(),
+            None,
+            the_server_diagnosing_before_it_is_indexed,
+            false,
+            Vec::new,
+        );
+        let path = file.to_str().expect("a utf-8 scratch path");
+        ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Definition,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("the question starts the server");
+        let server = servers
+            .running
+            .get_mut(&Key::Builtin(Language::Rust))
+            .expect("the question started it");
+        server.indexed = false;
+        server.waited = true;
+
+        let answer = ask_with_the_server_approved(
+            &mut servers,
+            &Question {
+                operation: Operation::Diagnostics,
+                path,
+                line: 1,
+                character: 1,
+                query: None,
+            },
+        )
+        .expect("an unsettled index still reports what it has");
+        assert!(
+            answer.partial,
+            "the report did not say the index was still building"
+        );
+        assert!(
+            answer.diagnostics.is_some(),
+            "an unsettled index still reports what it has"
         );
     }
 }

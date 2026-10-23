@@ -4,13 +4,14 @@
 //! a shell would chain them, whether an argument survives intact, and whether a run that goes
 //! wrong comes back with what it produced instead of nothing.
 
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+
 use bravebot_agent::exec::{self, ExecError};
 use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[allow(dead_code)]
 #[path = "../test-support/pipelines.rs"]
 mod pipelines;
 
@@ -32,7 +33,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-exec-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-exec-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -262,7 +264,9 @@ fn a_stage_runs_in_the_directory_it_was_given() {
     .expect("pwd runs");
     // The scratch path may be reached through a symlink, so the tail is what is compared.
     assert!(
-        ran.stdout.trim().ends_with("bravebot-exec-cwd"),
+        ran.stdout
+            .trim()
+            .ends_with(&format!("bravebot-exec-{}-cwd", std::process::id())),
         "ran somewhere else: {}",
         ran.stdout.trim()
     );
@@ -405,16 +409,56 @@ fn a_program_that_does_not_exist_is_reported_by_name() {
 
 /// Nothing is typed at a program bravebot started, so a stage that reads stdin gets an empty one.
 /// Inheriting the terminal's would hang the turn on input nobody is going to provide.
+///
+/// The run happens in a child of this test binary whose own stdin holds a line, which is what a
+/// terminal is: a spawner that inherited the descriptor would hand `cat` that line, where one run
+/// with a closed or `/dev/null` stdin (CI, nextest) could not tell the difference.
 #[test]
 fn a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal() {
-    let scratch = Scratch::new("stdin");
-    let ran = run(
-        Pipeline::new(vec![Stage::new("cat", Vec::new())]),
-        &scratch.path,
-    )
-    .expect("cat runs and ends");
-    assert_eq!(ran.stdout, "", "something was fed in that nobody approved");
-    assert!(ran.succeeded());
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    const TEST: &str = "a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal";
+    const CHILD: &str = "BRAVEBOT_TEST_STDIN_CHILD";
+    const TYPED: &str = "typed at the terminal";
+
+    if std::env::var_os(CHILD).is_some() {
+        let scratch = Scratch::new("stdin-child");
+        let ran = run(
+            Pipeline::new(vec![Stage::new("cat", Vec::new())]),
+            &scratch.path,
+        )
+        .expect("cat runs and ends");
+        assert_eq!(ran.stdout, "", "something was fed in that nobody approved");
+        assert!(ran.succeeded());
+        return;
+    }
+
+    // nosemgrep: rust.lang.security.current-exe.current-exe
+    let mut child = Command::new(std::env::current_exe().expect("test binary"))
+        .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+        .env(CHILD, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("child starts");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(format!("{TYPED}\n").as_bytes())
+        .expect("a line is typed");
+    let output = child.wait_with_output().expect("child ends");
+    let report = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a stage was handed the terminal's stdin: {report}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the child did not run the test: {report}"
+    );
 }
 
 /// The weakness this closes: a person approving a run reads the binary, the argv and the
@@ -537,6 +581,68 @@ fn no_stage_of_a_pipeline_sees_a_gateways_environment_token() {
     assert!(
         !ran.stdout.contains("a-live-gateway-token"),
         "a later stage was handed the gateway's token"
+    );
+}
+
+/// RUN-12: an assignment in front of a program does not bring a withheld name back. The line is
+/// the planner's, so a name it assigns is not one the person chose to hand over, whether the name
+/// is the one this process holds or another the block lists. The regression it rejects: removing
+/// the names before the line's assignments are applied, which hands the assigned value on.
+#[cfg(unix)]
+#[test]
+fn a_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step() {
+    let scratch = Scratch::new("scrub-gateway-assigned");
+    let _guard = with_a_gateway_token(&scratch);
+
+    let ran = line(
+        "ACME_GATEWAY_TOKEN=the-lines-own ACME_GATEWAY_FALLBACK=also env",
+        &scratch.path,
+    );
+
+    assert!(ran.succeeded(), "{}", ran.stdout);
+    for name in ["ACME_GATEWAY_TOKEN", "ACME_GATEWAY_FALLBACK"] {
+        assert_eq!(
+            value_of(&ran.stdout, name),
+            None,
+            "an assignment of {name} reached the program: {}",
+            ran.stdout
+        );
+    }
+    assert!(
+        !ran.stdout.contains("a-live-gateway-token"),
+        "the value this process holds reached the program"
+    );
+}
+
+/// The same for a background job, which starts its own commands.
+#[cfg(unix)]
+#[test]
+fn a_background_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step() {
+    let scratch = Scratch::new("scrub-gateway-background-assigned");
+    let _guard = with_a_gateway_token(&scratch);
+    let resolved = script(&scratch.path, "show-env", "#!/bin/sh\nenv\n");
+    let pipeline = Pipeline::new(vec![Stage::new("show-env", Vec::new())]);
+    let mut steps = pipelines::steps_of(&pipeline, &[resolved]).expect("the steps");
+    steps[0].environment = vec![("ACME_GATEWAY_TOKEN".into(), "the-lines-own".into())];
+
+    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+        .expect("it starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let printed = job.printed();
+    assert!(
+        printed.contains("PATH="),
+        "the job printed no environment at all: {printed}"
+    );
+    assert_eq!(
+        value_of(&printed, "ACME_GATEWAY_TOKEN"),
+        None,
+        "an assignment of a withheld name reached a background job: {printed}"
     );
 }
 
@@ -879,16 +985,18 @@ fn a_pipeline_that_ends_by_itself_is_not_marked_stopped() {
     assert!(ran.succeeded());
 }
 
-/// A backgrounded grandchild holds the write end of the pipe after its parent is killed, so the
-/// drain cannot be joined: it would wait on a process nobody is waiting for. The run must come
-/// back within the grace regardless.
+/// A grandchild that left the stage's process group holds the write end of the pipe after the stage
+/// is killed, so the drain cannot be joined: it would wait on a process nobody is waiting for. The
+/// run must come back within the grace regardless. Job control puts the background `sleep` in a
+/// group of its own, which is what a program that daemonises does, and one left in the stage's
+/// group would be ended with it and never hold the pipe at all.
 #[test]
 fn a_grandchild_holding_the_pipe_does_not_hang_the_run() {
     let scratch = Scratch::new("grandchild");
     let resolved = [script(
         &scratch.path,
         "detach",
-        "#!/bin/sh\nsleep 30 &\necho started\nsleep 30\n",
+        "#!/usr/bin/env bash\nset -m\nsleep 10 &\necho started\nsleep 10\n",
     )];
 
     let pipeline = Pipeline::new(vec![Stage::new("detach", Vec::new())]);
@@ -904,6 +1012,264 @@ fn a_grandchild_holding_the_pipe_does_not_hang_the_run() {
     assert!(
         started.elapsed() < std::time::Duration::from_secs(10),
         "the run hung on a pipe a grandchild was holding open"
+    );
+}
+
+/// Shell defining `count`, which counts into `beat` for as long as it runs. A program that is
+/// still running is told from one that was ended by the count: a process that is gone can be a
+/// zombie nobody has collected, and a count that has stopped moving cannot be one.
+#[cfg(unix)]
+const COUNTING: &str = "count() { i=0; while :; do i=$((i+1)); echo $i > beat.tmp; mv beat.tmp beat; sleep 0.05; done; }\n\
+                        waiting_for_the_count() { while [ ! -f beat ]; do sleep 0.02; done; }\n";
+
+/// [`run_within`] on a thread of its own, so a stop that never ends a stage fails the test instead
+/// of holding the suite open.
+#[cfg(unix)]
+fn stopped_within(
+    pipeline: &Pipeline,
+    resolved: &[PathBuf],
+    at: &std::path::Path,
+    limit: Duration,
+) -> exec::Ran {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let (pipeline, resolved, at) = (pipeline.clone(), resolved.to_vec(), at.to_path_buf());
+    std::thread::spawn(move || {
+        let _ = sender.send(run_within(&pipeline, &resolved, &at, limit));
+    });
+    receiver
+        .recv_timeout(limit + Duration::from_secs(30))
+        .expect("a run that outstayed its limit never came back")
+        .expect("a pipeline that outstays the limit is stopped, not an error")
+}
+
+/// Runs `body` as one stage and stops it at the limit, once it has printed `ready`.
+///
+/// The limit is found by trying, for the reason the test above it does. What is under test is what
+/// a stop does to a stage that is set up, and how long a loaded machine takes to set one up is a
+/// different question. A stage stopped before it printed `ready` is run again with twice the
+/// limit. Every assertion that follows is the same whichever limit produced the run.
+#[cfg(unix)]
+fn stopped_once_ready(at: &std::path::Path, body: &str) -> exec::Ran {
+    let resolved = [script(at, "stage", body)];
+    let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
+    let mut limit = Duration::from_secs(1);
+    loop {
+        for leftover in ["beat", "beat.tmp", "held", "cleaned", "child-ready"] {
+            let _ = std::fs::remove_file(at.join(leftover));
+        }
+        let ran = stopped_within(&pipeline, &resolved, at, limit);
+        if ran.stdout.contains("ready") {
+            return ran;
+        }
+        assert!(
+            limit < Duration::from_secs(16),
+            "the stage never became ready: {:?}",
+            ran.stdout
+        );
+        limit *= 2;
+    }
+}
+
+/// What the program counting into `beat` has counted to, or 0 before it has started.
+#[cfg(unix)]
+fn counted_to(at: &std::path::Path) -> u64 {
+    std::fs::read_to_string(at.join("beat"))
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Whether nothing is counting into `beat` any more.
+///
+/// Looked at twice, half a second apart and after a pause that lets a count already under way
+/// finish: a program that is still running counts every fraction of a second.
+#[cfg(unix)]
+fn nothing_is_counting(at: &std::path::Path) -> bool {
+    std::thread::sleep(Duration::from_millis(200));
+    let before = counted_to(at);
+    std::thread::sleep(Duration::from_millis(500));
+    counted_to(at) == before
+}
+
+/// Whether the program counting into `beat` is still running, seen by its count moving.
+///
+/// Waits until the count moves, so a machine that stalls the program for a while is not read as the
+/// program having ended.
+#[cfg(unix)]
+fn still_counting(at: &std::path::Path) -> bool {
+    let before = counted_to(at);
+    let waiting = std::time::Instant::now();
+    while waiting.elapsed() < Duration::from_secs(20) {
+        if counted_to(at) != before {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+/// What `git commit -a` does while a hook runs: it holds `.git/index.lock`, and it removes the
+/// file when it is told to end, which it cannot do once it has been killed. A run stopped at its
+/// limit that killed the stage outright left the lock for every later `git` command to fail on.
+#[cfg(unix)]
+#[test]
+fn a_stage_stopped_at_the_limit_is_asked_to_end_so_it_can_remove_what_it_holds() {
+    let scratch = Scratch::new("ask-before-kill");
+    let ran = stopped_once_ready(
+        &scratch.path,
+        "#!/bin/sh\ntrap 'rm -f held; exit 143' TERM\n: > held\necho ready\nsleep 30\n",
+    );
+
+    assert!(ran.stopped.is_some(), "the stop was not reported");
+    assert!(
+        !scratch.path.join("held").exists(),
+        "the stage was killed before it could remove the file it held"
+    );
+}
+
+/// The hook `git commit` runs is a program the stage started, and it kept running after the stage
+/// was killed because only the stage's own process was signalled.
+#[cfg(unix)]
+#[test]
+fn a_program_the_stage_started_is_ended_with_it_at_the_limit() {
+    let scratch = Scratch::new("end-the-group");
+    let ran = stopped_once_ready(
+        &scratch.path,
+        &format!("#!/bin/sh\n{COUNTING}count &\nwaiting_for_the_count\necho ready\nwait\n"),
+    );
+
+    assert!(ran.stopped.is_some(), "the stop was not reported");
+    assert!(
+        nothing_is_counting(&scratch.path),
+        "a program the stage started was left running when the stage was stopped"
+    );
+}
+
+/// The stage ends at once on the request, as `git` does, and a program it started is still
+/// undoing what it holds. The grace is the group's: killing what is left as soon as the stage has
+/// gone would cut that program off, which is the failure the request exists to prevent one process
+/// down.
+#[cfg(unix)]
+#[test]
+fn a_program_the_stage_started_is_given_the_grace_after_the_stage_has_ended() {
+    let scratch = Scratch::new("grace-for-the-group");
+    let ran = stopped_once_ready(
+        &scratch.path,
+        "#!/bin/sh\n\
+         ( trap 'sleep 0.5; : > cleaned; exit 0' TERM; : > child-ready; while :; do sleep 0.05; done ) &\n\
+         while [ ! -f child-ready ]; do sleep 0.02; done\n\
+         echo ready\n\
+         wait\n",
+    );
+
+    assert!(ran.stopped.is_some(), "the stop was not reported");
+    assert!(
+        scratch.path.join("cleaned").exists(),
+        "a program the stage started was killed before it had finished undoing what it held"
+    );
+}
+
+/// A stage that ignores the request to end is killed once it has had the grace to answer it, with
+/// whatever of its group is left. Asking and never killing would leave the run waiting on a stage
+/// that is not going to leave.
+#[cfg(unix)]
+#[test]
+fn a_stage_that_ignores_the_request_to_end_is_killed_with_what_it_started() {
+    let scratch = Scratch::new("ignore-then-kill");
+    let ran = stopped_once_ready(
+        &scratch.path,
+        &format!(
+            "#!/bin/sh\ntrap '' TERM\n{COUNTING}count &\nwaiting_for_the_count\necho ready\n\
+             while :; do sleep 1; done\n"
+        ),
+    );
+
+    assert!(ran.stopped.is_some(), "the stop was not reported");
+    assert!(
+        nothing_is_counting(&scratch.path),
+        "a stage that ignored the request to end, or what it started, was left running"
+    );
+}
+
+/// Ends the program a script left counting, so a failing test does not leave it counting.
+#[cfg(unix)]
+struct EndsTheCounter(PathBuf);
+
+#[cfg(unix)]
+impl Drop for EndsTheCounter {
+    fn drop(&mut self) {
+        if let Ok(pid) = std::fs::read_to_string(self.0.join("counter.pid")) {
+            let _ = std::process::Command::new("sh")
+                .args(["-c", "kill \"$0\"", pid.trim()])
+                .status();
+        }
+    }
+}
+
+/// A stage that has ended by itself has been collected, and its number is free to be given to a
+/// process it never started. Stopping the pipeline afterwards signals nothing by that number, so
+/// what the stage left running is left as it was: ending it would be a change to what a run that
+/// finished does, and a signal sent to a number that has been reused would reach a stranger.
+#[cfg(unix)]
+#[test]
+fn what_a_stage_left_running_after_it_ended_by_itself_is_not_signalled() {
+    let scratch = Scratch::new("left-alone");
+    let _ends = EndsTheCounter(scratch.path.clone());
+    let resolved = [script(
+        &scratch.path,
+        "stage",
+        &format!(
+            "#!/bin/sh\n{COUNTING}count &\necho $! > counter.pid\nwaiting_for_the_count\necho done\n"
+        ),
+    )];
+    let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
+
+    // The program the stage left holds the write end of the pipe, so this is also the stage that
+    // ended by itself while a child kept its output open: the run comes back within the grace the
+    // drain is given, with what the stage printed.
+    let started = std::time::Instant::now();
+    let ran = stopped_within(&pipeline, &resolved, &scratch.path, Duration::from_secs(60));
+
+    assert!(ran.stopped.is_none(), "the stage ended by itself");
+    assert!(ran.succeeded(), "the stage ended by itself: {ran:?}");
+    assert_eq!(ran.stdout.trim(), "done");
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the run hung on a pipe a child was holding open"
+    );
+    assert!(
+        still_counting(&scratch.path),
+        "stopping a pipeline whose stage had ended ended what that stage left running"
+    );
+}
+
+/// A background job is ended the same way a run stopped at its limit is, since a person's stop and
+/// the end of the turn are as likely to catch a hook half way through.
+#[cfg(unix)]
+#[test]
+fn killing_a_background_job_ends_what_its_stage_started() {
+    let scratch = Scratch::new("kill-background");
+    let resolved = [script(
+        &scratch.path,
+        "stage",
+        &format!("#!/bin/sh\n{COUNTING}count &\nwaiting_for_the_count\necho ready\nwait\n"),
+    )];
+    let pipeline = Pipeline::new(vec![Stage::new("stage", Vec::new())]);
+    let mut job = start(&pipeline, &resolved, &scratch.path).expect("the job starts");
+
+    let waiting = std::time::Instant::now();
+    while !job.printed().contains("ready") {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(30),
+            "the job never became ready"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    job.kill();
+
+    assert!(
+        nothing_is_counting(&scratch.path),
+        "a program the job's stage started was left running when the job was killed"
     );
 }
 
@@ -2198,6 +2564,146 @@ fn a_wait_for_more_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn()
     assert!(
         waited < std::time::Duration::from_secs(5),
         "a wait went on waiting after the person asked to stop a job: {waited:?}"
+    );
+}
+
+/// A job that prints more often than a round takes ends every wait that output ends at its next
+/// line, so waiting for it to finish costs a look per line. A wait for the exit is not told about
+/// output at all: it lasts as long as the job does, however much the job prints on the way and
+/// however much of it the caller has not been handed when the wait begins.
+#[test]
+fn waiting_for_exit_is_not_ended_by_the_output_of_a_job_that_keeps_printing() {
+    let scratch = Scratch::new("wait-for-exit-chatty");
+    // Six lines half a second apart, so the job runs for at least three seconds and has something
+    // unseen to say at every moment of them.
+    let resolved = script(
+        &scratch.path,
+        "chatty",
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 6 ]; do echo \"line $i\"; i=$((i + 1)); sleep 0.5; done\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("chatty", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !job.printed().contains("line 0") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Asserted rather than assumed: the caller has been handed nothing, so output it has not seen
+    // is already there when the wait begins, and that is half of what the wait must ignore.
+    let mut seen = exec::Seen::default();
+    assert!(
+        job.has_more(&seen),
+        "the job had printed nothing unseen by the time the wait began, so nothing below is a test \
+         of a wait that output does not end"
+    );
+
+    let began = std::time::Instant::now();
+    job.wait_for_exit(std::time::Duration::from_secs(60), &Cancel::new(), &[]);
+    let waited = began.elapsed();
+
+    // Whether the job had exited when the wait returned, which no host's load changes: a wait
+    // ended by output returns while the loop above still has lines to print.
+    assert!(
+        job.ended(),
+        "a wait for the exit came back while the job was still printing: {waited:?}"
+    );
+    assert!(
+        waited < std::time::Duration::from_secs(30),
+        "a wait for the exit ran to its bound though the job ended after a few seconds: {waited:?}"
+    );
+    let whole = job.since(&mut seen);
+    assert!(
+        whole.contains("line 0") && whole.contains("line 5"),
+        "what the job printed while it was waited for was not all handed over: {whole:?}"
+    );
+}
+
+/// The bound is the wait's own, and it ends a wait for the exit as it ends any other. A job still
+/// running and still printing when it runs out is reported as running rather than waited on
+/// further, which is what makes the longest a caller can be held the number it asked for.
+#[test]
+fn waiting_for_exit_lasts_its_bound_where_the_job_keeps_running_and_printing() {
+    let scratch = Scratch::new("wait-for-exit-bound");
+    // Thirty seconds of a line every fifth of a second: long enough that a wait ignoring its bound
+    // comes back far past it, and noisy enough that a wait ended by output comes back at once.
+    let resolved = script(
+        &scratch.path,
+        "endless",
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 150 ]; do echo tick; i=$((i + 1)); sleep 0.2; done\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("endless", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let bound = std::time::Duration::from_secs(2);
+    let began = std::time::Instant::now();
+    job.wait_for_exit(bound, &Cancel::new(), &[]);
+    let waited = began.elapsed();
+
+    assert!(
+        waited >= bound,
+        "a wait for the exit came back before its bound on a job that had not ended: {waited:?}"
+    );
+    assert!(
+        waited < std::time::Duration::from_secs(15),
+        "a wait for the exit went on past its bound: {waited:?}"
+    );
+    assert!(
+        !job.ended(),
+        "a job with half a minute left to run was reported ended"
+    );
+}
+
+/// The token is checked every pass of a wait for the exit as it is of one for output: a person who
+/// has changed their mind should not sit through up to ten minutes of somebody else's build.
+#[test]
+fn a_cancelled_wait_for_exit_comes_back_without_waiting_out_its_bound() {
+    let scratch = Scratch::new("wait-for-exit-cancelled");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let began = std::time::Instant::now();
+    job.wait_for_exit(std::time::Duration::from_secs(600), &cancel, &[]);
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a cancelled wait for the exit went on waiting: {waited:?}"
+    );
+}
+
+/// A stop the person asks for on any job of the turn is carried out at the turn's next step, which
+/// a wait for the exit holds back for as long as the job runs. So it ends that wait too.
+#[test]
+fn a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn() {
+    let scratch = Scratch::new("wait-for-exit-job-stopped");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let stop = JobStop::new();
+    let asking = stop.clone();
+    let asker = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        asking.request();
+    });
+    let began = std::time::Instant::now();
+    job.wait_for_exit(
+        std::time::Duration::from_secs(600),
+        &Cancel::new(),
+        &[JobStop::new(), stop],
+    );
+    let waited = began.elapsed();
+    asker.join().expect("the request was made");
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a wait for the exit went on after the person asked to stop a job: {waited:?}"
     );
 }
 

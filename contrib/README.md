@@ -57,6 +57,31 @@ something skipped: the parser is hand written against the subset of Fluent in
 report every catalog complete forever. `--selftest` checks the parse and the verdict against inputs
 whose answer is known, and reads no catalog; `make check-locales` runs it first, for the same reason.
 
+## check-lint-increase.py
+
+Fails a change that adds sites of a clippy lint the tree has hundreds of.
+
+`make check` runs clippy with `-D warnings`, so a lint is on only where the tree has no site of it.
+Others, such as `let_underscore_must_use`, `string_slice` and the numeric casts, report hundreds of
+sites in the existing code, and turning one on would need every site fixed or marked in the same
+change. This runs clippy over the libraries and binaries at the merge base and at the checkout, and
+fails when a lint reports more sites in a crate than it did at the base. Nothing is recorded in the
+tree, so no list falls behind the code. Both runs use one toolchain on one host, so a clippy release
+that finds more sites, and code that only another platform compiles, change both counts alike.
+
+A site that is right is marked where it is with `#[expect(clippy::lint, reason = "...")]`, which
+clippy does not report. A lint that reaches zero belongs in `[workspace.lints.clippy]`, which then
+refuses the first new site on its own.
+
+```sh
+make check-lint-increase          # or contrib/check-lint-increase.py
+```
+
+`make check` runs it after clippy, and CI runs it on pull requests. It compiles the workspace twice,
+about twenty seconds each with the dependencies built, and skips a change that touches nothing under
+`crates/` or the manifests. `--base REF` compares with another commit, and `BASE_SHA` sets it
+for CI. `--selftest` checks the verdict on known inputs and runs clippy on none of them.
+
 ## check-versions.py
 
 Holds every file that states this repository's version to the one in the workspace manifest.
@@ -132,6 +157,29 @@ and its untracked files. The
 a title or body runs this alone. `--selftest` builds a repository and checks what each source
 contributes; `make check-narration` runs it first.
 
+## check-pr-body.py
+
+Fails a pull request opened by `netzenbot` whose body does not say which cases it leaves undone, with an
+issue for each.
+
+The body has a line `Not covered: none`, or `Not covered:` followed by one bullet per case, each
+naming the issue that tracks it as `#N` or `brave/bravebot#N`. The rule is in
+[commits.md](../docs/development/commits.md). It cannot read whether the list is complete or whether
+an issue is about its case, so a reviewer reads the diff for that
+([GAP-001](../docs/best-practices/gaps.md#GAP-001)), and it does not look a number up. A quoted line
+inside a fenced code block or an HTML comment is not the line.
+
+```sh
+PR_BODY="$(cat body.md)" make check-pr-body   # a draft body
+make check-pr-body                            # the selftest alone, where there is no PR_BODY
+```
+
+In CI the [narration workflow](../.github/workflows/narration.yml) runs it with the event's body and
+author, when the pull request is opened, pushed to or edited. A body that is empty fails there. Only
+pull requests whose `PR_AUTHOR` is `netzenbot` are held to the line, and a run with no author holds the body. `pr-fix.py` loads
+this file to check the body it opens a pull request with. `--selftest` checks the verdict on known
+bodies and that the workflow runs the check on an edit.
+
 ## affected-checks.py
 
 Says which checks a change needs, from the paths it touches. CI's `Affected checks` job runs it on
@@ -189,6 +237,12 @@ the tests: it is nonzero when the measurement did not happen, or when an issue t
 filed was not, because a filer that has quietly stopped working looks exactly like a suite that
 stopped being flaky.
 
+`--save FILE` writes what was measured, and `--load FILE` files issues from that file and runs
+nothing else. The workflow measures in one job that holds no token, because cargo runs every build
+script and proc macro in `Cargo.lock` and the child environment would otherwise carry it, and files
+from another job that holds `issues: write` and runs only `gh` (#2789). The script drops `GH_TOKEN`
+and `GITHUB_TOKEN` from the environment it gives cargo as well.
+
 `--summary FILE` appends the same report to a file, which is how the weekly
 [Test determinism](../.github/workflows/test-determinism.yml) workflow puts it in a job summary.
 That workflow names both thread counts rather than leaving either to cargo, since a hosted runner
@@ -207,6 +261,39 @@ rather than ruling it out.
 of its own in that workflow, which is also what a pull request touching this file runs, and the
 thing to run after touching a regular expression here: a parser that matches nothing reports a clean
 suite forever.
+
+## measure-mutants.py
+
+Names the changes to the code that no test notices.
+
+A passing suite says every assertion held, and not that the assertions would fail if the code were
+wrong. [TS-003](../docs/best-practices/tests.md#TS-003) asks for that proof of a new test, one fault
+at a time by hand. [cargo-mutants](https://mutants.rs) does it for a crate: it changes one thing, such
+as a `<` to a `<=` or a function body to `true`, runs the tests, and reports each change they did not
+fail on as missed.
+
+The report is the product. It gives the share of tested changes that made a test fail, the files with
+the most missed changes, and the functions with the most, each with its lines and the change that
+survived. Nothing fails over a score, because a job that goes red over a list is one people learn to
+ignore. Only a measurement that did not happen fails: cargo-mutants exiting for a usage error or
+because the suite fails before anything is changed, or a report of fewer shards than were run.
+
+```sh
+cargo install --locked cargo-mutants@27.1.0
+contrib/measure-mutants.py run --package bravebot-core --shard 0/6 --save shard-0.json
+contrib/measure-mutants.py run --package bravebot-core --save one-file.json -- --file crates/core/src/canonical.rs
+contrib/measure-mutants.py report shard-*.json --shards 6 --summary summary.md
+```
+
+`bravebot-core` has about three thousand changes, two to five seconds each, so the
+[Mutation testing](../.github/workflows/mutation-testing.yml) workflow cuts it into six shards,
+measures each in a job that holds no grant and no secret, and joins them in a job that runs no cargo.
+It runs on Sundays and by hand, and its pull request trigger runs only `--selftest`. Timeouts are
+changes that make the code loop; they are counted apart and left out of the score. A change in the
+list is one of three things: a test that is missing, an assertion too loose to fail, or code whose
+behaviour does not matter, such as a `<` in a loop bound that only changes how many times a no-op runs.
+Only the first two are fixed. `agents/skills/security-audit` treats `run` as it does a cargo build,
+so a job that holds a token cannot start one.
 
 ## drive_tui.py
 

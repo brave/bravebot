@@ -11,44 +11,15 @@
 //
 // Costs nothing: it never sends a prompt. It does drive the fold commands, which share the
 // persisted layout with every other driver, so it puts the columns back before it leaves.
-import { _electron as electron } from 'playwright-core'
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { checker, launchLive, COMPOSER_INPUT } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
-const problems = []
-const check = (ok, what) => {
-  console.log(`${ok ? '  ok  ' : ' FAIL '} ${what}`)
-  if (!ok) problems.push(what)
-}
+const { check, problems } = checker()
 
-// The left column has two tabs and remembers which was last open, so a run after somebody left it
-// on the bots — or after a run of `drive-bots.mjs` that was interrupted before its teardown — would
-// find the session list present in the DOM and invisible, and every click below would time out
-// against an element that is right there. Everything here is about that list, so it is put back on
-// screen first: a driver leaves the window as the next one expects to find it, and does not assume
-// it was left that way.
-async function showSessions(page) {
-  await page
-    .locator('[data-test="sidebar-tabs"]')
-    .getByText('Chats', { exact: true })
-    .waitFor({ state: 'visible', timeout: 15000 })
-    .catch(() => undefined)
-  await page
-    .locator('[data-test="sidebar-tabs"]')
-    .getByText('Chats', { exact: true })
-    .click({ timeout: 3000 })
-    .catch(() => undefined)
-  await page.waitForTimeout(250)
-}
-
-const app = await electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
-const page = await app.firstWindow()
-await page.waitForLoadState('domcontentloaded')
-await showSessions(page)
-page.on('pageerror', (e) => console.log('PAGE ERROR:', e.message))
-page.on('console', (m) => m.type() === 'error' && console.log('CONSOLE ERROR:', m.text()))
+const { app, page } = await launchLive()
 await page.waitForTimeout(2000)
 
 /** The whole menu, flattened to something assertable. */
@@ -221,14 +192,14 @@ if (hasSessions) {
   check(openItem('turn.send').enabled === false, 'an empty composer still leaves Send grey')
 
   // The assertion that proves the state channel is live in both directions.
-  await page.locator('.composer textarea').fill('hello')
+  await page.locator(COMPOSER_INPUT).fill('hello')
   await page.waitForTimeout(400)
   open = await readMenu()
   check(
     open.flatMap((m) => m.items).find((i) => i.id === 'turn.send').enabled === true,
     'typing into the composer enables Send',
   )
-  await page.locator('.composer textarea').fill('')
+  await page.locator(COMPOSER_INPUT).fill('')
   await page.waitForTimeout(400)
   open = await readMenu()
   check(

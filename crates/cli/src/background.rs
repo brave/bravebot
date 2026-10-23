@@ -1,5 +1,5 @@
 //! `bravebot sessions`, `--bg`, `attach` and `reply`: the sessions that keep running after the
-//! terminal closes (BG-1, BG-2, BG-5, BG-9, BG-10).
+//! terminal closes (BG-1, BG-2, BG-5, BG-9, BG-10, BG-11, BG-16).
 //!
 //! Everything drawn here is a thing the person typed, a fact about a process, or a word from a
 //! fixed set. The roster has no field for anything else (BG-4), so there is nothing in it to
@@ -8,6 +8,7 @@
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
 use bravebot_session::jobs::{Held, Lookup, Mode, Roster, Seen, State, Stopped};
+use bravebot_tui::sessions_view::{Choice, Row};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -19,19 +20,34 @@ const GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 const ID_SHOWN: usize = 8;
 
 /// `bravebot sessions [--json]` and `bravebot sessions stop <id>`.
+///
+/// The bare word is the roster of background sessions, which is what it has always been. The
+/// sessions recorded for a directory are a separate listing under `list` (CLI-32).
 pub(crate) fn sessions(args: &[String]) -> ExitCode {
+    if wants_the_view(
+        args,
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+        std::io::stderr().is_terminal(),
+    ) {
+        return view();
+    }
     match args {
         [] => list(false),
         [flag] if flag == "--json" => list(true),
         [word, id] if word == "stop" => stop(id),
         [word, rest @ ..] if word == "import" => crate::session_import::command(rest),
         [word, rest @ ..] if word == "search" => crate::session_search::command(rest),
+        [word, rest @ ..] if word == "list" => crate::sessions_list::command(rest),
+        [word, rest @ ..] if word == "delete" => crate::session_delete::delete(rest),
+        [word, rest @ ..] if word == "purge" => crate::session_delete::purge(rest),
         _ => fail(Ending::Argument, t!(sessions_usage)),
     }
 }
 
-/// The directory `sessions import` and `sessions search` look in: the one the person typed, or the
-/// current one. It has to exist and be a directory; a path that is not one is an argument error.
+/// The directory `sessions import`, `sessions search`, `sessions list`, `sessions delete` and
+/// `sessions purge` look in: the one the person typed, or the current one. It has to exist and be a directory; a path that is not one is
+/// an argument error.
 pub(crate) fn project_directory(named: Option<PathBuf>) -> Result<PathBuf, ExitCode> {
     let directory = match named {
         Some(path) => path,
@@ -54,6 +70,41 @@ pub(crate) fn project_directory(named: Option<PathBuf>) -> Result<PathBuf, ExitC
                 t!(sessions_import_no_project, path = directory.display()),
             )
         })
+}
+
+/// Whether `bravebot sessions` opens the list rather than printing lines (BG-16).
+///
+/// Standard error is checked as well: an attach from the list needs it to say why it cannot start.
+fn wants_the_view(
+    args: &[String],
+    input_is_terminal: bool,
+    output_is_terminal: bool,
+    error_is_terminal: bool,
+) -> bool {
+    args.is_empty() && input_is_terminal && output_is_terminal && error_is_terminal
+}
+
+/// The list grouped by state; Enter on a row attaches as `bravebot attach` does (BG-16).
+fn view() -> ExitCode {
+    let roster = Roster::readable();
+    let read = || {
+        roster
+            .as_ref()
+            .map(|roster| rows_of(&roster.list()))
+            .unwrap_or_default()
+    };
+    let rows = read();
+    if rows.is_empty() {
+        return list(false);
+    }
+    match bravebot_tui::sessions_view::run(rows, read) {
+        Ok(Choice::Attach(id)) => attach(&[id]),
+        Ok(Choice::Leave) => ExitCode::SUCCESS,
+        Err(problem) => {
+            eprintln!("{}", t!(sessions_view_failed, problem = problem));
+            list(false)
+        }
+    }
 }
 
 fn list(as_json: bool) -> ExitCode {
@@ -115,6 +166,22 @@ pub(crate) fn start(words: &[String]) -> ExitCode {
     }
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return fail(Ending::Argument, t!(bg_needs_a_terminal));
+    }
+    // Asked here, in the process a person is looking at, because the host runs with nothing to say
+    // a refusal to: a session it opened on a machine with no service configured would send the
+    // prompt to Brave's endpoint and the answer would read as the agent being poor (BACKEND-39).
+    // What an import writes is read back by the host from disk.
+    let mut config = match bravebot_config::Config::from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            return fail(
+                Ending::Configuration,
+                t!(cli_configuration_problem, problem = err),
+            );
+        }
+    };
+    if let Some(ended) = crate::import::before_the_session(&mut config) {
+        return ended;
     }
     let Some(roster) = Roster::writable() else {
         return fail(Ending::Failed, t!(sessions_no_home));
@@ -180,6 +247,7 @@ fn start_host(
         if roster.get(id).is_some_and(|seen| seen.live)
             && roster.socket_of(id).is_some_and(|s| s.exists())
         {
+            ensure_supervisor(roster, &me);
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -188,15 +256,69 @@ fn start_host(
     Err(fail(Ending::Failed, t!(bg_not_started)))
 }
 
+/// Make sure a supervisor is running, so the process just started is started again if it ends
+/// between turns (BG-11, BG-12).
+///
+/// Done once the process is alive, not before. A supervisor that is about to end lets go of its lock
+/// and then looks at the roster once more, so a process alive by the time this looks at the lock is
+/// one it finds; a lock this finds free belongs to no supervisor and a new one is started. That
+/// order is what leaves no moment in which a live process has neither.
+///
+/// The session is running whatever becomes of this, so it is not undone when the supervisor cannot
+/// be started.
+#[cfg(unix)]
+fn ensure_supervisor(roster: &Roster, program: &std::path::Path) {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    if roster.has_supervisor() {
+        return;
+    }
+    let mut command = supervisor_command(program);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let Ok(mut supervisor) = command.spawn() else {
+        return;
+    };
+    // Until it holds its lock, so that the next `--bg` finds it rather than starting another, or
+    // until it has ended: it does when nothing is alive for it to watch.
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until && !roster.has_supervisor() {
+        if !matches!(supervisor.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The command that runs the supervisor: the hidden `__bg-supervisor`, from a directory that no
+/// terminal holds open.
+#[cfg(unix)]
+fn supervisor_command(program: &std::path::Path) -> std::process::Command {
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    );
+    command.arg("__bg-supervisor").current_dir("/");
+    command
+}
+
 /// The command that runs the process for `id`: the hidden `__bg-host` with the mode word it runs in.
 #[cfg(unix)]
-fn host_command(
+pub(crate) fn host_command(
     program: &std::path::Path,
     id: &str,
     directory: Option<&std::path::Path>,
     mode: Mode,
 ) -> std::process::Command {
-    let mut command = std::process::Command::new(program);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    );
     command.arg("__bg-host").arg(id).arg(mode.word());
     if let Some(directory) = directory {
         command.current_dir(directory);
@@ -226,6 +348,17 @@ pub(crate) fn host(_id: &str, _mode: Mode) -> ExitCode {
     ExitCode::FAILURE
 }
 
+/// The hidden command the supervisor runs under (BG-11).
+#[cfg(unix)]
+pub(crate) fn supervise() -> ExitCode {
+    crate::supervisor::supervise()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn supervise() -> ExitCode {
+    ExitCode::FAILURE
+}
+
 /// `/bg`: hand the foreground session `left` to a background process, which resumes its record in
 /// `mode` and opens idle. Said on the terminal the foreground session leaves (BG-2).
 ///
@@ -245,6 +378,17 @@ pub(crate) fn hand_over(
     Ok(())
 }
 
+/// The sentence that says the mode a background session runs in, to the person attached to it
+/// (BG-8). The session says it in its opening lines and `attach` says it again on joining.
+pub(crate) fn mode_line(mode: Mode) -> String {
+    let words = match mode {
+        Mode::Ask => t!(mode_ask),
+        Mode::AcceptEdits => t!(mode_accept_edits),
+        Mode::Plan => t!(mode_plan),
+    };
+    t!(bg_mode, mode = words).to_string()
+}
+
 /// Whether a background session is running under `id`, the id of a session record (BG-9).
 pub(crate) fn is_running(id: &str) -> bool {
     bravebot_session::jobs::is_running(id)
@@ -258,12 +402,7 @@ pub(crate) fn refuse_to_resume(id: &str) -> ExitCode {
 
 /// Why a session a background process is running cannot be resumed by a second one.
 pub(crate) fn held_by_a_background_session(id: &str) -> String {
-    let name = Roster::readable()
-        .and_then(|roster| roster.get(id))
-        .map(|seen| shown(&seen.job.name))
-        .unwrap_or_default();
-    let id: String = id.chars().take(ID_SHOWN).collect();
-    t!(resume_held_by_background, name = name, id = id).to_string()
+    bravebot_session::jobs::held_refusal(id, usize::MAX)
 }
 
 /// What a terminal does for a session that is not running.
@@ -397,6 +536,7 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
         _ => return fail(Ending::Failed, t!(attach_not_running, name = name)),
     }
     eprintln!("{}", t!(attach_joined, name = name.clone()));
+    eprintln!("{}", mode_line(seen.job.mode));
 
     let sending = stream;
     let detached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -537,24 +677,38 @@ fn shown(typed: &str) -> String {
     crate::progress::printable(typed).replace('\t', " ")
 }
 
-/// One line for each session: the start of its id, its name, its state, where it works, how long
+/// One row for each session: the start of its id, its name, its state, where it works, how long
 /// since its last turn, and the last prompt the person typed.
 ///
 /// A prompt that is held shows as needing input and the one word for its kind, and nothing of
-/// what it asks (BG-5).
-fn lines_of(seen: &[Seen]) -> Vec<String> {
+/// what it asks (BG-5). Both the lines and the list (BG-16) are drawn from these.
+fn rows_of(seen: &[Seen]) -> Vec<Row> {
     seen.iter()
         .map(|seen| {
             let job = &seen.job;
-            let id: String = job.id.chars().take(ID_SHOWN).collect();
-            let since =
-                bravebot_session::sessions::how_long_ago(job.last_turn.unwrap_or(job.started));
+            Row {
+                id: job.id.clone(),
+                short: job.id.chars().take(ID_SHOWN).collect(),
+                name: shown(&job.name),
+                state: seen.state(),
+                state_words: state_in_words(seen),
+                since: bravebot_session::sessions::how_long_ago(
+                    job.last_turn.unwrap_or(job.started),
+                ),
+                directory: shown(&job.directory),
+                prompt: shown(&bravebot_session::sessions::title_from(&job.prompt)),
+            }
+        })
+        .collect()
+}
+
+fn lines_of(seen: &[Seen]) -> Vec<String> {
+    rows_of(seen)
+        .iter()
+        .map(|row| {
             format!(
-                "{id}  {}  {}  {}  {since}  {}",
-                shown(&job.name),
-                state_in_words(seen),
-                shown(&job.directory),
-                shown(&bravebot_session::sessions::title_from(&job.prompt)),
+                "{}  {}  {}  {}  {}  {}",
+                row.short, row.name, row.state_words, row.directory, row.since, row.prompt
             )
         })
         .collect()
@@ -576,6 +730,7 @@ fn state_in_words(seen: &Seen) -> String {
                 Held::Move => t!(sessions_held_move),
                 Held::Manifest => t!(sessions_held_manifest),
                 Held::Question => t!(sessions_held_question),
+                Held::Message => t!(sessions_held_message),
             }
         )
         .to_string(),
@@ -589,6 +744,21 @@ fn state_in_words(seen: &Seen) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BG-8: the person attached is told the mode in words, one for each mode a background
+    /// session can run in, and never the mode a session cannot be in.
+    #[test]
+    fn the_mode_line_names_each_mode_a_background_session_runs_in() {
+        for (mode, words) in [
+            (Mode::Ask, "asking before it acts"),
+            (Mode::AcceptEdits, "accept edits on"),
+            (Mode::Plan, "plan mode on"),
+        ] {
+            let line = mode_line(mode);
+            assert!(line.contains(words), "{line}");
+            assert!(!line.contains("bypass"), "{line}");
+        }
+    }
 
     /// BG-8: the process is started with the word for the mode it runs in, in the directory the
     /// session worked in, and a start that names no mode asks.
@@ -607,6 +777,16 @@ mod tests {
             command.get_current_dir(),
             Some(std::path::Path::new("/work"))
         );
+    }
+    /// BG-11: the supervisor is started as the hidden command, away from any directory a terminal
+    /// is in, so closing the terminal that started it does not hold a directory open.
+    #[cfg(unix)]
+    #[test]
+    fn the_supervisor_is_started_as_the_hidden_command_from_the_root() {
+        let command = supervisor_command(std::path::Path::new("/bin/bravebot"));
+        let arguments: Vec<_> = command.get_args().collect();
+        assert_eq!(arguments, ["__bg-supervisor"]);
+        assert_eq!(command.get_current_dir(), Some(std::path::Path::new("/")));
     }
     use bravebot_session::jobs::{Job, Mode};
     use std::path::Path;
@@ -665,6 +845,26 @@ mod tests {
         assert!(rows[0].contains("fix the build"), "{rows:?}");
     }
 
+    /// BG-5: a session holding the question of whether to send a message is listed as needing input
+    /// and with the word for that kind, which is not the word for a question the planner asked.
+    #[test]
+    fn a_session_holding_a_message_to_send_is_listed_with_that_kind() {
+        let rows = lines_of(&[seen(
+            "fix the build",
+            State::NeedsInput,
+            Some(Held::Message),
+            true,
+        )]);
+        assert!(
+            rows[0].contains(&t!(sessions_held_message).to_string()),
+            "{rows:?}"
+        );
+        assert!(
+            !rows[0].contains(&t!(sessions_held_question).to_string()),
+            "{rows:?}"
+        );
+    }
+
     /// BG-6: the list says what is true of the process now. An entry that said it was working and
     /// has no process is listed as interrupted, and its kind is not listed at all.
     #[test]
@@ -697,5 +897,94 @@ mod tests {
         assert_eq!(drawable(&mut pending), "caf");
         pending.extend_from_slice(&"caf\u{e9}".as_bytes()[4..]);
         assert_eq!(drawable(&mut pending), "\u{e9}");
+    }
+
+    /// BG-16: `bravebot sessions` opens the list only for no other word, with standard input,
+    /// output and error all terminals, so a pipe or a redirect, `--json` or `stop` is not taken over.
+    #[test]
+    fn the_list_opens_only_for_no_other_word_on_three_terminals() {
+        let words = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert!(wants_the_view(&words(&[]), true, true, true));
+        assert!(!wants_the_view(&words(&[]), false, true, true));
+        assert!(!wants_the_view(&words(&[]), true, false, true));
+        assert!(!wants_the_view(&words(&[]), true, true, false));
+        assert!(!wants_the_view(&words(&["--json"]), true, true, true));
+        assert!(!wants_the_view(
+            &words(&["stop", "3f2a9c1e"]),
+            true,
+            true,
+            true
+        ));
+        assert!(!wants_the_view(
+            &words(&["search", "ledger"]),
+            true,
+            true,
+            true
+        ));
+    }
+
+    /// BG-16, BG-6: a session is grouped by the state of its process now. An entry that said it
+    /// was working or holding a prompt and has no process is in the interrupted group, and an idle
+    /// one with no process is in the stopped group, so the list never offers a dead session under
+    /// "working" or "needs input".
+    #[test]
+    fn a_session_is_grouped_by_the_state_of_its_process_and_not_the_one_it_last_wrote() {
+        let state_of =
+            |written, held, live| rows_of(&[seen("fix the build", written, held, live)])[0].state;
+        assert_eq!(state_of(State::Working, None, false), State::Interrupted);
+        assert_eq!(
+            state_of(State::NeedsInput, Some(Held::Run), false),
+            State::Interrupted
+        );
+        assert_eq!(state_of(State::Idle, None, false), State::Stopped);
+        assert_eq!(state_of(State::Working, None, true), State::Working);
+        assert_eq!(
+            state_of(State::NeedsInput, Some(Held::Run), true),
+            State::NeedsInput
+        );
+        assert_eq!(state_of(State::Idle, None, true), State::Idle);
+    }
+
+    /// BG-16: a row holds the whole id for `attach`, the start of it for the screen, and the kind of
+    /// a held prompt as a word and nothing of what it asks.
+    #[test]
+    fn a_row_holds_the_whole_id_and_the_start_of_it_and_names_the_kind_of_a_held_prompt() {
+        let row = &rows_of(&[seen(
+            "fix the build",
+            State::NeedsInput,
+            Some(Held::Fetch),
+            true,
+        )])[0];
+        assert_eq!(row.id, "11111111-1111-4111-8111-111111111111");
+        assert_eq!(row.short, "11111111");
+        assert!(
+            row.state_words
+                .contains(&t!(sessions_held_fetch).to_string()),
+            "{row:?}"
+        );
+    }
+
+    /// BG-5, BG-16: no field of a row the list draws holds a control character, whichever field
+    /// the person's typing reached.
+    #[test]
+    fn a_control_character_in_what_was_typed_cannot_reach_any_field_of_a_row() {
+        let mut one = seen("fix\x1b[31m the\nbuild\r\x07", State::Idle, None, true);
+        one.job.name = "na\x1b]0;me\x07\tx".to_string();
+        one.job.directory = "/work/\x1b[2J/pro\nject".to_string();
+        let row = &rows_of(&[one])[0];
+        for field in [
+            &row.name,
+            &row.directory,
+            &row.prompt,
+            &row.state_words,
+            &row.since,
+            &row.short,
+        ] {
+            assert!(!field.chars().any(|c| c.is_control()), "{field:?}");
+        }
+        assert!(
+            row.name.contains('\u{241b}') && row.directory.contains('\u{241b}'),
+            "{row:?}"
+        );
     }
 }

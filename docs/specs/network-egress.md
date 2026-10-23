@@ -112,6 +112,12 @@ the moment it begins, and waits to begin no longer than any other reply. The gap
 two pieces of a reply is the same however long the request says its reply may take. A stream from
 this machine that asks is the one exception ([NET-10](#NET-10)).
 
+A request may state a gap of its own where the person it is made for chose one
+([BACKEND-55](backends.md#BACKEND-55)). That gap replaces the default, longer or shorter, and moves
+no other bound: the wait for a reply to begin and the time the whole of it may take stay as the
+request and this clause set them, so a gap longer than those leaves the reply to be ended by them.
+A stream waited on through any silence ([NET-10](#NET-10)) is held to no gap, stated or not.
+
 A reply cut at the end of its time is reported as out of time, apart from one that stopped arriving,
 and is not worth another attempt. It was still being written when it was cut, and asked for again it
 is written as long again and billed again. A reply asked for whole within a time its request stated
@@ -135,17 +141,35 @@ however long its reply was going to be.
 `verified-by: bravebot_net::egress::a_reply_written_before_any_of_it_is_sent_is_out_of_time_when_it_outlasts_its_stated_bound`
 `verified-by: bravebot_net::egress::a_stream_is_waited_on_to_begin_no_longer_whatever_its_request_said`
 `verified-by: bravebot_net::egress::a_reply_that_stops_arriving_is_given_up_on_however_long_its_request_said_it_may_take`
+`verified-by: bravebot_net::egress::a_request_stating_a_longer_gap_between_pieces_is_waited_on_that_long`
+`verified-by: bravebot_net::egress::a_request_stating_a_shorter_gap_gives_up_on_a_quiet_reply_sooner`
+`verified-by: bravebot_net::egress::a_stated_gap_does_not_end_a_stream_from_this_machine_that_asks_to_be_waited_on`
 
 <a id="NET-6"></a>
 ### NET-6: a failure that means "not now" may be retried, and nothing else may
 
-A connection that gave out is worth another attempt. A refusal is not, and only the statuses that
-mean the server is temporarily unable are treated as retryable.
+A connection that gave out is worth another attempt: a timeout, a socket that went away, a name that
+did not resolve, and a network that is down or unreachable. A refusal is not, and only the statuses
+that mean the server is temporarily unable are treated as retryable.
 
-**Why.** Retrying a refusal turns one denied request into several.
+A `Retry-After` header on such an answer is read as whole seconds or an IMF-fixdate HTTP date and
+carried on the failure as a duration of at most one hour. A value that is neither, a date already
+past aside, is absent. It is a number that only sets a timer ([BACKEND-54](backends.md#BACKEND-54)):
+the header's text is never kept or shown, and the retryable set above is decided from the status
+alone.
+
+**Why.** Retrying a refusal turns one denied request into several. A failed name lookup is retried
+whatever it failed on, because a name that does not exist and a network that is not up yet cannot be
+told apart by the failure ([Known costs](#known-costs)).
 
 `verified-by: bravebot_net::lib::a_connection_that_gave_out_is_worth_another_attempt_and_a_refusal_is_not`
+`verified-by: bravebot_net::lib::a_network_that_is_down_is_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_request_whose_name_did_not_resolve_is_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_lookup_that_failed_another_way_is_reported_as_it_failed`
+`verified-by: bravebot_net::lib::the_systems_own_failed_lookup_is_reported_as_a_host_not_found`
 `verified-by: bravebot_net::lib::only_the_statuses_that_mean_not_now_are_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_retry_after_is_read_as_seconds_or_a_date_and_bounded`
+`verified-by: bravebot_net::lib::a_status_carries_the_wait_the_server_asked_for_and_nothing_it_wrote`
 `verified-by: bravebot_net::egress::a_non_success_status_is_an_error`
 
 <a id="NET-7"></a>
@@ -158,6 +182,13 @@ certificate does not discard what the other held; where neither held anything, n
 rather than the shipped set coming back. Which roots are in force, and any named path that yielded
 nothing, are reported by `doctor` ([CLI-7](cli.md#CLI-7)), each such path rather than the first of
 them.
+
+Where the environment names neither path, a settings file may: `SSL_CERT_FILE` and `SSL_CERT_DIR` in
+the `env` block of the person's own layers ([BACKEND-33](backends.md#BACKEND-33)), which are read
+once, before the first connection, by whatever entry point goes on to connect. The pair comes whole
+from one place: an exported variable naming either path means the file's are not consulted, so a
+bundle in a file is never added to an exported directory. `doctor` names the file the roots came
+from.
 
 **Why.** A network that inspects TLS presents a certificate from an authority whoever set the
 machine up has already installed, and every other client on it honours these two variables. A
@@ -189,7 +220,9 @@ that nothing is trusted.
 `verified-by: bravebot_net::transport::a_directory_entry_that_is_not_a_certificate_is_skipped`
 `verified-by: bravebot_net::transport::a_path_that_yields_nothing_does_not_discard_one_that_does`
 `verified-by: bravebot_net::transport::every_named_path_that_yields_nothing_is_reported_rather_than_the_first`
-`verified-by: bravebot_cli::main::the_network_section_names_every_path_that_yielded_nothing`
+`verified-by: bravebot_cli::doctor::the_network_section_names_every_path_that_yielded_nothing`
+`verified-by: bravebot_net::transport::a_certificate_file_a_settings_file_names_is_what_is_trusted`
+`verified-by: bravebot_net::transport::exported_roots_replace_the_files_rather_than_joining_them`
 `verified-by: bravebot_net::transport::a_client_gets_the_built_in_roots_when_nothing_names_others`
 `verified-by: bravebot_net::lib::the_one_way_out_is_built_against_the_stated_transport_rather_than_a_default_client`
 
@@ -202,6 +235,16 @@ is then set on each client explicitly rather than left to a library's default. A
 protocol this build cannot connect through is not carried at all. `doctor` names the proxy by
 protocol, host and port, the hosts it is not used for, and whether it requires a credential, or says
 that a proxy was named and is not the route; the credential itself is never printed.
+
+Where the environment names none of the three, the person's settings file may
+([BACKEND-33](backends.md#BACKEND-33)), for a process a launcher or a service started with no shell
+profile. The answer comes whole from the environment when it names any of them, whether or not that
+value parses, so a file's `ALL_PROXY` never outranks an exported `HTTPS_PROXY` by the order the
+variables are read in and an exported variable that names no route is reported rather than replaced.
+`NO_PROXY` is the one name read on its own: an exported one applies to a route a file stated and the
+file's is not consulted beside it, and the file's applies when nothing was exported. A project or
+local file's value is never used. `doctor` names the file that stated the proxy, and a checkout's
+file that stated one as read and not used, neither with the value.
 
 A variable that is set and non-empty and whose value cannot be read as a proxy address is named too,
 one line each, in the order the variables are read and in either case. That covers a value that is
@@ -264,13 +307,22 @@ did, since the usual mistake is a uri missing its scheme and the username stays 
 `verified-by: bravebot_net::transport::a_lower_case_proxy_variable_that_cannot_be_parsed_is_named`
 `verified-by: bravebot_net::transport::a_proxy_variable_a_case_folding_lookup_answers_twice_is_named_once`
 `verified-by: bravebot_net::transport::two_spellings_of_a_proxy_variable_holding_different_values_are_both_named`
-`verified-by: bravebot_cli::main::the_network_section_names_a_proxy_variable_that_cannot_be_parsed`
-`verified-by: bravebot_cli::main::the_network_section_names_every_proxy_variable_that_cannot_be_parsed`
+`verified-by: bravebot_cli::doctor::the_network_section_names_a_proxy_variable_that_cannot_be_parsed`
+`verified-by: bravebot_cli::doctor::the_network_section_names_every_proxy_variable_that_cannot_be_parsed`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_for_a_proxy_variable_that_names_no_route`
-`verified-by: bravebot_cli::main::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`
-`verified-by: bravebot_cli::main::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
-`verified-by: bravebot_cli::main::the_network_section_names_the_roots_in_force_and_the_proxy`
-`verified-by: bravebot_cli::main::the_network_section_never_prints_a_proxy_credential`
+`verified-by: bravebot_cli::doctor::a_proxy_this_build_cannot_connect_through_is_reported_as_not_the_route`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_hosts_a_proxy_is_not_used_for`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_roots_in_force_and_the_proxy`
+`verified-by: bravebot_cli::doctor::the_network_section_never_prints_a_proxy_credential`
+`verified-by: bravebot_net::transport::a_proxy_a_settings_file_states_is_the_one_a_client_carries`
+`verified-by: bravebot_net::transport::an_exported_proxy_beats_the_file_whatever_names_each_used`
+`verified-by: bravebot_net::transport::an_exported_proxy_that_does_not_parse_is_not_replaced_by_the_file`
+`verified-by: bravebot_net::transport::a_proxy_in_the_file_that_does_not_parse_is_named_and_is_not_the_route`
+`verified-by: bravebot_net::transport::a_file_proxy_honours_the_no_proxy_it_is_given_and_keeps_its_credential`
+`verified-by: bravebot_net::transport::an_exported_no_proxy_applies_to_a_file_proxy_in_place_of_the_files`
+`verified-by: bravebot_net::transport::a_settings_file_hands_over_the_six_names_and_nothing_else`
+`verified-by: bravebot_cli::doctor::the_network_section_names_the_file_that_stated_the_proxy_and_the_one_that_was_ignored`
+`verified-by: bravebot_cli::doctor::the_network_section_names_no_file_when_the_environment_decided`
 
 <a id="NET-9"></a>
 ### NET-9: a redirect may not take an https chain into cleartext
@@ -311,7 +363,7 @@ A redirect is named by a server, and how long its target is waited on is not a s
 lengthen. A proxy is another machine, so a request through one is another machine's request. With
 no bound, the only end to a wait on a server that took the request and hung is somebody stopping
 it, so a request nobody can stop is not waited on this way. A whole reply is always one of those,
-because its body is read to the end without a stop being looked at.
+because its body is read to the end and a stop pressed meanwhile is not acted on.
 
 `verified-by: bravebot_net::egress::a_stream_from_this_machine_that_asks_is_waited_on_through_any_silence`
 `verified-by: bravebot_net::egress::a_redirect_from_this_machine_keeps_the_bounds`
@@ -320,6 +372,45 @@ because its body is read to the end without a stop being looked at.
 `verified-by: bravebot_net::lib::a_request_through_a_proxy_keeps_its_bounds_when_it_asks_to_be_patient`
 `verified-by: bravebot_aichat::client::a_model_on_this_machine_that_goes_quiet_while_it_writes_is_waited_for`
 `verified-by: bravebot_aichat::client::a_quiet_local_model_is_not_waited_on_without_bound_by_a_client_nobody_can_stop`
+
+<a id="NET-11"></a>
+### NET-11: a client certificate is presented when one is named, and a request is refused when it cannot be
+
+`BRAVEBOT_CLIENT_CERT` names a file holding a certificate (with its chain, where there is one) and
+`BRAVEBOT_CLIENT_KEY` a file holding its unencrypted private key, both in the environment and
+read once with the other transport settings. Both together are set on the TLS configuration every
+client in this process is built from, so a server that asks for a certificate during the handshake
+is given this one. A settings file does not state them: only the environment does.
+
+Naming one without the other, a file that cannot be read, one holding no certificate or no key, an
+encrypted key, and a key that is not the one that belongs to the certificate are each a problem
+reported by path, every one of them rather than the first. While there is one, every TLS handshake
+is refused, as it is when [NET-7](#NET-7) leaves nothing trusted, instead of the request going to a
+server that would have been given the certificate without it. The pair is checked against itself
+once, when it is read: the TLS library panics at the first request on a pair that disagree.
+`doctor` ([CLI-7](cli.md#CLI-7)) names the two paths and says they loaded, or names each path that
+did not and ends on a configuration error. It never prints the key, and neither does the
+transport's `Debug`.
+
+**Why.** A gateway or proxy that requires mutual TLS fails at the handshake with nothing to say
+which end refused, and a program that had no way to name a certificate cannot be used behind one.
+Refusing rather than connecting without it is the same bargain NET-7 makes for a named authority: a
+setting that fails open is one whose failure looks like the server's.
+
+The key is a secret for the reason a proxy credential is under [NET-8](#NET-8): the report exists to
+be pasted into an issue, so it holds the path and the fact that it loaded. The passphrase an
+encrypted key needs is not read; see Known costs.
+
+`verified-by: bravebot_net::transport::a_certificate_and_key_that_agree_are_what_a_client_presents`
+`verified-by: bravebot_net::transport::naming_no_client_certificate_presents_none`
+`verified-by: bravebot_net::transport::a_key_that_does_not_belong_to_the_certificate_is_refused_with_its_path`
+`verified-by: bravebot_net::transport::a_certificate_file_that_cannot_be_read_is_refused_with_its_path`
+`verified-by: bravebot_net::transport::every_client_file_that_cannot_be_used_is_reported`
+`verified-by: bravebot_net::transport::a_certificate_named_without_a_key_is_refused_and_so_is_a_key_without_a_certificate`
+`verified-by: bravebot_net::transport::an_encrypted_key_is_refused_as_encrypted`
+`verified-by: bravebot_net::transport::a_debug_print_of_the_transport_holds_the_paths_and_none_of_the_key`
+`verified-by: bravebot_cli::doctor::the_network_section_names_a_client_certificate_that_loaded_and_never_its_key`
+`verified-by: bravebot_cli::doctor::the_network_section_names_each_client_file_that_cannot_be_used`
 
 ## Known costs
 
@@ -375,6 +466,8 @@ because its body is read to the end without a stop being looked at.
   whole request, which on those connections means the `authorization` header the aichat and gateway
   backends carry (`x-goog-api-key` for a Google Vertex service), the `authorization` and `x-amz-security-token` pair a Bedrock request is signed
   with, the `mcp-session-id` an HTTP MCP server issued, and a body holding the conversation. The
+  `x-api-key` an Anthropic service takes is not among them: it is attached as a socket header, so a
+  hop that leaves the endpoint's own scheme, host and port is sent the conversation and not the key. The
   per-hop check there is the capability and nothing more, for the reason NET-2 gives, so an endpoint
   somebody configured can name any https host in a `Location` header and be sent all of it. NET-9
   bounds what a downgrade costs, not where a hop may land. What stands in front of this is that the
@@ -405,3 +498,36 @@ because its body is read to the end without a stop being looked at.
   end went away without the forward noticing. A bound long enough for the slowest local model would
   still be a guess, and one that ran out would cut a working reply, which is the failure the clause
   is there to remove.
+
+- **A request that cannot succeed is sent again when its failure looks like a network that is down.**
+  Nothing readable from a failed lookup says whether the name does not exist or the network is not
+  up yet, since `std` reports the lookup's own error code as a kind that cannot be matched, and a
+  machine without a network can fail a lookup the way it fails one for a name that does not exist.
+  So a mistyped host is sent three times, after a pause of one second and then two, before it is
+  reported. A lookup that failed for a cause of its own, a descriptor limit for example, is reported
+  as a host that could not be found, and so is a proxy that does not resolve, since ureq resolves
+  its host through the same lookup. `NetworkUnreachable` and `HostUnreachable` name one route as well
+  as a whole network, and the transport stops at the first address that fails other than by being
+  refused, so a name whose first address is IPv6, on a network with no IPv6 route, fails the same way
+  on each attempt. A request that fails for any of these reasons ends after three attempts with the
+  same failure it would have ended with on the first.
+
+- **The certificate is offered to any https host that asks for one, and no test here has a server
+  that does.** The TLS library presents it to whichever server requests a certificate during a
+  handshake, and nothing records the host it was configured for, so an endpoint that redirects to
+  another host ([NET-2](#NET-2) revalidates the hop and no more) is offered it there too. The
+  subscription client built by `bravebot-skus` is handed the same configuration and presents it
+  alike. What would bound it is a setting naming the hosts, which is not decided here. Pinning that
+  a server demanding a certificate receives this one needs a TLS server in the test, and `bravebot-net`
+  has no dependency that is one; the tests pin what is handed to the client's configuration, and
+  the change was observed against `openssl s_server -Verify`.
+
+- **An encrypted key is refused, not decrypted.** Decrypting a key means a dependency this build
+  does not have, so no passphrase is read from the environment or the credential store either. A key that needs one is reported by path as encrypted, and the file has to be
+  given an unencrypted copy readable only by its owner.
+
+- **The pair is checked by a stand-in connection.** The TLS library offers no way to ask whether a
+  pair agree except building a configuration, which panics when they do not. The check does that
+  on a connection that carries nothing, catches the panic and withholds its report for that thread.
+  A library release that stopped panicking would still be caught, because any error other than the
+  stand-in's own counts as a pair that cannot be used.

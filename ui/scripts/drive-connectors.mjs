@@ -7,38 +7,22 @@
 // Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
 // `pnpm run drive:connectors` does first.
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, realpathSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { _electron as electron } from 'playwright-core'
+import { launchWorld, makeWorld } from './drive-world.mjs'
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-connectors-')))
-const home = join(root, 'home'), profile = join(root, 'profile')
-for (const path of [join(home, '.bravebot'), join(home, 'github-mcp-server'), profile]) mkdirSync(path, { recursive: true })
-writeFileSync(join(home, '.bravebot/settings.json'), JSON.stringify({ model: 'local/test', provider: { local: { options: { baseURL: 'http://127.0.0.1:9/v1' }, models: { test: {} } } } }))
+const { root, home, profile, env } = makeWorld('bravebot-connectors-', { baseURL: 'http://127.0.0.1:9/v1', project: false, dirs: ['home/github-mcp-server'] })
+delete env.NO_PROXY
 const program = join(home, 'github-mcp-server/github-mcp-server')
 writeFileSync(program, '#!/bin/sh\n')
 chmodSync(program, 0o755)
 const file = (name) => { try { return readFileSync(join(home, '.bravebot', name), 'utf8') } catch { return '' } }
 
-const env = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG'].filter((key) => process.env[key]).map((key) => [key, process.env[key]]))
-Object.assign(env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config'), BRAVEBOT_LOCALE: 'en-US' })
-
 const output = process.env.BRAVEBOT_DRIVE_OUTPUT ?? '/tmp/bravebot-ui'
 mkdirSync(output, { recursive: true })
-const app = await electron.launch({
-  args: ['.', ...(process.env.CI ? ['--no-sandbox'] : []), ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), `--user-data-dir=${profile}`],
-  env,
-  timeout: 40000,
-})
-let page
+let app, page, errors
 try {
-  page = await app.firstWindow()
-  page.setDefaultTimeout(30000)
-  await page.setViewportSize({ width: 1400, height: 1000 })
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-
+  ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
   // ---- the button and the list ---------------------------------------------------------------
   await page.locator('[data-test="agent-settings"]').click()
   await page.locator('[data-test="settings-page-connectors"]').click()
@@ -101,6 +85,6 @@ try {
   if (page) await page.screenshot({ path: join(output, 'connectors-failure.png') }).catch(() => undefined)
   throw error
 } finally {
-  await app.close()
+  await app?.close()
   rmSync(root, { recursive: true, force: true })
 }

@@ -53,6 +53,7 @@ pub fn endpoint(
             stream.set_write_timeout(Some(LIMIT)).unwrap();
             let mut reader = BufReader::new(stream);
             let mut length = 0;
+            let mut request_line = String::new();
             loop {
                 let mut line = String::new();
                 assert!(
@@ -62,11 +63,22 @@ pub fn endpoint(
                 if line == "\r\n" {
                     break;
                 }
+                if request_line.is_empty() {
+                    request_line = line.clone();
+                }
                 if let Some((name, value)) = line.split_once(':')
                     && name.eq_ignore_ascii_case("content-length")
                 {
                     length = value.trim().parse().unwrap();
                 }
+            }
+            // A turn asks for the model listing to take its window before it sends anything. The
+            // script is of completions, so a listing is refused without using up one of them.
+            if request_line.starts_with("GET ") {
+                let _ = reader.into_inner().write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                continue;
             }
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();

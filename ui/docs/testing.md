@@ -55,7 +55,9 @@ matter:
 - `pnpm run drive:fetch`: a fetch the planner asks for, through the real app and bridge,
   against a model service and a website the script serves itself. The website is the
   witness: an approval sends one request to the host the card showed, a refusal sends none,
-  and an earlier approval does not answer a later fetch. No paid inference.
+  and an earlier approval does not answer a later fetch. A redirect to another host is asked
+  about in a card that names the host it was approved for, and a yes or a no to it is read
+  off the website the same way. No paid inference.
 - `pnpm run drive:language-server`: a language server the planner asks for, through the real
   app and bridge, against a model service and a server the script supplies. The server is
   the witness: an approval starts one process, the next message asks nobody and starts none,
@@ -106,7 +108,11 @@ matter:
   and `node scripts/drive-models.mjs`: isolated Electron acceptance checks with deterministic
   provider replies. These cover the current tab layout, search, history, drafts, approvals,
   memory, and model selection. Command approvals include the resolved execution plan and
-  files written by redirections.
+  files written by redirections. `drive-ux-acceptance`, `drive-bot-history` and
+  `drive-conversation-workflow` build their profile and install their bridge replies through
+  `scripts/acceptance-fixture.mjs`, so a method the bridge gains is added to the fixture once.
+  The same module holds the `agent.info` and `models.list` answers that `drive-visual`,
+  `drive-perf`, `drive-shown` and `drive-session-list` send.
 - `node scripts/drive-secure-files.mjs`: real preview and memory IPC, symlink rejection,
   edit conflicts, history deletion and bot recreation, without model calls. To verify packaging,
   build with `node scripts/package.mjs`, then set `SECURE_FILES_APP` to the packaged executable
@@ -149,7 +155,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:markdown` | Markdown rendering, light and dark |
 | `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
 | `pnpm run drive:run` | Approving a command from the window, end to end through a live turn |
-| `pnpm run drive:fetch` | Approving and refusing a fetch from the window, end to end, against a local model service and website |
+| `pnpm run drive:fetch` | Approving and refusing a fetch, and a redirect to another host, from the window, end to end, against a local model service and website |
 | `pnpm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
 | `pnpm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
 | `pnpm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
@@ -207,30 +213,57 @@ pinned to light and that its renderer bundle cannot switch appearance at runtime
 (columns, bots, recents, theme) and `experience.json`, and the agent it starts uses your `HOME`,
 which means your real `~/.bravebot` sessions, history and configuration. Read a driver before
 running it, and do not run one you have not read on a machine whose bots or sessions you care
-about. These launch without `--user-data-dir`:
+about. These launch without `--user-data-dir`. All but `drive`, `drive-packaged` and `drive-smoke`
+launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use the real profile:
 
 `drive`, `drive-ask`, `drive-bot-memory`, `drive-bot-turn`, `drive-bots`, `drive-columns`,
 `drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`, `drive-packaged`, `drive-panels`,
 `drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`, `drive-tree` and `drive-turn`.
+
+`drive-support.mjs` also exports the selectors the drivers share for the composer's text box
+(`COMPOSER_INPUT`, `COMPOSER_IDLE`) and the left column's tabs (`SIDEBAR_TAB`), so a markup
+change to either is made there and in the test that pins them to the renderer.
 
 Of those, **`drive-run`, `drive-ask` and `drive-markdown` send live model turns** against the
 real profile (and so do `drive-bot-turn`, `drive-bot-memory` and `drive-turn`), which spends
 credits from whatever backend is configured. `drive-columns`, `drive-panels`, `drive-tree` and
 `drive-theme` put back the key they change; do not assume any of the others do.
 
+`drive-bots`, `drive-bot-turn`, `drive-bot-memory` and `drive-theme` write `bravebot-ui.json` through
+`appState` in `scripts/drive-profile.mjs`, the one place that code is written; it changes one key
+at a time, and a driver replaces only its own rows inside a shared key such as `bots`.
+
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
-`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-conversation-workflow`,
-`drive-manual-walkthrough`, `drive-models`, `drive-models-live`, `drive-remembered-trust`,
-`drive-rewind`, `drive-secure-files`, `drive-session-list`, `drive-turn-details`, `drive-ux-acceptance`,
-`drive-vetting`, `drive-visual` and `drive-perf`.
+`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-connectors`,
+`drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language-server`,
+`drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-permission-mode`,
+`drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
+`drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
+`drive-ux-acceptance`, `drive-vetting`, `drive-visual` and `drive-perf`.
 
-The flag isolates only the app's own state. Most of these also replace the bridge with IPC
-fixtures, so they need no credentials and make no requests; `drive-models-live` does not, and
-sends a live turn through the isolated profile using your real credentials.
-`drive-manual-walkthrough` and `drive-rewind` also set a disposable `HOME`. `drive-agent-rpc` never opens a window:
-it spawns the bridge on its own with a temporary `HOME`. When you write a new driver, launch with
-a temporary `--user-data-dir` and mock or isolate whatever the bridge would reach.
+`drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
+`drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-paste`,
+`drive-permission-mode`, `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
+launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
+the temporary profile its caller made. `drive-manual-walkthrough`, `drive-remembered-trust`,
+`drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the
+inherited variables and, for `drive-vetting`, the project opening. The others also take their
+temporary root, `HOME` and settings file from it, and their stub model service where they have one.
+
+The flag isolates only the app's own state. Some of these replace the bridge with IPC fixtures, so
+they need no credentials and make no requests. Those that launch through `drive-world.mjs` run the
+real bridge and agent, with a model service on `127.0.0.1` where they have one: they need no
+credentials, and `drive-language-server`, `drive-permission-mode` and `drive-sandbox-mode` run real
+programs on your machine. `drive-models-live` sends a live turn through the isolated profile using
+your real credentials.
+`drive-manual-walkthrough`, `drive-remembered-trust`, `drive-rewind` and `drive-vetting` also set a
+disposable `HOME` of their own. `drive-sandbox-mode` writes one file under your real home, and
+removes it and the file its confined program tries to plant there when it ends. `drive-agent-rpc`
+never opens a window: it spawns the bridge on its own with a temporary `HOME`. When you write a new driver, build
+its temporary root with `makeWorld`, start its model service with `startModelService`, launch with
+`launchWorld` and open its project with `openProject`, all from `scripts/drive-world.mjs`, and mock or
+isolate whatever else the bridge would reach.
 
 ### The visual gallery
 
@@ -318,6 +351,10 @@ The driver asserts:
 7. Narrow settings/watch/approval layouts with reachable decision controls and cleanup.
    The Agent settings button stays within both sidebar tabs at the default, minimum
    and maximum panel widths (250, 200 and 400 pixels).
+8. A series of three questions from the planner: each put alone under its position, an answer
+   shut until something is picked or typed, a skip moving on, the card drawn again at the same
+   question and pick after another conversation was opened, and the planner reading one
+   paragraph per question with the skipped one as a decline.
 
 The native file-picker **result** is supplied by the test; the actual selection handler,
 JSON validation and configuration loading run normally. OS dialog appearance, real

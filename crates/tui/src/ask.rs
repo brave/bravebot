@@ -10,18 +10,25 @@
 //!
 //! Declining is always one keypress away. A question the user does not want is a question they
 //! can dismiss, and a picker with no exit would make the model able to stall the session.
+//!
+//! A person who has walked away is not declining, and the picker is told how long to wait for them
+//! (ASK-9). Past that, every question still open is closed as [`Answer::TimedOut`], which the planner
+//! reads as no answer from somebody who may be away.
 
 use bravebot_core::ask::{Answer, Asking, Prompt, Row};
 use bravebot_i18n::t;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, KeyCode};
+use ratatui::crossterm::event::{self, Event, KeyCode};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
+use std::io;
+use std::time::{Duration, Instant};
 
 use crate::input;
+use crate::state::Session;
 use crate::theme;
 
 /// Longest answer the user can type.
@@ -93,7 +100,22 @@ const CHIP_WIDTH: usize = 12;
 /// question. Saying nothing is the one reply that cannot be wrong about how many questions there
 /// were.
 pub fn ask<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking) -> Vec<Answer> {
-    ask_titled(terminal, asking, None)
+    ask_within(terminal, asking, None)
+}
+
+/// [`ask`] for the planner's questions, closing them without an answer once `idle` passes with no
+/// key pressed (ASK-9).
+///
+/// `None` waits for as long as it takes, which is [`ask`]. The time is the person's own setting and
+/// the clock is the only thing it is compared with, so nothing a question or an answer says
+/// reaches the decision. Any key restarts it, and a series that is answered a question at a time
+/// gets the whole time again for each.
+pub fn ask_within<B: Backend>(
+    terminal: &mut Terminal<B>,
+    asking: &Asking,
+    idle: Option<Duration>,
+) -> Vec<Answer> {
+    ask_titled(terminal, asking, None, idle)
 }
 
 /// [`ask`] for a question the driver puts and not the planner, so the box is not called "the agent
@@ -102,38 +124,91 @@ pub fn ask<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking) -> Vec<Answe
 /// A person who sees that title takes the question for a request from the model, which is what
 /// they are taught to read with suspicion. `title` is a sentence from this program's own catalog.
 pub fn ask_as<B: Backend>(terminal: &mut Terminal<B>, asking: &Asking, title: &str) -> Vec<Answer> {
-    ask_titled(terminal, asking, Some(title))
+    ask_titled(terminal, asking, Some(title), None)
 }
 
 fn ask_titled<B: Backend>(
     terminal: &mut Terminal<B>,
     asking: &Asking,
     title: Option<&str>,
+    idle: Option<Duration>,
 ) -> Vec<Answer> {
     if asking.prompts.is_empty() {
         return Vec::new();
     }
     let mut picker = Picker::new(asking);
     picker.named = title.map(str::to_string);
+    converse(terminal, &mut picker, idle, &mut Keyboard)
+}
+
+/// Where the picker's events and its clock come from, so a test can say what arrives when.
+trait Events {
+    fn now(&mut self) -> Instant;
+
+    /// The next event, or `None` once `within` has passed with none. A `within` of `None` waits for
+    /// one however long that is.
+    fn next(&mut self, within: Option<Duration>) -> io::Result<Option<Event>>;
+}
+
+/// The terminal and the system clock.
+struct Keyboard;
+
+impl Events for Keyboard {
+    fn now(&mut self) -> Instant {
+        Instant::now()
+    }
+
+    fn next(&mut self, within: Option<Duration>) -> io::Result<Option<Event>> {
+        if let Some(within) = within
+            && !input::poll(within)?
+        {
+            return Ok(None);
+        }
+        input::read().map(Some)
+    }
+}
+
+/// Draw the question, take keys, and return the answers once there is nothing left to ask.
+///
+/// `idle` is how long the person may go without pressing a key before every question still open is
+/// closed with [`Answer::TimedOut`] (ASK-9). It is measured from the last key press, or from when
+/// the questions were put, and nothing else restarts it: a release, the pointer and a change of
+/// size are not somebody answering.
+fn converse<B: Backend>(
+    terminal: &mut Terminal<B>,
+    picker: &mut Picker<'_>,
+    idle: Option<Duration>,
+    events: &mut impl Events,
+) -> Vec<Answer> {
+    let mut quiet_since = events.now();
 
     loop {
+        let left = idle
+            .map(|idle| idle.saturating_sub(events.now().saturating_duration_since(quiet_since)));
+
         // A terminal that cannot show the question cannot collect a considered answer, so
         // decline rather than take a keypress against something nobody saw.
         if terminal.draw(|frame| picker.draw(frame)).is_err() {
             return Vec::new();
         }
 
-        let key = match input::read() {
-            Ok(taken) => match input::key_of(&taken) {
+        let key = match events.next(left) {
+            Ok(Some(taken)) => match input::key_of(&taken) {
                 // Presses only. The interface asks the terminal for disambiguated keys, which
                 // reports releases too, and a release taken for a press answers the next question
                 // with the key that answered this one.
                 Some(key) if key.kind == event::KeyEventKind::Press => key.code,
                 _ => continue,
             },
+            // Nothing arrived in the time left. With none left, the person was not there: a key
+            // pressed before the time was up is still waiting when this loop was late, and a wait
+            // of no length takes it first.
+            Ok(None) if left == Some(Duration::ZERO) => return picker.time_out(),
+            Ok(None) => continue,
             // Losing the event stream must not invent an answer.
             Err(_) => return Vec::new(),
         };
+        quiet_since = events.now();
 
         match picker.press(key) {
             Step::Waiting => continue,
@@ -190,6 +265,12 @@ struct Picker<'a> {
     here: State,
     /// What the box is called when the driver asked and the planner did not.
     named: Option<String>,
+    /// The step after the last question of a series, where every answer is listed and nothing has
+    /// yet been sent (ASK-11). `at` stays on the last question while this is up.
+    reviewing: bool,
+    /// Set while a question is reopened from the review, so settling it goes back to the review
+    /// rather than on through the questions after it.
+    returning: bool,
 }
 
 impl<'a> Picker<'a> {
@@ -200,6 +281,8 @@ impl<'a> Picker<'a> {
             answers: Vec::new(),
             here: State::starting(&asking.prompts[0]),
             named: None,
+            reviewing: false,
+            returning: false,
         }
     }
 
@@ -218,20 +301,95 @@ impl<'a> Picker<'a> {
 
     /// Take this question's answer and move on, finishing when there is nothing left to ask.
     ///
-    /// One place decides the series is over, and it decides on the number of questions, never on
+    /// [`Asking::ends_at`] decides the series is over, on the number of questions and never on
     /// what any of them was answered with. That is what makes skipping and finishing the same
     /// operation: an answer the person declined is still an answer to the question they were on.
+    ///
+    /// The end of a series of more than one is the review and not the return (ASK-11): nothing
+    /// leaves the picker until the person confirms it there. A question reopened from the review
+    /// goes back to it, since the rest of the series is already answered.
     fn settle(&mut self, answer: Answer) -> Step {
-        self.answers.push(answer);
-        self.at += 1;
-        if self.at == self.asking.prompts.len() {
+        let ends = self.asking.ends_at(self.at);
+        match self.answers.get_mut(self.at) {
+            Some(earlier) => *earlier = answer,
+            None => self.answers.push(answer),
+        }
+        let several = self.asking.prompts.len() > 1;
+        if several && (ends || self.returning) {
+            self.reviewing = true;
+            self.returning = false;
+            return Step::Waiting;
+        }
+        if ends {
             return Step::Answered(std::mem::take(&mut self.answers));
         }
+        self.reopen(self.at + 1);
+        Step::Waiting
+    }
+
+    /// Put question `at` on screen, with the mark or the words the person gave it if they have
+    /// answered it before. A question not answered yet starts clean.
+    fn reopen(&mut self, at: usize) {
+        self.at = at;
+        self.reviewing = false;
         self.here = State::starting(self.prompt());
+        match self.answers.get(at) {
+            Some(Answer::Chosen(picked)) => {
+                self.here.cursor = self
+                    .prompt()
+                    .rows
+                    .iter()
+                    .position(|row| picked.first() == Some(&row.index))
+                    .unwrap_or(0);
+                self.here.chosen = picked.clone();
+            }
+            Some(Answer::Typed(text)) => {
+                self.here.cursor = self.own_words();
+                self.here.typed = Some(text.clone());
+            }
+            _ => {}
+        }
+    }
+
+    /// Close every question still open, the one on screen among them, because nobody pressed a key
+    /// in time.
+    ///
+    /// What is already settled stays. What is marked or half typed on the question on screen is not
+    /// kept: the person never confirmed it, and reporting an unconfirmed mark as their answer is
+    /// the invented reply ASK-7 rules out. A question the person went back to keeps the answer it
+    /// had, and so do those after it, since each was given: only a question never answered is
+    /// closed.
+    fn time_out(&mut self) -> Vec<Answer> {
+        let mut answers = std::mem::take(&mut self.answers);
+        answers.resize(self.asking.prompts.len(), Answer::TimedOut);
+        answers
+    }
+
+    /// What a key does on the review: send, or go back to a question.
+    ///
+    /// A digit is the position of the question, as the title counts them, and escape reopens the
+    /// last one. Neither declines anything: escape here is the one way out that does not send, and
+    /// the answers already given are kept (ASK-11).
+    fn press_review(&mut self, key: KeyCode) -> Step {
+        let last = self.asking.prompts.len() - 1;
+        let target = match key {
+            KeyCode::Enter => return Step::Answered(std::mem::take(&mut self.answers)),
+            KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => last,
+            KeyCode::Char(digit) => match digit.to_digit(10) {
+                Some(nth @ 1..) if nth as usize <= last + 1 => nth as usize - 1,
+                _ => return Step::Waiting,
+            },
+            _ => return Step::Waiting,
+        };
+        self.returning = true;
+        self.reopen(target);
         Step::Waiting
     }
 
     fn press(&mut self, key: KeyCode) -> Step {
+        if self.reviewing {
+            return self.press_review(key);
+        }
         match &mut self.here.typed {
             Some(text) => match key {
                 KeyCode::Char(c) if text.chars().count() < MAX_TYPED => {
@@ -306,6 +464,15 @@ impl<'a> Picker<'a> {
                     self.settle(Answer::Chosen(picked))
                 }
                 KeyCode::Esc => self.settle(Answer::Declined),
+                // Back to the question before, with what was answered there. What is marked on
+                // this one is not carried, as it belongs to this one.
+                KeyCode::Left | KeyCode::Char('h') if self.at > 0 => {
+                    // Walking back by hand is walking the series again, so what follows is the
+                    // next question and not the review.
+                    self.returning = false;
+                    self.reopen(self.at - 1);
+                    Step::Waiting
+                }
                 _ => Step::Waiting,
             },
         }
@@ -339,6 +506,9 @@ impl<'a> Picker<'a> {
     }
 
     fn draw(&mut self, frame: &mut ratatui::Frame) {
+        if self.reviewing {
+            return self.draw_review(frame);
+        }
         let area = centred(frame.area());
         frame.render_widget(Clear, area);
 
@@ -517,6 +687,96 @@ impl<'a> Picker<'a> {
         );
     }
 
+    /// The review: every question beside what the person did with it, and the keys to send or to
+    /// go back (ASK-11).
+    ///
+    /// The tag and the options are the ones the questions were drawn with, and the words are the
+    /// person's own, so nothing is drawn here that the person has not already been shown. Each
+    /// question and each answer is cut to the one row it is given, by the columns it takes and not
+    /// the characters, so four questions and their keys fit a box that [`centred`] has made as
+    /// short as it will: an answer that wrapped would push the keys, which are how the person
+    /// sends, off the bottom.
+    fn draw_review(&self, frame: &mut ratatui::Frame) {
+        let area = centred(frame.area());
+        frame.render_widget(Clear, area);
+        let inside = usize::from(area.width.saturating_sub(2).max(1));
+        let room = inside.saturating_sub(MARKER_WIDTH).max(1);
+
+        let mut lines = vec![Line::from(Span::styled(
+            t!(ask_review_heading),
+            Style::default().add_modifier(Modifier::BOLD),
+        ))];
+        lines.push(Line::raw(""));
+        for (nth, prompt) in self.asking.prompts.iter().enumerate() {
+            let label = match chip(&prompt.header) {
+                Some(chip) => chip,
+                None => Span::raw(clipped(&prompt.question, room.saturating_sub(3))),
+            };
+            // A tag is at most CHIP_WIDTH wide and the number takes three, so the row fits unless
+            // the box is narrower than both.
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" {} ", nth + 1),
+                    Style::default()
+                        .fg(theme::brand_primary())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                label,
+            ]));
+            let (said, style) = match self.answers.get(nth) {
+                Some(Answer::Chosen(picked)) => (
+                    picked
+                        .iter()
+                        .filter_map(|index| prompt.rows.iter().find(|row| row.index == *index))
+                        .map(|row| row.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    Style::default(),
+                ),
+                Some(Answer::Typed(text)) => (text.clone(), Style::default()),
+                _ => (
+                    t!(ask_review_skipped).to_string(),
+                    Style::default().fg(theme::muted()),
+                ),
+            };
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(MARKER_WIDTH)),
+                Span::styled(clipped(&said, room), style),
+            ]));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::from(self.review_keys()));
+
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(theme::brand_primary()))
+                        .title(self.title()),
+                )
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+    }
+
+    /// Keys for the review. The way back is named beside the way on, since the point of the
+    /// screen is that nothing has been sent.
+    fn review_keys(&self) -> Vec<Span<'static>> {
+        let bold = Style::default()
+            .fg(theme::brand_primary())
+            .add_modifier(Modifier::BOLD);
+        vec![
+            Span::styled("  enter", bold),
+            Span::raw(format!(" {}   ", t!(ask_key_send))),
+            Span::styled(format!("1-{}", self.asking.prompts.len()), bold),
+            Span::raw(format!(" {}   ", t!(ask_key_change))),
+            Span::styled("esc", bold),
+            Span::raw(format!(" {}", t!(ask_key_back))),
+        ]
+    }
+
     /// What the box is called, and where the person is in the series.
     ///
     /// A lone question is not counted: "1 of 1" is noise on the common case, and the count is
@@ -525,17 +785,12 @@ impl<'a> Picker<'a> {
         if let Some(named) = &self.named {
             return format!(" {named} ");
         }
-        if self.asking.prompts.len() == 1 {
-            return format!(" {} ", t!(ask_title));
+        if self.reviewing {
+            return format!(" {} ", t!(ask_review_title));
         }
-        format!(
-            " {} ",
-            t!(
-                ask_title_numbered,
-                at = self.at + 1,
-                total = self.asking.prompts.len()
-            )
-        )
+        let said = bravebot_i18n::ask::place(self.at, self.asking.prompts.len())
+            .unwrap_or_else(|| t!(ask_title).to_string());
+        format!(" {said} ")
     }
 
     fn keys(&self) -> Vec<Span<'static>> {
@@ -559,6 +814,12 @@ impl<'a> Picker<'a> {
         )));
         spans.push(Span::styled("enter", bold));
         spans.push(Span::raw(format!(" {}   ", t!(ask_key_answer))));
+        // Only where there is a question to go back to, so the first question's line is the one
+        // it always was.
+        if self.at > 0 {
+            spans.push(Span::styled("←", bold));
+            spans.push(Span::raw(format!(" {}   ", t!(ask_key_back))));
+        }
         // No hint for the free-text field: it is a row in the list now, and a line this short
         // cannot afford to say twice what the person can already read.
         spans.push(Span::styled(
@@ -668,20 +929,54 @@ impl<'a> Picker<'a> {
     }
 }
 
-/// Put remembered answers back beside the fresh ones, in the order the questions were asked.
+/// Put a series to the person, asking only what the session has not been answered already.
 ///
-/// The picker is only shown the questions nobody has settled yet, so what it hands back is
-/// shorter than the series and lines up with nothing. This is where the two are woven together.
+/// A planner that loops back over the same decision does not make the person restate it. The note
+/// is what keeps that from being invisible: an answer given once and reused silently would look
+/// like a question that was never asked. `ask` draws the questions still outstanding, so the count
+/// in its title is the number the person has to answer. What the person answers is remembered for
+/// the next time, and a question `ask` returned no answer for is drawn again (ASK-8). So is one
+/// `ask` closed on the clock, which the transcript says was closed (ASK-9).
+pub fn put(
+    session: &mut Session,
+    asking: &Asking,
+    ask: impl FnOnce(&Asking) -> Vec<Answer>,
+) -> Vec<Answer> {
+    let settled = session.answers.read(asking);
+    for prompt in settled.reused() {
+        session.note(t!(session_answered_already, question = &prompt.question));
+    }
+
+    let fresh = ask(settled.outstanding());
+    session.note_closed_on_the_clock(&fresh);
+
+    settled.finish(&mut session.answers, fresh)
+}
+
+/// `text` cut to `limit` columns, the last of them an ellipsis where something was cut.
 ///
-/// A fresh answer that never arrived leaves a decline rather than pulling the next one forward.
-/// Shifting answers up would report the person as having said, about one question, what they
-/// said about another.
-pub fn in_order(known: Vec<Option<Answer>>, fresh: Vec<Answer>) -> Vec<Answer> {
-    let mut fresh = fresh.into_iter();
-    known
-        .into_iter()
-        .map(|earlier| earlier.or_else(|| fresh.next()).unwrap_or(Answer::Declined))
-        .collect()
+/// Columns and not characters, because a wide character takes two and a row measured in
+/// characters wraps. Newlines and tabs are one space, since a typed answer is one line but a
+/// planner's question need not be.
+fn clipped(text: &str, limit: usize) -> String {
+    let flat: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let width = |text: &str| Line::from(text.to_string()).width();
+    if width(&flat) <= limit {
+        return flat;
+    }
+    let mut cut = String::new();
+    for c in flat.chars() {
+        cut.push(c);
+        if width(&cut) >= limit {
+            cut.pop();
+            break;
+        }
+    }
+    cut.push('\u{2026}');
+    cut
 }
 
 /// The tag a question is shown under, or nothing where it has none.
@@ -772,6 +1067,7 @@ mod tests {
     fn one(prompt: &Prompt) -> Asking {
         Asking {
             prompts: vec![prompt.clone()],
+            ..Default::default()
         }
     }
 
@@ -955,6 +1251,7 @@ mod tests {
     fn a_series() -> Asking {
         Asking {
             prompts: vec![prompt(false), platforms()],
+            ..Default::default()
         }
     }
 
@@ -968,7 +1265,15 @@ mod tests {
             "the series ended on its first answer"
         );
         assert_eq!(
-            answers(&a_series(), &[KeyCode::Enter, KeyCode::Enter]),
+            answers(&a_series(), &[KeyCode::Enter, KeyCode::Enter],),
+            None,
+            "the series was sent before the review was confirmed"
+        );
+        assert_eq!(
+            answers(
+                &a_series(),
+                &[KeyCode::Enter, KeyCode::Enter, KeyCode::Enter]
+            ),
             Some(vec![Answer::Chosen(vec![0]), Answer::Chosen(vec![0])])
         );
     }
@@ -986,6 +1291,7 @@ mod tests {
                 KeyCode::Down,
                 KeyCode::Char(' '),
                 KeyCode::Enter,
+                KeyCode::Enter,
             ],
         )
         .expect("the series finished");
@@ -999,14 +1305,16 @@ mod tests {
     /// cannot answer one of four should not lose the three they can.
     #[test]
     fn skipping_a_question_moves_on_rather_than_abandoning_the_series() {
-        let given = answers(&a_series(), &[KeyCode::Esc, KeyCode::Enter]).expect("finished");
+        let given = answers(&a_series(), &[KeyCode::Esc, KeyCode::Enter, KeyCode::Enter])
+            .expect("finished");
         assert_eq!(given, vec![Answer::Declined, Answer::Chosen(vec![0])]);
     }
 
     /// And the last question is the one that ends it, however it was settled.
     #[test]
     fn skipping_the_last_question_still_ends_the_series() {
-        let given = answers(&a_series(), &[KeyCode::Enter, KeyCode::Esc]).expect("finished");
+        let given = answers(&a_series(), &[KeyCode::Enter, KeyCode::Esc, KeyCode::Enter])
+            .expect("finished");
         assert_eq!(given, vec![Answer::Chosen(vec![0]), Answer::Declined]);
     }
 
@@ -1022,6 +1330,7 @@ mod tests {
                 KeyCode::Char(' '),
                 KeyCode::Enter,
                 KeyCode::Enter,
+                KeyCode::Enter,
             ],
         )
         .expect("finished");
@@ -1030,6 +1339,308 @@ mod tests {
             vec![Answer::Chosen(vec![2]), Answer::Chosen(vec![0])],
             "the second question inherited the first question's cursor or marks"
         );
+    }
+
+    /// The series as the review tests put it: three questions, the first answered with the second
+    /// option, so that a change to it is visible in what comes back.
+    fn three_asked() -> Asking {
+        Asking {
+            prompts: vec![prompt(false), platforms(), prompt(false)],
+            ..Default::default()
+        }
+    }
+
+    /// The issue's own scenario: answer the first question, go back, change it, confirm. The
+    /// regression it rejects is a picker that sends at the last answer (the old behaviour), or one
+    /// that keeps the first pick beside the new one, or that drops the answers after it.
+    #[test]
+    fn an_answer_changed_from_the_review_is_the_one_sent() {
+        use KeyCode::*;
+        let given = answers(
+            &a_series(),
+            &[Enter, Enter, Char('1'), Down, Char(' '), Enter, Enter],
+        )
+        .expect("confirmed");
+        assert_eq!(
+            given,
+            vec![Answer::Chosen(vec![1]), Answer::Chosen(vec![0])]
+        );
+    }
+
+    /// Nothing leaves until enter on the review, whatever was pressed to reach it.
+    #[test]
+    fn nothing_is_sent_before_the_review_is_confirmed() {
+        use KeyCode::*;
+        for keys in [
+            vec![Enter, Enter],
+            vec![Esc, Esc],
+            vec![Enter, Enter, Esc, Enter],
+            vec![Enter, Enter, Char('2'), Enter],
+        ] {
+            assert_eq!(
+                answers(&a_series(), &keys),
+                None,
+                "{keys:?} sent the answers"
+            );
+        }
+    }
+
+    /// A question left for the one before it comes back with what was answered there, in both
+    /// kinds, so a person fixing one word does not retype the rest.
+    #[test]
+    fn going_back_reopens_a_question_with_its_earlier_answer() {
+        use KeyCode::*;
+        let given = answers(
+            &a_series(),
+            &[
+                Char('o'),
+                Char('h'),
+                Char('i'),
+                Enter,
+                Left,
+                Enter,
+                Enter,
+                Enter,
+            ],
+        )
+        .expect("confirmed");
+        assert_eq!(given[0], Answer::Typed("hi".into()), "the words were lost");
+
+        let given = answers(
+            &a_series(),
+            &[Down, Down, Enter, Char('h'), Enter, Enter, Enter],
+        )
+        .expect("confirmed");
+        assert_eq!(given[0], Answer::Chosen(vec![2]), "the mark was lost");
+    }
+
+    /// The first question has nothing before it, and what was half done on a question is not
+    /// carried back to the one before.
+    #[test]
+    fn going_back_from_the_first_question_does_nothing() {
+        use KeyCode::*;
+        assert_eq!(answers(&a_series(), &[Left, Char('h'), Enter, Enter]), None);
+        let given = answers(
+            &a_series(),
+            &[Enter, Down, Char(' '), Left, Enter, Enter, Enter],
+        )
+        .expect("confirmed");
+        assert_eq!(
+            given[1],
+            Answer::Chosen(vec![0]),
+            "a mark left on the question the person went back from was kept"
+        );
+    }
+
+    /// Changing the middle of three returns to the review and not through the third question.
+    #[test]
+    fn a_question_reopened_from_the_review_returns_to_the_review() {
+        use KeyCode::*;
+        let given = answers(
+            &three_asked(),
+            &[
+                Enter,
+                Enter,
+                Enter,
+                Char('2'),
+                Down,
+                Char(' '),
+                Enter,
+                Enter,
+            ],
+        )
+        .expect("confirmed");
+        assert_eq!(
+            given,
+            vec![
+                Answer::Chosen(vec![0]),
+                Answer::Chosen(vec![0, 1]),
+                Answer::Chosen(vec![0])
+            ]
+        );
+    }
+
+    /// Escape on the review reopens the last question and declines nothing already answered.
+    #[test]
+    fn escape_on_the_review_declines_nothing() {
+        use KeyCode::*;
+        let given = answers(&a_series(), &[Enter, Enter, Esc, Enter, Enter]).expect("confirmed");
+        assert_eq!(
+            given,
+            vec![Answer::Chosen(vec![0]), Answer::Chosen(vec![0])]
+        );
+    }
+
+    /// A key that names no question changes nothing.
+    #[test]
+    fn a_digit_past_the_last_question_does_nothing_on_the_review() {
+        use KeyCode::*;
+        let given =
+            answers(&a_series(), &[Enter, Enter, Char('3'), Char('0'), Enter]).expect("confirmed");
+        assert_eq!(given.len(), 2);
+    }
+
+    /// A lone question is sent as it always was, with no review in between.
+    #[test]
+    fn a_lone_question_has_no_review() {
+        assert_eq!(
+            answer(&prompt(false), &[KeyCode::Enter]),
+            Some(Answer::Chosen(vec![0]))
+        );
+    }
+
+    /// The screen: each question's tag beside its answer, a skip said as one, and the keys.
+    #[test]
+    fn the_review_lists_every_answer_beside_its_question() {
+        use KeyCode::*;
+        let rows = rows_after(&a_series(), &[Down, Enter, Esc], 80, 24);
+        let screen = rows.join("\n");
+        assert!(screen.contains(t!(ask_review_title)), "{screen}");
+        let first = row_holding(&rows, "Cache layer");
+        assert!(rows[first + 1].contains("Query"), "{screen}");
+        let second = row_holding(&rows, "Platforms");
+        assert!(
+            rows[second + 1].contains(t!(ask_review_skipped)),
+            "{screen}"
+        );
+        assert!(
+            screen.contains("1-2") && screen.contains(t!(ask_key_send)),
+            "{screen}"
+        );
+    }
+
+    /// An answer as long as the field allows is cut, so the keys that send stay on screen.
+    #[test]
+    fn a_long_answer_does_not_push_the_keys_off_the_review() {
+        use KeyCode::*;
+        let mut keys = vec![Char('o')];
+        keys.extend(std::iter::repeat_n(Char('x'), 400));
+        keys.extend([Enter, Enter]);
+        let rows = rows_after(&a_series(), &keys, 60, 20);
+        assert!(
+            rows.iter().any(|row| row.contains(t!(ask_key_send))),
+            "{}",
+            rows.join("\n")
+        );
+    }
+
+    /// The question after the first says how to go back, and the first does not.
+    #[test]
+    fn the_way_back_is_offered_only_where_there_is_one() {
+        let first = rows_after(&a_series(), &[], 80, 24).join("\n");
+        let second = rows_after(&a_series(), &[KeyCode::Enter], 80, 24).join("\n");
+        assert!(!first.contains(t!(ask_key_back)), "{first}");
+        assert!(second.contains(t!(ask_key_back)), "{second}");
+    }
+
+    /// Nobody confirmed the review, so a clock that runs out there is ASK-9's case and keeps what
+    /// was answered, as it does anywhere else.
+    #[test]
+    fn a_review_left_alone_keeps_the_answers_given() {
+        use KeyCode::*;
+        let asking = a_series();
+        let mut picker = Picker::new(&asking);
+        for key in [Enter, Enter] {
+            picker.press(key);
+        }
+        assert_eq!(
+            picker.time_out(),
+            vec![Answer::Chosen(vec![0]), Answer::Chosen(vec![0])]
+        );
+    }
+
+    /// A person who reopens the first of three to fix it and walks away has still given the other
+    /// two, and the one they were fixing keeps what it had. The regression it rejects is the clock
+    /// reporting confirmed answers as no answer.
+    #[test]
+    fn a_question_gone_back_to_keeps_its_answer_and_so_do_those_after_it() {
+        use KeyCode::*;
+        let asking = three_asked();
+        let mut picker = Picker::new(&asking);
+        for key in [Enter, Enter, Enter, Char('1'), Down, Char(' ')] {
+            picker.press(key);
+        }
+        assert_eq!(
+            picker.time_out(),
+            vec![
+                Answer::Chosen(vec![0]),
+                Answer::Chosen(vec![0]),
+                Answer::Chosen(vec![0])
+            ]
+        );
+        let asking = a_series();
+        let mut picker = Picker::new(&asking);
+        for key in [Enter, Left] {
+            picker.press(key);
+        }
+        assert_eq!(
+            picker.time_out(),
+            vec![Answer::Chosen(vec![0]), Answer::TimedOut]
+        );
+    }
+
+    /// Going back by hand from a question reopened from the review walks the series on, through
+    /// the question that was reopened, and does not jump to the review past it.
+    #[test]
+    fn going_back_by_hand_from_a_reopened_question_walks_the_series_on() {
+        use KeyCode::*;
+        let asking = three_asked();
+        let mut picker = Picker::new(&asking);
+        for key in [Enter, Enter, Enter, Char('3'), Left, Enter] {
+            picker.press(key);
+        }
+        assert!(
+            !picker.reviewing,
+            "the review came up past the third question"
+        );
+        assert_eq!(picker.at, 2);
+    }
+
+    /// Wide characters and a header as long as the planner likes both take one row each.
+    #[test]
+    fn a_wide_answer_and_a_long_tag_leave_the_keys_on_the_review() {
+        use KeyCode::*;
+        let mut long = prompt(false);
+        long.header = "h".repeat(200);
+        let asking = Asking {
+            prompts: vec![long.clone(), long.clone(), long.clone(), long],
+            ..Default::default()
+        };
+        let mut keys = vec![Char('o')];
+        keys.extend(std::iter::repeat_n(Char('語'), 300));
+        keys.push(Enter);
+        keys.extend([Enter, Enter, Enter]);
+        let rows = rows_after(&asking, &keys, 60, 20);
+        assert!(
+            rows.iter().any(|row| row.contains(t!(ask_key_send))),
+            "{}",
+            rows.join("\n")
+        );
+    }
+
+    /// The memory is written from what `ask` returns, so an answer corrected on the review is the
+    /// one remembered and the first pick is not (ASK-8).
+    #[test]
+    fn the_answer_remembered_is_the_one_confirmed() {
+        use KeyCode::*;
+        let asking = a_series();
+        let mut session = Session::new(".");
+        let given = put(&mut session, &asking, |outstanding| {
+            answers(
+                outstanding,
+                &[Enter, Enter, Char('1'), Down, Char(' '), Enter, Enter],
+            )
+            .expect("sent")
+        });
+        assert_eq!(given[0], Answer::Chosen(vec![1]));
+        let again = put(&mut session, &asking, |shown| {
+            assert!(
+                shown.prompts.is_empty(),
+                "a confirmed question was put again"
+            );
+            Vec::new()
+        });
+        assert_eq!(again, given);
     }
 
     /// Half-typed text is no different: it was written in answer to the question on screen.
@@ -1041,6 +1652,7 @@ mod tests {
                 KeyCode::Char('o'),
                 KeyCode::Char('h'),
                 KeyCode::Char('i'),
+                KeyCode::Enter,
                 KeyCode::Enter,
                 KeyCode::Enter,
             ],
@@ -1170,51 +1782,6 @@ mod tests {
             KeyCode::Enter,
         ];
         assert_eq!(answer(&prompt(true), &keys), Some(Answer::Chosen(vec![0])));
-    }
-
-    /// The weave the main loop depends on. Fresh answers fill the gaps the remembered ones left,
-    /// and every question keeps its own place.
-    #[test]
-    fn remembered_answers_keep_their_places_beside_the_fresh_ones() {
-        let known = vec![
-            Some(Answer::Chosen(vec![1])),
-            None,
-            Some(Answer::Declined),
-            None,
-        ];
-        let fresh = vec![Answer::Typed("second".into()), Answer::Chosen(vec![0])];
-        assert_eq!(
-            in_order(known, fresh),
-            vec![
-                Answer::Chosen(vec![1]),
-                Answer::Typed("second".into()),
-                Answer::Declined,
-                Answer::Chosen(vec![0]),
-            ]
-        );
-    }
-
-    /// A series everyone has already answered asks nothing, and still reports every answer.
-    #[test]
-    fn a_series_answered_entirely_from_memory_asks_nothing() {
-        let known = vec![Some(Answer::Chosen(vec![0])), Some(Answer::Declined)];
-        assert_eq!(
-            in_order(known, Vec::new()),
-            vec![Answer::Chosen(vec![0]), Answer::Declined]
-        );
-    }
-
-    /// An interface that answered fewer than it was shown leaves the rest declined. Pulling the
-    /// next answer forward would report the person as having said, about one question, what they
-    /// said about another.
-    #[test]
-    fn an_interface_that_answered_fewer_leaves_the_rest_declined() {
-        let known = vec![None, None, None];
-        let fresh = vec![Answer::Chosen(vec![0])];
-        assert_eq!(
-            in_order(known, fresh),
-            vec![Answer::Chosen(vec![0]), Answer::Declined, Answer::Declined]
-        );
     }
 
     /// A picker shown nothing draws nothing and answers nothing, which is what lets the main
@@ -1822,5 +2389,399 @@ mod tests {
 
         assert!(screen.contains("skip the question"));
         assert!(!screen.contains("back to the options"));
+    }
+
+    /// What the session said beside the work, oldest first.
+    fn said(session: &Session) -> Vec<String> {
+        session
+            .transcript
+            .iter()
+            .filter(|entry| entry.speaker == crate::state::Speaker::System)
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    /// ASK-8 as the main loop reaches it. The picker is drawn by `ask`, so a stand-in that records
+    /// what it was shown is what tells a series put whole from one put only for what is left.
+    #[test]
+    fn a_question_the_person_answered_is_not_drawn_again() {
+        let mut session = Session::new(".");
+        let asking = one(&prompt(false));
+
+        let first = put(&mut session, &asking, |shown| {
+            assert_eq!(shown, &asking, "the first time the question is drawn whole");
+            vec![Answer::Chosen(vec![1])]
+        });
+        let again = put(&mut session, &asking, |shown| {
+            assert!(
+                shown.prompts.is_empty(),
+                "a question answered before was drawn again: {shown:?}"
+            );
+            Vec::new()
+        });
+
+        assert_eq!(first, vec![Answer::Chosen(vec![1])]);
+        assert_eq!(again, first, "the remembered answer was not handed back");
+    }
+
+    /// Said once per question answered from memory, so a reused answer is not mistaken for a
+    /// question that was never put.
+    #[test]
+    fn an_answer_reused_from_memory_is_said_to_have_been_given_already() {
+        let mut session = Session::new(".");
+        let asking = one(&prompt(false));
+        put(&mut session, &asking, |_| vec![Answer::Declined]);
+        assert!(said(&session).is_empty(), "the first asking said something");
+
+        put(&mut session, &asking, |_| Vec::new());
+
+        assert_eq!(
+            said(&session),
+            vec![t!(session_answered_already, question = "Which cache layer?").to_string()]
+        );
+    }
+
+    /// The questions still open are the only ones drawn, and every answer keeps the place of the
+    /// question it belongs to, whichever of them were remembered.
+    #[test]
+    fn a_series_with_some_questions_settled_draws_only_the_rest() {
+        let mut session = Session::new(".");
+        put(&mut session, &one(&platforms()), |_| {
+            vec![Answer::Chosen(vec![0, 1])]
+        });
+
+        let both = Asking {
+            prompts: vec![prompt(false), platforms()],
+            ..Default::default()
+        };
+        let given = put(&mut session, &both, |shown| {
+            assert_eq!(
+                shown.prompts,
+                vec![prompt(false)],
+                "the settled one was drawn"
+            );
+            vec![Answer::Typed("neither".into())]
+        });
+
+        assert_eq!(
+            given,
+            vec![Answer::Typed("neither".into()), Answer::Chosen(vec![0, 1])]
+        );
+    }
+
+    /// A picker that could not draw, or lost the keyboard, answers nothing. The question was not
+    /// put to the person, so it is not remembered as skipped and is drawn when asked again.
+    #[test]
+    fn a_question_the_picker_left_unanswered_is_drawn_again() {
+        let mut session = Session::new(".");
+        let asking = one(&prompt(false));
+
+        let first = put(&mut session, &asking, |_| Vec::new());
+        let mut drawn = 0;
+        put(&mut session, &asking, |shown| {
+            drawn = shown.prompts.len();
+            vec![Answer::Chosen(vec![0])]
+        });
+
+        assert_eq!(first, vec![Answer::Declined]);
+        assert_eq!(drawn, 1, "a question nobody was asked was not drawn again");
+    }
+
+    /// ASK-8, ASK-9: a question closed on the clock is not remembered. A person who was away said
+    /// nothing, so a planner asking it again is asking for the first time, and a remembered "no
+    /// answer" would be given back in their place. What was answered beside it is remembered, and
+    /// the transcript says a question was closed so the person who returns can see it.
+    #[test]
+    fn a_question_closed_on_the_clock_is_asked_again_and_the_one_beside_it_is_remembered() {
+        let both = Asking {
+            prompts: vec![prompt(false), platforms()],
+            ..Default::default()
+        };
+
+        let mut session = Session::new(".");
+        session.adopt_ask_idle(Some(90));
+        let given = put(&mut session, &both, |_| {
+            vec![Answer::Chosen(vec![0]), Answer::TimedOut]
+        });
+        assert_eq!(given, vec![Answer::Chosen(vec![0]), Answer::TimedOut]);
+        assert!(
+            said(&session).contains(&t!(session_question_timed_out, seconds = 90).to_string()),
+            "{:?}",
+            said(&session)
+        );
+
+        let mut drawn = Vec::new();
+        put(&mut session, &both, |shown| {
+            drawn = shown.prompts.clone();
+            vec![Answer::Declined]
+        });
+        assert_eq!(
+            drawn,
+            vec![platforms()],
+            "the question nobody answered was not put again, or the one answered was"
+        );
+
+        let mut brief = Session::new(".");
+        brief.adopt_ask_idle(Some(1));
+        put(&mut brief, &both, |_| {
+            vec![Answer::TimedOut, Answer::TimedOut]
+        });
+        let said_once = said(&brief).join("\n");
+        assert!(
+            said_once.contains("after 1 second with"),
+            "a single second was counted as seconds: {said_once}"
+        );
+
+        let mut settled = Session::new(".");
+        settled.adopt_ask_idle(Some(90));
+        put(&mut settled, &both, |_| {
+            vec![Answer::Chosen(vec![0]), Answer::Declined]
+        });
+        assert!(
+            said(&settled).is_empty(),
+            "a series nobody was late for said it had been closed"
+        );
+    }
+
+    /// A question that differs in its tag is another question, and is drawn.
+    #[test]
+    fn a_question_that_differs_in_its_tag_is_drawn_though_the_sentence_was_answered() {
+        let mut session = Session::new(".");
+        put(&mut session, &one(&prompt(false)), |_| {
+            vec![Answer::Chosen(vec![0])]
+        });
+        let retagged = bravebot_core::ask::prompt(&Question::new(
+            "Caching",
+            "Which cache layer?",
+            vec![
+                Choice::new("HTTP", Some("in front of the handler".into())),
+                Choice::new("Query", None),
+                Choice::new("Neither", None),
+            ],
+            false,
+        ));
+
+        let mut drawn = 0;
+        put(&mut session, &one(&retagged), |shown| {
+            drawn = shown.prompts.len();
+            vec![Answer::Declined]
+        });
+
+        assert_eq!(drawn, 1);
+    }
+
+    /// A terminal and a clock that run on a script instead of a person: what arrives, and at what
+    /// time since the questions were put. Waiting past the last thing scripted with no limit would
+    /// never end, which is reported as a failure rather than a hang.
+    struct Scripted {
+        started: Instant,
+        elapsed: Duration,
+        arriving: std::collections::VecDeque<(u64, Event)>,
+        /// How long the loop is held up between the time it starts and the first time it looks
+        /// at the clock again, as a process that was stopped or starved would be.
+        stall: Duration,
+        readings: usize,
+    }
+
+    impl Scripted {
+        fn new(arriving: Vec<(u64, Event)>) -> Self {
+            Self {
+                started: Instant::now(),
+                elapsed: Duration::ZERO,
+                arriving: arriving.into(),
+                stall: Duration::ZERO,
+                readings: 0,
+            }
+        }
+
+        fn stalled_for(mut self, stall: Duration) -> Self {
+            self.stall = stall;
+            self
+        }
+    }
+
+    impl Events for Scripted {
+        fn now(&mut self) -> Instant {
+            self.readings += 1;
+            if self.readings == 2 {
+                self.elapsed += self.stall;
+            }
+            self.started + self.elapsed
+        }
+
+        fn next(&mut self, within: Option<Duration>) -> io::Result<Option<Event>> {
+            let limit = within.map(|within| self.elapsed + within);
+            let due = self
+                .arriving
+                .front()
+                .map(|(at, _)| Duration::from_secs(*at));
+            match (due, limit) {
+                (Some(at), limit) if limit.is_none_or(|limit| at <= limit) => {
+                    self.elapsed = self.elapsed.max(at);
+                    Ok(self.arriving.pop_front().map(|(_, event)| event))
+                }
+                (_, Some(limit)) => {
+                    self.elapsed = limit;
+                    Ok(None)
+                }
+                (_, None) => Err(io::Error::other("waiting with nothing left to arrive")),
+            }
+        }
+    }
+
+    fn pressed(code: KeyCode) -> Event {
+        Event::Key(event::KeyEvent::new(code, event::KeyModifiers::NONE))
+    }
+
+    /// The answers a series ends with when `arriving` happens and the picker waits `idle`, and how
+    /// long it had been going when it ended.
+    fn waited(
+        asking: &Asking,
+        idle: Option<u64>,
+        arriving: Vec<(u64, Event)>,
+    ) -> (Vec<Answer>, Duration) {
+        waited_after_a_stall(asking, idle, arriving, Duration::ZERO)
+    }
+
+    fn waited_after_a_stall(
+        asking: &Asking,
+        idle: Option<u64>,
+        arriving: Vec<(u64, Event)>,
+        stall: Duration,
+    ) -> (Vec<Answer>, Duration) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        let mut picker = Picker::new(asking);
+        let mut events = Scripted::new(arriving).stalled_for(stall);
+        let given = converse(
+            &mut terminal,
+            &mut picker,
+            idle.map(Duration::from_secs),
+            &mut events,
+        );
+        (given, events.elapsed)
+    }
+
+    fn three_questions() -> Asking {
+        Asking {
+            prompts: vec![prompt(false), platforms(), prompt(false)],
+            ..Default::default()
+        }
+    }
+
+    /// ASK-9: the question on screen and the ones behind it close with no answer, and the answer
+    /// already given stays. The time runs from the last key, so it ends a whole `idle` after the
+    /// answer to the first question and not after the questions were put.
+    #[test]
+    fn a_series_left_alone_closes_from_the_question_on_screen_and_keeps_what_was_answered() {
+        let (given, ended) = waited(
+            &three_questions(),
+            Some(60),
+            vec![(10, pressed(KeyCode::Enter))],
+        );
+        assert_eq!(
+            given,
+            vec![Answer::Chosen(vec![0]), Answer::TimedOut, Answer::TimedOut]
+        );
+        assert_eq!(ended, Duration::from_secs(70));
+    }
+
+    /// Any key press restarts the time, not only the one that answers. A person who is scrolling
+    /// the options is there, and closing the question under them is what the setting is not for.
+    #[test]
+    fn a_key_that_answers_nothing_still_restarts_the_time() {
+        let (given, ended) = waited(
+            &one(&prompt(false)),
+            Some(60),
+            vec![
+                (50, pressed(KeyCode::Down)),
+                (100, pressed(KeyCode::Down)),
+                (150, pressed(KeyCode::Enter)),
+            ],
+        );
+        assert_eq!(given, vec![Answer::Chosen(vec![2])]);
+        assert_eq!(ended, Duration::from_secs(150));
+    }
+
+    /// Nothing but a key press is somebody at the keyboard. A change of size or the terminal being
+    /// left is reported to the picker and leaves the time running.
+    #[test]
+    fn an_event_that_is_not_a_key_press_does_not_restart_the_time() {
+        let (given, ended) = waited(
+            &one(&prompt(false)),
+            Some(60),
+            vec![(30, Event::Resize(80, 24)), (50, Event::FocusLost)],
+        );
+        assert_eq!(given, vec![Answer::TimedOut]);
+        assert_eq!(ended, Duration::from_secs(60));
+    }
+
+    /// With no time set a question waits however long it takes, so the setting is the only thing
+    /// that closes one. A picker that carried a time of its own would close this one.
+    #[test]
+    fn with_no_time_set_a_question_waits_for_as_long_as_it_takes() {
+        let (given, ended) = waited(
+            &one(&prompt(false)),
+            None,
+            vec![(3 * 24 * 60 * 60, pressed(KeyCode::Enter))],
+        );
+        assert_eq!(given, vec![Answer::Chosen(vec![0])]);
+        assert_eq!(ended, Duration::from_secs(3 * 24 * 60 * 60));
+    }
+
+    /// What was marked or typed and never confirmed is not an answer. Reporting it would hand the
+    /// planner a reply the person did not give, which is the thing the time out exists to avoid.
+    #[test]
+    fn marks_and_half_typed_words_are_not_an_answer_when_the_time_runs_out() {
+        let (marked, _) = waited(
+            &one(&prompt(true)),
+            Some(60),
+            vec![
+                (1, pressed(KeyCode::Char(' '))),
+                (2, pressed(KeyCode::Down)),
+                (3, pressed(KeyCode::Char(' '))),
+            ],
+        );
+        assert_eq!(marked, vec![Answer::TimedOut]);
+
+        let (typed, _) = waited(
+            &one(&prompt(false)),
+            Some(60),
+            vec![
+                (1, pressed(KeyCode::Char('o'))),
+                (2, pressed(KeyCode::Char('h'))),
+                (3, pressed(KeyCode::Char('i'))),
+            ],
+        );
+        assert_eq!(typed, vec![Answer::TimedOut]);
+    }
+
+    /// A key pressed inside the time is an answer even when the loop reached it late, as a process
+    /// that was stopped and resumed does. Without one waiting, the same stall is the time running
+    /// out. Rejects: a deadline honoured before the keys already queued are read.
+    #[test]
+    fn a_key_waiting_when_the_loop_runs_late_is_still_an_answer() {
+        let stall = Duration::from_secs(100);
+        let (given, _) = waited_after_a_stall(
+            &one(&prompt(false)),
+            Some(60),
+            vec![(50, pressed(KeyCode::Enter))],
+            stall,
+        );
+        assert_eq!(given, vec![Answer::Chosen(vec![0])]);
+
+        let (given, _) = waited_after_a_stall(&one(&prompt(false)), Some(60), Vec::new(), stall);
+        assert_eq!(given, vec![Answer::TimedOut]);
+    }
+
+    /// A key that arrives in the last moment is an answer, so a person who presses it as the time
+    /// is up is not told they were away.
+    #[test]
+    fn a_key_arriving_as_the_time_is_up_is_still_an_answer() {
+        let (given, _) = waited(
+            &one(&prompt(false)),
+            Some(60),
+            vec![(60, pressed(KeyCode::Enter))],
+        );
+        assert_eq!(given, vec![Answer::Chosen(vec![0])]);
     }
 }

@@ -60,6 +60,7 @@ fn session_running(target: u64) -> Session {
             pending: Arc::new(Mutex::new(None)),
             target,
             finished: Arc::clone(&finished),
+            interjections: None,
         }),
         watches: Arc::clone(&watches),
         ..Open::opened(
@@ -184,7 +185,7 @@ fn a_cancel_naming_a_turn_number_is_refused_and_stops_nothing() {
 #[test]
 fn a_target_that_is_not_a_number_is_refused_and_stops_nothing() {
     let mut session = session_running(1);
-    for target in [json!("1"), json!(-1), json!(1.5), json!(true)] {
+    for target in [json!("1"), json!(-1), json!(1.5), json!(true), json!(null)] {
         let refused = session.cancel_turn(Some(target.clone())).unwrap_err();
         assert_eq!(refused.code, ErrorCode::BadRequest, "{target}");
     }

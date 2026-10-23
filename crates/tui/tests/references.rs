@@ -15,7 +15,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-references-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-references-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(path.join("src")).expect("create");
         std::fs::write(path.join("Cargo.toml"), "[package]").expect("write");
@@ -107,6 +108,43 @@ fn a_directory_completes_so_typing_can_continue_into_it() {
     typing(&mut session, "mai");
     handle_key(&mut session, key(KeyCode::Tab));
     assert_eq!(session.input(), "@src/main.rs ");
+}
+
+/// NAME-11: a fragment that begins nothing in the root is looked for below it, so a person who
+/// remembers part of a name and not its directory gets the file, and Tab writes the whole path
+/// without disturbing the sentence it is in.
+#[test]
+fn a_fragment_finds_a_file_below_and_tab_writes_the_whole_path() {
+    let scratch = Scratch::new("found-tab");
+    let mut session = session(&scratch);
+    typing(&mut session, "explain @mnrs");
+
+    assert_eq!(offered_paths(&session), ["src/main.rs"]);
+    assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
+    assert_eq!(session.input(), "explain @src/main.rs ");
+}
+
+/// NAME-7, NAME-11: Enter on a fragment takes the file found below instead of sending the fragment,
+/// and the line then names that file, which is the one the person was shown.
+#[test]
+fn enter_completes_a_fragment_to_the_file_found_below_and_names_that_file() {
+    let scratch = Scratch::new("found-enter");
+    let mut session = session(&scratch);
+    typing(&mut session, "explain @mnrs");
+
+    assert_eq!(
+        handle_key(&mut session, key(KeyCode::Enter)),
+        Action::Redraw
+    );
+    assert_eq!(session.input(), "explain @src/main.rs ");
+    assert!(
+        session.transcript.is_empty(),
+        "a half-typed reference was sent"
+    );
+    assert_eq!(
+        bravebot_mentions::referenced(session.input()),
+        ["src/main.rs"]
+    );
 }
 
 /// The arrows walk the offered files, and Enter takes one rather than sending a half-typed path.
@@ -289,6 +327,33 @@ fn a_cursor_past_the_end_of_a_narrowed_list_still_names_a_file() {
     assert_eq!(session.input(), "@src/");
 }
 
+/// Everything a key press and its frame ask about what is offered is answered from one reading of
+/// the directory. The file is removed between two questions with no key between them, so the second
+/// can only name it if the disk was not read again.
+#[test]
+fn the_callers_of_one_key_press_share_one_reading_of_the_directory() {
+    let scratch = Scratch::new("shared");
+    let mut session = session(&scratch);
+    typing(&mut session, "@");
+    let first = offered_paths(&session);
+    assert!(first.iter().any(|path| path == "README.md"), "{first:?}");
+
+    std::fs::remove_file(scratch.path.join("README.md")).expect("remove");
+    assert_eq!(
+        offered_paths(&session),
+        first,
+        "a question with no key before it read the directory again"
+    );
+
+    handle_key(&mut session, key(KeyCode::Down));
+    assert!(
+        !offered_paths(&session)
+            .iter()
+            .any(|path| path == "README.md"),
+        "the next key press was answered from the reading before it"
+    );
+}
+
 /// An ordinary sentence containing an address is not a reference: only a word beginning with `@`
 /// is, and only while it is the one being typed.
 #[test]
@@ -387,6 +452,85 @@ fn a_name_with_a_space_completes_to_a_reference_that_names_it() {
     );
 }
 
+/// A file whose name is another's with a no-break space at its end is not offered, since a line
+/// is trimmed when it is sent and would name the other file. Only the file that can be named is
+/// listed, so a pick names the file it shows.
+#[test]
+fn a_name_ending_in_a_no_break_space_is_not_offered_beside_the_name_it_looks_like() {
+    let scratch = Scratch::new("no-break-space-trailing");
+    std::fs::write(scratch.path.join("a.md"), "x").expect("write");
+    std::fs::write(scratch.path.join("a.md\u{a0}"), "x").expect("write");
+    let mut session = session(&scratch);
+    typing(&mut session, "read @a.md");
+    assert_eq!(offered_starting(&session, "a.md"), vec!["a.md"]);
+
+    handle_key(&mut session, key(KeyCode::Tab));
+    assert_eq!(session.input(), "read @a.md ");
+    let sent = match handle_key(&mut session, key(KeyCode::Enter)) {
+        Action::Submit(sent) => sent,
+        other => panic!("the line was not sent: {other:?}"),
+    };
+    assert_eq!(
+        bravebot_mentions::referenced(&sent),
+        vec!["a.md".to_string()]
+    );
+}
+
+/// A name holding a no-break space beside the same name with a space completes to the escaped
+/// form, and the line that is sent names the file picked. Without the escape the line ends the
+/// reference at the no-break space and names a different path.
+#[test]
+fn a_name_with_a_no_break_space_completes_to_a_reference_that_names_it() {
+    let scratch = Scratch::new("no-break-space-inside");
+    std::fs::write(scratch.path.join("a b.md"), "x").expect("write");
+    std::fs::write(scratch.path.join("a\u{a0}b.md"), "x").expect("write");
+    let mut session = session(&scratch);
+    typing(&mut session, "read @a");
+    assert_eq!(
+        offered_starting(&session, "a"),
+        vec!["a b.md", "a\u{a0}b.md"]
+    );
+
+    handle_key(&mut session, key(KeyCode::Down));
+    handle_key(&mut session, key(KeyCode::Tab));
+    assert_eq!(session.input(), "read @a\\\u{a0}b.md ");
+
+    let sent = match handle_key(&mut session, key(KeyCode::Enter)) {
+        Action::Submit(sent) => sent,
+        other => panic!("the line was not sent: {other:?}"),
+    };
+    assert_eq!(
+        bravebot_mentions::referenced(&sent),
+        vec!["a\u{a0}b.md".to_string()]
+    );
+}
+
+/// A name ending in a backslash is written with two, so the space the completion adds does not
+/// join it as an escaped space and the line that is sent names the file picked.
+#[cfg(unix)]
+#[test]
+fn a_name_ending_in_a_backslash_completes_to_a_reference_that_names_it() {
+    let scratch = Scratch::new("trailing-backslash");
+    std::fs::write(scratch.path.join("a.md"), "x").expect("write");
+    std::fs::write(scratch.path.join("a.md\\"), "x").expect("write");
+    let mut session = session(&scratch);
+    typing(&mut session, "read @a.md");
+    assert_eq!(offered_starting(&session, "a.md"), vec!["a.md", "a.md\\"]);
+
+    handle_key(&mut session, key(KeyCode::Down));
+    handle_key(&mut session, key(KeyCode::Tab));
+    assert_eq!(session.input(), "read @a.md\\\\ ");
+
+    let sent = match handle_key(&mut session, key(KeyCode::Enter)) {
+        Action::Submit(sent) => sent,
+        other => panic!("the line was not sent: {other:?}"),
+    };
+    assert_eq!(
+        bravebot_mentions::referenced(&sent),
+        vec!["a.md\\".to_string()]
+    );
+}
+
 /// Enter completes a half-typed reference that already holds an escaped space, rather than sending
 /// the fragment.
 #[test]
@@ -417,6 +561,14 @@ fn offered_paths(session: &Session) -> Vec<String> {
         }
         other => panic!("files were not offered: {other:?}"),
     }
+}
+
+/// The offered files that begin with `prefix`, which come before the names a fragment finds below
+/// the root (NAME-11).
+fn offered_starting(session: &Session, prefix: &str) -> Vec<String> {
+    let mut paths = offered_paths(session);
+    paths.retain(|path| path.starts_with(prefix));
+    paths
 }
 
 /// NAME-10: an `@` offers the past sessions after the files, and a title or an id narrows them.

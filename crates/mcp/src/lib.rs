@@ -22,7 +22,10 @@ pub mod protocol;
 pub mod stdio;
 
 pub use http::HttpServer;
-pub use protocol::{Listing, MAX_WIRE, ToolResult, listed_or_none, wire_name};
+pub use protocol::{
+    DrawnArgument, DrawnPrompt, Listing, MAX_WIRE, PromptListing, PromptResult, ToolResult,
+    drawn_prompts, listed_or_none, wire_name,
+};
 pub use stdio::StdioServer;
 
 use bravebot_core::label::Label;
@@ -112,6 +115,25 @@ pub(crate) fn named(error: McpError, tool: &str) -> McpError {
             after,
         },
         other => other,
+    }
+}
+
+/// Writes how a handshake step ended to the diagnostic log: that it did, or which kind of failure.
+/// Never the server's name or anything it sent, since both are text someone else chose.
+pub(crate) fn log_step<T>(step: &'static str, outcome: &McpResult<T>) {
+    match outcome {
+        Ok(_) => bravebot_diag::info(step, &[("outcome", bravebot_diag::Field::word("ok"))]),
+        Err(error) => {
+            let kind = match error {
+                McpError::Confinement(_) => "confinement",
+                McpError::Denied(_) => "denied",
+                McpError::Transport(_) => "transport",
+                McpError::Server { .. } => "server",
+                McpError::ToolFailed { .. } => "tool_failed",
+                McpError::TimedOut { .. } => "timed_out",
+            };
+            bravebot_diag::error(step, &[("kind", bravebot_diag::Field::word(kind))]);
+        }
     }
 }
 

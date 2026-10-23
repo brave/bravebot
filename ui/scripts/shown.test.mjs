@@ -16,17 +16,26 @@ const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 
 // `react-dom/server` draws a Leo button as a bare `<leo-button>`, with none of the props that shut
-// it, so here it is drawn as the plain button it stands for.
+// it, so here it is drawn as the plain button it stands for. A Leo alert loses its class the same
+// way, and the class is what says a row is a warning, so it is drawn as a plain `div`.
 const plainLeoButton = {
   name: 'plain-leo-button',
   setup(built) {
-    built.onResolve({ filter: /^@brave\/leo\/react\/button$/ }, () => ({ path: 'button', namespace: 'plain-leo-button' }))
-    built.onLoad({ filter: /.*/, namespace: 'plain-leo-button' }, () => ({
+    built.onResolve({ filter: /^@brave\/leo\/react\/(button|alert)$/ }, ({ path }) => ({ path: path.split('/').pop(), namespace: 'plain-leo-button' }))
+    built.onLoad({ filter: /^button$/, namespace: 'plain-leo-button' }, () => ({
       loader: 'js',
       resolveDir: process.cwd(),
       contents: `import { createElement } from 'react'
         export default function Button({ className, isDisabled, onClick, children }) {
           return createElement('button', { className, disabled: !!isDisabled, onClick }, children)
+        }`,
+    }))
+    built.onLoad({ filter: /^alert$/, namespace: 'plain-leo-button' }, () => ({
+      loader: 'js',
+      resolveDir: process.cwd(),
+      contents: `import { createElement } from 'react'
+        export default function Alert({ className, children }) {
+          return createElement('div', { className }, children)
         }`,
     }))
   },
@@ -191,4 +200,96 @@ test('an answer is open once measured with nothing left, and a standing one wait
   assert.equal(leftWords(measured(1, 3)), '1 more line to read before approving')
   assert.equal(leftWords(measured(0, 3)), '3 more lines to read before remembering')
   assert.equal(leftWords(measured(0, 0)), null)
+})
+
+// Rows that carry no token: those that exist only when a request says so, and the sentences that close a card. The cases above set none of these fields, so a
+// mark dropped from one of the rows they draw would fail nothing there: no token sits in it.
+const CONDITIONAL = {
+  confirm: {
+    request: { ...CASES.confirm.request, untrusted: true, exact: false, writtenSinceCheckout: true },
+    phrases: [
+      'Read it as you would a stranger’s patch',
+      'too dissimilar to diff exactly',
+      'after the checkout was made',
+    ],
+  },
+  run: {
+    request: {
+      ...CASES.run.request, releasesPrivate: true, plan: 'grep zqr31 notes.md', confinement: null,
+      notSandboxed: 'Nothing confines these programs.', ambient: [{ authority: 'agent-socket', named: 'zqr34' }],
+    },
+    phrases: ['Execution plan:', 'Nothing confines these programs.', 'hands your own data to the program', 'This spends access that is yours elsewhere'],
+  },
+  output: {
+    request: CASES.output.request,
+    phrases: ['The planner has not seen this', '2 characters in this text draw as nothing'],
+  },
+  vet: {
+    request: CASES.vet.request,
+    phrases: ['1 character in this text draws as nothing'],
+  },
+  // The sentences that say what a yes does come after the last token in their cards.
+  exposure: { request: CASES.exposure.request, phrases: ['Keeping it back keeps this file’s text from the model'] },
+  host: { request: CASES.host.request, phrases: ['A yes lets every command the model runs'] },
+}
+
+test('the warnings and closing sentences no case token sits in are rows the card marks as deciding', () => {
+  for (const [name, { request, phrases }] of Object.entries(CONDITIONAL)) {
+    const markup = draw(ENTRY[name](request))
+    const runs = texts(markup)
+    for (const phrase of phrases) {
+      const holding = runs.filter((run) => run.text.includes(phrase))
+      assert.equal(holding.length, 1, `${name}: "${phrase}" is drawn once\n${markup}`)
+      assert.equal(holding[0].deciding, 'all', `${name}: "${phrase}" is drawn outside every row the card marks as deciding\n${markup}`)
+    }
+  }
+})
+
+test('an output or vetted read the agent sent no sentence for says nothing about characters that draw as nothing', () => {
+  for (const kind of ['output', 'vet']) {
+    for (const [hidden, hiddenNote] of [[undefined, undefined], [0, null]]) {
+      const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hidden, hiddenNote }))
+      assert.ok(!markup.includes('draw as nothing') && !markup.includes('draws as nothing'), `${kind}: a count of ${hidden} drew the sentence\n${markup}`)
+      assert.ok(!markup.includes('hidden-characters'), `${kind}: a count of ${hidden} drew the row\n${markup}`)
+    }
+  }
+})
+
+test('the sentence the agent sent is drawn as sent, with no wording of the card’s own', () => {
+  for (const kind of ['output', 'vet']) {
+    const note = 'Zq9 sentence the agent worded, in whatever language'
+    const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hiddenNote: note }))
+    assert.equal(texts(markup).filter((run) => run.text === note && run.deciding === 'all').length, 1, `${kind}: the sentence is drawn once, as a deciding row\n${markup}`)
+    assert.ok(!markup.includes('draw as nothing') && !markup.includes('draws as nothing'), `${kind}: the card put words of its own beside the agent's\n${markup}`)
+  }
+})
+
+test('every warning a decision card draws is inside a row it marks as deciding, or holds one', () => {
+  const drawn = [...Object.values(CASES).map(({ kind, request }) => [kind, request]), ...Object.entries(CONDITIONAL).map(([kind, { request }]) => [kind, request])]
+  let warnings = 0
+  for (const [kind, request] of drawn) {
+    const markup = draw(ENTRY[kind](request))
+    const open = []
+    const looked = []
+    for (const found of markup.matchAll(/<(\/?)([a-zA-Z][\w-]*)([^>]*)>/g)) {
+      const [, closing, tag, attributes] = found
+      if (closing) {
+        const index = open.findLastIndex((element) => element.tag === tag)
+        if (index >= 0) open.length = index
+        continue
+      }
+      if (VOID.has(tag)) continue
+      const deciding = /data-deciding="/.test(attributes)
+      // A warning that holds the marked row itself, like the secret alert's title, is marked where it counts.
+      if (deciding) for (const outer of open) outer.holds = true
+      const element = { tag, deciding, holds: false, inside: open.some((outer) => outer.deciding), at: found.index }
+      open.push(element)
+      if (/class="[^"]*\b(warn|card-alert)\b/.test(attributes)) looked.push(element)
+    }
+    for (const element of looked) {
+      assert.ok(element.inside || element.deciding || element.holds, `${kind}: a warning is drawn outside every row the card marks as deciding\n${markup.slice(element.at, element.at + 200)}`)
+    }
+    warnings += looked.length
+  }
+  assert.ok(warnings >= 8, `only ${warnings} warnings were looked at`)
 })

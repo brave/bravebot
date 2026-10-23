@@ -3,7 +3,7 @@
 //! Real files in a real directory, because the whole question a drop asks is whether a path names
 //! something, and a fake filesystem would answer it for free.
 
-use bravebot_tui::dropped::Kind;
+use bravebot_filetype::by_name::Kind;
 use bravebot_tui::state::Session;
 use std::path::PathBuf;
 
@@ -13,7 +13,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-drop-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-drop-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }

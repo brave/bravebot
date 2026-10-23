@@ -12,6 +12,7 @@ governs:
   - crates/session/src/store.rs
   - crates/session/src/sessions.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
   - crates/cli/src/auth.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
@@ -55,7 +56,8 @@ words, and it is the part of a session that most often names something private.
 
 Choosing a model, a theme or an effort level inside an incognito session takes effect for that
 session and is not recorded. The recorded choice a previous ordinary session made is still read at
-startup and is still there afterwards.
+startup and is still there afterwards. A language chosen with `/language` applies from the next
+start, which an incognito session does not record, so the command saves nothing and says so.
 
 **Why.** Both halves are the point. Without the first, the mode would be a session in which nothing
 can be changed; without the second, entering it once would quietly overwrite settings the person
@@ -108,8 +110,8 @@ would add one is not offered either. So is the record of reach a person remember
 which [sandboxing.md](sandboxing.md#SANDBOX-23) governs: a grant already in it is attached as it is
 anywhere, and `/reach` adds none and says so. So is the record of answers to the startup question
 somebody asked to be kept, which [trust-map.md](trust-map.md#TRUST-23) governs: a kept answer settles
-the question here as anywhere, the session says so as it opens, the key that would keep one is not
-offered, and `/forget-trust` writes nothing and names the file.
+the question here as anywhere, the session says so as it opens, a yes is not kept and the question
+says so, and `/forget-trust` writes nothing and names the file.
 
 **The one read refused is the standing answer about whether a check answers in somebody's place.**
 The word a person's own directory holds about that is not read in this mode, so a session here asks
@@ -167,7 +169,12 @@ cleared and by what, and one missed ordering writes the thing the mode exists no
 `import-leo-creds` in an incognito session reports that it will not run and exits without
 registering a device. Forgetting an existing import is still allowed. Storing a gateway key with
 `bravebot auth login gateway` is refused the same way, before the key is asked for, and forgetting
-one with `bravebot auth logout gateway` is allowed.
+one with `bravebot auth logout gateway` is allowed. Signing in with a ChatGPT account with
+`bravebot auth login chatgpt` is refused the same way, before the listener binds and before a browser
+opens, and `bravebot auth logout chatgpt` is allowed
+([CHATGPT-12](chatgpt-sign-in.md#CHATGPT-12)).
+Deleting a stored session with `bravebot sessions delete` or `sessions purge` is allowed for the same
+reason ([CLI-33](cli.md#CLI-33)).
 
 **Why.** An import is a write by definition: a credential that did not outlive the session would not
 be an import. Doing it and discarding the result would mint a batch on Brave's service that nothing
@@ -179,6 +186,8 @@ mode points.
 `verified-by: bravebot_cli::running::forgetting_an_import_is_allowed_in_an_incognito_session`
 `verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
 `verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
+`verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
+`verified-by: bravebot_cli::running::auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one`
 
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so

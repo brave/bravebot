@@ -19,6 +19,11 @@
 //! it never tried.
 
 #![cfg(unix)]
+#![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_ui_bridge::control_link::{self, Linked};
 use serde_json::{Value, json};
@@ -34,7 +39,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "pipelines.rs is shared with exec.rs and spawn_gate.rs, and this test uses only run"
+)]
 #[path = "../../agent/test-support/pipelines.rs"]
 mod pipelines;
 

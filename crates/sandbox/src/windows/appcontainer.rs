@@ -939,6 +939,10 @@ fn started(
     let start_in = directory.as_ref().map_or(null(), |path| path.as_ptr());
 
     let mut created = PROCESS_INFORMATION::default();
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the command line the caller asked to run confined, created inside the AppContainer"
+    )]
     // On a console of its own with no window, rather than on this process's: any process attached
     // to a console can write input into it, which on the terminal's console is typing an answer
     // to a prompt. Detaching it instead would give each console program it starts a console, and

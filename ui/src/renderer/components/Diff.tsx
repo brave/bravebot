@@ -17,7 +17,7 @@ import { highlightLine, languageOf } from '../highlight'
  * Coloured by the file's extension, except for a write nobody vouched for: that is a stranger's
  * patch, and it is read as the plain text it is.
  */
-export function Diff({ changes, path, untrusted = false, deciding = false }: { changes: Change[]; path?: string; untrusted?: boolean; deciding?: boolean }): React.JSX.Element {
+export function Diff({ changes, path, shownPath, untrusted = false, deciding = false }: { changes: Change[]; path?: string; shownPath?: string; untrusted?: boolean; deciding?: boolean }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [wrap, setWrap] = useState(true)
   const language = untrusted || !path ? null : languageOf(path)
@@ -54,7 +54,7 @@ export function Diff({ changes, path, untrusted = false, deciding = false }: { c
       subtitle="Review the supplied changes here, then return to the approval card to decide."
       actions={<Button kind="filled" onClick={() => setExpanded(false)}>Done</Button>}>
       <div className="diff-review">
-        <div className="code-toolbar"><span className="code-language">{path ?? 'Proposed changes'}</span>{wrapToggle}</div>
+        <div className="code-toolbar"><span className="code-language">{shownPath ?? 'Proposed changes'}</span>{wrapToggle}</div>
         {body(false)}
       </div>
     </Modal>}

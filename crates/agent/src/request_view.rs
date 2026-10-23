@@ -26,7 +26,7 @@ pub enum Provenance {
     TrustedFile(String),
     /// Something the kernel judged trusted and showed, by what it is.
     Trusted(&'static str),
-    /// A setting, which a checkout may supply and the driver does not vouch for.
+    /// A setting, which only the person's own files may supply and the driver does not vouch for.
     Setting,
     /// A reference token standing for content the planner was not shown.
     Reference(String),

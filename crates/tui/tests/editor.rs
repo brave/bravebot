@@ -59,7 +59,8 @@ unsafe fn set(name: &str, value: Option<&str>) {
 
 /// A program that saves `contents` over the file it is given, which is what an editor does.
 fn saves(contents: &str, name: &str) -> PathBuf {
-    let source = std::env::temp_dir().join(format!("bravebot-editor-{name}"));
+    let source =
+        std::env::temp_dir().join(format!("bravebot-editor-{}-{name}", std::process::id()));
     std::fs::write(&source, contents).expect("scratch source");
     source
 }
@@ -119,7 +120,10 @@ fn a_configured_editor_that_is_missing_is_not_replaced_by_a_guess() {
 /// space as the end of the program would send a user's editor a file it never opened.
 #[test]
 fn an_editor_path_with_a_space_in_it_is_one_program() {
-    let editor = std::env::temp_dir().join("bravebot editor with spaces.sh");
+    let editor = std::env::temp_dir().join(format!(
+        "bravebot editor with spaces {}.sh",
+        std::process::id()
+    ));
     std::fs::write(&editor, "#!/bin/sh\nprintf 'edited\\n' > \"$1\"\n").expect("scratch editor");
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).expect("mode");

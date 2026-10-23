@@ -72,7 +72,13 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
+/// Where a question stands in a series the planner is asking, which every interface says alike.
+pub mod ask;
 /// The catalog format and its parser, compiled only for tests.
 ///
 /// The build script does not reach it through here: it `include!`s `src/catalog.rs` into itself,
@@ -83,6 +89,8 @@
 mod catalog;
 /// Which plural category a number falls into, per language.
 pub mod plural;
+/// The notes that say a size was too large to attach, which the terminal and the desktop share.
+pub mod sizes;
 
 /// The code the build script writes from those catalogs, compiled here so the rules it applies
 /// have tests. Build-script code that nothing can call is build-script code nothing can pin, and
@@ -164,29 +172,72 @@ pub fn init(locale: Locale) {
     let _ = CHOSEN.set(locale);
 }
 
-/// Fix the catalog from what the user's shell says their language is.
+/// What a person has said about their language somewhere other than the environment.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Said<'a> {
+    /// The tag `/language` recorded.
+    pub picked: Option<&'a str>,
+    /// The tag the `language` key of the person's own settings file holds.
+    pub written: Option<&'a str>,
+}
+
+/// The word that gives a choice back to the next source.
+pub const AUTO: &str = "auto";
+
+/// Fix the catalog from what the person said and from what their shell says their language is.
 ///
-/// `BRAVEBOT_LOCALE` first so a person can have one program in a language their whole shell is
-/// not, then the POSIX variables in the precedence POSIX gives them.
-pub fn init_from_environment() {
-    let requested = [LOCALE, "LC_ALL", "LC_MESSAGES", "LANG"]
-        .into_iter()
-        .find_map(|name| std::env::var(name).ok().filter(|v| !v.trim().is_empty()));
+/// `BRAVEBOT_LOCALE` first, since a launch can name it for itself and a test pins a catalog with
+/// it. Then the tag `/language` recorded, then the settings key, which both outrank the POSIX
+/// variables because they were written for this program. Then the POSIX variables in the precedence
+/// POSIX gives them.
+pub fn init_from_environment(said: Said<'_>) {
+    let requested = requested(|name| std::env::var(name).ok(), said);
     init(match requested {
         Some(requested) => resolve(&requested),
         None => DEFAULT,
     });
 }
 
+/// The request that decides the catalog, from the sources in the order each outranks the next.
+///
+/// A blank value asks for nothing. So does [`AUTO`] in what the person said, which is how they
+/// hand the choice to the next source; the variables are read as they always were, where a blank
+/// is the only value that asks for nothing.
+fn requested(variable: impl Fn(&str) -> Option<String>, said: Said<'_>) -> Option<String> {
+    let variable = |name: &str| variable(name).filter(|value| !value.trim().is_empty());
+    let stated = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case(AUTO))
+            .map(str::to_string)
+    };
+    variable(LOCALE)
+        .or_else(|| stated(said.picked))
+        .or_else(|| stated(said.written))
+        .or_else(|| {
+            ["LC_ALL", "LC_MESSAGES", "LANG"]
+                .into_iter()
+                .find_map(variable)
+        })
+}
+
 /// Which catalog answers a request.
 pub fn resolve(requested: &str) -> Locale {
-    match best(
-        requested,
-        &LOCALES.iter().map(|l| l.tag()).collect::<Vec<_>>(),
-    ) {
-        Some(index) => LOCALES[index],
-        None => DEFAULT,
-    }
+    find(requested).unwrap_or(DEFAULT)
+}
+
+/// The shipped catalog that answers a request, or `None` where none does.
+///
+/// [`resolve`] answers the reference there, which is right for a request from the environment and
+/// wrong for a person naming a language: they are told there is no catalog rather than shown
+/// English under the name they typed.
+pub fn find(requested: &str) -> Option<Locale> {
+    best(requested, &tags()).map(|index| LOCALES[index])
+}
+
+/// The tag of every shipped catalog, reference first.
+pub fn tags() -> Vec<&'static str> {
+    LOCALES.iter().map(|locale| locale.tag()).collect()
 }
 
 /// Which of `available` best answers `requested`, by the usual widening: the exact locale, then
@@ -262,6 +313,107 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(output.status.success(), "child failed:\n{stdout}");
         assert!(stdout.contains("1 passed"), "child ran nothing:\n{stdout}");
+    }
+
+    /// The environment a launch has, as the lookup reads it.
+    fn environment<'a>(set: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name| {
+            set.iter()
+                .find(|(held, _)| *held == name)
+                .map(|(_, value)| (*value).to_string())
+        }
+    }
+
+    /// A person whose shell says English and who reads French has to be able to say so once, in
+    /// the file: a settings key that lost to `LANG` would be a key that did nothing.
+    #[test]
+    fn a_language_the_person_wrote_outranks_the_posix_variables() {
+        let said = Said {
+            written: Some("fr"),
+            ..Said::default()
+        };
+        let shell = [("LC_ALL", "en_US.UTF-8"), ("LANG", "en_US.UTF-8")];
+        assert_eq!(requested(environment(&shell), said).as_deref(), Some("fr"));
+    }
+
+    /// With nothing written, the variables answer as they did before the key existed, so a machine
+    /// already set up for French has nothing to do.
+    #[test]
+    fn without_a_choice_the_posix_variables_answer_in_their_order() {
+        let shell = [
+            ("LANG", "en_US"),
+            ("LC_MESSAGES", "fr_FR"),
+            ("LC_ALL", "ja_JP"),
+        ];
+        assert_eq!(
+            requested(environment(&shell), Said::default()).as_deref(),
+            Some("ja_JP")
+        );
+        let shell = [("LANG", "en_US"), ("LC_MESSAGES", "fr_FR")];
+        assert_eq!(
+            requested(environment(&shell), Said::default()).as_deref(),
+            Some("fr_FR")
+        );
+    }
+
+    /// `/language` is the later and narrower act, so it answers over a file written by hand: a
+    /// file read afterwards would undo what somebody had just asked for.
+    #[test]
+    fn what_the_person_picked_outranks_what_the_settings_file_says() {
+        let said = Said {
+            picked: Some("ja"),
+            written: Some("fr"),
+        };
+        assert_eq!(requested(environment(&[]), said).as_deref(), Some("ja"));
+    }
+
+    /// `BRAVEBOT_LOCALE` is the one name a launch can give for itself, and the tests that run a
+    /// binary pin their catalog with it whatever the home they were handed holds.
+    #[test]
+    fn the_variable_made_for_this_program_outranks_what_the_person_said() {
+        let said = Said {
+            picked: Some("fr"),
+            written: Some("fr"),
+        };
+        let shell = [(LOCALE, "en-US")];
+        assert_eq!(
+            requested(environment(&shell), said).as_deref(),
+            Some("en-US")
+        );
+    }
+
+    /// A blank asks for nothing, and `auto` is the word for handing the choice on, so neither may
+    /// stop the next source being read: a `language` of `auto` that answered as a language called
+    /// auto would show English to somebody whose shell says French.
+    #[test]
+    fn a_blank_or_auto_choice_leaves_the_question_to_the_next_source() {
+        let shell = [("LANG", "fr_FR")];
+        for picked in [Some(""), Some("  "), Some("auto"), Some(" AUTO ")] {
+            let said = Said {
+                picked,
+                written: Some("auto"),
+            };
+            assert_eq!(
+                requested(environment(&shell), said).as_deref(),
+                Some("fr_FR"),
+                "{picked:?}"
+            );
+        }
+        let said = Said {
+            picked: Some("auto"),
+            written: Some("ja"),
+        };
+        assert_eq!(requested(environment(&shell), said).as_deref(), Some("ja"));
+    }
+
+    /// `/language` has to tell a language nobody translated from one somebody did, which
+    /// [`resolve`] cannot: it answers the reference for both.
+    #[test]
+    fn a_language_that_did_not_ship_is_found_by_nothing_though_it_resolves_to_the_reference() {
+        assert_eq!(find("zz-ZZ"), None);
+        assert_eq!(resolve("zz-ZZ"), DEFAULT);
+        assert_eq!(find("fr").map(Locale::tag), Some("fr"));
+        assert_eq!(find("en").map(Locale::tag), Some("en-US"));
     }
 
     /// The whole point of naming a catalog after a locale.

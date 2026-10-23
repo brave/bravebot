@@ -89,6 +89,20 @@ pub fn own_credentials() -> Vec<String> {
     credentials_of(crate::gateway_variables())
 }
 
+/// The credentials this agent always holds, without the variables a configuration adds.
+///
+/// Fixed in the source, so the same for every person and safe to say to the planner. The wider
+/// [`own_credentials`] holds names a settings file wrote, which are for removal only: an entry in a
+/// provider's `env` is a free-form string, and one a person pasted a key into would be sent
+/// wherever the planner's text goes. Empty where the filtering is switched off, since nothing is
+/// then removed.
+pub fn builtin_credentials() -> Vec<&'static str> {
+    if !enabled() {
+        return Vec::new();
+    }
+    crate::env_var::SCRUBBED.to_vec()
+}
+
 /// Every variable withheld from a program somebody asked for, as this machine is configured.
 pub fn withheld() -> Vec<String> {
     with_listed(
@@ -290,6 +304,17 @@ mod tests {
         let names = names(&Settings::default());
         assert!(names.iter().any(|name| name == "SERVICES_KEY_AICHAT"));
         assert!(names.iter().any(|name| name == "BRAVE_SERVICES_KEY_ID"));
+    }
+
+    /// What the planner is told is the fixed set and nothing a configuration adds. An entry in a
+    /// provider's `env` can hold any string, so a name from a settings file is withheld from a
+    /// program and never said to the planner.
+    #[test]
+    fn the_credentials_told_to_the_planner_are_the_fixed_ones() {
+        assert_eq!(
+            builtin_credentials(),
+            ["SERVICES_KEY_AICHAT", "BRAVE_SERVICES_KEY_ID"]
+        );
     }
 
     /// The user's own environment is not guessed at. A name-matching filter cannot tell `run aws

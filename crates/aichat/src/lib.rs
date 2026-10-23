@@ -16,9 +16,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod anthropic;
+pub mod conversation;
+pub mod generate_content;
+pub mod llama_server;
+pub mod lm_studio;
 pub mod models;
 pub mod ollama;
 pub mod protocol;
+pub mod responses;
+
+#[cfg(test)]
+mod local_servers;
+#[cfg(test)]
+mod stand_in;
 
 use bravebot_config::{CacheTtl, Config, Secret};
 use bravebot_core::cancel::Cancel;
@@ -65,6 +76,24 @@ pub enum ChatError {
     ///
     /// Never retried: it is the one error that says the answer is no longer wanted.
     Cancelled,
+    /// The service said it was not going to finish the reply, whether part way through it or by
+    /// the reason it stopped.
+    ///
+    /// Named by the failure the service reported rather than by a status: the status was sent and
+    /// accepted before the reply began, so this is the only thing that says why it stopped. The
+    /// failure is one of a closed set this crate holds, never the service's text.
+    Reported {
+        failure: anthropic::protocol::Failure,
+    },
+    /// The model was cut off at the token ceiling with nothing to show for it.
+    ///
+    /// Distinct from [`ChatError::Incomplete`], which is a connection that died: this reply ended
+    /// because it ran out of room, so sending it again unchanged produces the same result. Only
+    /// where the reply said nothing before it stopped, which is what a model that spent the whole
+    /// ceiling on reasoning leaves. A reply that wrote anything is returned as
+    /// [`Completion::cut_off`], because throwing away what it did say is the one outcome nobody
+    /// asked for.
+    TooLong(CutOff),
 }
 
 impl fmt::Display for ChatError {
@@ -78,6 +107,30 @@ impl fmt::Display for ChatError {
                 f.write_str("the reply stopped before the server said it was finished")
             }
             Self::Cancelled => f.write_str("the reply was stopped while it was being waited for"),
+            Self::Reported { failure } => {
+                write!(f, "the service stopped the reply and reported {failure}")
+            }
+            Self::TooLong(cut_off) => {
+                let ceiling = cut_off.ceiling;
+                write!(f, "the model reached its output limit of {ceiling} tokens ")?;
+                match (&cut_off.call, cut_off.thought) {
+                    (
+                        Some(OpenCall {
+                            tool: Some(tool), ..
+                        }),
+                        _,
+                    ) => write!(
+                        f,
+                        "while writing a call to {tool}, so the call was not made"
+                    )?,
+                    (Some(OpenCall { tool: None, .. }), _) => {
+                        f.write_str("while writing a tool call, so the call was not made")?
+                    }
+                    (None, true) => f.write_str("while thinking, and wrote nothing")?,
+                    (None, false) => f.write_str("before writing anything")?,
+                }
+                f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
+            }
             Self::Subscription(detail) => write!(
                 f,
                 "the Leo subscription could not be used: {detail}. Run `bravebot auth login leo` to \
@@ -127,9 +180,10 @@ pub struct Completion {
     /// A caller showing this to a person has to say so, and one continuing a conversation with it
     /// is continuing from a sentence that stops mid-word.
     ///
-    /// Always `None` from this backend, which states no ceiling: the request carries no
-    /// `max_tokens` field, so whatever bounds a reply here belongs to the service and is not
-    /// reported as this. Only [`bravebot_bedrock`] sets it.
+    /// Always `None` from the aichat endpoint and from an OpenAI-compatible gateway, which state
+    /// no ceiling: the request carries no `max_tokens` field, so whatever bounds a reply there
+    /// belongs to the service and is not reported as this. Set by [`bravebot_bedrock`] and by
+    /// [`anthropic::AnthropicClient`], whose requests state one.
     pub cut_off: Option<CutOff>,
 }
 
@@ -239,6 +293,12 @@ struct Gateway<'a> {
     /// one the gateway has never heard of.
     model: String,
     token: Option<Secret>,
+    /// The headers the block asked for, resolved by the caller.
+    ///
+    /// Resolved elsewhere for the reason the token is: a value may name a variable, and this crate
+    /// reads none. Carried and attached, never read: a name and a value from a settings file are
+    /// the person's own words, and nothing here decides anything on them.
+    headers: Vec<(String, Secret)>,
 }
 
 impl<'a> AichatClient<'a> {
@@ -304,7 +364,20 @@ impl<'a> AichatClient<'a> {
             provider,
             model: model.into(),
             token,
+            headers: Vec::new(),
         });
+        self
+    }
+
+    /// Also send the headers the gateway's block asked for, already resolved.
+    ///
+    /// Separate from [`Self::for_gateway`] because a value may name a variable and this crate reads
+    /// none: the caller that resolved the token resolves these at the same moment, from the same
+    /// environment. Does nothing where no gateway is set, these being a property of a gateway block.
+    pub fn with_gateway_headers(mut self, headers: Vec<(String, Secret)>) -> Self {
+        if let Some(gateway) = self.gateway.as_mut() {
+            gateway.headers = headers;
+        }
         self
     }
 
@@ -323,6 +396,14 @@ impl<'a> AichatClient<'a> {
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
         self.cancel = Some(cancel);
         self
+    }
+
+    /// How many requests are sent for one call before its failure is the caller's: the retry count
+    /// the gateway's block stated, plus the first request, and [`ATTEMPTS`] where it stated none.
+    fn attempts_allowed(&self) -> u32 {
+        self.gateway.as_ref().map_or(ATTEMPTS, |gateway| {
+            gateway.provider.patience.attempts(ATTEMPTS)
+        })
     }
 
     /// Wait this long before the first retry instead of the default one-second wait. Later
@@ -462,6 +543,7 @@ impl<'a> AichatClient<'a> {
                     caching: !self.breakpoints,
                     cache_ttl: !self.cache_ttl,
                     effort: !self.effort,
+                    ..Refusals::default()
                 },
             );
         }
@@ -509,9 +591,18 @@ impl<'a> AichatClient<'a> {
             }
             let mut http = Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
                 .header("content-type", "application/json");
+            if let Some(gap) = gateway.provider.patience.idle_timeout {
+                http = http.idle_within(gap);
+            }
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
                 let (name, value) = gateway.provider.credential_header(token);
                 http = http.header(name, value);
+            }
+            // After the credential, and never over it: a name this request already set is refused
+            // where the block is read, because `Request::header` appends and a second copy of one
+            // of these would be sent rather than replace the first.
+            for (name, value) in &gateway.headers {
+                http = http.header(name.clone(), value.expose());
             }
             return Ok(http);
         }
@@ -569,9 +660,10 @@ impl<'a> AichatClient<'a> {
                     self.effort = false;
                     probed = true;
                 }
-                Err(error) if worth_another_attempt(attempt, &error) => {
-                    log_retry(attempt + 1, backoff(self.backoff, attempt));
-                    if !self.wait(backoff(self.backoff, attempt)) {
+                Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
+                    let pause = pause_before_retry(self.backoff, attempt, &error);
+                    log_retry(attempt + 1, pause);
+                    if !self.wait(pause) {
                         return Err(ChatError::Cancelled);
                     }
                     attempt += 1;
@@ -686,9 +778,10 @@ impl<'a> AichatClient<'a> {
                     self.effort = false;
                     probed = true;
                 }
-                Err(error) if worth_another_attempt(attempt, &error) => {
+                Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
                     attempt += 1;
-                    log_retry(attempt, backoff(self.backoff, attempt - 1));
+                    let pause = pause_before_retry(self.backoff, attempt - 1, &error);
+                    log_retry(attempt, pause);
                     // Announced before the wait rather than after it, so the pause is explained
                     // while it is happening. Reply content and progress start again from nothing;
                     // completed costs remain in the call total.
@@ -696,10 +789,11 @@ impl<'a> AichatClient<'a> {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
                         calling: None,
+                        thinking: Labelled::new("", Label::untrusted_public()),
                         counted_by_server: false,
                         attempt,
                     });
-                    if !self.wait(backoff(self.backoff, attempt - 1)) {
+                    if !self.wait(pause) {
                         return Err(ChatError::Cancelled);
                     }
                 }
@@ -897,6 +991,7 @@ impl<'a> AichatClient<'a> {
                 self.completed_usage = reported;
             }
 
+            let thinking = accumulated.take_thinking();
             progress(Progress {
                 written: Labelled::new(&accumulated.content()[written_before..], label),
                 output_tokens: reported.map_or_else(
@@ -904,6 +999,7 @@ impl<'a> AichatClient<'a> {
                     |usage| usage.completion_tokens,
                 ),
                 calling: accumulated.calling().map(|name| Labelled::new(name, label)),
+                thinking: Labelled::new(&thinking, label),
                 counted_by_server: reported.is_some(),
                 attempt,
             });
@@ -975,6 +1071,12 @@ pub struct Progress<'a> {
     /// then this is the only sign of what the model is doing through a silence that can last
     /// minutes.
     pub calling: Option<Labelled<&'a str>>,
+    /// What the model thought since the last report, still labelled, for a service that sends its
+    /// thinking as it goes (BACKEND-46, BACKEND-59).
+    ///
+    /// Carried for a screen and read by nothing else: it is not part of the reply, is never
+    /// recorded, and never reaches a later request. Empty from a service that sends none.
+    pub thinking: Labelled<&'a str>,
     /// Whether that figure is the server's rather than an estimate.
     ///
     /// Worth knowing at the point of display: an estimate presented as a billed figure would be
@@ -988,7 +1090,8 @@ pub struct Progress<'a> {
     pub attempt: u32,
 }
 
-/// How many times one request is sent before its failure is the caller's.
+/// How many times one request is sent before its failure is the caller's, where the provider's block
+/// states no retry count.
 ///
 /// Three because the failure this exists for is a connection that died while nobody was
 /// looking, and a machine coming back from sleep needs a moment before its network works.
@@ -996,6 +1099,33 @@ const ATTEMPTS: u32 = 3;
 
 /// How long to wait after the first failure. Doubled for each attempt after that.
 const BACKOFF: Duration = Duration::from_secs(1);
+
+/// The longest pause taken on a service's say-so before sending a request again.
+///
+/// A wait the service asks for beyond this is not waited out: the request fails at once and the
+/// failure says how long the service asked for, so the person decides when to ask again rather
+/// than a turn sitting unattended for minutes. Lower than `bravebot_net::LONGEST_RETRY_AFTER`,
+/// which only bounds the figure the network layer will carry.
+pub const LONGEST_WAIT: Duration = Duration::from_secs(120);
+
+/// The slowest a reply is taken to be written, in tokens a second.
+///
+/// Well under half the slowest rate measured on Bedrock, 69 tokens a second on Claude Opus 5.5, so
+/// a reply running to its ceiling on a slow day still finishes inside the bound.
+const SLOWEST_WRITING: u64 = 25;
+
+/// How long a reply may take to begin, reading the prompt, before the first token of it.
+const BEFORE_WRITING: Duration = Duration::from_secs(120);
+
+/// How long a reply that may run to `ceiling` tokens is given.
+///
+/// For a service whose requests state a ceiling, which is what says how long a reply can run.
+/// Never less than the bound the egress layer puts on a reply of unstated length, which stays the
+/// figure for a short reply.
+pub fn reply_bound(ceiling: u64) -> Duration {
+    (BEFORE_WRITING + Duration::from_secs(ceiling.div_ceil(SLOWEST_WRITING)))
+        .max(bravebot_net::Timeouts::default().reply)
+}
 
 /// How often a reply that has not started arriving looks up to see whether it should stop.
 ///
@@ -1009,17 +1139,17 @@ const WAKE: Duration = Duration::from_millis(50);
 /// because the decoder has never been the slow end.
 const CHUNKS_AHEAD: usize = 16;
 
-/// Whether a failed attempt should be repeated.
+/// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
 ///
 /// Only transport failures qualify, and only from the layer that knows what happened to the
 /// connection. A reply that arrived and would not decode is not a connection problem, and
 /// asking for it again would produce the same thing.
-fn worth_another_attempt(attempt: u32, error: &ChatError) -> bool {
-    if attempt >= ATTEMPTS {
+fn worth_another_attempt(allowed: u32, attempt: u32, error: &ChatError) -> bool {
+    if attempt >= allowed {
         return false;
     }
     match error {
-        ChatError::Egress(e) => e.is_transient(),
+        ChatError::Egress(e) => e.is_transient() && asked_wait(e) <= LONGEST_WAIT,
         // A reply that stopped early is a request that did not complete, whatever the socket
         // thought. Sending it again is the same remedy, and the partial is thrown away for the
         // same reason: half a reply cannot be continued by a second stream.
@@ -1030,6 +1160,35 @@ fn worth_another_attempt(attempt: u32, error: &ChatError) -> bool {
 
 fn backoff(base: Duration, failures: u32) -> Duration {
     base * 2u32.pow(failures - 1)
+}
+
+/// The wait a service asked for with a 429, or none. Another status keeps the doubling whatever
+/// header it carried: the header is read as a rate limit's only.
+fn asked_wait(error: &EgressError) -> Duration {
+    match error {
+        EgressError::Status {
+            status: 429,
+            retry_after: Some(asked),
+            ..
+        } => *asked,
+        _ => Duration::ZERO,
+    }
+}
+
+/// The pause before sending again after `failures` failures: what the service asked for where it
+/// said, and the doubling otherwise. Never less than the doubling, so a `Retry-After: 0` sends the
+/// next request after the pause it would have had anyway rather than at once.
+fn pause_before_retry(base: Duration, failures: u32, error: &ChatError) -> Duration {
+    match error {
+        ChatError::Egress(
+            e @ EgressError::Status {
+                status: 429,
+                retry_after: Some(_),
+                ..
+            },
+        ) => asked_wait(e).max(backoff(base, failures)),
+        _ => backoff(base, failures),
+    }
 }
 
 /// Writes the decision to send again to the diagnostic log: which attempt, and the wait before it.
@@ -1070,6 +1229,15 @@ pub struct Refusals {
     pub cache_ttl: bool,
     /// It will not take a request that names how hard to think.
     pub effort: bool,
+    /// It will not take a request that asks for a tool's arguments as they are written.
+    ///
+    /// Learned by the Messages client alone, the one service here that is asked for them in the
+    /// request.
+    pub arguments_as_written: bool,
+    /// It will not take the ceiling a request states where nobody stated one.
+    ///
+    /// Learned by the Messages client alone, the one service here whose every request states one.
+    pub ceiling: bool,
 }
 
 /// What each service-and-model pair has refused.
@@ -1333,6 +1501,38 @@ mod tests {
         assert!(calls(&http)[0].get("extra_content").is_none());
     }
 
+    /// Brave's own endpoint is no gateway, so no service of its own attached the member and the
+    /// request is built without it, whatever a conversation carried over from another service.
+    #[test]
+    fn extra_content_is_not_sent_to_braves_own_endpoint() {
+        let config = config();
+        let egress = Egress::new();
+        let mut request = request("m");
+        request.messages.push(Message::assistant_calling(
+            "",
+            vec![protocol::ToolCallRequest {
+                id: "call_1".into(),
+                kind: "function".into(),
+                function: protocol::ToolCallRequestFunction {
+                    name: "read_file".into(),
+                    arguments: "{}".into(),
+                },
+                extra_content: Some(serde_json::json!({"google": {"thought_signature": "s"}})),
+            }],
+        ));
+        let http = AichatClient::new(&config, &egress)
+            .prepare(&request)
+            .expect("prepared");
+        let calls = body(&http)["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .find_map(|message| message.get("tool_calls").cloned())
+            .expect("the call stays");
+        assert_eq!(calls[0]["id"], "call_1");
+        assert!(calls[0].get("extra_content").is_none(), "{calls}");
+    }
+
     /// A local Ollama wants no credential, and `Bearer` with nothing after it is not the same request
     /// as one carrying no credential at all: some services read the empty value as a bad token and
     /// refuse, which is the failure this exists to avoid.
@@ -1399,6 +1599,7 @@ mod tests {
                 caching: true,
                 cache_ttl: false,
                 effort: true,
+                ..Refusals::default()
             },
         );
 

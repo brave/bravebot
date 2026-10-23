@@ -17,7 +17,7 @@ pick by number or by name:
 Ways to sign in to a model service:
   1. leo      Brave Leo Premium, from a Brave install that subscribes
   2. bedrock  An AWS account, for Amazon Bedrock
-  3. import   A model service Claude Code, opencode or Ollama has, imported into settings
+  3. import   A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
   4. gateway  A key for a gateway a provider block in settings names, typed here and kept by bravebot
 Which one? Type its number or its name, or nothing to stop:
 ```
@@ -28,7 +28,7 @@ Each way is the command it was before, run for you:
 |---|---|---|
 | `leo` | `bravebot import-leo-creds [channel]` | [Leo Premium](premium.md) |
 | `bedrock` | the AWS sign-in a session makes on its first turn | [AWS Bedrock](providers/bedrock.md) |
-| `import` | `bravebot import-providers` | [Importing](configuration.md#importing-from-claude-code-opencode-or-ollama) |
+| `import` | `bravebot import-providers` | [Importing](configuration.md#importing-from-claude-code-opencode-or-a-local-model-server) |
 | `gateway` | nothing before it: the key used to go in a variable or a settings file | [below](#gateway) |
 
 A script names the way, so nothing is asked: `bravebot auth login leo nightly`,

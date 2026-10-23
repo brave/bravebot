@@ -5,23 +5,31 @@
     python3 agents/skills/maintenance/maintenance.py collect --work-dir DIR
     python3 agents/skills/maintenance/maintenance.py draft --work-dir DIR
 
-The scan reads every tracked source file and lists candidates in six lanes: public items nothing
-names, items only tests name, attributes that silence the dead-code lint, blocks of lines repeated
-in several places, string literals repeated across files, and files or functions past a length.
-A candidate is something to look at, not a finding. The skill hands each lane to reviewers who
-read the code and decide, and only what a reviewer calls `cleanup` becomes a draft.
+The scan reads every tracked source file and lists candidates in fourteen lanes: public items
+nothing names, items only tests name, attributes that silence a lint, blocks of lines repeated in
+several places, string literals repeated across files, files or functions past a length, deeply
+nested functions, modules that use many others, public functions no test names, shared mutable
+state, commented-out code, string-typed errors, and what clippy reports in code that ships. A
+candidate is something to look at, not a finding. The skill hands each lane to reviewers who read
+the code and decide, and only what a reviewer calls `cleanup` becomes a draft.
 
-Nothing here edits the tree or posts anything. `--mechanical-only` prints the candidates and
-exits, which is what `make check-maintenance` runs. Standard library only, like the other checks.
+`record` writes the verdicts reviewers gave to docs/maintenance-reviewed, and a later scan leaves
+out each candidate recorded there while the files it names are unchanged, so a repeat run reaches
+the candidates past each lane's cap instead of reading the first ones again.
+
+Nothing here edits source or posts anything. `--mechanical-only` prints the candidates and exits,
+which is what `make check-maintenance` runs. Standard library only, like the other checks.
 """
 
 import argparse
 import bisect
 import datetime
+import hashlib
 import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
@@ -41,8 +49,12 @@ def _load(name, path):
 
 specs = _load("check_spec_specs", HERE.parent / "check-spec" / "specs.py")
 drafting = _load("check_spec_draft_issues", HERE.parent / "check-spec" / "draft-issues.py")
+workdir = _load("work_dir", HERE.parents[1] / "work_dir.py")
 
-LANES = ("unreferenced", "test-only", "allowances", "duplicates", "literals", "size")
+LANES = (
+    "unreferenced", "test-only", "allowances", "duplicates", "literals", "size",
+    "complexity", "coupling", "untested", "shared-state", "stale", "error-types", "clippy",
+)
 PREFIX = {
     "unreferenced": "U",
     "test-only": "T",
@@ -50,6 +62,13 @@ PREFIX = {
     "duplicates": "D",
     "literals": "L",
     "size": "S",
+    "complexity": "X",
+    "coupling": "C",
+    "untested": "N",
+    "shared-state": "H",
+    "stale": "Z",
+    "error-types": "E",
+    "clippy": "K",
 }
 # Candidates per reviewer. A size candidate is a whole file, often thousands of lines, so a
 # reviewer gets few of them; the other lanes point at one item each.
@@ -57,6 +76,15 @@ CHUNK = {"duplicates": 8, "size": 3}
 DEFAULT_CHUNK = 15
 LIMIT = 30
 SIZE_LIMIT = 12
+# The lanes added after the first six keep fewer candidates, so a full run asks one reviewer
+# about each. `--limit` sets every lane but size to the same number.
+LANE_LIMIT = {
+    "complexity": 15, "coupling": 15, "untested": 15, "shared-state": 15, "stale": 15,
+    "error-types": 15, "clippy": 15,
+}
+# Which verdicts `record` writes down, and the file it writes them to.
+RECORDED = ("keep", "cleanup")
+LEDGER = "docs/maintenance-reviewed"
 
 # A file past this many lines outside its tests, or a function past this many non-blank lines.
 FILE_LINES = 2500
@@ -69,6 +97,20 @@ WINDOW_CHARS = 200
 LITERAL_LENGTH = 10
 LITERAL_COPIES = 3
 LITERAL_FILES = 2
+# A function nested this many blocks deep inside its body, or with this many boolean parameters, or
+# (outside Rust, where clippy refuses more than seven) this many parameters.
+NESTING = 6
+BOOL_PARAMETERS = 3
+PARAMETERS = 8
+# A file that uses this many other modules of its own crate, a file with this many marks of shared
+# mutable state, this many public functions no test names, and this many functions that return a
+# string or a boxed error.
+COUPLING = 12
+SHARED_STATE = 8
+UNTESTED = 5
+STRING_ERRORS = 3
+# Consecutive lines of commented-out code that make a block, since one line is as often an example.
+COMMENTED_OUT = 2
 
 AREAS = (
     "area/trust", "area/tools", "area/turns", "area/interface", "area/cli",
@@ -120,6 +162,12 @@ JS_EXPORT = re.compile(
 CFG = re.compile(r"#\[cfg\(([^\]]*)\)\]")
 MODULE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;", re.MULTILINE)
 ALLOWANCE = re.compile(r"#!?\[\s*(?:cfg_attr\s*\((.*?),\s*)?(?:allow|expect)\s*\(([^)\]]*)\)")
+# A lint about a function or type that is too large or too complex. Allowing one is a record that
+# the code is that way, so it is as much a candidate as an allowance of dead code.
+SMELL_ALLOWANCE = re.compile(
+    r"clippy::(?:too_many_arguments|too_many_lines|cognitive_complexity|type_complexity"
+    r"|large_enum_variant|struct_excessive_bools|fn_params_excessive_bools|needless_pass_by_value)"
+)
 # A `cfg_attr` that silences the lint on some platforms only. The lint still runs on the others,
 # so what it covers is used somewhere and the allowance hides nothing a build would catch.
 PLATFORM_ONLY = re.compile(
@@ -369,6 +417,48 @@ def body_start(text, start):
     return len(text)
 
 
+ITEM = re.compile(
+    r"(?:pub(?:\([^)]*\))?\s+)?(?:(?:unsafe|async|const|extern(?:\s+\"[^\"]*\")?)\s+)*"
+    r"(?:fn|mod|use|impl|struct|enum|trait|type|static|const|union|macro_rules!)\b"
+)
+ATTRIBUTES = re.compile(r"(?:\s*#!?\[[^\]]*\])*\s*")
+FIELD = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?[A-Za-z_]\w*\s*(?::(?!:)|,)")
+
+
+def field_end(text, start):
+    """The index just past a field that begins at `start`: its `,` outside parentheses, brackets,
+    braces and angle brackets, or the end of the text before the `}` closing the struct it is in."""
+    depth = 0
+    for i in range(start, len(text)):
+        c = text[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return i
+            depth -= 1
+        elif c == "<":
+            depth += 1
+        elif c == ">" and text[i - 1] not in "-=":
+            depth = max(depth - 1, 0)
+        elif c == "," and depth == 0:
+            return i + 1
+    return len(text)
+
+
+def attributed_end(bare, after):
+    """The index where the item or field attributed by an attribute ending at `after` ends, and
+    whether it is a `{ }` block. A field of a struct, or of a struct literal, ends at its `,` and
+    the next `{` belongs to something else; anything else runs to its body's end or its `;`."""
+    first = ATTRIBUTES.match(bare, after).end()
+    if FIELD.match(bare, first) and not ITEM.match(bare, first):
+        return field_end(bare, first), False
+    at = body_start(bare, after)
+    if at < len(bare) and bare[at] == "{":
+        return matching_brace(bare, at), True
+    return at + 1, False
+
+
 def rust_modules(bare):
     """The lines of items under `#[cfg(test)]`, or under a `cfg` that needs `test` to be set, and
     the names of the `mod name;` declarations in the file: every one, and those under such a `cfg`.
@@ -379,11 +469,8 @@ def rust_modules(bare):
         condition = found.group(1)
         if not re.search(r"\btest\b", condition) or re.search(r"not\s*\(\s*test\b", condition):
             continue
-        at = body_start(bare, found.end())
-        if at < len(bare) and bare[at] == "{":
-            end = matching_brace(bare, at)
-        else:
-            end = at + 1
+        end, braced = attributed_end(bare, found.end())
+        if not braced:
             declared = MODULE.search(bare, found.end(), end)
             if declared:
                 test_modules.append(declared.group(1))
@@ -481,8 +568,8 @@ def definitions(source):
     return found
 
 
-def scan_references(sources):
-    outside, inside = references(sources)
+def scan_references(sources, counts):
+    outside, inside = counts
     defined = Counter()
     every = []
     for source in sources.values():
@@ -505,6 +592,15 @@ def scan_references(sources):
     return {"unreferenced": unreferenced, "test-only": test_only}
 
 
+def attributed_line(source, number):
+    """The first line after `number` that is not blank and not an attribute: what one is on."""
+    for line in source.bare[number:]:
+        text = line.strip()
+        if text and not text.startswith("#["):
+            return " ".join(text.split())
+    return ""
+
+
 def scan_allowances(sources):
     found = []
     for source in sources.values():
@@ -517,11 +613,12 @@ def scan_allowances(sources):
                 lints = match.group(2)
                 if match.group(1) and PLATFORM_ONLY.fullmatch(match.group(1).strip()):
                     continue
-                if "dead_code" in lints or "unused" in lints:
+                if "dead_code" in lints or "unused" in lints or SMELL_ALLOWANCE.search(lints):
                     found.append(
                         {
                             "path": source.path,
                             "line": number,
+                            "item": attributed_line(source, number),
                             "detail": f"`{line.strip()}`",
                         }
                     )
@@ -699,8 +796,54 @@ def scan_literals(sources, blocks=()):
     return found
 
 
-def functions(source):
-    """(name, first line, last line, non-blank lines) for each function outside test code."""
+def split_parameters(text, at, language, until=None):
+    """The parameters of the function whose parameter list is the first `(` from `at` to `until`,
+    split at the commas outside brackets, without `self` and `cls`. A Rust generic list is skipped
+    first, since its bounds can hold parentheses."""
+    if language == "rust":
+        while at < len(text) and text[at].isspace():
+            at += 1
+        if text.startswith("<", at):
+            depth = 0
+            for at in range(at, len(text)):
+                if text[at] == "<":
+                    depth += 1
+                elif text[at] == ">" and text[at - 1] != "-":
+                    depth -= 1
+                    if depth == 0:
+                        at += 1
+                        break
+    opening = text.find("(", at, until) if until else text.find("(", at)
+    if opening < 0:
+        return []
+    angles = language == "rust"
+    depth, parts, current = 0, [], []
+    for i in range(opening, len(text)):
+        c = text[i]
+        if c in "([{" or (angles and c == "<"):
+            depth += 1
+            if depth == 1:
+                continue
+        elif c in ")]}" or (angles and c == ">" and text[i - 1] != "-"):
+            depth -= 1
+            if depth == 0:
+                break
+        if c == "," and depth == 1:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(c)
+    parts.append("".join(current))
+    parts = [part.strip() for part in parts if part.strip()]
+    return [part for part in parts if not re.fullmatch(r"(?:&\s*(?:'\w+\s+)?)?(?:mut\s+)?(?:self|cls)\b.*", part)]
+
+
+BOOL_PARAMETER = re.compile(r":\s*(?:bool|boolean)\b|=\s*(?:True|False)\s*$")
+
+
+def function_parts(source):
+    """One record for each function outside test code: its name, first and last line, non-blank
+    lines, parameters, and how many blocks deep the deepest statement in its body sits."""
     found = []
     if source.language in ("rust", "js"):
         text = "\n".join(source.bare)
@@ -724,7 +867,22 @@ def functions(source):
             if source.is_test(first):
                 continue
             counted = sum(1 for line in source.code[first - 1 : last] if line.strip())
-            found.append((name, first, last, counted))
+            depth = deepest = 0
+            for c in text[at:end]:
+                if c == "{":
+                    depth += 1
+                    deepest = max(deepest, depth)
+                elif c == "}":
+                    depth -= 1
+            found.append(
+                {
+                    "name": name, "first": first, "last": last, "lines": counted,
+                    "parameters": split_parameters(
+                        text, *((match.end(), "rust") if source.language == "rust" else (match.start(), "js", match.end()))
+                    ),
+                    "depth": max(deepest - 1, 0),
+                }
+            )
     elif source.language == "python":
         lines = source.code
         for index, line in enumerate(lines):
@@ -747,8 +905,38 @@ def functions(source):
                     break
                 last = after
             counted = sum(1 for text in lines[index : last + 1] if text.strip())
-            found.append((match.group(2), index + 1, last + 1, counted))
+            signature = "\n".join(source.bare[index : body + 1])
+            found.append(
+                {
+                    "name": match.group(2), "first": index + 1, "last": last + 1, "lines": counted,
+                    "parameters": split_parameters(signature, match.end(), "python"),
+                    "depth": python_depth(source.bare[body + 1 : last + 1], indent),
+                }
+            )
     return found
+
+
+def python_depth(lines, indent):
+    """How many blocks deep the deepest line of a Python body is, with the body itself at 0. A line
+    starts a block when the one before it ends in a colon; any other deeper line continues a
+    statement."""
+    stack, deepest, opens = [indent], 0, True
+    for line in lines:
+        if not line.strip():
+            continue
+        here = len(line) - len(line.lstrip())
+        while len(stack) > 1 and here < stack[-1]:
+            stack.pop()
+        if here > stack[-1] and opens:
+            stack.append(here)
+        deepest = max(deepest, len(stack) - 2)
+        opens = line.rstrip().endswith(":")
+    return deepest
+
+
+def functions(source):
+    """(name, first line, last line, non-blank lines) for each function outside test code."""
+    return [(f["name"], f["first"], f["last"], f["lines"]) for f in function_parts(source)]
 
 
 def scan_size(sources):
@@ -783,6 +971,430 @@ def scan_size(sources):
                 ],
                 "rank": max(0, outside - FILE_LINES) + sum(c - FUNCTION_LINES for *_, c in long),
                 "detail": "; ".join(parts),
+            }
+        )
+    return found
+
+
+def shippable(sources, languages=None):
+    """The sources whose code ships: not a test file, not generated, in one of `languages`."""
+    for source in sources.values():
+        if source.language is None or source.whole_test or is_generated(source):
+            continue
+        if languages and source.language not in languages:
+            continue
+        yield source
+
+
+def scan_complexity(sources):
+    """Functions nested many blocks deep, with several boolean parameters, or (outside Rust, where
+    clippy refuses more than seven) with many parameters."""
+    found = []
+    for source in shippable(sources):
+        for part in function_parts(source):
+            bools = sum(1 for p in part["parameters"] if BOOL_PARAMETER.search(p))
+            many = len(part["parameters"]) if source.language != "rust" else 0
+            reasons, rank = [], 0
+            if part["depth"] >= NESTING:
+                reasons.append(f"statements {part['depth']} blocks deep")
+                rank += (part["depth"] - NESTING + 1) * 10
+            if bools >= BOOL_PARAMETERS:
+                reasons.append(f"{bools} boolean parameters")
+                rank += (bools - BOOL_PARAMETERS + 1) * 10
+            if many >= PARAMETERS:
+                reasons.append(f"{many} parameters")
+                rank += (many - PARAMETERS + 1) * 5
+            if reasons:
+                found.append(
+                    {
+                        "path": source.path,
+                        "line": part["first"],
+                        "symbol": part["name"],
+                        "rank": rank,
+                        "detail": f"`{part['name']}` ({part['lines']} lines): " + ", ".join(reasons),
+                    }
+                )
+    return found
+
+
+REEXPORT = re.compile(r"(?m)^[ \t]*pub(?:\([^)]*\))?[ \t]+use\b[^;]*;")
+LOCAL_PATH = re.compile(
+    r"(?<![\w:])(?:crate|super|self)::(?:\{((?:[^{}]|\{[^{}]*\})*)\}|([A-Za-z_]\w*))"
+)
+OTHER_CRATE = re.compile(r"\bbravebot_[a-z0-9_]+\b")
+
+
+ROOT_ITEMS = "(items in the module above)"
+
+
+def module_name(name):
+    """A lower-case first segment is a module. A type or constant named straight from the crate
+    root or the parent module is an item that module offers, and all of them are one dependency."""
+    return name if name[0].islower() or name[0] == "_" else ROOT_ITEMS
+
+
+def leading_names(group):
+    """The modules a `use` group lists: `a::b, c::{d, e}, f, Type` is a, c, f and the items."""
+    names, depth, current = set(), 0, []
+    for c in group + ",":
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        if c == "," and depth == 0:
+            found = IDENT.match("".join(current).strip())
+            if found and found.group(0) not in ("self", "super", "crate"):
+                names.add(module_name(found.group(0)))
+            current = []
+        else:
+            current.append(c)
+    return names
+
+
+def used_modules(source):
+    """The modules of its own crate, and the other bravebot crates, that a Rust file names outside
+    its tests. A `pub use` is a re-export and is not counted, since a module that lists what it
+    offers is not one that depends on all of it."""
+    text = "\n".join("" if source.is_test(n) else line for n, line in enumerate(source.bare, start=1))
+    text = REEXPORT.sub(lambda found: " " * len(found.group(0)), text)
+    modules = set()
+    for found in LOCAL_PATH.finditer(text):
+        if found.group(1) is not None:
+            modules |= leading_names(found.group(1))
+        else:
+            modules.add(module_name(found.group(2)))
+    return modules, set(OTHER_CRATE.findall(text))
+
+
+def scan_coupling(sources):
+    found = []
+    for source in shippable(sources, ("rust",)):
+        modules, crates = used_modules(source)
+        total = len(modules) + len(crates)
+        if total < COUPLING:
+            continue
+        shown = ", ".join(sorted(modules)[:10]) + (", ..." if len(modules) > 10 else "")
+        found.append(
+            {
+                "path": source.path,
+                "line": 1,
+                "rank": total,
+                "detail": f"uses {len(modules)} other modules of its crate ({shown}) and {len(crates)} other crates",
+            }
+        )
+    return found
+
+
+def scan_untested(sources, counts):
+    """Files with several public functions that code outside tests calls and no test names."""
+    outside, inside = counts
+    defined = Counter()
+    every = []
+    for source in shippable(sources, ("rust",)):
+        for number, name, kind in definitions(source):
+            defined[name] += 1
+            every.append((source.path, number, name, kind))
+    per_file = {}
+    for path, number, name, kind in every:
+        if kind == "fn" and inside[name] == 0 and outside[name] > defined[name]:
+            per_file.setdefault(path, []).append((number, name))
+    found = []
+    for path, names in per_file.items():
+        if len(names) < UNTESTED:
+            continue
+        shown = ", ".join(f"`{name}`" for _, name in names[:8]) + (", ..." if len(names) > 8 else "")
+        found.append(
+            {
+                "path": path,
+                "line": names[0][0],
+                "rank": len(names),
+                "detail": f"{len(names)} public functions that other code calls and no test names: {shown}",
+            }
+        )
+    return found
+
+
+SHARED_MARKS = (
+    ("Mutex", re.compile(r"\bMutex\b")),
+    ("RwLock", re.compile(r"\bRwLock\b")),
+    ("RefCell", re.compile(r"\bRefCell\b")),
+    ("static cell", re.compile(r"\b(?:OnceLock|LazyLock|thread_local!)")),
+    ("atomic", re.compile(r"\bAtomic(?:Bool|[IU]\w+)\b")),
+    ("static mut", re.compile(r"\bstatic\s+mut\b")),
+    ("thread spawn", re.compile(r"\bthread::(?:spawn|Builder)\b")),
+    ("channel", re.compile(r"\bmpsc::(?:sync_)?channel\b")),
+)
+
+
+def scan_shared_state(sources):
+    found = []
+    for source in shippable(sources, ("rust",)):
+        counts = Counter()
+        for number, line in enumerate(source.bare, start=1):
+            if source.is_test(number) or USE_START.match(line):
+                continue
+            for name, pattern in SHARED_MARKS:
+                counts[name] += len(pattern.findall(line))
+        total = sum(counts.values())
+        if total >= SHARED_STATE:
+            found.append(
+                {
+                    "path": source.path,
+                    "line": 1,
+                    "rank": total,
+                    "detail": f"{total} marks of shared state or threads: "
+                    + ", ".join(f"{n} {name}" for name, n in counts.most_common() if n),
+                }
+            )
+    return found
+
+
+USE_START = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?use\b")
+COMMENT_MARKER = {"rust": "//", "js": "//", "python": "#"}
+COMMENTED_CODE = {
+    "rust": re.compile(
+        r"(?:let\s.*;|(?:pub(?:\([^)]*\))?\s+)?(?:fn|use|mod|struct|enum|impl|const|static)\s.*[;{]"
+        r"|(?:if|for|while|match|loop)\b.*\{|else\s*\{|return\b.*;"
+        r"|[\w:.]+(?:::<[^>]*>)?\(.*\)\??;|[\w.\[\]*]+\s*[-+*/|&^]?=\s*[^=\s].*;|[\w:]+!\(.*\);|\}\)?[;,]?)"
+    ),
+    "js": re.compile(
+        r"(?:(?:const|let|var)\s.*;|(?:export\s+)?(?:function|class|import)\b.*[;{]"
+        r"|(?:if|for|while|switch)\s*\(.*\{|else\s*\{|return\b.*;|[\w.]+\(.*\);|[\w.\[\]]+\s*[-+*/|&]?=\s*[^=\s].*;|\}\)?[;,]?)"
+    ),
+    "python": re.compile(
+        r"(?:(?:def|class)\s.*:|(?:import|from)\s.*|(?:if|for|while|with|try|except|elif|else)\b.*:"
+        r"|return\b.*|raise\b.*|[\w.]+\(.*\)|[\w.\[\]]+\s*[-+*/|&]?=\s*[^=\s].*)"
+    ),
+}
+TODO_MARKER = re.compile(r"\b(?:TODO|FIXME|HACK|XXX)\b")
+ISSUE_REFERENCE = re.compile(r"#\d+|issues/\d+|\bGH-\d+")
+
+
+def comment_lines(source):
+    """(line number, text after the marker) for each line that is only a comment. A doc comment
+    (`///`, `//!`) or a shebang keeps a `/` or `!` in front of its text, which none of the
+    patterns for code match, so an example in a doc comment is never commented-out code."""
+    marker = COMMENT_MARKER[source.language]
+    for number, (line, code) in enumerate(zip(source.text.split("\n"), source.code), start=1):
+        stripped = line.strip()
+        if code.strip() or not stripped.startswith(marker):
+            continue
+        if not source.is_test(number):
+            yield number, stripped[len(marker):].strip()
+
+
+def commented_out_blocks(source):
+    """(first line, last line) of each run of consecutive comment lines that are all code."""
+    pattern = COMMENTED_CODE[source.language]
+    blocks, run, last = [], [], 0
+    for number, text in comment_lines(source):
+        is_code = bool(pattern.fullmatch(text))
+        if is_code and (not run or number == last + 1):
+            run.append(number)
+        else:
+            if len(run) >= COMMENTED_OUT:
+                blocks.append((run[0], run[-1]))
+            run = [number] if is_code else []
+        last = number
+    if len(run) >= COMMENTED_OUT:
+        blocks.append((run[0], run[-1]))
+    return blocks
+
+
+def unissued_todos(source):
+    """The lines holding a `TODO`, `FIXME`, `HACK` or `XXX` in a comment, with no issue named. A
+    marker inside a string is not one: its place in `source.code`, where comments are blanked and
+    strings are kept, is not blank."""
+    found = []
+    for number, line in enumerate(source.text.split("\n"), start=1):
+        marked = TODO_MARKER.search(line)
+        if not marked or source.is_test(number) or ISSUE_REFERENCE.search(line):
+            continue
+        if not source.code[number - 1][marked.start() : marked.end()].strip():
+            found.append(number)
+    return found
+
+
+def scan_stale(sources):
+    """Files holding commented-out code, in blocks of consecutive lines, or a TODO naming no issue."""
+    found = []
+    for source in shippable(sources, tuple(COMMENT_MARKER)):
+        blocks, todos = commented_out_blocks(source), unissued_todos(source)
+        if not blocks and not todos:
+            continue
+        parts = []
+        if blocks:
+            parts.append(
+                "commented-out code at "
+                + ", ".join(f"{first}-{last}" for first, last in blocks[:8])
+                + (f", and {len(blocks) - 8} more" if len(blocks) > 8 else "")
+            )
+        if todos:
+            parts.append("a TODO naming no issue at " + ", ".join(str(n) for n in todos[:8]))
+        found.append(
+            {
+                "path": source.path,
+                "line": blocks[0][0] if blocks else todos[0],
+                "rank": sum(last - first + 1 for first, last in blocks) + 3 * len(todos),
+                "detail": "; ".join(parts),
+            }
+        )
+    return found
+
+
+STRING_ERROR = re.compile(
+    r"String|&\s*(?:'static\s+)?str|Box<\s*dyn\s[^>]*Error[^>]*>"
+)
+RESULT_ARROW = re.compile(r"->\s*Result\s*<")
+
+
+def string_error_functions(source):
+    """(function, line, error type) for each Rust function outside tests that returns a `Result`
+    whose error is a string or a boxed `dyn Error`."""
+    text = "\n".join(source.bare)
+    starts = line_starts(text)
+    found = []
+    for arrow in RESULT_ARROW.finditer(text):
+        depth, i, comma = 1, arrow.end(), None
+        while i < len(text) and depth:
+            c = text[i]
+            if c == "<":
+                depth += 1
+            elif c == ">" and text[i - 1] != "-":
+                depth -= 1
+            elif c == "," and depth == 1:
+                comma = i
+            elif c in "{;":
+                break
+            i += 1
+        if depth or comma is None:
+            continue
+        error = " ".join(text[comma + 1 : i - 1].split())
+        line = line_of(starts, arrow.start())
+        named = re.match(r"fn\s+([A-Za-z_]\w*)", text[text.rfind("fn ", 0, arrow.start()) :])
+        if STRING_ERROR.fullmatch(error) and named and not source.is_test(line):
+            found.append((named.group(1), line, error))
+    return found
+
+
+def scan_error_types(sources):
+    found = []
+    for source in shippable(sources, ("rust",)):
+        returning = string_error_functions(source)
+        if len(returning) < STRING_ERRORS:
+            continue
+        shown = ", ".join(f"`{name}` ({error})" for name, _, error in returning[:6])
+        found.append(
+            {
+                "path": source.path,
+                "line": returning[0][1],
+                "rank": len(returning),
+                "detail": f"{len(returning)} functions return a string or boxed error: {shown}"
+                + (", ..." if len(returning) > 6 else ""),
+            }
+        )
+    return found
+
+
+# What clippy is asked about in code that ships, and how much a hit counts: 3 for what the
+# checklist this lane came from rates High, 2 for Medium, 1 for Low. The first three are the
+# strictest of them and are free to enforce while the tree has none.
+CLIPPY_LINTS = {
+    "let_underscore_must_use": 3,
+    "panic": 3,
+    "expect_used": 2,
+    "unwrap_used": 3,
+    "undocumented_unsafe_blocks": 3,
+    "multiple_unsafe_ops_per_block": 2,
+    "cast_possible_truncation": 3,
+    "cast_sign_loss": 3,
+    "string_slice": 2,
+    "struct_excessive_bools": 3,
+    "fn_params_excessive_bools": 2,
+    "cognitive_complexity": 3,
+    "too_many_lines": 2,
+    "significant_drop_tightening": 3,
+    "needless_pass_by_value": 2,
+    "redundant_clone": 2,
+    "implicit_clone": 2,
+    "allow_attributes_without_reason": 2,
+    "wildcard_imports": 1,
+    "manual_let_else": 1,
+    "items_after_statements": 1,
+    "unused_self": 1,
+    "needless_pass_by_ref_mut": 1,
+}
+CLIPPY_TARGET_DIR = "target/maintenance-clippy"
+CLIPPY_SECONDS = 1800
+
+
+def clippy_command():
+    return [
+        "cargo", "clippy", "--workspace", "--lib", "--bins", "--all-features", "--quiet",
+        "--message-format=json", "--",
+        *(f"-Wclippy::{lint}" for lint in CLIPPY_LINTS),
+    ]
+
+
+def run_clippy(root):
+    """clippy's JSON diagnostics for the workspace's libraries and binaries, and a note saying why
+    there are none when it could not be run. It has a target directory of its own, because these
+    lints differ from the ones `make check` passes and sharing one would recompile every crate
+    each time the two alternate."""
+    if shutil.which("cargo") is None:
+        return "", "cargo is not installed, so clippy was not run"
+    env = dict(os.environ, CARGO_TARGET_DIR=str(root / CLIPPY_TARGET_DIR))
+    try:
+        # The program and arguments are fixed above; no shell reads them.
+        done = subprocess.run(  # nosemgrep: gitlab.bandit.B603
+            clippy_command(), cwd=root, env=env, capture_output=True, text=True,
+            timeout=CLIPPY_SECONDS, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as problem:
+        return "", f"clippy could not be run: {problem}"
+    if '"reason":"compiler-message"' not in done.stdout and done.returncode != 0:
+        return "", f"clippy exited {done.returncode} with no diagnostics: {done.stderr.strip()[-300:]}"
+    return done.stdout, ""
+
+
+def scan_clippy(sources, output):
+    """One candidate for each lint and file, from the JSON lines clippy printed. A location in a
+    file the tree does not track (build output, a dependency) or in test code is not one."""
+    seen, grouped = set(), {}
+    for line in output.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if message.get("reason") != "compiler-message":
+            continue
+        diagnostic = message.get("message") or {}
+        lint = ((diagnostic.get("code") or {}).get("code") or "").removeprefix("clippy::")
+        spans = [s for s in diagnostic.get("spans", []) if s.get("is_primary")]
+        if lint not in CLIPPY_LINTS or not spans:
+            continue
+        span = spans[0]
+        path = span["file_name"].removeprefix("./")
+        source = sources.get(path)
+        key = (lint, path, span["line_start"], span["column_start"])
+        if source is None or source.is_test(span["line_start"]) or key in seen:
+            continue
+        seen.add(key)
+        entry = grouped.setdefault((path, lint), {"lines": [], "message": diagnostic.get("message", "")})
+        entry["lines"].append(span["line_start"])
+    found = []
+    for (path, lint), entry in grouped.items():
+        lines = sorted(entry["lines"])
+        found.append(
+            {
+                "path": path,
+                "line": lines[0],
+                "lint": lint,
+                "rank": CLIPPY_LINTS[lint] * len(lines),
+                "detail": f"`clippy::{lint}` {len(lines)} times, at "
+                + ", ".join(str(n) for n in lines[:10])
+                + (f", and {len(lines) - 10} more" if len(lines) > 10 else "")
+                + f": {entry['message']}",
             }
         )
     return found
@@ -847,15 +1459,134 @@ def in_scope(candidate, prefixes):
     return any(p == pre or p.startswith(pre.rstrip("/") + "/") for p in paths for pre in prefixes)
 
 
-def scan(root, lanes=LANES, prefixes=(), limit=LIMIT, size_limit=SIZE_LIMIT):
+def digest_of(sources, paths, cache):
+    """A short hash of the text of the files at `paths`: what a recorded verdict was given for."""
+    parts = []
+    for path in sorted(set(paths)):
+        if path not in cache:
+            source = sources.get(path)
+            text = source.text if source else ""
+            cache[path] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        parts.append(f"{path}:{cache[path]}")
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def short_hash(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def candidate_paths(candidate):
+    return [c["path"] for c in candidate.get("copies", [])] or [candidate["path"]]
+
+
+def ledger_field(text, also=""):
+    """Text for one whitespace-separated ledger field, without loss: `%`, whitespace and the
+    characters in `also` become `%XX` per UTF-8 byte, so two names that differ only there keep two keys."""
+    return re.sub(
+        r"[%\s" + re.escape(also) + r"]",
+        lambda found: "".join("%%%02X" % b for b in found.group(0).encode("utf-8", "surrogateescape")),
+        text,
+    )
+
+
+def ledger_value(field):
+    return re.sub(
+        r"(?:%[0-9A-F]{2})+",
+        lambda found: bytes.fromhex(found.group(0).replace("%", "")).decode("utf-8", "surrogateescape"),
+        field,
+    )
+
+
+def candidate_key(candidate, sources):
+    """What names a candidate from one run to the next: the file and item, never a line number."""
+    lane, path = candidate["lane"], candidate["path"]
+    if lane in ("unreferenced", "test-only"):
+        name = candidate["symbol"]
+    elif lane == "complexity":
+        name = candidate["symbol"]
+    elif lane == "clippy":
+        name = candidate["lint"]
+    elif lane == "allowances":
+        name = short_hash(candidate["detail"] + candidate["item"])
+    elif lane == "literals":
+        path, name = "text", short_hash(candidate["literal"])
+    elif lane == "duplicates":
+        first = candidate["copies"][0]
+        lines = sources[first["path"]].code[first["line"] - 1 : first["end"]]
+        path = "+".join(sorted(set(candidate_paths(candidate))))
+        name = short_hash(" ".join(" ".join(lines).split()))
+    else:
+        name = ""
+    return ledger_field(f"{lane}:{path}" + (f"::{name}" if name else ""))
+
+
+def read_ledger(root):
+    """The verdicts recorded in docs/maintenance-reviewed, by key. A line that does not parse is
+    reported and skipped, which makes its candidate a new one."""
+    path = Path(root) / LEDGER
+    entries = {}
+    if not path.exists():
+        return entries
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        fields = line.split(None, 5)
+        if len(fields) < 5 or fields[1] not in RECORDED:
+            print(f"{LEDGER}:{number}: not a verdict line, so it is ignored", file=sys.stderr)
+            continue
+        key, verdict, date, digest, paths = fields[:5]
+        entries[key] = {
+            "verdict": verdict, "date": date, "digest": digest,
+            "paths": [ledger_value(p) for p in paths.split(",")], "reason": fields[5] if len(fields) > 5 else "",
+        }
+    return entries
+
+
+LEDGER_HEADER = """\
+# Candidates the maintenance skill has read, one per line, sorted by key:
+#
+#   <key> <verdict> <date> <digest> <paths> <reason>
+#
+# keep      a reviewer read it and the code should stay as it is
+# cleanup   a reviewer read it and a draft was written, which a person posted or declined
+#
+# <digest> hashes the text of every file in <paths>. A scan leaves a candidate out while its file
+# is unchanged and offers it again after any edit to one of them, or when `--fresh` is given. A
+# line is the verdict for that code and no other, so deleting it asks for the review again.
+# In <key> and <paths>, `%`, whitespace and (in <paths>) `,` are written as `%XX`.
+# The maintenance skill writes this file: agents/skills/maintenance/SKILL.md.
+"""
+
+
+def write_ledger(root, entries):
+    lines = []
+    for key in sorted(entries):
+        entry = entries[key]
+        reason = " ".join(str(entry.get("reason") or "").split())
+        lines.append(
+            f"{key} {entry['verdict']} {entry['date']} {entry['digest']} {','.join(ledger_field(p, ',') for p in entry['paths'])} {reason}".rstrip()
+        )
+    path = Path(root) / LEDGER
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(LEDGER_HEADER + "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return path
+
+
+def scan(root, lanes=LANES, prefixes=(), limit=None, size_limit=SIZE_LIMIT, fresh=False, clippy=run_clippy):
     """Candidates per lane, ranked, capped, numbered, and annotated with the specs they touch.
 
     References are counted over the whole tree whatever `prefixes` says, because an item under
-    one directory is used from another, and only the report is scoped."""
+    one directory is used from another, and only the report is scoped. A candidate the ledger
+    holds a verdict for, with its files unchanged since, is counted as carried and left out before
+    the cap, so the cap reaches the next candidates instead of the same ones. `limit` is the cap
+    for every lane but size; left unset, each lane has its own."""
     sources = read_tree(root)
-    found = {}
+    found, notes = {}, {}
+    counts = None
+    if {"unreferenced", "test-only", "untested"} & set(lanes):
+        counts = references(sources)
     if "unreferenced" in lanes or "test-only" in lanes:
-        found.update(scan_references(sources))
+        found.update(scan_references(sources, counts))
     if "allowances" in lanes:
         found["allowances"] = scan_allowances(sources)
     if "duplicates" in lanes or "literals" in lanes:
@@ -864,21 +1595,50 @@ def scan(root, lanes=LANES, prefixes=(), limit=LIMIT, size_limit=SIZE_LIMIT):
         found["literals"] = scan_literals(sources, found["duplicates"])
     if "size" in lanes:
         found["size"] = scan_size(sources)
+    if "complexity" in lanes:
+        found["complexity"] = scan_complexity(sources)
+    if "coupling" in lanes:
+        found["coupling"] = scan_coupling(sources)
+    if "untested" in lanes:
+        found["untested"] = scan_untested(sources, counts)
+    if "shared-state" in lanes:
+        found["shared-state"] = scan_shared_state(sources)
+    if "stale" in lanes:
+        found["stale"] = scan_stale(sources)
+    if "error-types" in lanes:
+        found["error-types"] = scan_error_types(sources)
+    if "clippy" in lanes:
+        output, notes["clippy"] = clippy(root)
+        found["clippy"] = scan_clippy(sources, output)
 
     table = governed_by(root, specs.load_specs(root / "docs" / "specs"))
+    ledger = {} if fresh else read_ledger(root)
+    hashes = {}
     result = {}
     for lane in LANES:
         if lane not in lanes:
             continue
         every = [c for c in found.get(lane, []) if in_scope(c, prefixes)]
-        every.sort(key=lambda c: (-c.get("rank", 0), c["path"], c["line"]))
-        cap = size_limit if lane == "size" else limit
-        kept = every[:cap]
+        carried = 0
+        remaining = []
+        for candidate in every:
+            candidate["lane"] = lane
+            candidate["key"] = candidate_key(candidate, sources)
+            candidate["digest"] = digest_of(sources, candidate_paths(candidate), hashes)
+            entry = ledger.get(candidate["key"])
+            if entry and entry["digest"] == candidate["digest"]:
+                carried += 1
+            else:
+                remaining.append(candidate)
+        remaining.sort(key=lambda c: (-c.get("rank", 0), c["path"], c["line"]))
+        cap = size_limit if lane == "size" else (limit or LANE_LIMIT.get(lane, LIMIT))
+        kept = remaining[:cap]
         for number, candidate in enumerate(kept, start=1):
             candidate["id"] = f"{PREFIX[lane]}{number}"
-            candidate["lane"] = lane
             annotate(candidate, table, sources)
-        result[lane] = {"candidates": kept, "left_out": len(every) - len(kept)}
+        result[lane] = {"candidates": kept, "left_out": len(remaining) - len(kept), "carried": carried}
+        if notes.get(lane):
+            result[lane]["note"] = notes[lane]
     return result
 
 
@@ -889,7 +1649,13 @@ def report(result):
         candidates = entry["candidates"]
         total += len(candidates)
         lines.append("")
-        lines.append(f"{lane}: {len(candidates)}" + (f", {entry['left_out']} more past the cap" if entry["left_out"] else ""))
+        lines.append(
+            f"{lane}: {len(candidates)}"
+            + (f", {entry['left_out']} more past the cap" if entry["left_out"] else "")
+            + (f", {entry['carried']} already reviewed ({LEDGER})" if entry.get("carried") else "")
+        )
+        if entry.get("note"):
+            lines.append(f"  note: {entry['note']}")
         for candidate in candidates:
             lines.append(f"  {candidate['id']:<4} {candidate['path']}:{candidate['line']}  {candidate['detail']}")
             for name in ("specs", "guards"):
@@ -943,7 +1709,10 @@ For every candidate:
    identifiers, so it misses a use built from parts or reached by reflection, and it calls two
    unrelated items with one name a use of each other.
 2. Look for the reason it is the way it is before calling it a mess. A comment, a spec clause, a
-   platform `cfg`, or a public API another repository uses is a reason.
+   platform `cfg`, or a public API another repository uses is a reason. A candidate is a reason
+   to look and not a defect: a long function can read well and a short one can hide a bad
+   abstraction. Call it `cleanup` when a person changing this code is slowed or misled by it and
+   you can name the change that fixes that.
 3. Decide one of:
    - `cleanup`: changing it makes the tree smaller or easier to work on, behaviour stays the
      same, and you can say exactly what the change is.
@@ -1003,8 +1772,9 @@ QUESTION = {
         "are testing something nothing uses, or the item belongs in the test code that uses it."
     ),
     "allowances": (
-        "Each of these silences the compiler's dead-code or unused warning. Remove it in your "
-        "head and decide whether the warning it hides is real."
+        "Each of these silences a lint about dead or unused code, or about a function or type "
+        "that is too large or too complex. Remove it in your head and decide whether what it "
+        "hides is real."
     ),
     "duplicates": (
         "Each of these is a block of lines, compared after comments and whitespace are removed, "
@@ -1018,6 +1788,43 @@ QUESTION = {
         f"Each of these is a file over {FILE_LINES} non-blank lines outside its tests, or one with "
         f"functions over {FUNCTION_LINES} non-blank lines. Read the file, not only the parts the "
         "scan names."
+    ),
+    "complexity": (
+        f"Each of these is a function with statements {NESTING} or more blocks deep, "
+        f"{BOOL_PARAMETERS} or more boolean parameters, or (outside Rust) {PARAMETERS} or more "
+        "parameters. Clippy refuses more than seven parameters in Rust, so a Rust function with "
+        "that many carries an allowance, which the `allowances` lane lists."
+    ),
+    "coupling": (
+        f"Each of these is a Rust file that names {COUPLING} or more other modules of its own "
+        "crate, or other crates of this workspace, outside its tests. A change to any of them can "
+        "mean a change here. Types named straight from the crate root count as one."
+    ),
+    "untested": (
+        f"Each of these is a Rust file with {UNTESTED} or more public functions that code outside "
+        "tests calls and no test names, in a test file, a `tests` directory or a `#[cfg(test)]` "
+        "module. The scan matches names, so a function tested through the behaviour it serves "
+        "looks untested."
+    ),
+    "shared-state": (
+        f"Each of these is a Rust file with {SHARED_STATE} or more marks of shared mutable state "
+        "or threads outside its tests: `Mutex`, `RwLock`, `RefCell`, statics that initialise "
+        "once, atomics, `static mut`, spawned threads and channels."
+    ),
+    "stale": (
+        f"Each of these is a file with {COMMENTED_OUT} or more consecutive lines of commented-out "
+        "code, or a `TODO`, `FIXME`, `HACK` or `XXX` that names no issue."
+    ),
+    "error-types": (
+        f"Each of these is a Rust file with {STRING_ERRORS} or more functions that return a "
+        "`Result` whose error is a `String`, a `&str` or a boxed `dyn Error`. A caller cannot "
+        "match on one of these, only print it."
+    ),
+    "clippy": (
+        "Each of these is one clippy lint in one file, from clippy run over the libraries and "
+        "binaries and not the tests, counted over every site in the file. clippy sees types, so "
+        "a site is what the lint says it is, but whether it matters is for you to read. Its "
+        "`nursery` lints are wrong at times."
     ),
 }
 
@@ -1056,6 +1863,56 @@ LANE_NOTES = {
         "work on, such as a function doing several jobs or near-copies of one branch, as findings "
         "with `\"candidates\": []`."
     ),
+    "complexity": (
+        "A cleanup names the change: a guard clause or `let ... else` that flattens a branch, a "
+        "helper for the inner block, an enum or a small options struct in place of the booleans. "
+        "Keep a parser or state machine whose nesting follows the structure of its input, a "
+        "table, and flags a spec clause names. Never flatten a branch that decides something "
+        "about labelled content by moving it into a helper elsewhere."
+    ),
+    "coupling": (
+        "A cleanup says which jobs the file does, which module each moves to, and that each part "
+        "then uses a handful of the modules. A new module goes in the crate the old one is in, "
+        "or in one docs/specs/layering.md allows. Keep a file whose job is to join the others: "
+        "the place a program starts, or the one that wires the application together."
+    ),
+    "untested": (
+        "Read the tests and the spec clauses that name them before deciding a function is "
+        "untested; most are exercised through what they serve. A cleanup, in this lane, is a "
+        "test to write: name the function, the behaviour it decides, and the cases, refusals "
+        "first, since a test of the allowed path alone is the one most likely to exist already. "
+        "Keep accessors, constructors and one-line forwarders whose behaviour is their caller's."
+    ),
+    "shared-state": (
+        "A cleanup says what one owner could hold instead and what passes messages to it, or "
+        "which lock covers more than the data it guards. Keep state that is shared because "
+        "several threads need it, a process-wide registry, and a lock around one value read and "
+        "written briefly. A guard held across blocking I/O, a second lock taken while one is "
+        "held, or a thread whose handle is dropped and whose failure nobody sees is a `bug` if "
+        "you can say how it hangs or loses the failure."
+    ),
+    "stale": (
+        "Commented-out code is deleted, since git keeps it. A `TODO` either gets the issue that "
+        "tracks it, which you find by searching the tracker with `gh issue list --search`, or "
+        "is deleted because it is done or will not be. Say which, for each."
+    ),
+    "error-types": (
+        "A cleanup names the error type: an enum a caller can match, in the crate that returns "
+        "it, with the variants the functions use. Keep a message that is the product, such as a "
+        "refusal text a tool returns to the planner or a person reads, where a spec fixes the "
+        "wording, and a function whose caller only prints the error. An error type that carries "
+        "content from a file or a page carries untrusted bytes across a boundary: say what the "
+        "type holds, and do not propose one that holds labelled content."
+    ),
+    "clippy": (
+        "Read every site of a candidate. `cleanup` is where the lint is right at most sites and "
+        "one change removes them: a helper, a `?`, a checked conversion, a named type. Keep a "
+        "`let _ =` on a send to a channel whose receiver may be gone, a cast bounded by "
+        "construction (say the bound), and a clone a later use needs. A lint that is right, in "
+        "code that can panic or wrap on a value a person, a file or a server supplies "
+        "(`string_slice` on text, a cast of a length, `expect` on parsed input), is a `bug`: say "
+        "which input and what happens."
+    ),
 }
 
 
@@ -1080,8 +1937,10 @@ def build_prompt(lane, chunk, results_file):
     )
 
 
-def prepare(root, lanes, prefixes, work_dir, limit, size_limit):
-    result = scan(root, lanes, prefixes, limit, size_limit)
+def prepare(root, lanes, prefixes, work_dir, **options):
+    """Scan, then write a prompt file for each group of candidates. `options` are the keywords
+    `scan` takes after the prefixes: `limit`, `size_limit`, `fresh` and `clippy`."""
+    result = scan(root, lanes, prefixes, **options)
     work_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1115,9 +1974,10 @@ def prepare(root, lanes, prefixes, work_dir, limit, size_limit):
         manifest["progress_lines"].append(
             f"{lane}: {len(candidates)} candidates for {len(prompts)} reviewers"
             + (f", {entry['left_out']} more past the cap" if entry["left_out"] else "")
+            + (f", {entry['carried']} already reviewed" if entry.get("carried") else "")
+            + (f" ({entry['note']})" if entry.get("note") else "")
         )
-    path = work_dir / "manifest.json"
-    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    path = workdir.write_manifest(work_dir, manifest)
     return result, path
 
 
@@ -1304,24 +2164,46 @@ def render_drafts(drafts, out):
     return "\n".join(lines)
 
 
-def read_manifest(work_dir):
-    path = Path(work_dir) / "manifest.json"
-    if not path.exists():
-        print(f"no manifest at {path}", file=sys.stderr)
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
+def record(manifest, verdicts, today=None):
+    """Write the verdicts reviewers gave to the ledger, and drop the entries whose files have
+    changed or gone, since those are reviewed again anyway. Returns the path and how many verdicts
+    this run added."""
+    root = Path(manifest["root"])
+    today = today or datetime.date.today().isoformat()
+    sources = read_tree(root)
+    hashes = {}
+    entries = {}
+    for key, entry in read_ledger(root).items():
+        if entry["digest"] == digest_of(sources, entry["paths"], hashes) and all(p in sources for p in entry["paths"]):
+            entries[key] = entry
+    added = 0
+    for candidate_id, candidate in manifest["candidates"].items():
+        verdict = verdicts.get(candidate_id, {})
+        if verdict.get("verdict") not in RECORDED:
+            continue
+        entries[candidate["key"]] = {
+            "verdict": verdict["verdict"],
+            "date": today,
+            "digest": candidate["digest"],
+            "paths": sorted(set(candidate_paths(candidate))),
+            "reason": verdict.get("reason", ""),
+        }
+        added += 1
+    return write_ledger(root, entries), added
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    command = argv.pop(0) if argv and argv[0] in ("prepare", "collect", "draft") else "prepare"
+    command = argv.pop(0) if argv and argv[0] in ("prepare", "collect", "draft", "record") else "prepare"
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     if command == "prepare":
         parser.add_argument("scope", nargs="*", help="lane names and path prefixes; default every lane, whole tree")
         parser.add_argument("--mechanical-only", action="store_true", help="print the candidates and stop")
         parser.add_argument("--work-dir")
-        parser.add_argument("--limit", type=int, default=LIMIT, help="candidates per lane")
+        parser.add_argument("--limit", type=int, help=f"candidates per lane, default {LIMIT} or the lane's own")
         parser.add_argument("--size-limit", type=int, default=SIZE_LIMIT, help="candidates in the size lane")
+        parser.add_argument("--fresh", action="store_true", help=f"review candidates {LEDGER} holds a verdict for")
+        parser.add_argument("--no-clippy", action="store_true", help="leave out the clippy lane, which compiles")
         parser.add_argument("--root", default=str(ROOT))
     else:
         parser.add_argument("--work-dir", required=True)
@@ -1331,19 +2213,22 @@ def main(argv=None):
 
     if command == "prepare":
         root = Path(args.root).resolve()
-        lanes = tuple(s for s in args.scope if s in LANES) or LANES
+        named = tuple(s for s in args.scope if s in LANES)
+        lanes = named or tuple(lane for lane in LANES if not (args.no_clippy and lane == "clippy"))
         prefixes = tuple(s for s in args.scope if s not in LANES)
         os.chdir(root)
         if args.mechanical_only:
-            print(report(scan(root, lanes, prefixes, args.limit, args.size_limit)))
+            print(report(scan(root, lanes, prefixes, args.limit, args.size_limit, args.fresh)))
             return 0
         work_dir = Path(args.work_dir or tempfile.mkdtemp(prefix="maintenance-"))
-        result, manifest = prepare(root, lanes, prefixes, work_dir, args.limit, args.size_limit)
+        result, manifest = prepare(
+            root, lanes, prefixes, work_dir, limit=args.limit, size_limit=args.size_limit, fresh=args.fresh
+        )
         print(report(result), file=sys.stderr)
         print(json.dumps({"work_dir": str(work_dir), "manifest": str(manifest)}))
         return 0
 
-    manifest = read_manifest(args.work_dir)
+    manifest = workdir.read_manifest(args.work_dir)
     if manifest is None:
         return 2
     os.chdir(manifest["root"])
@@ -1354,6 +2239,10 @@ def main(argv=None):
         else:
             print(render_review(manifest, findings, verdicts, problems))
         return 1 if problems else 0
+    if command == "record":
+        path, added = record(manifest, verdicts)
+        print(f"{added} verdicts written to {path}. Nothing has been committed.")
+        return 0
     out = Path(args.out) if args.out else Path(args.work_dir) / "issues"
     drafts = draft(manifest, findings, out)
     if args.json:

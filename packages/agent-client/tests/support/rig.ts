@@ -38,17 +38,25 @@ export interface Rig {
   stub: ModelStub
   rpc: StdioConnection
   project: string
+  /** A second workspace, for a session that must start with no answer kept about its directory. */
+  elsewhere: string
   home: string
   diagnostics: string[]
   stop(): Promise<void>
 }
 
-/** A real bridge process, a project directory and a home of its own, and a stub model with `plans`. */
+/**
+ * A real bridge process, a project directory and a home of its own, and a stub model with `plans`.
+ * A yes given in one workspace is kept in the home and settles every later session there, so a test
+ * that needs the question asked again opens `elsewhere`.
+ */
 export async function startRig(plans: Record<string, PlannerStep[]>, options: { chunked?: boolean } = {}): Promise<Rig> {
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'agent-client-')))
   const project = join(scratch, 'project')
+  const elsewhere = join(scratch, 'elsewhere')
   const home = join(scratch, 'home')
   mkdirSync(project)
+  mkdirSync(elsewhere)
   mkdirSync(join(home, '.bravebot'), { recursive: true })
   const stub = await ModelStub.start(plans)
   const diagnostics: string[] = []
@@ -58,13 +66,17 @@ export async function startRig(plans: Record<string, PlannerStep[]>, options: { 
     args: options.chunked ? [join(FIXTURES, 'chunking-proxy.mjs'), rpcBinary()] : [],
     env: isolatedEnvironment(home, stub.endpoint),
     cwd: scratch,
-    workspaces: [{ id: 'project', name: 'Project', directory: project }],
+    workspaces: [
+      { id: 'project', name: 'Project', directory: project },
+      { id: 'elsewhere', name: 'Elsewhere', directory: elsewhere },
+    ],
     onDiagnostic: (message) => diagnostics.push(message),
   })
   return {
     stub,
     rpc,
     project,
+    elsewhere,
     home,
     diagnostics,
     async stop() {

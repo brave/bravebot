@@ -17,8 +17,10 @@ and pull requests and nothing else.
 
 It does not use the other two ways GitHub documents:
 
-- **The hosted server at `api.githubcopilot.com`** needs an `Authorization` header, and
-  `bravebot mcp add --http` sends none.
+- **The hosted server at `api.githubcopilot.com`** needs an `Authorization` header. It can be
+  declared with `--bearer-env GITHUB_PERSONAL_ACCESS_TOKEN`, which sends the token from your
+  environment to that host only (see [headers for a service](../mcp-servers.md#headers-for-a-service)).
+  This recipe does not use it.
 - **The Docker image** cannot be used, because a confined server does not reach the Docker daemon.
 
 The server is a Go binary, so nothing else has to be installed. Windows is not covered, because

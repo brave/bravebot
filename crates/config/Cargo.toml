@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # Holds a credential in pages the kernel keeps out of swap, a platform call this crate forbids
 # itself. It brings libc, landlock and windows-sys with it, and adds no crate to the lockfile:

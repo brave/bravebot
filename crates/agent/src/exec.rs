@@ -47,7 +47,8 @@
 //!
 //! # This agent's own credentials are not handed on
 //!
-//! The environment is inherited, less the names in [`scrub`]. A person approving a run reads the
+//! The environment is inherited, less the names in [`bravebot_config::scrub::withheld`], which
+//! [`bravebot_sandbox::programs::start`] removes. A person approving a run reads the
 //! binary, the argv and the directory, so a credential travelling alongside those is something they
 //! were never shown and could not have endorsed. The signing key has no use in a subprocess anyway:
 //! a program the planner chose is doing what somebody approved, not authenticating as this agent.
@@ -61,7 +62,7 @@ use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
 use std::io::{Read, Write};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -187,11 +188,23 @@ const TICK: Duration = Duration::from_millis(50);
 /// How long the drain threads are given to reach the end of their pipe, once the stages are done.
 ///
 /// They are waited on rather than joined, because a stage can leave a child holding the write end
-/// of the pipe. `sh -c 'echo hi; sleep 30'` is enough: killing the shell leaves `sleep` holding
-/// the same descriptor, so the pipe never reaches end-of-file and a joining thread waits on a
-/// process nobody is waiting for. Whatever was read by the time the grace runs out is kept, which
-/// is what makes the wait safe to abandon.
+/// of the pipe. `sh -c 'sleep 30 & echo hi'` is enough: the shell exits and `sleep` holds the same
+/// descriptor, so the pipe never reaches end-of-file and a joining thread waits on a process
+/// nobody is waiting for. A child that left the stage's process group does the same when the
+/// stage is stopped. Whatever was read by the time the grace runs out is kept, which is what
+/// makes the wait safe to abandon.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+/// How long the process group of a stage is given to end after it has been asked to, before
+/// what is left of it is killed (RUN-11).
+///
+/// A program that is asked to end can undo what it holds: `git` removes its `index.lock` on
+/// `SIGTERM` and nothing removes it after `SIGKILL`. Short, because the stage was asked to end
+/// because a person's turn or deadline ran out, and one that ignores the request is killed
+/// anyway. Every stage of a pipeline waits out the same grace together, so a long pipeline is no
+/// slower to stop than one stage.
+#[cfg(unix)]
+const STOP_GRACE: Duration = Duration::from_secs(2);
 
 /// What running a pipeline produced.
 ///
@@ -276,6 +289,11 @@ pub enum ExecError {
     /// Carries the program name, which is safe to report: argv was endorsed by a person, so it is
     /// not content an attacker chose.
     NotStarted { program: String, detail: String },
+    /// The directory the line was to run in no longer exists, so the pipeline was not started.
+    ///
+    /// Checked immediately before the first stage is spawned, since an approval can wait for
+    /// hours. The directory is the one the person was shown and approved.
+    DirectoryGone { directory: String },
     /// The platform could not confine the program, so it was not started.
     ///
     /// A program a person approved runs under its profile or not at all, so this is a refusal and
@@ -296,6 +314,9 @@ impl fmt::Display for ExecError {
         match self {
             Self::NotStarted { program, detail } => {
                 write!(f, "'{program}' could not be started: {detail}")
+            }
+            Self::DirectoryGone { directory } => {
+                write!(f, "the directory '{directory}' no longer exists")
             }
             Self::NotConfined { program, detail } => {
                 write!(
@@ -546,6 +567,7 @@ impl<'a> Running<'a> {
         if steps.is_empty() {
             return Err(ExecError::Io("no stages to run".to_string()));
         }
+        the_directory_exists(self.directory)?;
         still_approved(steps)?;
 
         let mut children = ForegroundChildren(Vec::with_capacity(steps.len()));
@@ -594,7 +616,17 @@ impl<'a> Running<'a> {
             // Started by the path the name was found by, which some programs read
             // ([`Step::started_as`]). A second lookup here would let a `$PATH` changed since the
             // question decide what runs.
-            let mut command = Command::new(started_as);
+            //
+            // Every step, not only the first, is started without this agent's own credentials. One
+            // is as reachable from the middle of a pipeline as from the front, and one step spared
+            // would be the whole of the hole.
+            let withheld = bravebot_config::scrub::withheld();
+            let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
+            let mut command = bravebot_sandbox::programs::start(
+                &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+                inherits,
+                bravebot_sandbox::programs::SearchPath::Inherited,
+            );
             // The vector, never a string. Nothing here builds a command line, so nothing has to
             // unbuild one.
             command.args(&step.args).current_dir(self.directory);
@@ -614,9 +646,9 @@ impl<'a> Running<'a> {
             for (name, value) in &step.environment {
                 command.env(name, value);
             }
-            // Every step, not only the first. A credential is as reachable from the middle of a
-            // pipeline as from the front, and one step spared would be the whole of the hole.
-            crate::scrub::apply(&mut command);
+            // Withheld again, since the line is the planner's and a name it assigns is not the
+            // person's own: `run.scrubEnv` lists what their commands may not be handed.
+            inherits.withhold(&mut command);
             // Decided before a redirection's file is opened, so a step the platform will not
             // confine is refused ahead of every effect its line has.
             let launching = crate::confine::begin(self.confinement, command, step, self.directory)?;
@@ -869,34 +901,115 @@ fn from_upstream(upstream: &mut Option<Handle>) -> Result<Handle, ExecError> {
 
 /// A started step: an ordinary child, or on Windows a process in a container.
 enum Process {
-    Plain(Child),
+    /// On Unix the child leads a process group of its own (see [`crate::confine::begin`]), so its
+    /// number is also the number of the group everything it started belongs to.
+    Plain {
+        child: Child,
+        /// Whether the child has been waited for. Its number is free to be given to another
+        /// process from then on, so a signal addressed by it could reach a process that is not
+        /// this stage's, and none is sent once this is set.
+        #[cfg(unix)]
+        reaped: bool,
+    },
     #[cfg(windows)]
     Contained(crate::confine::Contained),
 }
 
 impl Process {
-    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
-        match self {
-            Self::Plain(child) => child.try_wait(),
-            #[cfg(windows)]
-            Self::Contained(contained) => contained.child.try_wait(),
+    fn plain(child: Child) -> Self {
+        Self::Plain {
+            child,
+            #[cfg(unix)]
+            reaped: false,
         }
     }
 
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        let status = match self {
+            Self::Plain { child, .. } => child.try_wait(),
+            #[cfg(windows)]
+            Self::Contained(contained) => contained.child.try_wait(),
+        };
+        // Any answer but "still running" ends the waiting, an error included. A parent that
+        // ignores `SIGCHLD` has its children collected by the kernel, and the number of a child
+        // that was collected may belong to another process.
+        #[cfg(unix)]
+        if !matches!(status, Ok(None)) {
+            self.waited_for();
+        }
+        status
+    }
+
+    #[cfg(unix)]
+    fn waited_for(&mut self) {
+        let Self::Plain { reaped, .. } = self;
+        *reaped = true;
+    }
+
+    /// End the stage, and on Unix every program in its process group with it.
+    ///
+    /// Nothing is signalled by number once the stage has been waited for: see
+    /// [`Process::Plain`].
     fn kill(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(group) = self.group() {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
         match self {
-            Self::Plain(child) => child.kill(),
+            Self::Plain { child, .. } => child.kill(),
             #[cfg(windows)]
             Self::Contained(contained) => contained.child.kill(),
         }
     }
 
     fn wait(&mut self) -> std::io::Result<ExitStatus> {
-        match self {
-            Self::Plain(child) => child.wait(),
+        let status = match self {
+            Self::Plain { child, .. } => child.wait(),
             #[cfg(windows)]
             Self::Contained(contained) => contained.child.wait(),
+        };
+        #[cfg(unix)]
+        self.waited_for();
+        status
+    }
+
+    /// The process group the stage leads, while the stage has not been waited for.
+    ///
+    /// Not waited for means its number still names it, even if it has exited and is waiting to be
+    /// collected, so the group it names cannot belong to anything else.
+    #[cfg(unix)]
+    fn group(&self) -> Option<rustix::process::Pid> {
+        let Self::Plain { child, reaped } = self;
+        if *reaped {
+            return None;
         }
+        rustix::process::Pid::from_raw(i32::try_from(child.id()).ok()?)
+    }
+
+    /// Ask the stage to end, and every program in its group with it, and name the group asked.
+    ///
+    /// `SIGCONT` follows, because a stopped group holds a `SIGTERM` back until it is continued.
+    #[cfg(unix)]
+    fn ask_to_end(&self) -> Option<rustix::process::Pid> {
+        let group = self.group()?;
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::TERM);
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::CONT);
+        Some(group)
+    }
+
+    /// Collect the stage if it has exited, then say whether anything is left in `group`, the group
+    /// it was asked to end.
+    ///
+    /// The stage is collected first because a leader nobody has collected still counts as a member
+    /// of its group. A group's number is not given to another process while the group has a member,
+    /// so a group this finds a member in can still be signalled by that number.
+    #[cfg(unix)]
+    fn collect_then_group_has_members(&mut self, group: rustix::process::Pid) -> bool {
+        let _ = self.try_wait();
+        !matches!(
+            rustix::process::test_kill_process_group(group),
+            Err(rustix::io::Errno::SRCH)
+        )
     }
 }
 
@@ -915,7 +1028,7 @@ fn launch(
                 .stdout(Stdio::from(stdout))
                 .stderr(Stdio::from(stderr));
             bravebot_sandbox::process::starting_a_program(|| command.spawn())
-                .map(Process::Plain)
+                .map(Process::plain)
                 .map_err(|e| ExecError::NotStarted {
                     program: step.program.clone(),
                     detail: e.to_string(),
@@ -1106,19 +1219,63 @@ struct Mark {
 ///
 /// Byte counts and nothing else. Comparing two of these says whether more has arrived; it never says
 /// what arrived, and nothing here reads a byte of it.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Seen {
     stdout: Mark,
     /// One per standard-error pipe, grown to match when a pipeline's stages are first looked at.
     stderr: Vec<Mark>,
 }
 
-/// Kill every stage and reap it, so nothing is left behind.
+/// Stop every stage and reap it, so nothing is left behind.
+///
+/// On Unix each stage is first asked to end, together with everything in its process group, and
+/// its group is given `STOP_GRACE` to do so. Whatever is left of a group after that is killed, so
+/// a program that ignored the request, or a child that outlived the stage, does not keep running
+/// (RUN-11). The grace lasts while the group has a member, since a stage that ends at once on the
+/// request can leave programs it started that are still undoing what they hold.
 fn stop(children: &mut [Process]) {
+    stop_processes(children.iter_mut().collect());
+}
+
+/// [`stop`] over stages that may belong to several jobs, which then share the one grace.
+fn stop_processes(mut children: Vec<&mut Process>) {
+    #[cfg(unix)]
+    {
+        let asked: Vec<(usize, rustix::process::Pid)> = children
+            .iter()
+            .enumerate()
+            .filter_map(|(index, child)| Some((index, child.ask_to_end()?)))
+            .collect();
+        let until = Instant::now() + STOP_GRACE;
+        while Instant::now() < until
+            && asked
+                .iter()
+                .any(|&(index, group)| children[index].collect_then_group_has_members(group))
+        {
+            std::thread::sleep(TICK);
+        }
+        for &(index, group) in &asked {
+            if children[index].collect_then_group_has_members(group) {
+                let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            }
+        }
+    }
     for child in children.iter_mut() {
         let _ = child.kill();
         let _ = child.wait();
     }
+}
+
+/// Refuse the pipeline when the directory it runs in has been removed since the line was planned
+/// or approved. Without this the spawn fails with the operating system's "No such file or
+/// directory", which reads as a missing program.
+fn the_directory_exists(directory: &std::path::Path) -> Result<(), ExecError> {
+    if directory.is_dir() {
+        return Ok(());
+    }
+    Err(ExecError::DirectoryGone {
+        directory: directory.display().to_string(),
+    })
 }
 
 /// Refuse the pipeline unless every step's start path still leads to the file that was approved.
@@ -1309,6 +1466,19 @@ impl Background {
         stop(&mut self.children);
     }
 
+    /// Stop several jobs at once and keep what each printed.
+    ///
+    /// Every job is asked to end before any is waited for, and their process groups share one
+    /// grace period, so jobs that ignore the request take two seconds together and not two seconds
+    /// each. Stopping them one after another with [`Background::kill`] gives each its own.
+    pub fn stop_together(jobs: &mut [&mut Background]) {
+        stop_processes(
+            jobs.iter_mut()
+                .flat_map(|job| job.children.iter_mut())
+                .collect(),
+        );
+    }
+
     /// Wait for something to happen, and return at the first of five things.
     ///
     /// Output past `seen` being there, every step having exited, `bound` running out, `cancel`
@@ -1340,11 +1510,32 @@ impl Background {
         cancel: &Cancel,
         stops: &[JobStop],
     ) {
+        self.wait(Some(seen), bound, cancel, stops);
+    }
+
+    /// Wait for the job to end, and return at the first of four things.
+    ///
+    /// Every step having exited, `bound` running out, `cancel` being set, and one of `stops` being
+    /// set. Output arriving ends none of it, whether it arrives during the wait or was already
+    /// there, unseen, when the wait began: that is the difference from [`Background::wait_for_more`],
+    /// whose caller gets back at the next line from a job that prints more often than a round takes.
+    ///
+    /// Of the output this asks for nothing at all, not even a byte count, so it decides on which
+    /// steps have exited and on the clock alone. What was printed is taken by the caller afterwards,
+    /// the same way [`Background::wait_for_more`]'s is, and is all of what the job printed since the
+    /// caller's last look.
+    pub fn wait_for_exit(&mut self, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
+        self.wait(None, bound, cancel, stops);
+    }
+
+    /// The loop both waits share. `seen` is where the caller's last look left off for a wait that
+    /// output ends, and `None` for one that only an exit, the bound, the token or a stop does.
+    fn wait(&mut self, seen: Option<&Seen>, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
         let until = Instant::now() + bound;
         loop {
             if cancel.is_cancelled()
                 || stops.iter().any(JobStop::is_requested)
-                || self.has_more(seen)
+                || seen.is_some_and(|seen| self.has_more(seen))
                 || self.steps_exited()
             {
                 return;
@@ -1391,6 +1582,7 @@ pub fn start_steps(
     if steps.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
     }
+    the_directory_exists(directory)?;
     still_approved(steps)?;
 
     let mut children: Vec<Process> = Vec::with_capacity(steps.len());
@@ -1409,7 +1601,16 @@ pub fn start_steps(
             environment: _,
             routes: _,
         } = step;
-        let mut command = Command::new(started_as);
+        // Without this agent's own credentials on every step, as in the foreground: one is as
+        // reachable from the middle of a pipeline as from the front, and one spared would be the
+        // whole of the hole.
+        let withheld = bravebot_config::scrub::withheld();
+        let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
+        let mut command = bravebot_sandbox::programs::start(
+            &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+            inherits,
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        );
         command.args(&step.args).current_dir(directory);
         // In front of the step's own assignments, as in the foreground.
         if let Some(directory) = scratch {
@@ -1421,9 +1622,8 @@ pub fn start_steps(
         for (name, value) in &step.environment {
             command.env(name, value);
         }
-        // Every step, as in the foreground: a credential is as reachable from the middle of a
-        // pipeline as from the front, and one spared would be the whole of the hole.
-        crate::scrub::apply(&mut command);
+        // Withheld again after the line's own assignments, as in the foreground.
+        inherits.withhold(&mut command);
         let launching = match crate::confine::begin(confinement, command, step, directory) {
             Ok(launching) => launching,
             Err(error) => {

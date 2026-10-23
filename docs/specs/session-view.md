@@ -52,6 +52,7 @@ responses and event payloads retain their meaning.
 `verified-by: bravebot_ui_bridge::fetch::the_session_view_orders_prompts_approvals_and_labelled_results`
 `verified-by: bravebot_ui_bridge::fetch::session_views_keep_two_sessions_and_terminal_outcomes_separate`
 `verified-by: bravebot_ui_bridge::fetch::a_legacy_session_emits_no_view_events`
+`verified-by: bravebot_ui_bridge::fetch::a_view_started_after_trust_was_answered_opens_idle`
 
 <a id="RPCVIEW-2"></a>
 ### RPCVIEW-2: Rust supplies ordered rows and authoritative status
@@ -71,6 +72,8 @@ use the same tag-only projection as saved history. Narration, quarantined previe
 and finishes, approvals, and terminal replies/errors produce rows. Other legacy events, including
 audit, token counts, todos and phases, are outside version 1's transcript.
 
+The engine gives a call no identity, so a tool finish replaces the row of the latest call still running, keeping its ID and position, and a call is one row. No content of a call decides which row that is, because a call's target can be content from outside. Two calls in flight therefore pair by arrival order, and a finish that is not for the latest call lands on the wrong row. A finish with no call running produces a row of its own. A turn's end forgets the calls it left running.
+
 Status is `awaiting_trust`, `idle`, `running`, `waiting`, `completed`, `failed`, `cancelled`, or
 `detached`. Terminal updates clear pending approvals. Completion publication and next-turn
 eligibility share the emitter lock, so the next turn cannot publish ahead of the terminal update.
@@ -83,7 +86,9 @@ The bridge retains only current view metadata and the pending payload. Clients r
 `verified-by: bravebot_ui_bridge::fetch::session_views_keep_two_sessions_and_terminal_outcomes_separate`
 `verified-by: bravebot_ui_bridge::emit::completion_is_eligible_before_publication_and_precedes_the_next_turn`
 `verified-by: bravebot_ui_bridge::view::failures_have_authoritative_terminal_status`
+`verified-by: bravebot_ui_bridge::view::a_finished_call_replaces_the_row_of_the_call_it_ends`
 `verified-by: bravebot_ui_bridge::wire::accepted_composed_prompts_cross_without_their_text`
+`verified-by: bravebot_ui_bridge::view::a_terminal_update_clears_the_question_still_waiting`
 
 <a id="RPCVIEW-3"></a>
 ### RPCVIEW-3: the existing approval implementation owns answers
