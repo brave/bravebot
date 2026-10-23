@@ -177,21 +177,7 @@ impl Connectors {
                     ));
                 }
                 if !resource.with.is_empty() {
-                    let each: Vec<String> = resource
-                        .with
-                        .iter()
-                        .map(|(key, rule)| match rule {
-                            WithRule::OneOf(values) => format!("{key}:<{}>", values.join("|")),
-                            WithRule::Form(form) => match forms::example(form) {
-                                Some(example) => format!("{key}:{example}"),
-                                None => format!("{key}:<{form}>"),
-                            },
-                        })
-                        .collect();
-                    lines.push_str(&format!(
-                        "      with gives every one of these, as key:value terms like a select: {}\n",
-                        each.join(" ")
-                    ));
+                    lines.push_str(&with_line(resource));
                 }
                 if resource.step == StepKind::Fetch && !resource.narrow.is_empty() {
                     lines.push_str(&format!(
@@ -444,46 +430,7 @@ impl Connectors {
                 ));
             }
         }
-        // Every value the definition asks for, once each, in its form, and nothing else. A taken
-        // value is checked by the authority, which alone holds it; here, only that it names a field
-        // a fetch earlier in the plan records, and is one the definition lets the act take.
-        let with = selector::terms(step.text("with"))?;
-        for (at, (key, value)) in with.iter().enumerate() {
-            let form = resource
-                .with
-                .get(key)
-                .ok_or_else(|| format!("'{name}' takes no with value '{key}'"))?;
-            if with[..at].iter().any(|(earlier, _)| earlier == key) {
-                return Err(format!("'with' gives '{key}' twice"));
-            }
-            form.check(value)
-                .map_err(|why| format!("'with' {key} {why}"))?;
-        }
-        let taken = take_terms(step.text("take"))?;
-        for (at, (key, slot, field)) in taken.iter().enumerate() {
-            if !resource.takes.contains(key) {
-                return Err(format!("'{name}' cannot take '{key}'"));
-            }
-            if with.iter().any(|(given, _)| given == key)
-                || taken[..at].iter().any(|(earlier, _, _)| earlier == key)
-            {
-                return Err(format!("'{key}' is given or taken twice"));
-            }
-            self.check_taken(plan, index, slot, field)?;
-        }
-        if given("with") || given("take") {
-            for (key, rule) in &resource.with {
-                if !with.iter().any(|(given, _)| given == key)
-                    && !taken.iter().any(|(taken, _, _)| taken == key)
-                {
-                    let what = match rule {
-                        WithRule::Form(form) => format!("a {form}"),
-                        WithRule::OneOf(values) => format!("one of {}", values.join(", ")),
-                    };
-                    return Err(format!("'{name}' needs with {key}, {what}"));
-                }
-            }
-        }
+        self.check_with(plan, index, name, resource, step)?;
         // A fetch the definition holds to narrowing, such as a search across every place, uses one
         // of its terms.
         if resource.step == StepKind::Fetch
@@ -524,6 +471,77 @@ impl Connectors {
         }
         Ok(())
     }
+
+    /// Every value the definition asks for, once each, in its form, and nothing else. A taken
+    /// value is checked by the authority, which alone holds it; here, only that it names a field
+    /// a fetch earlier in the plan records, and is one the definition lets the act take.
+    fn check_with(
+        &self,
+        plan: &Manifest,
+        index: usize,
+        name: &str,
+        resource: &Resource,
+        step: &Step,
+    ) -> Result<(), String> {
+        let given = |field: &str| !step.text(field).trim().is_empty();
+        let with = selector::terms(step.text("with"))?;
+        for (at, (key, value)) in with.iter().enumerate() {
+            let form = resource
+                .with
+                .get(key)
+                .ok_or_else(|| format!("'{name}' takes no with value '{key}'"))?;
+            if with[..at].iter().any(|(earlier, _)| earlier == key) {
+                return Err(format!("'with' gives '{key}' twice"));
+            }
+            form.check(value)
+                .map_err(|why| format!("'with' {key} {why}"))?;
+        }
+        let taken = take_terms(step.text("take"))?;
+        for (at, (key, slot, field)) in taken.iter().enumerate() {
+            if !resource.takes.contains(key) {
+                return Err(format!("'{name}' cannot take '{key}'"));
+            }
+            if with.iter().any(|(given, _)| given == key)
+                || taken[..at].iter().any(|(earlier, _, _)| earlier == key)
+            {
+                return Err(format!("'{key}' is given or taken twice"));
+            }
+            self.check_taken(plan, index, slot, field)?;
+        }
+        if given("with") || given("take") {
+            for (key, rule) in &resource.with {
+                if !with.iter().any(|(given, _)| given == key)
+                    && !taken.iter().any(|(taken, _, _)| taken == key)
+                {
+                    let what = match rule {
+                        WithRule::Form(form) => format!("a {form}"),
+                        WithRule::OneOf(values) => format!("one of {}", values.join(", ")),
+                    };
+                    return Err(format!("'{name}' needs with {key}, {what}"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The planner's line about the values an act gives in `with`, each with an example of its form.
+fn with_line(resource: &Resource) -> String {
+    let each: Vec<String> = resource
+        .with
+        .iter()
+        .map(|(key, rule)| match rule {
+            WithRule::OneOf(values) => format!("{key}:<{}>", values.join("|")),
+            WithRule::Form(form) => match forms::example(form) {
+                Some(example) => format!("{key}:{example}"),
+                None => format!("{key}:<{form}>"),
+            },
+        })
+        .collect();
+    format!(
+        "      with gives every one of these, as key:value terms like a select: {}\n",
+        each.join(" ")
+    )
 }
 
 /// What the planner is told about an act beyond its fields: the text it takes, the narrowing it
