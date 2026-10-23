@@ -420,7 +420,7 @@ where the body is no longer than 16 KiB: all of it, labelled as the call labels 
 beside the status and the wait the server asked for. A longer body is not handed over cut, since half of it
 would be read as if it were whole, and neither is one that could not be read because the connection broke or
 went quiet past [NET-5](#NET-5)'s gap. The failure is then the status alone. A request that does not ask is
-answered as it was, and so is a success whatever the request asked.
+answered a non-success status with no body, and a success is answered the same whatever the request asked.
 
 The body is read with the reply, under the bounds of NET-5. A body that goes quiet is given up on at the gap.
 Where the request is made with a way to stop it, the read is on the thread a stop abandons, so the caller is
