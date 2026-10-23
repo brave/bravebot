@@ -1479,6 +1479,16 @@ def candidate_paths(candidate):
     return [c["path"] for c in candidate.get("copies", [])] or [candidate["path"]]
 
 
+def ledger_field(text, also=""):
+    """Text for one whitespace-separated ledger field, without loss: `%`, whitespace and the
+    characters in `also` become `%XX`, so two names that differ only there keep two keys."""
+    return re.sub(r"[%\s" + re.escape(also) + r"]", lambda found: "%%%02X" % ord(found.group(0)), text)
+
+
+def ledger_value(field):
+    return re.sub(r"%([0-9A-F]{2})", lambda found: chr(int(found.group(1), 16)), field)
+
+
 def candidate_key(candidate, sources):
     """What names a candidate from one run to the next: the file and item, never a line number."""
     lane, path = candidate["lane"], candidate["path"]
@@ -1499,7 +1509,7 @@ def candidate_key(candidate, sources):
         name = short_hash(" ".join(" ".join(lines).split()))
     else:
         name = ""
-    return re.sub(r"\s+", "_", f"{lane}:{path}" + (f"::{name}" if name else ""))
+    return ledger_field(f"{lane}:{path}" + (f"::{name}" if name else ""))
 
 
 def read_ledger(root):
@@ -1519,7 +1529,7 @@ def read_ledger(root):
         key, verdict, date, digest, paths = fields[:5]
         entries[key] = {
             "verdict": verdict, "date": date, "digest": digest,
-            "paths": paths.split(","), "reason": fields[5] if len(fields) > 5 else "",
+            "paths": [ledger_value(p) for p in paths.split(",")], "reason": fields[5] if len(fields) > 5 else "",
         }
     return entries
 
@@ -1535,6 +1545,7 @@ LEDGER_HEADER = """\
 # <digest> hashes the text of every file in <paths>. A scan leaves a candidate out while its file
 # is unchanged and offers it again after any edit to one of them, or when `--fresh` is given. A
 # line is the verdict for that code and no other, so deleting it asks for the review again.
+# In <key> and <paths>, `%`, whitespace and (in <paths>) `,` are written as `%XX`.
 # The maintenance skill writes this file: agents/skills/maintenance/SKILL.md.
 """
 
@@ -1545,7 +1556,7 @@ def write_ledger(root, entries):
         entry = entries[key]
         reason = " ".join(str(entry.get("reason") or "").split())
         lines.append(
-            f"{key} {entry['verdict']} {entry['date']} {entry['digest']} {','.join(entry['paths'])} {reason}".rstrip()
+            f"{key} {entry['verdict']} {entry['date']} {entry['digest']} {','.join(ledger_field(p, ',') for p in entry['paths'])} {reason}".rstrip()
         )
     path = Path(root) / LEDGER
     path.parent.mkdir(parents=True, exist_ok=True)

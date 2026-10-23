@@ -980,6 +980,23 @@ class Ledger(unittest.TestCase):
         self.assertIn("unused_number_0", ledger)
         self.assertNotIn("b_unused", ledger)
 
+    def test_files_that_differ_only_in_whitespace_keep_two_keys_and_two_verdicts(self):
+        spaced, joined = "crates/a/src/a b.rs", "crates/a/src/a_b.rs"
+        with tree({spaced: "pub fn same() {}\n", joined: "pub fn same() {}\n"}) as root:
+            self.assertTrue((root / spaced).exists() and (root / joined).exists())
+            manifest, _ = self.prepared(root)
+            by_path = {c["path"]: (i, c) for i, c in manifest["candidates"].items()}
+            self.assertEqual(len({c["key"] for _, c in by_path.values()}), 2)
+            verdicts = {by_path[spaced][0]: {"verdict": "keep"}, by_path[joined][0]: {"verdict": "cleanup"}}
+            m.record(manifest, verdicts)
+            m.record({"root": str(root), "candidates": {}}, {})
+            entries = m.read_ledger(root)
+            self.assertEqual(
+                sorted((e["verdict"], e["paths"]) for e in entries.values()),
+                [("cleanup", [joined]), ("keep", [spaced])],
+            )
+            self.assertEqual(m.scan(root, ("unreferenced",))["unreferenced"]["candidates"], [])
+
     def test_a_line_that_is_not_a_verdict_is_reported_and_ignored(self):
         with tree(self.files) as root:
             (root / "docs").mkdir()
