@@ -884,9 +884,11 @@ enum Acts {
     /// point back or starts, switches to or leaves a record changes what these act on.
     NotesAndName,
     /// The output style `/style` picks and the person's own style files its name is looked up among.
-    /// A turn reads the style when it is built, and a line that replaces the session starts the next
-    /// one from the style settings name. Nothing a command line does changes either: a program cannot
-    /// write `~/.bravebot`, and a name is looked up in no file of the working directory.
+    /// A turn reads the style when it is built, and a line that leaves for another session starts
+    /// the next one from the style settings name. A file is read only where its path does not land
+    /// in the workspace's reach, so a line that moves or ends the reach changes which names are
+    /// styles. Nothing a command line does changes either: a program cannot write `~/.bravebot`,
+    /// and the project's names are the list held when the line was typed, not its files.
     Style,
     /// The answer kept about the working directory and about the root of the git worktree around it,
     /// which `/forget-trust` withdraws (TRUST-24). A line that starts a session here reads the
@@ -995,24 +997,78 @@ const LEAVES_NOTES_AND_NAME_ALONE: &[&str] = &[
 ];
 
 /// The commands that neither start a turn, start, switch to or leave a session, move the working
-/// directory nor write what `/style` and `/forget-trust` act on: the pick, the style files and the
-/// file the kept answer is in. A command not named here holds both back.
+/// directory nor reopen the directories the session is made of, and that write neither the pick
+/// `/style` makes nor the style files its name is looked up among. A command not named here holds
+/// `/style` back.
 ///
-/// Each command named was read against what the two act on. Only a turn reads the style
+/// Each command named was read against what `/style` acts on. Only a turn reads the style
 /// (`task.style`), so `/compact`, `/btw` and `/recap`, which send a request and run no program,
-/// leave it alone, and none of the three touches the file the answer is kept in. `/memory` lists what
-/// it finds. `/rename`, `/note`, `/issue` and `/pr` write the record, `/model`, `/effort`, `/advisor`
-/// and `/sandbox` the session's own choices. `/style` writes the pick and `/forget-trust` the file
-/// the answer is kept in, and the other leaves each alone: a withdrawn answer leaves this session's
-/// own trust map as it is, and a pick is looked up in no file the answer is kept in. `/clear`, `/branch`, `/undo`, `/rewind`, `/hunks`, `/add-dir`, `/cd`, `/reach` and
-/// `/mcp` are not named: each replaces or reopens part of what the session's directories are made
-/// of, and none has been read against either. A command added to the table is placed against this
-/// list by `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
-const LEAVES_THE_STYLE_AND_THE_KEPT_ANSWER_ALONE: &[&str] = &[
+/// leave it alone. A name is taken from the styles the build ships, from the files under
+/// `~/.bravebot/styles` and from the project's names the session held when the line was typed, and
+/// a file under `~/.bravebot` is read only where its path does not land in the workspace's reach:
+/// the root, the directories added, the checkouts the session kept and the paths programs were let
+/// reach. The project's names are not read again where the line is carried out, and the turn that
+/// begins next reads the pick under its own trust map, so a command that changes the map or the
+/// files under the root leaves the pick as it is. `/memory` lists what it finds. `/rename`,
+/// `/note`, `/issue` and `/pr` write the record, `/model`, `/effort`, `/advisor`, `/forget-trust`
+/// and `/sandbox` the session's own choices and the file the kept answer is in. `/undo`, `/rewind`
+/// and `/hunks` put back files the workspace resolves and restore the trust map and the record.
+/// They move no reach and touch neither the pick nor the held names, and a file under `~/.bravebot`
+/// that the reach covers is refused by the lookup whatever its bytes. `/mcp` starts or ends a
+/// server the session holds, confined so that it cannot write under `~/.bravebot`, and is handed
+/// the root rather than the workspace. `/after` arms a prompt that goes out when its delay is up
+/// and sends nothing now: a style typed after it is the one the turn it sends is built with,
+/// whichever of the two is carried out first. `/clear` and `/branch` are not named: the first
+/// closes the directories added and the checkouts kept, and each ends the reach programs were let,
+/// so a file that landed in the reach before it is read after it. `/cd`, `/add-dir` and `/reach`
+/// move the reach itself. A command added to the table is placed against this list by
+/// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
+const LEAVES_THE_STYLE_ALONE: &[&str] = &[
     COMPACT_COMMAND,
     BTW_COMMAND,
     RECAP_COMMAND,
     MEMORY_COMMAND,
+    UNDO_COMMAND,
+    REWIND_COMMAND,
+    HUNKS_COMMAND,
+    MCP_COMMAND,
+    AFTER_COMMAND,
+    RENAME_COMMAND,
+    NOTE_COMMAND,
+    STYLE_COMMAND,
+    FORGET_TRUST_COMMAND,
+    ISSUE_COMMAND,
+    PR_COMMAND,
+    SANDBOX_COMMAND,
+    MODEL_COMMAND,
+    EFFORT_COMMAND,
+    ADVISOR_COMMAND,
+];
+
+/// The commands that neither start a turn, start, switch to or leave a session, move the working
+/// directory nor write the file the kept answer is in. A command not named here holds
+/// `/forget-trust` back, as does a command line.
+///
+/// Each command named was read against what `/forget-trust` acts on. `/compact`, `/btw` and
+/// `/recap` send a request and run no program, and none of the three touches the file the answer is
+/// kept in. `/memory` lists what it finds. `/rename`, `/note`, `/issue` and `/pr` write the record,
+/// `/model`, `/effort`, `/advisor` and `/sandbox` the session's own choices. `/style` writes the
+/// pick and `/forget-trust` the file the answer is kept in, and the other leaves each alone: a
+/// withdrawn answer leaves this session's own trust map as it is, and a pick is looked up in no
+/// file the answer is kept in. `/after` arms a prompt that goes out later, after the lines waiting
+/// have been carried out, so what it starts runs under the answer as `/forget-trust` left it either
+/// way. `/clear`, `/branch`, `/undo`, `/rewind`, `/hunks`, `/add-dir`, `/cd`, `/reach` and `/mcp`
+/// are not named: `/clear` starts a session here and reads the answer, and each of the others
+/// replaces or reopens part of what the session's directories are made of or puts files back, which
+/// has not been shown unable to make or remove the `.git` entry that moves the root around the
+/// directory. A command added to the table is placed against this list by
+/// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
+const LEAVES_THE_KEPT_ANSWER_ALONE: &[&str] = &[
+    COMPACT_COMMAND,
+    BTW_COMMAND,
+    RECAP_COMMAND,
+    MEMORY_COMMAND,
+    AFTER_COMMAND,
     RENAME_COMMAND,
     NOTE_COMMAND,
     STYLE_COMMAND,
@@ -1042,14 +1098,11 @@ fn could_change(goes: Bound, waiting: Option<&str>, acts: Acts) -> bool {
     match acts {
         Acts::Other => waiting != Some(SANDBOX_COMMAND),
         Acts::NotesAndName => held_unless_listed(goes, waiting, LEAVES_NOTES_AND_NAME_ALONE),
-        Acts::Style => {
-            held_unless_listed(goes, waiting, LEAVES_THE_STYLE_AND_THE_KEPT_ANSWER_ALONE)
-        }
+        Acts::Style => held_unless_listed(goes, waiting, LEAVES_THE_STYLE_ALONE),
         // A command line is held back too: a program it runs can make the `.git` entry that moves
         // the root around the directory.
         Acts::KeptAnswer => {
-            goes == Bound::Run
-                || held_unless_listed(goes, waiting, LEAVES_THE_STYLE_AND_THE_KEPT_ANSWER_ALONE)
+            goes == Bound::Run || held_unless_listed(goes, waiting, LEAVES_THE_KEPT_ANSWER_ALONE)
         }
         Acts::Link => waiting.is_some_and(|word| REPLACES_THE_RECORD.contains(&word)),
         Acts::Choice => held_unless_listed(goes, waiting, LEAVES_THE_CHOICE_ALONE),
@@ -1147,49 +1200,50 @@ mod tests {
         // whether it sends a request, reads or changes the model, the level or the advisor, or
         // leaves for another session, whether it could change the notes or the name the record
         // holds: begin a turn, change the turn count, put a rewind point back, or move or replace
-        // the record, and whether it could change the style `/style` picks or the answer
+        // the record, whether it could change the style `/style` picks: begin a turn, replace the
+        // session, or move or end the reach, and whether it could change the answer
         // `/forget-trust` withdraws: begin a turn, replace the session, or touch the directories
-        // it is made of, without being read against either.
-        const PLACED: &[(&str, bool, bool, bool, bool)] = &[
-            (ADD_DIR_COMMAND, false, false, false, true),
-            (CD_COMMAND, false, false, true, true),
-            (COMPACT_COMMAND, false, true, true, false),
-            (BTW_COMMAND, false, true, true, false),
-            (RECAP_COMMAND, false, true, true, false),
-            (CLEAR_COMMAND, true, false, true, true),
-            (HANDOFF_COMMAND, true, true, true, true),
-            (BRANCH_COMMAND, true, false, true, true),
-            (RESUME_COMMAND, true, true, true, true),
-            (BACKGROUND_COMMAND, true, true, true, true),
-            (REACH_COMMAND, false, false, false, true),
-            (CHECKOUTS_COMMAND, false, true, true, true),
-            (PLAN_COMMAND, false, true, true, true),
-            (MANIFEST_COMMAND, false, true, true, true),
-            (AGENT_COMMAND, false, true, true, true),
-            (MEMORY_COMMAND, false, false, false, false),
-            (INIT_COMMAND, false, true, true, true),
-            (REVIEW_COMMAND, false, true, true, true),
-            (COMMIT_MESSAGE_COMMAND, false, true, true, true),
-            (HELP_COMMAND, false, true, true, true),
-            (UNDO_COMMAND, false, false, true, true),
-            (REWIND_COMMAND, false, false, true, true),
-            (HUNKS_COMMAND, false, false, true, true),
-            (EXIT_COMMAND, true, true, true, true),
-            (MCP_COMMAND, false, false, false, true),
-            (LOOP_COMMAND, false, true, true, true),
-            (AFTER_COMMAND, false, false, true, true),
-            (GOAL_COMMAND, false, true, true, true),
-            (MODEL_COMMAND, false, true, false, false),
-            (EFFORT_COMMAND, false, true, false, false),
-            (ADVISOR_COMMAND, false, true, false, false),
-            (RENAME_COMMAND, false, false, false, false),
-            (NOTE_COMMAND, false, false, false, false),
-            (STYLE_COMMAND, false, false, false, false),
-            (MODE_COMMAND, false, true, true, true),
-            (FORGET_TRUST_COMMAND, false, false, false, false),
-            (ISSUE_COMMAND, false, false, false, false),
-            (PR_COMMAND, false, false, false, false),
-            (SANDBOX_COMMAND, false, false, false, false),
+        // it is made of or put files back, without being read against it.
+        const PLACED: &[(&str, bool, bool, bool, bool, bool)] = &[
+            (ADD_DIR_COMMAND, false, false, false, true, true),
+            (CD_COMMAND, false, false, true, true, true),
+            (COMPACT_COMMAND, false, true, true, false, false),
+            (BTW_COMMAND, false, true, true, false, false),
+            (RECAP_COMMAND, false, true, true, false, false),
+            (CLEAR_COMMAND, true, false, true, true, true),
+            (HANDOFF_COMMAND, true, true, true, true, true),
+            (BRANCH_COMMAND, true, false, true, true, true),
+            (RESUME_COMMAND, true, true, true, true, true),
+            (BACKGROUND_COMMAND, true, true, true, true, true),
+            (REACH_COMMAND, false, false, false, true, true),
+            (CHECKOUTS_COMMAND, false, true, true, true, true),
+            (PLAN_COMMAND, false, true, true, true, true),
+            (MANIFEST_COMMAND, false, true, true, true, true),
+            (AGENT_COMMAND, false, true, true, true, true),
+            (MEMORY_COMMAND, false, false, false, false, false),
+            (INIT_COMMAND, false, true, true, true, true),
+            (REVIEW_COMMAND, false, true, true, true, true),
+            (COMMIT_MESSAGE_COMMAND, false, true, true, true, true),
+            (HELP_COMMAND, false, true, true, true, true),
+            (UNDO_COMMAND, false, false, true, false, true),
+            (REWIND_COMMAND, false, false, true, false, true),
+            (HUNKS_COMMAND, false, false, true, false, true),
+            (EXIT_COMMAND, true, true, true, true, true),
+            (MCP_COMMAND, false, false, false, false, true),
+            (LOOP_COMMAND, false, true, true, true, true),
+            (AFTER_COMMAND, false, false, true, false, false),
+            (GOAL_COMMAND, false, true, true, true, true),
+            (MODEL_COMMAND, false, true, false, false, false),
+            (EFFORT_COMMAND, false, true, false, false, false),
+            (ADVISOR_COMMAND, false, true, false, false, false),
+            (RENAME_COMMAND, false, false, false, false, false),
+            (NOTE_COMMAND, false, false, false, false, false),
+            (STYLE_COMMAND, false, false, false, false, false),
+            (MODE_COMMAND, false, true, true, true, true),
+            (FORGET_TRUST_COMMAND, false, false, false, false, false),
+            (ISSUE_COMMAND, false, false, false, false, false),
+            (PR_COMMAND, false, false, false, false, false),
+            (SANDBOX_COMMAND, false, false, false, false, false),
         ];
         for command in commands() {
             // A command that is carried out as it is typed waits only behind a line of its own.
@@ -1207,7 +1261,8 @@ mod tests {
             replaces_the_record,
             builds_a_request,
             changes_the_record,
-            holds_style_and_answer,
+            could_change_the_style,
+            could_change_the_answer,
         ) in PLACED
         {
             assert!(
@@ -1231,12 +1286,12 @@ mod tests {
             );
             assert_eq!(
                 could_change(Bound::CarriedOut, Some(name), Acts::Style),
-                holds_style_and_answer,
+                could_change_the_style,
                 "{name} and the style"
             );
             assert_eq!(
                 could_change(Bound::CarriedOut, Some(name), Acts::KeptAnswer),
-                holds_style_and_answer,
+                could_change_the_answer,
                 "{name} and the kept answer"
             );
             // Where the two differ: a command line, which never changes the style and always could
