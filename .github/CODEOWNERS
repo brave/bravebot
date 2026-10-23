@@ -26,6 +26,7 @@
 /.github/CODEOWNERS @bbondy
 /Dockerfile.cross @bbondy
 /install.sh @bbondy
+/install.ps1 @bbondy
 /npm/scripts/ @bbondy
 /ui/package.json @bbondy
 /ui/pnpm-lock.yaml @bbondy

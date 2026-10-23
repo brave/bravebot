@@ -19,6 +19,7 @@ use crate::running::{Mcp, Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
 use crate::{store, wire};
 use bravebot_agent::confirm::Decision;
+use bravebot_agent::report::Reporter;
 use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
 use bravebot_agent::workspace::WorkspaceError;
@@ -30,11 +31,12 @@ use bravebot_net::Egress;
 use bravebot_sandbox::SandboxMode;
 use bravebot_session::sessions::{Handle, Record, Standing};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 /// A session this process has open.
 struct Open {
@@ -130,6 +132,13 @@ pub struct Bridge {
     emitter: Emitter,
     /// The worker threads each open session has started, so a close can say when they have ended.
     workers: HashMap<String, Arc<crate::workers::Workers>>,
+    /// The sessions that have accepted a turn, and so have begun (HOOK-10). Kept here, on the thread
+    /// that accepts a turn and closes a session, so a close knows whether there is an end to fire
+    /// without waiting for a turn that holds the session's state.
+    begun: HashSet<String>,
+    /// The workers of the sessions closed and not yet seen to have ended, so that a process ending
+    /// soon after a close waits for the hook that ends the session as it waits for an open one's.
+    closing: Vec<Arc<crate::workers::Workers>>,
     /// Who can answer each session's questions. A session with no entry is answered by anyone,
     /// as every client of the stdio transports does.
     answerers: HashMap<String, Answerers>,
@@ -146,6 +155,8 @@ impl Bridge {
             settings: None,
             emitter: Emitter::new(emit),
             workers: HashMap::new(),
+            begun: HashSet::new(),
+            closing: Vec::new(),
             answerers: HashMap::new(),
             refuse_until_set: false,
         }
@@ -390,7 +401,7 @@ impl Bridge {
         // the same as nothing trusted, and reading an absent map as an empty one would
         // answer on behalf of somebody who was never asked.
         let opening = Opening::of(&directory, record.trust_map(&directory));
-        let reported = opening.json();
+        let reported = opening.json(&directory);
         // A kept answer settles a record that kept no map, and the session then opens known, as a
         // fork of it does: `known: false` is the one sign that the question was put.
         let settled = opening
@@ -472,7 +483,15 @@ impl Bridge {
             handle,
             json!({
                 "directory": open.project.display().to_string(),
+                // Spelled as a path in a prompt is (PROMPT-1), so a directory or a record that
+                // ends in whitespace or holds a byte that is not text is not drawn as another.
+                // A client draws these and never `directory` or `keeping`.
+                "shownDirectory": bravebot_agent::confirm::shown_path(&open.project),
                 "keeping": open.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+                "shownKeeping": open
+                    .keeping
+                    .as_ref()
+                    .map(|(store, _)| bravebot_agent::confirm::shown_path(store.path())),
                 // What a yes grants beyond the files (RUN-5), in the words every front end shows.
                 // A window that shows it answers with `confinedLines`, and a client that does not
                 // is not taken to have said it.
@@ -603,7 +622,7 @@ impl Bridge {
         // it. Unanswered, the map is empty until they answer; nothing runs before then, so it is
         // never the map a turn uses.
         let opening = Opening::of(&directory, None);
-        let reported = opening.json();
+        let reported = opening.json(&directory);
         let handle = self.mint(Open::opened(
             directory.clone(),
             State::fresh(opening.trust),
@@ -738,7 +757,7 @@ impl Bridge {
         // question (a record written before maps were kept) hands the question down, which a
         // kept answer about the directory settles as it would for the parent.
         let opening = Opening::of(&project, answered_trust.then_some(trust));
-        let reported = opening.json();
+        let reported = opening.json(&project);
         let known = opening.answered;
         let rules = rules_json(&opening.trust);
 
@@ -994,6 +1013,7 @@ impl Bridge {
 
         self.emitter.detach_view(&handle);
         self.answerers.remove(&handle);
+        let begun = self.begun.remove(&handle);
 
         // Stop the work, then refuse whatever it was waiting on. Both, and in that order:
         // cancelling alone would leave a write blocked on an answer that is never coming,
@@ -1002,7 +1022,27 @@ impl Bridge {
             running.cancel.cancel();
             running.refuse_pending();
         }
-        Ok(self.workers.remove(&handle).unwrap_or_default())
+        let workers = self.workers.remove(&handle).unwrap_or_default();
+        // The end of a session that began is one of the workers this returns, so a host that waits for
+        // them waits for it, and it follows the turn that was running (HOOK-10).
+        if begun {
+            let state = Arc::clone(&open.state);
+            workers.spawn_after_the_rest(move || end_the_session(&state));
+        }
+        self.closing.retain(|closing| !closing.is_idle());
+        self.closing.push(Arc::clone(&workers));
+        Ok(workers)
+    }
+
+    /// Close every open session and wait up to `limit` for the threads working for them, so that a
+    /// turn still writing its record and a `session-ended` hook are not cut off by the process
+    /// ending. Returns whether they had all ended.
+    ///
+    /// For a client that has gone, so nothing is said to it while this closes what it held.
+    pub fn shut_down(&mut self, limit: Duration) -> bool {
+        self.emitter.go_quiet();
+        self.stop_all();
+        crate::workers::Workers::all_end_within(&self.closing, limit)
     }
 
     /// Choose what the session's next turn asks before it acts.
@@ -1226,6 +1266,7 @@ impl Bridge {
             open.model = model;
             open.definition = addressing.clone();
         }
+        self.begun.insert(handle.clone());
         self.workers_of(&handle).spawn(move || {
             work(Work {
                 model: worker_model,
@@ -1466,6 +1507,7 @@ impl Bridge {
         state.conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
         state.turns = snapshot.turns;
         state.tokens = snapshot.tokens;
+        state.split = snapshot.split;
         state.spend = snapshot.spend;
         state.timing = snapshot.timing;
         // The snapshot's approvals that are still held. The terminal takes the snapshot's whole,
@@ -2372,6 +2414,26 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
+    let mut reporter = BridgeReporter::new(emitter.clone(), &session);
+
+    // The session begins with its first turn (HOOK-10), here on the worker so the request that
+    // sent the turn is answered at once, and before anything else the turn does, so a hook that
+    // starts something the turn uses has started it. Said as a running hook while it holds the
+    // turn (HOOK-9), and what goes wrong is carried by the notices of this turn's end.
+    let session_began = state
+        .moments
+        .get_or_insert_with(|| {
+            bravebot_agent::hooks::SessionMoments::read(
+                bravebot_agent::home::directory().as_deref(),
+                &project,
+            )
+        })
+        .started_watched(&mut |edge| match edge {
+            bravebot_agent::hooks::Watch::Starting { moment, program } => {
+                reporter.hook_started(moment, program.to_string())
+            }
+            bravebot_agent::hooks::Watch::Over => reporter.hook_finished(),
+        });
     let mut confirmer = BridgeConfirmer::new(
         emitter.clone(),
         &session,
@@ -2381,6 +2443,7 @@ fn work(work: Work) {
         cancel.clone(),
     )
     .answerable_by(answerers)
+    .remembering(Arc::clone(&state.question_answers))
     .taking_interjections(interjections);
 
     // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
@@ -2455,7 +2518,6 @@ fn work(work: Work) {
     } else {
         bravebot_agent::watch::Arming::Allowed { free }
     });
-    let mut reporter = BridgeReporter::new(emitter.clone(), &session);
     let mut sink = BridgeSink::new(emitter.clone(), &session, turn);
     let egress = Egress::new();
 
@@ -2478,7 +2540,7 @@ fn work(work: Work) {
     // which no mode a window can choose answers: only bypassing does (SERVERS-13), and a window
     // cannot reach it. The screening value is the task's, so the confirmer and the tools that fill
     // in a verdict read the same answer.
-    let mut confirmer = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
+    let mut confining = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
     let began_at = std::time::Instant::now();
     let completed = agent_turn::resume(
@@ -2487,7 +2549,7 @@ fn work(work: Work) {
         &workspace,
         &task,
         &mut state.conversation,
-        &mut confirmer,
+        &mut confining,
         &mut reporter,
         &mut sink,
         trust,
@@ -2555,6 +2617,10 @@ fn work(work: Work) {
                 }
             }
             state.tokens += outcome.tokens;
+            state.split.add(bravebot_session::sessions::Split::of(
+                outcome.tokens,
+                outcome.output_tokens,
+            ));
             // Added to rather than set: a turn that compacted part way through has already put
             // that cost here under the same number, and the breakdown has to add up to the total.
             *state.spend.entry(turn).or_insert(0) += outcome.tokens;
@@ -2568,6 +2634,14 @@ fn work(work: Work) {
             let archived = save(&project, &mut state, turn, sink.trail());
 
             let rules = rules_json(&state.answers.trust);
+            // What the turn said, then each question it did not put because the person had
+            // already answered it.
+            let notices = [
+                session_began.as_slice(),
+                outcome.notices.as_slice(),
+                confirmer.reused(),
+            ]
+            .concat();
 
             Event::new(
                 "turn.done",
@@ -2583,7 +2657,7 @@ fn work(work: Work) {
                     "tokens": outcome.tokens,
                     "outputTokens": outcome.output_tokens,
                     "contextTokens": outcome.context_tokens,
-                    "notices": outcome.notices,
+                    "notices": notices,
                     "trust": { "rules": rules },
                     // The session's durable name, which is real from here and was not before:
                     // `save` above is what wrote the record, and until a record exists there is
@@ -2613,6 +2687,7 @@ fn work(work: Work) {
             let charged = &mut *state;
             bravebot_session::sessions::charge_failed_turn(
                 &mut charged.tokens,
+                &mut charged.split,
                 &mut charged.spend,
                 &mut charged.timing,
                 turn,
@@ -2621,6 +2696,12 @@ fn work(work: Work) {
             );
             let _ = save(&project, &mut state, turn, sink.trail());
 
+            let notices = [
+                session_began.as_slice(),
+                reporter.notices(),
+                confirmer.reused(),
+            ]
+            .concat();
             let chosen = task.model.as_deref().unwrap_or(&config.default_model);
             let mut data = failure_fields(&error, &config, chosen);
             merge(
@@ -2631,7 +2712,7 @@ fn work(work: Work) {
                     // What the turn said about itself before it failed, as `turn.done` carries for a
                     // turn that answered. There is no outcome here to take them from, and a hook
                     // that could not be started is the person's own to hear about (HOOK-7).
-                    "notices": reporter.notices(),
+                    "notices": notices,
                     // As on `turn.done`. A turn that failed still said what it was asked, so the
                     // prompt is in the conversation and is still a place a fork can be cut at.
                     "prompt": prompt_ordinal(&state.conversation, &prompt),
@@ -2648,6 +2729,22 @@ fn work(work: Work) {
     }
     drop(state);
     emitter.finish(event, &finished);
+}
+
+/// Fire `session-ended` for a session that has been closed, once the last of its work has ended
+/// (HOOK-10).
+///
+/// What goes wrong is said to nobody: the session is closed, and the window it was drawn in has no
+/// turn to carry a sentence.
+fn end_the_session(state: &Mutex<State>) {
+    // A turn that panicked poisoned the lock, and what an end needs is not what it left half done:
+    // a session that began still ends.
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(moments) = state.moments.as_mut() {
+        let _ = moments.ended();
+    }
 }
 
 /// Start the MCP servers `requested` names, putting the questions about them to the window.
@@ -2735,7 +2832,9 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         _ => diagnosis.and_then(|d| d.attempts),
     };
     let kind = match error {
-        TurnError::Cancelled { .. } => "cancelled",
+        // Only a one-shot run gives a turn a limit of its own (TURN-14), so the bridge never sees
+        // this one, and a stop is what it would be: the ending says `Stopped`.
+        TurnError::Cancelled { .. } | TurnError::LimitReached(_) => "cancelled",
         TurnError::Precommit(_) => "precommit",
         TurnError::Workspace(_) => "workspace",
         TurnError::Chat(_) => "chat",
@@ -2764,6 +2863,7 @@ fn open_rewind_point(state: &mut State, workspace: &Workspace, prompt: &str) {
         conversation: state.conversation.snapshot(),
         turns: state.turns,
         tokens: state.tokens,
+        split: state.split,
         spend: state.spend.clone(),
         timing: state.timing.clone(),
         cached: None,
@@ -2857,6 +2957,7 @@ pub(crate) fn save(
             conversation: &snapshot,
             turns: state.turns,
             tokens: state.tokens,
+            split: state.split,
             spend: &state.spend,
             timing: &state.timing,
             model: state.model.as_deref(),
@@ -2993,10 +3094,18 @@ impl Opening {
     }
 
     /// What the response opening the session adds about it, for the window to say in turn.
-    fn json(&self) -> Value {
+    ///
+    /// `project` and the record a yes is kept in come with the spelling the startup question
+    /// carries (PROMPT-1), so the window draws those and never the paths as held.
+    fn json(&self, project: &Path) -> Value {
         json!({
             "remembered": self.remembered.as_ref().map(|(kept, path)| kept_json(kept, path)),
+            "shownDirectory": bravebot_agent::confirm::shown_path(project),
             "keeping": self.keeping.as_ref().map(|(store, _)| store.path().display().to_string()),
+            "shownKeeping": self
+                .keeping
+                .as_ref()
+                .map(|(store, _)| bravebot_agent::confirm::shown_path(store.path())),
             "confinedLines": (!self.answered).then(trusted::confined_lines_notice),
         })
     }
@@ -3033,12 +3142,15 @@ fn honoured(project: &Path) -> Option<trusted::Honoured> {
 }
 
 /// A kept answer as a window is told about it: when it was given, the file it is kept in, and the
-/// directory it is about, which is the session's own or the root of the worktree around it.
+/// directory it is about, which is the session's own or the root of the worktree around it. The
+/// file and the directory also come spelled for a person (PROMPT-1), which is what a window draws.
 fn kept_json(kept: &trusted::Kept, path: &Path) -> Value {
     json!({
         "at": kept.at,
         "path": path.display().to_string(),
+        "shownPath": bravebot_agent::confirm::shown_path(path),
         "root": kept.root.display().to_string(),
+        "shownRoot": bravebot_agent::confirm::shown_path(&kept.root),
     })
 }
 
@@ -3817,6 +3929,10 @@ mod completion_tests;
 #[cfg(test)]
 #[path = "closing_tests.rs"]
 mod closing_tests;
+
+#[cfg(all(test, unix))]
+#[path = "../tests/ending/worker.rs"]
+mod ending_tests;
 
 #[cfg(test)]
 #[path = "targets_tests.rs"]

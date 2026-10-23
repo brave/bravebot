@@ -30,7 +30,7 @@ use bravebot_agent::confirm::{
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{PermissionMode, Workspace};
 use bravebot_config::Config;
-use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::ask::{Answer, AnswerMemo, Asking};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::RecordingSink;
 use bravebot_core::permissions::Permissions;
@@ -293,6 +293,15 @@ fn run(
     let resumed = hosted_as
         .as_deref()
         .and_then(|id| bravebot_session::sessions::load(workspace.root(), id));
+    // A session started again, and the index of its workspace, are what the sweep of what has
+    // outlived the retention period must leave whatever their age (STATE-4).
+    bravebot_session::retention::at_startup(
+        settings.retention(),
+        bravebot_session::retention::InUse {
+            session: hosted_as.as_deref(),
+            workspace: Some(workspace.root()),
+        },
+    );
     let Some(trust) = resumed
         .as_ref()
         .and_then(|record| record.trust_map(workspace.root()))
@@ -461,6 +470,10 @@ fn run(
         asking.say(&t!(cli_notice, notice = t!(session_permissions_skipped)));
     }
 
+    // A background session's process has no interface a person opened and leaves, so it fires
+    // neither end of a session (HOOK-10).
+    let mut moments = (!hosted)
+        .then(|| bravebot_agent::hooks::SessionMoments::read(home.as_deref(), workspace.root()));
     let mut running = Running {
         config: &config,
         egress: bravebot_net::Egress::new(),
@@ -517,12 +530,23 @@ fn run(
         ),
     };
 
+    // Every question that precedes the first prompt is settled, so the session has begun and the
+    // first prompt is not yet read (HOOK-10). Run before the stderr lock is taken: the lock is for
+    // writing the sentences, not for the length of a hook.
+    if let Some(moments) = &mut moments {
+        let said = moments.started();
+        crate::finish::say_notices(&mut std::io::stderr().lock(), &said);
+    }
     // The streams themselves rather than a lock on each. A lock held for the length of the session
     // is a lock a delegate's thread waits on for ever: a turn lends its reporter to the delegates
     // it spawns, they write progress from threads of their own, and the first of those writes would
     // block on a lock this thread does not give back until the session ends. Each write takes the
     // lock for its own line, which is what the one-shot run does with the same two streams.
     lines(&mut asking, &mut reply, &mut running, &mut beside);
+    if let Some(moments) = &mut moments {
+        let said = moments.ended();
+        crate::finish::say_notices(&mut std::io::stderr().lock(), &said);
+    }
     ExitCode::SUCCESS
 }
 
@@ -564,7 +588,7 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
                 reply: &said.reply,
                 notices: &said.notices,
                 attempt: None,
-                trail: None,
+                model: None,
                 clean: said.clean,
                 ending: crate::finish::ending_of_a_turn(
                     said.clean,
@@ -707,6 +731,7 @@ struct Kept {
     handle: bravebot_session::sessions::Handle,
     turns: usize,
     tokens: u64,
+    split: bravebot_session::sessions::Split,
     spend: std::collections::BTreeMap<usize, u64>,
     timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
     /// The model that last answered, kept across a turn that failed before any server did.
@@ -726,6 +751,7 @@ impl Kept {
                 handle: Handle::resuming(root, record, Front::Terminal, bravebot_stamp::BUILD),
                 turns: record.turns,
                 tokens: record.tokens,
+                split: record.split,
                 spend: record.spend.clone(),
                 timing: record.timing.clone(),
                 model: record.model.clone(),
@@ -739,6 +765,7 @@ impl Kept {
                 ),
                 turns: 0,
                 tokens: 0,
+                split: Default::default(),
                 spend: std::collections::BTreeMap::new(),
                 timing: std::collections::BTreeMap::new(),
                 model: None,
@@ -760,6 +787,10 @@ impl Kept {
     ) {
         self.turns += 1;
         self.tokens += outcome.tokens;
+        self.split.add(bravebot_session::sessions::Split::of(
+            outcome.tokens,
+            outcome.output_tokens,
+        ));
         *self.spend.entry(self.turns).or_insert(0) += outcome.tokens;
         self.timing
             .entry(self.turns)
@@ -777,6 +808,7 @@ impl Kept {
         let turn = self.turns + 1;
         let charged = bravebot_session::sessions::charge_failed_turn(
             &mut self.tokens,
+            &mut self.split,
             &mut self.spend,
             &mut self.timing,
             turn,
@@ -818,6 +850,7 @@ impl Kept {
                 history: None,
                 turns: self.turns,
                 tokens: self.tokens,
+                split: self.split,
                 spend: &self.spend,
                 timing: &self.timing,
                 model: self.model.as_deref(),
@@ -1124,7 +1157,7 @@ pub struct Prompting<R: BufRead, W: Write> {
     input: R,
     output: W,
     /// What the person answered, by the question's key, for the rest of the session (ASK-8).
-    answers: Vec<(String, Answer)>,
+    answers: AnswerMemo,
     /// Told when a line is about to be waited for and when it has come, by a session whose process
     /// a terminal does not own.
     watch: Option<Box<dyn Watcher>>,
@@ -1191,7 +1224,7 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         Self {
             input,
             output,
-            answers: Vec::new(),
+            answers: AnswerMemo::default(),
             watch: None,
             kind: None,
         }
@@ -1220,22 +1253,6 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         }
         for line in lines {
             self.say(line);
-        }
-    }
-
-    /// What the person answered the last time this exact question was put to them, if it was.
-    fn recall_answer(&self, key: &str) -> Option<Answer> {
-        self.answers
-            .iter()
-            .find(|(asked, _)| asked == key)
-            .map(|(_, answer)| answer.clone())
-    }
-
-    /// Remember an answer, replacing any earlier one for the same question.
-    fn remember_answer(&mut self, key: String, answer: Answer) {
-        match self.answers.iter_mut().find(|(asked, _)| *asked == key) {
-            Some(slot) => slot.1 = answer,
-            None => self.answers.push((key, answer)),
         }
     }
 
@@ -1375,7 +1392,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         .iter()
         .map(|step| bravebot_approval::RunStep {
             written: step.as_written(),
-            binary: step.binary(),
+            binary: bravebot_agent::confirm::shown_binary(step),
         })
         .collect();
     let writes: Vec<String> = request
@@ -1472,6 +1489,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             &request.host,
             &request.url,
             request.ambient_authority().is_some(),
+            request.redirected_from.as_deref(),
         );
         self.about(Held::Fetch);
         self.ask(&lines, t!(fetch_title))
@@ -1635,29 +1653,23 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         // A planner that loops back over the same decision does not make the person restate it
         // (ASK-8). Each settled question is said to have been answered already, so an answer
         // reused silently is not mistaken for a question that was never put.
-        let known: Vec<Option<Answer>> = asking
-            .prompts
-            .iter()
-            .map(|prompt| self.recall_answer(&prompt.key))
-            .collect();
-        for (prompt, earlier) in asking.prompts.iter().zip(&known) {
-            if earlier.is_some() {
-                self.say(&t!(
-                    session_answered_already,
-                    question = shown(&prompt.question)
-                ));
-            }
+        let settled = self.answers.read(asking);
+        for prompt in settled.reused() {
+            self.say(&t!(
+                session_answered_already,
+                question = shown(&prompt.question)
+            ));
         }
 
+        let outstanding = &settled.outstanding().prompts;
         let mut fresh = Vec::new();
-        for prompt in asking
-            .prompts
-            .iter()
-            .zip(&known)
-            .filter(|(_, earlier)| earlier.is_none())
-            .map(|(prompt, _)| prompt)
-        {
-            let mut lines = vec![shown(&prompt.header), shown(&prompt.question)];
+        for (at, prompt) in outstanding.iter().enumerate() {
+            // The position among the questions put, as the picker's title says it (ASK-6).
+            let mut lines: Vec<String> = bravebot_i18n::ask::place(at, outstanding.len())
+                .into_iter()
+                .collect();
+            lines.push(shown(&prompt.header));
+            lines.push(shown(&prompt.question));
             for row in &prompt.rows {
                 lines.push(format!("  {}", shown(&row.label)));
                 if let Some(detail) = &row.detail {
@@ -1675,11 +1687,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             });
         }
 
-        let answers = bravebot_tui::ask::in_order(known, fresh);
-        for (prompt, answer) in asking.prompts.iter().zip(&answers) {
-            self.remember_answer(prompt.key.clone(), answer.clone());
-        }
-        answers
+        settled.finish(&mut self.answers, fresh)
     }
 
     /// Nothing. The only line this reads is a prompt it asked for or an answer to a question it
@@ -1720,6 +1728,7 @@ mod tests {
         let mut kept = Kept::opening(&root, "id", None, None);
         let spent = bravebot_agent::Spent {
             tokens: 107,
+            output_tokens: 40,
             timing: Timing {
                 wall_ms: 999_999,
                 inference_ms: 11,
@@ -1734,6 +1743,14 @@ mod tests {
 
         assert!(kept.charge_failure(spent, std::time::Duration::from_millis(500)));
         assert_eq!((kept.turns, kept.tokens), (1, 107));
+        assert_eq!(
+            kept.split,
+            bravebot_session::sessions::Split {
+                read: 67,
+                written: 40
+            },
+            "the failed turn's tokens were not divided as the report counted them"
+        );
         assert_eq!(kept.spend.get(&1), Some(&107));
         assert_eq!(
             kept.timing.get(&1),
@@ -2714,6 +2731,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
 
         let lines = change(&request).join("\n");
@@ -2732,11 +2750,13 @@ mod tests {
     }
 
     /// The names a question in lines has to draw as what they are, with the form a person is shown.
-    const UNSEEN_NAMES: [(&str, &str); 4] = [
+    const UNSEEN_NAMES: [(&str, &str); 6] = [
         (" ", "\"\u{2423}\""),
         ("note.md ", "\"note.md\u{2423}\""),
         ("a\u{202e}b", "\"a\\u{202e}b\""),
         ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ("/work/state /file", "\"/work/state\u{2423}/file\""),
+        ("a\u{2800}b", "\"a\\u{2800}b\""),
     ];
 
     /// PROMPT-1: the question for a write, a credential read, a path and a directory draws a name
@@ -2758,6 +2778,7 @@ mod tests {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             })
             .join("\n")
         };
@@ -2831,6 +2852,7 @@ mod tests {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             })
             .join("\n")
         };
@@ -2856,6 +2878,7 @@ mod tests {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             })
             .join("\n")
         };
@@ -2885,6 +2908,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
 
         let lines = change(&request).join("\n");
@@ -2974,6 +2998,43 @@ mod tests {
                 );
                 assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
             }
+        }
+    }
+
+    /// PROMPT-1: the plain question for a run names the directory the line runs in on its summary
+    /// row, and the file each step runs under it, spelled where the name would draw as another, so
+    /// a line in `/work ` is not read as one in `/work`.
+    #[test]
+    fn a_run_question_spells_the_directory_and_the_binary_that_would_draw_as_another() {
+        let drawn =
+            |directory: &str, binary: &str| {
+                let pipeline = bravebot_core::command::Pipeline::new(vec![
+                    bravebot_core::command::Stage::new("tee", Vec::new()),
+                ]);
+                let mut request =
+                    RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".to_string()], directory);
+                let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+                    panic!("a pipeline");
+                };
+                steps[0].resolved = binary.into();
+                steps[0].started_as = binary.into();
+                program(&request)
+            };
+        let plain = drawn("/work", "/usr/bin/tee");
+        assert_eq!(plain[0], "run 1 step in /work");
+        assert!(plain.contains(&"  /usr/bin/tee".to_string()), "{plain:?}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let in_directory = drawn(name, "/usr/bin/tee");
+            assert_eq!(in_directory[0], format!("run 1 step in {spelled}"));
+            let running = drawn("/work", name);
+            assert!(
+                running.contains(&format!("  {spelled}")),
+                "{name:?}: {running:?}"
+            );
+            assert!(
+                !running.contains(&format!("  {name}")),
+                "{name:?}: {running:?}"
+            );
         }
     }
 
@@ -3158,6 +3219,87 @@ mod tests {
         assert!(
             !later.contains("Region"),
             "the settled question was put again: {later}"
+        );
+    }
+
+    /// Questions are put one at a time with the position shown (ASK-6). The position is the line
+    /// directly above the question it belongs to, so a person reading down the screen never has
+    /// to match a count to a question.
+    #[test]
+    fn each_question_in_a_series_is_put_under_its_position() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"one\ntwo\nthree\n".to_vec())),
+            Vec::new(),
+        );
+        let answers = asking.ask_user(&series_of(&[
+            ("Colour", "Which colour?"),
+            ("Size", "Which size?"),
+            ("Shape", "Which shape?"),
+        ]));
+
+        assert_eq!(
+            answers,
+            vec![
+                Answer::Typed("one".to_string()),
+                Answer::Typed("two".to_string()),
+                Answer::Typed("three".to_string())
+            ]
+        );
+        let said = String::from_utf8(asking.output).expect("text");
+        for (position, header, question) in [
+            ("(1 of 3)", "Colour", "Which colour?"),
+            ("(2 of 3)", "Size", "Which size?"),
+            ("(3 of 3)", "Shape", "Which shape?"),
+        ] {
+            let at = said
+                .find(position)
+                .unwrap_or_else(|| panic!("{position} was not said: {said}"));
+            let under: Vec<&str> = said[at..].lines().skip(1).take(2).collect();
+            assert_eq!(
+                under,
+                [header, question],
+                "{position} is not directly above its question: {said}"
+            );
+        }
+    }
+
+    /// The count is of the questions put to the person. One that a remembered answer settled is
+    /// not put, so counting it would number the questions 1 and 3 of 3 with no 2 to be seen.
+    #[test]
+    fn the_position_counts_the_questions_put_and_not_those_remembered() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"east\nblue\nlarge\n".to_vec())),
+            Vec::new(),
+        );
+        asking.ask_user(&series_of(&[("Region", "Which region?")]));
+
+        let before = asking.output.len();
+        asking.ask_user(&series_of(&[
+            ("Colour", "Which colour?"),
+            ("Region", "Which region?"),
+            ("Size", "Which size?"),
+        ]));
+
+        let later = String::from_utf8(asking.output[before..].to_vec()).expect("text");
+        assert!(later.contains("(1 of 2)"), "{later}");
+        assert!(later.contains("(2 of 2)"), "{later}");
+        assert!(!later.contains("of 3"), "{later}");
+    }
+
+    /// A lone question has nowhere else in anything to be, so it carries no position.
+    #[test]
+    fn a_lone_question_is_put_without_a_position() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"east\n".to_vec())),
+            Vec::new(),
+        );
+        asking.ask_user(&series_of(&[("Region", "Which region?")]));
+
+        let said = String::from_utf8(asking.output).expect("text");
+        assert!(said.contains("Which region?"), "{said}");
+        assert!(
+            !said.contains(" of "),
+            "a single question counted itself: {said}"
         );
     }
 
@@ -3347,6 +3489,36 @@ mod tests {
         }
     }
 
+    /// FETCH-4: a redirect hop is asked with the host it came from. A hop shown as a fresh fetch
+    /// asks the person to approve a host they were never shown, so the redirect row has to be in
+    /// the question beside the lines a plain fetch gets.
+    #[test]
+    fn a_fetch_hop_is_asked_with_the_host_it_came_from() {
+        let request = FetchRequest {
+            url: "https://other.example/a".to_string(),
+            host: "other.example".to_string(),
+            redirected_from: Some("example.com".to_string()),
+        };
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+            Vec::new(),
+        );
+        assert_eq!(asking.confirm_fetch(&request), Decision::Approve);
+        let drawn = String::from_utf8(asking.output).expect("text");
+        for line in bravebot_approval::fetch_lines(
+            "other.example",
+            &request.url,
+            false,
+            Some("example.com"),
+        ) {
+            assert!(drawn.contains(&line), "`{line}` is missing from: {drawn}");
+        }
+        assert!(
+            drawn.contains(&t!(fetch_redirected, from = "example.com")),
+            "the redirect row is missing: {drawn}"
+        );
+    }
+
     /// BG-7: every question a session puts reaches its watcher as the kind it is, which is the
     /// word the roster stores and the list shows. A method that never said its kind would be
     /// listed as a plain question, and one that said another's would be listed as that.
@@ -3385,6 +3557,7 @@ mod tests {
                     credentials: Vec::new(),
                     may_always: false,
                     record: None,
+                    may_edit: false,
                 });
             }),
             held(Held::Write)
@@ -3447,6 +3620,7 @@ mod tests {
                 asking.confirm_fetch(&FetchRequest {
                     url: "https://example.com/a".to_string(),
                     host: "example.com".to_string(),
+                    redirected_from: None,
                 });
             }),
             held(Held::Fetch)
@@ -3544,6 +3718,7 @@ mod tests {
                         multiple: false,
                         key: "which".to_string(),
                     }],
+                    ..Default::default()
                 });
             }),
             held(Held::Question)

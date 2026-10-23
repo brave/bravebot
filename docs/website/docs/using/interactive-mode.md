@@ -21,10 +21,12 @@ growing further. It keeps growing while a turn runs.
 | Ctrl-Enter | mid-turn, stop the turn and send what is waiting as one turn |
 | Shift-Enter, Ctrl-J | start a new line without sending |
 | Ctrl-G | compose in `$VISUAL` or `$EDITOR` and take back what you saved |
-| Ctrl-V | paste what is on the clipboard, a picture included |
+| Ctrl-V | paste what is on the clipboard, a picture or a copied file included |
+| Ctrl-P | with a prompt typed, rewrite it to be more specific and leave the rewrite in the box to edit ([below](#enhancing-a-prompt)) |
 | Ctrl-S | put the line away, bring back the one you put away, or search this workspace |
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
+| Ctrl-Z | [suspend to the shell](#suspending-to-the-shell), and `fg` brings the session back. Not on Windows |
 | Up / Down | walk back through every prompt you have sent in any session, starting with a line you cleared |
 | Ctrl-N | on a prompt recalled with Up, cycle between every prompt, this project's and this session's. It stays where you put it, and a scope with nothing in it is skipped |
 | Ctrl-R | search every prompt you have sent |
@@ -43,7 +45,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Eleven of these chords can be [moved to keys of your own](#moving-a-key). Every chord named on this
+Thirteen of these chords can be [moved to keys of your own](#moving-a-key), twelve on Windows. Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Undoing an edit
@@ -57,7 +59,56 @@ editing style and recalling an earlier prompt leave nothing to undo.
 
 Some terminals report the same key as Ctrl-7, Ctrl-Shift-_, Ctrl-/ or Ctrl-Shift-/. While `undo` is on its default
 those answer too, except one that you moved another action onto. Ctrl-Z is not used, because it
-suspends the process in a terminal that has job control on.
+[suspends the session](#suspending-to-the-shell).
+
+## Suspending to the shell
+
+Ctrl-Z stops the session and gives the terminal back to the shell that started it. Run `fg` there to
+bring it back. The screen you left is as it was: the line you were writing, the caret, what is attached
+to it, and what is waiting in the queue are all still there, and the session is drawn again.
+
+It works at rest and while a turn runs, in either editing style and in shell mode. A turn stops with
+the session and carries on when you continue it. A command it started is not stopped: it keeps
+running, and what it prints waits until the session is back. A command is still held to its time limit,
+which a long stop can use up. A request to the model that was waiting for its answer may have been
+closed by the server by then, and the turn fails as any request does that the network ended.
+
+If you continue the session with `bg`, the terminal stops it again as soon as it tries to take the
+screen back, and the shell reports it as stopped for terminal output. `fg` carries it on from there.
+
+The scroller, the prompt search, a picker, the delegate view and the questions the session asks do not
+answer Ctrl-Z. A Ctrl-Z that arrives in the same read as other keys suspends nothing, and the row beneath
+says so, for the reason an Enter that arrives that way does not send. In a session that is not in a
+process group of its shell, such as the first process of a container, the stop has no effect.
+
+Windows has no suspend, so Ctrl-Z does nothing there and the `?` list does not name it.
+
+## Enhancing a prompt
+
+Ctrl-P with a prompt typed in the box asks the model you are using to make it more specific, and puts
+the rewrite in the box in place of what you wrote. Nothing is sent to a turn. You edit the rewrite and
+press Enter, which sends it as a prompt like any other. The request carries your line and the
+conversation so far, so the rewrite can name what you and the model have already been through, and it
+reads no file of its own: a file nobody has read in the session is not one the rewrite can name. It
+is asked not to add a requirement, a file name or a fact that neither your line nor the conversation
+gives, but it is a model's reading of what you meant, so read it before you send it. A `@path` in it
+is text until you send the line, and sending is what names the file, exactly as if you had typed it.
+
+Escape puts back the line you wrote, and Ctrl-C does the same in either editing style, since Escape in
+vi's style leaves INSERT. The rewrite is kept as the line Up brings back, so an edit you made to it is
+not lost. Pressing Ctrl-P again on a rewrite asks for another, and Escape still returns to what you
+first wrote. Emptying the box ends all of this, and what you type next is an ordinary line. The press
+that asks costs one request, charged to the session, and Escape or Ctrl-C while it is out stops it and
+leaves your line as it was.
+
+The key does nothing on an empty box, in [shell mode](./shell-mode.md), and while a turn is running.
+A line whose first word is a slash and a name is a command or a skill, a line holding a picture or a
+dropped file holds more than words, and a line over 4,000 characters is longer than a rewrite is put
+in the box at, so each is left as written with a note saying why. A line that begins with a path such
+as `/Users/me/proj/src/main.rs` is a prompt and is rewritten. A rewrite that comes back empty or
+longer than 4,000 characters is not put in the box, and neither is one written after the
+conversation has read something untrusted, since words written over that conversation are not ones
+the planner could have held. Your line stays where it was, and a note says why.
 
 ## Editing the way vi does
 
@@ -75,7 +126,7 @@ objects, VISUAL selection and REPLACE mode, and how each treats a [marker](#mark
 
 A `keybindings` block in [`settings.json`](../customize/configuration.md) names an action and the
 chord you want to answer it. Write a chord as `ctrl-x`, `alt-o` or `ctrl+x`. The block layers per
-action the way `env` does, so a project file moving one action says nothing about the other ten.
+action the way `env` does, so a project file moving one action says nothing about the others.
 
 ```json
 {
@@ -86,7 +137,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Eleven actions can be moved, and nothing else can:**
+**Thirteen actions can be moved, and nothing else can** (twelve on Windows, which has no `suspend`):
 
 | Action | Default | What it does |
 |---|---|---|
@@ -100,7 +151,9 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
 | `scope` | `ctrl-n` | cycle Up between every stored prompt, this project's and this session's |
+| `suspend` | `ctrl-z` | [suspend the session to the shell](#suspending-to-the-shell) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([below](#undoing-an-edit)) |
+| `enhance` | `ctrl-p` | rewrite the line to be more specific ([below](#enhancing-a-prompt)) |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the caret and the history.
@@ -136,6 +189,9 @@ is refused while a turn runs, because an editor needs the screen the turn is dra
 Every path that does not end in a save leaves the line untouched: quitting without saving, an editor
 that failed, an editor that was killed. One trailing newline is dropped, one only. The file holds
 your own words, is readable by nobody else, and does not outlive the edit.
+
+The same editor opens from a write prompt, on the proposed contents, with **e**
+([details](../security/permissions.md#changing-a-write-before-approving-it)).
 
 Which editor opens: `$VISUAL`, then `$EDITOR`, then the first of `vim`, `vi`, `emacs`, `nano` that is
 installed. That fallback list is the same on every platform. A name is looked for under every spelling
@@ -315,11 +371,12 @@ the turn ends becomes a turn of its own.
 **A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
-has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/copy`, `/export`, `/loop`
+has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/thinking`, `/copy`, `/export`, `/loop`
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
-that sets one, which wait. `/theme` and `/config` are too, whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
+that sets one, which wait. `/theme`, `/config` and `/language` are too, whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model` and `/effort` are too unless a line waiting ahead of them could change what they act on, a
-waiting `/clear` for `/rename`, say, and then they wait behind that line and the mark under the box names it. A waiting `/sandbox off` holds none of
+waiting `/clear` for `/rename`, say, and then they wait behind that line and the mark under the box names it. `/rename` and `/note` wait behind a prompt and a command that
+could change the record's name or notes, and are carried out as you press Enter behind a command line. `/style` is carried out as you press Enter behind a command line too, but waits behind a prompt, and `/forget-trust` waits behind both. A waiting `/sandbox off` holds none of
 them back. The four that open a list draw it over the turn. What they answer goes into the
 transcript as it is said, so it scrolls with the rest of the history, and nothing waiting moves. During a compaction, a `/btw` question, a `/manifest` run or a goal check,
 every command waits. A paste or a pasted picture arriving during one of them is kept in the box like any other. While work runs, the list of commands offered when you type `/` marks each row: `now` for a

@@ -12,9 +12,10 @@
 //! the body
 //! ```
 //!
-//! Only the name and the description reach the planner up front. The body is read when the
-//! planner asks for it by name, which keeps a directory of long skills from filling a context
-//! that has room for the task instead.
+//! Only a built-in's name and description reach the planner up front; the rest are found with
+//! `search_skills` rather than listed, so a directory of many skills does not fill a context
+//! that has room for the task instead. The body of any skill, however it was found, is read when
+//! the planner asks for it by name.
 //!
 //! A file may also name the model its rounds are asked of and the effort they carry. Neither is
 //! required, and neither is a reason to drop a skill: a value that cannot be used is reported and
@@ -60,6 +61,11 @@ pub struct Frontmatter {
     /// The word rather than the level, so a word naming no level can be said back to whoever wrote
     /// it. [`runs_as`] is what turns one into a level.
     pub effort: Option<String>,
+    /// What `disable-model-invocation` said, as the file wrote it, or nothing where it said none.
+    ///
+    /// The word rather than a flag, so a value that is neither `true` nor `false` can be said back
+    /// to whoever wrote it. [`keeps_from_the_planner`] is what turns one into an answer.
+    pub disable_model_invocation: Option<String>,
     /// Every key this does not read, in the order a sorted block declares them.
     ///
     /// Carried out rather than dropped: a key nothing reads is a line whose author believes it is
@@ -68,7 +74,14 @@ pub struct Frontmatter {
 }
 
 /// Every key [`parse_frontmatter`] reads. Anything else is carried out on [`Frontmatter::unread`].
-const READ: [&str; 5] = ["name", "description", "argument-hint", "model", "effort"];
+const READ: [&str; 6] = [
+    "name",
+    "description",
+    "argument-hint",
+    "model",
+    "effort",
+    "disable-model-invocation",
+];
 
 /// How a skill asks the rounds that follow it to run.
 ///
@@ -124,6 +137,7 @@ pub fn parse_frontmatter(text: &str) -> Option<Frontmatter> {
         model: declared_word(&declared, "model")
             .filter(|model| !model.eq_ignore_ascii_case("inherit")),
         effort: declared_word(&declared, "effort"),
+        disable_model_invocation: declared_word(&declared, "disable-model-invocation"),
         unread: declared
             .keys()
             .filter(|key| !READ.contains(&key.as_str()))
@@ -178,6 +192,42 @@ fn runs_as(front: &Frontmatter, origin: &str, notices: &mut Vec<Notice>) -> Runs
     }
 }
 
+/// Whether a skill is left out of what the planner is told and loads only when the person names it.
+///
+/// `disable-model-invocation: true` says so and `false` says it is not, in any case, quoted or not,
+/// with a trailing `# comment` ignored as a YAML file would ignore it and a value that is only a
+/// comment read as blank. A word that is neither is read as `true` and said back. The key exists to
+/// keep a skill with side effects from being chosen by a model, so a misspelt value that left the
+/// skill advertised would expose the skill the key was written to protect, and the person can still
+/// name it. The notice names the file and the word it wrote, which are safe to print for the reason
+/// [`runs_as`]'s are.
+fn keeps_from_the_planner(front: &Frontmatter, origin: &str, notices: &mut Vec<Notice>) -> bool {
+    let Some(written) = front.disable_model_invocation.as_deref() else {
+        return false;
+    };
+    // A comment is a `#` that opens the value or follows whitespace, so a `#` inside a word is left
+    // alone.
+    let comment = written
+        .char_indices()
+        .find(|&(at, c)| c == '#' && (at == 0 || written[..at].ends_with(char::is_whitespace)));
+    let value = comment.map_or(written, |(at, _)| &written[..at]).trim();
+    if value.is_empty() {
+        return false;
+    }
+    match unquoted(value) {
+        word if word.eq_ignore_ascii_case("true") => true,
+        word if word.eq_ignore_ascii_case("false") => false,
+        _ => {
+            notices.push(Notice::new(t!(
+                skill_person_only_not_a_boolean,
+                skill = origin,
+                value = written
+            )));
+            true
+        }
+    }
+}
+
 /// Every `key: value` a frontmatter block declares, wrapped values joined.
 ///
 /// The one dialect, so a delegate definition is read the way a skill is and a file written for
@@ -187,26 +237,11 @@ fn runs_as(front: &Frontmatter, origin: &str, notices: &mut Vec<Notice>) -> Runs
 ///
 /// `None` means "not frontmatter", and every caller drops the file on that answer.
 pub fn declarations(text: &str) -> Option<std::collections::BTreeMap<String, String>> {
-    let mut lines = text.lines();
-    if lines.next().map(str::trim_end) != Some(MARKER) {
-        return None;
-    }
-
-    let mut block = Vec::new();
-    let mut closed = false;
-    for line in lines {
-        if line.trim_end() == MARKER {
-            closed = true;
-            break;
-        }
-        block.push(line);
-    }
-
     // An unterminated block is not frontmatter that happens to run long: it is a file whose whole
     // contents would otherwise be read as declarations.
-    if !closed {
+    let Block::Lines(block) = frontmatter_lines(text) else {
         return None;
-    }
+    };
 
     let mut declared = std::collections::BTreeMap::new();
 
@@ -238,6 +273,34 @@ pub fn declarations(text: &str) -> Option<std::collections::BTreeMap<String, Str
     }
 
     Some(declared)
+}
+
+/// What the top of a file holds between its two markers.
+pub(crate) enum Block<'a> {
+    /// The first line is not a marker, so the file has no frontmatter.
+    Absent,
+    /// The first line is a marker and no later line closes the block.
+    Unclosed,
+    /// The lines between the two markers.
+    Lines(Vec<&'a str>),
+}
+
+/// The lines of the frontmatter block at the top of `text`, which is the one reading of where a
+/// block starts and stops that every file with frontmatter shares.
+pub(crate) fn frontmatter_lines(text: &str) -> Block<'_> {
+    let mut lines = text.lines();
+    if lines.next().map(str::trim_end) != Some(MARKER) {
+        return Block::Absent;
+    }
+
+    let mut block = Vec::new();
+    for line in lines {
+        if line.trim_end() == MARKER {
+            return Block::Lines(block);
+        }
+        block.push(line);
+    }
+    Block::Unclosed
 }
 
 /// How many columns a line is indented by, which is what says whether it continues the one above.
@@ -289,7 +352,7 @@ fn value_of(first: &str, wrapped: &[&str]) -> String {
 /// The quotes are YAML's, put there so a value may open with a character that would otherwise
 /// mean something. They are not part of what the planner is choosing from, and leaving them in
 /// puts a stray apostrophe at each end of every description on the screen.
-fn unquoted(value: &str) -> String {
+pub(crate) fn unquoted(value: &str) -> String {
     let opens = value.chars().next();
     let closes = value.chars().last();
     match (opens, closes) {
@@ -350,6 +413,10 @@ pub struct Skill {
     pub runs_as: RunsAs,
     /// The keys its file declared that nothing here reads, for a report a person asks for.
     pub unread: Vec<String>,
+    /// Whether the planner is kept from it: neither its name nor its description is advertised, and
+    /// it is loaded only for a turn whose line the person typed `/name` in (SKILL-20). An interface
+    /// listing skills still draws it, saying so.
+    pub person_only: bool,
     /// Where the skill's directory is named to the planner, as `load_skill` says it and a read
     /// spells it, for a skill that has one. A built-in is not a file and has none.
     pub directory: Option<String>,
@@ -390,6 +457,31 @@ impl Skill {
     /// The directory a read may reach beside this skill once it is loaded, for the user's own.
     pub fn reach(&self) -> Option<&Path> {
         self.reach.as_deref()
+    }
+
+    /// A skill whose body carries a label the gate holds back, which no catalogue produces: a skill
+    /// file is read through `Policy::read_trusted_content`, so what it yields is trusted or is not
+    /// a skill at all (SKILL-3). For a test of what a caller does when the gate shows the planner
+    /// nothing of a skill it was handed.
+    #[cfg(test)]
+    pub(crate) fn untrusted_for_a_test(name: &str, body: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: "d".to_string(),
+            argument_hint: None,
+            origin: "SKILL.md".to_string(),
+            directory: None,
+            files: Vec::new(),
+            reach: None,
+            source: Source::Home,
+            runs_as: RunsAs::default(),
+            unread: Vec::new(),
+            person_only: true,
+            body: Labelled::new(
+                body.to_string(),
+                bravebot_core::label::Label::untrusted_public(),
+            ),
+        }
     }
 }
 
@@ -456,6 +548,25 @@ impl Notice {
         })
     }
 
+    /// That some skills have a description long enough to be worth saying so (SKILL-18).
+    ///
+    /// A count, never a name, as [SKILL-6](SKILL-6) counts what it skips: naming one would put a
+    /// name read out of a directory on a screen as though the planner had asked for it. Nothing
+    /// is cut: `load_skill` and `search_skills` both return the description in full regardless.
+    pub(crate) fn descriptions_are_long(n: usize) -> Self {
+        if n == 1 {
+            Self::new(format!(
+                "1 skill has a description past {DESCRIPTION_WARN_CHARS} characters: it is not \
+                 shortened, and reaches you in full"
+            ))
+        } else {
+            Self::new(format!(
+                "{n} skills have a description past {DESCRIPTION_WARN_CHARS} characters: none \
+                 is shortened, and each reaches you in full"
+            ))
+        }
+    }
+
     /// That an `@path` import in an instructions file was left as written, and why (INSTR-11).
     pub(crate) fn import_refused(import: &str, why: ImportRefusal) -> Self {
         Self::new(match why {
@@ -480,6 +591,50 @@ impl Notice {
         Self::new(t!(sources_large_together, bytes = bytes, limit = limit))
     }
 
+    /// That a rule file was added to the instructions because a file the session used matches its
+    /// paths (INSTR-16).
+    ///
+    /// Both are names, one a file in a rules directory and one a file the planner or the person
+    /// typed, so both are drawn as [`crate::confirm::shown_name`] draws a name.
+    pub(crate) fn rule_loaded(rule: &str, file: &str) -> Self {
+        Self::new(t!(
+            rule_loaded,
+            rule = crate::confirm::shown_name(rule),
+            file = crate::confirm::shown_name(file)
+        ))
+    }
+
+    /// That `count` files in a rules directory are not rules, because their names are not text
+    /// (INSTR-16). `directory` is one of the two places INSTR-1 gives.
+    pub(crate) fn rule_names_not_text(directory: &str, count: usize) -> Self {
+        Self::new(t!(
+            rule_names_not_text,
+            directory = directory,
+            count = count
+        ))
+    }
+
+    /// That the project's rule files were not read, because the directory is not trusted
+    /// (INSTR-16). A count and no name, as [SKILL-6] has it: a name in a directory nobody vouched
+    /// for is not the user's to read.
+    ///
+    /// [SKILL-6]: ../../../docs/specs/skills.md#SKILL-6
+    pub(crate) fn rules_directory_not_trusted(count: usize) -> Self {
+        Self::new(t!(rules_directory_not_trusted, count = count))
+    }
+
+    /// That a rule file was left out because its frontmatter has no closing marker, or its `paths`
+    /// list no closing bracket (INSTR-16).
+    pub(crate) fn rule_frontmatter_unreadable(rule: &str) -> Self {
+        Self::new(t!(rule_frontmatter_unreadable, rule = rule))
+    }
+
+    /// That rule files in `~/.bravebot/rules` were not read, because the way to them goes through
+    /// the workspace (INSTR-16, SKILL-3).
+    pub(crate) fn home_rules_reached_through_the_workspace(count: usize) -> Self {
+        Self::new(t!(home_rules_reached_through_the_workspace, count = count))
+    }
+
     /// That `~/.bravebot/AGENTS.md` was not read, because the way to it goes through the workspace
     /// (SKILL-3).
     pub(crate) fn home_agents_file_reached_through_the_workspace() -> Self {
@@ -497,6 +652,12 @@ impl Notice {
 #[derive(Debug, Clone, Default)]
 pub struct Catalogue {
     entries: Vec<Skill>,
+    /// Whether [`Catalogue::only`] narrowed this to a definition's own `skills:` line.
+    ///
+    /// A definition that named skills already made a short, deliberate list, which is not the
+    /// crowding [SKILL-18](SKILL-18) exists for, so the whole of a curated catalogue is listed
+    /// directly rather than held back to built-ins and left for `search_skills` to find.
+    curated: bool,
 }
 
 impl Catalogue {
@@ -506,6 +667,27 @@ impl Catalogue {
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Whether [`Catalogue::only`] narrowed this to a definition's own `skills:` line.
+    pub fn is_curated(&self) -> bool {
+        self.curated
+    }
+
+    /// The names of every skill the default listing leaves out (SKILL-18): every skill but a
+    /// built-in, or none at all where [`Catalogue::only`] already curated the whole list.
+    ///
+    /// Names only, in [SKILL-2](SKILL-2) order: a description is the cost `search_skills` exists
+    /// to avoid paying up front, and a name is the only part cheap enough to give away for free.
+    pub fn other_skill_names(&self) -> Vec<&str> {
+        if self.curated {
+            return Vec::new();
+        }
+        self.entries
+            .iter()
+            .filter(|skill| skill.source != Source::BuiltIn && !skill.person_only)
+            .map(|skill| skill.name.as_str())
+            .collect()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Skill> {
@@ -527,6 +709,7 @@ impl Catalogue {
     /// what this can leave a planner with is a shorter list of the same skills.
     pub fn only(mut self, names: &[String]) -> Self {
         self.entries.retain(|skill| names.contains(&skill.name));
+        self.curated = true;
         self
     }
 
@@ -541,18 +724,146 @@ impl Catalogue {
         }
     }
 
-    /// The lines that go in the system prompt: one per skill, name and when to use it.
+    /// The person-only skills a line the person typed names as `/name`, in the order they were found.
     ///
-    /// Never the body. A directory of long skills would otherwise fill a context that has room
-    /// for the task instead, which is the whole reason the body waits to be asked for.
+    /// `load_skill` refuses a person-only skill whether or not the person named it, so what this
+    /// selects is supplied by the driver and never loaded by a call (SKILL-20).
+    ///
+    /// A word of the line is matched exactly, slash included, against the names found before the turn
+    /// (LOAD-2), after the quotes, brackets and sentence punctuation around it are taken off, so
+    /// `/name.`, `(/name)` and `` `/name` `` name the skill and `/Name`, `/nam`, `/names` and `name` do
+    /// not. A name holding a space can never be named. What the line holds is compared with names the
+    /// driver enumerated and is never read as one, so no file or tool result decides which skill is
+    /// supplied: the caller passes the person's own line and nothing else
+    /// ([`crate::turn::Task::typed_by_a_person`] says which lines those are).
+    pub fn named_in(&self, line: &str) -> Vec<Skill> {
+        const BEFORE: &[char] = &[
+            '(', '[', '{', '<', '"', '\'', '`', '\u{201c}', '\u{2018}', '\u{ab}',
+        ];
+        const AFTER: &[char] = &[
+            ')', ']', '}', '>', '"', '\'', '`', '.', ',', ';', ':', '!', '?', '\u{201d}',
+            '\u{2019}', '\u{bb}', '\u{2026}',
+        ];
+        // Each word once as written and once without its surroundings, so a name that itself ends in
+        // punctuation is still named as it is spelt.
+        let words: Vec<[&str; 2]> = line
+            .split_whitespace()
+            .map(|word| {
+                [
+                    word,
+                    word.trim_start_matches(BEFORE).trim_end_matches(AFTER),
+                ]
+            })
+            .collect();
+        self.entries
+            .iter()
+            .filter(|skill| skill.person_only)
+            .filter(|skill| {
+                let needle = format!("/{}", skill.name);
+                words.iter().any(|word| word.contains(&needle.as_str()))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The skills the planner may be given a name and description of, listed or found: every one
+    /// but those kept from the planner. The one place that says which they are, so the lists and
+    /// `search_skills` cannot disagree.
+    fn offered(&self) -> impl Iterator<Item = &Skill> {
+        self.entries.iter().filter(|skill| !skill.person_only)
+    }
+
+    /// Whether any skill is offered to the planner, listed or found with `search_skills`, which is
+    /// what decides whether the system prompt has a section for skills at all.
+    pub fn advertises_any(&self) -> bool {
+        self.offered().next().is_some()
+    }
+
+    /// The lines that go in the system prompt: name and when to use it, one per skill.
+    ///
+    /// Never the body. By default only a built-in is listed: a skill of the user's own or the
+    /// project's can number enough to fill a context that has room for the task instead, so
+    /// those are found with [`Catalogue::search`] rather than listed. Past [`Catalogue::only`]
+    /// narrowing this to a definition's own `skills:` line, every entry is listed, curated: a
+    /// definition that named a handful of skills already made the short, deliberate list
+    /// [SKILL-18](SKILL-18) exists to get to, and holding it back to built-ins would make a
+    /// person wait on `search_skills` to find what their own definition already named.
+    ///
+    /// Never a person-only skill either, whose name and description are not the planner's to choose
+    /// from.
+    ///
+    /// A description is never cut; [SKILL-18](SKILL-18) says what happens where one is long.
     pub fn describe_for_prompt(&self) -> String {
         let mut out = String::new();
-        for skill in &self.entries {
-            out.push_str(&format!("- {}: {}\n", skill.name, skill.description));
+        for skill in self
+            .offered()
+            .filter(|skill| self.curated || skill.source == Source::BuiltIn)
+        {
+            out.push_str(&prompt_line(&skill.name, &skill.description));
         }
         out
     }
+
+    /// How many skills, of any source, have a description past [`DESCRIPTION_WARN_CHARS`]
+    /// (SKILL-18).
+    ///
+    /// A count only: the driver compares a length, never a byte of what a description says, so
+    /// it learns how many are long and not which ones.
+    pub fn long_descriptions(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|skill| skill.description.chars().count() > DESCRIPTION_WARN_CHARS)
+            .count()
+    }
+
+    /// The skills whose name or description holds every word of `query`, in [SKILL-2] order.
+    ///
+    /// Matched case-insensitively and word by word: a query of several words asks for all of
+    /// them, in whatever order they appear, which is looser than the exact name `load_skill`
+    /// takes ([LOAD-2](tools/load-skill.md#LOAD-2)) and lets an approximate query still find
+    /// something. A blank query matches nothing, since asking for nothing in particular is not a
+    /// search.
+    ///
+    /// Bounded to [`SEARCH_RESULT_CAP`] so a broad query cannot return the whole catalogue in one
+    /// call. The second member of the pair is how many further skills matched past the cap.
+    pub fn search(&self, query: &str) -> (Vec<&Skill>, usize) {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        if words.is_empty() {
+            return (Vec::new(), 0);
+        }
+        let matched: Vec<&Skill> = self
+            .offered()
+            .filter(|skill| {
+                let haystack = format!("{} {}", skill.name, skill.description).to_lowercase();
+                words.iter().all(|word| haystack.contains(word.as_str()))
+            })
+            .collect();
+        let more = matched.len().saturating_sub(SEARCH_RESULT_CAP);
+        (matched.into_iter().take(SEARCH_RESULT_CAP).collect(), more)
+    }
 }
+
+/// One skill's line in the system prompt, or in a `search_skills` result.
+pub(crate) fn prompt_line(name: &str, description: &str) -> String {
+    format!("- {name}: {description}\n")
+}
+
+/// Past how many characters a description is long enough to be worth saying so, rather than
+/// cutting it (SKILL-18).
+///
+/// A description says when to use a skill, and [SKILL-10] lets one wrap over as many lines as the
+/// author writes. What is past this is the author explaining the skill rather than saying when to
+/// load it, and the body is where that belongs, but a skill nobody vouched for the length of is
+/// still carried in full: half an instruction a person meant to write is worse than paying for the
+/// whole of it. Other agents warn in the same range: Cline at 1,024 characters for a description.
+const DESCRIPTION_WARN_CHARS: usize = 1_024;
+
+/// How many skills one `search_skills` call returns before the rest are left for a narrower
+/// query (SKILL-18).
+///
+/// A broad query over a large directory could otherwise return the whole catalogue in one call,
+/// which is the cost `search_skills` exists to avoid paying by default.
+const SEARCH_RESULT_CAP: usize = 25;
 
 /// A skill written into this program rather than found on a disk.
 ///
@@ -603,6 +914,8 @@ fn built_in_skill(name: &str, description: &str, body: &str) -> Skill {
         // an effort and no key nothing reads: it runs as the session does.
         runs_as: RunsAs::default(),
         unread: Vec::new(),
+        // Written into this program, so nothing in a file asked for it to be kept from anybody.
+        person_only: false,
     }
 }
 
@@ -763,9 +1076,11 @@ fn discover_listing<S: Sink>(
 /// The set a turn starting now would resolve, for an interface offering the names as they are typed.
 ///
 /// Read the way a turn reads it, through a policy holding only the read, so what the box offers is
-/// what the planner would be advertised: the same gate, the same trust map, the same rules, the same
-/// shadowing. An untrusted project's skills are dropped here exactly as they are there, and so is a
-/// skill `permissions` denies reading, so no name the turn would refuse is ever drawn.
+/// what the planner would be offered: the same gate, the same trust map, the same rules, the same
+/// shadowing. A skill its file keeps from the planner is in the set too and says so, since the box
+/// is where a person finds the name to type (SKILL-20). An untrusted project's skills are dropped
+/// here exactly as they are there, and so is a skill `permissions` denies reading, so no name the
+/// turn would refuse is ever drawn.
 pub fn resolved<S: Sink>(
     workspace: &Workspace,
     home: Option<&Path>,
@@ -862,6 +1177,7 @@ fn discover_home<S: Sink>(
                     body_after_frontmatter(&whole).to_string()
                 });
                 let runs_as = runs_as(&front, &origin, notices);
+                let person_only = keeps_from_the_planner(&front, &origin, notices);
                 let directory = root.join(&name);
                 // Trusted by provenance like the file beside them (SKILL-3), so only a deny rule
                 // keeps one off the list.
@@ -885,6 +1201,7 @@ fn discover_home<S: Sink>(
                     source: Source::Home,
                     runs_as,
                     unread: front.unread,
+                    person_only,
                 });
             }
             None => notices.push(Notice::new(format!(
@@ -898,6 +1215,15 @@ fn discover_home<S: Sink>(
 /// The most links followed on the way to one home skill before it is taken to go through the
 /// workspace, which is the limit Linux puts on resolving one path.
 const MAX_LINKS_TO_A_HOME_SKILL: usize = 40;
+
+/// Whether `a` and `b` are the one directory, wherever each is spelled. False where either cannot be
+/// found.
+pub(crate) fn same_directory(a: &Path, b: &Path) -> bool {
+    std::fs::canonicalize(a)
+        .ok()
+        .zip(std::fs::canonicalize(b).ok())
+        .is_some_and(|(a, b)| a == b)
+}
 
 /// Whether the way to `path` goes through a directory the workspace's file tools may write to.
 ///
@@ -1091,6 +1417,7 @@ fn discover_workspace_root<S: Sink>(
                     body_after_frontmatter(&whole).to_string()
                 });
                 let runs_as = runs_as(&front, &relative, notices);
+                let person_only = keeps_from_the_planner(&front, &relative, notices);
                 let directory = format!("{skills_root}/{name}");
                 // A file name is content, so each is asked of the rules and of the trust map as the
                 // file itself would be before it is named (SKILL-4).
@@ -1114,6 +1441,7 @@ fn discover_workspace_root<S: Sink>(
                     source: Source::Workspace,
                     runs_as,
                     unread: front.unread,
+                    person_only,
                 });
             }
             None => notices.push(Notice::new(format!(
@@ -1296,6 +1624,7 @@ mod tests {
                 argument_hint: Some("[x]".to_string()),
                 model: None,
                 effort: None,
+                disable_model_invocation: None,
                 unread: vec!["license".to_string()],
             })
         );
@@ -1484,6 +1813,7 @@ mod tests {
             source: Source::Home,
             runs_as: RunsAs::default(),
             unread: Vec::new(),
+            person_only: false,
             body: Labelled::trusted("sign them".to_string()),
         });
 

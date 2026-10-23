@@ -15,10 +15,11 @@ are content. The call answers as soon as the kernel has approved it, and the rep
 What a delegate is, what it may do and how long it may live is [delegation.md](../delegation.md);
 this spec is the call surface.
 
-[CHECKOUT-1](../checkouts.md#CHECKOUT-1) adds a routing field, `isolation`, whose one value,
-`checkout`, asks for a checkout of the delegate's own. A definition `kind` names may ask for one
-itself ([CHECKOUT-2](../checkouts.md#CHECKOUT-2)), and its delegate then has one whether or not the
-call asks.
+[CHECKOUT-1](../checkouts.md#CHECKOUT-1) adds a routing field, `isolation`, whose value `checkout`
+asks for a checkout of the delegate's own and whose value `checkout_with_changes` also carries the
+working directory's uncommitted changes into it ([CHECKOUT-23](../checkouts.md#CHECKOUT-23)). A
+definition `kind` names may ask for a checkout itself ([CHECKOUT-2](../checkouts.md#CHECKOUT-2)), and
+its delegate then has one whether or not the call asks.
 
 ## Clauses
 
@@ -135,6 +136,7 @@ narrowing, so the most a list can do is leave the worker as it would have been
 `verified-by: bravebot_core::policy::a_worker_delegate_holds_the_servers_its_parent_holds_and_no_other`
 `verified-by: bravebot_agent::tools::a_server_list_that_is_not_a_list_of_names_is_refused`
 `verified-by: bravebot_agent::mcp::a_worker_spawned_keeping_no_server_is_offered_no_servers_tool`
+`verified-by: bravebot_core::policy::a_fallen_run_is_refused_before_a_server_list_is_compared_with_its_grants`
 
 <a id="AGENT-7"></a>
 ### AGENT-7: `budget` bounds each delegate's tokens, and can only lower the definition's

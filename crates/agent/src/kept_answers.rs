@@ -136,7 +136,10 @@ fn a_subdomain_of_a_host_that_was_allowed() -> bool {
 /// effect is tried again. A case that holds is a yes covering something the person was never shown.
 #[test]
 fn changing_the_world_under_a_yes_asks_again() {
-    #[allow(unused_mut)]
+    #[allow(
+        unused_mut,
+        reason = "`cases` is only extended under `cfg(unix)`, so other platforms never mutate it"
+    )]
     let mut cases = vec![
         Case {
             row: "files sent despite a credential",

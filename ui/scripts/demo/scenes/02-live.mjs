@@ -131,8 +131,12 @@ async function answerEverything(s, { shot }) {
       await s.say('Declined', 'Which is a real answer: the turn is told no and carries on.', 2.4)
     }
     if (kind === 'ask') {
+      // One question is on screen at a time and Next puts the following one, so this runs once per
+      // question: the card is still asking when the loop comes back to it.
+      const position = ((await card.locator('.confirm-head .path').textContent()) ?? '').trim()
+      if (position.startsWith('the agent is asking')) await s.say('One at a time', position, 1.6)
       const blocks = await card.locator('.ask-question').all()
-      for (const [n, block] of blocks.entries()) {
+      for (const block of blocks) {
         const choices = block.locator('.choices .choice')
         const offered = await choices.count()
 
@@ -142,7 +146,7 @@ async function answerEverything(s, { shot }) {
           // default being accepted, which is the one thing this card is not.
           await s.spotlight(block.locator('.choices'), 1.6)
           await s.unspot()
-          const pick = choices.nth(n % offered)
+          const pick = choices.nth(seen % offered)
           const label = ((await pick.locator('.label').textContent()) ?? '').trim()
           await s.click(pick)
           // The choice says so itself once taken; if it did not, the click missed.
@@ -155,7 +159,8 @@ async function answerEverything(s, { shot }) {
           await s.slowType(block.locator('.typed').first(), 'whichever reads best at the call site')
         }
       }
-      await s.say('Answered here', 'In the transcript, where the question was — and nowhere else.', 2.4)
+      const closing = ((await card.locator('.confirm-actions .approve').first().textContent()) ?? '').trim() === 'Answer'
+      if (closing) await s.say('Answered here', 'In the transcript, where the question was, and nowhere else.', 2.4)
     }
 
     await s.shot(`${shot}-${seen}-${kind}`)

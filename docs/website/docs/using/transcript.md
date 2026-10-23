@@ -90,6 +90,14 @@ the sender, and the sender draws each message it sent with the target's name and
 resumed session draws both again. Control characters in a name or in the text are replaced by visible
 ones.
 
+**A `#<number>` in a reply is a link to that issue or pull request** when the checkout you are in has
+an `origin` remote on `github.com`. The number is underlined, and in a terminal that draws links it
+opens `https://github.com/{owner}/{repository}/issues/{number}` with the owner and the repository of
+the remote, which GitHub sends to the pull request where the number is one. `C#1`, `page#12`, a
+number in backticks and a number in a quarantined block are left as text, and so is every number where
+`origin` is not on `github.com`. Selecting a linked number copies the number. The desktop window draws
+a number as text.
+
 ## The end of a turn
 
 A finished turn gets a row of its own: which turn it was, what it cost, and how long it took. The row
@@ -336,7 +344,10 @@ which the list says. A terminal too short for the list loses rows from the middl
 `x` expands the call nearest the top of the view to every line that was kept of its result, up to
 500 lines per result, instead of the few lines the transcript shows by default. Pressing `x` again
 collapses it. The extra lines are cleaned the same way the short view is: control characters are
-replaced and each line is cut to one row.
+replaced and each line is cut to one row. Clicking a call that has more to show does the same for
+that call, and clicking it again collapses it. Clicking a delegate's block opens that delegate's view, as the watch key does. A drag, a double click or a triple click still selects.
+
+In the [info panel](sessions.md#telling-sessions-apart), clicking the model row opens the `/model` picker and clicking the effort row opens the `/effort` picker.
 
 `v` opens the transcript in your editor. What goes is the rows as they are drawn, margins and all,
 so untrusted content is marked in the file exactly the way it is marked on the screen. It is written
@@ -351,7 +362,7 @@ grepping the lot.
 panel, the prompt box or the footer. The selection stops at that pane's edge, so a drag down the
 transcript does not take the panel's text on every row. A press between panes starts nothing, and
 closing the panel or resizing the terminal drops a selection held in it. Double-click selects a word, triple-click a row, and dragging on from
-either grows the selection by words or rows. Shift-click moves the end of the selection you hold.
+either grows the selection by words or rows. Shift-click moves the end of the selection you hold. A paragraph the screen wrapped copies as one line, with a space where it was cut and no line break.
 
 **Nothing comes back.** A transcript is a record of what happened, and a record you can edit back
 into the session is not one. No later turn reads that file, and no path in your workspace gains

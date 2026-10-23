@@ -8,7 +8,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 241
+      - crates/agent/src/tools.rs: 252
       - crates/agent/src/tools/message.rs: 14
   - symbol: Produced::refused_with_a_note
     sites:
@@ -38,7 +38,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |
-| [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | confirmation |
+| [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | confirmation |
 | [`apply_checkout`](../checkouts.md#CHECKOUT-14) | `checkout`, `paths` | none | the files brought back, one confirmation each |
 | [`spawn_processor`](spawn-processor.md) | `reads`, `about` | `instruction` | a reference |
 | [`spawn_agent`](spawn-agent.md) | `kind`, `mcp_servers` | `task`, `each` | one report per delegate |
@@ -49,6 +49,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`fetch_url`](fetch-url.md) | `url` | none | a reference |
 | [`download_url`](download-url.md) | `url`, `path` | none | the path and the byte count |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
+| [`search_skills`](search-skills.md) | `query` | none | matching skills' names and descriptions, or a count of further matches |
 | [`load_tool`](../mcp-servers.md#SERVERS-16) | `name` | none | confirmation that the tool is offered from the next request |
 | [`todo_write`](todo-write.md) | none | `todos` | confirmation |
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |

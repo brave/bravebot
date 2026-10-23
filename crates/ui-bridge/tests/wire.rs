@@ -187,6 +187,7 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             },
         )["remark"]["label"]
             .clone()
@@ -623,6 +624,7 @@ fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
         credentials: Vec::new(),
         may_always: false,
         record: None,
+        may_edit: false,
     };
     assert_eq!(
         wire::write_request(1, &request(true))["writtenSinceCheckout"],
@@ -656,6 +658,7 @@ fn a_write_and_a_credential_read_carry_the_name_spelled_for_a_person() {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             },
         )
     };
@@ -698,6 +701,7 @@ fn a_write_request_says_what_happens_to_the_line_endings() {
         credentials: Vec::new(),
         may_always: false,
         record: None,
+        may_edit: false,
     };
     assert_eq!(
         wire::write_request(1, &request("a\r\nb\r\n", "a\r\nc\r\n"))["lineEndings"],
@@ -729,6 +733,7 @@ fn a_write_request_sends_the_diff_and_never_the_body() {
         credentials: Vec::new(),
         may_always: false,
         record: None,
+        may_edit: false,
     };
 
     let value = wire::write_request(3, &request);
@@ -767,6 +772,7 @@ fn a_created_file_says_nothing_would_be_lost() {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         },
     );
     assert_eq!(value["existing"], json!(false));
@@ -808,6 +814,7 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             credentials: vec![found.to_string()],
             may_always: false,
             record: None,
+            may_edit: false,
         },
     );
     assert_eq!(
@@ -831,6 +838,7 @@ fn what_the_scan_inferred_reaches_the_front_end_that_draws_the_question() {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         },
     );
     assert_eq!(quiet["credentials"], json!([]), "an empty list, not absent");
@@ -991,6 +999,34 @@ fn the_prompts_are_sent_as_the_kernel_shaped_them() {
     );
 }
 
+/// The window puts the questions one at a time and decides neither where a question stands nor
+/// whether settling it ends the series (ASK-6), so each prompt carries both, from the same code
+/// the picker uses. The fault this rejects is a series that ends on a count the window keeps.
+#[test]
+fn each_prompt_says_where_it_stands_and_whether_settling_it_ends_the_series() {
+    let sent = wire::ask_request(3, &a_series());
+    let prompts = sent["prompts"].as_array().expect("prompts");
+
+    assert_eq!(prompts[0]["place"], "the agent is asking (1 of 2)");
+    assert_eq!(prompts[1]["place"], "the agent is asking (2 of 2)");
+    assert_eq!(prompts[0]["last"], false);
+    assert_eq!(prompts[1]["last"], true);
+
+    let lone = ask::asking(&Series::new(vec![Question::new(
+        "Approach",
+        "Which way?",
+        vec![Choice::new("rebase", None)],
+        false,
+    )]));
+    let sent = wire::ask_request(4, &lone);
+    assert_eq!(
+        sent["prompts"][0]["place"],
+        Value::Null,
+        "a lone question counted itself"
+    );
+    assert_eq!(sent["prompts"][0]["last"], true);
+}
+
 /// The path a stage is started by goes to the desktop app beside the file, so its prompt can show
 /// the link a name reached the file through.
 #[test]
@@ -1127,6 +1163,96 @@ fn a_run_request_carries_the_written_files_and_directories_spelled_for_a_person(
     assert_eq!(
         bidi["confinement"]["shownDirectories"],
         json!(["\"/wo\\u{202e}rk\""])
+    );
+}
+
+/// PROMPT-1: the desktop is handed the directory a line runs in and the file each step runs
+/// already spelled, beside the raw ones, so a card draws what the terminal draws. A path that needs
+/// no spelling is sent as it is, and the held values keep the bytes they had.
+#[test]
+fn a_run_request_carries_the_directory_and_the_binary_spelled_for_a_person() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage, Steps};
+    let run = |directory: &str, started_as: &str, resolved: &str| {
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], directory);
+        let Steps::Pipeline(steps) = &mut request.plan.steps else {
+            panic!("a pipeline");
+        };
+        steps[0].started_as = started_as.into();
+        steps[0].resolved = resolved.into();
+        wire::run_request(1, &request)
+    };
+    let plain = run("/work", "/usr/bin/tee", "/usr/bin/tee");
+    assert_eq!(plain["directory"], json!("/work"));
+    assert_eq!(plain["shownDirectory"], json!("/work"));
+    assert_eq!(plain["stages"][0]["shownBinary"], json!("/usr/bin/tee"));
+
+    let trailing = run("/work ", "/usr/bin/tee ", "/usr/bin/tee ");
+    assert_eq!(trailing["directory"], json!("/work "));
+    assert_eq!(trailing["shownDirectory"], json!("\"/work\u{2423}\""));
+    assert_eq!(trailing["stages"][0]["resolved"], json!("/usr/bin/tee "));
+    assert_eq!(
+        trailing["stages"][0]["shownBinary"],
+        json!("\"/usr/bin/tee\u{2423}\"")
+    );
+
+    // A step started through a link is drawn as the link and the file, each spelled on its own.
+    let linked = run("/work", "/usr/local/bin/tee ", "/usr/bin/te\u{202e}e");
+    assert_eq!(
+        linked["stages"][0]["shownBinary"],
+        json!("\"/usr/local/bin/tee\u{2423}\" -> \"/usr/bin/te\\u{202e}e\"")
+    );
+    assert_eq!(
+        linked["summary"],
+        json!("run 1 step in /work"),
+        "the summary names the directory the card names"
+    );
+    let spelled_summary = run("/wo\u{202e}rk", "/usr/bin/tee", "/usr/bin/tee");
+    assert_eq!(
+        spelled_summary["summary"],
+        json!("run 1 step in \"/wo\\u{202e}rk\"")
+    );
+}
+
+/// PROMPT-1, PATH-003: a directory whose name holds a byte that is not UTF-8 reaches the desktop
+/// spelled with that byte, so the card does not draw it as the directory its replacement character
+/// spells. The held directory is sent with the replacement character, as it always was.
+#[cfg(unix)]
+#[test]
+fn a_run_request_carries_a_directory_that_is_not_text_spelled_as_the_bytes_it_holds() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage};
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let run = |directory: &[u8]| {
+        let pipeline = Pipeline::new(vec![Stage::new("ls", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/bin/ls".into()], "/w");
+        request.confined = Some(bravebot_agent::Confined {
+            reads_the_machine: false,
+            directories: vec![std::path::PathBuf::from(OsStr::from_bytes(directory))],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories: false,
+        });
+        wire::run_request(1, &request)
+    };
+    let invalid = run(b"/work/a\xffb");
+    let lookalike = run("/work/a\u{fffd}b".as_bytes());
+    assert_eq!(
+        invalid["confinement"]["shownDirectories"],
+        json!(["\"/work/a\\xffb\""])
+    );
+    assert_eq!(
+        lookalike["confinement"]["shownDirectories"],
+        json!(["/work/a\u{fffd}b"])
+    );
+    assert_ne!(
+        invalid["confinement"]["shownDirectories"],
+        lookalike["confinement"]["shownDirectories"]
     );
 }
 
@@ -1417,6 +1543,7 @@ fn approval_evidence_is_kept_beside_the_decision() {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         },
     );
     assert_eq!(write["remark"]["lines"], 9);
@@ -1435,6 +1562,7 @@ fn a_fetch_prompt_carries_the_host_beside_the_url_and_nothing_of_a_body() {
         &FetchRequest {
             url: "https://example.com@evil.test/docs".into(),
             host: "evil.test".into(),
+            redirected_from: None,
         },
     );
 
@@ -1444,10 +1572,29 @@ fn a_fetch_prompt_carries_the_host_beside_the_url_and_nothing_of_a_body() {
             "request": 3,
             "url": "https://example.com@evil.test/docs",
             "host": "evil.test",
+            "redirectedFrom": null,
             "ambient": [],
             "summary": "fetch from evil.test",
         })
     );
+}
+
+/// A fetch a redirect led to carries the host the person approved beside the one it led to, so a
+/// front end can say the question is about a hop (FETCH-4).
+#[test]
+fn a_fetch_a_redirect_led_to_names_the_host_that_was_approved() {
+    use bravebot_agent::confirm::FetchRequest;
+    let value = wire::fetch_request(
+        5,
+        &FetchRequest {
+            url: "https://docs.example.com/start".into(),
+            host: "cdn.example.net".into(),
+            redirected_from: Some("docs.example.com".into()),
+        },
+    );
+
+    assert_eq!(value["host"], "cdn.example.net");
+    assert_eq!(value["redirectedFrom"], "docs.example.com");
 }
 
 /// A metadata service is an ordinary host to everything between here and it, so the address alone
@@ -1461,6 +1608,7 @@ fn a_fetch_from_a_metadata_service_says_so_across_the_bridge() {
         &FetchRequest {
             url: "http://169.254.169.254/latest/meta-data/".into(),
             host: "169.254.169.254".into(),
+            redirected_from: None,
         },
     );
 

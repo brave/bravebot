@@ -15,6 +15,13 @@ Type `@` and a picker opens over the workspace. Directories come first, a prefix
 slash descends into a directory, and Tab completes without disturbing the rest of the sentence.
 Version-control and build directories are not offered.
 
+A fragment of a name finds it in any directory below, so `@mainrs` offers `crates/cli/src/main.rs`
+without a walk through `crates` and `cli`. The letters have to appear in the name in that order and
+case does not matter. Names that match come before paths that match, and the closer match comes
+first. What the directory you are typing in offers stays at the top of the list, followed by at most
+ten names found this way. The search covers the workspace only, skips the directories above, does
+not follow links, and reads at most 10,000 names, starting from the root.
+
 ```
 > why does @crates/cli/src/main.rs read stdin before checking the prompt?
 ```
@@ -35,8 +42,10 @@ reference, and a bare `@` names nothing.
 
 Sending a prompt that ends in a half-typed reference completes it rather than sending the fragment.
 
-A name containing a space is written with a backslash before the space, as in
-`@My\ Documents/notes.md`. Completing it from the picker writes that form for you.
+A name containing whitespace is written with a backslash before each whitespace character, as in
+`@My\ Documents/notes.md`, and a backslash in a name is written as two. Completing it from the picker
+writes that form for you. The picker leaves out a file or folder whose name holds a line break, and a file whose
+name ends in whitespace, because the line is trimmed when it is sent. Name such a file with `--file`.
 
 ## Naming an earlier session: `@session:<id>`
 
@@ -115,6 +124,17 @@ through `osascript`; on Linux it needs `wl-paste` or `xclip`.
 
 - A picture wins over text when the clipboard holds both, since copying an image in a browser leaves
   the page's URL behind as text, and text has another key.
+- **A picture is read as a PNG first, then as a JPEG**, and on macOS last as a TIFF, which is how a
+  GIF or a HEIC copied from an app arrives. A PNG and a JPEG are sent as they are, and a TIFF is
+  sent as a PNG. A TIFF that declares a canvas of more than 134 million pixels is not read.
+- **A file copied in Finder, Explorer or a Linux file manager is treated as a drop.** Ctrl-V reads
+  the files the clipboard names and handles them as if you had dragged them onto the window (see
+  [Dropping a file](#dropping-a-file)): an image or a PDF is carried as bytes, a text file becomes
+  context, and any other type has its path written into the line. The files win over a picture or
+  text beside them on the clipboard. A file whose name is not text or holds a line break refuses the
+  whole copy, and none of the files are pasted. On Linux the file manager has to leave a
+  `text/uri-list` or, as GNOME's do, an `x-special/gnome-copied-files`, which `wl-paste` or `xclip`
+  reads.
 - The picture is inlined into the request, never linked, so no other machine fetches it.
 - The marker is written where the caret is, and the picture goes wherever that text goes. Deleting
   the marker unsends it.
@@ -158,7 +178,8 @@ What happens depends on the type:
 | anything else | its path is written into the line, as dropping a file always did |
 
 Extensions are recognised whatever their case. Dropping a directory attaches nothing. A dropped PNG
-or JPEG also gets a thumbnail under the box, as a pasted picture does.
+or JPEG also gets a thumbnail under the box, as a pasted picture does. A file copied in a file
+manager and pasted with Ctrl-V is handled the same way.
 
 The path line goes ahead of the bytes in a turn's prompt, in a question beside the work, and in a plan's
 task. A file that cannot be shown to the model is replaced by the sentence `<path> could not be shown to

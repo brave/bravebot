@@ -60,6 +60,10 @@ fn main() {
         std::env::current_dir().ok().as_deref(),
         settings.as_deref(),
     );
+    bravebot_ui_bridge::settings::start_the_sweep_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
+    );
 
     // One writer behind a lock, so a line from an event and a line from a response cannot
     // interleave. Shared with the bridge, which emits events from whichever thread a turn
@@ -101,10 +105,13 @@ fn main() {
         }
     }
 
-    // EOF on stdin. Anything waiting on an answer from a front-end that has gone away is
-    // refused, which is what dropping the bridge does: a channel that cannot carry the
-    // question cannot carry consent either.
-    drop(bridge);
+    // EOF on stdin. Every session is closed, which refuses anything waiting on an answer from a
+    // front-end that has gone away: a channel that cannot carry the question cannot carry consent
+    // either. Closing is also what fires `session-ended`, so the process waits a few seconds for it
+    // and for the turns still writing their records, as the host does.
+    if !bridge.shut_down(std::time::Duration::from_secs(10)) {
+        eprintln!("bravebot-rpc: some sessions were still working when the process stopped");
+    }
 }
 
 /// Write one line, or give up on writing altogether.

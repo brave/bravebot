@@ -440,12 +440,17 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// talked to. Plan mode asks rather than refusing, because reading a page is how a plan gets
     /// written and a fetch changes nothing here; what it does do is leave the machine, which is
     /// the person's to agree to.
+    ///
+    /// Bypassing answers a URL the planner proposed and not a host a redirect led to. That host is
+    /// a server's choice, and a run told to ask nobody is still not told that a server may send
+    /// its fetch wherever it likes, which is what the gate refuses without this question (FETCH-4).
     fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
         match self.mode.get() {
-            PermissionMode::Bypass => Decision::Approve,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_fetch(request)
-            }
+            PermissionMode::Bypass if request.redirected_from.is_none() => Decision::Approve,
+            PermissionMode::Bypass
+            | PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan => self.asking().confirm_fetch(request),
         }
     }
 
@@ -650,6 +655,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         }
     }
 
@@ -1491,6 +1497,26 @@ mod tests {
         let mut confining = Confining::new(&mut moved, PermissionMode::Ask, false);
         assert_eq!(confining.confirm_move(&a_move()), Decision::Approve);
         assert_eq!(moved.0, 1, "asking did not put the move to the person");
+    }
+
+    /// Bypassing answers a fetch the planner proposed and not the host a redirect led it to: that
+    /// host is a server's choice, and the gate refuses it without a question put to somebody
+    /// (FETCH-4). The inner confirmer is `Unattended`, which says no, so a yes is the mode's own.
+    #[test]
+    fn bypassing_answers_a_fetch_but_not_a_redirect() {
+        let fetch = |redirected_from: Option<&str>| crate::confirm::FetchRequest {
+            url: "https://docs.example.com/api".to_string(),
+            host: "cdn.example.net".to_string(),
+            redirected_from: redirected_from.map(str::to_string),
+        };
+        let mut inner = Unattended;
+        let mut confining = Confining::new(&mut inner, PermissionMode::Bypass, false);
+        assert_eq!(confining.confirm_fetch(&fetch(None)), Decision::Approve);
+        assert_eq!(
+            confining.confirm_fetch(&fetch(Some("docs.example.com"))),
+            Decision::Reject,
+            "bypassing followed a redirect a server chose"
+        );
     }
 
     /// A run told to ask nobody and told nothing about screening gets what it asked for, and the

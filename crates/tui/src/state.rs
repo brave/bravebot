@@ -16,6 +16,7 @@ mod accounts;
 mod completion;
 mod editing;
 mod entry;
+mod files;
 mod scroller;
 mod settings;
 mod standing;
@@ -39,12 +40,22 @@ pub use entry::{
 pub use scroller::{Laid, Scroller};
 pub use watching::Watching;
 
+/// How many bytes of the model's thinking are kept for the screen, counted from the end.
+///
+/// The thinking is split into lines and drawn again on every frame, so this bounds that work
+/// however long the model thinks.
+const THINKING_KEPT: usize = 4096;
+
 /// How many newlines a paste carries before it is folded behind a marker.
 ///
 /// Counted in newlines rather than in lines so that three lines with nothing after the last of
 /// them is the first paste to fold: the third newline is the point where the box was going to grow
 /// past what a prompt is meant to look like.
 const FOLD_AT_NEWLINES: usize = 3;
+
+/// Past this many characters the banner over a link's text says how many and asks for a scroll and a
+/// review, since that is more than the box shows (LINK-4).
+pub(crate) const LONG_LINK_PROMPT: usize = 1000;
 
 /// How many changes back `u` reaches, which is vim's `undolevels` as it ships.
 ///
@@ -57,6 +68,14 @@ const UNDO_DEPTH: usize = 1000;
 /// Long enough that a command about to finish returns its output to the turn instead of a job to
 /// ask about.
 const GIVE_WAY_AFTER: Duration = Duration::from_secs(10);
+
+/// How many of the last lines a running command printed are kept to draw, and how many bytes of them.
+///
+/// A frame draws all of what is kept, and a command can print without end, or print one line that
+/// never ends. The end is what a person watching a command wants to see, and the whole of it is
+/// drawn when the command ends.
+pub const COMMAND_LINES: usize = 200;
+pub const COMMAND_BYTES: usize = 32 * 1024;
 
 /// How many rows one mouse wheel event moves the view by where nothing says otherwise.
 ///
@@ -93,6 +112,15 @@ fn lines_in(text: &str) -> usize {
     } else {
         newlines + 1
     }
+}
+
+/// Why a line cannot be rewritten by the enhance key (INPUT-48).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Unenhanceable {
+    /// It names a picture or a dropped file, which a rewrite of words would lose.
+    HoldsAttachment,
+    /// It is longer than a rewrite is offered at.
+    TooLong,
 }
 
 /// One replayed line.
@@ -591,6 +619,17 @@ pub struct Session {
     /// by [`Session::propose_handoff`], and dropped the moment the box is replaced or found empty,
     /// so a prompt typed after the brief was wiped out is never the one that starts a session.
     handoff: bool,
+    /// The line the box held before the enhancement now in it replaced it, which the box puts back
+    /// on Escape or Ctrl-C (INPUT-48).
+    ///
+    /// Like `handoff`, a mode over the line and not part of it: set only by
+    /// [`Session::propose_enhancement`], and dropped the moment the box is replaced or found empty,
+    /// so a line typed after the enhancement was wiped out never has an older one put back over it.
+    /// The line as the box held it, so a paste folded behind a marker comes back behind it.
+    enhanced: Option<String>,
+    /// How many characters the text a link put in the box was, while the box still holds it
+    /// (LINK-4).
+    link_prompt: Option<usize>,
     /// The prompt a new session is to begin with, once the session [`Session::hand_over`] named has
     /// been set up, and the next pass of the loop sends it.
     handed_over: Option<String>,
@@ -627,6 +666,9 @@ pub struct Session {
     wheel_rows: u16,
     /// Whether the mouse is captured, from `tui.mouse`. On unless the settings turned it off.
     mouse: bool,
+    /// How long a question the planner puts waits with no key pressed before it is closed without
+    /// an answer, from `askIdleSeconds` (ASK-9). `None` waits for as long as it takes.
+    ask_idle: Option<Duration>,
     /// Which vi mode the box is in, where vi is the style.
     ///
     /// Every session opens in INSERT, where a typed character is a typed character. Opening in NORMAL
@@ -722,8 +764,16 @@ pub struct Session {
     pub status: Status,
     /// Whether the audit trail is shown alongside replies.
     pub show_trail: bool,
+    /// Whether the model's thinking is drawn as it arrives. For this session only, and a matter of
+    /// what is drawn: nothing the model is asked or sent depends on it.
+    show_thinking: bool,
     /// Whether the person has the info panel open, which the frame then draws only where it fits.
     panel: bool,
+    /// The info panel's files state, while it is open (FILES-3).
+    ///
+    /// Beside `panel` rather than in place of it, so that ending the state puts the panel back as it
+    /// was: closed if it was closed.
+    files: Option<crate::files_mode::State>,
     /// The width the person has dragged the info panel to, which the frame clamps to the terminal
     /// it is drawn on without changing this.
     panel_width: u16,
@@ -739,6 +789,9 @@ pub struct Session {
     prompt_files: Option<std::path::PathBuf>,
     /// What the info panel says this session is.
     identity: Identity,
+    /// The GitHub repository a `#<number>` in a reply links into: the one the checkout's `origin`
+    /// names, where it is on GitHub (VIEW-32).
+    repository: Option<crate::issue_link::Repository>,
     /// Scroll offset from the bottom, in lines.
     pub scroll: u16,
     /// The scroller, while it is open.
@@ -865,6 +918,9 @@ pub struct Session {
     unplaced_todos: std::collections::BTreeMap<usize, Vec<bravebot_core::todo::Row>>,
     /// Tokens spent across the whole session.
     pub tokens: u64,
+    /// How many of [`Session::tokens`] the model read and how many it wrote, for the charges that
+    /// reported the split. A charge that did not is in the total and in neither of these.
+    split: bravebot_session::sessions::Split,
     /// What each turn cost, by turn number, and what was spent before the first turn under zero.
     ///
     /// The session total answers "what has this cost me"; this answers "where did it go", which is
@@ -1084,7 +1140,7 @@ pub struct Session {
     /// Not in [`bravebot_session::sessions::Standing`], so nothing about it is written down. A schedule that
     /// outlived the session that set it would start sending prompts at somebody who resumed a
     /// conversation to read it.
-    looping: Option<crate::loops::Running>,
+    looping: crate::loops::Loops,
     /// The condition this session is working towards, where the person set one.
     ///
     /// Private for the reason the loop is: the condition, the rounds spent and the last verdict
@@ -1127,7 +1183,8 @@ pub struct Session {
     /// that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     watches: watch::Watches,
-    /// Set when `/init` hands back its prompt, so the turn that sends it says the driver wrote it.
+    /// Set when `/init`, `/review` or `/help` hands back its prompt, so the turn that sends it says
+    /// the driver wrote it.
     driver_prompt_pending: bool,
     /// The same prompts, resolved, for the turn in flight to take between rounds.
     ///
@@ -1156,6 +1213,23 @@ pub struct Session {
     /// Held as it arrived. What is drawn from it is [`Session::reply_so_far`], since a model
     /// that has nowhere else to put its working writes it in here.
     streaming: String,
+    /// What the model has thought in the round now being written, as far back as is kept.
+    ///
+    /// Apart from `streaming` and from the transcript: it is no part of the reply, is never
+    /// written to the session record or sent in a later request, and goes when the round does. The
+    /// end of it only, since a model can think for minutes and every frame draws what is held.
+    /// Held whether or not it is being shown, so turning it on mid-round shows what has come so far.
+    thinking: String,
+    /// What the command running right now has printed, as far as it has got and as far back as is
+    /// kept (SHELL-7).
+    ///
+    /// Apart from the transcript for the reason `streaming` is: it is drawn at the tail and replaced
+    /// by the entry the command's result makes, so the handover draws nothing twice. The end of it
+    /// only, since a command can print without end and every frame draws what is held. Held as it
+    /// arrived, and drawn through the same step as the entry that replaces it.
+    command_output: String,
+    /// How many lines of what the command printed came before the first of `command_output`.
+    command_earlier: usize,
     /// Where in the transcript the commands carried out during the turn in flight put what they
     /// said, oldest first.
     ///
@@ -1180,10 +1254,10 @@ pub struct Session {
     /// Answers the user has already given this session, keyed by the question.
     ///
     /// A repeated question is answered from here rather than put to them again, since a planner
-    /// that loops back over the same decision should not make the user restate it. Kept in the
-    /// interface rather than the kernel: it is a convenience for the person, not a rule about
-    /// labels, and the key is trusted text by the time it reaches here.
-    pub answers: Vec<(String, bravebot_core::ask::Answer)>,
+    /// that loops back over the same decision should not make the user restate it. The memo is the
+    /// one every front end keeps; which session it belongs to is this interface's to say, and
+    /// the key is trusted text by the time it reaches here.
+    pub answers: bravebot_core::ask::AnswerMemo,
     /// Pictures pasted into the line being typed, each with the text standing in for it.
     ///
     /// The marker is the handle. A paste writes `[Image #1]` where the caret was and the picture
@@ -1267,6 +1341,12 @@ pub struct Session {
     ///
     /// Kept for the session only, as `advisor` is.
     style: Option<bravebot_agent::styles::Style>,
+    /// The skill `/mode` put in force, which every turn applies until it is left (SKILL-21).
+    ///
+    /// The name alone: each turn reads the skill again, so a file that moved or is no longer
+    /// trusted is not applied from what was read when the mode was chosen. Recorded with the
+    /// session, so a resume puts it back.
+    skill_mode: Option<String>,
     /// The names of the project's styles the trust map vouched for when `/style` was last typed.
     ///
     /// A pick of one of them is taken on this list, and the turn reads the file again under its own
@@ -1349,6 +1429,8 @@ impl Session {
             stashed: None,
             shell: false,
             handoff: false,
+            enhanced: None,
+            link_prompt: None,
             handed_over: None,
             shell_private: false,
             shortcuts: false,
@@ -1361,6 +1443,7 @@ impl Session {
             bindings: crate::keybindings::Keybindings::default(),
             wheel_rows: WHEEL_ROWS,
             mouse: true,
+            ask_idle: None,
             mode: crate::vim::Mode::default(),
             half_typed: None,
             count: None,
@@ -1379,7 +1462,9 @@ impl Session {
             ordinary_run_open: false,
             status: Status::Idle,
             show_trail: false,
+            show_thinking: false,
             panel: false,
+            files: None,
             panel_width: crate::panel::WIDTH,
             panel_drag: false,
             pointer: None,
@@ -1387,6 +1472,7 @@ impl Session {
             away: Default::default(),
             prompt_files: None,
             identity: Identity::default(),
+            repository: None,
             scroll: 0,
             scroller: None,
             last_request: None,
@@ -1422,6 +1508,7 @@ impl Session {
             turn_places: Default::default(),
             unplaced_todos: Default::default(),
             tokens: 0,
+            split: Default::default(),
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             occupancy: Occupancy::Unmeasured,
@@ -1457,7 +1544,7 @@ impl Session {
             turn_in_flight: false,
             stopping: false,
             ctrl_enter_arrives: false,
-            looping: None,
+            looping: crate::loops::Loops::default(),
             watches: watch::Watches::new(),
             driver_prompt_pending: false,
             goal: None,
@@ -1471,10 +1558,13 @@ impl Session {
             pending: crate::remote_confirm::Interjections::new(),
             held: std::collections::VecDeque::new(),
             streaming: String::new(),
+            thinking: String::new(),
+            command_output: String::new(),
+            command_earlier: 0,
             said_while_working: Vec::new(),
             composing: None,
             attributed_to: None,
-            answers: Vec::new(),
+            answers: bravebot_core::ask::AnswerMemo::default(),
             pasted: Vec::new(),
             previews: Vec::new(),
             sent_pasted: Vec::new(),
@@ -1490,6 +1580,7 @@ impl Session {
             advisor: None,
             spend_limit: bravebot_agent::SpendLimit::default(),
             style: None,
+            skill_mode: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
             reference_sources: Vec::new(),
@@ -1745,6 +1836,8 @@ impl Session {
         // A new conversation has sent nothing yet, so Up starts from nothing of its own.
         self.history.forget_session();
         self.transcript.clear();
+        // The edits it listed were in the transcript that is gone (FILES-10).
+        self.files = None;
         self.expandable_lines = 0;
         self.last_request = None;
         self.turns = 0;
@@ -1753,7 +1846,7 @@ impl Session {
         self.recall.clear();
         // ASK-8: kept, a question in the new conversation would be answered from the one that was
         // thrown away, and the person asked nothing.
-        self.answers.clear();
+        self.answers.forget();
         self.turn_places.clear();
         self.unplaced_todos.clear();
         self.hunks_listed = None;
@@ -1761,6 +1854,7 @@ impl Session {
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
         self.tokens = 0;
+        self.split = Default::default();
         self.spend_limit.forget_credits();
         self.spend.clear();
         self.timing.clear();
@@ -1790,8 +1884,10 @@ impl Session {
         // nothing written about it looks like one that is live and has found nothing. Silent where
         // there was no loop, and after the transcript was emptied, so the line is the new
         // conversation's first.
-        if self.looping.take().is_some() {
-            self.note(t!(loop_cleared));
+        match self.looping.stop_all() {
+            0 => {}
+            1 => self.note(t!(loop_cleared)),
+            count => self.note(t!(loop_cleared_all, count = count)),
         }
         // The goal goes the same way, and for a sharper version of the same reason: a condition
         // judged against an exchange that has been thrown away is judged against nothing, and the
@@ -1876,6 +1972,7 @@ impl Session {
         if self.attributed_to.is_none() {
             self.waiting_on = None;
             self.streaming.clear();
+            self.thinking.clear();
         }
         self.drop_composing();
     }
@@ -1947,6 +2044,45 @@ impl Session {
         self.streaming.push_str(text);
     }
 
+    /// Add what the model has thought since the last frame.
+    ///
+    /// Dropped for a delegate for the reason its half-written reply is: there is one model
+    /// thinking at a time, and a delegate's thought drawn at the turn's tail reads as the planner's.
+    /// Only the end is kept, however long the model thinks.
+    pub fn thinking(&mut self, text: &str) {
+        if text.is_empty() || self.attributed_to.is_some() {
+            return;
+        }
+        self.thinking.push_str(text);
+        if let Some(excess) = self.thinking.len().checked_sub(THINKING_KEPT) {
+            let mut cut = excess;
+            while !self.thinking.is_char_boundary(cut) {
+                cut += 1;
+            }
+            self.thinking.drain(..cut);
+        }
+    }
+
+    /// The thinking to draw at the tail: what the model has thought this round, while it is being
+    /// shown, and nothing otherwise.
+    pub fn thinking_so_far(&self) -> &str {
+        if self.show_thinking {
+            self.thinking.trim()
+        } else {
+            ""
+        }
+    }
+
+    /// Show the model's thinking as it arrives, or stop showing it, and say which.
+    pub fn toggle_thinking(&mut self) {
+        self.show_thinking = !self.show_thinking;
+        self.note(if self.show_thinking {
+            t!(thinking_on)
+        } else {
+            t!(thinking_off)
+        });
+    }
+
     /// Record the call the model is writing, or that an attempt thrown away took it back.
     ///
     /// A delegate's is dropped for the reason its half-written reply is: there is one model
@@ -2002,6 +2138,7 @@ impl Session {
         // has been showing, now on their way into the transcript, so leaving the tail up would
         // draw them twice; and a round that said nothing has nothing to leave up either.
         self.streaming.clear();
+        self.thinking.clear();
         self.drop_composing();
         let text = text.into();
         let text = crate::reasoning::spoken(&text);
@@ -2215,6 +2352,28 @@ impl Session {
         match expand(&directory, &line) {
             Expansion::NotOne => false,
             Expansion::Expanded(text) => {
+                // A file's text that would run a prompt of a server once sent is refused as one
+                // that opens with a command is: nothing carries out a line from a file (CMD-26).
+                let runs_a_prompt = self
+                    .servers
+                    .session
+                    .as_ref()
+                    .is_some_and(|servers| servers.prompt_request(&text).is_some());
+                if runs_a_prompt {
+                    let name = line
+                        .trim_start_matches('/')
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string();
+                    let path = directory.join(format!("{name}.md")).display().to_string();
+                    self.note(t!(
+                        prompt_file_begins_with_a_command,
+                        name = name,
+                        path = path
+                    ));
+                    return true;
+                }
                 self.put_in_the_box(text);
                 true
             }
@@ -2234,6 +2393,34 @@ impl Session {
                 true
             }
         }
+    }
+
+    /// Refuse a line that runs a prompt of an MCP server when the words after its name are not
+    /// `name=value` pairs, saying which word. The line stays as typed and nothing is sent (CMD-26).
+    ///
+    /// Returns whether the key was spent here. A line that names no server's prompt, one whose
+    /// arguments parse, and one with a row of the list highlighted are left for the arms that
+    /// follow.
+    pub fn refuse_unparsable_server_prompt(&mut self) -> bool {
+        use bravebot_agent::mcp::Unparsed;
+        if self.shell || self.completion != 0 {
+            return false;
+        }
+        let Some(servers) = self.servers.session.clone() else {
+            return false;
+        };
+        let line = self.unfolded(self.input.trim());
+        let Some(Err(why)) = servers.prompt_request(&line) else {
+            return false;
+        };
+        self.note(match why {
+            Unparsed::NotAPair(word) => t!(mcp_prompt_not_a_pair, word = word),
+            Unparsed::BadName(word) => t!(mcp_prompt_bad_name, word = word),
+            Unparsed::Twice(name) => t!(mcp_prompt_twice, name = name),
+            Unparsed::Quote(name) => t!(mcp_prompt_quote, name = name),
+            Unparsed::Ambiguous(word) => t!(mcp_prompt_ambiguous, word = word),
+        });
+        true
     }
 
     /// The worker appended the submitted prompt at this recounted position.
@@ -2867,6 +3054,7 @@ impl Session {
         // them, so they come down with the stop as they do at every other ending a round has.
         // Left up they are an answer drawn above a prompt that has gone back to the box.
         self.streaming.clear();
+        self.thinking.clear();
         self.composing = None;
 
         self.forget_cancelled_prompt();
@@ -2974,6 +3162,30 @@ impl Session {
         self.handoff = true;
     }
 
+    /// Put the commit message `/commit-message` drafted in the box for the person to read, edit and
+    /// send (CMD-23).
+    ///
+    /// A line already in the box is kept as the draft Up brings back, so a draft arriving after the
+    /// person started typing something else costs them nothing. The text goes in after the leading
+    /// words the driver wrote, and with what a terminal draws as nothing taken out, as a paste's is
+    /// (PASTE-10): the draft was written about files nobody may have vouched for. Enter on it is an
+    /// ordinary press, so nothing here sends and nothing here runs.
+    pub fn propose_commit_message(&mut self, message: &str) {
+        if self.status != Status::Idle {
+            return;
+        }
+        let (message, removed) = crate::invisible::without_invisible(&normalised(message));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
+        if !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(crate::commit_message_command::box_text(&message));
+        self.shell = false;
+    }
+
     /// Whether Enter on the box starts a new session from it.
     pub fn handoff_pending(&self) -> bool {
         self.handoff && !self.input.trim().is_empty()
@@ -2986,7 +3198,35 @@ impl Session {
     pub fn drop_a_wiped_handoff(&mut self) {
         if self.input.trim().is_empty() {
             self.handoff = false;
+            self.link_prompt = None;
         }
+    }
+
+    /// Put the words a `bravebot://open` link carried in the box, as a paste puts them, and keep that
+    /// they came from a link (LINK-4).
+    ///
+    /// What a terminal draws as nothing comes out and is counted, as from a paste. Unlike a paste a long
+    /// one is not folded. Nothing here sends. The count is of the text as it was after that, which is
+    /// what the person is asked to read.
+    pub fn prefill_from_link(&mut self, text: &str) {
+        let (cleaned, removed) = crate::invisible::without_invisible(&normalised(text));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
+        if cleaned.trim().is_empty() {
+            return;
+        }
+        // Written whole rather than folded behind a marker, which `paste_text` does for a long
+        // paste: the point of the banner is that the person reads what is in the box, and a marker
+        // would hide the words a page chose behind a label that Enter then expands.
+        self.paste(&cleaned);
+        self.link_prompt = Some(cleaned.chars().count());
+    }
+
+    /// The length of the text a link put in the box, while the box holds anything: the banner under
+    /// the line is drawn for as long as this answers (LINK-4).
+    pub fn link_prompt(&self) -> Option<usize> {
+        self.link_prompt.filter(|_| !self.input.trim().is_empty())
     }
 
     /// Take the brief as the person left it, to start a new session from.
@@ -3001,6 +3241,99 @@ impl Session {
         let text = self.unfolded(&typed);
         self.take_line(&typed);
         Some(text)
+    }
+
+    /// The words the enhance key would rewrite, or why the line is not words it can (INPUT-48).
+    ///
+    /// A folded paste is put back to the words it stands for, as it is where the line leaves the box
+    /// for the planner. A line that names a picture or a dropped file is refused, because the rewrite
+    /// is words and the marker standing for the file is not: a rewrite that dropped it would lose the
+    /// attachment, and one that kept it would send a file its writer had not chosen to keep. A line
+    /// longer than a rewrite is offered at is refused too, since the request would be paid for and
+    /// the answer, which keeps what the line says, could not be used.
+    pub fn draft_to_enhance(&self) -> Result<String, Unenhanceable> {
+        if !self.pasted_named(&self.input).is_empty()
+            || !self.attachments_named(&self.input).is_empty()
+        {
+            return Err(Unenhanceable::HoldsAttachment);
+        }
+        let draft = self.unfolded(self.input.trim());
+        if draft.chars().count() > bravebot_agent::aside::ENHANCE_LIMIT {
+            return Err(Unenhanceable::TooLong);
+        }
+        Ok(draft)
+    }
+
+    /// What an answer to the request for an enhancement offers, with what draws as nothing taken out
+    /// and counted, as it is from a paste (`pasting.md` PASTE-10), or `None` where nothing usable is
+    /// left (INPUT-48).
+    ///
+    /// Taken out before the answer is counted, so one made of nothing but those characters is empty
+    /// and not offered: the person is about to read this line and send it as their own, and what
+    /// they cannot see they cannot have meant.
+    pub fn clean_enhancement(&mut self, shown: &str) -> Option<String> {
+        let (text, removed) = crate::invisible::without_invisible(&normalised(shown));
+        if removed > 0 {
+            self.note(t!(enhance_invisible_removed, count = removed));
+        }
+        bravebot_agent::aside::enhancement(&text)
+    }
+
+    /// Put the enhancement of `line` in the box for the person to read and edit (INPUT-48).
+    ///
+    /// `line` is what the box held when the request went out. A box that holds something else by now
+    /// has been typed into since, and what is there is what the person is looking at, so nothing is
+    /// written over it and `false` comes back. Where it holds `line`, that line is kept as the one
+    /// [`Session::restore_unenhanced`] puts back.
+    pub fn propose_enhancement(&mut self, line: &str, text: String) -> bool {
+        if self.status != Status::Idle || self.input != line {
+            return false;
+        }
+        // The oldest line, so enhancing an enhancement and pressing Escape lands on what the person
+        // wrote and not on the rewrite before this one.
+        let original = self.enhanced.clone().unwrap_or_else(|| line.to_string());
+        self.history.leave();
+        self.set_input(text);
+        self.shell = false;
+        self.enhanced = Some(original);
+        true
+    }
+
+    /// Whether the line in the box is an enhancement, which Escape and Ctrl-C put the original back
+    /// over and Enter sends as a prompt and never as a command.
+    pub fn enhanced_pending(&self) -> bool {
+        self.enhanced.is_some() && !self.input.trim().is_empty()
+    }
+
+    /// End an enhancement the box was holding, where the box has since been emptied.
+    ///
+    /// Asked before each key and each paste, for the reason [`Session::drop_a_wiped_handoff`] is: the
+    /// one edit that leaves the box empty is the one that decides the next thing typed is a new line
+    /// and not the enhancement being edited.
+    pub fn drop_a_wiped_enhancement(&mut self) {
+        if self.input.trim().is_empty() {
+            self.enhanced = None;
+        }
+    }
+
+    /// Put back the line the enhancement in the box replaced (INPUT-48).
+    ///
+    /// What is in the box now is kept as the draft Up brings back, as clearing it does, so an edit
+    /// made to the enhancement is not lost with it. Once the original is back the box holds an
+    /// ordinary line, and the next Escape clears it as it clears any.
+    pub fn restore_unenhanced(&mut self) {
+        if self.status != Status::Idle {
+            return;
+        }
+        let Some(original) = self.enhanced.take() else {
+            return;
+        };
+        if !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(original);
+        self.shell = false;
     }
 
     /// Hold the prompt the session beginning now is to open with.
@@ -3123,13 +3456,102 @@ impl Session {
     pub fn begin_command(&mut self) {
         self.status = Status::Running;
         self.started = Some(Instant::now());
+        self.command_output.clear();
+        self.command_earlier = 0;
         self.back_to_the_tail();
     }
 
     /// Note that it finished, whatever came of it.
+    ///
+    /// What it printed so far goes with it. What the command's result releases is drawn by
+    /// [`Session::printed`] in its place, and a command that released nothing leaves nothing of it.
     pub fn finish_command(&mut self) {
         self.status = Status::Idle;
         self.started = None;
+        self.command_output.clear();
+        self.command_earlier = 0;
+    }
+
+    /// Note that it ended because it was stopped or ran out of time, and keep what it had printed.
+    ///
+    /// The rows become an entry, since a person stops a command from what it has printed and would
+    /// lose the reason with them. The entry is for the screen alone: the command released nothing,
+    /// so nothing of it is recorded in the conversation (SHELL-7). Where the rows held only the end
+    /// of it, the entry begins with the line saying how many came before. Whether anything was
+    /// kept, so the caller can say it was not sent.
+    pub fn finish_stopped_command(&mut self) -> bool {
+        let kept = self
+            .command_so_far()
+            .map(|(text, earlier)| (text.trim_end().to_string(), earlier))
+            .filter(|(text, _)| !text.is_empty());
+        self.finish_command();
+        let Some((text, earlier)) = kept else {
+            return false;
+        };
+        let text = match earlier {
+            0 => text,
+            count => format!("{}\n{text}", t!(transcript_earlier_lines, count = count)),
+        };
+        self.transcript.push(Entry::output(text));
+        self.back_to_the_tail();
+        true
+    }
+
+    /// Add what the running command has printed since the last frame to what is drawn of it.
+    ///
+    /// The view does not move for it, as it does not for [`Session::streaming`]: a chunk lands
+    /// several times a second for as long as the command prints, and putting the view back for each
+    /// would leave nobody able to scroll back while it runs. A view at the tail follows what
+    /// arrives, since `scroll` is 0 there.
+    ///
+    /// Only the end is kept, [`COMMAND_LINES`] lines and [`COMMAND_BYTES`] bytes of it, a last line
+    /// with no newline yet being one of the lines. The lines before it are counted so the drawing
+    /// can say so. The released text that replaces it when the command ends is whole.
+    ///
+    /// Looked at from the end, and a piece that fills what is kept alone is cut before anything is
+    /// looked at in it: this runs between frames, and a command that prints faster than they are
+    /// drawn hands it a great deal at once.
+    pub fn command_printing(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let mut text = text;
+        if text.len() > COMMAND_BYTES {
+            let mut from = text.len() - COMMAND_BYTES;
+            while !text.is_char_boundary(from) {
+                from += 1;
+            }
+            self.command_earlier +=
+                self.command_output.matches('\n').count() + text[..from].matches('\n').count();
+            self.command_output.clear();
+            text = &text[from..];
+        }
+        self.command_output.push_str(text);
+
+        let newlines_kept = match self.command_output.ends_with('\n') {
+            true => COMMAND_LINES,
+            false => COMMAND_LINES - 1,
+        };
+        let mut cut = self
+            .command_output
+            .rmatch_indices('\n')
+            .nth(newlines_kept)
+            .map_or(0, |(at, _)| at + 1);
+        let over = (self.command_output.len() - cut).saturating_sub(COMMAND_BYTES);
+        if over > 0 {
+            cut += over;
+            while !self.command_output.is_char_boundary(cut) {
+                cut += 1;
+            }
+        }
+        self.command_earlier += self.command_output[..cut].matches('\n').count();
+        self.command_output.drain(..cut);
+    }
+
+    /// What the running command has printed, and how many lines came before it, or `None` while it
+    /// has printed nothing.
+    pub fn command_so_far(&self) -> Option<(&str, usize)> {
+        (!self.command_output.is_empty()).then_some((&self.command_output, self.command_earlier))
     }
 
     /// Show what a command printed, or that it printed nothing.
@@ -3610,9 +4032,15 @@ impl Session {
         Some(line)
     }
 
-    /// The loop repeating a prompt, where one is running.
+    /// The oldest loop repeating a prompt, where one is running: the only one in a session that
+    /// holds one, and some loop at all exactly when any is live.
     pub fn looping(&self) -> Option<&crate::loops::Running> {
-        self.looping.as_ref()
+        self.looping.oldest()
+    }
+
+    /// Every loop repeating a prompt, numbered and oldest first.
+    pub fn loops(&self) -> &crate::loops::Loops {
+        &self.looping
     }
 
     /// Start repeating a prompt, and give back the first tick to send now.
@@ -3638,8 +4066,11 @@ impl Session {
             self.note(t!(loop_busy));
             return None;
         }
-        if self.looping.is_some() {
-            self.note(t!(loop_replaced));
+        // Refused rather than replacing one: the person typed every loop that is live, and the
+        // cost of one more is the cost of another turn on every tick.
+        if self.looping.is_full() {
+            self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
+            return None;
         }
         // The other half of the rule `start_goal` states: one thing at a time, whichever of the
         // two was asked for second.
@@ -3651,29 +4082,9 @@ impl Session {
         // turn that silently took somebody's loop off would be ending work they are waiting on.
         self.end_watches_for_another_kind();
 
-        match request.adjusted {
-            Some(crate::loops::Held::Raised(every)) => {
-                self.note(t!(loop_interval_raised, every = crate::loops::spell(every)))
-            }
-            Some(crate::loops::Held::Capped(every)) => {
-                self.note(t!(loop_interval_capped, every = crate::loops::spell(every)))
-            }
-            None => {}
-        }
-        match request.pacing {
-            crate::loops::Pacing::Every(every) => {
-                self.note(t!(loop_started_every, every = crate::loops::spell(every)))
-            }
-            crate::loops::Pacing::SelfPaced => self.note(t!(loop_started_self_paced)),
-        }
-
-        // Said before the first tick goes, because it is about every tick after it: somebody who
-        // pasted a screenshot into a loop is owed the difference between the turn that sees it and
-        // the ones that read a sentence in its place.
+        let (adjusted, pacing) = (request.adjusted, request.pacing);
+        let pasted_a_picture = !pasted.is_empty();
         let mut running = crate::loops::Running::begin(request);
-        if !pasted.is_empty() {
-            self.note(t!(paste_with_the_first_tick));
-        }
         if !pasted.is_empty() || !attached.is_empty() {
             // Nothing is said about a dropped file, because a later tick is sent its name and a name
             // is something the turn can act on: it reads the file through the gate it reads any other
@@ -3685,8 +4096,38 @@ impl Session {
             );
             running = running.carrying(pasted, attached, settled);
         }
-        self.looping = Some(running);
-        self.dispatch_tick()
+        // Numbered before anything is said about it, so what is said is the number it has.
+        let number = self.looping.start(running);
+
+        match adjusted {
+            Some(crate::loops::Held::Raised(every)) => {
+                self.note(t!(loop_interval_raised, every = crate::loops::spell(every)))
+            }
+            Some(crate::loops::Held::Capped(every)) => {
+                self.note(t!(loop_interval_capped, every = crate::loops::spell(every)))
+            }
+            None => {}
+        }
+        match pacing {
+            crate::loops::Pacing::Every(every) => self.note(t!(
+                loop_started_every,
+                number = number,
+                every = crate::loops::spell(every)
+            )),
+            crate::loops::Pacing::SelfPaced => {
+                self.note(t!(loop_started_self_paced, number = number))
+            }
+            // Not started here: `/after` sends nothing now, and [`Session::start_after`] says so.
+            crate::loops::Pacing::Once(_) => {}
+        }
+
+        // Said before the first tick goes, because it is about every tick after it: somebody who
+        // pasted a screenshot into a loop is owed the difference between the turn that sees it and
+        // the ones that read a sentence in its place.
+        if pasted_a_picture {
+            self.note(t!(paste_with_the_first_tick));
+        }
+        self.dispatch_tick_of(number)
     }
 
     /// Start a turn on a person's task, addressed to the definition they named.
@@ -3732,12 +4173,40 @@ impl Session {
         )
     }
 
+    /// Begin the turn `/help` is (CMD-24).
+    pub fn start_help(&mut self, question: &str) -> String {
+        self.driver_prompt_pending = true;
+        self.begin_turn(
+            crate::help_command::prompt(question),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+        )
+    }
+
+    /// Put the release notes `/changelog` shows in the transcript (CMD-25).
+    ///
+    /// `release` is what the build carries for `running`, which is the newest release's where the
+    /// changelog has no heading for that version, and `None` where it carries no release at all.
+    pub fn report_changelog(
+        &mut self,
+        running: &str,
+        release: Option<crate::help_command::Release<'_>>,
+    ) {
+        let Some(release) = release else {
+            self.note(t!(changelog_none));
+            return;
+        };
+        let (heading, notes) = crate::help_command::shown(&release, running);
+        self.note(format!("{heading}\n{notes}"));
+    }
+
     /// Whether the turn starting now sends a prompt the driver wrote, without taking the answer.
     pub fn driver_prompt_is_pending(&self) -> bool {
         self.driver_prompt_pending
     }
 
-    /// Whether the turn starting now sends a prompt the driver wrote, as `/init` and `/review` do.
+    /// Whether the turn starting now sends a prompt the driver wrote, as `/init`, `/review` and
+    /// `/help` do.
     /// Taken once.
     pub fn take_driver_prompt(&mut self) -> bool {
         std::mem::take(&mut self.driver_prompt_pending)
@@ -3823,7 +4292,7 @@ impl Session {
         // whose ticks were each held open by a goal is neither of the two things a person asked
         // for: the interval stops meaning anything, and the condition is judged against a turn
         // that was going to be repeated anyway.
-        if self.looping.take().is_some() {
+        if self.looping.stop_all() > 0 {
             self.note(t!(goal_replaces_loop));
         }
         self.end_watches_for_another_kind();
@@ -4321,6 +4790,7 @@ impl Session {
         self.started = None;
         self.clear_in_progress();
         self.streaming.clear();
+        self.thinking.clear();
         self.composing = None;
         // The driver says which jobs the turn stopped before it says the turn is over. A worker
         // that ended without saying so stopped them all the same, since none outlives its turn,
@@ -4457,6 +4927,13 @@ impl Session {
         self.timing.entry(self.turns).or_default().inference_ms += took;
     }
 
+    /// [`Session::end_aside`] for a model call that reported its usage, so that the cost is
+    /// charged with how it divides into what was read and what was written.
+    pub fn end_aside_of(&mut self, usage: bravebot_aichat::protocol::Usage) {
+        self.end_aside(usage.total());
+        self.charged_split(usage.total(), usage.completion_tokens);
+    }
+
     /// Leave a manifest run the session started, adding what it cost to the session's total.
     ///
     /// [`Session::end_aside`] in every respect but the breakdown, and charged to the same turn for
@@ -4500,6 +4977,7 @@ impl Session {
         // said it, which the planner has not: what an aside wrote is the aside's, and the row it
         // becomes is where it is drawn.
         self.streaming.clear();
+        self.thinking.clear();
         self.composing = None;
         // Read before the timer is cleared.
         let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -4616,19 +5094,12 @@ impl Session {
         self.note(message);
     }
 
-    /// What the user said last time this exact question was asked, if they were asked it.
-    pub fn recall_answer(&self, key: &str) -> Option<bravebot_core::ask::Answer> {
-        self.answers
-            .iter()
-            .find(|(asked, _)| asked == key)
-            .map(|(_, answer)| answer.clone())
-    }
-
-    /// Remember an answer, replacing any earlier one for the same question.
-    pub fn remember_answer(&mut self, key: String, answer: bravebot_core::ask::Answer) {
-        match self.answers.iter_mut().find(|(asked, _)| *asked == key) {
-            Some(slot) => slot.1 = answer,
-            None => self.answers.push((key, answer)),
+    /// Say on the transcript that a question was closed on the clock, where `answers` hold one
+    /// (ASK-9), so a person who comes back can see that it was put and nobody answered.
+    pub fn note_closed_on_the_clock(&mut self, answers: &[bravebot_core::ask::Answer]) {
+        let closed = answers.contains(&bravebot_core::ask::Answer::TimedOut);
+        if let (true, Some(idle)) = (closed, self.ask_idle) {
+            self.note(t!(session_question_timed_out, seconds = idle.as_secs()));
         }
     }
 
@@ -4787,6 +5258,23 @@ mod tests {
             id
         }
 
+        /// One model thinks at a time, and a delegate's thought drawn at the turn's tail reads as
+        /// the planner's.
+        #[test]
+        fn a_delegates_thinking_is_not_the_turns() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            session.toggle_thinking();
+            spawn(&mut session, "explore", "look around");
+            session.thinking("a delegate's");
+            assert_eq!(
+                session.thinking_so_far(),
+                "",
+                "a delegate's thought was the turn's"
+            );
+        }
+
         /// One model writes at a time, and a delegate's call named beside the turn's spinner reads
         /// as the planner's.
         #[test]
@@ -4941,6 +5429,7 @@ mod tests {
                 height: 10,
                 rows: 40,
                 expandable: vec![(32, 38, 0)],
+                delegates: Vec::new(),
                 ..Laid::default()
             };
 
@@ -7559,64 +8048,55 @@ mod tests {
         assert_eq!(session.top_row(), 120, "the view stopped at the old end");
     }
 
-    /// A question nobody has been asked has no answer to recall, which is what makes the memo
-    /// safe to consult for every question in a series.
-    #[test]
-    fn a_question_never_asked_has_no_remembered_answer() {
-        let session = Session::new(".");
-        assert_eq!(session.recall_answer("pick one: Cache: Which?"), None);
-    }
-
-    /// The key is the whole question, so two that differ anywhere are two questions and the
-    /// second is put to the person rather than answered with the first one's reply.
-    #[test]
-    fn a_different_question_is_not_answered_from_an_earlier_one() {
-        let mut session = Session::new(".");
-        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
-        assert_eq!(session.recall_answer("pick one: Branch: Which?"), None);
-    }
-
-    /// Answering again replaces rather than accumulates, or the memo would grow a second entry
-    /// for the same question and recall would keep returning the stale one.
-    #[test]
-    fn answering_the_same_question_again_replaces_what_was_remembered() {
-        let mut session = Session::new(".");
-        session.remember_answer("q".into(), Answer::Chosen(vec![0]));
-        session.remember_answer("q".into(), Answer::Chosen(vec![1]));
-        assert_eq!(session.answers.len(), 1);
-        assert_eq!(session.recall_answer("q"), Some(Answer::Chosen(vec![1])));
-    }
-
     /// ASK-8: an answer is remembered for the session, and `/clear` begins another. A question the
     /// new conversation puts is asked, not answered from the one that was thrown away.
     #[test]
     fn clearing_the_conversation_forgets_the_answers_to_the_planners_questions() {
         let mut session = Session::new(".");
-        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
-        session.remember_answer("skip: Branch: Which?".into(), Answer::Declined);
+        session
+            .answers
+            .remember("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
+        session
+            .answers
+            .remember("skip: Branch: Which?".into(), Answer::Declined);
 
         session.clear();
 
         assert_eq!(
-            session.recall_answer("pick one: Cache: Which?"),
+            session.answers.recall("pick one: Cache: Which?"),
             None,
             "a chosen answer outlived /clear"
         );
         assert_eq!(
-            session.recall_answer("skip: Branch: Which?"),
+            session.answers.recall("skip: Branch: Which?"),
             None,
             "a declined question outlived /clear"
         );
     }
 
-    /// A decline is an answer, so it is remembered as one. Treating it as absence would put a
-    /// question the person deliberately passed over back in front of them.
+    /// ASK-9: the time is the person's, and it closes the planner's questions only. A plan, a spend
+    /// limit and a repeated call are the driver's own, so they wait for the person with the setting
+    /// in force. Rejects: the time applied to every question the interface puts.
     #[test]
-    fn a_skipped_question_is_remembered_as_skipped() {
+    fn only_the_planners_own_questions_are_closed_on_the_clock() {
+        use bravebot_core::ask::Asking;
+        let planners = Asking {
+            closes_when_idle: true,
+            ..Default::default()
+        };
+        let drivers = Asking::default();
+
         let mut session = Session::new(".");
-        session.remember_answer("q".into(), Answer::Declined);
-        assert_eq!(session.recall_answer("q"), Some(Answer::Declined));
+        assert_eq!(session.ask_idle_for(&planners), None);
+
+        session.adopt_ask_idle(Some(90));
+        assert_eq!(
+            session.ask_idle_for(&planners),
+            Some(Duration::from_secs(90))
+        );
+        assert_eq!(session.ask_idle_for(&drivers), None);
     }
+
     use bravebot_core::label::Label;
 
     fn session() -> Session {
@@ -8708,6 +9188,24 @@ mod tests {
         assert!(!finished.failed());
     }
 
+    /// VIEW-13: the row says how long the turn took, so the figure is the session's clock at the
+    /// turn's end and not a placeholder.
+    #[test]
+    fn a_completed_turn_is_reported_with_how_long_it_took() {
+        let mut s = Session::new("none");
+        s.set_input("do the thing".to_string());
+        s.submit();
+        s.started = Some(Instant::now() - Duration::from_secs(75));
+        s.complete("done", Vec::new(), 4_200);
+
+        let finished = s.finished.expect("a finished turn");
+        assert!(
+            finished.took >= Duration::from_secs(75),
+            "the turn's duration was lost: {:?}",
+            finished.took
+        );
+    }
+
     /// A tick beside a turn that did not finish would be the wrong thing to say about it.
     #[test]
     fn a_failed_turn_is_reported_as_failed() {
@@ -9016,6 +9514,47 @@ mod tests {
             s.take_queued_command().is_none(),
             "a tick was left waiting as a command"
         );
+    }
+
+    /// The line goes once, no earlier than the delay, as the prompt typed and never as a command, and
+    /// nothing is scheduled afterwards. Wrong implementations send at once, send before the delay is
+    /// up, run `/exit` as a command, or leave a loop behind that sends it again.
+    #[test]
+    fn an_after_line_is_sent_once_when_its_delay_is_up_and_leaves_no_schedule() {
+        let mut s = session();
+        s.start_after(match crate::loops::parse_after("5m /exit") {
+            crate::loops::Delayed::Start(request) => request,
+            _ => panic!("unread"),
+        });
+        assert_eq!(s.status, Status::Idle, "a turn started at once");
+        assert!(s.looping().is_some());
+
+        let early = Instant::now() + Duration::from_secs(5 * 60 - 5);
+        assert_eq!(s.loop_tick_at(early), None, "sent before the delay");
+
+        let due = Instant::now() + Duration::from_secs(5 * 60 + 1);
+        assert_eq!(s.loop_tick_at(due).as_deref(), Some("/exit"));
+        assert!(!s.is_quitting(), "the line ran as a command");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        assert!(s.looping().is_none(), "a schedule was left behind");
+        let much_later = Instant::now() + Duration::from_secs(3 * 60 * 60);
+        assert_eq!(s.loop_tick_at(much_later), None, "it was sent again");
+    }
+
+    /// A prompt typed while one is waiting is not what it waits for, and does not use it up.
+    #[test]
+    fn a_prompt_typed_while_an_after_line_waits_does_not_use_it_up() {
+        let mut s = session();
+        s.start_after(match crate::loops::parse_after("5m later") {
+            crate::loops::Delayed::Start(request) => request,
+            _ => panic!("unread"),
+        });
+        s.begin_turn("now".to_string(), (Vec::new(), Vec::new()), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        assert!(s.looping().is_some(), "an unrelated turn ended it");
     }
 
     /// What a watch is armed with, for the tests below: a look that saw something, so the watch
@@ -9471,6 +10010,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// `/changelog` names the notes for the version that runs, with each link written as its text.
+    /// Notes with their addresses left in, or under another version's name, would be read as what
+    /// this build changed.
+    #[test]
+    fn the_changelog_is_headed_by_the_running_version_and_has_its_links_written_as_text() {
+        let mut s = session();
+        s.report_changelog(
+            "0.17.0",
+            Some(crate::help_command::Release {
+                version: "0.17.0",
+                notes: " - Fixed a hang. ([#2122](https://github.com/brave/bravebot/issues/2122))",
+            }),
+        );
+        assert_eq!(
+            s.transcript.last().expect("the notes").text,
+            format!(
+                "{}\n - Fixed a hang. (#2122)",
+                t!(changelog_heading, version = "0.17.0")
+            )
+        );
+    }
+
+    /// A build whose version has no notes shows the newest release's and says so. Headed as the
+    /// running version's, they would be taken for what this build changed.
+    #[test]
+    fn the_changelog_of_a_build_with_no_notes_of_its_own_says_whose_notes_it_shows() {
+        let mut s = session();
+        s.report_changelog(
+            "0.18.0",
+            Some(crate::help_command::Release {
+                version: "0.17.0",
+                notes: " - Fixed a hang.",
+            }),
+        );
+        assert!(s.transcript.last().expect("the notes").text.starts_with(
+            &t!(changelog_newest, running = "0.18.0", version = "0.17.0").to_string()
+        ));
+    }
+
+    /// A build that carries no release says so rather than drawing an empty heading.
+    #[test]
+    fn a_changelog_with_no_release_says_so() {
+        let mut s = session();
+        s.report_changelog("0.17.0", None);
+        assert_eq!(
+            s.transcript.last().expect("a note").text,
+            t!(changelog_none)
+        );
+    }
+
     fn a_request() -> bravebot_agent::request_view::RequestView {
         use bravebot_agent::request_view::{Provenance, RequestView, Span};
         RequestView {
@@ -9865,7 +10454,7 @@ mod tests {
     #[test]
     fn a_due_tick_is_held_for_a_running_turn_and_a_queued_prompt_and_then_goes() {
         let mut s = session();
-        s.looping = Some(a_loop_that_is_due());
+        s.looping.start(a_loop_that_is_due());
 
         for c in "their own question".chars() {
             s.type_char(c);
@@ -9947,7 +10536,7 @@ mod tests {
     #[test]
     fn a_turn_that_begins_without_a_line_from_the_box_takes_down_the_mark() {
         let mut s = session();
-        s.looping = Some(a_loop_that_is_due());
+        s.looping.start(a_loop_that_is_due());
         for c in "exit".chars() {
             s.type_char(c);
         }
@@ -10036,7 +10625,7 @@ mod tests {
         s.keep_awake();
         assert!(s.caffeinate.holding(), "a pending wakeup held nothing");
 
-        s.stop_loop();
+        s.stop_loops();
         s.keep_awake();
         assert!(
             !s.caffeinate.holding(),
@@ -10104,22 +10693,28 @@ mod tests {
         }
         let mut s = session();
         s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
-        assert_eq!(last_note(&s), "loop 1");
+        assert_eq!(last_note(&s), "loop 1, tick 1");
 
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
         s.dispatch_tick();
-        assert_eq!(last_note(&s), "loop 2, after 1 tick that found nothing");
+        assert_eq!(
+            last_note(&s),
+            "loop 1, tick 2, after 1 tick that found nothing"
+        );
 
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
         s.dispatch_tick();
-        assert_eq!(last_note(&s), "loop 3, after 2 ticks that found nothing");
+        assert_eq!(
+            last_note(&s),
+            "loop 1, tick 3, after 2 ticks that found nothing"
+        );
 
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, false)));
         s.dispatch_tick();
-        assert_eq!(last_note(&s), "loop 4");
+        assert_eq!(last_note(&s), "loop 1, tick 4");
     }
 
     /// A turn that says the loop is finished ends it at once and the screen names that ending,
@@ -10141,7 +10736,7 @@ mod tests {
             .clone();
         assert_eq!(
             note,
-            "that turn said the loop is finished, so the loop has stopped"
+            "that turn said the loop is finished, so loop 1 has stopped"
         );
     }
 
@@ -10230,7 +10825,7 @@ mod tests {
         assert!(
             s.transcript
                 .iter()
-                .any(|entry| entry.text == t!(loop_aged_out)),
+                .any(|entry| entry.text == t!(loop_aged_out, number = 1)),
             "the ending was not announced"
         );
     }
@@ -10238,11 +10833,11 @@ mod tests {
     #[test]
     fn stopping_a_loop_says_so_and_says_nothing_when_there_was_none() {
         let mut s = session();
-        assert!(!s.stop_loop());
+        assert!(!s.stop_loops());
         assert!(s.transcript.is_empty());
 
         s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
-        assert!(s.stop_loop());
+        assert!(s.stop_loops());
         assert!(s.looping().is_none());
     }
 
@@ -10315,6 +10910,322 @@ mod tests {
         s.report_loop();
         assert_eq!(s.transcript.len(), 1);
         assert_eq!(s.transcript[0].text, t!(loop_none));
+    }
+
+    fn said(s: &Session) -> Vec<String> {
+        s.transcript
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::System)
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    /// Two loops over two lines, each started by the person, both live. Settled between ticks, so
+    /// neither has a tick in flight.
+    fn two_loops() -> Session {
+        let mut s = session();
+        s.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s.start_loop(
+            crate::loops::request("1h check the pull request"),
+            Vec::new(),
+            Vec::new(),
+        );
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s
+    }
+
+    /// LOOP-1: starting a second loop leaves the first running, each with the line its own
+    /// person typed, and says which number each one is.
+    #[test]
+    fn a_second_loop_leaves_the_first_running_and_has_a_number_of_its_own() {
+        let s = two_loops();
+        let lines: Vec<(usize, &str)> = s
+            .loops()
+            .iter()
+            .map(|running| (running.number(), running.prompt()))
+            .collect();
+        assert_eq!(
+            lines,
+            [(1, "check the deploy"), (2, "check the pull request")]
+        );
+        let said = said(&s);
+        assert!(
+            said.iter()
+                .any(|note| note.starts_with("loop 2: repeating every 1h")),
+            "{said:?}"
+        );
+    }
+
+    /// LOOP-16: a sixth is refused and nothing is dropped to make room.
+    #[test]
+    fn a_loop_past_the_cap_is_refused_and_no_loop_is_dropped() {
+        let mut s = session();
+        for n in 0..crate::loops::MAX_LIVE {
+            s.start_loop(
+                crate::loops::request(&format!("5m watch {n}")),
+                Vec::new(),
+                Vec::new(),
+            );
+            s.complete("done", Vec::new(), 0);
+            s.loop_turn_ended(None);
+        }
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        s.transcript.clear();
+
+        let sent = s.start_loop(
+            crate::loops::request("5m one too many"),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(sent, None);
+        assert_eq!(s.status, Status::Idle, "a refused loop began a turn");
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        assert_eq!(s.looping().expect("a loop").prompt(), "watch 0");
+        assert_eq!(
+            said(&s),
+            [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]
+        );
+    }
+
+    /// LOOP-18: an `/after` line joins the loops under a number of its own and counts towards the
+    /// cap. A wrong implementation replaces the loop that is running, or lets a sixth line in.
+    #[test]
+    fn an_after_line_joins_the_loops_with_a_number_and_counts_towards_the_cap() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let after = |s: &mut Session, line: &str| match crate::loops::parse_after(line) {
+            crate::loops::Delayed::Start(request) => s.start_after(request),
+            _ => panic!("unread"),
+        };
+
+        after(&mut s, "5m tail the log");
+        let held: Vec<(usize, &str)> = s
+            .loops()
+            .iter()
+            .map(|running| (running.number(), running.prompt()))
+            .collect();
+        assert_eq!(
+            held,
+            [
+                (1, "check the deploy"),
+                (2, "check the pull request"),
+                (3, "tail the log")
+            ]
+        );
+        assert_eq!(
+            said(&s),
+            [t!(after_started, number = 3, delay = "5m").to_string()]
+        );
+
+        for n in 0..crate::loops::MAX_LIVE - 3 {
+            after(&mut s, &format!("5m later {n}"));
+        }
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        s.transcript.clear();
+        after(&mut s, "5m one too many");
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        assert_eq!(
+            said(&s),
+            [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]
+        );
+    }
+
+    /// LOOP-15: a number ends that loop and no other, and the others keep their numbers.
+    #[test]
+    fn stopping_a_loop_by_number_ends_only_that_one() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        assert!(s.stop_loop(Some(1)));
+        let left: Vec<usize> = s.loops().iter().map(|running| running.number()).collect();
+        assert_eq!(left, [2]);
+        assert_eq!(
+            said(&s),
+            [t!(loop_stopped_numbered, number = 1).to_string()]
+        );
+    }
+
+    /// A number is not handed out twice, so `/loop stop 1` typed after loop 1 ended cannot end a
+    /// loop that began afterwards.
+    #[test]
+    fn a_number_that_was_used_is_not_given_to_a_later_loop() {
+        let mut s = two_loops();
+        assert!(s.stop_loop(Some(1)));
+        s.start_loop(crate::loops::request("5m a third"), Vec::new(), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s.transcript.clear();
+
+        assert!(!s.stop_loop(Some(1)));
+        assert_eq!(s.loops().len(), 2, "a stale number ended a live loop");
+        assert_eq!(said(&s), [t!(loop_no_such, number = 1).to_string()]);
+        let numbers: Vec<usize> = s.loops().iter().map(|running| running.number()).collect();
+        assert_eq!(numbers, [2, 3]);
+    }
+
+    /// Where several are live a bare `stop` does not pick one: it ends nothing and says what it
+    /// needs. With one live it still ends it.
+    #[test]
+    fn a_bare_stop_with_several_loops_ends_none_of_them() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        assert!(!s.stop_loop(None));
+        assert_eq!(s.loops().len(), 2);
+        assert_eq!(said(&s), [t!(loop_stop_which, count = 2).to_string()]);
+
+        assert!(s.stop_loop(Some(2)));
+        s.transcript.clear();
+        assert!(s.stop_loop(None));
+        assert!(s.looping().is_none());
+        assert_eq!(said(&s), [t!(loop_stopped).to_string()]);
+    }
+
+    /// What Ctrl-C and a stopped turn reach: every loop, in one sentence.
+    #[test]
+    fn stopping_every_loop_says_how_many_went() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        assert!(s.stop_loops());
+        assert!(s.looping().is_none());
+        assert_eq!(said(&s), [t!(loop_stopped_all, count = 2).to_string()]);
+    }
+
+    /// LOOP-17: due ticks go one at a time, soonest first, and a tick in flight is never
+    /// interrupted by another loop's.
+    #[test]
+    fn due_ticks_go_one_at_a_time_soonest_first() {
+        let mut s = session();
+        // Loop 1 is every hour and loop 2 every five minutes, so by an hour and a minute both are
+        // due and the younger loop became due first.
+        for line in ["1h check the pull request", "5m check the deploy"] {
+            s.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            s.complete("done", Vec::new(), 0);
+            s.loop_turn_ended(None);
+        }
+        let later = Instant::now() + Duration::from_secs(3_660);
+
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("check the deploy"));
+        assert_eq!(s.status, Status::Working);
+        assert_eq!(
+            s.loop_tick_at(later),
+            None,
+            "a second tick went in a busy session"
+        );
+        assert!(s.loops().in_flight().is_some_and(|r| r.number() == 2));
+
+        // Loop 2 ended and is armed another five minutes out, which is still before loop 1's hour,
+        // so it is the one that goes: the order is by moment and not by number or by turns.
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("check the deploy"));
+    }
+
+    /// The end of a tick arms the loop that sent it and leaves the others' clocks alone.
+    #[test]
+    fn a_turn_ending_arms_only_the_loop_whose_tick_it_was() {
+        let mut s = session();
+        for line in ["1h check the pull request", "5m check the deploy"] {
+            s.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            s.complete("done", Vec::new(), 0);
+            s.loop_turn_ended(None);
+        }
+        let hour_loop_before = s.loops().oldest().expect("loop 1").until(Instant::now());
+
+        // The tick that goes is loop 2's, the younger loop, because its five minutes are up first.
+        let later = Instant::now() + Duration::from_secs(301);
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("check the deploy"));
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+
+        let hour = s.loops().oldest().expect("loop 1");
+        let five = s.loops().iter().nth(1).expect("loop 2");
+        assert!(
+            !five.ticking(),
+            "the loop whose tick ended is still in flight"
+        );
+        assert!(
+            five.until(Instant::now()).is_some(),
+            "loop 2 was not re-armed"
+        );
+        assert!(
+            hour.until(Instant::now()) <= hour_loop_before,
+            "loop 1 was re-armed by loop 2's tick"
+        );
+        assert_eq!((hour.ticks(), five.ticks()), (1, 2));
+    }
+
+    /// LOOP-13: each tick says which loop it is, by the number `/loop stop` takes, as well as which
+    /// tick, so a tick count is never read as a loop's number.
+    #[test]
+    fn a_tick_names_its_loop_by_the_number_stop_takes() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let later = Instant::now() + Duration::from_secs(3_660);
+        s.loop_tick_at(later);
+        assert_eq!(said(&s), [t!(loop_tick, number = 1, count = 2).to_string()]);
+    }
+
+    /// LOOP-13: the bare command lists every loop under its number.
+    #[test]
+    fn the_report_lists_every_loop_with_its_number() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        s.report_loop();
+        let said = said(&s);
+        assert_eq!(said.len(), 3, "{said:?}");
+        assert!(
+            said[0].starts_with("loop 1, repeating: check the deploy"),
+            "{said:?}"
+        );
+        assert!(
+            said[1].starts_with("loop 2, repeating: check the pull request"),
+            "{said:?}"
+        );
+        assert_eq!(said[2], t!(loop_ends_with));
+    }
+
+    /// LOOP-11: a goal and a clear each end every loop, and say once that they did.
+    #[test]
+    fn a_goal_and_a_clear_end_every_loop() {
+        let mut s = two_loops();
+        s.start_goal("cargo test exits 0".to_string());
+        assert!(s.looping().is_none());
+        assert!(said(&s).contains(&t!(goal_replaces_loop).to_string()));
+
+        let mut s = two_loops();
+        s.transcript.clear();
+        s.clear();
+        assert!(s.looping().is_none());
+        assert!(said(&s).contains(&t!(loop_cleared_all, count = 2).to_string()));
+    }
+
+    /// LOOP-11: a loop ages out with its own note, naming it.
+    #[test]
+    fn every_loop_past_its_age_ends_and_says_which() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let at = Instant::now() + crate::loops::MAX_AGE;
+        assert_eq!(s.loop_tick_at(at), None);
+        assert!(s.looping().is_none(), "both began before the week was up");
+        let said = said(&s);
+        assert!(
+            said.contains(&t!(loop_aged_out, number = 1).to_string()),
+            "{said:?}"
+        );
+        assert!(
+            said.contains(&t!(loop_aged_out, number = 2).to_string()),
+            "{said:?}"
+        );
     }
 
     /// A goal is a stopping condition. Arming one that also started work would send a line
@@ -10997,6 +11908,7 @@ mod tests {
             conversation: bravebot_agent::Conversation::new().snapshot(),
             turns,
             tokens: 10,
+            split: Default::default(),
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             cached: None,
@@ -12631,8 +13543,9 @@ mod tests {
     }
 
     /// A list left up over a line that arrived under it belongs to a press two prompts ago. Every
-    /// path that writes a whole line takes it down, and these two are the ones a person reaches
-    /// while a turn is in flight: asking for the keys, then recalling a prompt or stopping the turn.
+    /// path that writes a whole line takes it down: recalling a prompt, stopping a turn, yanking
+    /// killed or vi-deleted text back, a stashed line coming back, the queue coming back, and a
+    /// line handed back by an editor.
     #[test]
     fn a_line_that_arrives_under_the_list_takes_the_list_down() {
         let mut recalled = session();
@@ -12658,6 +13571,76 @@ mod tests {
         stopped.restore("first".to_string());
         assert_eq!(stopped.input, "first");
         assert!(!stopped.shortcuts, "the list stands over a stopped prompt");
+
+        // Ctrl-Y, with an empty box and the list up: the kill it puts back is the line that
+        // arrives, exactly as a paste or a recalled prompt would (#2147).
+        let mut yanked = session();
+        for c in "first".chars() {
+            yanked.type_char(c);
+        }
+        yanked.delete_word_before();
+        assert_eq!(yanked.input, "", "the kill left something behind");
+        yanked.type_char('?');
+        assert!(yanked.shortcuts, "the list did not come up");
+
+        yanked.yank();
+        assert_eq!(yanked.input, "first");
+        assert!(!yanked.shortcuts, "the list stands over a yanked line");
+
+        // A stashed line coming back.
+        let mut stashed = session();
+        for c in "first".chars() {
+            stashed.type_char(c);
+        }
+        assert!(stashed.stash(), "the line was not stashed");
+        assert_eq!(stashed.input, "");
+        stashed.type_char('?');
+        assert!(stashed.shortcuts, "the list did not come up");
+
+        assert!(stashed.stash(), "the stashed line did not come back");
+        assert_eq!(stashed.input, "first");
+        assert!(
+            !stashed.shortcuts,
+            "the list stands over a stashed line coming back"
+        );
+
+        // The queue coming back.
+        let mut queued = session();
+        for c in "first".chars() {
+            queued.type_char(c);
+        }
+        queued.submit().expect("submitted");
+        for c in "second".chars() {
+            queued.type_char(c);
+        }
+        assert!(queued.queue(), "the line was not queued");
+        assert_eq!(queued.input, "");
+        queued.type_char('?');
+        assert!(queued.shortcuts, "the list did not come up");
+
+        assert!(queued.unqueue(), "nothing came back out of the queue");
+        assert_eq!(queued.input, "second");
+        assert!(
+            !queued.shortcuts,
+            "the list stands over the queue coming back"
+        );
+
+        // A line handed back by an editor.
+        let mut edited = session();
+        for c in "first".chars() {
+            edited.type_char(c);
+        }
+        edited.submit().expect("submitted");
+        edited.status = Status::Idle;
+        edited.type_char('?');
+        assert!(edited.shortcuts, "the list did not come up");
+
+        edited.take_edited("edited line");
+        assert_eq!(edited.input, "edited line");
+        assert!(
+            !edited.shortcuts,
+            "the list stands over a line handed back by an editor"
+        );
     }
 
     mod todos {
@@ -13493,6 +14476,36 @@ mod tests {
             assert!(s.checking.is_none(), "a check outlived the turn");
         }
 
+        /// The thinking is kept whether or not it is shown, shown only while asked for, and ends
+        /// with the round. A delegate's is not the turn's, and only the end of a long one is kept,
+        /// whole characters of it.
+        #[test]
+        fn thinking_is_held_shown_on_request_and_ends_with_the_round() {
+            let mut s = working();
+            s.thinking("first ");
+            s.thinking("second");
+            assert_eq!(s.thinking_so_far(), "", "shown without being asked for");
+            s.toggle_thinking();
+            assert_eq!(s.thinking_so_far(), "first second");
+
+            s.set_phase(Phase::Planning);
+            assert_eq!(s.thinking_so_far(), "", "the next round saw the last one's");
+
+            s.thinking("again");
+            s.narrate("an answer");
+            assert_eq!(s.thinking_so_far(), "", "the round's words left it up");
+
+            let long = "é".repeat(THINKING_KEPT);
+            s.thinking(&long);
+            s.thinking("end");
+            let kept = s.thinking_so_far();
+            assert!(
+                kept.ends_with("éend") && kept.len() <= THINKING_KEPT,
+                "{}",
+                kept.len()
+            );
+        }
+
         /// A stop takes the word from everything else on the row and gives it up with the turn it
         /// was asked of, however that turn ends. What runs next, an aside or another turn, is not
         /// being stopped, and a word that outlived the turn would say it was.
@@ -14248,6 +15261,120 @@ mod tests {
                 s.spend_by_turn().values().sum::<u64>(),
                 s.tokens,
                 "the breakdown and the total disagreed"
+            );
+        }
+
+        /// A person asking what a session cost wants to know how much of it the model wrote, and the
+        /// two figures have to add up from every charge that reported them. A charge that reports
+        /// nothing is in the total alone, so it must not be counted as read.
+        #[test]
+        fn a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total() {
+            let mut s = session();
+            let split = |s: &Session| (s.split().read, s.split().written);
+
+            s.type_char('a');
+            s.submit();
+            s.complete("first", Vec::new(), 400);
+            s.charged_split(400, 100);
+            assert_eq!(split(&s), (300, 100));
+
+            s.type_char('b');
+            s.submit();
+            s.complete("second", Vec::new(), 1_600);
+            s.charged_split(1_600, 1_000);
+            assert_eq!(
+                split(&s),
+                (900, 1_100),
+                "the second charge replaced the first"
+            );
+
+            s.begin_aside();
+            s.end_aside(250);
+            assert_eq!(s.tokens, 2_250);
+            assert_eq!(
+                split(&s),
+                (900, 1_100),
+                "a charge that reported no split was counted as read or written"
+            );
+        }
+
+        /// A `/compact` reports its usage, so what it wrote is counted as written and not as read.
+        #[test]
+        fn an_aside_that_reports_its_usage_is_charged_with_its_split() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_aside_of(bravebot_aichat::protocol::Usage {
+                prompt_tokens: 200,
+                completion_tokens: 50,
+                ..Default::default()
+            });
+
+            assert_eq!(s.tokens, 250);
+            assert_eq!(
+                s.split(),
+                bravebot_session::sessions::Split {
+                    read: 200,
+                    written: 50
+                }
+            );
+        }
+
+        /// Restoring a total describes a different set of tokens than the ones counted so far, so a
+        /// split counted before it must not stay beside it: read and written would then add up to
+        /// more than the total they divide.
+        #[test]
+        fn restoring_the_spend_leaves_no_split_from_before_it() {
+            let mut s = session();
+            s.begin_aside();
+            s.end_aside_of(bravebot_aichat::protocol::Usage {
+                prompt_tokens: 200,
+                completion_tokens: 50,
+                ..Default::default()
+            });
+
+            s.restore_spend(100, std::collections::BTreeMap::from([(1, 100)]));
+
+            assert_eq!(s.tokens, 100);
+            assert_eq!(s.split(), bravebot_session::sessions::Split::default());
+        }
+
+        /// Clearing begins a new session, and the split of what the old one spent is not this one's.
+        #[test]
+        fn clearing_forgets_the_split() {
+            let mut s = session();
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 400);
+            s.charged_split(400, 100);
+
+            s.clear();
+
+            assert_eq!(s.split(), bravebot_session::sessions::Split::default());
+        }
+
+        /// A session picked up from a record carries on counting from the split the record kept, as
+        /// it does from its total.
+        #[test]
+        fn a_resumed_session_carries_on_counting_the_split_it_was_written_with() {
+            let mut s = session();
+            s.restore_spend(1_000, std::collections::BTreeMap::from([(1, 1_000)]));
+            s.restore_split(bravebot_session::sessions::Split {
+                read: 700,
+                written: 300,
+            });
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 100);
+            s.charged_split(100, 40);
+
+            assert_eq!(
+                s.split(),
+                bravebot_session::sessions::Split {
+                    read: 760,
+                    written: 340
+                }
             );
         }
 

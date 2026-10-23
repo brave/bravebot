@@ -19,6 +19,21 @@ pre-commit hook that refuses a commit failing either. The hook skips a commit th
 but files under `docs/` or `agents/`, Markdown, `LICENSE` or `CODEOWNERS`, which nothing compiled
 reads; a commit that stages anything else, or nothing, runs both.
 
+The workspace manifest holds a `[workspace.lints.clippy]` table of lints that code in this tree has no
+violation of: `unwrap_used`, `todo`, `unimplemented`, `dbg_macro`, `unused_async`, `large_futures`,
+`future_not_send`, `let_underscore_future`, `rc_mutex` and `mutex_atomic`. Each crate opts in with
+`[lints]` and `workspace = true`, and `crates/cli/tests/workspace_lints.rs` fails a member that does
+not. A lint is added to the table once the tree has none of it. A test target that unwraps starts with
+`#![allow(clippy::unwrap_used, reason = "...")]` (`#![cfg_attr(test, allow(...))]` in a crate root whose
+unit tests unwrap), because `allow-unwrap-in-tests` in `clippy.toml` exempts a `#[test]` function and
+a `#[cfg(test)]` module and not a helper in `tests/` or under `cfg(all(test, unix))`.
+
+Lints the tree has hundreds of sites of are held to the base instead: `make check-lint-increase`
+runs clippy over the libraries and binaries at the merge base and at the branch, and fails when a lint
+reports more sites in a crate than it did. Mark a site that is right with
+`#[expect(clippy::lint, reason = "...")]`. `make check` runs it after clippy, CI runs it on pull
+requests, and [contrib/README.md](../../contrib/README.md#check-lint-increasepy) lists the lints.
+
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
 [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
 with `bravebot_sandbox::programs::start`, which takes a `Resolved`, the variables the program
@@ -36,6 +51,13 @@ Then run the tests the diff is under, scoped as tightly as the diff is: `cargo t
 --lib` for the interface, `cargo test -p bravebot-agent --test workspace` for one test binary. A
 commit still has to be a state that stands up, and a change nothing covers is a change to be
 suspicious of.
+
+A test that builds a path under `std::env::temp_dir()` puts `std::process::id()` in the name, or a
+counter or timestamp, or takes its directory from `tempfile`. Every process on a machine shares that
+directory, so a fixed name is deleted by another run of the same test, which is a second session or the
+same binary started again, and each fails for a reason that is not in the code under test.
+`crates/cli/tests/temp_names.rs` fails a name that has none of these. A name that has to be fixed is
+marked `// shared-temp-name: <why>` on its line or the line above.
 
 ## Before pushing
 
@@ -138,6 +160,10 @@ These are local checks, not a promise that every CI environment passes. Windows 
 cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
 CI's native Linux tests cover that gap. Release cross-builds remain separate.
 
+Most tests that touch the state directory point `HOME` at a scratch directory, and `BRAVEBOT_HOME`
+answers before `HOME`, so unset it in the shell that runs the tests: with it set, a test reaches the
+directory it names, which is yours.
+
 `make check` runs the whole suite and takes minutes. It is what to run before pushing a branch and
 what CI runs, not what to run between two edits to the same file, and never twice to confirm the
 same thing. Reaching for it out of caution is not free: it is the difference between a review that
@@ -239,12 +265,18 @@ half itself when a task ends on a branch that changes a file where an answer is 
 
 `make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
 and TypeScript exports named nowhere but where they are defined or only from tests, allowances
-silencing the dead-code lint, blocks of lines and string literals repeated across files, and files
-and functions past a length. rustc warns about none of the first kind in a library crate, and no
-check compares one file with another. The scan reads no code and exits zero whatever it lists, so
-nothing runs it in CI. It is the deterministic half of the
-[maintenance skill](../../agents/skills/maintenance/SKILL.md), whose reviewers read each candidate
-and draft an issue for the ones worth fixing.
+silencing a lint about dead code or about a function that is too large, blocks of lines and string
+literals repeated across files, files and functions past a length, functions nested deeply or taking
+several booleans, files that use many other modules, public functions no test names, files holding
+a lot of shared mutable state, commented-out code, and functions returning string errors. rustc
+warns about none of the first kind in a library crate, and no check compares one file with another.
+The scan reads no code and exits zero whatever it lists, so nothing runs it in CI. It is the
+deterministic half of the [maintenance skill](../../agents/skills/maintenance/SKILL.md), whose
+reviewers read each candidate and draft an issue for the ones worth fixing. The skill also runs
+clippy's opinionated lints over the code that ships, which `make check-maintenance` does not, since
+it compiles. `docs/maintenance-reviewed` holds what reviewers decided, so a later run reaches
+candidates it has not read. [smells.md](../../agents/skills/maintenance/smells.md) says which smell
+each lane covers and which a lint already refuses.
 
 Wherever this page says a check fails a pull request, what does the failing is not the job going
 red. A job reports. What holds a merge is branch protection's list of required contexts, which is
@@ -324,7 +356,8 @@ check: the cross-build produces the shipped binary and lints nothing, and compil
 at all, so a Windows arm that does not build or that trips a lint reaches main with CI green. It
 cross-compiles, which clippy allows because it stops before linking, so no Windows host is
 involved and the suite is not run on one. CI's `Desktop on Windows` job runs the file helper's
-suite and the walkthrough on a Windows runner, which no local target does. Worth running for
+suite and the walkthrough on a Windows runner, and CI's `Awkward names on Windows` job runs the
+pair tests over file names there, which no local target does. Worth running for
 anything with a platform branch in it, and for any test that has one: a `#[cfg(unix)]` left off a
 test is invisible from every platform that has `unix`.
 
@@ -378,6 +411,12 @@ issue gets nothing further, so the list of open flakes is the search rather than
 a job summary somebody has to remember to read. Search the issues before treating a failure as a
 known flake, and run `contrib/measure-flakes.py --runs 30` to ask this machine over a shorter sweep.
 Neither fails a build over a rate.
+
+A passing test is not evidence that it would fail if the code were wrong. The
+[Mutation testing](../../.github/workflows/mutation-testing.yml) workflow runs cargo-mutants over
+`bravebot-core` every Sunday, in six shards, and its job summary lists the functions with the most
+changes no test noticed. That list is where to find a test to write. It gates nothing, and
+[contrib/README.md](../../contrib/README.md#measure-mutantspy) says how to run it on one file.
 
 **A test missing from that list is not thereby clean.** A hundred runs can only account for a test
 that loses more than about three in a hundred, and the job measures quiet hosted runners, while

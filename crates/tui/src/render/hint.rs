@@ -75,12 +75,29 @@ fn fitted(parts: &[String], expendable: &[usize], width: u16) -> Vec<usize> {
 /// a tick the session is not free to take yet, because a turn is running or the queue is holding
 /// something, and a row counting down to `0s` and sitting there reads as a loop that has stalled
 /// rather than one waiting its turn.
-pub(super) fn loop_part(until: Option<std::time::Duration>) -> String {
-    match until {
-        Some(until) if until >= std::time::Duration::from_secs(1) => {
+pub(super) fn loop_part(count: usize, until: Option<std::time::Duration>) -> String {
+    match (count, until) {
+        (1, Some(until)) if until >= std::time::Duration::from_secs(1) => {
             t!(loop_hint_next, next = crate::loops::spell(until))
         }
-        _ => t!(loop_hint).to_string(),
+        (1, _) => t!(loop_hint).to_string(),
+        (count, Some(until)) if until >= std::time::Duration::from_secs(1) => t!(
+            loop_hint_several_next,
+            count = count,
+            next = crate::loops::spell(until)
+        ),
+        (count, _) => t!(loop_hint_several, count = count),
+    }
+}
+
+/// The same part for a line `/after` is holding, which is not looping and says what it is: a
+/// delayed send, with the moment counted down on the same terms as [`loop_part`].
+pub(super) fn after_part(until: Option<std::time::Duration>) -> String {
+    match until {
+        Some(until) if until >= std::time::Duration::from_secs(1) => {
+            t!(after_hint_next, next = crate::loops::spell(until))
+        }
+        _ => t!(after_hint).to_string(),
     }
 }
 
@@ -169,9 +186,26 @@ mod ordinary {
 fn hint_facts(session: &Session) -> HintFacts {
     // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
     // the box is in, and shell mode is where somebody is least likely to be thinking about one.
-    let looping = session.looping().map_or_else(String::new, |running| {
-        loop_part(running.until(std::time::Instant::now()))
-    });
+    // Loops are named first. A line `/after` holds is not looping, so it is named only where no loop
+    // is live to be counted.
+    let now = std::time::Instant::now();
+    let soonest = |once: bool| {
+        let held = || {
+            session
+                .loops()
+                .iter()
+                .filter(move |running| running.once() == once)
+        };
+        (
+            held().count(),
+            held().filter_map(|running| running.until(now)).min(),
+        )
+    };
+    let looping = match (soonest(false), soonest(true)) {
+        ((0, _), (0, _)) => String::new(),
+        ((0, _), (_, until)) => after_part(until),
+        ((count, until), _) => loop_part(count, until),
+    };
 
     // Named only once a turn has left a trail to look at. Offering the key before that is a line
     // under the box inviting a press that changes nothing on screen, and what a person learns from
@@ -381,6 +415,35 @@ pub(super) fn hint_spans(
 
 /// The shortcut line. Keeps the bindings discoverable without a help command.
 pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
+    // The files state names its own keys and keeps the figures the panel has no section for
+    // (FILES-4, FILES-9). Every other key does nothing there, so nothing else on the line applies.
+    if session.files_open() {
+        let parts = [
+            t!(files_hint).to_string(),
+            context_reading(session),
+            cache_hit_rate(session).unwrap_or_default(),
+        ];
+        let said: Vec<&str> = parts
+            .iter()
+            .map(String::as_str)
+            .filter(|part| !part.is_empty())
+            .collect();
+        let line = crate::status::cut(&said.join("  ·  "), usize::from(area.width));
+        frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
+        return;
+    }
+    // Words an outside link put in the box stay named as such until they are sent or cleared, and
+    // the line says how long they are, because a long one runs past what the box shows (LINK-4).
+    if let Some(characters) = session.link_prompt() {
+        let said = if characters > crate::state::LONG_LINK_PROMPT {
+            t!(deep_link_banner_long, count = characters)
+        } else {
+            t!(deep_link_banner).to_string()
+        };
+        let line = crate::status::cut(&said, usize::from(area.width));
+        frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
+        return;
+    }
     let facts = hint_facts(session);
 
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a

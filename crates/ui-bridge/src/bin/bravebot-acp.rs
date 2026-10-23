@@ -62,6 +62,10 @@ fn main() {
         std::env::current_dir().ok().as_deref(),
         settings.as_deref(),
     );
+    bravebot_ui_bridge::settings::start_the_sweep_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
+    );
 
     let (input, lines) = mpsc::channel();
     let out = Arc::new(Mutex::new(std::io::stdout()));
@@ -99,9 +103,12 @@ fn main() {
         }
     }
 
-    // EOF on stdin. Anything waiting on an answer from an editor that has gone away is refused,
-    // which is what dropping the bridge does.
-    drop(acp);
+    // EOF on stdin. Every session is closed, which refuses anything waiting on an answer from an
+    // editor that has gone away and fires `session-ended`, so the process waits a few seconds for
+    // that and for the turns still writing their records.
+    if !acp.finish(std::time::Duration::from_secs(10)) {
+        eprintln!("bravebot-acp: some sessions were still working when the process stopped");
+    }
 }
 
 /// Write one line, or give up on writing altogether. A closed stdout means the editor is gone.

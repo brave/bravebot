@@ -3,6 +3,10 @@
 //! These run against a real `~/.bravebot`, redirected by `HOME`, because the point of the feature is
 //! what is on the filesystem afterwards: a record that a later process can find, and an audit a
 //! person can read.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_agent::Conversation;
 use bravebot_agent::Workspace;
@@ -41,7 +45,10 @@ impl Scratch {
         // A test that panicked while holding this poisoned nothing worth protecting: the guard
         // covers an environment variable, and the next test overwrites it anyway.
         let lock = HOME.lock().unwrap_or_else(|held| held.into_inner());
-        let root = std::env::temp_dir().join(format!("bravebot-sessions-test-{name}"));
+        let root = std::env::temp_dir().join(format!(
+            "bravebot-sessions-test-{}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let home = root.join("home");
         let project = root.join("project");
@@ -183,6 +190,7 @@ fn a_session_is_named_once_there_is_a_record_to_name() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -230,6 +238,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -310,6 +319,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 3_400,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -347,6 +357,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             conversation: &Conversation::new().snapshot(),
             turns: 1,
             tokens: 0,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -378,6 +389,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             conversation: &conversation.snapshot(),
             turns: 3,
             tokens: 5_600,
+            split: Default::default(),
             spend: &BTreeMap::from([(1, 1_200), (2, 900), (3, 3_500)]),
             timing: &a_time_breakdown(),
             model: Some("claude-opus-4-8"),
@@ -560,6 +572,7 @@ fn the_audit_keeps_the_time_each_event_happened() {
             conversation: &a_conversation().snapshot(),
             turns: 1,
             tokens: 0,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -628,6 +641,7 @@ fn renaming_a_session_rewrites_the_record_immediately() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -676,6 +690,7 @@ fn a_chosen_name_survives_the_next_turn() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 10,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -750,6 +765,7 @@ fn a_resumed_session_can_still_open_the_directory_it_added() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 10,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -819,6 +835,7 @@ fn a_directory_that_has_gone_since_is_reported_on_resume() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 10,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -874,6 +891,7 @@ fn a_manifest_run_is_recorded_and_cannot_be_resumed() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 0,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -922,6 +940,7 @@ fn the_session_continued_is_the_one_written_here() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -964,6 +983,7 @@ fn the_session_continued_is_the_one_written_here() {
             conversation: &bravebot_agent::Conversation::new().snapshot(),
             turns: 1,
             tokens: 0,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -1013,6 +1033,7 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
         conversation: &snapshot,
         turns: 1,
         tokens: 0,
+        split: Default::default(),
         spend: &spend,
         timing: &timing,
         model: None,
@@ -1090,6 +1111,7 @@ fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to
         conversation: &snapshot,
         turns,
         tokens: 0,
+        split: Default::default(),
         spend: &spend,
         timing: &timing,
         model: None,
@@ -1161,6 +1183,7 @@ fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
         conversation: &snapshot,
         turns: 0,
         tokens: 0,
+        split: Default::default(),
         spend: &spend,
         timing: &timing,
         model: None,
@@ -1218,6 +1241,7 @@ fn session_records_and_audit_trails_are_written_mode_0600() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 100,
+            split: Default::default(),
             spend: &spend,
             timing: &timing,
             model: None,
@@ -1327,6 +1351,7 @@ fn pre_existing_session_files_and_directories_are_tightened_on_write() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 100,
+            split: Default::default(),
             spend: &spend,
             timing: &timing,
             model: None,
@@ -1415,6 +1440,7 @@ fn forking_narrows_the_session_directory_it_writes_into() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 100,
+            split: Default::default(),
             spend: &spend,
             timing: &timing,
             model: None,
@@ -1474,6 +1500,7 @@ fn a_question_asked_beside_the_work_survives_a_resume() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -1550,6 +1577,7 @@ fn a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -1608,6 +1636,7 @@ fn an_answer_the_planner_could_not_have_held_is_not_written_down() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -1680,6 +1709,7 @@ fn a_rewind_point_survives_being_written_and_read_back() {
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -1768,6 +1798,7 @@ fn what_a_file_nobody_vouched_for_held_is_not_written_down() {
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -1906,6 +1937,7 @@ fn backup_capture_trust_overrides_a_stale_pre_turn_grant() {
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -2023,6 +2055,7 @@ fn a_path_vouched_for_inside_the_turn_keeps_what_it_held_out_of_the_record() {
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -2098,6 +2131,7 @@ fn a_rewind_point_keeps_no_cache_figure_in_the_record() {
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -2169,6 +2203,7 @@ fn a_rename_takes_the_points_it_gave_up_out_of_the_record() {
             conversation: &conversation.snapshot(),
             turns: 2,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -2218,6 +2253,7 @@ fn a_point_before_turn_two(
         conversation: conversation.snapshot(),
         turns: 1,
         tokens: 600,
+        split: Default::default(),
         spend: BTreeMap::from([(1, 600)]),
         timing: BTreeMap::new(),
         cached: None,
@@ -2305,6 +2341,7 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
             conversation: &conversation.snapshot(),
             turns: session.turns,
             tokens: session.tokens,
+            split: Default::default(),
             spend: session.spend_by_turn(),
             timing: session.timing_by_turn(),
             model: None,
@@ -2383,6 +2420,45 @@ mod completed_usage {
         });
         (endpoint, receiver)
     }
+    /// An endpoint that answers `script` in order and then refuses every request with a 401, so a
+    /// turn fails at the request the test chose and fails the same way on every run.
+    pub(super) fn endpoint_refusing_after(script: Vec<String>) -> (String, mpsc::Receiver<String>) {
+        use std::io::{BufRead, Read};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let mut script = script.into_iter();
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let _ = sender.send(String::from_utf8_lossy(&body).into_owned());
+                let answer = match script.next() {
+                    Some(frames) => format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                        frames.len()
+                    ),
+                    None => "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_string(),
+                };
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        (endpoint, receiver)
+    }
+
     /// A rejected reply is charged once through the real reporter and stored session.
     #[test]
     fn malformed_completed_usage_survives_turn_storage_and_resume() {
@@ -2466,6 +2542,7 @@ mod completed_usage {
                     conversation: &conversation.snapshot(),
                     turns: session.turns,
                     tokens: session.tokens,
+                    split: Default::default(),
                     spend: session.spend_by_turn(),
                     timing: session.timing_by_turn(),
                     model: None,
@@ -2532,6 +2609,7 @@ mod preserved_history {
                 conversation: &conversation.snapshot(),
                 turns: session.turns,
                 tokens: session.tokens,
+                split: Default::default(),
                 spend: session.spend_by_turn(),
                 timing: session.timing_by_turn(),
                 model: None,
@@ -2586,6 +2664,7 @@ mod preserved_history {
                 conversation: conversation.snapshot(),
                 turns: session.turns,
                 tokens: session.tokens,
+                split: Default::default(),
                 spend: session.spend_by_turn().clone(),
                 timing: session.timing_by_turn().clone(),
                 cached: session.cached(),
@@ -2871,6 +2950,34 @@ mod preserved_history {
         assert_eq!(reopened.timing_total().inference_ms, 70);
         assert_eq!(reopened.timing_total().tools_ms, 30);
         assert_eq!(reopened.timing_total().stalled_ms, 6);
+    }
+
+    /// No turn is running in a session that was just resumed, so the rows of its plan that were
+    /// left open are drawn as work nobody is doing, as they are after a turn that ended in this
+    /// session.
+    #[test]
+    fn a_resumed_session_draws_the_plan_it_was_left_with_as_left_open() {
+        let scratch = Scratch::new("history-plan-left-open");
+        let (session, conversation) = fixture();
+        let reopened = reopen(
+            &scratch.project,
+            &save(&scratch.project, &session, &conversation),
+        );
+        let open = reopened.plan()[0].content.clone();
+        assert!(
+            !reopened.a_turn_is_running(),
+            "the resumed session is in a turn"
+        );
+
+        let drawn = bravebot_tui::panel::lines(&reopened, bravebot_tui::panel::WIDTH, 30);
+        let row = drawn
+            .iter()
+            .find(|line| line.to_string().contains(&open))
+            .unwrap_or_else(|| panic!("no panel row holds {open}"));
+        assert_eq!(
+            row.spans[0].content, " □ ",
+            "{open} was left open and is not drawn as a hollow mark"
+        );
     }
 
     /// Returning an unstarted prompt to the editor must not create a cancelled transcript entry.
@@ -3292,6 +3399,7 @@ mod preserved_history {
             conversation: before_reset.clone(),
             turns: session.turns,
             tokens: session.tokens,
+            split: Default::default(),
             spend: session.spend_by_turn().clone(),
             timing: session.timing_by_turn().clone(),
             cached: session.cached(),
@@ -3316,6 +3424,7 @@ mod preserved_history {
             conversation: conversation.snapshot(),
             turns: session.turns,
             tokens: session.tokens,
+            split: Default::default(),
             spend: session.spend_by_turn().clone(),
             timing: session.timing_by_turn().clone(),
             cached: session.cached(),
@@ -3773,6 +3882,7 @@ mod preserved_history {
                 ToMain::Quarantined(shown) => session.show(shown),
                 ToMain::Notice(text) => session.note_once(text),
                 ToMain::Streaming(text) => session.streaming(&text),
+                ToMain::Thinking(text) => session.thinking(&text),
                 ToMain::Composing(call) => session.composing(call),
                 ToMain::ReportingFor(delegate) => session.reporting_for(delegate),
                 other => assert!(
@@ -4397,6 +4507,94 @@ mod preserved_history {
         assert!(!request.contains("DISPLAY_ONLY_PROMPT"));
     }
 
+    /// A turn that fails after a tool call leaves the planner a note that it failed (TURN-13). The
+    /// transcript does not draw the note and the turn's boundaries do not count it (SESSION-23), and
+    /// the next prompt, sent after the session was saved and reopened, carries it.
+    ///
+    /// The faults this rejects: a failure recorded for the interface and never put in the
+    /// conversation, so the planner is asked "what happened?" with nothing to answer from; a note
+    /// the saved conversation leaves out, so a resume loses it; and a note the reopened transcript
+    /// draws as something a person said.
+    #[test]
+    fn a_failed_turn_leaves_a_note_the_transcript_does_not_draw_and_a_resume_still_sends() {
+        let scratch = Scratch::new("failed-turn-note-tui");
+        std::fs::write(scratch.project.join("a.txt"), "a file").unwrap();
+        // The service answers the first request with a tool call and refuses the second, so the turn
+        // fails after the call's result is in the conversation.
+        let (refusing, first_requests) =
+            super::completed_usage::endpoint_refusing_after(vec![tool_reply(
+                "read_file",
+                r#"{"path":"a.txt"}"#,
+                10,
+            )]);
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&refusing),
+            &bravebot_agent::Task::new("read a.txt"),
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(session.finished.unwrap().failed());
+        assert!(
+            first_requests.try_iter().count() >= 2,
+            "the service refused nothing"
+        );
+        let drawn_without_the_note = conversation.recounted();
+
+        let record = save(&scratch.project, &session, &conversation);
+        let mut session = reopen(&scratch.project, &record);
+        let export = bravebot_tui::render::as_markdown(&session, "test");
+        assert!(export.contains("**Outcome:** failed"), "{export}");
+        assert!(
+            !export.contains(bravebot_agent::conversation::FAILED_TURN),
+            "the note was drawn: {export}"
+        );
+        let first = &session.turn_history()[0];
+        assert_eq!(
+            first.end,
+            drawn_without_the_note.len(),
+            "the turn's range counts a message nobody said"
+        );
+
+        let (endpoint, requests) = super::completed_usage::an_endpoint(vec![answer_reply()]);
+        let mut conversation = Conversation::restored(record.conversation);
+        assert_eq!(conversation.recounted(), drawn_without_the_note);
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&endpoint),
+            &bravebot_agent::Task::new("what happened?"),
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        let next = requests
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let (noted, asked) = (
+            next.find(bravebot_agent::conversation::FAILED_TURN),
+            next.find("what happened?"),
+        );
+        assert!(
+            noted.is_some() && asked.is_some() && noted < asked,
+            "the request after the resume does not carry the note in front of the prompt: {next}"
+        );
+        assert!(
+            next.contains("Failure category: unauthorized. Requests sent for the failed call: 1."),
+            "{next}"
+        );
+        assert!(
+            !next.contains("401"),
+            "the status of the reply was sent: {next}"
+        );
+        assert!(
+            next.contains(r#""role":"tool""#),
+            "the completed round was dropped: {next}"
+        );
+    }
+
     /// A stop inside a processor must stay cancelled through reporting, saving and export.
     #[test]
     fn processor_cancellation_preserves_its_plan_and_measurements_on_resume() {
@@ -4715,6 +4913,7 @@ fn failed_and_stopped_manifest_usage_survives_session_reload() {
                     conversation: &Conversation::new().snapshot(),
                     turns,
                     tokens: session.tokens,
+                    split: Default::default(),
                     spend: session.spend_by_turn(),
                     timing: session.timing_by_turn(),
                     model: None,
@@ -4994,6 +5193,7 @@ mod manifest_file_trust {
                 conversation: &a_conversation().snapshot(),
                 turns: session.turns,
                 tokens: session.tokens,
+                split: Default::default(),
                 spend: session.spend_by_turn(),
                 timing: session.timing_by_turn(),
                 model: None,
@@ -5113,6 +5313,7 @@ fn a_record_keeps_the_checkouts_a_resume_reads_back_and_a_fork_does_not_carry() 
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -5190,6 +5391,7 @@ fn the_checkouts_the_records_list_are_every_id_and_none_where_one_cannot_be_read
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -5243,6 +5445,7 @@ fn the_checkouts_no_record_lists_are_named_and_nothing_is_named_where_a_record_i
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -5293,6 +5496,7 @@ fn a_record_from_before_checkouts_were_kept_reads_as_having_none() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -5336,6 +5540,7 @@ fn a_checkout_that_is_not_where_the_record_put_it_is_named_on_resume() {
                 conversation: &conversation.snapshot(),
                 turns: 1,
                 tokens: 1,
+                split: Default::default(),
                 spend: &BTreeMap::new(),
                 timing: &BTreeMap::new(),
                 model: None,
@@ -5407,6 +5612,7 @@ fn a_resume_that_restores_no_checkout_still_writes_the_records_checkouts_back() 
                 conversation: &conversation.snapshot(),
                 turns: 1,
                 tokens: 1,
+                split: Default::default(),
                 spend: &BTreeMap::new(),
                 timing: &BTreeMap::new(),
                 model: None,
@@ -5470,6 +5676,7 @@ fn recorded(project: &Path, title: &str, manifest: bool) -> String {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 0,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -5589,6 +5796,7 @@ fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
                 conversation: &snapshot,
                 turns: 1,
                 tokens: 1,
+                split: Default::default(),
                 spend: &spend,
                 timing: &timing,
                 model: None,
@@ -5679,6 +5887,7 @@ fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
                 conversation: &snapshot,
                 prompt: "second",
                 tokens: 1,
+                split: Default::default(),
                 model: "test-model",
                 trust: $trust,
                 begins: 0,

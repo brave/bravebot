@@ -411,8 +411,10 @@ impl Workspace {
         bravebot_sandbox::programs::keep_out(&canonical);
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
-        // Names relative to the root left behind mean nothing under the new one (INSTR-14).
+        // Names relative to the root left behind mean nothing under the new one (INSTR-14, INSTR-16,
+        // CHECKOUT-23).
         self.touched = Arc::default();
+        locked(&self.working_writes).last.clear();
         {
             let mut added = locked(&self.added);
             let (overlapping, kept) = std::mem::take(&mut *added)

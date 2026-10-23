@@ -106,6 +106,17 @@ impl Turn {
         reply
     }
 
+    /// Put a series of the planner's questions from another thread, as a turn's worker does.
+    fn ask_user(&mut self, asking: Asking) -> mpsc::Receiver<(BridgeConfirmer, Vec<Answer>)> {
+        let mut confirmer = self.confirmer.take().expect("the confirmer is free");
+        let (done, asked) = mpsc::channel();
+        std::thread::spawn(move || {
+            let answers = confirmer.ask_user(&asking);
+            let _ = done.send((confirmer, answers));
+        });
+        asked
+    }
+
     fn waiting(&self) -> Option<Question> {
         *self.running.pending.lock().unwrap()
     }
@@ -115,6 +126,16 @@ impl Turn {
         loop {
             let event = self.said.recv_timeout(PATIENCE).expect("a question");
             if event.name == "x.request" {
+                return event.data;
+            }
+        }
+    }
+
+    /// The data of the next event of this name.
+    fn the_question_shown_as(&self, name: &str) -> Value {
+        loop {
+            let event = self.said.recv_timeout(PATIENCE).expect("a question");
+            if event.name == name {
                 return event.data;
             }
         }
@@ -234,4 +255,255 @@ fn a_question_refused_by_the_loss_of_its_controller_is_shown_as_resolved() {
     assert_eq!(last.data["pending"], Value::Null, "{}", last.data);
     assert_eq!(last.data["rows"][0]["resolved"], true, "{}", last.data);
     assert_ne!(last.data["status"], "waiting");
+}
+
+fn a_question(sentence: &str) -> bravebot_core::ask::Question {
+    bravebot_core::ask::Question::new(
+        "Cache",
+        sentence,
+        vec![
+            bravebot_core::ask::Choice::new("HTTP", None),
+            bravebot_core::ask::Choice::new("Query", None),
+        ],
+        false,
+    )
+}
+
+fn series_of(sentences: &[&str]) -> Asking {
+    bravebot_core::ask::asking(&bravebot_core::ask::Series::new(
+        sentences
+            .iter()
+            .map(|sentence| a_question(sentence))
+            .collect(),
+    ))
+}
+
+/// Answer the series the turn is waiting on with `answers`, and return what the turn got back
+/// along with what the window was shown.
+fn answered_with(turn: &mut Turn, asking: Asking, answers: Vec<Answer>) -> (Vec<Answer>, Value) {
+    let waiting = turn.ask_user(asking);
+    let shown = turn.the_question_shown_as("ask.request");
+    let request = shown["request"].as_u64().expect("a number");
+    assert!(turn.running.answer(request, Reply::Ask(answers)));
+    let (confirmer, got) = waiting
+        .recv_timeout(PATIENCE)
+        .expect("the series was answered");
+    turn.confirmer = Some(confirmer);
+    (got, shown)
+}
+
+/// ASK-8 in a desktop session: a question the person answered is answered again from memory, and
+/// the window is shown nothing for it.
+#[test]
+fn a_question_the_person_answered_is_not_put_to_the_window_again() {
+    let mut turn = a_turn(&Answerers::default());
+    let (first, _) = answered_with(
+        &mut turn,
+        series_of(&["Which layer?"]),
+        vec![Answer::Chosen(vec![1])],
+    );
+    assert_eq!(first, vec![Answer::Chosen(vec![1])]);
+
+    let again = turn.ask_user(series_of(&["Which layer?"]));
+    let (confirmer, got) = again
+        .recv_timeout(PATIENCE)
+        .expect("a question answered before waited for the window");
+    turn.confirmer = Some(confirmer);
+
+    assert_eq!(got, vec![Answer::Chosen(vec![1])]);
+    assert!(
+        turn.said
+            .try_iter()
+            .all(|event| event.name != "ask.request"),
+        "the window was shown the question a second time"
+    );
+    assert!(turn.waiting().is_none());
+    assert_eq!(
+        turn.confirmer.as_ref().expect("free").reused(),
+        [bravebot_i18n::t!(session_answered_already, question = "Which layer?").to_string()]
+    );
+}
+
+/// A planner that loops over a settled question within one turn is named once for it, so the
+/// turn's notices do not repeat a line.
+#[test]
+fn a_question_reused_twice_in_a_turn_is_named_once() {
+    let mut turn = a_turn(&Answerers::default());
+    answered_with(
+        &mut turn,
+        series_of(&["Which layer?"]),
+        vec![Answer::Chosen(vec![1])],
+    );
+
+    for _ in 0..2 {
+        let again = turn.ask_user(series_of(&["Which layer?"]));
+        let (confirmer, _) = again.recv_timeout(PATIENCE).expect("answered from memory");
+        turn.confirmer = Some(confirmer);
+    }
+
+    assert_eq!(turn.confirmer.as_ref().expect("free").reused().len(), 1);
+}
+
+/// A series where one question is settled puts only the other, and the answers come back in the
+/// order the questions were asked.
+#[test]
+fn a_series_with_some_questions_settled_puts_only_the_rest_to_the_window() {
+    let mut turn = a_turn(&Answerers::default());
+    answered_with(
+        &mut turn,
+        series_of(&["Which layer?"]),
+        vec![Answer::Chosen(vec![1])],
+    );
+    turn.said.try_iter().for_each(drop);
+
+    let (got, shown) = answered_with(
+        &mut turn,
+        series_of(&["Which store?", "Which layer?"]),
+        vec![Answer::Typed("redis".into())],
+    );
+
+    let prompts = shown["prompts"].as_array().expect("prompts");
+    assert_eq!(prompts.len(), 1, "{shown}");
+    assert_eq!(prompts[0]["question"], "Which store?");
+    assert_eq!(
+        got,
+        vec![Answer::Typed("redis".into()), Answer::Chosen(vec![1])]
+    );
+}
+
+/// A front end that answered fewer than it was shown has not declined the rest. They are put
+/// again, where a decline would be remembered as the person's own choice.
+#[test]
+fn a_question_the_window_left_unanswered_is_put_again() {
+    let mut turn = a_turn(&Answerers::default());
+    let (got, _) = answered_with(
+        &mut turn,
+        series_of(&["Which layer?", "Which store?"]),
+        vec![Answer::Chosen(vec![0])],
+    );
+    assert_eq!(got, vec![Answer::Chosen(vec![0]), Answer::Declined]);
+    turn.said.try_iter().for_each(drop);
+
+    let (got, shown) = answered_with(
+        &mut turn,
+        series_of(&["Which layer?", "Which store?"]),
+        vec![Answer::Chosen(vec![1])],
+    );
+
+    let prompts = shown["prompts"].as_array().expect("prompts");
+    assert_eq!(prompts.len(), 1, "{shown}");
+    assert_eq!(prompts[0]["question"], "Which store?");
+    assert_eq!(got, vec![Answer::Chosen(vec![0]), Answer::Chosen(vec![1])]);
+}
+
+/// Skipping answers a question, so a planner that asks it again is not asking the person to skip
+/// it twice.
+#[test]
+fn a_question_the_person_skipped_is_not_put_again() {
+    let mut turn = a_turn(&Answerers::default());
+    answered_with(
+        &mut turn,
+        series_of(&["Which layer?"]),
+        vec![Answer::Declined],
+    );
+    turn.said.try_iter().for_each(drop);
+
+    let again = turn.ask_user(series_of(&["Which layer?"]));
+    let (_, got) = again.recv_timeout(PATIENCE).expect("answered from memory");
+
+    assert_eq!(got, vec![Answer::Declined]);
+    assert!(
+        turn.said
+            .try_iter()
+            .all(|event| event.name != "ask.request")
+    );
+}
+
+/// Nobody answering is not an answer. The question is put again when somebody can be asked.
+#[test]
+fn a_question_nobody_could_be_asked_is_not_remembered_as_declined() {
+    let answerers = Answerers::default();
+    answerers.nobody().unwrap();
+    let mut turn = a_turn(&answerers);
+    let unasked = turn.ask_user(series_of(&["Which layer?"]));
+    let (confirmer, got) = unasked.recv_timeout(PATIENCE).expect("refused");
+    turn.confirmer = Some(confirmer);
+    assert!(got.is_empty());
+
+    answerers.only(&KINDS).unwrap();
+    let (got, shown) = answered_with(
+        &mut turn,
+        series_of(&["Which layer?"]),
+        vec![Answer::Chosen(vec![0])],
+    );
+
+    assert_eq!(shown["prompts"].as_array().expect("prompts").len(), 1);
+    assert_eq!(got, vec![Answer::Chosen(vec![0])]);
+}
+
+/// Losing the person mid-series leaves what they answered before standing, and what they were never
+/// asked unsettled. The planner is not told that a question the person answered was declined, and
+/// the note that it was reused is not left naming an answer nobody received.
+#[test]
+fn a_series_nobody_could_be_asked_keeps_the_answers_given_before() {
+    let answerers = Answerers::default();
+    let mut turn = a_turn(&answerers);
+    answered_with(
+        &mut turn,
+        series_of(&["Which layer?"]),
+        vec![Answer::Chosen(vec![1])],
+    );
+    turn.said.try_iter().for_each(drop);
+
+    answerers.nobody().unwrap();
+    let unasked = turn.ask_user(series_of(&["Which store?", "Which layer?"]));
+    let (confirmer, got) = unasked.recv_timeout(PATIENCE).expect("refused");
+    turn.confirmer = Some(confirmer);
+    assert_eq!(got, vec![Answer::Declined, Answer::Chosen(vec![1])]);
+    assert_eq!(turn.confirmer.as_ref().expect("free").reused().len(), 1);
+    assert!(turn.nothing_was_published());
+
+    answerers.only(&KINDS).unwrap();
+    let (_, shown) = answered_with(
+        &mut turn,
+        series_of(&["Which store?", "Which layer?"]),
+        vec![Answer::Typed("redis".into())],
+    );
+    let prompts = shown["prompts"].as_array().expect("prompts");
+    assert_eq!(prompts.len(), 1, "{shown}");
+    assert_eq!(prompts[0]["question"], "Which store?");
+}
+
+/// Two turns of one session share what was answered, which a confirmer given the session's memo
+/// is what makes true. A confirmer without it forgets with its turn.
+#[test]
+fn a_later_turn_with_the_sessions_memo_is_not_asked_what_an_earlier_one_was() {
+    let session = Arc::new(Mutex::new(bravebot_core::ask::AnswerMemo::default()));
+    let mut earlier = a_turn(&Answerers::default());
+    earlier.confirmer = earlier
+        .confirmer
+        .take()
+        .map(|confirmer| confirmer.remembering(Arc::clone(&session)));
+    answered_with(
+        &mut earlier,
+        series_of(&["Which layer?"]),
+        vec![Answer::Chosen(vec![1])],
+    );
+
+    let mut later = a_turn(&Answerers::default());
+    later.confirmer = later
+        .confirmer
+        .take()
+        .map(|confirmer| confirmer.remembering(Arc::clone(&session)));
+    let again = later.ask_user(series_of(&["Which layer?"]));
+    let (_, got) = again.recv_timeout(PATIENCE).expect("answered from memory");
+    assert_eq!(got, vec![Answer::Chosen(vec![1])]);
+
+    let mut forgetful = a_turn(&Answerers::default());
+    let waiting = forgetful.ask_user(series_of(&["Which layer?"]));
+    forgetful.the_question_shown_as("ask.request");
+    assert!(
+        waiting.try_recv().is_err(),
+        "a confirmer with no session memo remembered"
+    );
 }

@@ -156,6 +156,7 @@ fn problem(reason: Unreadable) -> &'static str {
         Unreadable::UnclosedBracket => t!(permission_rule_unclosed_bracket),
         Unreadable::UnknownFamily => t!(permission_rule_unknown_family),
         Unreadable::EmptyBrackets => t!(permission_rule_empty_brackets),
+        Unreadable::WhitespaceAtAnEnd => t!(permission_rule_whitespace_at_an_end),
         Unreadable::Unanchored => t!(permission_rule_unanchored),
         Unreadable::NotADomainRule => t!(permission_rule_not_a_domain_rule),
         Unreadable::NoDomainNamed => t!(permission_rule_no_domain_named),
@@ -837,6 +838,7 @@ mod tests {
             Unreadable::UnclosedBracket,
             Unreadable::UnknownFamily,
             Unreadable::EmptyBrackets,
+            Unreadable::WhitespaceAtAnEnd,
             Unreadable::Unanchored,
             Unreadable::NotADomainRule,
             Unreadable::NoDomainNamed,
@@ -1208,6 +1210,37 @@ mod tests {
                 beside.display()
             );
         }
+    }
+
+    /// TRUST-2 end to end: a rule in a settings file whose path has whitespace at an end is reported
+    /// by name and decides nothing, in each of the three lists and for a rule written from `/` as
+    /// for one written from `./`. The settings layer rewrites a `/x` rule before the rule language
+    /// reads it, so a step there that trimmed the specifier would hide the whitespace from the
+    /// report and the rule would be read as the file without it. The report names the rule as the
+    /// rewrite spelled it.
+    #[test]
+    fn a_settings_rule_whose_path_has_whitespace_at_an_end_is_reported_and_decides_nothing() {
+        let name = "whitespace-names";
+        let project = r#"{"permissions": {"deny": ["Read(/a.md )"], "ask": ["Edit(./b.md\t)"]}}"#;
+        let home = r#"{"permissions": {"allow": ["Edit(./c.md\u00a0)"]}}"#;
+        let settings = layered_settings(name, Some(project), Some(home));
+        let root = crate::testutil::scratch_dir(&format!("bravebot-permission-layers-{name}"));
+        let (permissions, rejected) =
+            from_settings(&settings, Some(&root.join("profile")), &root.join("cwd"));
+        let mut reported: Vec<_> = rejected
+            .iter()
+            .map(|r| (r.reason, r.text.as_str()))
+            .collect();
+        reported.sort_by_key(|(_, text)| *text);
+        assert_eq!(
+            reported,
+            [
+                (Unreadable::WhitespaceAtAnEnd, "Edit(./b.md\t)"),
+                (Unreadable::WhitespaceAtAnEnd, "Edit(./c.md\u{a0})"),
+                (Unreadable::WhitespaceAtAnEnd, "Read(./a.md )"),
+            ]
+        );
+        assert!(permissions.is_empty(), "a reported rule was kept");
     }
 
     /// A scratch directory holding a project with `real/secret.txt` and `real/notes.md` in it and a

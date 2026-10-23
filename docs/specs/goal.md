@@ -32,6 +32,8 @@ is a turn like any other. The judge is one request over a copy of the exchange, 
 [watching.md](watching.md) describes for a question asked beside the work. That a `/` line is a
 command at all, and that only a key press produces one, is [commands.md](commands.md).
 
+`bravebot --goal` runs the same loop in a one-shot run, which [cli.md](cli.md) specifies.
+
 **A goal never gets ahead of the person.** A prompt they queued while a turn ran is sent before the
 judge is asked, so the condition is judged against an exchange holding everything they have said.
 

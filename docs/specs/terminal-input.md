@@ -288,6 +288,7 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_aichat::client::a_stream_stopped_before_it_starts_reports_nothing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_the_model_to_start_writing`
+`verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_a_responses_model_to_start_writing`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_for_an_endpoint_that_has_not_answered`
 `verified-by: bravebot_tui::state::cancelling_before_anything_happens_still_un_sends_the_prompt`
 `verified-by: bravebot_tui::undo_tests::a_prompt_stopped_before_any_reply_is_sent_once_when_it_is_sent_again`
@@ -402,6 +403,7 @@ named here and nowhere else:
 | Ctrl-Enter | queues the line as Enter does, then stops the turn in flight so what is waiting goes now (INPUT-36) |
 | Ctrl-D | leaves, which is not something the box does |
 | Ctrl-G | hands the screen the turn is drawing on to an editor (INPUT-14) |
+| Ctrl-P | does nothing, since the exchange the rewrite is asked over belongs to the turn (INPUT-48) |
 | `!` | arms a mode that changes what Enter does, over whatever the box holds when the turn ends ([shell-mode.md](shell-mode.md)) |
 | Up | takes back what is waiting before it walks the history (INPUT-18) |
 
@@ -772,6 +774,7 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::render::a_reading_with_no_figure_in_it_is_given_up_before_a_binding`
 `verified-by: bravebot_tui::render::a_note_at_the_right_takes_its_room_from_the_parts_rather_than_over_them`
 `verified-by: bravebot_tui::shell_mode::the_shortcuts_offer_shell_mode`
+`verified-by: bravebot_tui::render::the_shortcut_list_names_the_suspend_chord`
 
 <a id="INPUT-14"></a>
 ### INPUT-14: Ctrl-G edits the line in the user's own editor, and only what was saved comes back
@@ -961,7 +964,7 @@ puts back what a kill took, as characters. A kill never changes what `p` does wi
 took. Ctrl-Y inserts a register that holds whole lines as its characters, without the newline. A
 marker that was killed comes back as the marker, and names its attachment again for as long as that is
 still staged; once it is not, it is text like any other ([INPUT-3](#INPUT-3)). A chord moved onto
-`ctrl-y` ([INPUT-32](#INPUT-32)) is read first, and `yank` is not one of the ten movable actions.
+`ctrl-y` ([INPUT-32](#INPUT-32)) is read first, and `yank` is not one of the actions a settings file can move.
 While `R` is typing over the line ([INPUT-37](#INPUT-37)), Ctrl-U and Ctrl-W are Backspace and keep
 nothing, and Alt-D does nothing.
 
@@ -1045,6 +1048,35 @@ and readline from disagreeing about what was last taken.
   asked for a pointer shape ([PANEL-6](info-panel.md#PANEL-6)); elsewhere only the wheel and a click
   withdraw it. A movement is not exempted, because the offer would then stand through input another
   program can write, which is what withdrawing it is for.
+- **Ctrl-Z reaches the box and nothing else.** The question a session opens with, the questions a turn
+  puts to a person, the pickers, the scroller, the search over prompts, the view of a delegate and a
+  command typed after `!` each read their own keys, and none of them answers a stop (INPUT-47). A
+  person at one answers or closes it before the shell can be had. What it buys is a stop that is only
+  ever taken from the box, where what has to be given back is the line and nothing is half answered.
+- **A request in flight when the session stops may be over by the time it continues.** The stopped
+  process answers nobody, so a server closes a connection that stays quiet, and the turn then fails as
+  any request does that the network ended. A stop of a moment costs nothing and a stop of an hour costs
+  the turn.
+- **A command a turn started is held to its time limit by a clock that keeps running while the
+  session is stopped.** The stop does not reach the command (INPUT-47), and the session is what reads
+  its limit ([run.md](tools/run.md)), so a stop that outlasts what was left of the limit ends the
+  command at the first look after the session continues. What it buys is a stop that leaves each
+  command's own process group alone, as the terminal's Ctrl-Z leaves it.
+- **A session in an orphaned process group is not stopped.** The kernel discards the stop signal for a
+  group whose parent is outside its session, such as the first process of a container. The terminal is
+  given back and taken again, the screen is drawn afresh, and the key does nothing else.
+- **A rewrite can only name what the exchange holds.** The request reads no file and lists no
+  directory, so a file the session has not read or been told of is not one a rewrite can name, and in
+  a session with no turn yet the rewrite is made from the line alone (INPUT-48). Giving the request
+  the workspace would give it a policy that reaches files, which a question asked beside the work does
+  not have, and the exchange is all the planner could have been shown. The cost is a rewrite less
+  specific than one written over the files.
+- **A file a rewrite names is vouched for by the Enter that sends it.** A reference in the box
+  vouches for nothing until the line is sent, and sending is the grant
+  ([naming-files.md](naming-files.md)), so a person who sends a rewrite without reading it vouches for
+  a path a model chose, where `@` otherwise leaves the choice to them. The line is drawn whole in the
+  box and nothing sends it but Enter, which is all that stands between the rewrite and the turn
+  (INPUT-48). A suggestion (INPUT-43) has the same cost.
 
 <a id="INPUT-19"></a>
 ### INPUT-19: Ctrl-R searches every prompt sent, and what is chosen goes into the box
@@ -2053,7 +2085,7 @@ chord moved onto a line-editing key still edits there. Ctrl-Left, Ctrl-Right, Al
 Alt-Right are the caret's word motion everywhere, a recalled prompt included, since a prompt is
 recalled in order to be edited and a terminal may deliver the arrows with a modifier as something
 other than the key (macOS reserves Ctrl-Left and Ctrl-Right for Mission Control). The chord is
-one of the ten a settings file can move (INPUT-32), and the border names the chord in force. A
+one a settings file can move (INPUT-32), and the border names the chord in force. A
 person who moved it, or whose terminal delivers nothing for it, still reaches this workspace's
 prompts through the search (INPUT-19).
 
@@ -2103,12 +2135,13 @@ one carries to the other.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move eleven chords, and nothing else
+### INPUT-32: a settings file can move thirteen chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
-action's key says nothing about the other ten. There is no second file and no other spelling of the
-block, so one place answers what a key does. Eleven actions can be moved, and nothing else can:
+action's key says nothing about the others. There is no second file and no other spelling of the
+block, so one place answers what a key does. Thirteen actions can be moved on a platform that can
+suspend the session, twelve on one that cannot (INPUT-47), and nothing else can be moved:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -2123,6 +2156,9 @@ block, so one place answers what a key does. Eleven actions can be moved, and no
 - `scope` (default: `ctrl-n`): switch the prompt history Up walks between every stored prompt and
   this session's prompts (INPUT-40).
 - `undo` (default: `ctrl-_`): put back the last edit to the line (INPUT-44).
+- `suspend` (default: `ctrl-z`): stop the session and give the terminal to the shell (INPUT-47). Not
+  an action on Windows, so a settings file naming it there names nothing.
+- `enhance` (default: `ctrl-p`): rewrite the line in the box to be more specific (INPUT-48).
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
@@ -2167,14 +2203,14 @@ readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather t
 editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
 
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
-down (INPUT-13), and the eleven rows above are asked of the chord in force rather than spelled out
+down (INPUT-13), and the rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
 search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
-of the eleven, it names the default.
+of the chords above, it names the default.
 
 **Why.** A list is worth having only where it is right, and a person reads it at the moment a key
 they pressed did nothing. Keeping a second copy for the defaults is the same list twice: the copy
@@ -2196,6 +2232,9 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::custom_chords_override_defaults`
 `verified-by: bravebot_tui::keybindings::the_background_chord_is_ctrl_b_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::the_scope_chord_is_ctrl_n_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::the_suspend_chord_is_ctrl_z_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::a_chord_contested_with_suspend_is_given_up_by_the_request`
+`verified-by: bravebot_tui::keybindings::the_enhance_chord_is_ctrl_p_and_can_be_moved`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
@@ -2236,8 +2275,9 @@ disambiguated keys.
 
 Every one of those is given back when the session ends, including when it ends by failing rather
 than by being left, and again around each handover of the terminal to another program: the editor
-a prompt is written in and the viewer a transcript is read in both get the terminal as it was
-found, and the same set is taken again on the way back.
+a prompt is written in, the viewer a transcript is read in and the shell a stop leaves the terminal
+to (INPUT-47) all get the terminal as it was found, and the same set is taken again on the way
+back.
 
 **Why.** Each mode is asked for because something here cannot work without it. The wheel scrolls
 the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
@@ -2287,11 +2327,13 @@ shared with anything. A release is still delivered exactly as the terminal repor
 here withholds; it is only not counted, which it can afford to be because nothing answers one.
 
 **What asks for it is anything that decides, and nothing else.** The rung that ends a session
-([INPUT-4](#INPUT-4)), the question a session opens with ([PROMPT-7](prompting.md#PROMPT-7)), and the
-return that takes the line out of the box. Each of those grants or spends something a person cannot get
-back, and a program able to write bytes at the terminal writes the key that does it: an editor typing a
-virtualenv activation ends its line with a return, and taking that return sent a line nobody wrote to
-the planner. Every other reader answers the event it was given, exactly as before this existed, because
+([INPUT-4](#INPUT-4)), the question a session opens with ([PROMPT-7](prompting.md#PROMPT-7)), the
+return that takes the line out of the box, and the key that suspends the session ([INPUT-47](#INPUT-47)).
+Each of the first three grants or spends something a person cannot get back, and a program able to write
+bytes at the terminal writes the key that does it: an editor typing a virtualenv activation ends its line
+with a return, and taking that return sent a line nobody wrote to the planner. The last takes the
+terminal from a person who did not ask for the shell, which one byte written at the terminal would
+otherwise do. Every other reader answers the event it was given, exactly as before this existed, because
 moving the caret or narrowing a list costs nothing if a program does it.
 
 **The line stays where it is when the return is refused**, and the refusal is said. Words that vanish
@@ -2325,6 +2367,7 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::app::a_refused_way_out_says_so`
 `verified-by: bravebot_tui::app::a_return_of_its_own_still_sends`
 `verified-by: bravebot_tui::app::a_program_cannot_send_its_own_line_with_an_arrow_and_a_return`
+`verified-by: bravebot_tui::suspend_tests::a_ctrl_z_that_arrived_with_other_keys_does_not_suspend`
 
 <a id="INPUT-35"></a>
 ### INPUT-35: a count in front of an instruction says how many
@@ -2673,10 +2716,9 @@ session stays open in INSERT mode. What the session has typed since it opened is
 stack until Escape closes it (INPUT-28), so Ctrl-_ there does not reach it either, the same as `u`
 could not reach it if INSERT read letters as anything but themselves. It carries no count, so one
 press is one step back in either style, where a count in front of `u` asks vi for several. Ctrl-Z is
-not used for it: that chord suspends the process on a terminal that has not had job control turned
-off, which this program does not take.
+not used for it: that chord suspends the session (INPUT-47).
 
-`undo` is one of the eleven chords a settings file can move (INPUT-32), defaulting to `ctrl-_`, and
+`undo` is one of the chords a settings file can move (INPUT-32), defaulting to `ctrl-_`, and
 the `?` list shows it (INPUT-13). While it stands on that default, the chord also answers to Ctrl-7,
 Ctrl-Shift-_, Ctrl-/ and Ctrl-Shift-/, the spellings a terminal reports for the same byte or the same
 key by another name, so the key that undoes on a terminal reporting one answers on a terminal
@@ -2711,6 +2753,7 @@ has otherwise finished typing.
 `verified-by: bravebot_tui::state::undo_after_a_style_switch_has_nothing_to_restore_in_the_ordinary_box`
 `verified-by: bravebot_tui::state::undo_after_recalling_history_has_nothing_to_restore_in_the_ordinary_box`
 `verified-by: bravebot_tui::keybindings::an_alternate_spelling_given_to_another_action_no_longer_answers_undo`
+`verified-by: bravebot_tui::keybindings::an_alternate_spelling_given_to_enhance_no_longer_answers_undo`
 `verified-by: bravebot_tui::keybindings::a_block_written_before_undo_existed_that_named_ctrl_underscore_gives_it_up`
 
 <a id="INPUT-45"></a>
@@ -2787,3 +2830,159 @@ this meaning.
 `verified-by: bravebot_ui_bridge::interjection_tests::work_that_asks_nothing_between_rounds_takes_no_line`
 `verified-by: bravebot_ui_bridge::interjection_tests::lines_are_read_in_the_order_they_were_typed`
 `verified-by: by-construction (the renderer and the main process are not crates this workspace compiles, so ui/scripts/interjecting.test.mjs drives the window's own event reducer with the bridge's events: a line is in the transcript only after turn.interjected and in the order it was sent, a line unread when the turn is done or stopped goes on past a paused queue, one left by a failed turn waits, a refused line returns to the head of the queue, the window names its markers and writes no words, a paperclip file or the memory update queues the line, and turn.interject forwards only its line and the names of its markers; make check-ui runs the test)`
+
+<a id="INPUT-47"></a>
+### INPUT-47: Ctrl-Z suspends the session to the shell and `fg` brings it back, on Unix
+
+Ctrl-Z in the box stops the session and leaves the terminal to the shell that started it, until the
+shell continues the session with `fg`. The session holds the terminal in raw mode, so the terminal
+driver never turns the key into a stop, and the session sends the stop itself, to its whole process
+group as the driver does. A session started in a pipeline or by a wrapper has other members in its
+group, and a shell reports a job stopped only when every member of it has stopped.
+
+The terminal goes to the shell as it is given back for an editor (INPUT-33): raw mode, the screen of
+its own, mouse reporting, bracketed paste, focus reporting and the keyboard mode the session pushed
+are all off before the process stops. When the shell continues it, the same set is asked for again
+and the screen is cleared and drawn afresh. The stop changes nothing the session holds: the line, the
+caret, what is attached to the line, what is waiting in the queue and the mode the box is in are as
+they were. The press is a key like any other for what waits on the next one. It withdraws the offer to
+leave ([INPUT-4](#INPUT-4)), so the first Ctrl-C after `fg` offers again and does not leave, it
+abandons a half-typed vi instruction ([INPUT-24](#INPUT-24)), and it removes a suggested next prompt
+([INPUT-43](#INPUT-43)).
+
+A session the shell continues with `bg` is outside the terminal's foreground group. The terminal
+stops it again at the first mode it sets, which the shell reports as stopped for terminal output, and
+`fg` carries it on from there: the call that was stopped is made again, and the session does not end.
+
+The key is the box's. It works at rest and while a turn runs, in either editing style and in shell
+mode. The scroller, the search over prompts, a picker, the view of a delegate and the questions the
+session puts to a person read their own keys and do nothing with it. A Ctrl-Z that arrived with other
+keys in one read stops nothing, in the way a Ctrl-C that arrived so does not leave (INPUT-34): the
+press is refused and said, and the line stays.
+
+**A turn stops with the process.** Nothing it holds runs while the process is stopped, the time it
+shows keeps counting, and it carries on when the process does. A command it started leads a process
+group of its own ([run.md](tools/run.md)), which the stop does not reach: the command keeps running,
+and what it prints waits in its pipe until the session reads it again, so a command that prints more
+than the pipe holds waits as well.
+
+`suspend` is a chord a settings file can move (INPUT-32), for a person whose terminal or multiplexer
+answers Ctrl-Z itself, and the `?` list names the chord in force (INPUT-13). Windows has no stop to
+send: the key does nothing there, the list does not name it, and a settings file has no `suspend` to
+move.
+
+**Why.** Raw mode is why the key does nothing otherwise, and a person who wants the shell for a moment
+has to leave the session or open another terminal. Stopping keeps the session exactly where it is,
+which leaving does not. Claude Code, Gemini CLI and OpenCode each stop on Ctrl-Z and continue with
+`fg`. The signal goes to the group because a shell cannot tell that a job has stopped while one of its
+members still runs. The refusal for a key that arrived with others is the one the rung that leaves
+has, since one byte another program writes should not take the terminal from the person at it.
+
+`verified-by: bravebot_tui::suspend_tests::ctrl_z_suspends_the_session_and_leaves_the_box_as_it_was`
+`verified-by: bravebot_tui::suspend_tests::ctrl_z_suspends_while_a_turn_runs_and_leaves_the_box_as_it_was`
+`verified-by: bravebot_tui::suspend_tests::ctrl_z_suspends_in_either_editing_style_and_in_shell_mode`
+`verified-by: bravebot_tui::suspend_tests::a_ctrl_z_that_arrived_with_other_keys_does_not_suspend`
+`verified-by: bravebot_tui::suspend_tests::a_mode_over_the_box_reads_ctrl_z_itself_and_does_not_suspend`
+`verified-by: bravebot_tui::suspend_tests::a_working_loop_hands_the_stop_back_to_the_pump_that_holds_the_terminal`
+`verified-by: bravebot_tui::app::the_turns_key_reader_hands_ctrl_z_back_and_leaves_the_turn_running`
+`verified-by: bravebot_tui::suspend_tests::the_offer_to_leave_does_not_survive_a_stop`
+`verified-by: bravebot_tui::suspend_tests::stopping_reaches_the_group_and_returns_only_once_continued`
+`verified-by: bravebot_tui::suspend_tests::the_terminal_is_given_back_before_the_stop_and_taken_again_after_it`
+`verified-by: bravebot_tui::suspend_tests::a_call_a_stop_interrupted_is_made_again`
+`verified-by: bravebot_tui::suspend_tests::a_call_that_failed_for_another_reason_is_not_made_again`
+`verified-by: bravebot_tui::suspend_tests::a_terminal_that_cannot_be_given_back_is_not_stopped_over`
+`verified-by: bravebot_tui::suspend_tests::the_suspend_chord_can_be_moved`
+`verified-by: bravebot_tui::suspend_tests::the_suspend_chord_answers_on_keys_the_ladder_reads_whatever_is_held_with_them`
+`verified-by: bravebot_tui::suspend_tests::a_moved_suspend_chord_takes_precedence_over_line_editing`
+`verified-by: bravebot_tui::keybindings::the_suspend_chord_is_ctrl_z_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::a_chord_contested_with_suspend_is_given_up_by_the_request`
+`verified-by: bravebot_tui::keybindings::suspend_moved_onto_an_undo_spelling_takes_it_from_undo`
+`verified-by: bravebot_tui::keybindings::where_nothing_suspends_ctrl_z_is_free_for_another_action`
+`verified-by: bravebot_tui::render::the_shortcut_list_names_the_suspend_chord`
+`verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
+
+<a id="INPUT-48"></a>
+### INPUT-48: a key rewrites the line to be more specific, and the rewrite waits in the box for the person to edit
+
+With a prompt in the box and no turn running, the enhance key makes one request, to the model the
+session is using, over the exchange the planner already holds and with no tools. The request is the
+line as written, a folded paste put back to its words, behind an instruction the driver writes: make
+the message more specific and easier to act on, keep what was asked for, add no requirement, file
+name or fact that neither the line nor the exchange gives, and write the message only. The exchange
+is read and not changed, the request reads no file, and what it cost is charged to the session and
+its trail kept. The box goes on taking what is typed while the request is out, and the keys that stop
+a turn stop it and leave the line as it was ([INPUT-4](#INPUT-4)).
+
+What comes back replaces the line in the box as text, and nothing is sent to a turn. The person edits
+it, and Enter sends the line as a prompt whatever it begins with: a line a model wrote is not carried
+out as a command, so a rewrite that begins with `/` is words. A `@` reference in it is text like any
+other, names nothing while it is in the box, and is vouched for only by the Enter that sends the line,
+as [naming-files.md](naming-files.md) has it.
+
+Escape in the ordinary style, and Ctrl-C in either style, put back the line that was in the box
+before the rewrite and keep the rewrite as the draft Up brings back, so an edit made to it is not
+lost. The next press clears the line as it clears any. In vi's style Escape leaves INSERT as it does
+everywhere. Enhancing a rewrite again keeps the first line as the one put back. Emptying the box, or
+replacing its line by recalling a prompt or by taking it back from an editor, ends the enhancement,
+and a line typed afterwards is an ordinary line.
+
+The driver reads the answer for its length and for characters a terminal draws as nothing, and for
+nothing else. It is offered only where the exchange has met nothing untrusted, because words written
+over such an exchange are ones the planner could not have held ([sessions.md](sessions.md)), and
+otherwise the person is told so and the line stays. An answer that is empty, or longer than 4000
+characters, is not offered rather than cut to something the model did not write. Characters a
+terminal draws as nothing are taken out of what is offered and counted, as they are from a paste
+([pasting.md](pasting.md)). An answer is not written over a line the person has typed into since the
+request went out, and says so.
+
+The key does nothing for an empty box, in shell mode, and while a turn runs, since the exchange
+belongs to the turn then (INPUT-9). For a line whose first word is a slash and a name, which is how a
+command or a skill is written, for one holding a picture or a dropped file, which a rewrite of words
+would lose, and for one longer than 4000 characters, which a rewrite could not be offered at, it says
+so and leaves the line as written. A first word with a second slash in it is a path, and a line
+beginning with one is a prompt. The key is one of the chords a settings file can move (INPUT-32), and
+the `?` list shows it (INPUT-13).
+
+**Why.** A prompt that says what is wanted, how done looks and which parts of the work it touches
+gets a better turn than one that leaves the planner to ask, and the exchange already holds what is
+known of those parts. The request is the driver's own words over the planner's own context, and the
+answer lands where the person reads and edits it before it is anything a planner sees, so it decides
+nothing. Counting is the only judgement the driver makes of it, which keeps this on the right side of
+the rule that the driver does not branch on what a model wrote. Nothing is sent until Enter because
+only the person can say whether the rewrite is what they meant, and the original comes back because a
+key that could lose the line would not be safe to press. A key and not a command because a person
+reaches for it with the line half written, where a command word would have to be typed in front of it.
+
+`verified-by: bravebot_agent::aside::an_enhancement_is_offered_whole_or_not_at_all`
+`verified-by: bravebot_agent::aside::the_enhancement_limit_counts_characters_rather_than_bytes`
+`verified-by: bravebot_agent::aside::an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_it_alone`
+`verified-by: bravebot_agent::aside::an_enhancement_carries_what_the_exchange_had_met`
+`verified-by: bravebot_agent::aside::an_enhancement_is_told_to_rewrite_and_not_to_answer`
+`verified-by: bravebot_agent::turn::an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_the_conversation_alone`
+`verified-by: bravebot_agent::turn::an_enhancement_over_an_untrusted_exchange_is_not_offered_for_the_box`
+`verified-by: bravebot_tui::keybindings::the_enhance_chord_is_ctrl_p_and_can_be_moved`
+`verified-by: bravebot_tui::app::the_enhance_chord_asks_for_the_line_and_sends_nothing`
+`verified-by: bravebot_tui::app::the_enhance_chord_has_nothing_to_rewrite_in_an_empty_box_or_a_shell_line`
+`verified-by: bravebot_tui::app::a_line_written_like_a_command_or_a_skill_is_left_as_written_and_says_so`
+`verified-by: bravebot_tui::app::a_prompt_that_starts_with_a_path_is_rewritten_like_any_other`
+`verified-by: bravebot_tui::app::a_line_too_long_to_be_rewritten_is_left_as_written_and_says_so`
+`verified-by: bravebot_tui::app::a_line_holding_a_picture_is_left_as_written_and_says_so`
+`verified-by: bravebot_tui::app::a_folded_paste_goes_to_the_request_as_its_words`
+`verified-by: bravebot_tui::app::a_moved_enhance_chord_enhances_and_the_old_one_does_not`
+`verified-by: bravebot_tui::app::the_enhance_chord_answers_in_every_mode_of_vi_s_style`
+`verified-by: bravebot_tui::app::the_enhance_chord_does_nothing_while_a_turn_runs`
+`verified-by: bravebot_tui::app::an_enhancement_is_placed_in_the_box_and_nothing_is_sent`
+`verified-by: bravebot_tui::app::escape_puts_back_what_was_written_and_the_next_escape_clears_it`
+`verified-by: bravebot_tui::app::ctrl_c_puts_back_what_was_written_in_either_style`
+`verified-by: bravebot_tui::app::enter_on_an_enhancement_sends_it_as_a_prompt_whatever_it_begins_with`
+`verified-by: bravebot_tui::app::enter_on_an_enhancement_mid_turn_queues_it_as_a_prompt_and_never_as_a_command`
+`verified-by: bravebot_tui::app::a_line_typed_after_the_enhancement_was_wiped_out_is_a_new_line`
+`verified-by: bravebot_tui::app::enhancing_an_enhancement_still_puts_back_the_line_the_person_wrote`
+`verified-by: bravebot_tui::app::an_enhancement_from_an_exchange_that_met_something_untrusted_is_not_offered`
+`verified-by: bravebot_tui::app::an_enhancement_that_is_empty_or_too_long_is_not_offered_and_says_so`
+`verified-by: bravebot_tui::app::an_enhancement_is_not_written_over_a_line_typed_since_the_request_went`
+`verified-by: bravebot_tui::app::a_stopped_or_failed_request_leaves_the_line_and_says_so`
+`verified-by: bravebot_tui::app::the_note_names_the_key_that_puts_the_line_back_in_each_style`
+`verified-by: bravebot_tui::app::an_enhancements_cost_is_charged_to_the_session`
+`verified-by: bravebot_tui::app::characters_that_draw_as_nothing_are_taken_out_of_an_enhancement_and_counted`
+`verified-by: bravebot_tui::render::the_shortcuts_name_the_enhance_chord_in_force`

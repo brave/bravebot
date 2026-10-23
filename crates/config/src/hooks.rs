@@ -63,9 +63,10 @@ pub fn hooks_file(directory: &Path) -> PathBuf {
 /// A moment a hook can be attached to, in a person's terms.
 ///
 /// Deliberately short. Each is something somebody can point at in a session that has happened:
-/// the turn began, a call finished, the turn is over, a question is waiting on them. The audit
-/// trail's events are a different vocabulary answering a different question, and a person writing a
-/// hook should not have to learn what a gate or a slot is.
+/// the session opened, the turn began, a call finished, the turn is over, a question is waiting on
+/// them, a checkout was made for a delegate, the conversation was shortened, the session closed. The
+/// audit trail's events are a different vocabulary answering a different question, and a person
+/// writing a hook should not have to learn what a gate or a slot is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Moment {
     /// The turn a person asked for has begun, before anything is sent.
@@ -76,9 +77,33 @@ pub enum Moment {
     TurnFinished,
     /// A prompt or a question is about to be put to a person who can answer it.
     PromptShown,
+    /// The driver has written a checkout for a delegate, which has not yet made its first request.
+    CheckoutMade,
+    /// A summary has replaced the older part of the conversation in the request, whether the budget
+    /// forced it or the person asked for it.
+    Compacted,
+    /// An interface a person opened has begun a session, before any turn is sent.
+    SessionStarted,
+    /// The interface a person opened is being left, however that came about.
+    SessionEnded,
+    /// A file the entry names has changed on disk, seen by a look the session takes itself.
+    FileChanged,
 }
 
 impl Moment {
+    /// Every moment a hook can be written for, in the order the specification lists them.
+    pub const ALL: [Self; 9] = [
+        Self::TurnStarted,
+        Self::ToolFinished,
+        Self::TurnFinished,
+        Self::PromptShown,
+        Self::CheckoutMade,
+        Self::Compacted,
+        Self::SessionStarted,
+        Self::SessionEnded,
+        Self::FileChanged,
+    ];
+
     /// The word a file spells it with, or `None` for a word this build does not fire.
     ///
     /// An unrecognised moment is an entry that never runs rather than an error: a file written for
@@ -89,6 +114,11 @@ impl Moment {
             "tool-finished" => Some(Self::ToolFinished),
             "turn-finished" => Some(Self::TurnFinished),
             "prompt-shown" => Some(Self::PromptShown),
+            "checkout-made" => Some(Self::CheckoutMade),
+            "compacted" => Some(Self::Compacted),
+            "session-started" => Some(Self::SessionStarted),
+            "session-ended" => Some(Self::SessionEnded),
+            "file-changed" => Some(Self::FileChanged),
             _ => None,
         }
     }
@@ -100,6 +130,11 @@ impl Moment {
             Self::ToolFinished => "tool-finished",
             Self::TurnFinished => "turn-finished",
             Self::PromptShown => "prompt-shown",
+            Self::CheckoutMade => "checkout-made",
+            Self::Compacted => "compacted",
+            Self::SessionStarted => "session-started",
+            Self::SessionEnded => "session-ended",
+            Self::FileChanged => "file-changed",
         }
     }
 }
@@ -114,10 +149,15 @@ pub struct Hook {
     /// what the writer said and dropping it at read time would leave nothing able to report that
     /// it says nothing here.
     tool: Option<String>,
+    /// The one file a `file-changed` entry watches, as the person wrote it.
+    ///
+    /// Read for every moment and consulted only by [`Moment::FileChanged`], for the reason `tool`
+    /// is. An entry for that moment with no usable path is not kept: there is nothing to look at.
+    path: Option<String>,
     /// The program and its arguments. Never empty: an entry with nothing to run is not kept.
     run: Vec<String>,
     /// How long this hook may run, in whole seconds, where the entry stated one. `None` is the
-    /// bound a turn uses for every hook that states none.
+    /// bound its moment has for every hook that states none.
     timeout: Option<u64>,
 }
 
@@ -130,6 +170,11 @@ impl Hook {
     /// The tool this is about, where it named one.
     pub fn tool(&self) -> Option<&str> {
         self.tool.as_deref()
+    }
+
+    /// The file a `file-changed` entry watches, where it named one.
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
     }
 
     /// The program and its arguments.
@@ -148,7 +193,8 @@ impl Hook {
     /// out from the moment and the name again would be a second answer to which entries are about
     /// a call.
     pub fn fires_for_nothing(&self) -> bool {
-        self.tool.is_some() && self.moment != Moment::ToolFinished
+        (self.tool.is_some() && self.moment != Moment::ToolFinished)
+            || (self.path.is_some() && self.moment != Moment::FileChanged)
     }
 
     /// Whether this entry fires for `moment`, for a call on `tool` where there was one.
@@ -258,6 +304,16 @@ impl Declarations {
         }
     }
 
+    #[cfg(test)]
+    fn read_text(text: &str) -> Self {
+        let (hooks, entire) = read(text);
+        Self {
+            hooks,
+            text: Some(text.to_string()),
+            entire,
+        }
+    }
+
     /// What the file declares, which is what a turn would fire.
     pub fn hooks(&self) -> &Hooks {
         &self.hooks
@@ -318,8 +374,13 @@ fn accounted(value: &serde_json::Value, hook: &Hook) -> bool {
     };
     if object
         .keys()
-        .any(|key| !matches!(key.as_str(), "on" | "tool" | "run" | "timeout"))
+        .any(|key| !matches!(key.as_str(), "on" | "tool" | "path" | "run" | "timeout"))
     {
+        return false;
+    }
+    // An editor composing the file back from the entries has no field for a path, so an entry with
+    // one is a file it must leave to be edited by hand, whatever it says.
+    if hook.path.is_some() {
         return false;
     }
     // A name read as `None` because it was blank, because it was not a string at all, or trimmed
@@ -350,6 +411,15 @@ fn entry(value: &serde_json::Value) -> Option<Hook> {
         }
         _ => None,
     };
+    let path = match object.get("path") {
+        Some(serde_json::Value::String(path)) if !path.trim().is_empty() => Some(path.clone()),
+        _ => None,
+    };
+    // Nothing to look at is nothing to fire for, so this moment's entry is dropped, as one with no
+    // program is.
+    if moment == Moment::FileChanged && path.is_none() {
+        return None;
+    }
     let serde_json::Value::Array(words) = object.get("run")? else {
         return None;
     };
@@ -378,6 +448,7 @@ fn entry(value: &serde_json::Value) -> Option<Hook> {
     Some(Hook {
         moment,
         tool,
+        path,
         run,
         timeout,
     })
@@ -395,16 +466,37 @@ mod tests {
             .collect()
     }
 
-    /// HOOK-2: the four moments are the vocabulary, and each is spelled the way the file spells it.
+    /// HOOK-2: the list of moments names each of them once, in a spelling a file accepts, which is
+    /// what a front end that reports a bound for each of them reads. The regression it rejects is a
+    /// moment listed twice in the place of another, which a front end then reports twice and the
+    /// other never. A moment left out of the list altogether is not something a test can see; the
+    /// list sits beside the enum and its two matches for that reason.
+    #[test]
+    fn the_list_of_moments_names_each_once_in_a_spelling_a_file_accepts() {
+        let words: std::collections::BTreeSet<&str> =
+            Moment::ALL.iter().map(|moment| moment.as_str()).collect();
+        assert_eq!(words.len(), Moment::ALL.len(), "{:?}", Moment::ALL);
+        for moment in Moment::ALL {
+            assert_eq!(Moment::parse(moment.as_str()), Some(moment));
+        }
+    }
+
+    /// HOOK-2: the nine moments are the vocabulary, and each is spelled the way the file spells it.
     #[test]
     fn each_moment_is_named_by_the_word_a_file_spells_it_with() {
-        for moment in [
-            Moment::TurnStarted,
-            Moment::ToolFinished,
-            Moment::TurnFinished,
-            Moment::PromptShown,
+        for (moment, word) in [
+            (Moment::TurnStarted, "turn-started"),
+            (Moment::ToolFinished, "tool-finished"),
+            (Moment::TurnFinished, "turn-finished"),
+            (Moment::PromptShown, "prompt-shown"),
+            (Moment::CheckoutMade, "checkout-made"),
+            (Moment::Compacted, "compacted"),
+            (Moment::SessionStarted, "session-started"),
+            (Moment::SessionEnded, "session-ended"),
+            (Moment::FileChanged, "file-changed"),
         ] {
-            assert_eq!(Moment::parse(moment.as_str()), Some(moment));
+            assert_eq!(Moment::parse(word), Some(moment));
+            assert_eq!(moment.as_str(), word);
         }
     }
 
@@ -496,13 +588,56 @@ mod tests {
         assert!(programs(&hooks, Moment::TurnStarted, None).is_empty());
     }
 
+    /// HOOK-2: a checkout is made by the driver and not by a call, so an entry naming a tool on
+    /// `checkout-made` is about a call that does not happen there, as it is on a turn moment.
+    #[test]
+    fn a_tool_named_on_the_checkout_moment_fires_for_nothing() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [{"on": "checkout-made", "tool": "spawn_agent", "run": ["setup"]}]}"#,
+        );
+        assert!(programs(&hooks, Moment::CheckoutMade, None).is_empty());
+        assert!(hooks.declared()[0].fires_for_nothing());
+    }
+
+    /// HOOK-2: a setup command for a new checkout is not run at the end of a turn or after a call,
+    /// and a command written for those is not run when a checkout is made.
+    #[test]
+    fn a_checkout_hook_fires_at_that_moment_alone() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "checkout-made", "run": ["setup"]},
+                {"on": "tool-finished", "run": ["log"]},
+                {"on": "turn-finished", "run": ["end"]}
+            ]}"#,
+        );
+        assert_eq!(
+            programs(&hooks, Moment::CheckoutMade, None),
+            vec![vec!["setup".to_string()]]
+        );
+        for moment in [
+            Moment::TurnStarted,
+            Moment::TurnFinished,
+            Moment::PromptShown,
+        ] {
+            assert!(
+                !programs(&hooks, moment, None).contains(&vec!["setup".to_string()]),
+                "{moment:?}"
+            );
+        }
+        assert!(
+            !programs(&hooks, Moment::ToolFinished, Some("run"))
+                .contains(&vec!["setup".to_string()])
+        );
+    }
+
     /// HOOK-2: a moment fires the hooks written for it and nothing written for another.
     #[test]
     fn a_moment_fires_only_the_hooks_written_for_it() {
         let hooks = Hooks::parse(
             r#"{"hooks": [
                 {"on": "turn-started", "run": ["begin"]},
-                {"on": "turn-finished", "run": ["end"]}
+                {"on": "turn-finished", "run": ["end"]},
+                {"on": "compacted", "run": ["shrunk"]}
             ]}"#,
         );
         assert_eq!(
@@ -513,6 +648,50 @@ mod tests {
             programs(&hooks, Moment::TurnFinished, None),
             vec![vec!["end".to_string()]]
         );
+        assert_eq!(
+            programs(&hooks, Moment::Compacted, None),
+            vec![vec!["shrunk".to_string()]]
+        );
+    }
+
+    /// HOOK-2, HOOK-10: the two ends of a session are moments of their own. An entry written for one
+    /// fires at that one, and not at the other or at any moment of a turn.
+    #[test]
+    fn a_session_moment_fires_only_the_hooks_written_for_it() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "session-started", "run": ["open"]},
+                {"on": "session-ended", "run": ["close"]},
+                {"on": "turn-started", "run": ["begin"]}
+            ]}"#,
+        );
+        assert_eq!(
+            programs(&hooks, Moment::SessionStarted, None),
+            vec![vec!["open".to_string()]]
+        );
+        assert_eq!(
+            programs(&hooks, Moment::SessionEnded, None),
+            vec![vec!["close".to_string()]]
+        );
+        assert_eq!(
+            programs(&hooks, Moment::TurnStarted, None),
+            vec![vec!["begin".to_string()]]
+        );
+    }
+
+    /// HOOK-2: a session is not a call, so a tool named on either end of one is about a call that
+    /// does not happen there, and the entry is shown as firing for nothing.
+    #[test]
+    fn a_tool_named_on_a_session_moment_fires_for_nothing() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "session-started", "tool": "write_file", "run": ["open"]},
+                {"on": "session-ended", "tool": "write_file", "run": ["close"]}
+            ]}"#,
+        );
+        assert!(programs(&hooks, Moment::SessionStarted, None).is_empty());
+        assert!(programs(&hooks, Moment::SessionEnded, None).is_empty());
+        assert!(hooks.declared().iter().all(Hook::fires_for_nothing));
     }
 
     /// HOOK-2: two entries for one moment are two commands, in the order the file listed them.
@@ -658,7 +837,8 @@ mod tests {
             r#"{"hooks": [
                 {"on": "turn-started", "tool": "write_file", "run": ["a"]},
                 {"on": "tool-finished", "tool": "write_file", "run": ["b"]},
-                {"on": "turn-finished", "run": ["c"]}
+                {"on": "turn-finished", "run": ["c"]},
+                {"on": "compacted", "tool": "write_file", "run": ["d"]}
             ]}"#,
         );
         let fires_for_nothing: Vec<bool> = hooks
@@ -666,7 +846,8 @@ mod tests {
             .iter()
             .map(Hook::fires_for_nothing)
             .collect();
-        assert_eq!(fires_for_nothing, vec![true, false, false]);
+        assert_eq!(fires_for_nothing, vec![true, false, false, true]);
+        assert!(programs(&hooks, Moment::Compacted, None).is_empty());
     }
 
     /// HOOK-7: an entry may state its own bound, in whole seconds, and one that states none has
@@ -763,5 +944,47 @@ mod tests {
 
         assert!(!loaded(65536), "a file of exactly 64 KB was passed over");
         assert!(loaded(65537), "a file a byte past 64 KB was read");
+    }
+
+    /// HOOK-2: a `file-changed` entry names the one file it watches, and an entry that names none
+    /// has nothing to look at and is not kept. The regression it rejects is keeping it, which
+    /// leaves a hook that can never fire and says nothing about why.
+    #[test]
+    fn a_file_changed_entry_names_the_file_it_watches() {
+        let hooks = Hooks::parse(
+            r#"{"hooks": [
+                {"on": "file-changed", "path": ".envrc", "run": ["notify"]},
+                {"on": "file-changed", "run": ["no-path"]},
+                {"on": "file-changed", "path": "  ", "run": ["blank"]}
+            ]}"#,
+        );
+
+        let kept: Vec<_> = hooks.firing(Moment::FileChanged, None).collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].path(), Some(".envrc"));
+        assert!(!kept[0].fires_for_nothing());
+    }
+
+    /// HOOK-2: a path on any other moment fires for nothing, as a tool does on a moment that has
+    /// no call. The regression it rejects is a form showing that entry as one that fires.
+    #[test]
+    fn a_path_on_another_moment_fires_for_nothing() {
+        let hooks =
+            Hooks::parse(r#"{"hooks": [{"on": "turn-finished", "path": "x", "run": ["notify"]}]}"#);
+
+        assert!(hooks.declared()[0].fires_for_nothing());
+    }
+
+    /// HOOK-8: a file holding a path is not one an editor may compose back from its entries, which
+    /// have no field for it. The regression it rejects is reporting it wholly read, which lets a
+    /// form rewrite the file without the path.
+    #[test]
+    fn an_entry_with_a_path_leaves_the_file_not_wholly_read() {
+        let kept = Declarations::read_text(
+            r#"{"hooks": [{"on": "file-changed", "path": "x", "run": ["notify"]}]}"#,
+        );
+
+        assert!(!kept.entire());
+        assert_eq!(kept.hooks().declared().len(), 1);
     }
 }

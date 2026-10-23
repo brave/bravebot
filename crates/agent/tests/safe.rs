@@ -5,6 +5,10 @@
 //! Engaging safe mode is a one-way door for the life of a process, so these cannot share a binary
 //! with the tests that assert the ordinary behaviour. The fixtures are the ones
 //! `tests/preamble.rs` and `tests/skills.rs` show are read in an ordinary session.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_agent::preamble;
 use bravebot_agent::skills::{self, Catalogue};
@@ -33,7 +37,8 @@ fn policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
 /// A project whose `pkg` holds an `AGENTS.md` and a skill, after the session worked in `pkg`.
 fn worked_in_a_package(name: &str) -> Workspace {
     bravebot_core::safe::engage();
-    let project = std::env::temp_dir().join(format!("bravebot-agent-safe-{name}"));
+    let project =
+        std::env::temp_dir().join(format!("bravebot-agent-safe-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&project);
     let skill = project.join("pkg/.bravebot/skills/only");
     std::fs::create_dir_all(&skill).unwrap();
@@ -95,4 +100,60 @@ fn a_safe_session_reads_no_nested_agents_file() {
         "a safe session read a nested AGENTS.md: {}",
         composed.text
     );
+}
+
+/// A safe session reads no rule file, whether it applies to every turn or waits for a path
+/// (INSTR-16). What the command line named still reaches the prompt, which shows the prompt was
+/// composed and only the files were left out.
+#[test]
+fn a_safe_session_reads_no_rule_file() {
+    bravebot_core::safe::engage();
+    let project =
+        std::env::temp_dir().join(format!("bravebot-agent-safe-rules-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&project);
+    std::fs::create_dir_all(project.join(".bravebot/rules")).unwrap();
+    std::fs::write(project.join(".bravebot/rules/always.md"), "ALWAYS-RULE").unwrap();
+    std::fs::write(
+        project.join(".bravebot/rules/scoped.md"),
+        "---\npaths: [\"**/*.rs\"]\n---\nSCOPED-RULE",
+    )
+    .unwrap();
+    // Beside the project and not in it, so that the person's own directory is one an ordinary
+    // session reads.
+    let home = std::env::temp_dir().join(format!(
+        "bravebot-agent-safe-rules-home-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join("rules")).unwrap();
+    std::fs::write(home.join("rules/mine.md"), "HOME-RULE").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+    workspace.record_touch("src/lib.rs");
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink);
+
+    let composed = preamble::compose_in(
+        &mut policy,
+        &workspace,
+        &workspace,
+        Some(&home),
+        &Catalogue::default(),
+        None,
+        None,
+        &Attribution::default(),
+        Some("FROM-THE-COMMAND-LINE"),
+    );
+
+    assert!(
+        composed.text.contains("FROM-THE-COMMAND-LINE"),
+        "{}",
+        composed.text
+    );
+    for read in ["ALWAYS-RULE", "SCOPED-RULE", "HOME-RULE"] {
+        assert!(
+            !composed.text.contains(read),
+            "a safe session read {read}: {}",
+            composed.text
+        );
+    }
 }

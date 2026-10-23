@@ -395,7 +395,7 @@ a turn.
 ```
 
 Returns `{ "session": "s2", "directory": "…", "branch": "main", "remembered": null,
-"keeping": "…" }`, the last two as §9 has them. The `Record` is not written until the first
+"keeping": "…", "shownDirectory": "…", "shownKeeping": "…" }`, the last four as §9 has them. The `Record` is not written until the first
 turn, matching `Session::begin` + `save`, so an opened-and-abandoned window leaves nothing
 behind.
 
@@ -834,7 +834,11 @@ for. A server reply has none either: an approval lasts as long as the session do
 the first and no more questions about this tool in this project for the second. `mcp-tools.reply`
 and `mcp-move.reply` accept `decision`.
 `ask.reply` accepts an `answers` array, whose entries contain `typed` text or `chosen`
-indices; unreadable entries decline. Choices are fitted to the question before use.
+indices; unreadable entries decline. Choices are fitted to the question before use. The entries
+answer the `prompts` of the request by position. A question the person answered earlier in the
+session is not in `prompts`, and a series whose questions are all settled sends no `ask.request`
+([ASK-8](../../docs/specs/tools/ask-user.md#ASK-8)). A question left without an answer is not
+remembered as declined.
 
 #### Permissions
 
@@ -953,6 +957,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
+| `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |
 | `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |
 | `tool.started` | `Activity` | `Reporter::tool_started` |
 | `tool.finished` | `Activity` | `Reporter::tool_finished` |
@@ -964,7 +969,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `tokens` | `{ written }` | `Reporter::output_tokens`, **only when the figure changes** |
 | `audit` | `{ at, turn, event }` | the `Sink`, via `audit::as_json` |
 | `confirm.request` | see §8.1 | `Confirmer::confirm_write` |
-| `run.request` | `{ request, stages, directory, line, plan, writes, shownWrites, releasesPrivate, confinement, vouches, summary }` | command approval |
+| `run.request` | `{ request, stages, directory, shownDirectory, line, plan, writes, shownWrites, releasesPrivate, confinement, vouches, summary }` | command approval |
 | `output.request` | `{ request, command, reference, lines, hidden, hiddenNote, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
@@ -982,7 +987,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `mcp-move.request` | `{ request, alias, declared, destination, authority, mayRecord }` | a remote server's reply pointed elsewhere (SERVERS-11) |
 | `host.request` | `{ request, hosts }` | let programs reach hosts `sandbox.network.allowedHosts` does not list (SANDBOX-24) |
 | `ask.request` | `{ request, prompts }` | user questions |
-| `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
+| `trust.request` | `{ directory, shownDirectory, keeping, shownKeeping, confinedLines }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
 | `turn.error` | see §8.3 | `Err(TurnError)` |
 
@@ -1052,9 +1057,10 @@ whose events all share one second cannot say which came first.
 ```
 
 - `path` is the name the planner wrote, and is what the decision is about. `shownPath` is the same
-  name spelled for a person: a name that is empty, has whitespace at either end or holds a
-  character that draws as nothing (a zero-width character, a bidirectional control, a no-break
-  space) is quoted with each such character written out, and any other name is unchanged. A client
+  name spelled for a person: a name that is empty, has a space at either end of it or of a
+  directory in it, or holds a character that draws as nothing or as a blank cell (a zero-width
+  character, a bidirectional control, a no-break space, the blank braille pattern) is quoted with
+  each such character written out, and any other name is unchanged. A client
   draws `shownPath` and never `path`. `vouch.request` and `exposure.request` carry it the same way.
 - `request` is agent-assigned and **single-use** for its pending question. IDs can
   recur in later turns; clients must discard pending questions when a turn ends.
@@ -1161,7 +1167,8 @@ preferences to this ID just as they do for `turn.done`.
 `notices` is what the turn said about itself as it ran, as §8.2 carries for a turn that
 answered. A failed turn produces no outcome for those sentences to arrive on, and one of
 them is a hook of the person's own that could not be started, so a client that drops this
-field is a client on which nobody learns their formatter has stopped running.
+field is a client on which nobody learns their formatter has stopped running. The same list
+names each question the turn did not put because the person had already answered it.
 
 ### 8.4 Failure semantics — the load-bearing part
 
@@ -1212,9 +1219,11 @@ default: defaulting either way is the mistake this design exists to avoid.
 directory, or about the root of the git worktree around it, a session the flow above would ask
 is not asked: it starts from the rule a yes
 writes, emits no `trust.request`, reports `trust.known: true` where its response has `trust`,
-and its response carries `remembered: { at, path }`, when
-the answer was given (seconds since the epoch) and the file it is kept in, for the client to
-say at the top of the conversation. Otherwise `remembered` is `null`. The record is the one
+and its response carries `remembered: { at, path, shownPath, root, shownRoot }`, when
+the answer was given (seconds since the epoch), the file it is kept in and the directory it is
+about, for the client to say at the top of the conversation. `shownPath` and `shownRoot` are `path`
+and `root` spelled as `shownPath` is on a request, and a client draws those. Otherwise `remembered`
+is `null`. The record is the one
 the terminal keeps, so an answer kept in either front end settles the other.
 
 Where the question is put and a yes may be kept, the response and the `trust.request`
@@ -1222,6 +1231,12 @@ carry `keeping`, the file a yes writes; the client names it on the question and 
 is kept. `keeping` is `null` where the answer may not be kept: no state directory,
 a filesystem root, the home directory or one holding it, a filesystem that cannot say when
 the directory was made, or an incognito session.
+
+The `trust.request` event also carries `shownDirectory` and `shownKeeping`, which are `directory`
+and `keeping` spelled as `shownPath` is. A client that draws the question from the event draws
+those and never `directory` or `keeping`. `shownKeeping` is `null` exactly when `keeping` is. The
+responses of `session.new`, `session.open` and `session.fork` carry `shownDirectory` and
+`shownKeeping` the same way, for a client that puts the question from the response.
 
 ---
 
@@ -1378,8 +1393,10 @@ Still open:
 - `run.request` stages carry `binary`, the file the step runs, and the request carries
   `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
   shownDirectories, sentences }` as the agent worded them. `writes` and `directories` are the paths as
-  held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, for a client
-  to draw in place of them.
+  held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, with a byte
+  that is not UTF-8 written `\xNN`, for a client to draw in place of them. `shownDirectory` spells
+  `directory` the same way, and each stage's `shownBinary` spells `startedAs` and `resolved`, joined
+  by ` -> ` where they differ.
 - `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and
   `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
   is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request
@@ -1422,8 +1439,9 @@ Still open:
   diagnostic text is not sent as a turn error.
 - `hooks.inspect` reports the hooks file as the agent reads it: `path`, its `text` (null for a
   file this could not read at all), the `hooks` it declares as `{ on, tool, run, timeout, firesForNothing }`,
-  `timeoutSeconds` as `{ min, max }`, the whole numbers of seconds the reader accepts for an
-  entry's `timeout` (an entry with any other `timeout` is dropped), and `entire`, false where the
+  `timeoutSeconds` as `{ min, max, defaultFor }`, the whole numbers of seconds the reader accepts for an
+  entry's `timeout` (an entry with any other `timeout` is dropped) and, for each moment word, the
+  seconds an entry on it that states none is held to, and `entire`, false where the
   reader passed over part of the file, so that composing it back
   from `hooks` alone would drop what it did not read. An editor that offers a form refuses one for
   such a file. `no_home` where the platform names no state directory. Nothing else parses the
@@ -1513,8 +1531,10 @@ Still open:
 - `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
   `{ deny, ask, allow, unreadable, proposed, directories }`. The first three are the rules in
   force, as the files spelled them. `unreadable` holds `{ rule, said }` for each entry that is
-  not a rule, where `said` is the agent's sentence about why. `proposed` holds `{ rule, file }`
-  for each `allow` rule a checkout wrote, which is not in force. `directories` holds the names
+  not a rule, where `said` is the agent's sentence about why. `proposed` holds
+  `{ rule, shownRule, file, shownFile }` for each `allow` rule a checkout wrote, which is not in
+  force; `shownRule` is `rule` spelled as text and `shownFile` is `file` spelled as `shownPath`
+  is, and a client draws those. `directories` holds the names
   in `additionalDirectories`, none of which is opened.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.

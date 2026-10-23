@@ -222,7 +222,7 @@ pub fn gating_capability(tool: &str) -> Option<Capability> {
         // thereby been given one.
         "lsp" => Some(Capability::LanguageServer),
         "read_file" | "list_files" | "search" | "read_git" | "repo_map" | "spawn_processor"
-        | "load_skill" => Some(Capability::FileRead),
+        | "load_skill" | "search_skills" => Some(Capability::FileRead),
         // A delegate is a model call, and every kind holds this so it can make its own. What a
         // delegate it spawns may hold is its own set narrowed again, so this adds nothing to it.
         "spawn_agent" => Some(Capability::WebFetch),
@@ -1159,7 +1159,7 @@ impl std::fmt::Debug for Tree {
 /// text carried, and a person typed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckoutRefusal {
-    /// `isolation` held something other than `"checkout"`.
+    /// `isolation` held something other than `"checkout"` or `"checkout_with_changes"`.
     UnknownIsolation,
     /// A reader writes nothing, so a checkout separates it from nobody.
     Reader,

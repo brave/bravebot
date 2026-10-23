@@ -110,6 +110,7 @@ the gix crates that start one.
 `verified-by: bravebot_agent::git::a_shallow_commit_is_read_as_having_no_parents`
 `verified-by: bravebot_agent::git::a_signature_time_is_shown_in_its_own_zone`
 `verified-by: bravebot_agent::git::objects_in_a_pack_and_stored_as_deltas_read_as_loose_ones_do`
+`verified-by: bravebot_agent::git::a_configuration_naming_programs_and_remotes_changes_no_answer_and_runs_nothing`
 
 <a id="GIT-2"></a>
 ### GIT-2: a repository is opened only where the trust map trusts all of its `.git`
@@ -140,6 +141,8 @@ this reader declines ([GIT-8](#GIT-8)), never what it runs.
 `verified-by: bravebot_core::policy::a_repository_nobody_vouched_for_is_not_trusted_beneath`
 `verified-by: bravebot_agent::git::survey_lists_the_files_a_read_opens_and_none_it_does_not`
 `verified-by: bravebot_agent::git::status_surveys_the_index_and_the_info_files_it_reads`
+`verified-by: bravebot_agent::git::a_name_under_git_in_another_case_is_listed_as_the_reader_spells_it`
+`verified-by: bravebot_agent::turn::a_distrusted_file_deep_under_git_keeps_the_repository_closed`
 
 <a id="GIT-3"></a>
 ### GIT-3: an answer is labelled by the whole of `.git` and by every path it showed
@@ -194,6 +197,7 @@ which object a file holds is not known until it is read.
 `verified-by: bravebot_agent::workspace::a_rule_over_a_git_file_a_symlinked_repository_lands_on_keeps_it_closed`
 `verified-by: bravebot_agent::git::a_withheld_path_is_left_out_of_every_answer_and_the_answer_says_so`
 `verified-by: bravebot_agent::git::a_withheld_path_is_neither_read_nor_listed`
+`verified-by: bravebot_agent::turn::a_named_file_a_deny_rule_covers_is_refused_before_the_repository_is_opened`
 
 <a id="GIT-5"></a>
 ### GIT-5: the question is log, show, diff, status, tags or search, and anything else is refused by name
@@ -303,6 +307,7 @@ from the one git would, and the rules were held against files it did not read.
 `verified-by: bravebot_agent::git::a_ref_in_another_worktrees_directory_is_never_read`
 `verified-by: bravebot_agent::git::a_loop_of_symbolic_refs_is_declined`
 `verified-by: bravebot_agent::tools::read_git_says_a_dot_git_that_is_a_file_is_declined`
+`verified-by: bravebot_agent::git::a_configuration_naming_programs_and_remotes_changes_no_answer_and_runs_nothing`
 
 <a id="GIT-9"></a>
 ### GIT-9: an answer is bounded, and one that stopped short says so
@@ -449,6 +454,32 @@ branch would be taken as the one before this release.
 `verified-by: bravebot_agent::git::tags_given_a_revision_are_only_those_its_history_holds`
 `verified-by: bravebot_agent::git::tags_page_by_count_and_skip`
 
+<a id="GIT-15"></a>
+### GIT-15: `staged` is a question only the driver asks, and no tool argument names it
+
+`staged` prints what the index holds that `HEAD` does not, as `git diff --cached --no-renames`
+prints it: the hunks of each path that was added, changed or deleted in the index, as `diff` prints
+them for two trees. Nothing is read from the working tree. A path in conflict and a path marked only
+with `git add -N` hold no staged content, so a conflicted path is named on a line of its own and
+neither is given hunks. An index that matches `HEAD` says nothing is staged. It is labelled as every
+other answer is ([GIT-3](#GIT-3)), by the whole of `.git` and by each path it showed, and a path the
+trust map withholds is left out and the answer says so.
+
+`Query::named` does not return it, so `query` has no value that asks for it and the planner is not
+offered it. It exists for `/commit-message` ([CMD-23](../commands.md#CMD-23)), which asks it of the
+working directory's own repository.
+
+**Why.** A draft of a commit message needs what is about to be committed, and `status` lists paths
+without their changes and `diff` compares only commits. Offering the question to the planner would
+widen a tool nobody asked to widen.
+
+`verified-by: bravebot_agent::git::staged_prints_the_index_against_head_and_not_the_working_tree`
+`verified-by: bravebot_agent::git::staged_says_so_when_the_index_matches_head`
+`verified-by: bravebot_agent::git::staged_leaves_out_a_withheld_path_and_says_so`
+`verified-by: bravebot_agent::git::staged_names_a_conflicted_path_and_prints_no_hunks_for_it`
+`verified-by: bravebot_agent::git::the_staged_question_is_not_one_a_tool_can_name`
+`verified-by: bravebot_agent::commit_message::the_staged_source_is_drafted_from_the_index_and_not_the_working_tree`
+
 <a id="GIT-14"></a>
 ### GIT-14: a search is labelled by every file it read, matched or not
 
@@ -479,3 +510,5 @@ in anything other than the lines it printed would repeat or skip one on the next
 `verified-by: bravebot_agent::git::a_search_shows_every_file_it_read_whether_or_not_it_matched`
 `verified-by: bravebot_agent::git::a_search_leaves_out_a_withheld_file_and_says_so`
 `verified-by: bravebot_agent::git::a_search_pages_by_the_lines_it_prints`
+`verified-by: bravebot_agent::git::a_file_past_the_size_cap_is_shown_whether_or_not_the_pattern_would_match_it`
+`verified-by: bravebot_agent::turn::a_search_that_met_a_distrusted_file_past_the_size_cap_is_quarantined`

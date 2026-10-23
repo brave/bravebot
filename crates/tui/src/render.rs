@@ -129,7 +129,7 @@ const MAX_DIFF_LINES: usize = 12;
 ///
 /// One glyph, on every line of the block, so the mark cannot be ended by anything written inside
 /// it. A caption could be imitated; a margin cannot.
-const QUARANTINE_BAR: &str = "\u{2503}";
+pub(crate) const QUARANTINE_BAR: &str = "\u{2503}";
 
 /// What the box says when there is nothing in it.
 ///
@@ -978,6 +978,42 @@ mod tests {
             );
         }
 
+        /// WATCH-8. What the delegate was asked stands above its lines, on a row of its own, and
+        /// stays there while a person reads back through more calls than the screen holds. A task
+        /// drawn among the lines would scroll away with them and answer which run this is only at
+        /// the top.
+        #[test]
+        fn a_delegates_view_names_what_it_was_asked_above_its_lines_and_keeps_it_there() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "FIND-THE-PARSER-ENTRY");
+            for n in 0..60 {
+                let file = format!("CALLED-FILE-{n:02}");
+                session.finish_activity(Activity::running("Read", file).done("1 line"));
+            }
+            session.watch();
+
+            let row_of =
+                |rows: &[String], needle: &str| rows.iter().position(|row| row.contains(needle));
+
+            for (scroll, a_line) in [(0, "CALLED-FILE-59"), (1000, "CALLED-FILE-00")] {
+                session.scroll = scroll;
+                let rows = rows_at(&session, 90, 24);
+                let asked = row_of(&rows, "FIND-THE-PARSER-ENTRY")
+                    .unwrap_or_else(|| panic!("scroll {scroll}: the task was not drawn: {rows:?}"));
+                let line = row_of(&rows, a_line)
+                    .unwrap_or_else(|| panic!("scroll {scroll}: no line was drawn: {rows:?}"));
+                assert!(
+                    asked < line,
+                    "scroll {scroll}: the task was not above the delegate's lines: {rows:?}"
+                );
+                assert!(
+                    !rows[asked].contains("CALLED-FILE"),
+                    "scroll {scroll}: the task shares a row with a line: {}",
+                    rows[asked]
+                );
+            }
+        }
+
         /// Two questions a person watching has, and the last tool line answers neither: is this
         /// still going, and which of them am I looking at.
         #[test]
@@ -1039,6 +1075,41 @@ mod tests {
             assert!(
                 screen.contains("THE-PARSER-IS-IN-LEX"),
                 "the view did not say how the delegate ended: {screen}"
+            );
+        }
+
+        /// WATCH-8: what the delegate was asked stands above its lines, so a reader who was not
+        /// told the task can tell what the lines were for.
+        #[test]
+        fn a_delegates_view_opens_on_what_it_was_asked_above_its_lines() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "reader", "FIND-THE-PARSER-ENTRY");
+            session.start_activity(Activity::running("Read", "PECULIAR-FILE-NAME"));
+            session.watch();
+
+            let screen = rendered(&session);
+            let asked = screen
+                .find("FIND-THE-PARSER-ENTRY")
+                .unwrap_or_else(|| panic!("the task was not drawn: {screen}"));
+            let work = screen
+                .find("PECULIAR-FILE-NAME")
+                .unwrap_or_else(|| panic!("the work was not drawn: {screen}"));
+            assert!(asked < work, "the task was drawn below the lines: {screen}");
+        }
+
+        /// WATCH-5: a delegate that has finished still has its lines to open.
+        #[test]
+        fn a_finished_delegates_lines_are_still_there_to_be_opened() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "reader", "find the parser");
+            session.start_activity(Activity::running("Read", "PECULIAR-FILE-NAME"));
+            session.delegate_finished(id, "answered".to_string(), false, None);
+            session.watch();
+
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("PECULIAR-FILE-NAME"),
+                "a finished delegate's lines were cleared: {screen}"
             );
         }
 
@@ -2088,6 +2159,34 @@ mod tests {
             assert!(
                 !screen.contains("PECULIAR-FILE-NAME"),
                 "a finished delegate is still drawing the work behind it: {screen}"
+            );
+        }
+
+        /// WATCH-5. The block in the transcript stops drawing the work behind a finished
+        /// delegate, and the work is still there to be opened in the delegate's own view. A
+        /// finish that cleared the lines would collapse the block and leave nothing behind it.
+        #[test]
+        fn a_finished_delegates_work_is_still_there_to_be_opened() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "reader", "find the parser");
+            session.start_activity(Activity::running("Read", "PECULIAR-FILE-NAME"));
+            session.delegate_finished(
+                id,
+                "a reader delegate answered after 2 rounds".to_string(),
+                false,
+                None,
+            );
+            assert!(
+                !rendered(&session).contains("PECULIAR-FILE-NAME"),
+                "the block did not collapse, so opening the delegate proves nothing"
+            );
+
+            session.watch();
+
+            let screen = rendered(&session);
+            assert!(
+                screen.contains("PECULIAR-FILE-NAME"),
+                "the work of a finished delegate was gone from its view: {screen}"
             );
         }
 
@@ -3883,7 +3982,7 @@ mod tests {
                 after_a_shell_line.type_char(c);
             }
             assert!(after_a_shell_line.queue_shell());
-            queue_command(&mut after_a_shell_line, "/effort high");
+            queue_command(&mut after_a_shell_line, "/forget-trust");
 
             let rows = rows_at(&after_a_command, 100, 30);
             assert!(
@@ -3901,7 +4000,7 @@ mod tests {
             );
             let rows = rows_at(&after_a_shell_line, 100, 30);
             assert!(
-                mark_under(&rows, "/effort high").contains("after the shell line before it"),
+                mark_under(&rows, "/forget-trust").contains("after the shell line before it"),
                 "{rows:#?}"
             );
         }
@@ -4095,6 +4194,45 @@ mod tests {
             assert!(
                 !output.contains("they want to know"),
                 "the working was drawn"
+            );
+        }
+
+        /// The model's thinking is drawn only while a person asked to see it, as plain text under a
+        /// heading of its own above the reply, with nothing in it able to act on the terminal, and
+        /// it is gone once the round's words replace the tail.
+        #[test]
+        fn the_models_thinking_is_drawn_only_when_asked_for_and_inert() {
+            let mut arriving = working();
+            arriving.thinking("the user wants **a file**\u{1b}[31m red");
+            arriving.streaming("Looking at it");
+            assert!(
+                !rendered(&arriving).contains("the user wants"),
+                "the thinking was drawn without being asked for"
+            );
+
+            arriving.toggle_thinking();
+            let output = rendered(&arriving);
+            assert!(output.contains("thinking"), "no heading: {output}");
+            assert!(
+                output.contains("the user wants **a file**"),
+                "markdown was read in the thinking: {output}"
+            );
+            assert!(
+                output.contains("\u{241b}[31m"),
+                "an escape reached the screen as one: {output}"
+            );
+            assert!(!output.contains('\u{1b}'));
+            assert!(
+                output.find("the user wants").unwrap() < output.find("Looking at it").unwrap(),
+                "the thinking was not above the reply: {output}"
+            );
+
+            arriving.narrate("Looking at it");
+            let output = rendered(&arriving);
+            assert!(output.contains("Looking at it"));
+            assert!(
+                !output.contains("the user wants"),
+                "the thinking outlived its round: {output}"
             );
         }
 
@@ -4797,6 +4935,49 @@ mod tests {
             invited,
             "the caret is not where the invitation begins"
         );
+    }
+
+    /// FILES-9: the files state owns every key, so the box keeps its text and is drawn without a
+    /// caret, whether the line is empty or holds a prompt.
+    #[test]
+    fn the_box_is_drawn_without_its_caret_while_the_state_is_open() {
+        for typed in ["", "half a prompt"] {
+            let mut session = Session::new("none");
+            session.note_layout(crate::state::Laid {
+                columns: 120,
+                ..crate::state::Laid::default()
+            });
+            for c in typed.chars() {
+                session.type_char(c);
+            }
+            let diff = bravebot_agent::diff::Diff::compute("old\n", "new\n");
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", "a.rs")
+                    .of_tool("edit_file")
+                    .with_changes(diff.condensed(3))
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: "a.rs".into(),
+                        added: diff.added(),
+                        removed: diff.removed(),
+                        numbers: diff.condensed_numbers(3),
+                    }))
+                    .done("done"),
+            ));
+            assert!(
+                caret_cell(&session, 120, 24).is_some(),
+                "the box had no caret before the state opened: {typed:?}"
+            );
+            session.toggle_files();
+            assert!(session.files_open());
+            assert_eq!(
+                caret_cell(&session, 120, 24),
+                None,
+                "the box drew a caret while the state was open: {typed:?}"
+            );
+            if !typed.is_empty() {
+                assert!(rendered_at(&session, 120, 24).contains(typed));
+            }
+        }
     }
 
     /// It stands in for the line rather than being part of it, so the first character typed takes
@@ -5719,6 +5900,45 @@ mod tests {
         );
     }
 
+    /// A line held by `/after` is not a loop, and the row under the box must not call it one. A wrong
+    /// implementation shares the loop's wording, which tells somebody a one-shot is repeating.
+    #[test]
+    fn the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_after(crate::loops::request_after("5m check the deploy"));
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains(t!(after_hint_next, next = "").trim()),
+            "{hint}"
+        );
+        assert!(!hint.contains(&t!(loop_hint).to_string()), "{hint}");
+    }
+
+    /// With a loop and an `/after` line both held, the row counts the loop and not the line that is
+    /// sent once. A wrong implementation counts both, and says two loops are repeating.
+    #[test]
+    fn the_hint_line_counts_loops_and_not_a_held_after_line() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_loop(
+            crate::loops::request("1h check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        session.complete("done", Vec::new(), 0);
+        session.loop_turn_ended(None);
+        session.start_after(crate::loops::request_after("5m tail the log"));
+        assert_eq!(session.loops().len(), 2);
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains(t!(loop_hint_next, next = "").trim()),
+            "{hint}"
+        );
+        assert!(
+            !hint.contains(t!(loop_hint_several, count = 2).trim()),
+            "{hint}"
+        );
+    }
+
     /// A word about a loop standing there in a session with none is a word nobody can account for,
     /// and this line is read at a glance.
     #[test]
@@ -5850,20 +6070,35 @@ mod tests {
     #[test]
     fn the_loop_part_names_a_moment_only_while_one_is_still_ahead() {
         let word = t!(loop_hint).to_string();
-        assert_eq!(loop_part(None), word, "a tick in flight names no moment");
+        assert_eq!(loop_part(1, None), word, "a tick in flight names no moment");
         assert_eq!(
-            loop_part(Some(std::time::Duration::ZERO)),
+            loop_part(1, Some(std::time::Duration::ZERO)),
             word,
             "a tick already due names no moment"
         );
         assert_eq!(
-            loop_part(Some(std::time::Duration::from_millis(999))),
+            loop_part(1, Some(std::time::Duration::from_millis(999))),
             word,
             "anything under a second is spelled 0s, which is that same nothing"
         );
         assert_eq!(
-            loop_part(Some(std::time::Duration::from_secs(90))),
+            loop_part(1, Some(std::time::Duration::from_secs(90))),
             t!(loop_hint_next, next = "1m 30s")
+        );
+    }
+
+    /// LOOP-13: with several live the row counts them and counts down to the soonest.
+    #[test]
+    fn the_loop_part_counts_the_loops_where_several_are_live() {
+        assert_eq!(loop_part(3, None), t!(loop_hint_several, count = 3));
+        assert_eq!(
+            loop_part(3, Some(std::time::Duration::from_secs(90))),
+            t!(loop_hint_several_next, count = 3, next = "1m 30s")
+        );
+        assert_eq!(
+            loop_part(2, Some(std::time::Duration::ZERO)),
+            t!(loop_hint_several, count = 2),
+            "a moment already gone is not spelled"
         );
     }
 
@@ -6213,6 +6448,27 @@ mod tests {
         assert!(!listed.contains("ctrl-n"), "{listed}");
     }
 
+    /// The `?` list has a row for the key that stops the session, on its default and on a moved
+    /// chord, so the key is written down in the one place that lists the keys (INPUT-47).
+    #[cfg(unix)]
+    #[test]
+    fn the_shortcut_list_names_the_suspend_chord() {
+        let mut session = Session::new("none");
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("ctrl-z"), "{listed}");
+        assert!(listed.contains("suspend to the shell"), "{listed}");
+
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("suspend".to_string(), "alt-z".to_string());
+        session.adopt_keybindings(&moved);
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-z"), "{listed}");
+        assert!(!listed.contains("ctrl-z"), "{listed}");
+    }
+
     /// When stash is customized, the stashed line reminder names the customized chord.
     #[test]
     fn the_stashed_line_names_the_custom_stash_chord() {
@@ -6450,6 +6706,26 @@ mod tests {
         );
     }
 
+    /// INPUT-48: the list names the chord that rewrites the line, and the one a settings file moved
+    /// it to, so the only place that says what the key does cannot go on naming a key that is dead.
+    #[test]
+    fn the_shortcuts_name_the_enhance_chord_in_force() {
+        let named = |bindings: &Keybindings| {
+            shortcuts(crate::vim::Editing::Ordinary, bindings)
+                .into_iter()
+                .find(|(_, meaning)| meaning.contains("more specific"))
+                .map(|(key, _)| key)
+        };
+        assert_eq!(named(&Keybindings::default()).as_deref(), Some("ctrl-p"));
+
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("enhance".to_string(), "alt-e".to_string());
+        assert_eq!(
+            named(&Keybindings::from_map(&moved)).as_deref(),
+            Some("alt-e")
+        );
+    }
+
     /// The list folds into columns, so it does not push the transcript off a short terminal the way
     /// one row per binding would.
     #[test]
@@ -6548,6 +6824,18 @@ mod tests {
         }
     }
 
+    /// SKILL-21. The mode in force is named on the box for as long as it is in force, and the box
+    /// of a session in none says nothing of one.
+    #[test]
+    fn the_box_names_the_mode_while_one_is_in_force() {
+        let mut session = Session::new("none");
+        assert!(!rendered_at(&session, 100, 24).contains("mode: "));
+        session.choose_skill_mode(Some("tdd-playbook".to_string()));
+        assert!(rendered_at(&session, 100, 24).contains("mode: tdd-playbook"));
+        session.choose_skill_mode(None);
+        assert!(!rendered_at(&session, 100, 24).contains("mode: "));
+    }
+
     /// A skill row says where the skill was found. Nothing below the box wraps, so a description
     /// too long for the screen is cut short of the edge, which keeps that on the row, and one the
     /// file wrapped or put an escape in is still one row of plain text.
@@ -6564,13 +6852,15 @@ mod tests {
                     name: "release-notes".to_string(),
                     description: "Draft the notes\nfrom the \u{1b}[31mchangelog, ".repeat(8),
                     argument_hint: None,
-                    source: Source::Workspace,
+                    source: Source::Workspace.into(),
+                    person_only: false,
                 },
                 crate::skills::Skill {
                     name: "release-check".to_string(),
                     description: "Check a tag".to_string(),
                     argument_hint: None,
-                    source: Source::Home,
+                    source: Source::Home.into(),
+                    person_only: false,
                 },
             ]
         });
@@ -6600,6 +6890,115 @@ mod tests {
             !rows[1].contains(['\u{1b}', '\n']),
             "an escape or a line break reached the row: {rows:?}"
         );
+    }
+
+    /// The rows the box offers when a session holds a server with a prompt, settled for `line`.
+    fn typed_with_prompts(line: &str) -> Session {
+        let held = crate::mcp_command::tests::holding_a_server_with_prompts();
+        let rows = crate::skills::from_servers(held.servers.session.as_ref());
+        let mut session = typed(line);
+        session.settle_skills(|| rows);
+        session
+    }
+
+    /// A prompt's row names the server it came from and what the server said about it, within the
+    /// width, and what it takes is drawn after the word once the word is typed in full (CMD-26).
+    #[test]
+    fn a_servers_prompt_row_names_its_server_and_what_it_takes() {
+        let session = typed_with_prompts("/mcp__w");
+        let rows: Vec<String> = lines_beneath_the_box(&session, 100, &session.offered())
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+        let [row] = rows.as_slice() else {
+            panic!("{rows:?}");
+        };
+        assert!(
+            row.starts_with("  ❯ /mcp__weather__summarise_diff"),
+            "{row}"
+        );
+        assert!(
+            row.ends_with("Summarise the staged diff. (MCP weather)"),
+            "{row}"
+        );
+
+        let finished = typed_with_prompts("/mcp__weather__summarise_diff ");
+        assert!(
+            input_row(&finished, 90).ends_with("file=<value> style=<value> [depth=<value>]"),
+            "{}",
+            input_row(&finished, 90)
+        );
+    }
+
+    /// A prompt's word is drawn as recognised where it begins the line and nowhere else, since that
+    /// is the one place a line runs it. A skill's name is recognised anywhere.
+    #[test]
+    fn a_servers_prompt_is_drawn_as_recognised_only_from_the_first_word() {
+        for (line, recognised) in [
+            (
+                "/mcp__weather__summarise_diff",
+                "/mcp__weather__summarise_diff",
+            ),
+            (
+                "/mcp__weather__summarise_diff file=a.rs",
+                "/mcp__weather__summarise_diff",
+            ),
+            ("see /mcp__weather__summarise_diff now", ""),
+            ("/mcp__weather__summarise", ""),
+        ] {
+            assert_eq!(
+                recognised_in_the_box(&typed_with_prompts(line)),
+                recognised,
+                "{line:?}"
+            );
+        }
+    }
+
+    /// A skill its file keeps from the planner is drawn with that said beside where it was found, so a
+    /// person choosing one to name knows only they can have it loaded (SKILL-20). The ordinary skill
+    /// beside it is the control: a mark on every row says nothing about either.
+    #[test]
+    fn a_skill_row_says_when_only_the_person_can_have_it_loaded() {
+        use bravebot_agent::skills::Source;
+        let mut session = Session::new("none");
+        for c in "/ship".chars() {
+            session.type_char(c);
+        }
+        session.settle_skills(|| {
+            ["ship-it", "ship-notes"]
+                .map(|name| crate::skills::Skill {
+                    name: name.to_string(),
+                    description: "Put it live".to_string(),
+                    argument_hint: None,
+                    person_only: name == "ship-it",
+                    source: Source::Workspace.into(),
+                })
+                .to_vec()
+        });
+
+        let rows: Vec<String> = lines_beneath_the_box(&session, 120, &session.offered())
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect()
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows[0].contains("/ship-it"), "{rows:?}");
+        assert!(
+            rows[0].ends_with("Put it live (project) (only you)"),
+            "{rows:?}"
+        );
+        assert!(rows[1].contains("/ship-notes"), "{rows:?}");
+        assert!(rows[1].ends_with("Put it live (project)"), "{rows:?}");
     }
 
     /// The first row of the box after its border and prompt, one cell to an entry with the colour
@@ -6656,7 +7055,8 @@ mod tests {
             name: name.to_string(),
             description: format!("what {name} is for"),
             argument_hint: hint.map(str::to_string),
-            source: Source::Home,
+            source: Source::Home.into(),
+            person_only: false,
         })
         .collect()
     }
@@ -6782,6 +7182,7 @@ mod tests {
         session.settle_skills(|| {
             vec![crate::skills::Skill {
                 argument_hint: Some("<a\u{1b}[31mb>".to_string()),
+                person_only: false,
                 ..skills_taking_arguments().remove(0)
             }]
         });
@@ -7184,6 +7585,50 @@ mod tests {
             output.contains("4.2k"),
             "what the turn cost was not reported: {output}"
         );
+    }
+
+    /// VIEW-13: a finished turn's row carries what it cost and how long it took, and the other two
+    /// endings carry neither, since they produced no answer to price.
+    #[test]
+    fn only_a_finished_turns_row_carries_its_cost_and_duration() {
+        let ended = |ending| {
+            let mut session = Session::new("partial");
+            session.type_char('a');
+            session.submit();
+            session.complete("done", Vec::new(), 0);
+            session.finished = Some(crate::state::Finished {
+                turn: 1,
+                tokens: 4_200,
+                took: std::time::Duration::from_secs(75),
+                ending,
+            });
+            rendered(&session)
+        };
+
+        let done = ended(bravebot_agent::Ending::Done);
+        assert!(done.contains("turn 1 done"), "{done}");
+        assert!(done.contains("4.2k"), "no cost: {done}");
+        assert!(done.contains("1m 15s"), "no duration: {done}");
+
+        for (word, ending) in [
+            (
+                "turn 1 cancelled",
+                bravebot_agent::Ending::Stopped { attempts: None },
+            ),
+            (
+                "turn 1 failed",
+                bravebot_agent::Ending::Failed(bravebot_agent::Diagnosis::of(
+                    bravebot_agent::Category::Transport,
+                )),
+            ),
+        ] {
+            let row = ended(ending);
+            assert!(row.contains(word), "{word} not reported: {row}");
+            assert!(
+                !row.contains("4.2k") && !row.contains("1m 15s"),
+                "{word} carried a cost or a duration: {row}"
+            );
+        }
     }
 
     /// A tick beside a turn that did not finish would say the wrong thing about it.
@@ -8132,6 +8577,34 @@ mod tests {
         (0..width)
             .map(|column| buffer[(column, height - 1)].symbol())
             .collect()
+    }
+
+    /// LINK-4: the line under the box names the link while its words are there, and says how many
+    /// there are and to review them once there are more than the box shows. Without the long form a
+    /// thousand-character prompt looks like the three lines of it that fit.
+    #[test]
+    fn the_hint_line_names_the_link_and_gives_the_length_of_a_long_prompt() {
+        let mut session = Session::new("none");
+        session.prefill_from_link("fix the test");
+        let short = hint_row_at(&session, 120, 24);
+        assert!(short.contains("external link"), "{short}");
+        assert!(!short.contains("characters"), "{short}");
+
+        let mut session = Session::new("none");
+        session.prefill_from_link(&"a".repeat(1500));
+        let long = hint_row_at(&session, 140, 24);
+        assert!(long.contains("1500 characters"), "{long}");
+        assert!(long.contains("review"), "{long}");
+
+        let mut session = Session::new("none");
+        session.prefill_from_link(&"a".repeat(1000));
+        assert!(
+            !hint_row_at(&session, 140, 24).contains("characters"),
+            "1000 is not over the line"
+        );
+
+        let plain = Session::new("none");
+        assert!(!hint_row_at(&plain, 120, 24).contains("external link"));
     }
 
     /// The frame drawn after the terminal changed size is the one a terminal of that size would

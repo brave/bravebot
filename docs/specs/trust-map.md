@@ -193,26 +193,40 @@ a character Unicode gives no width are part of a name where a path is bytes. A s
 folds case or decodes lossily joins two such files, and no row of the table lists a join of two
 files.
 
-The names are `AWKWARD_NAMES` in `crates/agent/test-support/aliases.rs`. One test makes every pair in
-a directory, asks the volume whether it is two files, and asks the map about a rule for one of them
-in both polarities. A second asks the same pairs of the key the workspace builds for a name, of a
-read, and of a second writer, where a step that joins two files can sit with the map seeing
+The names are `AWKWARD_NAMES` in `crates/agent/test-support/aliases.rs`, with `WINDOWS_NAMES` beside
+it for whitespace, a zero-width character and a bidirectional control inside a name, which a Windows
+volume holds and every other host does too. A test takes both from `held_names()`. One test makes
+every pair in a directory, asks the volume whether it is two files, and asks the map about a rule for
+one of them in both polarities. A second asks the same pairs of the key the workspace builds for a
+name, of a read, and of a second writer, where a step that joins two files can sit with the map seeing
 nothing, and compares the two keys. The vouch prompt is asked about four of the names.
 
 A turn that names each of the names with `@` is asked which files the rule it leaves covers, and
 `crates/mentions` is asked whether the line a completion writes for each name names that file
-([NAME-8](naming-files.md#NAME-8)). A reference cannot hold a whitespace character other than a
-space, so the names that do are listed in that test against #2863, and it fails once one reads back.
+([NAME-8](naming-files.md#NAME-8)). A name no line can carry, one holding a line break or ending
+in whitespace, is not offered, and the test lists those names and fails when one is offered. A
+directory holding names that differ only by the kind of whitespace inside them is asked which file
+each row's line names.
 
 A rule written about one of the names is asked in the deny, ask and allow lists and for `Read` and
 `Edit`, since a rule is matched under a key built apart from the map's. A deny or ask rule reaches
-the other name of the NFC and NFD group on purpose and an allow rule does not. A rule's text is
-trimmed and a `*` in it is a wildcard, so a name with whitespace at an end, a name of whitespace
-alone and a name holding `*` cannot be written as a rule. The test lists them against #2864 and
-fails once one can.
+the other name of the NFC and NFD group on purpose and an allow rule does not. A path specifier with
+whitespace at an end is reported and not read, since the whitespace is as likely padding as part of the
+name ([PERM-3](permissions.md#PERM-3)), so a name with whitespace at its end and a name of whitespace
+alone cannot be written as a rule about that file, and a rule typed for one is reported. A `*` in a
+rule is always a wildcard, so a name holding `*` cannot be written as a rule about that file alone
+either, and nothing reports it, since the rule is a pattern. A name with whitespace at its start is
+written from `./`. The test lists the three kinds against #2864 and fails once one can be written.
 
 A listing is asked the same pairs. It reports two entries for two files, and a refusal of one reaches
 a listing of the other only within a group.
+
+A pair is two files when a write through the second name leaves the first as it was, so no host
+needs a file identity to say so. A Windows host leaves out the names of `AWKWARD_NAMES` it cannot
+hold as written (`*`, `\`, a control character) or that the workspace refuses before a key is made
+(a stream, a trailing space or dot). CI's `Awkward names on Windows` job runs the pair tests
+over the workspace and the mention read-back test on a Windows runner (#2869); `make check-windows`
+is what compiles that arm locally, since no local target runs it.
 
 `make check-security` fails a `trim`, a case fold, a Unicode normalisation or a lossy conversion
 in the functions that key a name or fold or decompose it: `normalise`, `TrustStore::key`,

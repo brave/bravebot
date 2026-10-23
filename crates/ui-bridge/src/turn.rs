@@ -21,7 +21,7 @@ use bravebot_agent::confirm::{
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_agent::report::{Activity, Landing, Phase, Reporter, Shown};
-use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::ask::{Answer, AnswerMemo, Asking};
 use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::Sink;
 use bravebot_core::todo::Row;
@@ -318,6 +318,21 @@ impl Reporter for BridgeReporter {
         self.say("narration", json!({ "text": text }));
     }
 
+    /// What the model has thought since the last event, for the window to draw on request
+    /// (VIEW-34).
+    ///
+    /// The engine reports it with every frame of a streamed reply, empty for most of them, and an
+    /// event is a wake-up across a pipe, so an empty one is not sent. A delegate's is dropped for
+    /// the reason its call is: one model thinks at a time, and a delegate's thought drawn beside the
+    /// turn's working line would read as the planner's. Nothing is kept here, since the window holds
+    /// the end of it and the turn's record never has it.
+    fn thinking(&mut self, text: String) {
+        if text.is_empty() || self.reporting_for.is_some() {
+            return;
+        }
+        self.say("thinking", json!({ "text": text }));
+    }
+
     /// Kept for whichever event ends the turn to carry, rather than sent as its own.
     ///
     /// An event of this reporter's names the session and not the turn, and a notice belongs to the
@@ -479,6 +494,11 @@ pub struct BridgeConfirmer {
     answerers: crate::answerers::Answerers,
     /// What the person typed while this turn ran. Empty for a confirmer nobody can type into.
     interjections: crate::running::Interjections,
+    /// What the person answered to the planner's questions, for the rest of the session (ASK-8).
+    /// Shared by every turn of it; [`Self::remembering`] gives a confirmer the session's own.
+    answered: Arc<Mutex<AnswerMemo>>,
+    /// A line for each question this turn did not put because the person had answered it already.
+    reused: Vec<String>,
 }
 
 impl BridgeConfirmer {
@@ -500,7 +520,33 @@ impl BridgeConfirmer {
             declined_a_plan: false,
             answerers: crate::answerers::Answerers::default(),
             interjections: crate::running::Interjections::default(),
+            answered: Arc::default(),
+            reused: Vec::new(),
         }
+    }
+
+    /// Answer a question the person already answered in this session from `answered`, and keep
+    /// what they answer from now on there.
+    ///
+    /// A confirmer without it remembers for itself alone, which is a turn: the session's memo is
+    /// what lets a later turn's repeat of a question go unasked.
+    pub(crate) fn remembering(mut self, answered: Arc<Mutex<AnswerMemo>>) -> Self {
+        self.answered = answered;
+        self
+    }
+
+    /// What this turn answered from memory instead of asking, one line for each question, in the
+    /// words the terminal says it in.
+    pub fn reused(&self) -> &[String] {
+        &self.reused
+    }
+
+    /// The session's answers. A turn that panicked holding the lock left nothing half written,
+    /// since the memo only ever gains or replaces a whole entry, so it is read as it stands.
+    fn memo(&self) -> std::sync::MutexGuard<'_, AnswerMemo> {
+        self.answered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Read what the person types into this turn from `interjections` at each round boundary.
@@ -821,9 +867,38 @@ impl Confirmer for BridgeConfirmer {
     ///
     /// Answers are read against the prompts they answer, which is what stops a front-end
     /// returning an index for a choice that does not exist.
+    ///
+    /// A question the person answered earlier in the session is not put again. What is put is the
+    /// rest of the series, and the remembered answers are woven back in at their own places. What
+    /// a front end's reply carries is remembered, a decline among it, since [`wire::answers`] reads
+    /// an entry it cannot use as one and that is what the planner is told. A question nobody could
+    /// be asked, or that the reply has no entry for, stays unsettled.
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
-        match self.ask(Kind::Ask, "ask.request", |id| wire::ask_request(id, asking)) {
-            Some(Reply::Ask(answers)) => wire::fitted(answers, asking),
+        // A planner that loops back over a decision does not make the person restate it, and a
+        // series where some are settled puts only the rest (ASK-8).
+        let settled = self.memo().read(asking);
+        for prompt in settled.reused() {
+            let said = bravebot_i18n::t!(session_answered_already, question = &prompt.question)
+                .to_string();
+            // Once for each question, however many times the turn asked it.
+            if !self.reused.contains(&said) {
+                self.reused.push(said);
+            }
+        }
+        if settled.is_settled() {
+            return settled.finish(&mut self.memo(), Vec::new());
+        }
+
+        match self.ask(Kind::Ask, "ask.request", |id| {
+            wire::ask_request(id, settled.outstanding())
+        }) {
+            Some(Reply::Ask(answers)) => {
+                let fresh = wire::fitted(answers, settled.outstanding());
+                settled.finish(&mut self.memo(), fresh)
+            }
+            // Nobody could be asked. What the person answered before still stands, and the rest
+            // is not remembered as declined.
+            _ if settled.reuses_any() => settled.finish(&mut self.memo(), Vec::new()),
             _ => Vec::new(),
         }
     }

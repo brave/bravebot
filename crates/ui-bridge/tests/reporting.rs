@@ -238,6 +238,35 @@ fn the_call_being_written_is_reported_and_a_delegates_is_not() {
     );
 }
 
+/// VIEW-34: the model's thinking crosses as the words that arrived, in order and untouched. A frame
+/// with none is not an event, and a delegate's is not the turn's.
+#[test]
+fn the_models_thinking_is_reported_in_order_and_a_delegates_and_an_empty_one_are_not() {
+    use bravebot_core::delegate::DelegateId;
+
+    let (mut reporter, events) = harness();
+
+    reporter.thinking("first ".into());
+    reporter.thinking(String::new());
+    reporter.thinking("  second\n".into());
+    reporter.reporting_for(Some(DelegateId::nth(1)));
+    reporter.thinking("a delegate's".into());
+    reporter.reporting_for(None);
+    reporter.thinking("third".into());
+
+    let events = events.lock().expect("not poisoned");
+    let said: Vec<&str> = events
+        .iter()
+        .filter(|e| e.name == "thinking")
+        .map(|e| e.data["text"].as_str().expect("text"))
+        .collect();
+    assert_eq!(
+        said,
+        vec!["first ", "  second\n", "third"],
+        "a delegate's thought was drawn as the planner's, an empty frame was sent, or the words were altered"
+    );
+}
+
 /// HOOK-8: a hook holding the turn crosses as a pair carrying the moment's word and the program,
 /// and nothing else, and the end crosses however the hook ended.
 #[test]

@@ -167,6 +167,17 @@ as the relative pattern from the workspace, so `Read(/x)` in `.bravebot/settings
 `Read(./x)`, and one that starts anywhere else is the full path. A pattern whose anchor is unknown, such as `~/` on a machine with no home
 directory, is reported as unusable rather than silently matching nothing.
 
+A path specifier with whitespace at either end is not read and is reported ([PERM-11](#PERM-11)).
+Whitespace there is part of the name of a file that has it ([TRUST-2](trust-map.md#TRUST-2)) and as
+likely padding inside the brackets. Read as the name, `Read( .env )` would cover a file nobody meant
+and leave `.env` open. Trimmed, `Read(./a.md )` would cover `a.md` and not the file it names, and as
+an `allow` rule would grant it. Neither reading is one to guess at. Whitespace between the first and
+last character is part of the name, so `Read(./my notes.md)` is about the file `my notes.md`, and a
+name that starts with whitespace is written from `./` or `**/`, as `Read(./ a.md)`. A name that ends
+with whitespace has no spelling, since a `*` in its place covers other names too. Brackets holding
+only whitespace are empty. The line around the rule is trimmed, and so is the specifier of every
+other family, where padding inside the brackets says nothing.
+
 Segments are separated by `/`. A path pattern and the path it is matched against are both spelled
 that way first, whatever the host separates with, and both are respelled where the rules are read
 and where they are asked rather than at each gate: a gate added later cannot be the one that forgot.
@@ -238,6 +249,9 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_core::permissions::a_bare_name_matches_at_any_depth_in_every_list`
 `verified-by: bravebot_core::permissions::each_anchor_points_where_its_leader_says`
 `verified-by: bravebot_core::permissions::one_star_stays_in_a_segment_and_two_cross_them`
+`verified-by: bravebot_core::permissions::whitespace_inside_a_path_specifier_is_part_of_the_name`
+`verified-by: bravebot_core::permissions::padding_inside_the_brackets_of_a_command_host_or_tool_rule_is_dropped`
+`verified-by: bravebot_config::settings::a_slash_rule_keeps_the_whitespace_at_an_end_of_its_specifier`
 `verified-by: bravebot_core::permissions::a_trailing_double_star_covers_the_directory_it_names`
 `verified-by: bravebot_core::permissions::a_relative_rule_says_nothing_about_an_absolute_path`
 `verified-by: bravebot_core::permissions::an_anchored_pattern_matches_only_where_it_is_anchored`
@@ -621,19 +635,22 @@ directory a person typed from being reachable on different terms.
 <a id="PERM-11"></a>
 ### PERM-11: an unreadable rule is dropped, named, and takes nothing with it
 
-A line that is not a rule, names no family this agent has, or has no anchor to resolve is dropped,
-and the rest of the file still applies. So is an entry that is not a line at all: a number, or a
-rule nested one array too deep. So is a `deny`, `ask` or `allow` value that is not an array, and a
-`permissions` block that is not an object, each named with the keys that lead to it and the file
-that wrote it. Every one dropped is reported: on `doctor`, and in the session where the file was
-read, named in the spelling the file used, with each control character drawn as its picture
-([LAYER-3](layering.md#LAYER-3)).
+A line that is not a rule, names no family this agent has, has no anchor to resolve, or holds a path
+with whitespace at an end ([PERM-3](#PERM-3)) is dropped, and the rest of the file still applies. So
+is an entry that is not a line at all: a number, or a rule nested one array too deep. So is a `deny`,
+`ask` or `allow` value that is not an array, and a `permissions` block that is not an object, each
+named with the keys that lead to it and the file that wrote it. Every one dropped is reported: on
+`doctor`, and in the session where the file was read, named in the spelling the file used, with each
+control character drawn as its picture ([LAYER-3](layering.md#LAYER-3)).
 
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
 allow rule quietly removed a deny rule's protection.
 
 `verified-by: bravebot_core::permissions::a_rule_that_cannot_be_read_is_dropped_and_reported`
+`verified-by: bravebot_core::permissions::brackets_holding_only_whitespace_are_empty_in_every_family`
+`verified-by: bravebot_core::permissions::a_path_specifier_with_whitespace_at_an_end_is_reported_and_decides_nothing`
+`verified-by: bravebot_agent::permissions::a_settings_rule_whose_path_has_whitespace_at_an_end_is_reported_and_decides_nothing`
 `verified-by: bravebot_core::permissions::one_unreadable_rule_does_not_discard_the_others`
 `verified-by: bravebot_config::settings::an_entry_that_is_not_a_rule_is_carried_out_to_be_reported`
 `verified-by: bravebot_config::settings::an_unreadable_entry_is_carried_out_of_whichever_rule_list_held_it`
@@ -652,6 +669,7 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_ui_bridge::rules::a_padded_unreadable_rule_is_not_listed_as_in_force`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
+`verified-by: bravebot_cli::running::doctor_names_a_padded_path_rule_that_an_earlier_version_read_as_the_file_without_the_padding`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`
 `verified-by: bravebot_config::settings::an_object_entry_with_no_rule_is_carried_out_to_be_reported`
 

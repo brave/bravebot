@@ -88,7 +88,6 @@ pub(super) fn capped_note(tool: &str, incomplete: bool, paging: Option<Paging>) 
 ///
 /// `printed_by` is whether a command produced the result, `bytes` is the size of what it printed
 /// where that is known, and `cap` is the largest result a run may hold.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn run_advice(
     printed_by: bool,
     covered_by_record: bool,

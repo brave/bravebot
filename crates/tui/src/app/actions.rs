@@ -456,6 +456,7 @@ impl Held<'_> {
             std::mem::take(self.conversation),
             &self.answers.trust,
             focus,
+            self.workspace,
         )?;
         *self.conversation = shortened;
         save_compacted(
@@ -639,6 +640,30 @@ impl Held<'_> {
         None
     }
 
+    pub(super) fn commit_message(
+        &mut self,
+        terminal: &mut Tty,
+        config: &Config,
+        asked: &crate::commit_message_command::Asked,
+    ) -> io::Result<()> {
+        // Closed for the reason an aside closes it: the request is charged to a turn the snapshot
+        // predates.
+        self.session.rewind.close();
+        let (done, events) = super::commit_message_animated(
+            terminal,
+            self.session,
+            config,
+            &self.answers.trust,
+            asked,
+            self.workspace,
+        )?;
+        if self.session.turns > 0 {
+            self.stored.append_audit(self.session.turns, &events);
+        }
+        super::commit_message_answered(self.session, done);
+        Ok(())
+    }
+
     pub(super) fn handoff(
         &mut self,
         terminal: &mut Tty,
@@ -661,7 +686,7 @@ impl Held<'_> {
                 &mut self.answers.trust,
                 "",
                 false,
-                Some(goal),
+                Some(super::Writing::Brief(goal)),
                 &[],
                 &[],
                 self.workspace,
@@ -669,6 +694,43 @@ impl Held<'_> {
             self.stored.append_audit(self.session.turns, &events);
             handoff_answered(self.session, goal, done);
         }
+        Ok(())
+    }
+
+    /// Rewrite the line in the box to be more specific, and put the rewrite in the box (INPUT-48).
+    ///
+    /// Asked beside the work, as a brief is: the conversation is read and not written to, the cost
+    /// is charged to the session and the request's trail is kept. Nothing is sent to the turn loop,
+    /// since what comes back is a line the person reads and edits before Enter makes it a turn.
+    pub(super) fn enhance(
+        &mut self,
+        terminal: &mut Tty,
+        config: &Config,
+        line: &str,
+        draft: &str,
+    ) -> io::Result<()> {
+        // Closed for the reason an aside closes it: the request is charged to a turn the snapshot
+        // predates.
+        self.session.rewind.close();
+        let (done, events) = super::ask_animated(
+            terminal,
+            self.session,
+            config,
+            self.conversation,
+            &mut self.answers.trust,
+            "",
+            false,
+            Some(super::Writing::Enhancement(draft)),
+            &[],
+            &[],
+            self.workspace,
+        )?;
+        // Nothing yet where no turn has been had, as for a question beside the work: a session
+        // opened and abandoned leaves no record.
+        if self.session.turns > 0 {
+            self.stored.append_audit(self.session.turns, &events);
+        }
+        super::enhance_answered(self.session, line, done);
         Ok(())
     }
 

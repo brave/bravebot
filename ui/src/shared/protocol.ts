@@ -116,6 +116,16 @@ export interface TodoRow {
   status: TodoStatus
 }
 
+/** An `allow` rule a project's settings file wrote, which answers no question here. */
+export interface ProposedRule {
+  rule: string
+  /** `rule` spelled as text, so a character that draws as nothing is visible (PROMPT-1). Draw this and not `rule`. */
+  shownRule: string
+  file: string
+  /** `file` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). Draw this and not `file`. */
+  shownFile: string
+}
+
 /**
  * The permission rules a session opened under, read from the settings files when it opened.
  *
@@ -130,8 +140,8 @@ export interface SettingsRules {
   allow: string[]
   /** An entry nothing could read as a rule, and the agent's sentence about why. */
   unreadable: { rule: string; said: string }[]
-  /** An `allow` rule a project's settings file wrote. It answers no question here. */
-  proposed: { rule: string; file: string }[]
+  /** The `allow` rules a project's settings file wrote. They answer no question here. */
+  proposed: ProposedRule[]
   /** A directory a settings file asked to have opened. This app opens none of them. */
   directories: string[]
   /**
@@ -182,7 +192,11 @@ export interface SessionRecord {
 export interface KeptTrust {
   at: number
   path: string
+  /** `path` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). Draw this and not `path`. */
+  shownPath: string
   root?: string
+  /** `root` spelled the same way, present exactly when `root` is. Draw this and not `root`. */
+  shownRoot?: string
 }
 
 /** Why file backups may not account for everything a turn did (§7.1 `session.rewind`). */
@@ -218,6 +232,9 @@ export interface OpenedSession {
   remembered?: KeptTrust | null
   /** Where a yes would be kept, where the question is asked and the answer may be kept. */
   keeping?: string | null
+  /** `record.directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
+  shownDirectory: string
+  shownKeeping?: string | null
   /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
   confinedLines?: string | null
   branchNote: string | null
@@ -335,6 +352,9 @@ export interface ForkedSession {
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   remembered?: KeptTrust | null
   keeping?: string | null
+  /** `directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
+  shownDirectory: string
+  shownKeeping?: string | null
   confinedLines?: string | null
   /** The parent's, as it opened: the child carries on its conversation. */
   autoVetting: boolean
@@ -493,6 +513,8 @@ export interface Stage {
   startedAs?: string
   /** The file the step runs, which is what the terminal shows under the step. */
   binary?: string
+  /** `startedAs` and `resolved` spelled as `ConfirmRequest.shownPath` is. Draw this and not `binary`, `resolved` or `startedAs`. */
+  shownBinary: string
   args: string[]
   /** The agent's own rendering of the argv, so both front-ends show the same characters. */
   display: string
@@ -524,6 +546,8 @@ export interface FetchRequest {
   request: number
   url: string
   host: string
+  /** The host the fetch was approved for, set where `host` is one a redirect led it to. */
+  redirectedFrom?: string | null
   ambient?: Ambient[]
   summary: string
 }
@@ -754,6 +778,8 @@ export interface RunRequest {
   stdin?: string | null
   stages: Stage[]
   directory: string
+  /** `directory` spelled as `shownWrites` is. Draw this and not `directory`. */
+  shownDirectory: string
   /**
    * Whether approving would hand the user's own data to a program.
    *
@@ -873,6 +899,13 @@ export interface AskPrompt {
   multiple: boolean
   /** A stable string standing for the whole question. */
   key: string
+  /**
+   * Where this question stands in the series, in the words the terminal picker uses, or `null`
+   * for a series of one. The bridge says it so the window words it as the terminal does.
+   */
+  place: string | null
+  /** Whether settling this question, answered or skipped, ends the series. The bridge decides. */
+  last: boolean
 }
 
 /** A series of questions the planner is putting to the person. */
@@ -893,7 +926,8 @@ export type AskAnswer = { chosen?: number[]; typed?: string }
 /** Every event the bridge emits, keyed by name. */
 export interface EventMap {
   'agent.ready': { build: string; version: string; home: string | null }
-  'trust.request': { directory: string; keeping?: string | null; confinedLines?: string | null }
+  /** `shownDirectory` and `shownKeeping` are `directory` and `keeping` spelled as `ConfirmRequest.shownPath` is. Draw those. */
+  'trust.request': { directory: string; shownDirectory: string; keeping?: string | null; shownKeeping?: string | null; confinedLines?: string | null }
   'turn.started': { turn: number; sandbox?: SandboxMode }
   /** The planner has read the oldest line sent with `turn.interject`. `prompt` is the words it was given. */
   'turn.interjected': { prompt: string }
@@ -901,6 +935,8 @@ export interface EventMap {
   'watch.ended': { number: number; reason: string; message?: string }
   phase: { phase: Phase }
   composing: { call: string | null }
+  /** What the model has thought since the last one, never empty. A delegate's is not sent (VIEW-34). */
+  thinking: { text: string }
   narration: { text: string }
   'tool.started': Activity
   'tool.finished': Activity

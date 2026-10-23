@@ -143,6 +143,8 @@ pub enum ToMain {
     Notice(String),
     /// What the model has written since the last frame. No reply.
     Streaming(String),
+    /// What the model has thought since the last frame. No reply.
+    Thinking(String),
     /// The call the model is writing, by the word its row will start with, or none once the
     /// attempt writing it was thrown away. No reply.
     Composing(Option<&'static str>),
@@ -436,6 +438,10 @@ impl Reporter for RemoteReporter {
         let _ = self.outbound.send(ToMain::Streaming(text));
     }
 
+    fn thinking(&mut self, text: String) {
+        let _ = self.outbound.send(ToMain::Thinking(text));
+    }
+
     fn composing(&mut self, call: Option<&'static str>) {
         let _ = self.outbound.send(ToMain::Composing(call));
     }
@@ -543,6 +549,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         }
     }
 
@@ -746,6 +753,29 @@ mod tests {
         let call = confirmer.confirm_mcp_call(&a_call());
         assert_eq!(call.decision, Decision::Reject);
         assert_eq!(call.note(), Some("ask Paris"));
+        responder.join().expect("responder finished");
+    }
+
+    /// WRITE-7: the text a person saved from their editor travels back to the worker as the answer
+    /// to the write, since the worker is where the turn puts the question again. It is no approval.
+    #[test]
+    fn saved_text_travels_back_to_the_worker_and_approves_nothing() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            inbound.recv().expect("a write question arrived");
+            answer_tx
+                .send(Reply::Write(WriteDecision::edit(
+                    "the saved text\n".to_string(),
+                )))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        let write = confirmer.confirm_write(&request());
+        assert!(!write.approved());
+        assert_eq!(write.edited(), Some("the saved text\n"));
         responder.join().expect("responder finished");
     }
 
@@ -1154,6 +1184,7 @@ mod tests {
                     ToMain::Narration(_) => seen.push("narration"),
                     ToMain::Notice(_) => seen.push("notice"),
                     ToMain::Streaming(_) => seen.push("streaming"),
+                    ToMain::Thinking(_) => seen.push("thinking"),
                     ToMain::Composing(_) => seen.push("composing"),
                     ToMain::Started(_) => seen.push("started"),
                     ToMain::Finished(_) => seen.push("finished"),
@@ -1190,6 +1221,7 @@ mod tests {
         reporter.narration("about to write".into());
         reporter.notice("AGENTS.md was not loaded".into());
         reporter.streaming("about".into());
+        reporter.thinking("weighing it".into());
         reporter.composing(Some("Write"));
         reporter.delegate_waiting(DelegateId::nth(1));
         reporter.tool_started(Activity::running("Write", "notes.md"));
@@ -1207,6 +1239,7 @@ mod tests {
                 "narration",
                 "notice",
                 "streaming",
+                "thinking",
                 "composing",
                 "delegate waiting",
                 "started",

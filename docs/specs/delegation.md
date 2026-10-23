@@ -688,6 +688,7 @@ front of them for a turn they were told had finished.
 
 `verified-by: bravebot_agent::turn::a_turn_does_not_answer_while_a_delegate_is_still_working`
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
+`verified-by: bravebot_agent::turn::a_turn_out_of_tool_calls_waits_for_its_delegate_and_is_not_asked_again`
 `verified-by: bravebot_tui::state::a_turn_waiting_on_a_delegate_names_it_until_its_report_is_in`
 `verified-by: bravebot_tui::state::a_new_round_ends_the_wait_the_indicator_names`
 
@@ -971,9 +972,13 @@ definition could ask for one model and have every delegate it starts answered by
 ### DELEGATE-23: a definition may name the skills its delegate is offered
 
 `skills:` is optional and is read as `tools:` is, on one line or as a list. A definition naming
-none offers its delegate every skill the turn found. A definition naming some offers the ones of
-those the turn found and no others: the rest are neither listed in the delegate's prompt nor
-loadable by it. An empty line names none, and its delegate is offered no skill.
+none leaves its delegate the same default any turn gets ([SKILL-18](skills.md#SKILL-18)): a
+built-in is listed in the prompt, and every other skill the turn found is neither listed nor
+excluded, so the delegate reaches it with `search_skills` and loads it by name like the turn that
+spawned it would. A definition naming some curates its delegate's catalogue the way
+[SKILL-18](skills.md#SKILL-18) says: the ones of those the turn found are listed in the prompt
+directly, and the rest are neither listed nor loadable by it, not even through `search_skills`.
+An empty line names none, and its delegate is offered no skill, built-in included.
 
 A name selects out of what the turn found and adds nothing to it, so a skill the turn could not
 load, whether from a directory nobody vouched for or from nowhere, is one no definition can offer.
@@ -993,6 +998,7 @@ has.
 `verified-by: bravebot_agent::agents::a_skill_named_twice_and_found_nowhere_is_said_once`
 `verified-by: bravebot_core::delegate::a_definition_may_name_skills_and_the_spec_carries_them`
 `verified-by: bravebot_agent::turn::a_definition_offers_its_delegate_only_the_skills_it_names`
+`verified-by: bravebot_agent::skills::a_curated_catalogues_search_does_not_reach_a_skill_outside_its_list`
 
 <a id="DELEGATE-24"></a>
 ### DELEGATE-24: a definition may name the MCP servers its worker holds

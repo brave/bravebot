@@ -58,7 +58,10 @@ pub fn run_with_trust<S: Sink + Send, C: Confirmer + Send>(
 }
 
 /// One turn with a token that stops it and a reporter to tell about progress.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes its nine arguments to `turn::resume`, which takes a tenth, a new conversation"
+)]
 pub fn run_cancellable<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     config: &Config,
     egress: &Egress,

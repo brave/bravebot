@@ -203,6 +203,23 @@ impl Session {
         self.style.as_ref()
     }
 
+    /// Only a name, which each turn resolves again, so it can name a skill that has since gone.
+    pub fn skill_mode(&self) -> Option<&str> {
+        self.skill_mode.as_deref()
+    }
+
+    /// Keep this skill applied to every later turn, or `None` to leave the mode (SKILL-21).
+    pub fn choose_skill_mode(&mut self, name: Option<String>) {
+        self.skill_mode = name;
+    }
+
+    /// Put back the mode a resumed record held, and say so, since the transcript shown has no line
+    /// of its own for it.
+    pub fn resume_skill_mode(&mut self, name: &str) {
+        self.skill_mode = Some(name.to_string());
+        self.note(t!(session_mode_resumed, skill = name));
+    }
+
     /// The names of the project's styles offered after the others, as last read.
     pub fn project_styles(&self) -> &[String] {
         &self.project_styles
@@ -286,6 +303,26 @@ impl Session {
             bravebot_session::store::save_effort(effort);
         }
         self.effort = effort;
+    }
+
+    /// The language `/language` last saved, for saying so.
+    ///
+    /// Read only for a session that persists, which is the rule every read of a saved pick here
+    /// follows: a test must not be handed the developer's own preference.
+    pub fn saved_language(&self) -> Option<String> {
+        self.persist
+            .then(bravebot_session::store::load_language)
+            .flatten()
+    }
+
+    /// Keep the language the person chose for the next start, or forget the choice where `None`,
+    /// and say whether that was done.
+    ///
+    /// Nothing in this session changes with it, since the interface is in one language for the
+    /// whole process: a session that persists nothing has nowhere to keep the choice, and answers
+    /// that it kept none.
+    pub fn choose_language(&mut self, tag: Option<&str>) -> bool {
+        self.persist && bravebot_session::store::save_language(tag)
     }
 
     /// Put `effort` in force for this session over every saved pick and file, and record nothing,
@@ -446,6 +483,22 @@ impl Session {
         self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
     }
 
+    /// Record how long a planner's question waits for a key before it is closed, from
+    /// `askIdleSeconds` (ASK-9). Absence waits for as long as it takes; what counts as usable is
+    /// `Settings::parse`'s rule alone.
+    pub fn adopt_ask_idle(&mut self, seconds: Option<u64>) {
+        self.ask_idle = seconds.map(Duration::from_secs);
+    }
+
+    /// How long `asking` waits with no key pressed before it is closed, where it may be at all.
+    ///
+    /// Only what the driver marked as the planner's own question is closed on a clock, and the
+    /// time is the person's setting: a plan, a spend limit and a repeated call wait for the person
+    /// whatever the settings say, and nothing a question says is read here.
+    pub fn ask_idle_for(&self, asking: &bravebot_core::ask::Asking) -> Option<Duration> {
+        self.ask_idle.filter(|_| asking.closes_when_idle)
+    }
+
     /// Record whether the interface captures the mouse, from `tui.mouse`. Only a `false` turns it
     /// off, so an absent key leaves the capture on.
     pub fn adopt_mouse(&mut self, configured: Option<bool>) {
@@ -525,17 +578,36 @@ impl Session {
     /// The columns the info panel takes on a frame `columns` wide, border included: the width the
     /// person dragged it to, held between its minimum and what leaves the transcript its own.
     pub fn panel_columns(&self, columns: u16) -> u16 {
+        if self.files.is_some() {
+            return crate::files_mode::columns(columns);
+        }
         crate::panel::clamped(self.panel_width, columns)
     }
 
     /// Whether a press here is on the panel's border, the column a drag resizes it by.
     fn on_panel_border(&self, row: u16, column: u16) -> bool {
-        self.laid.panes.iter().any(|(pane, rect)| {
-            *pane == crate::select::Pane::Panel
-                && rect.x == column
-                && rect.y <= row
-                && row < rect.bottom()
-        })
+        // The files state is half the terminal, which dragging does not change (FILES-4).
+        self.files.is_none()
+            && self.laid.panes.iter().any(|(pane, rect)| {
+                *pane == crate::select::Pane::Panel
+                    && rect.x == column
+                    && rect.y <= row
+                    && row < rect.bottom()
+            })
+    }
+
+    /// What a release at this cell acts on in the info panel, if the panel drew a row there. Read
+    /// against the panel's rectangle as the last frame recorded it.
+    pub fn panel_target_at(&self, row: u16, column: u16) -> Option<crate::panel::Target> {
+        if self.files.is_some() {
+            return None;
+        }
+        let (_, area) = self
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)?;
+        crate::panel::target_at(self, *area, row, column)
     }
 
     /// Begin dragging the panel's border where the button went down, and say whether it was
@@ -623,7 +695,7 @@ impl Session {
     /// on a file with no end in view, and holding a laptop awake for that is holding it awake for
     /// as long as the session is open.
     pub fn work_pending(&self) -> bool {
-        self.status == Status::Working || self.looping.is_some()
+        self.status == Status::Working || !self.looping.is_empty()
     }
 
     /// Hold the machine awake where `/caffeinate` is on and work is pending, and release it
@@ -646,7 +718,7 @@ impl Session {
 
     /// Whether the person has the info panel open, whether or not the last frame had room for it.
     pub fn panel_open(&self) -> bool {
-        self.panel
+        self.panel || self.files.is_some()
     }
 
     /// Open or close the info panel.
@@ -656,6 +728,14 @@ impl Session {
     /// and the next widening would bring back a panel nobody remembered opening. A press to close
     /// always closes, so a panel left open before the terminal was narrowed can be put away.
     pub fn toggle_panel(&mut self) {
+        // The key hides the panel from either state, and the state goes with it (FILES-3).
+        if self.files.take().is_some() {
+            self.panel = false;
+            if self.persist {
+                bravebot_session::store::save_panel(false);
+            }
+            return;
+        }
         if !self.panel && !crate::panel::fits(self.laid.columns) {
             self.note(t!(panel_too_narrow, columns = crate::panel::NARROWEST));
             return;
@@ -686,6 +766,18 @@ impl Session {
             ..self.identity.clone()
         };
         self.reidentify(identity)
+    }
+
+    /// Record the repository a `#<number>` in a reply links into, from the checkout the session is
+    /// in, or none where its `origin` is not on GitHub. Read where the session opens and where it
+    /// moves to another directory, since reading it opens a file.
+    pub fn adopt_repository(&mut self, repository: Option<crate::issue_link::Repository>) {
+        self.repository = repository;
+    }
+
+    /// The repository a `#<number>` in a reply links into, where there is one.
+    pub fn repository(&self) -> Option<&crate::issue_link::Repository> {
+        self.repository.as_ref()
     }
 
     /// Record the id the info panel shows, answering as [`Session::identify`] does.
@@ -765,7 +857,8 @@ impl Session {
 
     /// Charge what a suggestion's request cost to the turn it followed, outside any turn's own
     /// figures and still in the session's total, as an aside is.
-    pub fn charge_suggestion(&mut self, tokens: u64) {
-        self.charge(tokens);
+    pub fn charge_suggestion(&mut self, usage: bravebot_aichat::protocol::Usage) {
+        self.charge(usage.total());
+        self.charged_split(usage.total(), usage.completion_tokens);
     }
 }

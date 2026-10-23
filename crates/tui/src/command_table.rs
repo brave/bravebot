@@ -26,6 +26,12 @@ pub(crate) const STYLE_COMMAND: &str = "/style";
 /// The word after `/style` that clears the session's pick.
 pub(crate) const STYLE_OFF: &str = "off";
 
+/// The line that lists the skills a session could be in as a mode, puts one in force, or leaves it.
+pub(crate) const MODE_COMMAND: &str = "/mode";
+
+/// The word after `/mode` that leaves the session's mode.
+pub(crate) const MODE_OFF: &str = "off";
+
 /// The line that reports the session's spend limit, sets it, or removes it.
 pub(crate) const LIMIT_COMMAND: &str = "/limit";
 
@@ -34,6 +40,10 @@ pub(crate) const LIMIT_OFF: &str = "off";
 
 /// The line that opens the panel of preferences about the interface itself.
 pub(crate) const CONFIG_COMMAND: &str = "/config";
+
+/// The line that says which language the interface is in, saves a choice for the next start, or
+/// gives the choice back to the settings file and the environment (LOCALE-8).
+pub(crate) const LANGUAGE_COMMAND: &str = "/language";
 
 /// The line that opens another directory, taking the path to open as its argument.
 pub(crate) const ADD_DIR_COMMAND: &str = "/add-dir";
@@ -128,6 +138,7 @@ pub(crate) const RECAP_LABEL: &str = "/recap";
 
 /// The line that repeats a prompt, taking the prompt and any interval as its argument.
 pub(crate) const LOOP_COMMAND: &str = "/loop";
+pub(crate) const AFTER_COMMAND: &str = "/after";
 
 /// The line that sets the condition a session works towards, taking that condition as its
 /// argument.
@@ -148,8 +159,16 @@ pub(crate) const JOBS_COMMAND: &str = "/jobs";
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
 
+/// The line that puts the info panel in its files state, or ends it.
+pub(crate) const FILES_COMMAND: &str = "/files";
+
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
+
+/// The line that shows or hides the model's thinking as it arrives.
+///
+/// Answered by the screen alone: it changes what is drawn and sends nothing to the model.
+pub(crate) const THINKING_COMMAND: &str = "/thinking";
 
 /// The line that lists the checkouts delegates kept, and removes one by its number.
 ///
@@ -227,6 +246,24 @@ pub(crate) const INIT_COMMAND: &str = "/init";
 /// [`crate::review_command`] and CMD-18.
 pub(crate) const REVIEW_COMMAND: &str = "/review";
 
+/// The line that has a commit message drafted from changes and put in the box.
+///
+/// Sends nothing to the planner. See [`crate::commit_message_command`] and CMD-23.
+pub(crate) const COMMIT_MESSAGE_COMMAND: &str = "/commit-message";
+
+/// The line that has the planner answer a question about bravebot from the documentation this
+/// program carries.
+///
+/// Starts an ordinary turn with words the driver wrote around the person's question. See
+/// [`crate::help_command`] and CMD-24.
+pub(crate) const HELP_COMMAND: &str = "/help";
+
+/// The line that shows the release notes this program carries, taking no argument.
+///
+/// Carried out by the driver from its own text and starts no turn. See [`crate::help_command`] and
+/// CMD-25.
+pub(crate) const CHANGELOG_COMMAND: &str = "/changelog";
+
 /// The line that sets plan mode, and with a task starts a turn on it.
 ///
 /// The same endorsement as the key that cycles to plan mode (MODE-12): it only narrows what is
@@ -271,6 +308,10 @@ impl Command {
                 use crate::review_command::{COMMIT, PULL_REQUEST, SINCE, STAGED};
                 format!("[{STAGED} | {SINCE} <ref> | {COMMIT} <ref> | {PULL_REQUEST} <n>] [focus]")
             }
+            COMMIT_MESSAGE_COMMAND => {
+                use crate::commit_message_command::{RANGE, STAGED};
+                format!("[{STAGED} | {RANGE} <a>..<b>] [format]")
+            }
             REACH_COMMAND => {
                 let scopes: Vec<&str> = bravebot_sandbox::scope::Scope::REACHABLE
                     .iter()
@@ -305,7 +346,9 @@ pub enum MidTurn {
     /// does not hold, but a line waiting ahead of it may replace that: `/clear` begins another
     /// session, `/cd` moves to another directory and a prompt starts a turn built with what it
     /// finds, and a change made first would land on the one being left or the turn begun under it.
-    /// A waiting `/sandbox` line changes the mode and nothing else, so it holds none of them back.
+    /// What each acts on, and so which lines could change it, is `Acts`: a waiting `/sandbox`
+    /// line holds none of them back, and `/issue`, `/pr`, `/model`, `/effort` and `/advisor` are
+    /// held back by fewer lines than the others.
     ///
     /// Where the bare word opens a picker, the picker is held as a mode of the session while the
     /// turn runs, so the turn's own questions are still drawn over it.
@@ -327,7 +370,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 48] {
+pub fn commands() -> [Command; 56] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -414,6 +457,30 @@ pub fn commands() -> [Command; 48] {
             mid_turn: MidTurn::Changes,
         },
         Command {
+            name: MODE_COMMAND,
+            argument: "[skill | off]",
+            description: t!(command_mode),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: LANGUAGE_COMMAND,
+            argument: "[tag | auto]",
+            description: t!(command_language),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: HELP_COMMAND,
+            argument: "<question>",
+            description: t!(command_help),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: CHANGELOG_COMMAND,
+            argument: "",
+            description: t!(command_changelog),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: COMPACT_COMMAND,
             argument: "[focus]",
             description: t!(command_compact),
@@ -486,6 +553,12 @@ pub fn commands() -> [Command; 48] {
             mid_turn: MidTurn::RunsUnlessItStarts,
         },
         Command {
+            name: AFTER_COMMAND,
+            argument: "<delay> <prompt>",
+            description: t!(command_after),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
             name: GOAL_COMMAND,
             argument: "[<condition> | clear]",
             description: t!(command_goal),
@@ -510,9 +583,21 @@ pub fn commands() -> [Command; 48] {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: FILES_COMMAND,
+            argument: "",
+            description: t!(command_files),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: CAFFEINATE_COMMAND,
             argument: "",
             description: t!(command_caffeinate),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: THINKING_COMMAND,
+            argument: "",
+            description: t!(command_thinking),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -570,6 +655,12 @@ pub fn commands() -> [Command; 48] {
             mid_turn: MidTurn::Waits,
         },
         Command {
+            name: COMMIT_MESSAGE_COMMAND,
+            argument: "[source] [format]",
+            description: t!(command_commit_message),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
             name: EXPORT_COMMAND,
             argument: "[path]",
             description: t!(command_export),
@@ -622,6 +713,10 @@ pub fn commands() -> [Command; 48] {
 
 /// The commands a half-typed line could still become, in the order they are offered.
 ///
+/// A command typed in full is offered first, ahead of the longer names that begin with it: with
+/// `/model` earlier in the table, Enter on `/mode` would otherwise complete to `/model` and never
+/// run the command that was typed (CMD-27).
+///
 /// Empty unless the line is a lone word starting with a slash: a command takes its argument after a
 /// space, so once there is one the command is settled and there is no command left to complete. A
 /// line that is not a command at all completes to nothing, which is what closes the list.
@@ -630,21 +725,28 @@ pub fn completions(line: &str) -> Vec<Command> {
     if !trimmed.starts_with('/') || trimmed.contains(char::is_whitespace) {
         return Vec::new();
     }
-    commands()
+    let mut offered: Vec<Command> = commands()
         .iter()
         .filter(|command| command.name.starts_with(trimmed))
         .copied()
-        .collect()
+        .collect();
+    // Stable, so the others keep the table's order.
+    offered.sort_by_key(|command| command.name != trimmed);
+    offered
 }
 
-/// The line `/effort ` or `/sandbox ` plus the start of one of its words becomes, or `None` where
-/// Tab has nothing to add.
+/// The line `/effort `, `/sandbox ` or `/mode ` plus the start of one of its words becomes, or
+/// `None` where Tab has nothing to add.
 ///
-/// The words are this program's own, so completing one reads nothing a person did not type. A
+/// The words are this program's own, or for `/mode` the names of the skills the box already offers,
+/// so completing one reads nothing a person did not type. A
 /// start that fits one word becomes that word, and a start that fits several is carried as far as
 /// they agree.
-pub(crate) fn complete_argument(line: &str) -> Option<String> {
+pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
     let line = line.trim_start();
+    if let Some(typed) = line.strip_prefix(MODE_COMMAND) {
+        return complete_exact_word(MODE_COMMAND, typed, skills);
+    }
     if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
         let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
             .iter()
@@ -661,11 +763,26 @@ pub(crate) fn complete_argument(line: &str) -> Option<String> {
 }
 
 fn complete_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
+    complete(command, after, words, str::to_ascii_lowercase)
+}
+
+/// [`complete_word`] for names that are matched as typed, because `/mode` takes a skill's name
+/// with its case.
+fn complete_exact_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
+    complete(command, after, words, str::to_string)
+}
+
+fn complete(
+    command: &str,
+    after: &str,
+    words: &[&str],
+    fold: fn(&str) -> String,
+) -> Option<String> {
     let typed = after.strip_prefix(' ')?;
     if typed.is_empty() || typed.contains(char::is_whitespace) {
         return None;
     }
-    let typed = typed.to_ascii_lowercase();
+    let typed = fold(typed);
     let mut fits = words.iter().filter(|word| word.starts_with(&typed));
     let mut shared = fits.next()?.to_string();
     for word in fits {
@@ -750,13 +867,193 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
     }
 }
 
-/// Whether a waiting line is a `/sandbox` one, which moves the mode the next turn is built with and
-/// writes nothing else (SANDBOX-22). The mode is read where a turn is built, by `/resume` and
-/// `/status`, and when the transcript is drawn, and by no command that changes something, so
-/// each of those gives the same result before it as after it. `/sandbox` itself is held back by
-/// the rule for a line of the same command.
-fn only_moves_the_sandbox(waiting: &str) -> bool {
-    command_typed(waiting) == Some(SANDBOX_COMMAND)
+/// What a command that changes something acts on, which is what decides the lines waiting ahead of
+/// it that could change it (CMD-8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Acts {
+    /// The link `/issue` or `/pr` sets on the session's record. Only a command that starts another
+    /// record, switches to one or leaves this one changes which record that is.
+    Link,
+    /// The model, the level or the advisor a request is built with: `/model`, `/effort` and
+    /// `/advisor`. A prompt or a command that sends a request reads them, and a command that
+    /// switches the session or leaves it replaces them.
+    Choice,
+    /// The notes and the name the record holds, which `/note` and `/rename` write: a note is stamped
+    /// with the turn count it is typed at, and a rename gives up the rewind points and is undone by
+    /// the ones that restore a title. Only a line that begins a turn, changes the turn count, puts a
+    /// point back or starts, switches to or leaves a record changes what these act on.
+    NotesAndName,
+    /// The output style `/style` picks and the person's own style files its name is looked up among.
+    /// A turn reads the style when it is built, and a line that replaces the session starts the next
+    /// one from the style settings name. Nothing a command line does changes either: a program cannot
+    /// write `~/.bravebot`, and a name is looked up in no file of the working directory.
+    Style,
+    /// The answer kept about the working directory and about the root of the git worktree around it,
+    /// which `/forget-trust` withdraws (TRUST-24). A line that starts a session here reads the
+    /// answer, and one that moves the directory or leaves the session changes what is withdrawn. So
+    /// does a prompt or a command line, which can run a program that makes the `.git` entry that
+    /// moves the root around the directory.
+    KeptAnswer,
+    /// The sandbox mode: `/sandbox`. Every waiting line could change it but a waiting `/sandbox`,
+    /// which moves the mode the next turn is built with and writes nothing else (SANDBOX-22). The
+    /// mode is read where a turn is built, by `/resume` and `/status`, and when the transcript is
+    /// drawn, and by no command that changes something, so each of those gives the same result
+    /// before it as after it. `/sandbox` itself is held back by the rule for a line of the same
+    /// command.
+    Other,
+}
+
+/// A command not named here falls to [`Acts::Other`], which every waiting line but a `/sandbox`
+/// holds it behind, so one added to the table waits when nobody has said what it acts on instead of
+/// landing ahead of a line that could change it.
+fn acts_on(command: &str) -> Acts {
+    match command {
+        ISSUE_COMMAND | PR_COMMAND => Acts::Link,
+        MODEL_COMMAND | EFFORT_COMMAND | ADVISOR_COMMAND => Acts::Choice,
+        NOTE_COMMAND | RENAME_COMMAND => Acts::NotesAndName,
+        STYLE_COMMAND => Acts::Style,
+        FORGET_TRUST_COMMAND => Acts::KeptAnswer,
+        _ => Acts::Other,
+    }
+}
+
+/// The commands that start a new record, switch to another or leave this one, so a link set
+/// before one lands on the record it leaves and a link set after one lands on the record it
+/// opens.
+///
+/// A command added to the table is placed against this list by
+/// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
+const REPLACES_THE_RECORD: &[&str] = &[
+    CLEAR_COMMAND,
+    HANDOFF_COMMAND,
+    BRANCH_COMMAND,
+    RESUME_COMMAND,
+    BACKGROUND_COMMAND,
+    EXIT_COMMAND,
+];
+
+/// The commands that neither build a request nor change the model, the level or the advisor, and
+/// that take none of them from another record. A command not named here holds `/model`, `/effort`
+/// and `/advisor` back.
+///
+/// `/model`, `/effort` and `/advisor` are not named: the level a model reads depends on the model,
+/// so each of them reads what the others set. `/style`, `/rename`, `/note`, `/issue`, `/pr`,
+/// `/forget-trust` and `/sandbox` write the session's own settings and the record, and none of
+/// the three. A command added to the table is placed against this list by
+/// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
+const LEAVES_THE_CHOICE_ALONE: &[&str] = &[
+    CLEAR_COMMAND,
+    UNDO_COMMAND,
+    REWIND_COMMAND,
+    HUNKS_COMMAND,
+    MEMORY_COMMAND,
+    REACH_COMMAND,
+    BRANCH_COMMAND,
+    ADD_DIR_COMMAND,
+    CD_COMMAND,
+    MCP_COMMAND,
+    RENAME_COMMAND,
+    NOTE_COMMAND,
+    STYLE_COMMAND,
+    FORGET_TRUST_COMMAND,
+    ISSUE_COMMAND,
+    PR_COMMAND,
+    SANDBOX_COMMAND,
+    AFTER_COMMAND,
+];
+
+/// The commands that neither begin a turn, change the turn count, put a rewind point back nor
+/// start, switch to or leave a record, and that write neither the notes nor the name. A command not
+/// named here holds `/note` and `/rename` back.
+///
+/// A command line is never held back: it saves the record with the notes and the name it holds, and
+/// a save keeps a name already chosen. Each command named was read against what the two write.
+/// `/add-dir` closes the rewind points, which a rename closes too, so the two give the same result
+/// in either order. `/issue` and `/pr` set a link that no point holds (PANEL-12), `/model`,
+/// `/effort`, `/advisor`, `/style`, `/forget-trust` and `/sandbox` set the session's own choices,
+/// and `/memory`, `/reach` and `/mcp` are handed the session's transcript and settings and not the
+/// record. `/note` and `/rename` leave each other
+/// alone: the first writes the notes and the second the name and the points. `/cd` is not named,
+/// since it moves the record to the new directory, nor `/hunks`, which puts a hunk back against the
+/// last point a rename gives up. A command added to the table is placed against this list by
+/// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
+const LEAVES_NOTES_AND_NAME_ALONE: &[&str] = &[
+    ADD_DIR_COMMAND,
+    MEMORY_COMMAND,
+    REACH_COMMAND,
+    MCP_COMMAND,
+    RENAME_COMMAND,
+    NOTE_COMMAND,
+    STYLE_COMMAND,
+    FORGET_TRUST_COMMAND,
+    ISSUE_COMMAND,
+    PR_COMMAND,
+    SANDBOX_COMMAND,
+    MODEL_COMMAND,
+    EFFORT_COMMAND,
+    ADVISOR_COMMAND,
+];
+
+/// The commands that neither start a turn, start, switch to or leave a session, move the working
+/// directory nor write what `/style` and `/forget-trust` act on: the pick, the style files and the
+/// file the kept answer is in. A command not named here holds both back.
+///
+/// Each command named was read against what the two act on. Only a turn reads the style
+/// (`task.style`), so `/compact`, `/btw` and `/recap`, which send a request and run no program,
+/// leave it alone, and none of the three touches the file the answer is kept in. `/memory` lists what
+/// it finds. `/rename`, `/note`, `/issue` and `/pr` write the record, `/model`, `/effort`, `/advisor`
+/// and `/sandbox` the session's own choices. `/style` writes the pick and `/forget-trust` the file
+/// the answer is kept in, and the other leaves each alone: a withdrawn answer leaves this session's
+/// own trust map as it is, and a pick is looked up in no file the answer is kept in. `/clear`, `/branch`, `/undo`, `/rewind`, `/hunks`, `/add-dir`, `/cd`, `/reach` and
+/// `/mcp` are not named: each replaces or reopens part of what the session's directories are made
+/// of, and none has been read against either. A command added to the table is placed against this
+/// list by `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
+const LEAVES_THE_STYLE_AND_THE_KEPT_ANSWER_ALONE: &[&str] = &[
+    COMPACT_COMMAND,
+    BTW_COMMAND,
+    RECAP_COMMAND,
+    MEMORY_COMMAND,
+    RENAME_COMMAND,
+    NOTE_COMMAND,
+    STYLE_COMMAND,
+    FORGET_TRUST_COMMAND,
+    ISSUE_COMMAND,
+    PR_COMMAND,
+    SANDBOX_COMMAND,
+    MODEL_COMMAND,
+    EFFORT_COMMAND,
+    ADVISOR_COMMAND,
+];
+
+/// Whether a waiting line holds back a command whose rule names the commands that leave what it acts
+/// on alone: a command line never does, a prompt always does, and a command does unless it is named.
+fn held_unless_listed(goes: Bound, waiting: Option<&str>, leaves_alone: &[&str]) -> bool {
+    match goes {
+        // The line runs a program in the working directory and says what it printed.
+        Bound::Run => false,
+        Bound::CarriedOut => !waiting.is_some_and(|word| leaves_alone.contains(&word)),
+        Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn => true,
+    }
+}
+
+/// Whether a waiting line could change what a command that acts on `acts` acts on. `goes` is where
+/// the line is going, and `waiting` the command it is, where it is one.
+fn could_change(goes: Bound, waiting: Option<&str>, acts: Acts) -> bool {
+    match acts {
+        Acts::Other => waiting != Some(SANDBOX_COMMAND),
+        Acts::NotesAndName => held_unless_listed(goes, waiting, LEAVES_NOTES_AND_NAME_ALONE),
+        Acts::Style => {
+            held_unless_listed(goes, waiting, LEAVES_THE_STYLE_AND_THE_KEPT_ANSWER_ALONE)
+        }
+        // A command line is held back too: a program it runs can make the `.git` entry that moves
+        // the root around the directory.
+        Acts::KeptAnswer => {
+            goes == Bound::Run
+                || held_unless_listed(goes, waiting, LEAVES_THE_STYLE_AND_THE_KEPT_ANSWER_ALONE)
+        }
+        Acts::Link => waiting.is_some_and(|word| REPLACES_THE_RECORD.contains(&word)),
+        Acts::Choice => held_unless_listed(goes, waiting, LEAVES_THE_CHOICE_ALONE),
+    }
 }
 
 /// The line, among those waiting ahead of position `at` in the queue, that a command carried out
@@ -768,7 +1065,7 @@ fn only_moves_the_sandbox(waiting: &str) -> bool {
 /// command that changes something waits behind a line that could change what it acts on, so it
 /// lands where it was typed: `/rename` ahead of a waiting `/clear` would name the session being
 /// left, and `/effort` ahead of a waiting prompt would change the level that prompt was typed
-/// under. Every line could, but a waiting `/sandbox` ([`only_moves_the_sandbox`]).
+/// under. What each acts on, and so which lines could change it, is [`Acts`].
 pub(crate) fn held_back_by<'a>(
     session: &'a Session,
     at: usize,
@@ -779,12 +1076,16 @@ pub(crate) fn held_back_by<'a>(
         command.mid_turn,
         MidTurn::Changes | MidTurn::ChangesUnlessItAsks
     );
-    session.queued_ahead(at).find(|(goes, waiting)| match goes {
-        Bound::CarriedOut => {
-            command_typed(waiting) == Some(command.name)
-                || (changes && !only_moves_the_sandbox(waiting))
-        }
-        Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn | Bound::Run => changes,
+    let acts = acts_on(command.name);
+    session.queued_ahead(at).find(|&(goes, waiting)| {
+        let word = match goes {
+            Bound::CarriedOut => command_typed(waiting),
+            Bound::IntoThisTurn | Bound::ItsOwnTurn | Bound::IntoTheNextTurn | Bound::Run => None,
+        };
+        // `/after` takes a loop's slot, so a `/loop stop` ahead of it in the queue would find nothing
+        // to end and the line would be sent anyway.
+        let takes_the_slot = command.name == LOOP_COMMAND && word == Some(AFTER_COMMAND);
+        word == Some(command.name) || takes_the_slot || (changes && could_change(goes, word, acts))
     })
 }
 
@@ -827,4 +1128,127 @@ pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
     } else {
         t!(command_waits_for_the_turn, command = word).to_string()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every command that can wait is placed against what a waiting line could change in the commands
+    /// that act on a record's link, on the choice a request is built with and on the notes and the
+    /// name a record holds (CMD-8). The three rules
+    /// name commands in lists, and a command added to the table that is in none would be carried
+    /// out ahead of a line it could change, or wait behind one it could not. The rows are written
+    /// out here rather than read from the lists, so a command is placed by deciding it twice. The
+    /// regression it rejects is a command added to the table and left out of the rules.
+    #[test]
+    fn every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change() {
+        // The command, whether it starts another record, switches to one or leaves this one,
+        // whether it sends a request, reads or changes the model, the level or the advisor, or
+        // leaves for another session, whether it could change the notes or the name the record
+        // holds: begin a turn, change the turn count, put a rewind point back, or move or replace
+        // the record, and whether it could change the style `/style` picks or the answer
+        // `/forget-trust` withdraws: begin a turn, replace the session, or touch the directories
+        // it is made of, without being read against either.
+        const PLACED: &[(&str, bool, bool, bool, bool)] = &[
+            (ADD_DIR_COMMAND, false, false, false, true),
+            (CD_COMMAND, false, false, true, true),
+            (COMPACT_COMMAND, false, true, true, false),
+            (BTW_COMMAND, false, true, true, false),
+            (RECAP_COMMAND, false, true, true, false),
+            (CLEAR_COMMAND, true, false, true, true),
+            (HANDOFF_COMMAND, true, true, true, true),
+            (BRANCH_COMMAND, true, false, true, true),
+            (RESUME_COMMAND, true, true, true, true),
+            (BACKGROUND_COMMAND, true, true, true, true),
+            (REACH_COMMAND, false, false, false, true),
+            (CHECKOUTS_COMMAND, false, true, true, true),
+            (PLAN_COMMAND, false, true, true, true),
+            (MANIFEST_COMMAND, false, true, true, true),
+            (AGENT_COMMAND, false, true, true, true),
+            (MEMORY_COMMAND, false, false, false, false),
+            (INIT_COMMAND, false, true, true, true),
+            (REVIEW_COMMAND, false, true, true, true),
+            (COMMIT_MESSAGE_COMMAND, false, true, true, true),
+            (HELP_COMMAND, false, true, true, true),
+            (UNDO_COMMAND, false, false, true, true),
+            (REWIND_COMMAND, false, false, true, true),
+            (HUNKS_COMMAND, false, false, true, true),
+            (EXIT_COMMAND, true, true, true, true),
+            (MCP_COMMAND, false, false, false, true),
+            (LOOP_COMMAND, false, true, true, true),
+            (AFTER_COMMAND, false, false, true, true),
+            (GOAL_COMMAND, false, true, true, true),
+            (MODEL_COMMAND, false, true, false, false),
+            (EFFORT_COMMAND, false, true, false, false),
+            (ADVISOR_COMMAND, false, true, false, false),
+            (RENAME_COMMAND, false, false, false, false),
+            (NOTE_COMMAND, false, false, false, false),
+            (STYLE_COMMAND, false, false, false, false),
+            (MODE_COMMAND, false, true, true, true),
+            (FORGET_TRUST_COMMAND, false, false, false, false),
+            (ISSUE_COMMAND, false, false, false, false),
+            (PR_COMMAND, false, false, false, false),
+            (SANDBOX_COMMAND, false, false, false, false),
+        ];
+        for command in commands() {
+            // A command that is carried out as it is typed waits only behind a line of its own.
+            if command.mid_turn == MidTurn::Runs {
+                continue;
+            }
+            assert!(
+                PLACED.iter().any(|(name, ..)| *name == command.name),
+                "{} can wait and is not placed against the rules for a link and for the choice",
+                command.name
+            );
+        }
+        for &(
+            name,
+            replaces_the_record,
+            builds_a_request,
+            changes_the_record,
+            holds_style_and_answer,
+        ) in PLACED
+        {
+            assert!(
+                commands().iter().any(|command| command.name == name),
+                "{name} is placed and is not in the table"
+            );
+            assert_eq!(
+                could_change(Bound::CarriedOut, Some(name), Acts::Link),
+                replaces_the_record,
+                "{name} and a link"
+            );
+            assert_eq!(
+                could_change(Bound::CarriedOut, Some(name), Acts::Choice),
+                builds_a_request,
+                "{name} and the choice"
+            );
+            assert_eq!(
+                could_change(Bound::CarriedOut, Some(name), Acts::NotesAndName),
+                changes_the_record,
+                "{name} and the notes and the name"
+            );
+            assert_eq!(
+                could_change(Bound::CarriedOut, Some(name), Acts::Style),
+                holds_style_and_answer,
+                "{name} and the style"
+            );
+            assert_eq!(
+                could_change(Bound::CarriedOut, Some(name), Acts::KeptAnswer),
+                holds_style_and_answer,
+                "{name} and the kept answer"
+            );
+            // Where the two differ: a command line, which never changes the style and always could
+            // change the answer.
+            assert!(
+                !could_change(Bound::Run, None, Acts::Style),
+                "a command line and the style"
+            );
+            assert!(
+                could_change(Bound::Run, None, Acts::KeptAnswer),
+                "a command line and the kept answer"
+            );
+        }
+    }
 }

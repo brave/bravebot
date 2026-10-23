@@ -387,6 +387,7 @@ fn said(said: &Said) -> Value {
                 | Composed::Summary
                 | Composed::Imported
                 | Composed::Skill { .. }
+                | Composed::SkillNamed { .. }
                 | Composed::SkillKept { .. }
                 | Composed::Notice
                 | Composed::MessageSent { .. }
@@ -511,6 +512,10 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
                 // The file the step runs after the path that starts it, which is what the
                 // terminal shows under the step.
                 "binary": stage.binary(),
+                // The same file spelled as the terminal draws it, so a path ending in whitespace
+                // or holding a byte that is not text is not drawn as another. The window draws
+                // this and never `binary`, `resolved` or `startedAs`.
+                "shownBinary": bravebot_agent::confirm::shown_binary(stage),
                 "startedAs": stage.started_as,
                 "args": stage.args,
                 "display": stage.as_written(),
@@ -522,6 +527,8 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "request": id,
         "stages": stages,
         "directory": request.directory(),
+        // Spelled as `shownWrites` is.
+        "shownDirectory": request.shown_directory(),
         // The line as the planner spelled it, which is not what an approval binds to: two
         // spellings that compile to the same plan are one endorsement. It is sent because a
         // reader with only the plan has nothing to compare it against, and a compiler that got
@@ -663,6 +670,7 @@ pub fn fetch_request(id: u64, request: &FetchRequest) -> Value {
         "request": id,
         "url": request.url,
         "host": request.host,
+        "redirectedFrom": request.redirected_from,
         "ambient": request
             .ambient_authority()
             .iter()
@@ -906,18 +914,27 @@ pub fn host_request(id: u64, request: &HostRequest) -> Value {
 /// `index` travels with every row so a selection can be reported back as data rather than
 /// by matching label text, and `key` travels with every prompt so a front-end can tell two
 /// questions apart without reimplementing the rule for what makes them different.
+///
+/// The same goes for where a question stands and whether settling it ends the series (ASK-6):
+/// `place` is the sentence the picker's title uses, null for a series of one, and `last` is the
+/// answer [`Asking::ends_at`] gives. The window puts the questions one at a time and keeps only
+/// which one it is on, so it says the position and ends the series from these and decides neither.
 pub fn ask_request(id: u64, asking: &Asking) -> Value {
+    let total = asking.prompts.len();
     json!({
         "request": id,
         "prompts": asking
             .prompts
             .iter()
-            .map(|prompt| {
+            .enumerate()
+            .map(|(at, prompt)| {
                 json!({
                     "header": prompt.header,
                     "question": prompt.question,
                     "multiple": prompt.multiple,
                     "key": prompt.key,
+                    "place": bravebot_i18n::ask::place(at, total),
+                    "last": asking.ends_at(at),
                     "rows": prompt
                         .rows
                         .iter()

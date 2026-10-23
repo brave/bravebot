@@ -4,7 +4,7 @@
 use crate::command_table::{
     command_typed, runs_while_working, waits_behind_the_queue, why_it_waits,
 };
-use crate::state::{Session, Status};
+use crate::state::{Session, Status, Unenhanceable};
 use crate::{input, render};
 use bravebot_core::cancel::Cancel;
 use bravebot_i18n::t;
@@ -36,6 +36,10 @@ pub enum Action {
     /// Write the prompt somewhere with room to think. Needs the terminal, which the loop hands
     /// over to the editor and takes back afterwards.
     Edit,
+    /// Stop the process and hand the terminal to the shell until it is continued (INPUT-47). Needs
+    /// the terminal, which the loop gives back before the stop and takes again after it.
+    #[cfg(unix)]
+    Suspend,
     /// Ask which model to use. Needs the network and the terminal, so the loop runs it.
     ChooseModel,
     /// Ask which theme to paint in. Needs the terminal, so the loop runs it.
@@ -51,6 +55,12 @@ pub enum Action {
     Advisor(String),
     /// Say which output style is in force, take one by name, or clear the pick. Empty says.
     Style(String),
+    /// Say which skill is the session's mode, put one in force by name, or leave it. Empty says.
+    /// Needs the workspace and the trust map to find the skill in, which the loop owns.
+    Mode(String),
+    /// Say which language the interface is in, choose one for the next start, or give the choice
+    /// back. Empty says.
+    Language(String),
     /// Ask how the box should edit. Needs the terminal, so the loop runs it.
     ChooseEditing,
     /// Open another directory. Needs the workspace and the trust map, which the loop owns.
@@ -80,6 +90,10 @@ pub enum Action {
     ),
     /// Recap the session so far, over a copy of the conversation, in the way an aside is answered.
     Recap,
+    /// Draft a commit message from changes and put it in the box. Needs the workspace, the trust
+    /// map and the network, which the loop owns, and gives the conversation nothing and takes
+    /// nothing from it.
+    CommitMessage(crate::commit_message_command::Asked),
     /// Plan this task in full and then walk it. Needs the workspace, the trust map and the
     /// network, which the loop owns, and gives the conversation nothing back.
     ///
@@ -104,6 +118,11 @@ pub enum Action {
     /// Have a brief written for the goal typed, from this session's conversation, and put it in the
     /// box. Needs the conversation and the network, which the loop owns.
     Handoff(String),
+    /// Have the line in the box rewritten to be more specific, from this session's conversation, and
+    /// put the rewrite in the box. Carries the line as the box holds it, and the words it is
+    /// asked as, which are that line with a folded paste put back. Needs the conversation and the
+    /// network, which the loop owns, and gives the conversation nothing back (INPUT-48).
+    Enhance(String, String),
     /// Start a new session whose first prompt is this, the brief as the person left it, and record
     /// which session it came from. Needs the conversation and the session record, which the loop
     /// owns.
@@ -332,6 +351,7 @@ pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
     !session.scrolling()
         && session.watching().is_none()
         && !session.searching_history()
+        && !session.files_open()
         && session.picking().is_none()
         && (is_ctrl_c(key) || is_escape(session, key))
 }
@@ -824,6 +844,47 @@ pub(super) fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
     }
 }
 
+/// Whether a line starts the way a command or a skill does: a slash and a name, then anything.
+///
+/// A first word with a second slash in it is a path, and a prompt may begin with one.
+fn is_written_like_a_command(line: &str) -> bool {
+    line.split_whitespace().next().is_some_and(|word| {
+        word.strip_prefix('/')
+            .is_some_and(|name| !name.contains('/'))
+    })
+}
+
+/// What the enhance chord asks for at rest (INPUT-48).
+///
+/// Nothing for an empty box and for shell mode, where there is no prompt to rewrite. A line written
+/// like a command or a skill, one naming a picture or a dropped file, and one too long to be rewritten
+/// are each left as written, and the person is told why.
+fn enhance_the_line(session: &mut Session) -> Action {
+    if session.shell || session.input().trim().is_empty() {
+        return Action::None;
+    }
+    let key = session.bindings().enhance_name();
+    if is_written_like_a_command(session.input()) {
+        session.note(t!(enhance_not_a_command, key = key));
+        return Action::Redraw;
+    }
+    match session.draft_to_enhance() {
+        Ok(draft) => Action::Enhance(session.input().to_string(), draft),
+        Err(Unenhanceable::HoldsAttachment) => {
+            session.note(t!(enhance_not_with_a_picture, key = key));
+            Action::Redraw
+        }
+        Err(Unenhanceable::TooLong) => {
+            session.note(t!(
+                enhance_too_long,
+                key = key,
+                limit = bravebot_agent::aside::ENHANCE_LIMIT
+            ));
+            Action::Redraw
+        }
+    }
+}
+
 /// What a key does to the suggestion in the empty box, if one is on offer (INPUT-43).
 ///
 /// Tab or Right, pressed bare, moves it into the box as text; the key is spent doing so and the
@@ -842,6 +903,41 @@ fn suggestion_key(session: &mut Session, key: KeyEvent) -> Option<Action> {
     None
 }
 
+/// Interpret a key press while the info panel is in its files state (FILES-9).
+///
+/// Every key is the state's and a key it does not name does nothing, so no character reaches the box
+/// and Enter sends nothing. Ctrl-C ends the state and does nothing else, so a turn in flight goes on.
+/// The panel chord hides the panel and the state with it, as it does from the ordinary state.
+fn files_key(session: &mut Session, key: KeyEvent) -> Action {
+    if is_ctrl_c(key) {
+        session.close_files();
+        return Action::Redraw;
+    }
+    if session.bindings().is_panel(&key) {
+        session.toggle_panel();
+        return Action::Redraw;
+    }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return Action::None;
+    }
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => session.close_files(),
+        KeyCode::Up | KeyCode::Char('k') => session.files_move(-1),
+        KeyCode::Down | KeyCode::Char('j') => session.files_move(1),
+        KeyCode::Home | KeyCode::Char('g') => session.files_to_end(false),
+        KeyCode::End | KeyCode::Char('G') => session.files_to_end(true),
+        KeyCode::PageUp => session.files_scroll(-session.files_page()),
+        KeyCode::PageDown => session.files_scroll(session.files_page()),
+        KeyCode::Char('[') => session.files_to_edit(false),
+        KeyCode::Char(']') => session.files_to_edit(true),
+        _ => return Action::None,
+    }
+    Action::Redraw
+}
+
 /// The answer to a key that a mode standing over the session takes, and `None` where no mode is
 /// open.
 ///
@@ -852,6 +948,9 @@ fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
     if session.picking().is_some() {
         session.press_in_picking(key.code, key.modifiers);
         return Some(Action::Redraw);
+    }
+    if session.files_open() {
+        return Some(files_key(session, key));
     }
     if session.watching().is_some() {
         return Some(watching_key(session, key));
@@ -872,6 +971,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     session.reread_offers();
     // Before the key edits anything: a brief whose box was emptied is no longer being edited.
     session.drop_a_wiped_handoff();
+    session.drop_a_wiped_enhancement();
     // At rest, so the modes are the whole of what stands between the key and the box.
     if let Some(action) = claimed_by_a_mode(session, key) {
         return action;
@@ -934,6 +1034,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // person who wants the answer to stop gets that from the first press, and nothing they
         // were part way through writing is taken with it.
         KeyCode::Char('c') if ctrl && session.status == Status::Working => Action::Cancel,
+        // The line in the box is the nearest thing to put back where an enhancement wrote it, and
+        // what it puts back is the line the person wrote, so the next press clears that as it
+        // clears any (INPUT-48). In vi's style this is the key that does it, since Escape there
+        // belongs to the instructions.
+        KeyCode::Char('c') if ctrl && session.enhanced_pending() => {
+            session.restore_unenhanced();
+            Action::Redraw
+        }
         KeyCode::Char('c') if ctrl && !session.input().is_empty() => {
             session.clear_input();
             // Said only here. A press that leaves is not one to explain, and the hint is the
@@ -949,7 +1057,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // reaches for when nothing else will stop it. Reversed, the key that ends a loop would be
         // the key that ends the session, and there would be no way to keep one without the other.
         KeyCode::Char('c') if ctrl && session.looping().is_some() => {
-            session.stop_loop();
+            session.stop_loops();
             Action::Redraw
         }
         // For the reason the loop is here: a goal is a thing still happening, and a person
@@ -1032,6 +1140,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // what someone reaches for on a long prompt. A paragraph worth thinking about goes
         // somewhere with room instead.
         _ if session.bindings().is_editor(&key) => Action::Edit,
+        // Rewriting the line in the box, which sends nothing: the rewrite comes back into the box
+        // and Enter on it is what sends (INPUT-48).
+        _ if session.bindings().is_enhance(&key) => enhance_the_line(session),
         // Escape stops a turn in flight where it is the turn's rather than the box's, which the loop
         // running the turn decides before any ladder. The prompt comes back for editing rather than
         // being lost.
@@ -1044,6 +1155,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // On an empty line it does nothing at all. It used to leave, which made every press a
         // question of what was in the box: the key for abandoning a thought was the key for
         // ending the session as soon as the thought was short enough. Ctrl-C is the way out.
+        //
+        // Over an enhancement it puts back the line the person wrote and clears nothing (INPUT-48).
+        KeyCode::Esc
+            if session.editing() == crate::vim::Editing::Ordinary && session.enhanced_pending() =>
+        {
+            session.restore_unenhanced();
+            Action::Redraw
+        }
         KeyCode::Esc if session.editing() == crate::vim::Editing::Ordinary => {
             session.clear_input();
             Action::Redraw
@@ -1077,6 +1196,20 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
                 None => Action::None,
             }
         }
+        // The line the enhance key wrote, as the person left it. Before the command arm, since a
+        // rewrite that happens to begin with a slash is still a prompt, and after the arm that
+        // refuses a return that arrived with other keys (INPUT-48). A reference left half typed at
+        // its end is finished first, as it is for every line (NAME-7).
+        KeyCode::Enter if !session.shell && session.enhanced_pending() => {
+            if session.completion_would_change_the_line() {
+                session.accept_completion();
+                return Action::Redraw;
+            }
+            match session.submit() {
+                Some(prompt) => Action::Submit(prompt),
+                None => Action::None,
+            }
+        }
         // Before every command arm, because in shell mode the line is a command and nothing else.
         // `/status` is a path to a program somebody might have, and `!` is how they said so.
         KeyCode::Enter if session.shell => {
@@ -1100,7 +1233,17 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // marker in the line being dispatched. The words a folded paste stood for are put back as
         // the line is taken, the way a line queued behind a turn is settled as it is queued, since
         // that marker is a handle only the session holding it can undo.
-        KeyCode::Enter if command_typed(session.input()).is_some() => {
+        //
+        // Guarded against a row the arrows moved onto: a command typed in full is still the start
+        // of a longer skill's name, and the skill is listed beneath it. Pressing Down highlights
+        // that row, and Enter there has to take it the way Tab would rather than running the
+        // command the cursor left behind (CMD-9). Where the arrows never moved,
+        // `completion_would_change_the_line` answers false for the command's own row and this arm
+        // runs as before.
+        KeyCode::Enter
+            if command_typed(session.input()).is_some()
+                && !session.completion_would_change_the_line() =>
+        {
             let commanded = session.take_command();
             dispatch_command(session, commanded)
         }
@@ -1108,6 +1251,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // replaces the line and waits in the box (CMD-17). After every command, so a file cannot
         // shadow one, and before completion, so `/review the diff` is not read as a half-typed word.
         KeyCode::Enter if session.expand_prompt_file() => Action::Redraw,
+        // A line that runs a prompt of an MCP server with words that are not its arguments is said
+        // so and not sent (CMD-26).
+        KeyCode::Enter if session.refuse_unparsable_server_prompt() => Action::Redraw,
         // A half-typed command, after every arm that recognises a whole one. Enter takes the
         // highlighted row rather than sending "/mod" to the planner, which is never what was meant.
         //
@@ -1141,6 +1287,28 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
 fn navigate(session: &mut Session, key: KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
+        // The shell, for as long as it takes to use it (INPUT-47). In the shared ladder because it
+        // sends nothing and changes nothing the person typed, so a running turn has no reason to
+        // refuse it: the turn stops with the process and carries on when it continues.
+        //
+        // First in this ladder, so the chord answers on the keys the arms below read whatever is
+        // held with them: an arm for Backspace, Tab, the arrows, Home or End would otherwise take
+        // `alt-backspace` or `ctrl-up` before this was asked. At rest the arm for Escape sits above
+        // this ladder and takes `alt-esc` first, as it takes the chords of the actions below (#2924).
+        //
+        // A press that arrived with other keys suspends nothing, for the reason the rung that leaves
+        // is held to the same rule (INPUT-34): a program that writes one byte at the terminal
+        // should not be able to take the session away from somebody. Said rather than ignored, as
+        // that rung says it.
+        #[cfg(unix)]
+        _ if session.bindings().is_suspend(&key) => {
+            if session.key_arrived_alone {
+                Action::Suspend
+            } else {
+                session.note(t!(suspend_not_pressed));
+                Action::Redraw
+            }
+        }
         KeyCode::Backspace => {
             session.backspace();
             Action::Redraw
@@ -1336,6 +1504,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // Where the idle path asks, and for the reason it does: a turn can begin with the brief `/handoff`
     // wrote still in the box, and an edit that empties it mid-turn must end it as it does at rest.
     session.drop_a_wiped_handoff();
+    session.drop_a_wiped_enhancement();
     // None of the modes sends anything, and sending is the whole of what a running turn refuses.
     // Mid-turn is also when a delegate is there to watch, since one does not outlive the turn that
     // spawned it, and when the prompt somebody wants back is most likely one they can no longer
@@ -1438,6 +1607,20 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         return queued(session, key);
     }
 
+    // The line the enhance key wrote is a prompt and nothing else, so no arm below may carry it out
+    // as a command or queue it as one (INPUT-48). It waits behind the turn as any prompt does, and
+    // where no turn is running to wait behind it stays in the box, as the brief `/handoff` wrote does.
+    if key.code == KeyCode::Enter && !session.shell && session.enhanced_pending() {
+        if session.completion_would_change_the_line() {
+            session.accept_completion();
+            return Action::Redraw;
+        }
+        if session.queue() {
+            return queued(session, key);
+        }
+        return Action::None;
+    }
+
     // Before the arm that queues a command, because these commands need not wait: each reads or
     // changes only what the session keeps for itself, a loop, a goal, a watch, the spend so far, its
     // name, a level or a theme, or what is kept for the next session here, and the turn holds none
@@ -1486,6 +1669,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         return Action::Redraw;
     }
 
+    // And a line running a prompt of a server that could not be sent is refused as it is at rest,
+    // since queueing it would send the sentence it is not (CMD-26).
+    if key.code == KeyCode::Enter
+        && session.answer_while_working(|session| session.refuse_unparsable_server_prompt())
+    {
+        return Action::Redraw;
+    }
+
     // After the arms that recognise a whole command, as at rest: Enter on a half-typed word takes
     // the highlighted row rather than queueing "/mod" as a prompt.
     if key.code == KeyCode::Enter && session.completion_would_change_the_line() {
@@ -1513,6 +1704,13 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // this key, and a key that does nothing by accident reads the same as one that does nothing on
     // purpose.
     if session.bindings().is_editor(&key) {
+        return Action::None;
+    }
+
+    // Refused for the reason the editor is: the exchange the rewrite is asked over belongs to the
+    // turn in flight (INPUT-48). Answered here rather than left to the ladder, which types a chord
+    // carrying Alt as the letter it holds.
+    if session.bindings().is_enhance(&key) {
         return Action::None;
     }
 
@@ -1607,6 +1805,40 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
         MouseEventKind::Drag(MouseButton::Left) => {
             session.extend_selection(mouse.row, mouse.column);
             Action::Redraw
+        }
+        // A click in the scroller that swept over nothing is a click on whatever is there: a
+        // call opens or closes as `x` does (MOUSE-9), and a delegate's block opens that
+        // delegate's view as the watch key does (MOUSE-10). Anything swept, or a word or row taken by
+        // a double or triple click, is a selection and is copied as before.
+        MouseEventKind::Up(MouseButton::Left)
+            if session.scrolling()
+                && session
+                    .selection
+                    .is_none_or(|selection| selection.is_empty())
+                && session.last_click.is_some_and(|click| click.count() == 1)
+                && (session.toggle_expanded_at(mouse.row, render::as_last_drawn)
+                    || session.watch_delegate_at(mouse.row)) =>
+        {
+            session.clear_selection();
+            Action::Redraw
+        }
+        // A click on the panel's model or effort row asks what `/model` or `/effort` asks
+        // (MOUSE-11). The press and the release are on one cell and the press is a single click,
+        // so a drag, a double click and a triple click stay selections.
+        MouseEventKind::Up(MouseButton::Left)
+            if !session.scrolling()
+                && !session.searching_history()
+                && session.last_click.is_some_and(|click| {
+                    click.count() == 1 && click.cell() == (mouse.row, mouse.column)
+                })
+                && session.panel_target_at(mouse.row, mouse.column).is_some() =>
+        {
+            session.clear_selection();
+            match session.panel_target_at(mouse.row, mouse.column) {
+                Some(crate::panel::Target::Model) => super::ask_which_model(session),
+                Some(crate::panel::Target::Effort) => Action::ChooseEffort,
+                None => Action::Redraw,
+            }
         }
         MouseEventKind::Up(MouseButton::Left) => Action::Copy,
         _ => Action::None,

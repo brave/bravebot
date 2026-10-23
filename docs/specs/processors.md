@@ -5,6 +5,8 @@ status: normative
 governs:
   - crates/core/src/processor.rs
   - crates/core/src/policy.rs
+  - crates/agent/src/commit_message.rs
+  - crates/agent/src/processor.rs
 guards:
   - symbol: ProcessorSpec::new
   - symbol: Policy::before_processor
@@ -256,7 +258,8 @@ The name is configuration, not content. It is read from the person's own setting
 file `--settings` names, and from no project or local layer ([BACKEND-24](backends.md#BACKEND-24)):
 a layer that names it is dropped and `doctor` names the file. No tool argument, planner word or
 file content chooses it, so the destination of a processor's input stays the one the person
-configured.
+configured. `--processor-model` ([CLI-34](cli.md#CLI-34)) names it for one run from the person's own
+command line and outranks the file.
 
 A model that needs a sign-in this machine has not made, that the managed layer refuses
 ([BACKEND-48](backends.md#BACKEND-48)), or that no configured service answers for is not swapped
@@ -267,6 +270,9 @@ A processor answered by a model other than the one the setting named says so, na
 the setting wrote it. It is compared as [DELEGATE-22](delegation.md#DELEGATE-22) compares a
 delegate's: against the name that was sent, and not where the name is a handle the reply resolves.
 The name that answered is left out of the sentence, which is the driver's own words.
+
+The trail records the model each processor call asked for ([TRACE-10](trace.md#TRACE-10)). A manifest
+run's processing steps use the same model ([MANIFEST-12](manifest.md#MANIFEST-12)).
 
 **Why refuse rather than fall back.** A person naming a cheaper model for bulk rewrites is drawing a
 cost boundary, and running the call on the turn's model would spend past it without anybody
@@ -284,6 +290,34 @@ bytes ([PROC-12](#PROC-12)).
 `verified-by: bravebot_agent::turn::a_processor_model_needing_a_sign_in_sends_nothing_and_says_so`
 `verified-by: bravebot_agent::turn::a_processor_answered_by_another_model_than_the_configured_one_says_so`
 `verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_processor_model_that_is_not_obeyed`
+
+<a id="PROC-14"></a>
+### PROC-14: a command may run a processor over a diff the driver read, and release the draft to the person's box alone
+
+`/commit-message` ([CMD-23](commands.md#CMD-23)) is a processor call that no planner asked for. The
+driver reads a diff with the `read_git` reader under a policy of its own that holds `FileRead` and
+the network, puts it in one slot at the label the read gave it, fixes the spec with
+[`Policy::before_processor`](#PROC-2), and runs it. Everything PROC-1 to PROC-3 say holds: no tool,
+no memory, one request, and an output labelled by taint over the diff. The instruction is the
+driver's own fixed words and the format the person typed after the command, both public.
+
+What differs from a call a planner makes is where the output goes. The document is released by the
+display gate to the person's input box, and the remark is never released. The driver reads two
+counts of the reader's own answer, whether it showed no file and whether it stopped at a cap, and,
+for a diff nobody vouched for, one yes or no from a credential scan of its text. It reads nothing
+else of the diff and nothing of the draft. A diff that holds what looks like a credential is not given to the
+processor, whether or not its files are vouched for, since nobody is at a prompt to agree to it as
+for a planner's read ([CRED-15](credential-protection.md#CRED-15)).
+
+**Why.** The diff and the draft stay out of both contexts, as they do for a processor a planner
+starts, and the person is the only reader of the draft before they decide what to send.
+
+`verified-by: bravebot_agent::commit_message::a_range_is_drafted_from_its_diff_and_the_request_holds_no_tool`
+`verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::commit_message::an_untrusted_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
+`verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
+`verified-by: bravebot_tui::app::a_draft_answered_by_another_model_than_the_configured_one_says_so`
 
 ## Known costs
 

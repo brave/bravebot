@@ -37,6 +37,19 @@ pub fn settle_for_process(project: Option<&Path>, selected: Option<&Path>) {
     bravebot_agent::transport::settle(&layers);
 }
 
+/// Start the one sweep this process makes of what has outlived the retention period (STATE-4).
+///
+/// Called by each front end beside [`settle_for_process`], with the same arguments. No session is
+/// open yet, so nothing is exempt: a client that loads a record older than the period as the process
+/// starts can find it removed or without its trail, which is what the period says. The sweep runs
+/// beside the first requests and is not ordered against them.
+pub fn start_the_sweep_for_process(project: Option<&Path>, selected: Option<&Path>) {
+    bravebot_session::retention::at_startup(
+        layers(project, selected).retention(),
+        bravebot_session::retention::InUse::default(),
+    );
+}
+
 /// Whether a safe verdict releases quarantined content with nobody asked, resolved as the terminal does.
 pub fn auto_vetting(settings: &Settings) -> bool {
     resolve_vetting(settings, bravebot_session::store::load_vetting())
@@ -93,12 +106,17 @@ fn ignored(settings: &Settings) -> Vec<Value> {
         settings.fallback_ignored().collect(),
     ));
     ignored.extend(named("summaryModel", settings.summary_ignored().collect()));
+    ignored.extend(named("planModel", settings.plan_ignored().collect()));
     ignored.extend(named(
         "processorModel",
         settings.processor_ignored().collect(),
     ));
     ignored.extend(named("agent", settings.agent_ignored().collect()));
     ignored.extend(named("style", settings.style_ignored().collect()));
+    ignored.extend(named(
+        "askIdleSeconds",
+        settings.ask_idle_ignored().collect(),
+    ));
     ignored.extend(named("references", settings.references_ignored().collect()));
     ignored
 }

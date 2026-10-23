@@ -14,6 +14,8 @@ use bravebot_core::cancel::Cancel;
 use bravebot_core::command::Plan;
 use bravebot_sandbox::network::Network;
 #[cfg(unix)]
+use std::ffi::OsStr;
+#[cfg(unix)]
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
@@ -778,6 +780,65 @@ fn a_bypass_stage_writes_beside_the_working_directory_without_a_request() {
     );
     let bypass = places.run(&line, Some(&places.confinement().with_unasked_writes(true)));
     assert!(bypass.ended_well && target.exists(), "{bypass:?}");
+}
+
+/// SANDBOX-30 under bypass: a program a stage wrote and made read-only, with the directories above
+/// it, is not one bravebot starts itself. The account owns what a stage creates and can set its
+/// mode, so the lookup cannot tell a plant by whether `access` says the account can write it. The
+/// probe writes under the isolated `.ssh` when it runs, which a stage cannot do, so the marker
+/// shows that bravebot started it unconfined. The stage that ends with `chmod 555` is the one
+/// that reached the lookup as an installed program; the stage that leaves the modes alone is the
+/// control that the lookup refuses a program in the row at all.
+#[cfg(unix)]
+#[test]
+fn a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started() {
+    use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath, start};
+    use std::os::unix::fs::PermissionsExt;
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("planted-read-only");
+    let marker = places.home.join(".ssh/marker");
+    let confinement = places.confinement().with_unasked_writes(true);
+    let refused = places.run(&touch(marker.display()), Some(&confinement));
+    assert!(
+        !refused.ended_well && !marker.exists(),
+        "a stage writes under .ssh, so the marker proves nothing: {refused:?}"
+    );
+
+    for (name, made_read_only) in [("untouched", false), ("read-only", true)] {
+        let held = places.beside.join(name);
+        let bin = held.join("bin");
+        let (bin_text, held_text, marker_text) = (bin.display(), held.display(), marker.display());
+        let modes = if made_read_only {
+            format!(" && chmod 555 {bin_text}/probe {bin_text} {held_text}")
+        } else {
+            String::new()
+        };
+        let line = format!(
+            "sh -c 'mkdir -p {bin_text} && printf \"#!/bin/sh\\n/usr/bin/touch {marker_text}\\n\" > {bin_text}/probe && chmod 755 {bin_text}/probe{modes}'"
+        );
+        let planted = places.run(&line, Some(&confinement));
+        assert!(
+            planted.ended_well && bin.join("probe").exists(),
+            "{name}: the stage did not write the program: {planted:?}"
+        );
+
+        let found = Resolved::find_on(OsStr::new("probe"), bin.as_os_str());
+        if let Some(program) = &found {
+            let _ = start(program, Inherits::All, SearchPath::Reduced).status();
+        }
+
+        // A read-only tree cannot be removed by the next run of this test, so it is opened again
+        // before anything can fail.
+        for path in [bin.join("probe"), bin, held] {
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+        }
+        assert!(
+            found.is_none() && !marker.exists(),
+            "{name}: bravebot started a program a stage wrote: {found:?}"
+        );
+    }
 }
 
 /// SANDBOX-22 under bypass: what a `request_path` would never be granted is still refused. The

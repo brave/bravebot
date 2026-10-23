@@ -14,6 +14,7 @@
 //! are workspace-relative names shown to the person who owns the workspace, and the counts are this
 //! program's own arithmetic. No model reads any of it.
 
+use bravebot_agent::servers::EffectivePolicy;
 use bravebot_agent::watch;
 use bravebot_config::Config;
 use bravebot_core::label::Integrity;
@@ -183,12 +184,12 @@ pub struct Facts<'a> {
     /// Whether the turn in flight holds the two above, which it answers into as it runs. Then
     /// neither is read and the report says the rules are the turn's until it ends.
     pub turn_holds_rules: bool,
-    /// The loop repeating a prompt, where the person started one.
+    /// The loops repeating a prompt, where the person started any, oldest first.
     ///
     /// Absent from the report entirely when there is none, rather than reported as "no loop": a
     /// line saying a thing is not happening is a line on every report for the sake of the few
     /// where it is.
-    pub looping: Option<&'a crate::loops::Running>,
+    pub looping: &'a [crate::loops::Running],
     /// The condition the session is working towards, where the person set one.
     ///
     /// Left out when there is none, for the reason the loop is.
@@ -626,6 +627,10 @@ pub fn report(facts: &Facts<'_>) -> Report {
 
     lines.extend(grant_lines(facts));
 
+    if let Some(session) = &facts.servers.session {
+        lines.extend(server_policy_lines(&session.policies()));
+    }
+
     Report { lines }
 }
 
@@ -844,7 +849,8 @@ fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
 
     // What is going to happen without anybody typing anything, which is the one thing about a
     // session that a person cannot read off the transcript.
-    if let Some(running) = facts.looping {
+    let several = facts.looping.len() > 1;
+    for running in facts.looping {
         let pace = running.pace();
         let when = running.when(std::time::Instant::now());
         // The repeated line is the value, the way the goal line below carries its condition. A
@@ -854,8 +860,17 @@ fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
         // Its first line only. A prompt is whatever somebody typed, a turn may arrange a loop over
         // one they pasted, and this panel spends one row per fact: the rest of a multi-line prompt
         // would land where the next fact goes.
+        //
+        // Told apart by number where there are several, the number `/loop stop` takes. A line
+        // `/after` holds is sent later, not repeated, and the label says so.
+        let label = match (running.once(), several) {
+            (true, true) => t!(status_after_numbered, number = running.number()).to_string(),
+            (true, false) => t!(status_after).to_string(),
+            (false, true) => t!(status_loop_numbered, number = running.number()).to_string(),
+            (false, false) => t!(status_loop).to_string(),
+        };
         lines.push(
-            Line::new(t!(status_loop), crate::render::one_line(running.prompt()))
+            Line::new(&label, crate::render::one_line(running.prompt()))
                 .with_note(format!("{pace} · {when}")),
         );
     }
@@ -1023,17 +1038,34 @@ fn usage_lines(facts: &Facts<'_>) -> Vec<Line> {
 /// nothing from a line about it, and the programs line above already says every run is asked.
 fn remembered_lines(facts: &Facts<'_>, record: Remembered<'_>) -> Vec<Line> {
     let mut lines = Vec::new();
-    let entries: Vec<&bravebot_core::remembered::Entry> = record.lines.iter().collect();
+    // Each scope as the one item it was answered as, before the lines: it is the wider grant, so it
+    // is the one that must not be cut off by the length limit below.
+    let entries: Vec<(String, &str)> = record
+        .lines
+        .scopes()
+        .map(|entry| {
+            (
+                crate::confirm::scope_name(&entry.scope),
+                entry.answered_in.as_str(),
+            )
+        })
+        .chain(
+            record
+                .lines
+                .iter()
+                .map(|entry| (entry.line.display(), entry.answered_in.as_str())),
+        )
+        .collect();
     lines.push(
         Line::new(
             t!(status_remembered),
-            t!(count_commands, count = entries.len()),
+            t!(count_remembered, count = entries.len()),
         )
         .with_note(t!(status_remembered_note)),
     );
-    for entry in entries.iter().take(MAX_REMEMBERED) {
-        lines.push(Line::new("", entry.line.display()).with_note(
-            match entry.answered_in == facts.session_id {
+    for (shown, answered_in) in entries.iter().take(MAX_REMEMBERED) {
+        lines.push(Line::new("", shown.as_str()).with_note(
+            match *answered_in == facts.session_id {
                 true => t!(status_remembered_this_session),
                 false => t!(status_remembered_earlier),
             },
@@ -1046,7 +1078,7 @@ fn remembered_lines(facts: &Facts<'_>, record: Remembered<'_>) -> Vec<Line> {
         let left_out = &entries[MAX_REMEMBERED..];
         let earlier = left_out
             .iter()
-            .filter(|entry| entry.answered_in != facts.session_id)
+            .filter(|(_, answered_in)| *answered_in != facts.session_id)
             .count();
         lines.push(Line::new(
             "",
@@ -1090,6 +1122,34 @@ fn grant_lines(facts: &Facts<'_>) -> Vec<Line> {
             .with_note(t!(status_requested_paths_note)),
             facts.requested_paths,
         ));
+    }
+    lines
+}
+
+/// What each started local server's confinement grants: a heading naming it, a line each for what
+/// its policy says of the network, of subprocesses and of where it starts, then one line for each
+/// path its backend was handed and each path that policy was resolved without (SERVERS-20). What a
+/// row allows is its label, so a path that fills the width of the screen is still one line.
+///
+/// Nothing for a session that started no local server, which is the session this screen has always
+/// described. Every row rather than a count, since this is what a refusal from inside a server is
+/// checked against, and a count cannot say whether the path it refused was granted. The rows are
+/// the policy's own and no word a server sent is among them. A path is drawn in full, as a server
+/// names it in a refusal and as the prompts that name one draw it, so one that holds a control
+/// character, or a character that draws as nothing, is not a row that reads as another.
+fn server_policy_lines(servers: &[(String, EffectivePolicy)]) -> Vec<Line> {
+    let mut lines = Vec::new();
+    for (alias, policy) in servers {
+        lines.push(Line::new(
+            t!(status_server_policy),
+            bravebot_agent::mcp::shown(alias),
+        ));
+        lines.extend(
+            policy
+                .described()
+                .into_iter()
+                .map(|(label, value)| Line::new(&label, value)),
+        );
     }
     lines
 }
@@ -1236,6 +1296,7 @@ pub(crate) fn offering(servers: &[(String, bravebot_agent::mcp::Offering)]) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_agent::servers::{Access, PolicyEgress};
     use bravebot_config::DEFAULT_MODEL;
 
     fn config_for(endpoint: &str, premium: Option<&str>) -> Config {
@@ -1398,7 +1459,7 @@ mod tests {
             turn_holds_rules: false,
             // Nothing repeating, which is every session that has not been asked to. Tests about
             // the loop line set this themselves.
-            looping: None,
+            looping: &[],
             // Nothing to work towards, on the same footing.
             goal: None,
             // Nothing watched, on the same footing. The test about the watch lines builds its
@@ -1961,7 +2022,7 @@ mod tests {
         running.ended(None, std::time::Instant::now());
 
         let mut facts = facts(&config, &trust);
-        facts.looping = Some(&running);
+        facts.looping = std::slice::from_ref(&running);
         let report = report(&facts);
 
         let line = report
@@ -1987,6 +2048,74 @@ mod tests {
         );
     }
 
+    /// LOOP-13: with several loops each has its own row under its number, the one `/loop stop`
+    /// takes, and a single loop's row keeps the plain label.
+    #[test]
+    fn the_report_has_a_row_per_loop_under_its_number() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut loops = crate::loops::Loops::default();
+        loops.start(crate::loops::Running::begin(crate::loops::request(
+            "5m check the deploy",
+        )));
+        loops.start(crate::loops::Running::begin(crate::loops::request(
+            "1h check the pull request",
+        )));
+
+        let mut facts = facts(&config, &trust);
+        facts.looping = loops.as_slice();
+        let report = report(&facts);
+        let rows: Vec<(String, &str)> = report
+            .lines
+            .iter()
+            .filter(|line| line.label.trim().starts_with(t!(status_loop).trim()))
+            .map(|line| (line.label.trim().to_string(), line.value.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    t!(status_loop_numbered, number = 1).to_string(),
+                    "check the deploy"
+                ),
+                (
+                    t!(status_loop_numbered, number = 2).to_string(),
+                    "check the pull request"
+                ),
+            ]
+        );
+    }
+
+    /// An `/after` line is sent later and not repeated (LOOP-18), so the panel labels it that way.
+    /// A wrong implementation lists it under the loop's label.
+    #[test]
+    fn the_report_lists_an_after_line_as_sent_later_and_not_as_a_loop() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let running = crate::loops::Running::after(
+            crate::loops::request_after("5m tail the log"),
+            std::time::Instant::now(),
+        );
+
+        let mut facts = facts(&config, &trust);
+        facts.looping = std::slice::from_ref(&running);
+        let report = report(&facts);
+
+        assert!(
+            !report
+                .lines
+                .iter()
+                .any(|line| line.label.trim() == t!(status_loop)),
+            "an after line was listed as a loop"
+        );
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_after))
+            .expect("the after line is reported");
+        assert_eq!(line.value, "tail the log");
+    }
+
     /// A loop a turn arranged is always self-paced, so its pacing says nothing about the work.
     /// The line is the only thing on the row that can, and it is the one reached by pasting.
     #[test]
@@ -2000,7 +2129,7 @@ mod tests {
         );
 
         let mut facts = facts(&config, &trust);
-        facts.looping = Some(&running);
+        facts.looping = std::slice::from_ref(&running);
         let report = report(&facts);
 
         let line = report
@@ -2245,6 +2374,61 @@ mod tests {
         assert!(shown.contains("stays quarantined"), "{shown}");
         assert!(
             shown.contains("/home/someone/.bravebot/remembered"),
+            "{shown}"
+        );
+    }
+
+    /// A scope for `gh pr view 12 --repo brave/bravebot`, as the prompt would have offered it.
+    fn a_remembered_scope() -> bravebot_core::remembered::Scope {
+        use bravebot_core::command::{Plan, Step, Steps};
+        let plan = Plan {
+            line: String::new(),
+            directory: std::path::PathBuf::from("/work"),
+            steps: Steps::Pipeline(vec![Step {
+                program: "gh".to_string(),
+                resolved: std::path::PathBuf::from("/usr/bin/gh"),
+                started_as: std::path::PathBuf::from("/usr/bin/gh"),
+                args: ["pr", "view", "12", "--repo", "brave/bravebot"]
+                    .map(String::from)
+                    .to_vec(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            }]),
+            writes: Vec::new(),
+            reads: Vec::new(),
+            stdin: None,
+        };
+        bravebot_core::remembered::scopes::offered_for(&plan).expect("a listed line")
+    }
+
+    /// RUN-20: a remembered scope is listed as the one item it was answered as, named in words, with
+    /// who answered it. The lines it expands to are not listed beside it, and a long list of lines
+    /// does not push it off the end, because it is the widest answer in the record.
+    #[test]
+    fn the_report_lists_a_remembered_scope_as_one_item_in_words() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut record = record_of(MAX_REMEMBERED + 3);
+        record.record_scope(a_remembered_scope(), "a-session-last-week");
+        let mut facts = facts(&config, &trust);
+        facts.remembered = Some(Remembered {
+            lines: &record,
+            path: Path::new("/home/someone/.bravebot/remembered/-tmp-project.jsonl"),
+        });
+
+        let shown = rendered(&report(&facts));
+        assert!(
+            shown.contains("Read pull requests and issues in brave/bravebot"),
+            "{shown}"
+        );
+        for expanded in ["<number>", "pr diff", "pr checks", "issue view"] {
+            assert!(
+                !shown.contains(expanded),
+                "the scope was listed as its lines ({expanded}): {shown}"
+            );
+        }
+        assert!(
+            shown.contains(&t!(count_remembered, count = MAX_REMEMBERED + 4)),
             "{shown}"
         );
     }
@@ -3217,6 +3401,142 @@ mod tests {
         );
         assert!(note.contains("weather: 3 tools"), "{note}");
         assert!(note.contains("coins: one tool"), "{note}");
+    }
+
+    /// The policy a started server's backend was handed, drawn for the tests of `/status`.
+    fn a_policy_for_the_report() -> EffectivePolicy {
+        use bravebot_agent::servers::PolicyRow;
+        let row = |path: &str, access| PolicyRow {
+            path: path.into(),
+            access,
+        };
+        EffectivePolicy {
+            rows: vec![
+                row("/srv/weather", Access::Read),
+                row("/srv/cache", Access::ReadWrite),
+                row("/var/out", Access::Write),
+            ],
+            egress: PolicyEgress::Hosts,
+            children: false,
+            starts_in: Some("/srv/cache".into()),
+            left_out: vec!["/opt/absent".into(), "/opt/also absent".into()],
+            git_held_back: true,
+        }
+    }
+
+    /// SERVERS-20: `/status` lists what a started server's backend was handed, one fact to a line:
+    /// the network, whether it may start subprocesses, where it starts, whether a `.git` is held
+    /// back, every row with what it allows, and the paths left out with the reason. A row is drawn
+    /// as the access it grants and no other, so a write-only row is not read as a read.
+    #[test]
+    fn a_started_servers_policy_is_listed_row_by_row_with_what_each_row_allows() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let started =
+            crate::mcp_command::tests::holding_started_under("weather", a_policy_for_the_report());
+
+        let drawn = report(&Facts {
+            servers: &started.servers,
+            ..facts(&config, &trust)
+        });
+
+        let at = drawn
+            .lines
+            .iter()
+            .position(|line| line.label == t!(status_server_policy))
+            .expect("the server's policy is on the report");
+        let listed: Vec<(&str, &str, &str)> = drawn.lines[at..]
+            .iter()
+            .map(|line| (line.label.as_str(), line.value.as_str(), line.note.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (t!(status_server_policy), "weather", ""),
+                (
+                    t!(status_server_policy_egress),
+                    t!(status_server_policy_egress_hosts),
+                    ""
+                ),
+                (
+                    t!(status_server_policy_subprocesses),
+                    t!(status_server_policy_subprocesses_refused),
+                    ""
+                ),
+                (t!(status_server_policy_starts_in), "/srv/cache", ""),
+                (
+                    t!(status_server_policy_git),
+                    t!(status_server_policy_git_held_back),
+                    ""
+                ),
+                (t!(status_server_policy_read), "/srv/weather", ""),
+                (t!(status_server_policy_read_write), "/srv/cache", ""),
+                (t!(status_server_policy_write), "/var/out", ""),
+                (
+                    t!(status_server_policy_left_out),
+                    t!(status_server_policy_left_out_reason),
+                    ""
+                ),
+                ("", "/opt/absent", ""),
+                ("", "/opt/also absent", ""),
+            ]
+        );
+    }
+
+    /// SERVERS-20: a session with no confined server has no policy to show, whether it started
+    /// nothing or only a server reached over HTTP, which is no process of the session's.
+    #[test]
+    fn a_session_with_no_confined_server_shows_no_server_policy() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let remote = crate::mcp_command::tests::holding(&["docs"]);
+
+        for servers in [&NO_SERVERS, &remote.servers] {
+            let drawn = report(&Facts {
+                servers,
+                ..facts(&config, &trust)
+            });
+
+            assert!(
+                drawn
+                    .lines
+                    .iter()
+                    .all(|line| line.label != t!(status_server_policy)),
+                "a policy was shown for a server that has none"
+            );
+        }
+    }
+
+    /// SERVERS-20: a path is drawn in full as the prompts that name one draw it, so a control
+    /// character in a directory name is its picture and not a sequence the terminal obeys, and a
+    /// character that draws as nothing is spelled out so two rows cannot look alike.
+    #[test]
+    fn a_path_in_a_servers_policy_is_drawn_without_sending_its_control_characters() {
+        let mut policy = a_policy_for_the_report();
+        policy.rows[0].path = "/srv/\u{1b}[2Jweather".into();
+        policy.rows[1].path = "/srv/data\u{3164}".into();
+        policy.rows[2].path = "/srv/my cache".into();
+        policy.left_out = vec!["/opt/\u{1b}[2Jabsent".into()];
+
+        let lines = server_policy_lines(&[("weather".to_string(), policy)]);
+
+        let values: Vec<&str> = lines.iter().map(|line| line.value.as_str()).collect();
+        assert_eq!(
+            values
+                .iter()
+                .filter(|value| value.contains("\u{241b}[2J"))
+                .count(),
+            2,
+            "a row and a path left out hold the escape as its picture: {values:?}"
+        );
+        assert!(values.contains(&r#""/srv/data\u{3164}""#), "{values:?}");
+        assert!(values.contains(&"/srv/my cache"), "{values:?}");
+        assert!(
+            values
+                .iter()
+                .all(|value| !value.contains('\u{1b}') && !value.contains('\u{3164}')),
+            "a character that is not drawn as itself reached the screen: {values:?}"
+        );
     }
 
     /// The markings a write recorded are the part nothing else reports: a poisoned file is otherwise

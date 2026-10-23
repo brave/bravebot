@@ -1,8 +1,9 @@
 //! `bravebot shell-init <shell>`: the hook that gives `@bravebot` the commands a person ran (SHELLINT-1).
 //!
-//! The scripts are fixed text. They read nothing at run time and name no path of the machine that
-//! printed them, so the command touches no state. What a script does once a shell has sourced it
-//! is [SHELLINT-2] to [SHELLINT-5], and the tests run the bash one against a real `bash`.
+//! The scripts are fixed text. The command reads nothing and names no path of the machine that
+//! printed them, so it touches no state. What a script does once a shell has sourced it, including
+//! which directory it keeps its records in, is [SHELLINT-2] to [SHELLINT-5], and the tests run the
+//! bash one against a real `bash`.
 
 use std::io::Write;
 
@@ -30,17 +31,25 @@ pub(crate) fn command(args: &[String]) -> Option<()> {
     Some(())
 }
 
+// Each script reads `BRAVEBOT_HOME` once, as the shell sources it, and keeps what it records in the
+// state directory STATE-2 gives: the directory the variable names where that is an absolute path, and
+// `~/.bravebot` where it is empty, relative or unset.
+//
 // Each `chmod` is skipped for a link: chmod follows one, and STATE-1 steps over a link rather than
 // narrowing wherever it leads.
 const BASH: &str = r#"# bravebot shell integration: add `eval "$(bravebot shell-init bash)"` to ~/.bashrc
-__bravebot_dir="${HOME}/.bravebot/shell"
+__bravebot_state="${HOME}/.bravebot"
+case "${BRAVEBOT_HOME-}" in
+    /*) __bravebot_state="$BRAVEBOT_HOME" ;;
+esac
+__bravebot_dir="${__bravebot_state}/shell"
 __bravebot_file="${__bravebot_dir}/$$"
 __bravebot_last=
 (
     umask 077
     mkdir -p "$__bravebot_dir" || exit
     narrowed=true
-    [ -L "${HOME}/.bravebot" ] || chmod 700 "${HOME}/.bravebot" || narrowed=false
+    [ -L "$__bravebot_state" ] || chmod 700 "$__bravebot_state" || narrowed=false
     [ -L "$__bravebot_dir" ] || chmod 700 "$__bravebot_dir" || narrowed=false
     $narrowed && : > "$__bravebot_file"
 )
@@ -84,13 +93,17 @@ __bravebot_chain_exit
 "#;
 
 const ZSH: &str = r#"# bravebot shell integration: add `eval "$(bravebot shell-init zsh)"` to ~/.zshrc
-__bravebot_dir="${HOME}/.bravebot/shell"
+__bravebot_state="${HOME}/.bravebot"
+case "${BRAVEBOT_HOME-}" in
+    /*) __bravebot_state="$BRAVEBOT_HOME" ;;
+esac
+__bravebot_dir="${__bravebot_state}/shell"
 __bravebot_file="${__bravebot_dir}/$$"
 (
     umask 077
     mkdir -p "$__bravebot_dir" || exit
     narrowed=true
-    [ -L "${HOME}/.bravebot" ] || chmod 700 "${HOME}/.bravebot" || narrowed=false
+    [ -L "$__bravebot_state" ] || chmod 700 "$__bravebot_state" || narrowed=false
     [ -L "$__bravebot_dir" ] || chmod 700 "$__bravebot_dir" || narrowed=false
     $narrowed && : > "$__bravebot_file"
 )
@@ -121,13 +134,17 @@ add-zsh-hook zshexit __bravebot_exit
 "#;
 
 const FISH: &str = r#"# bravebot shell integration: add `bravebot shell-init fish | source` to ~/.config/fish/config.fish
-set -g __bravebot_dir $HOME/.bravebot/shell
+set -g __bravebot_state $HOME/.bravebot
+if string match -q -- '/*' "$BRAVEBOT_HOME"
+    set -g __bravebot_state $BRAVEBOT_HOME
+end
+set -g __bravebot_dir $__bravebot_state/shell
 set -g __bravebot_file $__bravebot_dir/$fish_pid
 begin
     set -l old (umask)
     umask 077
     mkdir -p $__bravebot_dir
-    test -L $HOME/.bravebot; or chmod 700 $HOME/.bravebot
+    test -L $__bravebot_state; or chmod 700 $__bravebot_state
     test -L $__bravebot_dir; or chmod 700 $__bravebot_dir
     printf '' > $__bravebot_file
     umask $old

@@ -12,6 +12,10 @@
 
 #![cfg(unix)]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -1434,5 +1438,142 @@ fn a_workspace_whose_name_is_not_text_is_refused_not_opened_under_a_lookalike() 
     let mut client = host.client();
     let answered = client.answered("session.new", json!({"directory": link}));
     assert_eq!(answered["error"]["code"], "not_allowed", "{answered}");
+    client.leave();
+}
+
+/// A file written `days` ago, with the directories above it made.
+fn written_days_ago(path: &Path, days: u64) {
+    std::fs::create_dir_all(path.parent().expect("a directory")).unwrap();
+    std::fs::write(path, "{}").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(days * 86_400))
+        .unwrap();
+}
+
+/// STATE-4: a host removes the records in the state directory that nothing has written for the
+/// period, as it starts, and leaves those in the root it was told to keep its own in: that root was
+/// named by whoever started the host and may hold anything. The record in the root is as old as the
+/// one removed, so only where it is kept it.
+#[test]
+fn a_host_sweeps_the_state_directory_and_leaves_the_root_it_was_given() {
+    let scratch = Scratch::new();
+    let old = scratch
+        .home()
+        .join(".bravebot/sessions/project/old-session.json");
+    let recent = scratch
+        .home()
+        .join(".bravebot/sessions/project/recent-session.json");
+    let theirs = scratch.root().join("project/old-session.json");
+    written_days_ago(&old, 400);
+    written_days_ago(&recent, 3);
+    written_days_ago(&theirs, 400);
+    let endpoint = a_model_service(ends_the_turn, || {});
+
+    let _host = Host::start(&scratch, &endpoint);
+    let until = Instant::now() + PATIENCE;
+    while old.exists() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // A sweep that looked in the given root as well would be seen a moment after the record it was
+    // meant to remove, so the record it must leave is watched a little longer.
+    let grace = Instant::now() + Duration::from_millis(750);
+    while theirs.exists() && Instant::now() < grace {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    assert!(!old.exists(), "the record 400 days old was still there");
+    assert!(
+        recent.exists(),
+        "a record written three days ago was removed"
+    );
+    assert!(
+        theirs.exists(),
+        "a record in the root the host was given was removed"
+    );
+}
+
+/// A hooks file in the host's home where `session-started` and `session-ended` each append their
+/// word to the returned log, the end after two seconds so that a host that reported the session
+/// closed without waiting for it would be read before the hook had written.
+fn declared_session_hooks(scratch: &Scratch) -> PathBuf {
+    let log = scratch.project().join("session-log");
+    let hook = |moment: &str, wait: &str| {
+        json!({"on": moment, "run": ["/bin/sh", "-c",
+            format!("{wait}echo {moment} >> '{}'", log.display())]})
+    };
+    std::fs::write(
+        scratch.home().join(".bravebot/hooks.json"),
+        json!({"hooks": [hook("session-started", ""), hook("session-ended", "sleep 2; ")]})
+            .to_string(),
+    )
+    .unwrap();
+    log
+}
+
+fn session_log(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// A session the host closes has fired `session-ended` by the time the host says it is closed, and
+/// the close was answered without waiting for it. The end is one of the workers the close returns,
+/// so `session.closed` follows it: a host that ran the hook inside the close would answer late, and
+/// one that did not count it would say closed while the hook was still to write.
+#[test]
+fn a_hosted_session_is_reported_closed_only_after_its_end_hook_has_run() {
+    let scratch = Scratch::new();
+    let log = declared_session_hooks(&scratch);
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let host = Host::start(&scratch, &endpoint);
+    let mut client = host.client();
+    let session = client.session_in(&scratch.project());
+    client.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    client.event("turn.done");
+
+    let closing = client.call("session.close", json!({"session": session}));
+    assert_eq!(closing["state"], "closing");
+    assert_eq!(
+        session_log(&log),
+        ["session-started"],
+        "the close was answered after the hook that ends the session had run"
+    );
+    client.event("session.closed");
+
+    assert_eq!(session_log(&log), ["session-started", "session-ended"]);
+    client.leave();
+}
+
+/// A host told to quit closes the sessions it holds and waits for the hook that ends each, so the
+/// end has been written when the process is gone. A host that stopped its sessions without
+/// returning their end would exit with the hook still to run.
+#[test]
+fn a_host_that_quits_ends_the_sessions_it_holds_before_it_exits() {
+    let scratch = Scratch::new();
+    let log = declared_session_hooks(&scratch);
+    let endpoint = a_model_service(ends_the_turn, || {});
+    let mut host = Host::start(&scratch, &endpoint);
+    let mut client = host.client();
+    let session = client.session_in(&scratch.project());
+    client.call("turn.send", json!({"session": session, "prompt": "hello"}));
+    client.event("turn.done");
+
+    host.command("quit");
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        if let Some(status) = host.child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the host did not stop");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    assert_eq!(session_log(&log), ["session-started", "session-ended"]);
     client.leave();
 }

@@ -226,10 +226,15 @@ pub(super) struct ModelForTheTurn {
     /// The model the definition wrote and the one it resolved to, where the definition's model is
     /// the one this turn asked for.
     pub(super) definition_model: Option<(String, String)>,
+    /// Whether the turn runs on the model `planModel` named (BACKEND-56), so the answering model
+    /// is not compared with the session's own.
+    pub(super) on_the_plan_model: bool,
 }
 
 pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
     config: &Config,
+    egress: &bravebot_net::Egress,
+    started_in: crate::permission_mode::PermissionMode,
     task: &Task,
     addressed: Option<&Addressed>,
     reporter: &mut R,
@@ -292,14 +297,30 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
         (None, Some(spec)) => spec.model().map(|_| spec.definition().to_string()),
         (None, None) => None,
     };
+    // The plan model, where the order BACKEND-56 gives puts it first. A name that cannot be used is
+    // said and set aside, leaving the turn on the session's own model.
+    let plan_model =
+        match crate::backend::answering(config, egress, started_in, task, named.is_some()) {
+            crate::backend::Answering::Plan(model) => Some(model),
+            crate::backend::Answering::PlanSetAside(named) => {
+                let said = t!(plan_model_unavailable, model = named);
+                reporter.notice(said.clone());
+                notices.push(crate::skills::Notice::from_message(said));
+                None
+            }
+            crate::backend::Answering::Definition | crate::backend::Answering::Task => None,
+        };
+    let on_the_plan_model = plan_model.is_some();
     let turn_model = definition_model
         .as_ref()
         .map(|(_, resolved)| resolved.clone())
+        .or(plan_model)
         .or_else(|| task.model.clone());
     Ok(ModelForTheTurn {
         pinned_by,
         turn_model,
         definition_model,
+        on_the_plan_model,
     })
 }
 
@@ -311,20 +332,27 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// specific thing: a rule about this turn rather than about how work is done here. On both
 /// prompts, since a delegate writing files in plan mode would be the mode failing exactly where
 /// nobody is watching the writes. Only plan mode says anything: see
-/// `PermissionMode::instruction`.
+/// `PermissionMode::instruction`. The rule files a touched path brings in come after it, so that one
+/// a round adds is appended to what was sent (INSTR-16), and their heading says the mode and the
+/// user's words from the command line stand over them.
 ///
 /// `delegates` is the set the turn resolved, as narrowed by its `spawns:` lines, which decides
 /// whether a delegate is told it may delegate. `started_in` is the mode the turn began in, read
 /// once by the caller, which also updates it as the rounds go. `style` is the output style the
-/// turn resolved, which may differ from the one the task carries (INSTR-12). `memory` is what a
+/// turn resolved, which may differ from the one the task carries (INSTR-12). `skill_mode` is the
+/// name and gated words of the skill `/mode` keeps applied, which the turn read again (SKILL-21). `memory` is what a
 /// definition's kept memory says, which the caller reads through its policy and so keeps hold of.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
+)]
 pub(super) fn system_prompt(
     task: &Task,
     workspace: &Workspace,
     delegates: &Definitions,
     addressed: Option<&Addressed>,
     style: Option<&Style>,
+    skill_mode: Option<(&str, &str)>,
     preamble: &crate::preamble::Preamble,
     started_in: crate::permission_mode::PermissionMode,
     memory: impl Fn(bool, &str) -> String,
@@ -389,9 +417,22 @@ pub(super) fn system_prompt(
                     ),
                 );
             }
+            // Ahead of the instructions files, so what the user's own `AGENTS.md` says has the last
+            // word over a skill, as it has over everything this program says (SKILL-21).
+            if let Some((name, words)) = skill_mode {
+                system.push(
+                    Provenance::Trusted("skill mode"),
+                    format!(
+                        "The user put the skill `{name}` in force as a mode for every turn of this \
+                         session, until they leave it. Follow it:\n\n{words}"
+                    ),
+                );
+            }
             system.extend(preamble.prompt.clone());
         }
     }
     system.push(Provenance::Driver, mode);
+    // After everything else, so a rule a round adds later is appended to what was sent (INSTR-16).
+    system.extend(preamble.rules.clone());
     system
 }

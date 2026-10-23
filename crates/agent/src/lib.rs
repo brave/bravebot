@@ -18,6 +18,7 @@ pub mod attached;
 pub mod backend;
 mod calendar;
 pub mod cmdline;
+pub mod commit_message;
 pub mod compact;
 pub mod confine;
 pub mod confirm;
@@ -43,6 +44,7 @@ pub mod mcp;
 pub mod memory;
 pub mod messages;
 pub mod mode;
+pub mod notebook;
 pub mod outcome;
 pub mod output_schema;
 pub mod permission_mode;
@@ -60,12 +62,17 @@ pub mod repo_map;
 pub mod report;
 pub mod request_view;
 pub mod rewind;
+pub mod rules;
 pub mod sandbox_reason;
 pub mod scratch;
 pub mod servers;
 pub mod shared;
 pub mod shell;
 pub mod skills;
+// The build script reads it into the pages `help` serves, so the program itself holds no parser:
+// compiling it here is for its tests.
+#[cfg(test)]
+mod spec_headings;
 pub mod spend_limit;
 pub mod styles;
 pub mod subscription;

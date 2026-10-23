@@ -4,6 +4,7 @@ title: What bounds a turn
 status: normative
 governs:
   - crates/agent/src/turn.rs
+  - crates/agent/src/conversation.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -29,7 +30,7 @@ into its output ceiling. What a session does when it has spent as many tokens as
 it may. What a turn does when the planner asks for the same call three times running. How the reads of one
 round are run when the planner asks for several together. What the note under a finished turn says
 about refusals. What a turn that answers with tasks still open in the planner's list does about
-them.
+them. What the planner is told when a turn ends in a failure. What a limit a person gave a run does to it.
 
 ## Clauses
 
@@ -170,7 +171,11 @@ it may be part way through the build. A delegate in a checkout of its own
 ([CHECKOUT-7](checkouts.md#CHECKOUT-7)) builds the commit the checkout holds, which has none of
 the turn's changes in it, so nothing it does counts. That includes a write it makes in a directory
 the person opened beside the working directory, which a checkout leaves reachable, since the
-driver's record of a delegate's work does not say where a write landed.
+driver's record of a delegate's work does not say where a write landed. A checkout that was given
+at least one of the working directory's changes ([CHECKOUT-23](checkouts.md#CHECKOUT-23)) holds the
+turn's changes as they were when it was made, so a program the delegate ran there counts, whether or
+not every changed path was carried, and what it wrote does not. One that was given none holds the
+commit, as a checkout made without changes does, and nothing the delegate does there counts.
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
@@ -185,6 +190,8 @@ driver's record of a delegate's work does not say where a write landed.
 `verified-by: bravebot_agent::turn::a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_built`
 `verified-by: bravebot_agent::turn::a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_built`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_never_built`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_holding_the_changes_counts_as_the_turns_own`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_given_none_of_the_changes_leaves_the_change_reported_as_never_built`
 `verified-by: bravebot_agent::turn::the_question_waits_for_a_delegate_still_working_in_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_refused_for_a_credential_it_left_counts_as_run`
 `verified-by: bravebot_agent::turn::a_line_that_failed_before_its_program_started_leaves_the_change_reported_as_never_built`
@@ -624,3 +631,115 @@ carries a list forward only from the next `todo_write`.
 `verified-by: bravebot_agent::tools::the_count_of_open_tasks_in_an_untrusted_list_is_refused_to_the_driver`
 `verified-by: bravebot_agent::tools::a_refused_call_carries_no_count_of_open_tasks`
 `verified-by: bravebot_core::todo::a_task_is_open_unless_it_is_finished_or_dropped`
+
+<a id="TURN-13"></a>
+### TURN-13: a turn that ends in a failure leaves the planner a note that it did
+
+When a turn ends as a failure ([TURN-5](#TURN-5)) after it has added messages to the conversation,
+the driver adds one more after them, so the next prompt follows it. The note says that the turn
+failed and ended before it finished, that it did not pause, and that nothing is continuing it. It
+gives the failure's category and, where it is known, the number of requests sent for the call that
+failed. A turn that answered, a turn that failed before it added anything to the conversation, and
+a turn the person stopped add no note. A stop is the person's own pause, and the next prompt usually
+continues the turn ([TURN-3](#TURN-3)).
+
+**The words are the driver's.** They are fixed, and the category and the request count are fields
+of the diagnosis ([BACKEND-37](backends.md#BACKEND-37)). The category is a fixed name and the count
+is the driver's own, so nothing the service sent is in the note: not its reply, its headers, its
+URL, its error text or the status of its reply. The category is what the driver made of that
+status, and it is all the planner is given of any other failure ([BACKEND-37](backends.md#BACKEND-37)
+says the same of a processor's). A background session started again after an interrupted turn is
+told in the same way, in the driver's own words, that the turn ended without finishing
+([BG-12](background-sessions.md#BG-12)).
+
+**It is part of the saved conversation.** The note is a notice. It is saved with the conversation,
+so a session resumed after a failed turn holds it as the live session did. It is drawn as nothing
+anyone said, and it is not a prompt a fork can be cut in front of or a point a cut between
+exchanges falls in front of. The note a resume adds about dead references is left out of the record
+because each resume adds its own. This note describes one turn, so a resume that left it out would
+again give the planner tool results with no ending.
+
+**Every front end that keeps a conversation has it.** The note is added where the turn ends, not
+where an interface records the failure ([SESSION-23](sessions.md#SESSION-23)), so the terminal, the
+line-mode session and the desktop window carry it into the next prompt. A one-shot run that fails
+writes no record, so no later prompt follows its conversation.
+
+**Why.** A turn that fails after some tool calls leaves those calls and their results in the
+conversation. Nothing in the conversation says they stop because of a failure, so a planner asked
+"what happened?" cannot tell a failed turn from one it paused itself, and can answer that it will
+carry on. The failure is recorded for the person alone. A turn that added nothing leaves nothing
+for a note to refer to.
+
+**Known costs.** Each failed turn adds its own note and a later turn that succeeds does not remove
+it, so a session that fails repeatedly holds one for each failure. A note is about fifty tokens.
+
+`verified-by: bravebot_agent::turn::a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it`
+`verified-by: bravebot_agent::turn::a_turn_that_failed_before_adding_anything_leaves_no_note_and_one_that_added_its_prompt_does`
+`verified-by: bravebot_agent::turn::a_turn_that_answered_or_was_stopped_leaves_no_note_of_a_failure`
+`verified-by: bravebot_agent::turn::a_turn_that_compacted_and_then_failed_leaves_the_note_of_the_failure`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_is_sent_and_kept_and_is_not_drawn`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
+`verified-by: bravebot_tui::sessions::a_failed_turn_leaves_a_note_the_transcript_does_not_draw_and_a_resume_still_sends`
+`verified-by: bravebot_ui_bridge::history::a_failed_turn_leaves_the_planner_a_note_in_the_saved_conversation`
+`verified-by: bravebot_cli::running::a_session_in_lines_tells_the_planner_that_the_turn_before_it_failed`
+
+<a id="TURN-14"></a>
+### TURN-14: a limit a person gave a run ends it before it goes past
+
+A task may carry limits from the person who started it: the most rounds of tool calls the run may
+make and the most tokens it may spend. `--max-rounds` and `--max-tokens` set them for a one-shot run
+([CLI-38](cli.md#CLI-38)), and nothing else does. A run that reaches one ends there. The turn returns
+which limit it was and the rounds the run made. The tokens it spent are reported as for any turn
+that stops ([TURN-5](#TURN-5)).
+
+**Rounds.** When the planner asks for a round of tool calls and the run has made the most it may,
+the calls are not run. The request that carried them was sent and is counted. A planner that answers
+after its last allowed round asked for no further round, so it reached nothing and the turn ends on
+its answer.
+
+**Tokens.** Before a request is sent, the tokens the run has spent are compared with the limit. That
+is the total [TURN-5](#TURN-5) reports, delegates that were collected and the tool lists of servers
+included. At or over the limit the request is not sent. The comparison is made before a compaction
+and again after it, since the summary spends tokens of its own and the planner request that follows
+is the one held back. An answer that carries the total past the limit is the turn's answer, since no
+request is left to stop.
+
+**It ends the turn where [TURN-1](#TURN-1) takes the tools.** The bound of TURN-1 has the planner
+answer with what it has, so the run ends on an answer. A person who set a limit has a script that
+needs to tell a run that was cut short from one that finished, and an answer written to a limit
+looks like the second. Both may be in force. `--max-rounds` is below that bound, so the limit is
+the one reached.
+
+**Nobody is asked.** The question of [TURN-8](#TURN-8) is not put. A run given limits has nobody to
+put it to, and a higher limit is the same task run again.
+
+**The figures are counts and the stop depends on no content.** Rounds are counted by the driver and
+tokens are the usage the backends reported ([BACKEND-31](backends.md#BACKEND-31)), so no reply and
+no tool result decides it. A request that reports nothing adds nothing, so a backend that reports no
+usage never stops a run at a limit in tokens, as it never stops a session at one ([TURN-8](#TURN-8)).
+
+**Only a caller with a flag to read them from sets them.** The terminal session, the desktop window,
+a manifest run and a delegate carry none. A delegate's spend reaches the run's total when it is
+collected, and a delegate still running when the run ends is collected first, as for any stop
+([TURN-5](#TURN-5)).
+
+**Recorded.** The trail gets a line with the round, what the run had spent against the limit, what
+the limit counts and the limit, which carries no content ([TRACE-2](trace.md#TRACE-2)).
+
+**Known costs.** The check comes before a request, so a limit in tokens is passed by the request that
+reached it. A delegate still running when the run ends is waited for and not stopped, so what it
+spends before it finishes is in the total and is not held to the limit. A backend that reports no
+usage never reaches a limit in tokens. A run that ends on a limit writes no session record, so
+`--resume` cannot carry it on, and the files it changed stay changed.
+
+`verified-by: bravebot_agent::turn::a_planner_that_asks_for_a_round_past_the_limit_ends_the_run_before_it_runs`
+`verified-by: bravebot_agent::turn::a_planner_that_answers_after_its_last_allowed_round_reaches_no_limit`
+`verified-by: bravebot_agent::turn::a_run_that_has_spent_its_token_limit_sends_no_further_request`
+`verified-by: bravebot_agent::turn::a_compaction_that_spends_the_token_limit_is_not_followed_by_a_planner_request`
+`verified-by: bravebot_agent::turn::what_a_delegate_spent_counts_towards_the_token_limit`
+`verified-by: bravebot_agent::turn::spending_exactly_the_token_limit_reaches_it`
+`verified-by: bravebot_agent::turn::an_answer_that_carries_the_total_past_the_token_limit_is_still_an_answer`
+`verified-by: bravebot_agent::turn::the_limit_reached_first_is_the_one_that_ends_the_run`
+`verified-by: bravebot_agent::turn::a_task_with_no_limit_of_its_own_is_not_stopped_by_one`
+`verified-by: bravebot_agent::turn::a_limit_is_a_stop_and_says_which_limit_it_was`
+`verified-by: bravebot_cli::running::the_trail_of_a_run_stopped_at_its_limit_says_which_limit_it_was`

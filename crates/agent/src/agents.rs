@@ -667,10 +667,8 @@ fn discover_home<S: Sink>(
         );
     }
     // The project's own pass has said what it did with each file where it reads this directory.
-    let read_as_the_projects = std::fs::canonicalize(root)
-        .ok()
-        .zip(std::fs::canonicalize(workspace.root().join(WORKSPACE_AGENTS)).ok())
-        .is_some_and(|(home, project)| home == project);
+    let read_as_the_projects =
+        crate::skills::same_directory(root, &workspace.root().join(WORKSPACE_AGENTS));
     if passed_over > 0 && !read_as_the_projects {
         notices.push(Notice::from_message(t!(
             home_definitions_reached_through_the_workspace,
@@ -929,31 +927,49 @@ fn narrowed(origin: &str, narrowing: &Narrowing) -> String {
     )
 }
 
-/// What to tell whoever wrote a definition naming a skill this turn did not find.
+/// What to tell whoever wrote a definition naming a skill this turn did not find, or one its file
+/// keeps from the planner.
 ///
 /// Such a name selects nothing, as a `tools:` name that is not a tool does, and silence would
-/// leave a misspelt one reading to its author as a skill the delegate is offered. Named, because
-/// the name is the definition's own words and the definition came from a source somebody vouched
-/// for.
+/// leave a misspelt one reading to its author as a skill the delegate is offered. A skill kept from
+/// the planner is found and is still offered to no delegate, whose planner is the one it is kept
+/// from (SKILL-20), so it is said too: a definition naming one would otherwise read as having it.
+/// Named, because the name is the definition's own words and the definition came from a source
+/// somebody vouched for.
 pub fn skills_not_found(definitions: &Definitions, skills: &Catalogue) -> Vec<Notice> {
     definitions
         .iter()
-        .filter_map(|definition| {
+        .flat_map(|definition| {
             let mut missing: Vec<&str> = Vec::new();
-            for name in definition.skills()? {
-                if skills.get(name).is_none() && !missing.contains(&name.as_str()) {
-                    missing.push(name);
+            let mut kept: Vec<&str> = Vec::new();
+            for name in definition.skills().into_iter().flatten() {
+                let listed = match skills.get(name) {
+                    None => &mut missing,
+                    Some(skill) if skill.person_only => &mut kept,
+                    Some(_) => continue,
+                };
+                if !listed.contains(&name.as_str()) {
+                    listed.push(name);
                 }
             }
-            if missing.is_empty() {
-                return None;
+            let mut said = Vec::new();
+            if !missing.is_empty() {
+                said.push(Notice::from_message(t!(
+                    delegate_skills_not_found,
+                    definition = definition.origin(),
+                    count = missing.len(),
+                    skills = missing.join(", ")
+                )));
             }
-            Some(Notice::from_message(t!(
-                delegate_skills_not_found,
-                definition = definition.origin(),
-                count = missing.len(),
-                skills = missing.join(", ")
-            )))
+            if !kept.is_empty() {
+                said.push(Notice::from_message(t!(
+                    delegate_skills_kept_from_the_planner,
+                    definition = definition.origin(),
+                    count = kept.len(),
+                    skills = kept.join(", ")
+                )));
+            }
+            said
         })
         .collect()
 }
@@ -1030,18 +1046,32 @@ fn counted(n: usize) -> (String, &'static str) {
 /// filesystem would vary by machine, which would make which of two definitions is live vary with
 /// it.
 fn definition_files(root: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return Vec::new();
-    };
+    markdown_files(root).0
+}
 
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.path().is_file())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| name.ends_with(".md"))
-        .collect();
+/// The `.md` files directly in `root`, in name order, and how many more there are whose names are
+/// not text.
+///
+/// A name that is not UTF-8 is never turned into one that is: the file under the lossy spelling is
+/// another file, or none. It is counted so that a caller can say so (PATH-002).
+pub(crate) fn markdown_files(root: &Path) -> (Vec<String>, usize) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return (Vec::new(), 0);
+    };
+    let mut names = Vec::new();
+    let mut not_text = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.as_encoded_bytes().ends_with(b".md") || !entry.path().is_file() {
+            continue;
+        }
+        match name.into_string() {
+            Ok(name) => names.push(name),
+            Err(_) => not_text += 1,
+        }
+    }
     names.sort();
-    names
+    (names, not_text)
 }
 
 /// What a definition made for a desktop bot came to.

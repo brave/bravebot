@@ -161,6 +161,15 @@ BLOCK   approval: write_file: the write was not approved, so nothing was written
 BLOCK   approval: fetch_url: the fetch was not approved, so nothing was fetched
 ```
 
+A call to an MCP server's tool that was put to you and not approved gets the same line, naming the
+call as the server's alias and the tool's name. Answering no, pressing Ctrl-C, and a question nobody
+could be asked leave it, with or without words typed beside the answer. A call a `deny` rule refused
+was never put to you and has its own `mcp_call` line.
+
+```
+BLOCK   approval: weather:get_forecast: the call was not approved, so the server was not called
+```
+
 ## The hosts a run's programs asked for are recorded
 
 When the sandbox holds a run to [a list of hosts](../customize/configuration.md#sandboxnetwork), the
@@ -186,6 +195,19 @@ same cause is in the note you are shown. The planner is told only that the deleg
 Each [checkout](../customize/agents.md#a-checkout-of-its-own) made for a delegate, and each one
 removed, is recorded as well.
 
+## The model a processor ran on is recorded
+
+Each processor call, in a turn and in a manifest run, gets a `processor_model` line before its request
+goes, naming the model the request asks for: the one [`processorModel`](../customize/configuration.md#processormodel)
+or [`--processor-model`](../reference/cli.md#--processor-model-name) names, or the model of the turn or
+run where neither does. A processor over a file nobody vouched for can run on a different model from
+the planner, and this line is where that shows. A call refused for a model it could not use sends
+nothing and has no line; the refusal is the sentence you were shown.
+
+```
+ok      processor_model: step_2: the request names haiku-model
+```
+
 ## The request a turn sent can be read
 
 The trail records decisions, not the request. `/request` shows the last request built for the model,
@@ -195,7 +217,8 @@ was given. It is kept in memory, written to no file, and is not part of an incog
 
 ## The trail holds no content
 
-Every field is a gate name, a capability, a label, a path, a destination host or a slot id. A network
+Every field is a gate name, a capability, a label, a path, a destination host, a slot id or a model
+name that a setting, the command line or an agent definition chose. A network
 decision keeps the host and drops the rest of the URL: no userinfo, no path, no query, no fragment, so
 a credential carried in a URL is not written down. That is exactly why the trail can be put on your
 screen and written to a file without any release, and it is what makes the record safe to keep for a

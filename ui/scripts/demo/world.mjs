@@ -306,8 +306,10 @@ async function settle(page, seconds = 180) {
   while (Date.now() < until) {
     const card = asking.first()
     if (await card.isVisible().catch(() => false)) {
-      // A series of questions has to be answered before it can be sent; everything else is a
-      // single button. `:not(.always)` because vouching is a broader answer than was asked for.
+      // A series of questions is put one at a time and each has to be answered before the button
+      // moves on, so the card is still asking when this loop comes back to it for the next;
+      // everything else is a single button. `:not(.always)` because vouching is a broader answer
+      // than was asked for.
       for (const block of await card.locator('.ask-question').all()) {
         const choice = block.locator('.choices .choice').first()
         if (await choice.count()) await choice.click()

@@ -28,9 +28,10 @@ block copied out of another tool names its models and names no default, so the m
 still the one the build came with. That case gets one line naming the [`model`](#model) key rather
 than the three routes.
 
-**If Claude Code or opencode already reaches a service on this machine, or Ollama is running on it,**
-the first run offers to copy that setup instead, showing everything it would write before it asks.
-See [Importing from Claude Code, opencode or Ollama](#importing-from-claude-code-opencode-or-ollama).
+**If Claude Code or opencode already reaches a service on this machine, or Ollama, LM Studio or
+llama-server is running on it,** the first run offers to copy that setup instead, showing everything
+it would write before it asks. See
+[Importing from Claude Code, opencode or a local model server](#importing-from-claude-code-opencode-or-a-local-model-server).
 
 Once a service is configured, the rest of this page is what else you can set. What will actually be
 used is reported by:
@@ -78,9 +79,10 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/AGENTS.md` | standing instructions for every project |
 | `~/.bravebot/skills/<name>/SKILL.md` | skills available in every project |
 | `~/.bravebot/agents/<name>.md` | [delegate definitions](agents.md) available in every project |
-| `~/.bravebot/sessions/<directory>/` | session records and audit trails |
-| `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
-| `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace |
+| `~/.bravebot/rules/<name>.md` | [rules](instructions.md) for every project, in force every turn or once a file their `paths` match is touched |
+| `~/.bravebot/sessions/<directory>/` | session records and audit trails, removed after [`retentionDays`](#retentiondays) |
+| `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace, removed after [`retentionDays`](#retentiondays) ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
+| `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace, removed after [`retentionDays`](#retentiondays) |
 | `~/.bravebot/granted/<directory>.jsonl` | the permission rules a checkout proposed that you granted, one file per directory ([`permissions`](#permissions)) |
 | `~/.bravebot/trusted/<directory>.jsonl` | the yes to the startup question, one file per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/untrusted/<directory>.jsonl` | the [delegate definitions' memories](agents.md#memory) a write left untrusted, one per directory |
@@ -89,6 +91,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/effort` | the effort level chosen with `/effort` |
 | `~/.bravebot/theme` | the theme chosen with `/theme` |
 | `~/.bravebot/editor-mode` | the editing style chosen with `/config` |
+| `~/.bravebot/language` | the interface language chosen with `/language` ([below](#choosing-a-language)) |
 | `~/.bravebot/panel` | whether the [info panel](../using/sessions.md#telling-sessions-apart) was left open |
 | `~/.bravebot/themes/<name>.json` | themes you wrote yourself |
 | `~/.bravebot/settings.json` | long-lived settings (see [below](#settingsjson)) |
@@ -117,6 +120,11 @@ keeps them private.
 Every operation here degrades to doing nothing. A missing home directory, a read-only disk or a
 corrupt file does not stop a session starting.
 
+Session records, language server indexes and findings files are removed once nothing has written them
+for [`retentionDays`](#retentiondays) days, 30 where you state none. What you asked to keep is left
+whatever its age: the rules you granted, your answers to the startup question, the prompt history and
+every file you wrote yourself.
+
 `~/.bravebot` is one fixed name under the profile directory **the environment names**, and there is
 no fallback. `HOME` names it on Unix. On Windows `HOME` is read first and `USERPROFILE` second, the
 first of them holding a value answering, so a stock Windows install works and so does a Unix-like
@@ -137,6 +145,41 @@ Nothing recalled from `~/.bravebot` is fed straight to a turn. A recalled prompt
 input box, where you read it and press Enter. That keystroke is what makes it trusted, exactly as
 typing it would have. A model name the server does not recognise is reset to the automatic entry
 rather than obeyed.
+:::
+
+### Moving the state directory
+
+`BRAVEBOT_HOME` names the state directory itself, so two accounts or a CI job can each keep their own
+settings, sessions, history, skills and imported subscription without changing `HOME` for everything
+else the process starts:
+
+```sh
+BRAVEBOT_HOME=/srv/ci/bravebot-state bravebot -p "summarize the failing tests"
+```
+
+It answers before `HOME`. What it names is the directory, not a profile directory to put `.bravebot`
+under, and the modes described above apply to it as they do to `~/.bravebot`: reachable by you
+alone, narrowing stops at the directory you named, and a link out of it is stepped over. Name a
+directory bravebot can keep to itself, since it is narrowed to you alone and its files are written
+beside whatever is there already; your home directory or a shared directory is a poor choice. A `~`
+in a path you write still means your home directory, which `HOME` still names.
+
+A value that is empty, or is not an absolute path, names nothing and is passed over, so the directory
+is the one `HOME` names, as though the variable were unset. A relative value would otherwise name a
+directory under wherever you happened to start. `bravebot doctor` prints the directory in use and the
+variable that named it, which settles which of the two is in force, and says when a value was passed over.
+
+The variable is read from the environment and from nothing else. This directory is trusted for being
+yours, and a settings file, which a checkout can supply, cannot move it. `install.sh` reads it too and
+records where it installed in that directory. The [shell hook](../reference/cli.md#shell-init) reads it
+as your shell sources the hook, so export it before the line in your shell's startup file that
+evaluates the hook, and the hook records in that directory.
+
+:::warning
+A program a `run` starts is refused `~/.bravebot`, where the gateway keys and the premium token are,
+and not a directory `BRAVEBOT_HOME` puts anywhere else
+([what a stage cannot reach](../security/security.md)). Keep it somewhere you would not mind a
+program a `run` starts reading, or leave the variable unset.
 :::
 
 ## Choosing a model
@@ -296,20 +339,41 @@ See [Reading the transcript](../using/transcript.md#themes) for what each role p
 ## Choosing a language
 
 Brave Bot reads the interface in your language where a translation for it has shipped, and in English
-otherwise. It takes the first of `BRAVEBOT_LOCALE`, `LC_ALL`, `LC_MESSAGES` and `LANG` that is set, so
-on a machine already set up for French there is nothing to do.
+otherwise. It takes the first of these that names a language:
+
+1. `BRAVEBOT_LOCALE`, in the environment.
+2. The choice saved with [`/language`](../reference/commands.md#language-tag--auto).
+3. The `language` key of `~/.bravebot/settings.json`.
+4. `LC_ALL`, `LC_MESSAGES` and `LANG`, in that order.
+
+So on a machine already set up for French there is nothing to do, and a program started from a launcher,
+which has no shell profile to edit, can be given a language in the settings file.
 
 ```sh
-bravebot                          # whatever your shell says
+bravebot                          # whatever your settings and shell say
 BRAVEBOT_LOCALE=fr bravebot       # this once
-export BRAVEBOT_LOCALE=fr         # from now on
+export BRAVEBOT_LOCALE=fr         # from now on, in this shell
 ```
 
-`BRAVEBOT_LOCALE` puts this one program in a language the rest of your shell is not.
+```json
+{ "language": "fr" }
+```
+
+`language` is a locale tag, or `auto` to leave the question to the next source. It is read from your own
+`~/.bravebot/settings.json` and from nowhere else, before the command line is read. A project's
+`.bravebot/settings.json`, `.bravebot/settings.local.json` and a file `--settings` names cannot set it,
+and `bravebot doctor` names one that tried. The interface is in one language for a whole session, so a
+change takes effect at the next start. It applies to the terminal client. The desktop window is in
+English only.
+
+`/language fr` saves a choice without editing a file, in `~/.bravebot/language`, and `/language auto`
+removes it. A saved choice answers over the settings file, since it is the later act.
+`BRAVEBOT_LOCALE` answers over both, so one launch can name its own language.
 
 A request widens rather than failing: `fr-CA` and `fr-BE` are answered by the French catalog where
-they have none of their own, and a language nothing has shipped for reads in English. `LC_ALL=C` asks
-for no translation at all. English and French are what ship today. What a shell appends to say which
+they have none of their own, and a language nothing has shipped for reads in English. `bravebot doctor`
+names a `language` key that no catalog answers. `LC_ALL=C` asks for no translation at all, where nothing
+above it in the list names a language. English and French are what ship today. What a shell appends to say which
 encoding or modifier it wants is not part of the name.
 
 Widening is per message, not per language, so a single message a translation has not reached yet reads
@@ -350,6 +414,7 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 | `BRAVEBOT_CONTEXT_BUDGET` | the token budget before a conversation is compacted |
 | `BRAVEBOT_OUTPUT_BUDGET` | how far one reply may run before the service cuts it off ([below](#how-long-a-reply-may-run)) |
 | `BRAVEBOT_LOCALE` | the language the interface is read in |
+| `BRAVEBOT_HOME` | the directory bravebot keeps its state in, in place of `~/.bravebot` ([below](#moving-the-state-directory)) |
 | `BRAVEBOT_SUBPROCESS_ENV_SCRUB` | `0` hands a program bravebot starts its own credentials ([`run.scrubEnv`](#runscrubenv)) |
 
 Six more name an AWS account rather than this build. See
@@ -369,8 +434,8 @@ one.
 so it has to be set in the environment.
 
 **Thirteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
-spelling: seven of the nine above, plus the six AWS ones. The two exceptions are `BRAVEBOT_LOCALE` and
-`BRAVEBOT_SUBPROCESS_ENV_SCRUB`, which are read from the environment alone. Exporting a name wins over
+spelling: seven of the ten above, plus the six AWS ones. The three exceptions are `BRAVEBOT_LOCALE`,
+`BRAVEBOT_SUBPROCESS_ENV_SCRUB` and `BRAVEBOT_HOME`, which are read from the environment alone. Exporting a name wins over
 the file, except where an [administrator pinned it](#pinned-by-an-administrator), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
@@ -415,7 +480,7 @@ one thing leaves everything else in force:
 | `env`, `keybindings` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `processorModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
 | `references` | your own file and a `--settings` file outside the project; a project or local file's block, and a `--settings` file that resolves inside the project, is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
@@ -423,6 +488,7 @@ one thing leaves everything else in force:
 | `sandbox.filesystem.denyRead`, `sandbox.filesystem.denyWrite` | every file's entries are kept |
 | `sandbox.filesystem.allowRead`, `sandbox.filesystem.allowWrite` | your own file's entries and a `--settings` file outside the project; a project or local file's are ignored and reported |
 | `git.identities` | your own file and a `--settings` file outside the project, the later one's entry for an owner replacing the earlier one's; a project or local file's are ignored and reported |
+| `askIdleSeconds` | your own file and a `--settings` file outside the project; a project or local file's is ignored and reported |
 | anything else | the closest file that set it wins |
 
 A file that writes `permissions` or `run` as something other than an object, or `run.scrubEnv` or a
@@ -460,18 +526,20 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `advisorModel` | the model the planner may consult through the `advisor` tool ([below](#advisormodel)) |
 | `fallbackModel` | the model a turn moves to when its own keeps failing ([below](#fallbackmodel)) |
 | `summaryModel` | the model compaction summaries and `/goal` checks run on ([below](#summarymodel)) |
+| `planModel` | the model a turn that begins in plan mode runs on ([below](#planmodel)) |
 | `processorModel` | the model an isolated processor runs on ([below](#processormodel)) |
 | `references` | directories outside the project that the planner may consult, each with a name and a description ([below](#references)) |
 | `agent` | the definition every turn of a session is addressed to when `--agent` names none ([below](#agent)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
+| `language` | the language the interface is in: a locale tag such as `fr`, or `auto`. Read from your own file only ([below](#choosing-a-language)) |
 | `style` | the output style a session starts in: `concise`, `explanatory`, `proactive` or a file in `~/.bravebot/styles`. Read from your own file and the file `--settings` names only, and it cannot name a project's style from `.bravebot/styles` (pick that with `/style`) |
 | `limit` | the most tokens or Leo Premium credits a session may spend before it asks ([below](#limit)) |
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
-| `provider` | an OpenAI-compatible gateway ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
+| `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
 | `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
 | `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([below](#runnetwork)) |
 | `sandbox.network.allowedHosts`, `deniedHosts`, `onUnlisted` | the hosts a program the agent runs may reach ([below](#sandboxnetwork)) |
@@ -484,10 +552,14 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
+| `retentionDays` | how many days a session record, a language server index and a findings file are kept ([below](#retentiondays)) |
 | `awaySummaryEnabled` | whether a session is recapped by itself after you have been away ([below](#awaysummaryenabled)) |
 | `awaySummaryIdleSeconds` | how long after a turn finishes the automatic recap waits ([below](#awaysummaryidleseconds)) |
+| `askIdleSeconds` | how long a question from the agent waits with no key pressed before it is closed ([below](#askidleseconds)) |
+| `notificationMethod`, `notificationCondition` | how and when the terminal is told a turn ended or a question is waiting ([below](#notificationmethod-and-notificationcondition)) |
 | `suggestions` | whether the empty box offers a suggested next prompt ([below](#suggestions)) |
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
+| `deepLinks` | `false` makes `bravebot --handle-uri` refuse every `bravebot://open` link ([below](#deeplinks)) |
 | `tui.mouse` | `false` stops the interface capturing the mouse, so the terminal's own selection works ([below](#tuimouse)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
@@ -528,9 +600,9 @@ others in force, so a mistake in a checkout cannot decide that your own file no 
 
 :::caution
 **A `.bravebot/settings.json` arrives with a checkout.** A repository you have just cloned cannot name
-the host every request goes to, the model, the advisor model, the fallback model, or the environment variables read as a
-gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel`, `summaryModel` or `processorModel` key, in a project or local file is ignored, and `bravebot
-doctor` names each file whose block or key was dropped. It can still set the other keys here, so read
+the host every request goes to, the headers it carries, the model, the advisor model, the fallback model, or the environment variables read as a
+gateway's credential: a `provider` block, or a `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel` or `processorModel` key, in a project or local file is ignored, and `bravebot
+doctor` names each file whose block or key was dropped. A `headers` block lives inside `provider`, so it is dropped with the rest of the block. It can still set the other keys here, so read
 a project's settings file before working in it; `doctor` names the files in force. It cannot grant a
 capability either. The names that would (`permissions.allow`, and `permissions.additionalDirectories`)
 do not take effect on being read: each is a question you answer when the session opens, the rules in
@@ -642,8 +714,11 @@ The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a
 
 The model an isolated processor runs on. A processor rewrites or reads a file nobody vouched for, so
 a large rewrite is billed for the whole file in and the whole file out. Naming a cheaper model here
-moves those calls onto it, while the planner keeps the model the session is using. Without the key,
-and with `"inherit"`, a processor runs on the session's model.
+moves those calls onto it, while the planner keeps the model the session is using. A
+[manifest run](../using/headless.md#planning-the-whole-run-first) plans on the run's model and carries
+out each processing step on this one. Without the key, and with `"inherit"`, a processor runs on the
+session's model. [`--processor-model`](../reference/cli.md#--processor-model-name) names the model for
+one run and wins over the key.
 
 A processor still has no tools and no memory, and a write of what it produced is approved from the
 diff of the real file, so a weaker model that rewrites a file worse shows up in that diff.
@@ -689,6 +764,34 @@ other.** The model is sent the conversation, so a `.bravebot/settings.json` or
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier. The context
 budget that decides when to compact is still measured against the window of the model the session is
 using, not this one.
+
+### `planModel`
+
+```json
+{ "planModel": "opus" }
+```
+
+The model a turn runs on when it begins in plan mode. A stronger model can plan and the session's own
+model can act, without switching with `/model` at each change of mode. Without the key a plan turn
+runs on the model the session is using.
+
+The mode a turn began in decides: a turn that begins in plan mode runs on this model in every
+round, including over a model you picked with `/model`, and the next turn in another mode runs on
+the session's model. Pressing the mode key while a turn runs does not move that turn to the other
+model. A model an agent definition names for the turn, and `--model` on a one-shot run, outrank this
+key, and a delegate keeps the model it would have had.
+
+A model that needs a sign-in this machine has not made, that your administrator refuses, or that no
+configured service answers for is not used: bravebot says so and the turn runs on the session's
+model, as a plan turn is not worth refusing for a mistyped name. Each change of mode writes the
+conversation to the model's cache again, since a cache belongs to one model.
+
+**The key is read from `~/.bravebot/settings.json` and from the file `--settings` names, and from no
+other.** The model is sent the conversation, so a `.bravebot/settings.json` or
+`.bravebot/settings.local.json` that names one is ignored and reported by `bravebot doctor`, as a
+`model` is.
+
+The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
 
 ### `references`
 
@@ -863,6 +966,38 @@ offered no `load_tool`.
 A number or a size like `"20k"`; anything else, and zero, leaves every tool in full, which is the
 default. It lasts a turn, so a later turn loads again.
 
+### `retentionDays`
+
+```json
+{ "retentionDays": 14 }
+```
+
+How many days a session record, a language server index and a file of findings are kept after
+anything last wrote them. When a session starts, each one older than that is removed: a record goes
+with its audit trail and its search index, and an index goes once no language server has started on
+it for that long. Without this key it is 30. A whole number of one or more; one day is the least, so
+nothing written in the last day is removed.
+
+Only `~/.bravebot/settings.json` states it. A project or local settings file, and a file named with
+`--settings`, cannot, since a project's settings arrive with a clone and one saying `1` would remove
+your records by being opened. `bravebot doctor` names a file that tried.
+
+If your own settings file cannot be read, or `retentionDays` is zero, negative, fractional, a string
+or anything else that is not a whole number of days, nothing is removed until it can be, and `doctor`
+names the file. The built-in 30 is not used in its place, since a record removed on a period you did
+not choose cannot be brought back.
+
+The session you are starting is never removed, so resuming a record older than the period works, and
+neither is a session running in the background or the language server index of the workspace you
+start in. Your
+rules, your answers to the startup question, your prompt history and the acceptances of findings are
+not swept. An [incognito](../using/sessions.md#a-session-that-leaves-nothing-behind) session removes
+nothing. A session left open in another terminal for longer than the period has its record removed by
+a new one, and its next save writes it again.
+
+To keep a conversation past the period, run [`/export`](../reference/commands.md#export-path) first, or
+state a larger number.
+
 ### `awaySummaryEnabled`
 
 ```json
@@ -886,6 +1021,51 @@ How many seconds the terminal has to have been unfocused since the last turn fin
 [`awaySummaryEnabled`](#awaysummaryenabled)'s automatic recap is made. Without this key it is 300.
 A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves it at
 300. It changes nothing else about the recap, and `/recap` is not delayed by it.
+
+### `askIdleSeconds`
+
+```json
+{ "askIdleSeconds": 600 }
+```
+
+How many seconds a question from the agent, put with [`ask_user`](../reference/tools.md#ask_user),
+waits with no key pressed before the terminal closes it. Without this key it waits for as long as it
+takes. The question on screen and every question behind it are closed without an answer, the
+answers already given are kept, and the agent is told that no answer was given in the time allowed
+and that you may be away, so it can go on with its own judgment and ask again later. Any key press
+starts the time again. What you had marked or half typed on the question that closed is not sent.
+The session says that a question was closed, and a question that closed is asked again if the agent
+asks it again.
+
+A whole number above zero; zero, a negative or fractional number, or a number in quotes leaves a
+question waiting. Only your own file and a `--settings` file outside the project set it: a
+`.bravebot/settings.json` that arrived with a checkout is ignored and named by `bravebot doctor`,
+since a question closed on a clock is one you were not asked.
+
+It closes the agent's questions in the terminal interface only. A plan to approve, a spend limit and
+a repeated call always wait for you, and so do questions in a session started with `--plain`, in a
+background session, and in the desktop app.
+
+### `notificationMethod` and `notificationCondition`
+
+```json
+{ "notificationMethod": "osc9", "notificationCondition": "unfocused" }
+```
+
+When a turn ends, or an approval or a question from the agent opens, the terminal
+interface writes one notice to the terminal, so you learn it without looking at the window. The text
+is fixed (`bravebot: turn finished` or `bravebot: waiting for an answer`) and never carries a command,
+a path or any part of a reply.
+
+`notificationMethod` is `osc9` (a desktop notification in terminals that read OSC 9), `bel` (the terminal
+bell), `off`, or `auto`. `auto` is the default, and so is any other value: it writes OSC 9 where
+`TERM_PROGRAM` is iTerm.app, WezTerm or ghostty, and the bell elsewhere. Inside tmux or over ssh
+`TERM_PROGRAM` often does not name your terminal, so `auto` writes the bell there; set `osc9` to ask for
+the notification instead.
+
+`notificationCondition` is `unfocused` or `always`. `unfocused` is the default, and so is any other
+value: the notice is written only after the terminal reported being left, so a terminal that reports no
+focus changes is never written to. `always` writes it whether or not the terminal is in front.
 
 ### `suggestions`
 
@@ -912,6 +1092,18 @@ The terminal's title names the session, as `bravebot · dependency audit`
 terminal or multiplexer that manages titles itself. Only the boolean `false` turns it off: `"false"`
 in quotes, or any other value, leaves it on. An incognito session leaves the title alone whatever this
 says.
+
+### `deepLinks`
+
+```json
+{ "deepLinks": false }
+```
+
+`false` makes `bravebot --handle-uri`, which the operating system runs for a `bravebot://open` link,
+refuse every link with the configuration status before it reads one. Only the boolean `false` does
+this: `"false"` in quotes or any other value leaves links on. It does not remove the registration the
+installer made; set `BRAVEBOT_NO_DEEP_LINKS=1` when running `install.sh` to leave that out, or delete
+`bravebot-handler.desktop` from `~/.local/share/applications`.
 
 ### `tui.mouse`
 
@@ -1370,6 +1562,13 @@ absolute patterns are separate namespaces and neither reaches into the other. A 
 starts inside the workspace is a relative one, so `Read(/secrets/**)` in a project's
 `.bravebot/settings.json` is the same rule as `Read(./secrets/**)`.
 
+Whitespace at either end of a path specifier makes the rule unreadable, since it could be padding or
+part of a file's name, and `doctor` names the rule. `Read( .env )` is dropped for that reason. Write
+a name that starts with whitespace from `./`, as `Read(./ notes.md)`. A name that ends with whitespace
+has no spelling, since `Read(./notes.md*)` covers it along with other names. Whitespace inside a name
+is fine: `Read(./my notes.md)` is about the file `my notes.md`. A `*` is always a wildcard, so no rule
+is about a file whose name holds one and nothing else.
+
 On Windows a path on a drive is a full path, with the drive as its first segment:
 `Read(//D:/work/secrets/**)` covers `D:\work\secrets\key` whichever separator the path is written
 with, and whichever case the drive letter is in. A rule written from the drive letter is the same
@@ -1484,7 +1683,7 @@ only; a project or local file that sets it is ignored and reported by `bravebot 
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Eleven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+Thirteen actions can be moved and nothing else can (twelve on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 
 | Action | Default | What it does |
 |---|---|---|
@@ -1498,7 +1697,9 @@ Eleven actions can be moved and nothing else can. A chord is spelled `ctrl-x`, `
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](../using/sessions.md#telling-sessions-apart) |
 | `scope` | `ctrl-n` | switch Up between every stored prompt and this session's |
+| `suspend` | `ctrl-z` | suspend the session to the shell ([Interactive mode](../using/interactive-mode.md#suspending-to-the-shell)) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([Interactive mode](../using/interactive-mode.md#undoing-an-edit)) |
+| `enhance` | `ctrl-p` | rewrite the line to be more specific ([Interactive mode](../using/interactive-mode.md#enhancing-a-prompt)) |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, the arrows move), so handing one to an action
@@ -1509,13 +1710,13 @@ are not rebindable.
 **Every action keeps a key of its own.** A chord that cannot be read, or that the input box already
 answers, leaves that action on its default. So does one two actions both asked for: both fall back
 rather than one winning, since which won would come down to the order the file was read in. Two
-actions *trading* chords is not a conflict and both get what they asked for. `scope` and `undo` are
-the newest of the eleven, so a file that already gave `ctrl-n` or `ctrl-_` to another action now asks
-for a chord the new action stands on, and that action is back on its default until the file moves
-`scope` or `undo` as well.
+actions *trading* chords is not a conflict and both get what they asked for. `scope`, `undo`,
+`suspend` and `enhance` are the newest of the thirteen, so a file that already gave `ctrl-n`, `ctrl-_`, `ctrl-z` or `ctrl-p` to
+another action now asks for a chord the new action stands on, and that action is back on its default
+until the file moves `scope`, `undo`, `suspend` or `enhance` as well.
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
-the other ten. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+the others. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
 
 ### `search`
 
@@ -1648,7 +1849,8 @@ may reach; which theme is on and which keys do what are neither.
 **No credential is read from this file.** A gateway entry's `apiKey` is dropped and the entry's host,
 models and variable names are honoured without it. Everyone on the machine can read this file, so a
 token in it is a token handed to every account rather than one held by its owner. The service says what
-is missing on the first request.
+is missing on the first request. A `headers` block is kept, because a header is how this layer names a
+tenant or a route. Writing a value as `{env:NAME}` keeps it out of a file every account can read.
 
 **The `provider` block is pinned whole** rather than a name at a time, because pinning an endpoint
 pins nothing while anybody may add a destination beside it. A block that is present and empty says
@@ -1664,12 +1866,14 @@ what its permissions are: somebody who can write that path can replace the binar
 any other layer, so a file that is missing, over 64 KB or unparseable pins nothing, and a blank or
 non-string value pins nothing under that name.
 
-## Importing from Claude Code, opencode or Ollama
+<a id="importing-from-claude-code-opencode-or-ollama"></a>
+
+## Importing from Claude Code, opencode or a local model server
 
 A first run with nothing configured, in a terminal, reads what Claude Code and opencode set up in your
-home directory, and asks a running Ollama what it serves, before it names the three routes. Where any
-of them reaches a service bravebot can use, it shows what it would add to `~/.bravebot/settings.json`
-and asks:
+home directory, and asks a running Ollama, LM Studio and llama-server what each serves, before it names
+the three routes. Where any of them reaches a service bravebot can use, it shows what it would add to
+`~/.bravebot/settings.json` and asks:
 
 ```
 Claude Code configures a model service bravebot can use, in /home/you/.claude/settings.json.
@@ -1717,14 +1921,41 @@ an entry for a server on the same port, under any name, Ollama is not offered ag
 A second request asks which models are loaded. For the model shown, the question gives the context
 window the server loaded it with. Where that is below the 131,072 tokens bravebot otherwise budgets
 against, the question says the server drops the earliest turns beyond it and names
-`OLLAMA_CONTEXT_LENGTH`. A model that is not loaded has no line. The figure is shown and never
-written to your settings.
+`OLLAMA_CONTEXT_LENGTH`, and the entry written carries the figure as `contextWindow`, so a
+conversation is kept within it. A model that is not loaded has no line.
+
+**A running LM Studio or llama-server.** Each is asked once, the way Ollama is, on this machine only,
+with no key, and says nothing where it does not answer. A server that answers is offered as a block
+of the same shape as Ollama's, under the id `lmstudio` or `llama-server`.
+
+- LM Studio is asked for its model list at `http://127.0.0.1:1234`. It reads no variable for where it
+  listens, so a server on another port is named in `BRAVEBOT_LM_STUDIO_HOST`, written as `OLLAMA_HOST`
+  is. Only a language model trained for tool use is offered, and the one written is the first that
+  LM Studio has loaded, or the first it lists where none is loaded. The context length it has the
+  model loaded with is shown, and written as `contextWindow` where it is below 131,072 tokens.
+- llama-server is asked at the port `LLAMA_ARG_PORT` names, which is the variable llama-server itself
+  reads, on the address `LLAMA_ARG_HOST` names. With no port named, bravebot asks at `9931`, the port
+  llama-server defaults to, and at `8080`, the one earlier releases and its container image use.
+  It reports no capabilities and no loaded context, so neither is checked or shown.
+
+```
+LM Studio is running at http://127.0.0.1:1234, serving models bravebot can use.
+Importing it adds these to /home/you/.bravebot/settings.json:
+  model: "lmstudio/qwen/qwen3-coder-30b"
+  provider.lmstudio, reached at http://127.0.0.1:1234/v1: {"name":"LM Studio (local)","options":{"baseURL":"http://127.0.0.1:1234/v1"}}
+Import this from LM Studio? [y/N]
+```
+
+A server that asks for a key is not offered, because the request carries none. Where more than one
+of Ollama, LM Studio and llama-server answers, each is asked about in that order, and one at a port an
+earlier answer already wrote is not offered again.
 
 **What can be imported.** A Claude Code Bedrock setup, under bravebot's own names, when a region is
 named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
 bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. An `openai` entry that names
 no SDK, or an `auth.json` key for `openai`, imports; one naming `@ai-sdk/openai` is left as another
-SDK's. opencode's
+SDK's. The `ANTHROPIC_API_KEY` in Claude Code's settings file imports as an `anthropic` entry,
+unless a Claude Code `ANTHROPIC_BASE_URL` is stated beside it. opencode's
 `disabled_providers` and `enabled_providers` are honoured, and a name already set in your settings file,
 or pinned by an administrator, is left as it is. A model opencode's `amazon-bedrock` entry lists that
 one of your Bedrock tiers already names, such as the Claude Code import's
@@ -1738,7 +1969,7 @@ A `{file:path}` key is not followed, and neither is a substitution inside a long
 `Bearer {env:TOKEN}`: that entry is named as left.
 
 **What is never imported**: commands, permissions, hooks and MCP servers. What was found and cannot be
-used, such as an Anthropic API key or a Vertex AI setup, is named with the reason before the routes,
+used, such as an Anthropic bearer token or a Vertex AI setup, is named with the reason before the routes,
 and its value is never shown.
 
 A run that cannot ask (`-p`, `--json`, a pipe or a redirect, `doctor`) imports nothing, and its
@@ -1749,8 +1980,8 @@ bravebot import-providers
 ```
 
 That command asks the same questions at any time, whether or not a service is configured. It refuses
-without a terminal and in an incognito session. An incognito session asks no Ollama either, since it
-has nothing to write.
+without a terminal and in an incognito session. An incognito session asks none of the servers either,
+since it has nothing to write.
 
 ## Reaching a model through AWS Bedrock
 
@@ -1762,17 +1993,24 @@ has the variables, the signing in, and the assumed context window.
 
 ## Reaching an OpenAI-compatible gateway
 
-A `provider` block in a settings file names a gateway, the models it offers and the variable that
-holds its credential. It is opencode's block, so one copied from `opencode.json` works unedited, and
-a local Ollama needs no key. [Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
-has the fields, the credential, which models are offered, and how to name one.
+A `provider` block in a settings file names a gateway, the models it offers, the variable that
+holds its credential and any extra headers its requests carry. It is opencode's block, so one copied
+from `opencode.json` works unedited, and a local Ollama needs no key.
+[Reaching an OpenAI-compatible gateway](providers/openai-compatible.md)
+has the fields, the credential, the headers, which models are offered, and how to name one.
 
 OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_KEY` in `env`, and
 needs no `baseURL`. [OpenAI](providers/openai-compatible.md#openai) has the details, including which
 models `/model` offers.
 
+Claude is reached with an Anthropic API key by a block keyed `anthropic` naming `ANTHROPIC_API_KEY` in
+`env`, and needs no `baseURL`. It is spoken to in Anthropic's own Messages protocol, not the
+OpenAI-compatible one. [Anthropic](providers/anthropic.md) has the details, including the reply
+ceiling and which models `/model` offers.
+
 Google Vertex AI is reached by a block keyed `google-vertex`, or with no block by exporting
-`GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT`. It has no model listing a key can call, so `/model`
+`GOOGLE_API_KEY`, with `GOOGLE_CLOUD_PROJECT` beside it for a particular project and none for express
+mode. It has no model listing a key can call, so `/model`
 offers a short list of Gemini models built into bravebot, and a block that lists `models` is offered
 those instead. A Vertex model, on the built-in list or off it, is named with the service's id in
 front, as `--model google-vertex/google/gemini-3-flash-preview` or the same value in the

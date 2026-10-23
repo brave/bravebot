@@ -1,9 +1,9 @@
-//! RUN-20 across turns: a line remembered with its number free covers the same sub-command with
+//! RUN-20 across turns: a scope remembered from one line covers each sub-command of its group with
 //! another number in a later session, and nothing else.
 //!
 //! # Why a binary of its own
 //!
-//! The family table names `gh`, found the way a real one is, on `$PATH`, which belongs to the
+//! The scope table names `gh`, found the way a real one is, on `$PATH`, which belongs to the
 //! process. The test below sets it, and a variable set on one thread is set for every test sharing
 //! the binary. An integration test is its own process, so nothing outside this file is affected.
 //!
@@ -98,16 +98,16 @@ fn a_turn_asking_for(
     asked.runs
 }
 
-/// RUN-20: the `f` answer to a lone listed `gh` line writes an entry with the number free, a later
-/// session is not asked about the same sub-command on the same repository with another number, and
-/// is asked about another repository.
+/// RUN-20: the scope answer to a lone listed `gh` line writes one scope, a later session is not
+/// asked about another sub-command of the group on the same repository with another number, and is
+/// asked about another repository and about a sub-command that is not in the group.
 ///
 /// The whole road through a turn, because the unit tests hold the table and the matching and none
 /// of them holds that the acting layer records what the table made of the plan rather than the
 /// exact line the key was pressed on.
 #[test]
-fn a_family_remembered_in_one_session_covers_another_number_in_the_next() {
-    let scratch = Scratch::new("agent-run-family");
+fn a_scope_remembered_in_one_session_covers_its_group_in_the_next() {
+    let scratch = Scratch::new("agent-run-scope");
     let work = scratch.path.join("work");
     let home = scratch.path.join("home");
     let binaries = scratch.path.join("bin");
@@ -137,57 +137,60 @@ fn a_family_remembered_in_one_session_covers_another_number_in_the_next() {
         &home,
         "the-first-session",
         "gh pr view 1081 --repo brave/bravebot",
-        RunDecision::approve_and_record_family(),
+        RunDecision::approve_and_record_scope(),
     );
     let [request] = first.as_slice() else {
         panic!("the first line was asked about {} times", first.len());
     };
     assert!(
-        request.offers_a_family(),
-        "the prompt did not offer a family for a listed line"
+        request.offered_scope().is_some(),
+        "the prompt did not offer a scope for a listed line"
     );
 
     let record = Store::new(&home, Workspace::new(&work).expect("workspace").root()).read();
-    let [entry] = record.iter().collect::<Vec<_>>()[..] else {
-        panic!("the record holds {} entries, not one", record.len());
+    let [entry] = record.scopes().collect::<Vec<_>>()[..] else {
+        panic!(
+            "the record holds {} scopes, not one",
+            record.scopes().count()
+        );
     };
-    assert!(
-        entry.line.is_family(),
-        "the family answer recorded the exact line: {}",
-        entry.line.display()
+    assert_eq!(
+        record.iter().count(),
+        0,
+        "the scope answer recorded the exact line as well"
     );
+    assert_eq!(entry.scope.lines.len(), 4);
+    assert_eq!(entry.answered_in, "the-first-session");
 
-    let second = a_turn_asking_for(
+    let covered = a_turn_asking_for(
         &work,
         &home,
         "the-second-session",
-        "gh pr view 1082 --repo brave/bravebot",
+        "gh issue view 1082 --repo brave/bravebot",
         RunDecision::reject(),
     );
     assert!(
-        second.is_empty(),
-        "another number of a remembered family was asked about again"
+        covered.is_empty(),
+        "another sub-command of a remembered scope was asked about again"
     );
 
-    let other_repository = a_turn_asking_for(
-        &work,
-        &home,
-        "the-third-session",
-        "gh pr view 1083 --repo brave/other",
-        RunDecision::reject(),
-    );
-    assert_eq!(
-        other_repository.len(),
-        1,
-        "a family remembered for one repository covered another"
-    );
+    for (session, line) in [
+        ("the-third-session", "gh pr view 1083 --repo brave/other"),
+        (
+            "the-fourth-session",
+            "gh pr merge 1084 --repo brave/bravebot",
+        ),
+    ] {
+        let asked = a_turn_asking_for(&work, &home, session, line, RunDecision::reject());
+        assert_eq!(asked.len(), 1, "a scope covered {line}");
+    }
 
     let started = std::fs::read_to_string(&starts).expect("gh ran");
     assert_eq!(
         started.lines().collect::<Vec<_>>(),
         [
             "pr view 1081 --repo brave/bravebot",
-            "pr view 1082 --repo brave/bravebot",
+            "issue view 1082 --repo brave/bravebot",
         ],
         "gh ran something other than the two lines that were approved or covered"
     );

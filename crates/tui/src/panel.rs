@@ -86,7 +86,7 @@ fn wrapped(text: &str, width: usize) -> Vec<String> {
 
 /// `text` in one row of at most `width` columns, cut from the left with an ellipsis where it is
 /// longer: the end of a directory and of a branch is the part that tells two of them apart.
-fn ending(text: &str, width: usize) -> String {
+pub(crate) fn ending(text: &str, width: usize) -> String {
     use unicode_width::UnicodeWidthChar;
     if crate::wrap::display_width(text) <= width {
         return text.to_string();
@@ -217,7 +217,7 @@ pub fn continued_rows(session: &Session, area: Rect) -> Vec<u16> {
 /// Draw the panel over `area`, its border on the left, each shortened address a link to the
 /// address it stands for.
 pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
-    let (rows, links, _) = laid_out(session, area.width, area.height);
+    let (rows, links, ..) = laid_out(session, area.width, area.height);
     Clear.render(area, buffer);
     Paragraph::new(rows)
         .block(Block::default().borders(Borders::LEFT).border_style(dim()))
@@ -234,19 +234,60 @@ pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
     }
 }
 
-/// The rows [`lines`] gives, where among them the links are, and which of them continue on the
-/// row below.
-fn laid_out(
-    session: &Session,
-    width: u16,
-    height: u16,
-) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
+/// The rows of the panel, where the links are, which rows continue on the row below, and which rows
+/// a click acts on.
+type Body = (
+    Vec<Line<'static>>,
+    Vec<Link>,
+    Vec<usize>,
+    Vec<(usize, Target)>,
+);
+
+/// What a click on a row of the panel asks for (MOUSE-11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// The model row: the same question `/model` asks.
+    Model,
+    /// The effort row: the same question `/effort` asks.
+    Effort,
+}
+
+/// The target a press on screen row `row` of a panel drawn over `area` lands on, if any.
+///
+/// Read from the rows [`draw`] draws, so a row that is not drawn, or is cut for want of room, is
+/// not a target. The border column is the panel's handle and is never one (PANEL-6).
+pub fn target_at(session: &Session, area: Rect, row: u16, column: u16) -> Option<Target> {
+    if column <= area.x || column >= area.right() || row < area.y {
+        return None;
+    }
+    let at = usize::from(row - area.y);
+    laid_out(session, area.width, area.height)
+        .3
+        .into_iter()
+        .find_map(|(drawn, target)| (drawn == at).then_some(target))
+}
+
+/// The rows [`lines`] gives, where among them the links are, which of them continue on the row
+/// below, and which rows a click acts on.
+fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     let height = usize::from(height);
     if height == 0 {
-        return (Vec::new(), Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    }
+    // None of the ordinary sections is drawn beside the files state (FILES-4).
+    if let Some(state) = session.files_state() {
+        let files = session.written_files();
+        let rows = crate::files_mode::rows(
+            &files,
+            state,
+            session.has_earlier_calls(),
+            width,
+            height as u16,
+        );
+        return (rows, Vec::new(), Vec::new(), Vec::new());
     }
     let text = text_width(width);
-    let (mut body, mut links, mut continued) = head(session, text);
+    let (mut body, mut links, mut continued, mut targets) = head(session, text);
 
     let languages = session.language_servers().programs();
     if !languages.is_empty() {
@@ -271,6 +312,29 @@ fn laid_out(
         section(&mut body, t!(panel_mcp_servers).to_string(), rows);
     }
 
+    // Left out until a file has been written, and ahead of the plan so that the plan takes the rows
+    // it leaves (FILES-1).
+    let (count, added, removed) = session.written_totals();
+    if count > 0 {
+        let mut total = vec![Span::raw(format!(
+            " {}",
+            t!(panel_files_total, count = count)
+        ))];
+        for (sign, count, colour) in [("+", added, theme::ok()), ("-", removed, theme::fail())] {
+            if count > 0 {
+                total.push(Span::styled(
+                    format!(" {sign}{count}"),
+                    Style::default().fg(colour),
+                ));
+            }
+        }
+        let rows = vec![
+            Line::from(total),
+            row(crate::command_table::FILES_COMMAND.to_string(), dim()),
+        ];
+        section(&mut body, t!(panel_files).to_string(), rows);
+    }
+
     let plan = session.plan();
     // The blank row and the heading come out of the room before the rows do.
     let room = (height - 1).saturating_sub(body.len() + 2);
@@ -278,7 +342,7 @@ fn laid_out(
         section(
             &mut body,
             t!(panel_plan).to_string(),
-            plan_rows(plan, text, room),
+            plan_rows(plan, !session.a_turn_is_running(), text, room),
         );
     }
 
@@ -290,7 +354,8 @@ fn laid_out(
     ));
     links.retain(|link| link.row < height - 1);
     continued.retain(|row| *row < height - 1);
-    (body, links, continued)
+    targets.retain(|(row, _)| *row < height - 1);
+    (body, links, continued, targets)
 }
 
 /// Whether a frame `columns` by `rows` draws the panel with its Context section whole.
@@ -299,8 +364,10 @@ fn laid_out(
 /// too short for the sections above it, the panel cuts the Context section, and the line keeps
 /// both rather than leave the reading on neither.
 pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
-    // The hint line takes one row and the key that hides the panel another.
+    // The hint line takes one row and the key that hides the panel another. The files state has no
+    // Context section, so the line keeps both figures there (FILES-4).
     drawn(session, columns)
+        && !session.files_open()
         && head(session, text_width(session.panel_columns(columns)))
             .0
             .len()
@@ -316,7 +383,8 @@ fn text_width(width: u16) -> usize {
 /// The Session, Goal, Links and Context sections, each left out where it has nothing to say but for
 /// the context, which always has a reading, where in them the links are, and which rows continue on
 /// the row below.
-fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
+fn head(session: &Session, text: usize) -> Body {
+    let mut targets = Vec::new();
     let mut body: Vec<Line<'static>> = Vec::new();
     let mut links = Vec::new();
     let mut continued = Vec::new();
@@ -378,20 +446,31 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<u
     }
 
     let mut model = Vec::new();
+    // Where each row will land once the section is placed, which `section` decides.
+    let mut model_targets = Vec::new();
     if let Some(chosen) = session.model_label() {
+        model_targets.push((model.len(), Target::Model));
         model.push(row(
             ending(&crate::render::printable(chosen), text),
             Style::default(),
         ));
     }
     if let Some(level) = session.effort_in_force() {
+        model_targets.push((model.len(), Target::Effort));
         model.push(row(
             t!(panel_effort, level = level.as_str()).to_string(),
             dim(),
         ));
     }
     if !model.is_empty() {
+        let count = model.len();
         section(&mut body, t!(panel_model).to_string(), model);
+        let first = body.len() - count;
+        targets.extend(
+            model_targets
+                .into_iter()
+                .map(|(row, target)| (first + row, target)),
+        );
     }
 
     if let Some(goal) = session.goal() {
@@ -470,16 +549,30 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<u
         }
     }
     section(&mut body, t!(panel_context).to_string(), context);
-    (body, links, continued)
+    (body, links, continued, targets)
 }
 
+/// The mark of a row that no turn is working on and that was neither finished nor dropped.
+///
+/// Hollow where the mark of a row being worked on is filled, so the two differ under `NO_COLOR`
+/// too, where the ink of a row is the terminal's own.
+const LEFT_OPEN_MARKER: &str = "□";
+
 /// The plan in at most `room` rows, the task being worked on among them.
+///
+/// `left_open` is whether no turn is running: a row still outstanding is then drawn hollow and
+/// dim, so that after a turn ends it does not read as work being done.
 ///
 /// Where the rows do not all fit, the visible part starts at the task in progress if it would
 /// otherwise fall below the cut, since what is being done now is what somebody glancing at the
 /// panel is looking for. The last row counts the rows left out above the visible part apart from
 /// those below it, so a count is never read as work still to come when it is work already past.
-fn plan_rows(plan: &[bravebot_core::todo::Row], width: usize, room: usize) -> Vec<Line<'static>> {
+fn plan_rows(
+    plan: &[bravebot_core::todo::Row],
+    left_open: bool,
+    width: usize,
+    room: usize,
+) -> Vec<Line<'static>> {
     let (start, shown) = if plan.len() <= room {
         (0, plan.len())
     } else {
@@ -498,22 +591,33 @@ fn plan_rows(plan: &[bravebot_core::todo::Row], width: usize, room: usize) -> Ve
     let mut lines: Vec<Line<'static>> = plan[start..start + shown]
         .iter()
         .map(|task| {
-            let (marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
-                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+            let (glyph, marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
+                (
+                    task.marker,
+                    dim(),
+                    dim().add_modifier(Modifier::CROSSED_OUT),
+                )
             } else if task.struck() {
                 (
+                    task.marker,
                     Style::default().fg(theme::ok()),
                     dim().add_modifier(Modifier::CROSSED_OUT),
                 )
+            } else if left_open {
+                (LEFT_OPEN_MARKER, dim(), dim())
             } else {
-                (Style::default().fg(theme::running()), Style::default())
+                (
+                    task.marker,
+                    Style::default().fg(theme::running()),
+                    Style::default(),
+                )
             };
             let content = crate::status::cut(
                 &crate::render::printable(&task.content),
                 width.saturating_sub(2),
             );
             Line::from(vec![
-                Span::styled(format!(" {} ", task.marker), marker),
+                Span::styled(format!(" {glyph} "), marker),
                 Span::styled(content, text),
             ])
         })
@@ -590,6 +694,43 @@ mod tests {
             "the panel did not open at {width} columns"
         );
         session
+    }
+
+    /// MOUSE-11. Rejects: a target on the heading above the rows, one on the border column, one on
+    /// a row cut for want of room, and an effort row for a model that reads none.
+    #[test]
+    fn only_the_drawn_model_and_effort_rows_are_click_targets() {
+        let mut session = Session::new("none");
+        session.choose_model("claude-sonnet".to_string(), &model_config());
+        session.note_model_reads_effort(true);
+        session.choose_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let rows = lines(&session, area.width, area.height);
+        let at = |needle: &str| {
+            rows.iter()
+                .position(|line| line.to_string().contains(needle))
+                .expect(needle) as u16
+        };
+        let model = at("claude-sonnet");
+        let effort = at(&t!(panel_effort, level = "xhigh").to_string());
+        let inside = area.x + 3;
+
+        assert_eq!(
+            target_at(&session, area, area.y + model, inside),
+            Some(Target::Model)
+        );
+        assert_eq!(
+            target_at(&session, area, area.y + effort, inside),
+            Some(Target::Effort)
+        );
+        assert_eq!(target_at(&session, area, area.y + model - 1, inside), None);
+        assert_eq!(target_at(&session, area, area.y + model, area.x), None);
+        // Cut to fewer rows than the model's, it is not drawn and so is not a target.
+        let short = Rect::new(area.x, 0, WIDTH, model);
+        assert_eq!(target_at(&session, short, short.y + model, inside), None);
+
+        session.note_model_reads_effort(false);
+        assert_eq!(target_at(&session, area, area.y + effort, inside), None);
     }
 
     fn model_config() -> bravebot_config::Config {
@@ -1038,6 +1179,27 @@ mod tests {
         assert!(
             hint.contains(&counting),
             "the loop left the hint line with the panel drawn: {hint}"
+        );
+    }
+
+    /// The panel stops above the hint line, so the note the line draws at its right edge is at the
+    /// terminal's right edge, under the panel, and not at the right edge of the transcript's columns.
+    #[test]
+    fn the_hint_line_runs_under_the_panel_to_the_right_edge() {
+        let mut session = opened_at(100);
+        session.offered_to_leave = true;
+        let rows = screen(&mut session, 100, 30);
+        let note = "ctrl-c again to exit";
+        let hint = &rows[29];
+        assert_eq!(
+            hint.trim_end().chars().count(),
+            100 - 2,
+            "the note does not end at the right edge of the terminal: {hint:?}"
+        );
+        assert!(hint.trim_end().ends_with(note), "{hint:?}");
+        assert!(
+            rows[28].chars().nth(usize::from(100 - WIDTH)) == Some('│'),
+            "the panel's border is gone above the hint line: {rows:#?}"
         );
     }
 
@@ -1786,6 +1948,58 @@ mod tests {
         );
     }
 
+    /// FILES-1: the Files section is left out until a file has been written, and then has the totals
+    /// and the command that opens the state. It comes out of the plan's room, as a server section
+    /// does.
+    #[test]
+    fn the_files_section_has_the_totals_and_the_command_and_leaves_the_plan_its_rows() {
+        let tasks: Vec<(String, Status)> = (0..20)
+            .map(|n| (format!("task {n}"), Status::Pending))
+            .collect();
+        let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let mut session = working_on(plan(&rows));
+        let without = texts(&lines(&session, WIDTH, 20));
+        assert!(
+            !without.iter().any(|row| *row == *t!(panel_files)),
+            "a Files section was drawn before anything was written: {without:#?}"
+        );
+
+        for (path, before, after) in [("a.rs", "x\n", "x\ny\nz\n"), ("b.rs", "p\nq\n", "p\n")] {
+            let diff = bravebot_agent::diff::Diff::compute(before, after);
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", path)
+                    .of_tool("edit_file")
+                    .with_changes(diff.condensed(3))
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: path.into(),
+                        added: diff.added(),
+                        removed: diff.removed(),
+                        numbers: diff.condensed_numbers(3),
+                    }))
+                    .done("done"),
+            ));
+        }
+        let with = texts(&lines(&session, WIDTH, 20));
+        let heading = with
+            .iter()
+            .position(|row| *row == *t!(panel_files))
+            .unwrap_or_else(|| panic!("no Files heading: {with:#?}"));
+        assert_eq!(with[heading + 1].trim(), "2 files +2 -1", "{with:#?}");
+        assert_eq!(with[heading + 2].trim(), "/files", "{with:#?}");
+        let plan_heading = with
+            .iter()
+            .position(|row| *row == *t!(panel_plan))
+            .unwrap_or_else(|| panic!("the plan was dropped: {with:#?}"));
+        assert!(heading < plan_heading, "the section is not before the plan");
+        let shown = |drawn: &[String]| drawn.iter().filter(|row| row.contains("task ")).count();
+        assert_eq!(with.len(), 20, "the panel is not the height it was given");
+        assert_eq!(
+            shown(&without) - shown(&with),
+            4,
+            "a blank row, a heading and two rows came out of the plan's room: {with:#?}"
+        );
+    }
+
     /// An MCP server's alias is whatever the settings file called it, so it is drawn as every other
     /// typed string is, with its control characters pictured and a long one cut from the left.
     #[test]
@@ -1939,6 +2153,122 @@ mod tests {
         assert_ne!(
             cancelled.spans[0].content, done.spans[0].content,
             "a cancelled task carries the finished marker"
+        );
+    }
+
+    /// The rows under the plan's heading, which is the last section, and nothing of the other
+    /// sections, whose figures move from one turn to the next.
+    fn plan_part(session: &Session, rows: usize) -> Vec<Line<'static>> {
+        let all = lines(session, WIDTH, 24);
+        let heading = texts(&all)
+            .iter()
+            .position(|row| *row == t!(panel_plan))
+            .expect("a plan heading");
+        let part: Vec<Line<'static>> = all[heading + 1..]
+            .iter()
+            .take_while(|line| !line.to_string().trim().is_empty())
+            .cloned()
+            .collect();
+        assert_eq!(
+            part.len(),
+            rows,
+            "the plan is not drawn whole: {:#?}",
+            texts(&all)
+        );
+        part
+    }
+
+    fn plan_row(part: &[Line<'static>], needle: &str) -> Line<'static> {
+        part.iter()
+            .find(|line| line.to_string().contains(needle))
+            .unwrap_or_else(|| panic!("no plan row holds {needle}: {:#?}", texts(part)))
+            .clone()
+    }
+
+    const MIXED: [(&str, Status); 4] = [
+        ("finished it", Status::Done),
+        ("dropped it", Status::Cancelled),
+        ("working on it", Status::Active),
+        ("still to do", Status::Pending),
+    ];
+
+    /// A row still open after the turn that wrote the list has ended reads as work nobody is
+    /// doing, which is what the answer beside it says. The mark has to differ as well as the ink,
+    /// since `NO_COLOR` leaves the ink the terminal's own.
+    ///
+    /// Asserted against the same rows drawn while their turn runs, rather than against a colour
+    /// named here, so a theme change that keeps the two apart does not fail it. Finished and
+    /// dropped rows are drawn as they were, and a turn that starts is working on the plan again
+    /// before it has reported a list.
+    #[test]
+    fn a_row_a_turn_left_open_is_drawn_apart_from_work_being_done() {
+        let _held = crate::theme::exclusive();
+        let mut session = working_on(plan(&MIXED));
+        let live = plan_part(&session, 4);
+        session.complete("done", Vec::new(), 0);
+        let left = plan_part(&session, 4);
+
+        for needle in ["working on it", "still to do"] {
+            let (before, after) = (plan_row(&live, needle), plan_row(&left, needle));
+            assert_ne!(
+                after.spans[0].content, before.spans[0].content,
+                "{needle} keeps the mark of work being done after its turn ended"
+            );
+            assert_ne!(
+                after.spans[0].style.fg, before.spans[0].style.fg,
+                "{needle} keeps the ink of work being done after its turn ended"
+            );
+            assert_ne!(
+                after.spans[1].style, before.spans[1].style,
+                "{needle} keeps the text of work being done after its turn ended"
+            );
+            assert!(
+                !after.spans[1]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::CROSSED_OUT),
+                "{needle} is struck through, so it reads as no longer outstanding"
+            );
+        }
+        for needle in ["finished it", "dropped it"] {
+            assert_eq!(
+                plan_row(&left, needle),
+                plan_row(&live, needle),
+                "{needle} was drawn differently once the turn ended"
+            );
+        }
+
+        // The next turn has reported nothing yet, and it is the one that may be working on them.
+        session.type_char('b');
+        session.submit();
+        assert!(session.a_turn_is_running(), "no turn was running");
+        assert_eq!(
+            plan_part(&session, 4),
+            live,
+            "the rows are not drawn as work being done while a turn runs"
+        );
+    }
+
+    /// A compaction or an aside shares the working status with a turn and does no work on the
+    /// plan, so the rows it leaves outstanding stay left open while it runs.
+    #[test]
+    fn a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open() {
+        let _held = crate::theme::exclusive();
+        let mut session = working_on(plan(&MIXED));
+        let live = plan_part(&session, 4);
+        session.complete("done", Vec::new(), 0);
+        let left = plan_part(&session, 4);
+
+        session.begin_aside();
+        assert!(!session.a_turn_is_running(), "the aside is a turn");
+        assert_eq!(
+            plan_part(&session, 4),
+            left,
+            "an aside drew the open rows as work being done"
+        );
+        assert_ne!(
+            left, live,
+            "the fixture draws a turn's rows and its absence alike"
         );
     }
 

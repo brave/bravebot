@@ -212,6 +212,13 @@ impl Grant {
     ///
     /// A step with an assignment in front of it is covered by none, as it carries no scope: every
     /// program a scope names reads a variable that moves the directory or names a program to run.
+    ///
+    /// A credential scope for a program the scope table gives that scope to covers only a step
+    /// whose whole argument vector the table gives it to as well ([`Scope::of`]). The key is the
+    /// program and the operation word, and the arguments after it can name a program to run
+    /// (`git push --receive-pack=<file>`) or another configuration file (`kubectl --kubeconfig`),
+    /// which a scope the table would refuse is not lent to. A scope for a program the table does
+    /// not name (`/reach aws -- make check`) is keyed on the shape alone.
     pub fn covers(&self, step: &Step) -> bool {
         let Step {
             program: _,
@@ -226,6 +233,14 @@ impl Grant {
             && match &self.operation {
                 Some(operation) => operation_of(args).as_ref() == Some(operation),
                 None => args.is_empty(),
+            }
+            && match &self.reached {
+                Reached::Scope(scope)
+                    if Self::is_global(&self.binary, self.operation.as_deref(), &self.reached) =>
+                {
+                    Scope::of(resolved, args, &[]) == Some(*scope)
+                }
+                _ => true,
             }
     }
 
@@ -1175,6 +1190,51 @@ mod tests {
         assert!(bare.covers(&step("make", "/usr/bin/make", &[])));
         assert!(!bare.covers(&step("make", "/usr/bin/make", &["-j4"])));
         assert!(!bare.covers(&step("make", "/usr/bin/make", &["check"])));
+    }
+
+    /// A scope for a program the table names covers a step only where the table gives the whole
+    /// argv that scope. The regression it rejects: covering on the program and operation word
+    /// alone, so an argv that names a program to run, or another configuration file, takes the
+    /// scope a fresh stage would be refused. A scope for a program the table does not name stays
+    /// keyed on the shape.
+    #[test]
+    fn a_grant_for_a_program_the_table_names_covers_only_an_argv_the_table_gives_the_scope() {
+        let push = scope_grant("/usr/bin/git", Some("push"), Lifetime::Always);
+        assert!(push.covers(&step("git", "/usr/bin/git", &["push", "origin", "main"])));
+        assert!(!push.covers(&step(
+            "git",
+            "/usr/bin/git",
+            &["push", "--receive-pack=hook", "origin"]
+        )));
+        assert!(!push.covers(&step("git", "/usr/bin/git", &["push", "origin", "ext::sh"])));
+
+        let kubectl = scope_grant("/usr/bin/kubectl", Some("get"), Lifetime::Always);
+        assert!(kubectl.covers(&step("kubectl", "/usr/bin/kubectl", &["get", "pods"])));
+        assert!(!kubectl.covers(&step(
+            "kubectl",
+            "/usr/bin/kubectl",
+            &["get", "pods", "--kubeconfig=k"]
+        )));
+
+        let gh = scope_grant("/usr/bin/gh", Some("repo"), Lifetime::Always);
+        assert!(gh.covers(&step("gh", "/usr/bin/gh", &["repo", "view", "o/r"])));
+        assert!(!gh.covers(&step(
+            "gh",
+            "/usr/bin/gh",
+            &["repo", "clone", "o/r", "--", "--upload-pack=hook"]
+        )));
+
+        let docker = scope_grant("/usr/bin/docker", Some("ps"), Lifetime::Always);
+        assert!(docker.covers(&step("docker", "/usr/bin/docker", &["ps", "-a"])));
+        assert!(!docker.covers(&step("docker", "/usr/bin/docker", &["ps", "--config=dir"])));
+
+        let make = bound_grant(
+            "/usr/bin/make",
+            Reached::Scope(Scope::named("remote").expect("a scope")),
+            Lifetime::Always,
+            &fresh("covers-table"),
+        );
+        assert!(make.covers(&step("make", "/usr/bin/make", &[])));
     }
 
     /// A step with an assignment in front of it is covered by no grant. The regression it rejects

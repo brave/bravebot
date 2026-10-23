@@ -130,6 +130,17 @@ host against the one approved. A redirect within that host is ordinary and conti
 anywhere else is refused unless a rule allows that host too. A `deny` rule refuses a hop whatever
 else says otherwise.
 
+A hop the gate refuses for leaving the approved host is put to the person before the fetch is
+reported as refused. The gate keeps the host the hop named, as the server's own bytes, and
+`fetch_url` draws it through the fetch prompt of [FETCH-2](#FETCH-2): the host on its own row, then a
+row saying it was reached by redirect from the host that was approved, then the URL that was
+approved, and the metadata-service warning where the host is one. A yes sends that one request
+again with that host allowed for it alone. It is bound to the host as it was drawn, spent once and
+gone when the request reports back, and nothing is remembered ([FETCH-3](#FETCH-3)): a further hop to
+another host is refused without a question, and the next fetch asks again. A no leaves the hop refused at the egress gate, as the paragraph above says.
+Bypassing does not answer this question, since the host is a server's choice and not the planner's.
+A host a `deny` rule covers is not asked about, because that refusal is final.
+
 This is the host and not the transport. A hop that keeps the approved host satisfies everything this
 clause asks even where it drops TLS to do it, so whether one may is decided for every request that
 leaves this process, in [network-egress.md](../network-egress.md).
@@ -150,6 +161,15 @@ knows because it set it, and which no reply can influence.
 `verified-by: bravebot_core::policy::a_web_fetch_rule_does_not_govern_this_programs_own_connection`
 `verified-by: bravebot_core::policy::a_finished_fetch_stops_confining_the_turns_other_egress`
 `verified-by: bravebot_core::policy::a_redirect_to_a_host_a_rule_allows_is_followed`
+`verified-by: bravebot_core::policy::a_hop_refused_for_leaving_the_host_is_kept_untrusted_for_the_prompt`
+`verified-by: bravebot_core::policy::an_approved_hop_is_for_that_host_and_that_fetch_alone`
+`verified-by: bravebot_agent::turn::a_redirect_off_the_approved_host_is_put_to_the_person_and_followed_on_a_yes`
+`verified-by: bravebot_agent::turn::a_redirect_off_the_approved_host_that_is_declined_sends_nothing_to_it`
+`verified-by: bravebot_agent::turn::a_redirect_to_a_denied_host_is_refused_without_asking`
+`verified-by: bravebot_agent::permission_mode::bypassing_answers_a_fetch_but_not_a_redirect`
+`verified-by: bravebot_approval::lib::the_fetch_lines_say_where_a_redirect_was_approved_for`
+`verified-by: bravebot_tui::confirm::a_fetch_prompt_for_a_redirect_says_where_it_was_approved_for`
+`verified-by: bravebot_ui_bridge::wire::a_fetch_a_redirect_led_to_names_the_host_that_was_approved`
 
 <a id="FETCH-5"></a>
 ### FETCH-5: what is not text is carried anyway, and a cap is reported
@@ -175,7 +195,9 @@ Every URL a fetch puts in a result is the URL the caller gave, on both roads. A 
 names it as the origin of the content it produced; one that fails or is refused names it as the
 request that did not work, with the kind of failure. A redirect target, the host at the end of a
 chain, and the transport's own words about a URL it could not use are in neither. A refusal at the
-egress gate names the host that was approved and not the one a hop went to.
+egress gate names the host that was approved and not the one a hop went to, and so does the result
+of a fetch whose person was asked about that host: the planner's sentence is the same on a yes and
+on a no, and the host reaches the person's screen alone.
 
 Where a chain went stays with the crate that followed it: neither value a successful fetch hands
 back carries the URL the body arrived from, so a result cannot name it by reaching for it. The gate

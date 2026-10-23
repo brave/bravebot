@@ -10,62 +10,71 @@ governs:
 guards:
   - symbol: Labelled::new
     sites:
+      - crates/agent/src/backend.rs: 2
+      - crates/agent/src/commit_message.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 29
+      - crates/agent/src/skills.rs: 1
+      - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 14
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
-      - crates/aichat/src/lib.rs: 5
-      - crates/bedrock/src/lib.rs: 6
+      - crates/aichat/src/anthropic.rs: 8
+      - crates/aichat/src/generate_content.rs: 7
+      - crates/aichat/src/responses.rs: 6
+      - crates/aichat/src/lib.rs: 7
+      - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 119
+      - crates/core/src/policy.rs: 121
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
-      - crates/mcp/src/http.rs: 2
+      - crates/mcp/src/http.rs: 3
       - crates/mcp/src/lib.rs: 1
-      - crates/mcp/src/protocol.rs: 2
-      - crates/mcp/src/stdio.rs: 2
+      - crates/mcp/src/protocol.rs: 3
+      - crates/mcp/src/stdio.rs: 3
       - crates/net/src/lib.rs: 2
   - symbol: Labelled::declassify
     every-spelling: yes
     sites:
       - crates/agent/src/aside.rs: 3
+      - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/manifest.rs: 5
-      - crates/agent/src/mcp.rs: 3
+      - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 37
-      - crates/agent/src/turn.rs: 5
+      - crates/agent/src/tools.rs: 38
+      - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 59
-      - crates/aichat/tests/client.rs: 2
-      - crates/bedrock/src/lib.rs: 2
+      - crates/aichat/tests/client.rs: 12
+      - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 63
       - crates/core/src/value.rs: 1
-      - crates/mcp/tests/http.rs: 2
-      - crates/mcp/tests/stdio.rs: 4
+      - crates/mcp/tests/http.rs: 4
+      - crates/mcp/tests/stdio.rs: 7
       - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
     sites:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
+      - crates/agent/src/commit_message.rs: 3
       - crates/agent/src/tools/message.rs: 1
       - crates/agent/src/manifest.rs: 11
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/styles.rs: 1
-      - crates/agent/src/tools.rs: 22
+      - crates/agent/src/tools.rs: 24
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
-      - crates/agent/tests/workspace.rs: 280
+      - crates/agent/tests/turn.rs: 2
+      - crates/agent/tests/workspace.rs: 279
       - crates/core/src/policy.rs: 25
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -127,16 +136,17 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 13
+      - crates/agent/src/turn.rs: 16
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/aside.rs: 1
+      - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/manifest.rs: 8
-      - crates/agent/src/mcp.rs: 2
+      - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 39
+      - crates/agent/src/tools.rs: 41
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
@@ -151,7 +161,7 @@ guards:
     sites:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 6
-      - crates/core/src/policy.rs: 22
+      - crates/core/src/policy.rs: 24
   - symbol: Policy::adopt_model_output
     sites:
       - crates/agent/src/advisor.rs: 1
@@ -165,11 +175,14 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 15
+      - crates/agent/src/tools.rs: 16
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::decode_transport
     sites:
+      - crates/aichat/src/anthropic.rs: 2
+      - crates/aichat/src/generate_content.rs: 2
+      - crates/aichat/src/responses.rs: 1
       - crates/aichat/src/lib.rs: 2
       - crates/aichat/src/models.rs: 2
       - crates/aichat/src/ollama.rs: 1
@@ -469,6 +482,7 @@ and the content has no say in it.
 | what the planner wrote | the integrity of the context it was written in, and private once private content was let out of quarantine for the planner: a slot `vet_content` let through, output `read_output` read to it, a delegate's report it was given, or a context it resumed that already held one. A workspace file it was shown does not count, because that is the project's own data and counting it would make every call after the first read ask | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` `verified-by: bravebot_core::policy::a_vetted_private_slot_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_vetted_public_slot_leaves_what_the_planner_writes_public` `verified-by: bravebot_core::policy::a_vetted_private_picture_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::output_read_aloud_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_private_report_from_a_delegate_is_held` `verified-by: bravebot_core::policy::a_resumed_context_keeps_what_it_held_and_cannot_be_made_public` |
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
 | an answer a person typed to a question | trusted, because a person wrote it, and as private as the questions it answers, since the reply repeats them | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` `verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private` |
+| the body a person saved from their editor over a proposed write | trusted and public, because a person wrote it and it goes into their workspace as the proposal it replaces was already going to; refused where that proposal was untrusted or still private | `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public` `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
 | one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
 | a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, every session, since nothing the driver runs compares a server's bytes with an earlier list | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing` |
@@ -477,6 +491,8 @@ and the content has no say in it.
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | pasted text | none, for the same reason, but with the characters a terminal draws as nothing taken out first and counted on the screen ([PASTE-10](pasting.md#PASTE-10)): a character map that reads no meaning from the text and decides no effect | `verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
+| a line sent while a turn is running on an input channel the person vouched for with `--trust-input-lines` | none, for the reason a typed line gets none: the flag the person typed is the vouching, and the trail records it as that and not as typed ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_core::policy::a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context` `verified-by: bravebot_agent::turn::a_line_from_a_vouched_channel_is_recorded_as_vouched_for_and_not_as_typed` |
+| a line on an input channel nobody vouched for | untrusted and private, as input piped into the process is, because the launching program is not necessarily the person ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_cli::running::lines_nobody_vouched_for_never_reach_the_planner_and_vouched_ones_do` |
 | a message another background session sent | the label it was sent with, read back from the word beside the text, so a message never arrives better than it left; untrusted and private where there is no word or the word names no label ([MSG-9](session-messages.md#MSG-9)) | `verified-by: bravebot_core::policy::a_message_from_another_session_keeps_the_label_it_was_sent_with` `verified-by: bravebot_core::policy::a_message_whose_label_cannot_be_read_is_untrusted_and_private` `verified-by: bravebot_agent::turn::a_message_that_is_not_labelled_trusted_reaches_the_planner_as_a_reference` |
 | a system prompt named on the command line | none, for the reason the user's own message gets none: the person who typed the flag is the person the planner works for, and the words are plain text that grants no permission | `verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none` |
 
@@ -575,8 +591,8 @@ arrives at all.
 
 - **Seven places do look at untrusted bytes in order to decide something.** Three are in the policy
   layer, the fourth is the search, which is in `bravebot-agent`, the fifth is the diagnostics
-  sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff of a read, which are
-  in `bravebot-agent` too. The clauses above say
+  sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff and decoding of a
+  read, which are in `bravebot-agent` too. The clauses above say
   nothing may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
@@ -831,11 +847,15 @@ arrives at all.
   control characters. A file that fails is refused to the planner in the driver's own words, "is a
   binary file, so it cannot be read as text", and one that passes becomes a reference with a byte
   count. The same test runs again over the whole file, followed by a check that it is valid UTF-8,
-  when a slot is filled or a page is read (`Workspace::read` and `page`). The comparison is in
-  `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)), and the `filetype` crate holds
-  no `declassify`, so no pinned count moves when it changes. Where the path is vouched for, the bytes
-  are trusted and the comparison is the case [LABEL-5](#LABEL-5) allows. The rest of this entry is
-  about a path nobody vouched for.
+  when a slot is filled or a whole read is made (`Workspace::read` and `page`). A page the planner
+  is shown goes through `bravebot_filetype::decode_text` instead, which looks for a UTF-16 or UTF-32
+  byte order mark before the NUL test, decodes a file with one, and reads any other file that
+  passes the test as UTF-8 with each invalid byte replaced, unless the replacements are more than
+  30 percent of it. It then applies the same sniff to the decoded text. A page that is a decoding
+  carries a note naming it ([READ-3](tools/read-file.md#READ-3)). The comparisons are in
+  `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)), and in the `filetype` crate it
+  calls. That crate holds no `declassify`, so no pinned count moves when it changes. Where the path is vouched for, the bytes are trusted and the comparison is the case
+  [LABEL-5](#LABEL-5) allows. The rest of this entry is about a path nobody vouched for.
 
   Suppose an attacker owns the file. Everything that buys them is on this list:
 
@@ -843,7 +863,12 @@ arrives at all.
     with a size, or the refusal above. That is one bit, and the planner was already free to read a
     different path.
   - **Put the file out of reach of a processor.** A NUL in the first 8 KiB, or bytes that are not
-    valid UTF-8 anywhere, makes a later fill of the slot fail with the same refusal.
+    valid UTF-8 anywhere, makes a later fill of the slot fail with a refusal in the driver's own
+    words, as does a byte order mark. A slot is filled from text that is UTF-8 as it stands.
+  - **Choose how the bytes are split into lines** for a page of the file that is read through a
+    manifest step. A mark makes the units two or four bytes, and an invalid byte makes one
+    character. The line and byte counts the planner is told for a quarantined page are already the
+    attacker's to set ([LABEL-3](#LABEL-3)).
 
   What is **not** on the list: the label, which depends on the path alone, any destination, any
   argument of a later call, and any byte of the file. The size the planner is told is the file's own

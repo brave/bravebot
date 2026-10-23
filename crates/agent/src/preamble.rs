@@ -97,6 +97,20 @@ pub struct Preamble {
     pub for_a_person: String,
     /// Lines for the person watching: what loaded, and what did not and why.
     pub notices: Vec<Notice>,
+    /// The rule files a touched file has brought in (INSTR-16), in the order they came.
+    ///
+    /// Apart from `prompt` because they go last in the system prompt, after the words about the
+    /// mode: a rule that arrives while a turn runs is appended to what was sent, so the bytes in
+    /// front of it are the ones the last request carried. `text` holds them after everything
+    /// else.
+    pub rules: Prompt,
+    /// The rule files whose paths nothing touched has matched yet, for the turn to add as its
+    /// rounds touch files (INSTR-16).
+    pub held: crate::rules::Held,
+    /// The rule files in `rules`, each with the touched name that matched it, for the turn to tell
+    /// the person of. Said by the turn and not here, because a delegate composes the same prompt
+    /// and has nobody to tell.
+    pub added: Vec<crate::rules::Loaded>,
 }
 
 impl Preamble {
@@ -105,6 +119,35 @@ impl Preamble {
         self.text.push_str(&text);
         self.prompt.push(provenance, text);
     }
+
+    fn add_rule(&mut self, loaded: &crate::rules::Loaded) {
+        for (provenance, text) in rule_pieces(loaded) {
+            self.text.push_str(&text);
+            self.rules.push(provenance, text);
+        }
+    }
+}
+
+/// The words a rule adds to the end of the system prompt, with the origin of each piece (INSTR-16).
+///
+/// The first rule a session adds carries the heading over all of them. Public to the crate because
+/// a rule a round brings in is appended by the turn, with the same words as one the turn began
+/// with.
+pub(crate) fn rule_pieces(loaded: &crate::rules::Loaded) -> Vec<(Provenance, String)> {
+    let mut pieces = Vec::new();
+    if loaded.introduces {
+        pieces.push((
+            Provenance::Driver,
+            "\n\nRules for the files this session has worked with. Each was added once a file \
+             its paths match was read, written or named by the user, and it applies to the files \
+             those paths match. They follow every instruction above, the mode and any words the \
+             user gave on the command line included, and where one disagrees with those, those \
+             stand.\n\n"
+                .to_string(),
+        ));
+    }
+    pieces.extend(source_pieces(&loaded.origin, &loaded.text));
+    pieces
 }
 
 /// Build the preamble for one turn.
@@ -138,7 +181,10 @@ pub fn compose<S: Sink>(
 ///
 /// `appended` is what `--append-system-prompt` named (INSTR-10). It is the last standing source,
 /// after the project's file, and it is in `text`, which is what a delegate reads.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, the two workspaces and each preamble input are held separately by compose and by the turn"
+)]
 pub fn compose_in<S: Sink>(
     policy: &mut Policy<'_, S>,
     sources: &Workspace,
@@ -169,6 +215,12 @@ pub fn compose_in<S: Sink>(
     // Neither file is read in a safe session. What the command line named is the person's words for
     // this run and stays.
     let safe = bravebot_core::safe::engaged();
+    // Read before the sources that sit above them in the order, and placed in it below: the
+    // person's own after the person's `AGENTS.md`, the project's after the project's.
+    let mut rules = match safe {
+        true => crate::rules::Found::default(),
+        false => crate::rules::read(policy, sources, workspace, home, &mut preamble.notices),
+    };
     if !safe
         && let Some(home) = home
         && let Some(text) =
@@ -179,6 +231,14 @@ pub fn compose_in<S: Sink>(
         standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
         standing.push(Provenance::TrustedFile(origin), text.trim());
         standing.push(Provenance::Driver, "\n\n");
+    }
+    for rule in &rules.home {
+        stand_rule(
+            &mut standing,
+            rule,
+            &mut standing_bytes,
+            &mut preamble.notices,
+        );
     }
     let workspace_agents = match safe {
         true => Ok(None),
@@ -201,6 +261,14 @@ pub fn compose_in<S: Sink>(
         }
         Ok(None) => {}
         Err(notice) => preamble.notices.push(notice),
+    }
+    for rule in &rules.project {
+        stand_rule(
+            &mut standing,
+            rule,
+            &mut standing_bytes,
+            &mut preamble.notices,
+        );
     }
     if !safe {
         for relative in nested_agents_files(sources) {
@@ -233,13 +301,21 @@ pub fn compose_in<S: Sink>(
         }
     }
 
-    if !skills.is_empty() {
+    if skills.advertises_any() {
+        let find_more = if skills.is_curated() {
+            "This is the whole set a definition named for this turn; there are no others to find."
+        } else {
+            "These are the ones built into this program; call search_skills with a word or \
+             phrase to find one of the user's own or the project's."
+        };
         preamble.add(
             Provenance::Driver,
-            "\n\nSkills. Each is a set of instructions for a kind of task, most of them written \
-             by the user. When a task matches one, call load_skill with its name before starting \
-             that work and follow what it says. A prompt naming one as /name is the user asking \
-             for it. These names are the only ones that exist.\n\n",
+            format!(
+                "\n\nSkills. Each is a set of instructions for a kind of task, most of them \
+                 written by the user. When a task matches one, call load_skill with its name \
+                 before starting that work and follow what it says. A prompt naming one as \
+                 /name is the user asking for it. {find_more}\n\n"
+            ),
         );
         preamble.add(
             Provenance::Trusted("skill list"),
@@ -342,7 +418,54 @@ pub fn compose_in<S: Sink>(
         );
     }
 
+    // The rules a file touched in an earlier turn, or one named with `@` in this prompt, has
+    // already matched. Last, so that a rule a round adds later goes after the same bytes
+    // (INSTR-16).
+    for loaded in rules.held.take_for(sources) {
+        admit_by_size(
+            &crate::confirm::shown_name(&loaded.origin),
+            &loaded.text,
+            &mut standing_bytes,
+            &mut preamble.notices,
+        );
+        preamble.add_rule(&loaded);
+        preamble.added.push(loaded);
+    }
+    preamble.held = rules.held;
+
     preamble
+}
+
+/// One rule that applies on every turn, put with the standing instructions in the order INSTR-4
+/// gives (INSTR-16).
+fn stand_rule(
+    standing: &mut Prompt,
+    rule: &crate::rules::Rule,
+    standing_bytes: &mut usize,
+    notices: &mut Vec<Notice>,
+) {
+    admit_by_size(
+        &crate::confirm::shown_name(&rule.origin),
+        &rule.text,
+        standing_bytes,
+        notices,
+    );
+    for (provenance, text) in source_pieces(&rule.origin, &rule.text) {
+        standing.push(provenance, text);
+    }
+}
+
+/// One rule file's words as the system prompt carries them: where it came from, what it says, and
+/// a blank line (INSTR-16).
+fn source_pieces(origin: &str, text: &str) -> [(Provenance, String); 3] {
+    [
+        (Provenance::Driver, format!("From {origin}:\n\n")),
+        (
+            Provenance::TrustedFile(origin.to_string()),
+            text.trim().to_string(),
+        ),
+        (Provenance::Driver, "\n\n".to_string()),
+    ]
 }
 
 /// What the settings say a commit message and a pull request this program writes may carry.
@@ -1031,6 +1154,17 @@ fn read_instructions<S: Sink>(
     workspace: &Workspace,
     name: &str,
 ) -> Result<Option<String>, Notice> {
+    read_instructions_as(policy, workspace, name, name)
+}
+
+/// [`read_instructions`] for a file whose name a notice draws as `shown`, for a file the project
+/// named and not this program (INSTR-16).
+pub(crate) fn read_instructions_as<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    name: &str,
+    shown: &str,
+) -> Result<Option<String>, Notice> {
     let Ok(contents) = workspace.read(policy, &Labelled::trusted(name.to_string())) else {
         return Ok(None);
     };
@@ -1042,14 +1176,14 @@ fn read_instructions<S: Sink>(
     // warning stops being read.
     if !contents.label().is_trusted() {
         return Err(Notice::from_message(format!(
-            "{name} was not loaded: this directory is not trusted"
+            "{shown} was not loaded: this directory is not trusted"
         )));
     }
 
     match policy.read_trusted_content("preamble", &contents) {
         Ok(text) => Ok(Some(text)),
         Err(_) => Err(Notice::from_message(format!(
-            "{name} was not loaded: it is not trusted"
+            "{shown} was not loaded: it is not trusted"
         ))),
     }
 }

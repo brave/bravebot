@@ -169,6 +169,9 @@ impl Session {
     /// `u` after a send would put back the prompt that had just gone.
     pub(super) fn set_input(&mut self, line: impl Into<String>) {
         self.handoff = false;
+        self.enhanced = None;
+        // A line that arrived whole is not the one the link wrote, so its banner goes with it.
+        self.link_prompt = None;
         self.put_in_the_box(line);
         self.undo.clear();
         self.inserting = None;
@@ -490,6 +493,9 @@ impl Session {
         // typed find a run already open and share a step this press already closed.
         self.ordinary_run_open = false;
         self.abandon_the_selection();
+        // The list stands over a line that arrived under it as it does over a paste or a recalled
+        // one (INPUT-13).
+        self.shortcuts = false;
         self.input.insert_str(self.caret, &yanked.text);
         self.caret += yanked.text.len();
     }

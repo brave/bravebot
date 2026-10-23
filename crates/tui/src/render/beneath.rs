@@ -7,9 +7,11 @@ use ratatui::text::{Line, Span};
 
 use crate::command_table::{held_back_by, named, runs_while_working};
 use crate::keybindings::Keybindings;
+use crate::skills::Origin;
 use crate::state::{Bound, Session, Status};
 use crate::theme;
 use crate::wrap;
+use bravebot_agent::skills::Source;
 
 use super::{dim, head_of, printable, tail_of};
 
@@ -306,10 +308,19 @@ fn slash_lines(
         let chosen = highlighted.as_ref() == Some(skill);
         let word = skill_word(skill);
         let padding = column.saturating_sub(word.chars().count()) + 2;
-        let from = match skill.source {
-            bravebot_agent::skills::Source::Workspace => t!(skill_from_project),
-            bravebot_agent::skills::Source::Home => t!(skill_from_user),
-            bravebot_agent::skills::Source::BuiltIn => t!(skill_from_built_in),
+        let found = match &skill.source {
+            Origin::Skill(Source::Workspace) => t!(skill_from_project).to_string(),
+            Origin::Skill(Source::Home) => t!(skill_from_user).to_string(),
+            Origin::Skill(Source::BuiltIn) => t!(skill_from_built_in).to_string(),
+            Origin::Server { alias, .. } => {
+                t!(skill_from_mcp_server, alias = alias.as_str()).to_string()
+            }
+        };
+        // After where it was found, so the row says both: a skill the planner is kept from is one only
+        // this line can load (SKILL-20).
+        let from = match skill.person_only {
+            true => format!("{found} {}", t!(skill_person_only)),
+            false => found.to_string(),
         };
         // Cut rather than wrapped, since nothing below the box wraps, and cut short of the width so
         // where the skill came from is still on the row.
@@ -389,17 +400,17 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The eleven the file can move
+/// list names the key that answers rather than the key that used to. The thirteen the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
-) -> [(String, &'static str); 27] {
+) -> Vec<(String, &'static str)> {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
     };
-    [
+    let mut listed = vec![
         ("!".to_string(), "run a shell command"),
         ("/".to_string(), "commands and skills"),
         ("@".to_string(), "name a file"),
@@ -428,9 +439,16 @@ pub(super) fn shortcuts(
             "earlier prompts: this session or all",
         ),
         (bindings.undo_name(), "undo the last edit"),
+        (bindings.enhance_name(), "make the line more specific"),
+    ];
+    // Where the session can be suspended, which is every platform but Windows (INPUT-47).
+    #[cfg(unix)]
+    listed.push((bindings.suspend_name(), "suspend to the shell"));
+    listed.extend([
         ("drag".to_string(), "select, copy on release"),
         ("shift-drag".to_string(), "the terminal's own selection"),
-    ]
+    ]);
+    listed
 }
 
 /// The shortcuts in as many columns as the width will hold.

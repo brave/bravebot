@@ -66,6 +66,17 @@ impl Emitter {
 }
 
 impl Emitter {
+    /// Stop saying anything from here on.
+    ///
+    /// For a process whose client has gone and which is closing what it held: the client is not
+    /// there to be told, and one that reads a view detached takes it for the bridge's own account
+    /// of the view, which is not the same as a connection that was lost.
+    pub fn go_quiet(&self) {
+        if let Ok(mut output) = self.0.lock() {
+            output.sink = Box::new(|_| {});
+        }
+    }
+
     pub fn has_view(&self, session: &str) -> bool {
         self.0
             .lock()

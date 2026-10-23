@@ -55,6 +55,19 @@ A command that colours its output is drawn without its colour codes, with a row 
 saying how many were left out ([the transcript](transcript.md)). That changes what the screen draws
 and not what the model is sent.
 
+## Output while it runs
+
+What a command prints is drawn under it as it prints, from standard output and standard error in the
+order they were read. A build or a server start that prints for minutes shows what it has printed so
+far, so you can tell a slow command from a hung one and stop it with Esc. While it runs only the
+last 200 lines are drawn, with a row saying how many came before them. Colour codes and other
+escapes are drawn the way they are for a command that has ended.
+
+When the command ends, what was drawn is replaced by the output the model reads, so nothing is drawn
+twice. Standard error is listed after standard output there, which is the order the model reads it
+in. A command you stop, or that runs past ten minutes, leaves on the screen what it had printed,
+above the note saying why it ended and a note that it was not sent to the model.
+
 ## Keeping the output to yourself
 
 Type `!!` to run one command whose output is shown and never sent to the model: `!!cat .env`. The

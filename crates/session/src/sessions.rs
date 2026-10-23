@@ -111,6 +111,52 @@ pub struct Aside {
     pub kept: bool,
 }
 
+/// How a session's tokens divide into those the model read and those it wrote.
+///
+/// Kept as two running totals beside [`Record::tokens`] rather than as a second total, because
+/// a charge that reports no split still adds to the total. What the two figures leave out of the
+/// total is tokens whose split is not known, which is every token of a record written before the
+/// split was kept.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Split {
+    /// Tokens the model was sent, which is the total less what it wrote, as the account panel
+    /// reckons it.
+    #[serde(default)]
+    pub read: u64,
+    /// Tokens the model wrote.
+    #[serde(default)]
+    pub written: u64,
+}
+
+impl Split {
+    /// The split of `tokens` of which the model wrote `written`. A figure past the total reads as
+    /// the whole of it written.
+    pub fn of(tokens: u64, written: u64) -> Self {
+        Self {
+            read: tokens.saturating_sub(written),
+            written,
+        }
+        .within(tokens)
+    }
+
+    /// This split cut to fit inside `tokens`, so that the tokens it leaves out never wrap past zero.
+    /// Written is kept first and read takes what is left.
+    pub fn within(self, tokens: u64) -> Self {
+        let written = self.written.min(tokens);
+        Self {
+            read: self.read.min(tokens - written),
+            written,
+        }
+    }
+
+    /// Saturates like the token totals `stats` sums beside it: a figure read back from a record
+    /// can be any number, and adding two of them must not overflow.
+    pub fn add(&mut self, other: Split) {
+        self.read = self.read.saturating_add(other.read);
+        self.written = self.written.saturating_add(other.written);
+    }
+}
+
 /// A checkpoint of session state captured before a turn begins, for `/undo`.
 #[derive(Debug, Clone)]
 pub struct TurnSnapshot {
@@ -120,6 +166,8 @@ pub struct TurnSnapshot {
     pub turns: usize,
     /// Cumulative tokens before this turn.
     pub tokens: u64,
+    /// How many of those were read and how many written, where that was recorded.
+    pub split: Split,
     /// Spend by turn before this turn.
     pub spend: std::collections::BTreeMap<usize, u64>,
     /// Timing by turn before this turn.
@@ -287,6 +335,13 @@ pub struct Record {
     /// than about the process that happened to be running it.
     #[serde(default)]
     pub tokens: u64,
+    /// How many of [`Record::tokens`] were read and how many were written, for the part of the
+    /// spend that was recorded with the split.
+    ///
+    /// Zero for a record written before the split was kept, and short of the total for a session
+    /// that went on after one: what the split does not cover is `tokens` less the two figures.
+    #[serde(default)]
+    pub split: Split,
     /// The model the server reported answering with, as of the last turn.
     ///
     /// What answered rather than what was asked for, since those differ: an endpoint may serve
@@ -460,6 +515,15 @@ pub struct Record {
     /// `None` for a record written before this was kept, and for a session started without one.
     #[serde(default)]
     pub agent: Option<String>,
+    /// The skill the person put in force with `/mode` and had not left (SKILL-21).
+    ///
+    /// Only the name, written by the driver from the person's own command. A resume puts the mode
+    /// back and each turn reads the skill again, so an edit to the file is followed and a skill
+    /// that is gone or no longer trusted is reported rather than applied from this record.
+    ///
+    /// `None` for a record written before this was kept, and for a session in no mode.
+    #[serde(default)]
+    pub skill_mode: Option<String>,
 }
 
 /// A kept checkout as it is written down.
@@ -697,6 +761,10 @@ pub struct StoredRewind {
     pub turns: usize,
     /// Cumulative tokens before the turn.
     pub tokens: u64,
+    /// The split of those that was recorded, which a record written before it was kept leaves at
+    /// zero.
+    #[serde(default)]
+    pub split: Split,
     #[serde(default)]
     pub spend: BTreeMap<usize, u64>,
     #[serde(default)]
@@ -854,6 +922,7 @@ impl StoredRewind {
             conversation: snapshot.conversation.clone(),
             turns: snapshot.turns,
             tokens: snapshot.tokens,
+            split: snapshot.split,
             spend: snapshot.spend.clone(),
             timing: snapshot.timing.clone(),
             trust: Some(stored_rules(&snapshot.trust)),
@@ -951,6 +1020,7 @@ impl StoredRewind {
                 conversation: self.conversation,
                 turns: self.turns,
                 tokens: self.tokens,
+                split: self.split,
                 spend: self.spend,
                 timing: self.timing,
                 cached: None,
@@ -1268,6 +1338,7 @@ pub fn record_manifest_run(
     let programs = TrustedPrograms::new();
     let usage = manifest_usage(outcome, retained);
     let tokens = usage.map_or(0, |s| s.tokens);
+    let split = usage.map_or(Split::default(), |s| Split::of(s.tokens, s.output_tokens));
     // One turn, so the breakdown and the total say the same thing. Written anyway, because a
     // reader comparing runs should not have to special-case where the figure came from.
     let spend = BTreeMap::from([(1, tokens)]);
@@ -1289,6 +1360,7 @@ pub fn record_manifest_run(
             conversation: &snapshot,
             turns: 1,
             tokens,
+            split,
             spend: &spend,
             timing: &timing,
             model: outcome.as_ref().ok().map(|o| o.model.as_str()),
@@ -1614,6 +1686,7 @@ pub struct Summary {
 /// figure is left out. The terminal and the desktop window both charge through here.
 pub fn charge_failed_turn(
     tokens: &mut u64,
+    split: &mut Split,
     spend: &mut std::collections::BTreeMap<usize, u64>,
     timing: &mut std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
     turn: usize,
@@ -1624,6 +1697,7 @@ pub fn charge_failed_turn(
         return false;
     }
     *tokens += spent.tokens;
+    split.add(Split::of(spent.tokens, spent.output_tokens));
     *spend.entry(turn).or_insert(0) += spent.tokens;
     let timing = timing.entry(turn).or_default();
     timing.wall_ms += u64::try_from(took.as_millis()).unwrap_or(u64::MAX);
@@ -1641,6 +1715,8 @@ pub struct Standing<'a> {
     pub history: Option<&'a [StoredTurn]>,
     pub turns: usize,
     pub tokens: u64,
+    /// How many of `tokens` were read and how many written, where that was recorded.
+    pub split: Split,
     /// What each turn cost, by turn number.
     pub spend: &'a BTreeMap<usize, u64>,
     /// Where each turn's wall clock went, by turn number.
@@ -1671,6 +1747,8 @@ pub struct Continuation<'a> {
     pub prompt: &'a str,
     /// What the turn spent.
     pub tokens: u64,
+    /// How many of `tokens` the model read and how many it wrote.
+    pub split: Split,
     /// The model the server reported answering with.
     pub model: &'a str,
     /// The trust map after the turn.
@@ -1753,6 +1831,8 @@ pub struct Handle {
     notes: Vec<Note>,
     /// The definition the person named on the command line, for the record to carry.
     agent: Option<String>,
+    /// The skill `/mode` has in force, for the record to carry (SKILL-21).
+    skill_mode: Option<String>,
     /// Whether a record for this id is on disk yet.
     ///
     /// An id exists from the first moment, but a session that was opened and abandoned leaves
@@ -1812,6 +1892,7 @@ impl Handle {
             handed_off_from: None,
             notes: Vec::new(),
             agent: None,
+            skill_mode: None,
             wrote: false,
             server_children_may_run: false,
             build: build.to_string(),
@@ -1837,6 +1918,7 @@ impl Handle {
             handed_off_from: record.handed_off_from.clone(),
             notes: record.notes.clone(),
             agent: record.agent.clone(),
+            skill_mode: record.skill_mode.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
             server_children_may_run: record.server_children_may_run(),
@@ -1994,6 +2076,17 @@ impl Handle {
         self.agent.as_deref()
     }
 
+    /// Record the skill the person put in force with `/mode`, or `None` once they left it
+    /// (SKILL-21). Written with the next save.
+    pub fn set_skill_mode(&mut self, name: Option<String>) {
+        self.skill_mode = name;
+    }
+
+    /// Only a name: each turn resolves it again, so it can name a skill that has since gone.
+    pub fn skill_mode(&self) -> Option<&str> {
+        self.skill_mode.as_deref()
+    }
+
     /// The link of this kind the person gave the session, if they gave one.
     pub fn link(&self, kind: Link) -> Option<&str> {
         match kind {
@@ -2131,6 +2224,7 @@ impl Handle {
             updated: now(),
             turns: standing.turns,
             tokens: standing.tokens,
+            split: standing.split,
             model: standing.model.map(str::to_string),
             spend: standing.spend.clone(),
             timing: standing.timing.clone(),
@@ -2170,6 +2264,7 @@ impl Handle {
                 )
                 .collect(),
             agent: self.agent.clone(),
+            skill_mode: self.skill_mode.clone(),
         };
 
         self.write(&directory, &record);
@@ -2225,6 +2320,7 @@ impl Handle {
         }
         record.turns = number;
         record.tokens += next.tokens;
+        record.split.add(next.split);
         *record.spend.entry(number).or_insert(0) += next.tokens;
         record.timing.insert(number, next.timing);
         record.model = Some(next.model.to_string());
@@ -2244,6 +2340,7 @@ impl Handle {
         record.build = Some(self.build.clone());
         record.front = Some(self.front.recorded().to_string());
         record.agent = self.agent.clone();
+        record.skill_mode = self.skill_mode.clone();
         // The handle holds every note typed on this session, including ones added after the record
         // this continuation was read from.
         record.notes = self.notes.clone();
@@ -2502,6 +2599,12 @@ pub fn delete(project: &Path, id: &str) -> Result<(), Deletion> {
         return Err(Deletion::Invalid);
     }
     let directory = project_directory(project).ok_or(Deletion::NotFound)?;
+    delete_in(&directory, id)
+}
+
+/// [`delete`] for the directory a project's records are in, which the caller has found. `id` is a
+/// session's name, which [`is_a_session_name`] settles before it is joined onto a path.
+pub(crate) fn delete_in(directory: &Path, id: &str) -> Result<(), Deletion> {
     let record = directory.join(format!("{id}.json"));
     if std::fs::symlink_metadata(&record).is_err() {
         return Err(Deletion::NotFound);
@@ -2518,6 +2621,92 @@ pub fn delete(project: &Path, id: &str) -> Result<(), Deletion> {
         }
     }
     std::fs::remove_file(&record).map_err(Deletion::Failed)
+}
+
+/// Remove the records under `root` that have not been written since `cutoff`, with the trail and the
+/// search index beside each, returning how many records went (STATE-4).
+///
+/// `root` is the directory holding one directory per project. A record's age is the modification
+/// time of its file and nothing it says, so no byte of a conversation decides whether it is kept,
+/// and a time later than the cutoff, a future one included, keeps it. `kept` names the sessions
+/// whose files stay at any age: the one this process is in, whose record a rewind reads while the
+/// session is live, and any a background process is running ([SESSION-19], [BG-9]).
+///
+/// A trail or a temporary file with no record beside it is what an interrupted save leaves, and it
+/// holds the conversation as the record would, so it goes by its own age. An index with no record
+/// is removed by the next search ([SESSION-33]).
+///
+/// A project's directory is removed once the removal leaves nothing in it, except `kept_directory`,
+/// which a session starting in it may be about to write into. A link standing as a project's
+/// directory or as a record is stepped over rather than followed, because where it leads is outside
+/// what `root` was given. A removal that fails costs that record and nothing more.
+///
+/// [SESSION-19]: ../../../docs/specs/sessions.md
+/// [BG-9]: ../../../docs/specs/background-sessions.md
+/// [SESSION-33]: ../../../docs/specs/sessions.md
+pub(crate) fn remove_unwritten_since(
+    root: &Path,
+    cutoff: std::time::SystemTime,
+    kept: &dyn Fn(&str) -> bool,
+    kept_directory: Option<&Path>,
+) -> usize {
+    bravebot_agent::home::directories_in(root)
+        .iter()
+        .map(|project| {
+            remove_project_records_unwritten_since(
+                project,
+                cutoff,
+                kept,
+                kept_directory != Some(project.as_path()),
+            )
+        })
+        .sum()
+}
+
+/// [`remove_unwritten_since`] for one project's directory, which goes too where `may_remove_it` and
+/// the removal leaves nothing in it. A directory that still holds anything is not removed, which
+/// `remove_dir` guarantees.
+fn remove_project_records_unwritten_since(
+    directory: &Path,
+    cutoff: std::time::SystemTime,
+    kept: &dyn Fn(&str) -> bool,
+    may_remove_it: bool,
+) -> usize {
+    let mut removed = 0;
+    let mut removed_any = false;
+    for entry in bravebot_agent::home::files_unwritten_since(directory, cutoff) {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if let Some(id) = name.strip_suffix(".json") {
+            if is_a_session_name(id) && !kept(id) && delete_in(directory, id).is_ok() {
+                removed += 1;
+                removed_any = true;
+            }
+        } else if let Some(id) = name
+            .strip_suffix(".audit.jsonl")
+            .or_else(|| name.strip_suffix(".tmp"))
+        {
+            let no_record = std::fs::symlink_metadata(directory.join(format!("{id}.json")))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            if is_a_session_name(id) && !kept(id) && no_record {
+                removed_any |= std::fs::remove_file(entry.path()).is_ok();
+            }
+        }
+    }
+    if removed_any && may_remove_it {
+        let _ = std::fs::remove_dir(directory);
+    }
+    removed
+}
+
+/// The directory holding every project's records under `state`, which is where a sweep looks.
+///
+/// Not the root a process was told to keep its records in ([`keep_in`]): that directory was named by
+/// whoever started the process, may hold anything, and belongs to the process that was given it.
+pub(crate) fn state_sessions(state: &Path) -> PathBuf {
+    state.join(SESSIONS)
 }
 
 /// What `purge` would remove from a project, and what it leaves for being held.
@@ -2737,6 +2926,81 @@ pub fn branch_of(directory: &Path) -> Option<String> {
     let reference = head.trim().strip_prefix("ref: ")?;
     let branch = reference.strip_prefix("refs/heads/")?;
     Some(branch.to_string())
+}
+
+/// The most of a git file this reads: a configuration is a few lines, so a larger one is not read.
+const GIT_FILE_LIMIT: u64 = 1 << 20;
+
+/// What `origin` is set to in the checkout holding `directory`, as its configuration spells it.
+///
+/// Read out of the file for the reason [`branch_of`] reads `HEAD`: it is one line, and starting
+/// git for it would run whatever the repository's own configuration names. A linked worktree
+/// keeps no configuration of its own, so it is read from the repository its `commondir` names.
+/// `None` where there is no such remote, or where its value is not written plainly: a comment, a
+/// quote or an escape in it is left unread rather than interpreted. A configuration larger than
+/// [`GIT_FILE_LIMIT`] is not read, and neither is one with an `include` or `includeIf`, since the
+/// file it names can set another remote.
+///
+/// The text is the checkout's own and is workspace content, so it is for choosing what to show
+/// the person and for nothing that decides what the agent does.
+pub fn origin_of(directory: &Path) -> Option<String> {
+    let git = find_git(directory)?;
+    let common = match read_git_file(&git.join("commondir")) {
+        Some(named) => git.join(named.trim()),
+        None => git,
+    };
+    remote_url(&read_git_file(&common.join("config"))?, "origin")
+}
+
+/// A file under a git directory as text, or `None` for one larger than [`GIT_FILE_LIMIT`].
+fn read_git_file(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(GIT_FILE_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > GIT_FILE_LIMIT {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// The `url` of the remote called `remote` in a git configuration, the last one where several are
+/// given, as `git config --get` answers.
+///
+/// Only the plain spelling is read: `[remote "name"]` on a line of its own and `url = value` with
+/// no quote, backslash, `#` or `;` in the value, since each of those changes what git takes the
+/// value to be. A line that is not plain, and an `include` section anywhere, make the answer
+/// `None`, never a guess.
+fn remote_url(config: &str, remote: &str) -> Option<String> {
+    let mut inside = false;
+    let mut found = None;
+    for line in config.lines().map(str::trim) {
+        if let Some(header) = line.strip_prefix('[') {
+            let section = header.split(|c: char| c == ']' || c == '"' || c.is_whitespace());
+            if section.into_iter().next().is_some_and(|name| {
+                matches!(name.to_ascii_lowercase().as_str(), "include" | "includeif")
+            }) {
+                return None;
+            }
+            inside = header
+                .strip_suffix(']')
+                .and_then(|header| header.split_once(char::is_whitespace))
+                .is_some_and(|(section, name)| {
+                    section.eq_ignore_ascii_case("remote") && name.trim() == format!("\"{remote}\"")
+                });
+        } else if inside
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim().eq_ignore_ascii_case("url")
+        {
+            let value = value.trim();
+            found = (!value.is_empty() && !value.contains(['"', '\\', '#', ';']))
+                .then(|| value.to_string());
+        }
+    }
+    found
 }
 
 /// The git directory for a checkout, walking up from `directory`.
@@ -3036,9 +3300,10 @@ mod tests {
     fn a_failed_turn_is_charged_once_and_a_turn_with_no_request_not_at_all() {
         use bravebot_agent::timing::Timing;
 
-        let (mut tokens, mut spend, mut timing) = Default::default();
+        let (mut tokens, mut split, mut spend, mut timing) = Default::default();
         let spent = bravebot_agent::Spent {
             tokens: 107,
+            output_tokens: 40,
             timing: Timing {
                 wall_ms: 999_999,
                 inference_ms: 11,
@@ -3051,6 +3316,7 @@ mod tests {
 
         assert!(!charge_failed_turn(
             &mut tokens,
+            &mut split,
             &mut spend,
             &mut timing,
             1,
@@ -3058,10 +3324,12 @@ mod tests {
             took
         ));
         assert_eq!(tokens, 0);
+        assert_eq!(split, Split::default());
         assert!(spend.is_empty() && timing.is_empty());
 
         assert!(charge_failed_turn(
             &mut tokens,
+            &mut split,
             &mut spend,
             &mut timing,
             1,
@@ -3069,6 +3337,14 @@ mod tests {
             took
         ));
         assert_eq!(tokens, 107);
+        assert_eq!(
+            split,
+            Split {
+                read: 67,
+                written: 40
+            },
+            "the failed turn's split was not charged with its total"
+        );
         assert_eq!(spend.get(&1), Some(&107));
         assert_eq!(
             timing.get(&1),
@@ -3367,6 +3643,142 @@ mod tests {
         let inside = root.join("crates").join("tui");
         std::fs::create_dir_all(&inside).expect("create");
         assert_eq!(branch_of(&inside), Some("main".to_string()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A checkout's `origin` is the remote a link in a reply names, so another remote listed before
+    /// it, or after it, must not be taken for it.
+    #[test]
+    fn the_origin_is_read_out_of_the_checkout_configuration() {
+        let root = fake_checkout("origin", "ref: refs/heads/main\n");
+        std::fs::write(
+            root.join(".git").join("config"),
+            "[core]\n\turl = not-a-remote\n\
+             [remote \"upstream\"]\n\turl = git@github.com:brave/bravebot.git\n\
+             [remote \"origin\"]\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n\
+             \turl = https://github.com/netzenbot/bravebot.git\n\
+             [remote \"mirror\"]\n\turl = git@github.com:mirror/bravebot.git\n",
+        )
+        .expect("write config");
+        let wanted = Some("https://github.com/netzenbot/bravebot.git".to_string());
+        assert_eq!(origin_of(&root), wanted);
+
+        let inside = root.join("crates").join("tui");
+        std::fs::create_dir_all(&inside).expect("create");
+        assert_eq!(origin_of(&inside), wanted);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A worktree's own git directory holds no `config`, so a reader that stopped there would show
+    /// no remote for a checkout made with `git worktree add`, which is where a story is worked.
+    #[test]
+    fn a_linked_worktree_reads_the_configuration_of_the_repository_it_was_made_from() {
+        let root = fake_checkout("origin-worktree", "ref: refs/heads/main\n");
+        std::fs::write(
+            root.join(".git").join("config"),
+            "[remote \"origin\"]\n\turl = git@github.com:brave/bravebot.git\n",
+        )
+        .expect("write config");
+        let admin = root.join(".git").join("worktrees").join("story");
+        std::fs::create_dir_all(&admin).expect("create admin");
+        std::fs::write(admin.join("commondir"), "../..\n").expect("write commondir");
+        std::fs::write(admin.join("HEAD"), "ref: refs/heads/story\n").expect("write HEAD");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("create worktree");
+        std::fs::write(work.join(".git"), format!("gitdir: {}\n", admin.display()))
+            .expect("write .git file");
+
+        assert_eq!(branch_of(&work), Some("story".to_string()));
+        assert_eq!(
+            origin_of(&work),
+            Some("git@github.com:brave/bravebot.git".to_string())
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// What a value holds beyond its characters changes what git reads it as, and a wrong
+    /// repository named in a link is worse than none.
+    #[test]
+    fn an_origin_not_written_plainly_is_not_read() {
+        let plain = "https://github.com/a/b";
+        for (config, wanted) in [
+            // The ordinary spelling, with the section and key in any case.
+            (format!("[remote \"origin\"]\nurl={plain}\n"), Some(plain)),
+            (format!("[Remote \"origin\"]\nURL = {plain}\n"), Some(plain)),
+            // The last of several is the one `git config --get` answers.
+            (
+                format!("[remote \"origin\"]\n\turl = https://x.test/a/b\n\turl = {plain}\n"),
+                Some(plain),
+            ),
+            // Not the remote asked for: the name of a subsection is case sensitive.
+            (format!("[remote \"Origin\"]\n\turl = {plain}\n"), None),
+            (format!("[remote \"origin-2\"]\n\turl = {plain}\n"), None),
+            (format!("[remote]\n\turl = {plain}\n"), None),
+            (format!("[remote \"upstream\"]\n\turl = {plain}\n"), None),
+            // Written so that git reads something other than the text after the `=`.
+            (
+                format!("[remote \"origin\"]\n\turl = {plain} # mine\n"),
+                None,
+            ),
+            (
+                format!("[remote \"origin\"]\n\turl = {plain}; mine\n"),
+                None,
+            ),
+            (format!("[remote \"origin\"]\n\turl = \"{plain}\"\n"), None),
+            (
+                format!("[remote \"origin\"]\n\turl = {plain}\\\n/c\n"),
+                None,
+            ),
+            // A later value that is not plain replaces the earlier one in git, so none is left.
+            (
+                format!("[remote \"origin\"]\n\turl = {plain}\n\turl = {plain} # mine\n"),
+                None,
+            ),
+            // A header with a key after it on the same line is not read.
+            (format!("[remote \"origin\"] url = {plain}\n"), None),
+            // The file an include names can set another remote, in either order.
+            (
+                format!("[include]\n\tpath = other\n[remote \"origin\"]\n\turl = {plain}\n"),
+                None,
+            ),
+            (
+                format!(
+                    "[remote \"origin\"]\n\turl = {plain}\n[includeIf \"gitdir:/x/\"]\n\tpath = y\n"
+                ),
+                None,
+            ),
+            (String::new(), None),
+        ] {
+            assert_eq!(
+                remote_url(&config, "origin").as_deref(),
+                wanted,
+                "{config:?}"
+            );
+        }
+    }
+
+    /// Not every checkout names a remote, and a directory outside any is not a failure.
+    #[test]
+    fn a_checkout_with_no_configuration_has_no_origin() {
+        let root = fake_checkout("origin-none", "ref: refs/heads/main\n");
+        assert_eq!(origin_of(&root), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The file is the checkout's own, so how much of it is read is not left to its author, and a
+    /// prefix is not the file: a later line could set the remote to something else.
+    #[test]
+    fn a_configuration_past_the_limit_is_not_read() {
+        let root = fake_checkout("origin-huge", "ref: refs/heads/main\n");
+        let huge = format!(
+            "[remote \"origin\"]\n\turl = https://github.com/a/b\n{}",
+            "\t# padding\n".repeat(GIT_FILE_LIMIT as usize / 8)
+        );
+        std::fs::write(root.join(".git").join("config"), huge).expect("write config");
+        assert_eq!(origin_of(&root), None, "a prefix of the file was read");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -4144,6 +4556,48 @@ mod tests {
         assert_eq!(cleared.pull_request.as_deref(), Some(PULL));
     }
 
+    /// SKILL-21. The skill a person put in force with `/mode` is written with the record, kept by the
+    /// turns that follow, a resume and a fork, and cleared only by the driver. A record from before
+    /// it was kept reads as in no mode.
+    #[test]
+    fn a_session_records_the_skill_mode_and_its_fork_and_resume_keep_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-skill-mode");
+
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_skill_mode(Some("tdd-playbook".to_string()));
+        save_a_turn_session(&mut handle);
+        let record = load(&root, handle.id()).expect("the record was not written");
+        assert_eq!(record.skill_mode.as_deref(), Some("tdd-playbook"));
+
+        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        assert_eq!(resumed.skill_mode(), Some("tdd-playbook"));
+        save_a_turn_session(&mut resumed);
+        let again = load(&root, resumed.id()).expect("the record is still there");
+        assert_eq!(
+            again.skill_mode.as_deref(),
+            Some("tdd-playbook"),
+            "the next turn's save dropped the mode"
+        );
+        let forked = fork(&root, handle.id()).expect("the session forks");
+        assert_eq!(forked.skill_mode.as_deref(), Some("tdd-playbook"));
+
+        resumed.set_skill_mode(None);
+        save_a_turn_session(&mut resumed);
+        assert_eq!(
+            load(&root, resumed.id()).expect("written").skill_mode,
+            None,
+            "leaving the mode left it on disk"
+        );
+
+        let mut old = serde_json::to_value(&record).expect("serialises");
+        old.as_object_mut().expect("an object").remove("skill_mode");
+        let old: Record = serde_json::from_value(old).expect("an old record still reads");
+        assert_eq!(old.skill_mode, None);
+    }
+
     /// ADDRESS-3. The name the driver set is written with the record, kept by the turns that follow
     /// it, a resume, a fork and a continuation, and replaced or cleared only by the driver. A
     /// record from before the name was kept reads as naming none.
@@ -4218,6 +4672,7 @@ mod tests {
             conversation: &snapshot,
             prompt: "next",
             tokens: 1,
+            split: Default::default(),
             model: "m",
             trust: &trust,
             begins: 0,
@@ -4237,6 +4692,171 @@ mod tests {
         assert_eq!(
             load(&root, handle.id()).expect("written").agent.as_deref(),
             Some("another")
+        );
+    }
+
+    /// Every record written before the split was kept lacks the field, and it must still resume,
+    /// with the split read as not recorded rather than with an error that loses the session.
+    #[test]
+    fn a_record_from_before_the_split_reads_it_as_none_recorded() {
+        let mut record = a_record();
+        record.tokens = 900;
+        record.split = Split {
+            read: 600,
+            written: 300,
+        };
+        let mut written = serde_json::to_value(record).expect("serialises");
+        let fields = written.as_object_mut().expect("an object");
+        fields.remove("split").expect("the split is written");
+
+        let old: Record = serde_json::from_value(written).expect("an older record reads");
+
+        assert_eq!(old.tokens, 900);
+        assert_eq!(old.split, Split::default());
+    }
+
+    /// A turn carried on from a record adds its split to the record's, as it adds its tokens. A
+    /// split that replaced the record's would report the last turn's division as the session's, and
+    /// one that was left out would report none for a session that kept it.
+    #[test]
+    fn a_continued_turn_adds_its_split_to_the_record() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-split-continued");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+        let trust = TrustStore::new(&root);
+        let snapshot = a_record().conversation;
+        let mut carry_on = |tokens: u64, written: u64| {
+            let record = load(&root, handle.id()).expect("written");
+            assert!(handle.save_continuation(
+                record,
+                Continuation {
+                    conversation: &snapshot,
+                    prompt: "next",
+                    tokens,
+                    split: Split::of(tokens, written),
+                    model: "m",
+                    trust: &trust,
+                    begins: 0,
+                    ends: 0,
+                    prompt_at: None,
+                    rewind: &[],
+                    timing: Default::default(),
+                },
+            ));
+            load(&root, handle.id()).expect("written")
+        };
+
+        let first = carry_on(100, 30);
+        assert_eq!(
+            first.split,
+            Split {
+                read: 70,
+                written: 30
+            }
+        );
+
+        let second = carry_on(30, 20);
+        assert_eq!(second.tokens, 130);
+        assert_eq!(
+            second.split,
+            Split {
+                read: 80,
+                written: 50
+            },
+            "the second turn's split did not add to the first's"
+        );
+    }
+
+    /// Undoing a turn restores the tokens from before it, and the split has to come back with them
+    /// from the record too, or a session resumed after an undo reports more read and written than
+    /// it holds in all.
+    #[test]
+    fn a_stored_rewind_point_keeps_the_split_of_the_tokens_before_its_turn() {
+        let mut stored = a_stored_point(vec![]);
+        stored.tokens = 90;
+        stored.split = Split {
+            read: 60,
+            written: 20,
+        };
+        let mut record = a_record();
+        record.rewind = vec![stored];
+
+        let reread: Record = serde_json::from_slice(&serde_json::to_vec(&record).unwrap()).unwrap();
+        let point = reread.rewind_points("/work").remove(0);
+
+        assert_eq!(point.snapshot.tokens, 90);
+        assert_eq!(
+            point.snapshot.split,
+            Split {
+                read: 60,
+                written: 20
+            }
+        );
+        assert_eq!(
+            StoredRewind::of(&point, Path::new("/work")).split,
+            point.snapshot.split,
+            "a point written back lost its split"
+        );
+    }
+
+    /// A rewind point written before the split was kept lacks the field, and it must still read,
+    /// with the split as not recorded rather than with an error that loses the point, as the
+    /// record's own field does.
+    #[test]
+    fn a_rewind_point_from_before_the_split_reads_it_as_none_recorded() {
+        let mut stored = a_stored_point(vec![]);
+        stored.tokens = 90;
+        stored.split = Split {
+            read: 60,
+            written: 20,
+        };
+        let mut written = serde_json::to_value(stored).expect("serialises");
+        let fields = written.as_object_mut().expect("an object");
+        fields.remove("split").expect("the split is written");
+
+        let old: StoredRewind = serde_json::from_value(written).expect("an older point reads");
+
+        assert_eq!(old.tokens, 90);
+        assert_eq!(old.split, Split::default());
+        assert_eq!(
+            old.into_point(Path::new("/work")).snapshot.split,
+            Split::default()
+        );
+    }
+
+    /// A manifest run that failed keeps what its completed requests cost, and how that divided, as
+    /// a turn does.
+    #[test]
+    fn a_failed_manifest_record_keeps_the_split_of_what_it_spent() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("manifest-split");
+        let retained = Some(bravebot_agent::Spent {
+            tokens: 90,
+            output_tokens: 25,
+            ..Default::default()
+        });
+
+        let id = record_manifest_run(
+            &root,
+            "summarise",
+            &a_failed_run(),
+            retained,
+            Front::Terminal,
+            A_BUILD,
+        )
+        .unwrap();
+
+        assert_eq!(
+            load(&root, &id).unwrap().split,
+            Split {
+                read: 65,
+                written: 25
+            }
         );
     }
 
@@ -4698,6 +5318,7 @@ mod tests {
             conversation: bravebot_agent::Conversation::new().snapshot(),
             turns: 1,
             tokens: 0,
+            split: Default::default(),
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
             trust: None,
@@ -4725,6 +5346,7 @@ mod tests {
             updated: 1,
             turns: 0,
             tokens: 0,
+            split: Default::default(),
             model: None,
             spend: BTreeMap::new(),
             timing: BTreeMap::new(),
@@ -4750,6 +5372,7 @@ mod tests {
             rewind: Vec::new(),
             checkouts: Vec::new(),
             agent: None,
+            skill_mode: None,
         }
     }
 
@@ -4797,7 +5420,10 @@ mod tests {
         // The one scratch directory that cannot live under `target/`: this asserts a
         // directory is *not* inside a checkout, and `target/` is inside this one.
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let root = std::env::temp_dir().join("bravebot-sessions-not-a-checkout");
+        let root = std::env::temp_dir().join(format!(
+            "bravebot-sessions-not-a-checkout-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create scratch");
         assert_eq!(branch_of(&root), None);
@@ -4920,6 +5546,7 @@ mod tests {
                 conversation: &snapshot,
                 turns: 1,
                 tokens: 0,
+                split: Default::default(),
                 spend: &BTreeMap::new(),
                 timing: &BTreeMap::new(),
                 model: None,
@@ -5115,6 +5742,7 @@ mod tests {
                 conversation: &snapshot,
                 turns: 3,
                 tokens: 99,
+                split: Default::default(),
                 spend: &BTreeMap::from([(1, 42), (2, 7)]),
                 timing: &BTreeMap::new(),
                 model: None,
@@ -5402,6 +6030,7 @@ mod tests {
                 conversation: &empty,
                 turns: 1,
                 tokens: 0,
+                split: Default::default(),
                 spend: &BTreeMap::new(),
                 timing: &BTreeMap::new(),
                 model: None,
@@ -5457,6 +6086,7 @@ mod tests {
             conversation: &empty,
             turns,
             tokens: 0,
+            split: Default::default(),
             spend: &spend,
             timing: &timing,
             model: None,
@@ -5485,6 +6115,52 @@ mod tests {
             "fix the parser",
             "a later prompt renamed the session"
         );
+    }
+
+    /// A command line typed during a turn is saved with the line as its title. A name and a note
+    /// given before that save are kept by it, so `/rename` and `/note` may be carried out ahead of
+    /// a waiting command line (CMD-8). The regression it rejects is a save that titles the record
+    /// from the line over a name already chosen, or writes the record without the notes held.
+    #[test]
+    fn a_save_for_a_command_line_keeps_the_name_and_the_notes_given_before_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-command-line-save");
+        let empty = bravebot_agent::Conversation::new().snapshot();
+        let (spend, timing, todos) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let trust = TrustStore::new("/work");
+        let programs = TrustedPrograms::default();
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        assert!(handle.rename("deploy watch"), "the name was refused");
+        assert_eq!(handle.add_note(1, "remember the deploy"), Noted::Kept);
+
+        handle.save(
+            "make",
+            Standing {
+                history: None,
+                conversation: &empty,
+                turns: 1,
+                tokens: 0,
+                split: Default::default(),
+                spend: &spend,
+                timing: &timing,
+                model: None,
+                todos: &todos,
+                asides: &[],
+                trust: &trust,
+                programs: &programs,
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+        );
+
+        let record = load(&root, handle.id()).expect("the record");
+        assert_eq!(record.title, "deploy watch");
+        assert_eq!(record.notes.len(), 1);
+        assert_eq!(record.notes[0].text, "remember the deploy");
     }
 
     /// A name somebody chose outlives the turn that was rewound: it was not the turn's to give, so
@@ -5517,6 +6193,7 @@ mod tests {
                     conversation: &bravebot_agent::Conversation::new().snapshot(),
                     turns: 1,
                     tokens: 0,
+                    split: Default::default(),
                     spend: &BTreeMap::new(),
                     timing: &BTreeMap::new(),
                     model: None,
@@ -5924,6 +6601,7 @@ mod tests {
                 conversation: &snapshot,
                 turns: 1,
                 tokens: 10,
+                split: Default::default(),
                 spend: &BTreeMap::from([(1, 10)]),
                 timing: &timing,
                 model: Some("old-model"),
@@ -5946,6 +6624,7 @@ mod tests {
                 conversation: &snapshot,
                 prompt: "second question",
                 tokens: 5,
+                split: Default::default(),
                 model: "new-model",
                 trust: &TrustStore::new("/work"),
                 begins: 2,
@@ -6010,6 +6689,7 @@ mod tests {
                 conversation: &snapshot,
                 prompt: "next",
                 tokens: 1,
+                split: Default::default(),
                 model: "m",
                 trust: &TrustStore::new("/work"),
                 begins: 0,
@@ -6060,6 +6740,7 @@ mod tests {
                 conversation: &snapshot,
                 prompt: "next",
                 tokens: 1,
+                split: Default::default(),
                 model: "m",
                 trust: &TrustStore::new("/work"),
                 begins: 0,
@@ -6116,6 +6797,7 @@ mod tests {
                 conversation: &snapshot,
                 prompt: "next",
                 tokens: 1,
+                split: Default::default(),
                 model: "m",
                 trust: &TrustStore::new("/work"),
                 begins: 0,

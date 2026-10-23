@@ -36,6 +36,9 @@ pub fn in_isolated_profile() -> bool {
     for variable in bravebot_agent::home::PROFILE_VARIABLES {
         child.env(variable, profile.path());
     }
+    // It answers before the profile variables, so one in the parent's environment would put the
+    // child's state in the person's own directory.
+    child.env_remove(bravebot_agent::home::STATE_VARIABLE);
     let output = child.output().expect("run isolated session test");
     profile.close().expect("remove isolated session profile");
     assert!(

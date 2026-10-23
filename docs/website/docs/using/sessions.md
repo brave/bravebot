@@ -201,6 +201,24 @@ a fraction of a fresh one, and the breakdown keeps no cache split per turn, so a
 be composed here rather than measured. What is written stays comparable across turns and across
 sessions, which is what the record is read for.
 
+### Totalling what sessions spent
+
+```sh
+bravebot stats
+```
+
+adds the sessions, turns and tokens of every recorded session, with how many of the tokens the model
+read and how many it wrote, where `/cost` reports the one in front of you. `--days 7` keeps the
+sessions last written in the last seven days, `--models` shows what each model spent, and
+`--project` keeps the sessions that ran in this directory, or in the one `--project <dir>` names.
+Every option is described under [`stats`](../reference/cli.md#stats).
+
+The same limits apply as for `/cost`: the figures are tokens, and a session is counted whole, under
+the day it was last written and the model it ended on. The read and written figures cover the
+sessions written by a version that kept them, and the tokens of the rest are in the unsplit column.
+An incognito session leaves no record, so it is not in the total. A session you forked, or moved
+with `/cd`, is counted once for each record it left, so its spend can appear more than once.
+
 ## What is never written down
 
 **Nothing untrusted.** Every message in the record has already passed the gate that decides what the
@@ -219,7 +237,9 @@ Vouching for a directory is not saying every file in it is worth copying elsewhe
 overwrites a file of credentials **inside a project you trusted** puts its previous contents into the
 record, so they leave the project and land in the state directory. They go once the point ages out a
 few turns later, and mode 0600 covers them while they are there, but a session that ends on such a
-turn leaves them in its record until the record is deleted.
+turn leaves them in its record until the record is deleted: by you, as
+[below](#deleting-a-session), or once nothing has written it for
+[`retentionDays`](../customize/configuration.md#retentiondays) days, which is 30 where you state none.
 :::
 
 A pasted picture *is* written down, because it was never quarantined. It is part of your own message,
@@ -301,8 +321,12 @@ Ghostty and foot change the pointer to a resize arrow over the border. It holds
   shows neither and a turn that only wrote to the cache shows the write alone. The cache figures update after each round of a turn in flight, including
   the first turn, and a round that reports nothing spent leaves the previous figures in place,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
-- the plan, which stays after the turn ends. Where it runs past the bottom it keeps the task in
-  progress in view and counts the rows left out above and below it, as `+12 earlier` or
+- the files the session has written, as a count with the lines added and removed and the command that
+  opens the files view below, once one has been written,
+- the plan, which stays after the turn ends. A task still pending or in progress is drawn with a
+  filled `■` while a turn is running, and dim with a hollow `□` while none is, as after the turn
+  that wrote the list has ended or in a resumed session. Where it runs past the bottom it keeps the
+  task in progress in view and counts the rows left out above and below it, as `+12 earlier` or
   `+3 more`. A task list with no rows leaves the plan as the last list that had rows. `/clear`, a
   rewind and a new turn clear it.
 
@@ -313,6 +337,31 @@ to open it on a narrower one leaves a note, and narrowing the terminal while the
 it until the terminal is wide again. A press to close it works at any width. Whether it was left open is kept in
 `~/.bravebot/panel` for the next session, and the width you dragged it to in `~/.bravebot/panel-width`. The panel draws only what you typed, the plan, the
 session's own counters, the servers you approved and where the session runs, and never a reply or anything a tool returned.
+
+### The files the session wrote
+
+Type `/files` and the panel lists every file the session's write calls changed, in the order each was
+first written, with the lines added and removed at the right edge. Under the list are all the edits to
+the highlighted file, oldest first, each under a header with its place, its turn and its counts, with
+line numbers in a gutter and every change drawn, where the transcript draws the first twelve of each
+write. The view is half the terminal's columns, between 60 and 100, and needs a terminal at least 100
+columns wide.
+
+| Key | Does |
+|---|---|
+| `↑` `↓`, `k` `j` | highlight the previous or next file |
+| `Home` `End`, `g` `G` | highlight the first or last file |
+| `PgUp` `PgDn` | scroll the edits |
+| `[` `]` | scroll to the previous or next edit |
+| `q`, `Esc`, `/files`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
+
+Every other key does nothing there, and the line in the box comes back as you left it. Edits that
+finish while the view is open are added without moving the highlight or the scroll. The view lists
+what the session's own `write_file` and `edit_file` calls and manifest write steps changed. A file a
+program changed, a file you edited, and a write a delegate made are not listed. The session record
+keeps no write's changes, so a resumed session lists only the edits made since it was resumed, and the
+heading says so. `/clear` removes the list, and `/undo` and `/rewind` remove the edits of the turns they
+undo.
 
 ```
 /issue https://github.com/brave/bravebot/issues/1267
@@ -377,6 +426,11 @@ prompt history is one file for every project and stays, and so do the sessions o
 directories. A session running in the background is left until you stop it with
 `bravebot sessions stop`. A session open in another terminal is not seen, and its next save writes
 its record back, so close it first. Both work under `--incognito`.
+
+Nothing needs to be asked for to remove an old one: when a session starts, every record nothing has
+written for [`retentionDays`](../customize/configuration.md#retentiondays) days is removed, with its
+trail and its search index, and the session you are starting is left whatever its age. A record that
+is gone cannot be resumed, forked or searched, so run `/export` first to keep the words.
 
 ## Importing sessions from Claude Code
 

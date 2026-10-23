@@ -6,6 +6,10 @@
 //! than an interface's: a struct on disk outlives the shape of a struct in memory.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::disallowed_methods, reason = "the test names its program")
+)]
 
 #[cfg(test)]
 mod testutil;
@@ -18,7 +22,9 @@ pub mod audit;
 pub mod excerpt;
 pub mod import;
 pub mod jobs;
+pub mod retention;
 pub mod rewind;
 pub mod search;
 pub mod sessions;
+pub mod stats;
 pub mod store;

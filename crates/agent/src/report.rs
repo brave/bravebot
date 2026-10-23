@@ -29,7 +29,8 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
     }
 }
 
-/// What a person is told when `processorModel` names a model a processor cannot run on.
+/// What a person is told when `processorModel` or `--processor-model` names a model a processor
+/// cannot run on.
 ///
 /// Beside [`summary_model_refusal`] for the same reason: it names the key to correct, and a person
 /// reads it.
@@ -90,6 +91,10 @@ pub struct Activity {
     pub failed: bool,
     /// The change a write made, for showing beneath the line. Empty for everything else.
     pub changes: Vec<Change>,
+    /// The counts and line numbers the kernel made with the diff behind `changes`, for a write
+    /// that changed a file. `None` for everything else, and for a write that was refused, failed or
+    /// changed nothing, so a screen listing what was written needs no reading of `changes`.
+    pub written: Option<Written>,
     /// Whether those lines are content nobody vouched for.
     ///
     /// Drawn with the same mark the transcript puts on everything the model was not allowed to
@@ -119,6 +124,7 @@ impl Activity {
             note: None,
             failed: false,
             changes: Vec::new(),
+            written: None,
             untrusted: false,
             waited: None,
         }
@@ -155,6 +161,12 @@ impl Activity {
         self
     }
 
+    /// Attach the counts and line numbers the write's diff was made with.
+    pub fn with_written(mut self, written: Option<Written>) -> Self {
+        self.written = written;
+        self
+    }
+
     /// Say that the lines beneath this call are content nobody vouched for.
     pub fn marked_untrusted(mut self, untrusted: bool) -> Self {
         self.untrusted = untrusted;
@@ -180,6 +192,24 @@ impl Activity {
             format!("{}({})", self.verb, self.target)
         }
     }
+}
+
+/// What the kernel counted when it made the diff behind a write's [`Activity::changes`].
+///
+/// Counted over the two texts before anything was released for a screen, so no interface counts
+/// the rows it was given or counts them to find a line number ([FILES-2](../../../docs/specs/files-mode.md#FILES-2)).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Written {
+    /// The file the write landed on, as the workspace resolved it. Two calls that landed on one
+    /// file carry the same value, whatever each was called by. Where it came from a reference it
+    /// is a name out of a directory nobody vouched for, so it is a key and is never drawn.
+    pub landed: std::path::PathBuf,
+    /// Lines the write added.
+    pub added: usize,
+    /// Lines the write removed.
+    pub removed: usize,
+    /// The line numbers of each row of [`Activity::changes`], in the same order.
+    pub numbers: Vec<crate::diff::Numbered>,
 }
 
 /// What the turn is waiting on.
@@ -713,6 +743,16 @@ pub trait Reporter {
     /// it drew when the round's finished text arrives, so nothing is said twice.
     fn streaming(&mut self, _text: String) {}
 
+    /// What the model thought since the last call, for a service that sends its thinking as it
+    /// goes (BACKEND-46).
+    ///
+    /// Released for a screen and nowhere else, through the gate [`Reporter::streaming`] passes,
+    /// and sent whether or not it is empty for the same reason. It is no part of the reply: it is
+    /// never written into the conversation or the session record and never reaches a later
+    /// request, so a caller that draws it draws it only while it is wanted and drops it when the
+    /// round ends. A service that sends no thinking never calls this with anything in it.
+    fn thinking(&mut self, _text: String) {}
+
     /// The tool call the model is writing, by the word its row will start with, or `None` once
     /// there is no longer one.
     ///
@@ -924,6 +964,8 @@ pub struct RecordingReporter {
     pub narration: Vec<String>,
     /// Every fragment of a reply as it arrived, in order.
     pub streamed: Vec<String>,
+    /// Every fragment of the model's thinking as it arrived, in order.
+    pub thought: Vec<String>,
     /// The call being written, each time it changed.
     pub composing: Vec<Option<&'static str>>,
     /// What loaded and what did not, in order.
@@ -989,6 +1031,10 @@ impl Reporter for RecordingReporter {
 
     fn streaming(&mut self, text: String) {
         self.streamed.push(text);
+    }
+
+    fn thinking(&mut self, text: String) {
+        self.thought.push(text);
     }
 
     fn composing(&mut self, call: Option<&'static str>) {
@@ -1101,6 +1147,7 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         // have to remember which of the verbs meant that.
         "spawn_processor" => t!(verb_spawn_processor),
         "load_skill" => t!(verb_load_skill),
+        "search_skills" => t!(verb_search_skills),
         "load_tool" => t!(verb_load_tool),
         "ask_user" => t!(verb_ask_user),
         "request_path" => t!(verb_request_path),
@@ -1186,6 +1233,35 @@ mod tests {
         assert!(
             said.contains("not the whole of what it will print"),
             "a partial log is described as the whole of one: {said}"
+        );
+    }
+
+    /// A wait that ended early on output reads like one that sat out its bound, and nothing new
+    /// reads like a standing account of the job. Saying that nothing is watching now is what makes
+    /// the answer an account of those seconds only. The sentence belongs to a look that watched,
+    /// whatever it waited for, and not to one that only took a snapshot.
+    #[test]
+    fn a_look_that_waited_says_nothing_is_watching_the_job_now() {
+        for waited in [1, 30, 600] {
+            let said = Outcome::Running {
+                ran_for: std::time::Duration::from_secs(900),
+                waited: Some(std::time::Duration::from_secs(waited)),
+            }
+            .describe();
+            assert!(
+                said.contains("Nothing is watching it now."),
+                "a wait of {waited}s does not say the job is no longer watched: {said}"
+            );
+        }
+
+        let snapshot = Outcome::Running {
+            ran_for: std::time::Duration::from_secs(900),
+            waited: None,
+        }
+        .describe();
+        assert!(
+            !snapshot.contains("watching"),
+            "a look that watched nothing claims a watch ended: {snapshot}"
         );
     }
 

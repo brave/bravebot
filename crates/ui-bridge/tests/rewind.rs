@@ -1,4 +1,8 @@
 //! `session.rewind`: a desktop turn is undone on disk and in the conversation (SESSION-19).
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;

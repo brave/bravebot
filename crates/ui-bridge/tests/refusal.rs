@@ -45,6 +45,7 @@ fn a_write() -> WriteRequest {
         credentials: Vec::new(),
         may_always: false,
         record: None,
+        may_edit: false,
     }
 }
 
@@ -781,6 +782,7 @@ fn a_fetch() -> bravebot_agent::confirm::FetchRequest {
     bravebot_agent::confirm::FetchRequest {
         url: "https://docs.example.com/api".into(),
         host: "docs.example.com".into(),
+        redirected_from: None,
     }
 }
 

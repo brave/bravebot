@@ -30,7 +30,7 @@ try {
   await first().click()
   assert.equal(await composer.inputValue(), 'Draft one')
   await page.getByRole('button', {name: 'Send', exact: true}).click()
-  await emit('ask.request', {request: 1, prompts: [{header: 'Color', question: 'Which color?', rows: [{index: 0, label: 'Blue', detail: 'Cool'}], multiple: false, key: 'color'}]})
+  await emit('ask.request', {request: 1, prompts: [{header: 'Color', question: 'Which color?', rows: [{index: 0, label: 'Blue', detail: 'Cool'}], multiple: false, key: 'color', place: null, last: true}]})
   await composer.fill('Queued follow-up')
   // Enter would send it into the running turn; Alt+Enter holds it for after.
   await composer.press('Alt+Enter')

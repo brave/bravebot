@@ -240,7 +240,12 @@ fn table(
              than as anything you can look at, whoever vouched for the directory it is in. Give \
              that reference to spawn_processor with a question about it and the answer comes back \
              the way any processor's does. That is how to check a screenshot or read a scanned \
-             page."
+             page. \
+             \
+             A .ipynb notebook comes back as its cells, numbered from 1, with their source only: \
+             edit_file changes a cell by that number. Saved outputs are not shown unless you \
+             ask for one cell's with output_of, and they come back as a reference like a \
+             picture does, because a program or a web page may have written them."
             ),
             json!({
                 "type": "object",
@@ -249,6 +254,15 @@ fn table(
                         "type": "string",
                         "description": "Workspace-relative path, e.g. src/main.rs. Give this \
                                         or path_ref, never both."
+                    },
+                    "output_of": {
+                        "type": "integer",
+                        "description": "In a .ipynb notebook, the number of a code cell, from \
+                                        1 as a read of the notebook shows them, to get the \
+                                        cell's saved outputs instead of the cells. They come \
+                                        back as a reference for spawn_processor, never as \
+                                        text, and a picture in one is a line giving its size. \
+                                        offset and limit are ignored."
                     },
                     "path_ref": {
                         "type": "string",
@@ -369,7 +383,10 @@ fn table(
              write_file when changing part of a file: the user approves a diff, which is \
              easier to review than a whole body. The user must approve each edit before it \
              happens, so explain what you are changing. To change several places in one \
-             file, give them together in edits: the user approves one diff.",
+             file, give them together in edits: the user approves one diff. In a .ipynb \
+             notebook, name a cell by the number a read showed instead of a passage: give \
+             cell and new_text to replace that cell's source (its saved outputs are dropped), \
+             or cell_action insert_after or delete.",
             json!({
                 "type": "object",
                 "properties": {
@@ -399,6 +416,27 @@ fn table(
                         "type": "boolean",
                         "description": "Replace every occurrence instead of requiring \
                                         exactly one. Defaults to false."
+                    },
+                    "cell": {
+                        "type": "integer",
+                        "description": "In a .ipynb notebook, the number of the cell to \
+                                        change, from 1 as a read of the notebook shows \
+                                        them, with new_text as the cell's whole new \
+                                        source. With cell_action insert_after, the cell \
+                                        the new one goes after, or 0 to put it first. \
+                                        Not given with old_text, edits or replace_all."
+                    },
+                    "cell_action": {
+                        "type": "string",
+                        "enum": ["replace", "insert_after", "delete"],
+                        "description": "What to do to the cell. Defaults to replace. \
+                                        delete takes no new_text."
+                    },
+                    "cell_type": {
+                        "type": "string",
+                        "enum": ["code", "markdown"],
+                        "description": "The kind of cell insert_after makes. Defaults to \
+                                        code."
                     },
                     "edits": {
                         "type": "array",
@@ -803,16 +841,40 @@ fn table(
         ),
         Tool::function(
             "load_skill",
-            "Read one of the skills listed for you. A skill is instructions the user wrote for a              kind of task. Load one before doing that kind of work, and follow what it says.              Only the names you were listed exist; there is no path to give and nothing else to              browse.",
+            "Read one of the skills listed for you, or one search_skills found. A skill is \
+             instructions the user wrote for a kind of task. Load one before doing that kind of \
+             work, and follow what it says. Only a name you were listed or that search_skills \
+             returned exists; there is no path to give.",
             json!({
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "The name of a skill exactly as it was listed for you,                                         e.g. commit-style."
+                        "description": "The name of a skill exactly as it was listed for you \
+                                        or as search_skills returned it, e.g. commit-style."
                     }
                 },
                 "required": ["name"]
+            }),
+        ),
+        Tool::function(
+            "search_skills",
+            "Find a skill by a word or phrase, among skills of the user's own and the \
+             project's own that are not listed for you up front. Matches a skill whose name or \
+             description holds every word of the query, and returns each match's name and \
+             description in full. Load a match with load_skill before doing the kind of work it \
+             names.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "One or more words. A skill matches only where every \
+                                        word is in its name or its description, so a longer \
+                                        query narrows the search rather than widening it."
+                    }
+                },
+                "required": ["query"]
             }),
         ),
         Tool::function(
@@ -1268,12 +1330,17 @@ fn table(
                              last commit to work in, so that delegates writing at the same time \
                              do not edit or build in one working tree. Changes not yet committed \
                              are not in it, and what it changes stays there until it is brought \
-                             back. Not for a \"reader\", and not for a delegate that is already \
-                             in one. A definition may ask for one itself, and its delegates are \
-                             then started as if this were set. {}",
+                             back. \"checkout_with_changes\" is the same, and also copies into it \
+                             the changes your working directory has now: the files you wrote and \
+                             the ones git status lists as changed. Use it for a delegate that has \
+                             to check or build what you have written and not the last commit. \
+                             Which files were carried, and which were not, is in the answer. Not \
+                             for a \"reader\", and not for a delegate that is already in one. A \
+                             definition may ask for one itself, and its delegates are then \
+                             started as if \"checkout\" were set. {}",
                             checkouts_share_refs(running)
                         ),
-                        "enum": ["checkout"]
+                        "enum": ["checkout", "checkout_with_changes"]
                     },
                     "mcp_servers": {
                         "type": "array",
@@ -1868,7 +1935,8 @@ fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definiti
             let apart = match definition.asks_for_checkout() {
                 true => {
                     " Its delegates work in a checkout of the last commit, which holds no change \
-                     not yet committed."
+                     not yet committed unless the call sets isolation to \
+                     \"checkout_with_changes\"."
                 }
                 false => "",
             };

@@ -179,9 +179,9 @@ impl Session {
             return Offered::Nothing;
         }
         let commands = crate::command_table::completions(&self.input);
-        let skills = match (crate::skills::typed(&self.input), &self.skills) {
-            (Some(typed), Some(held)) => crate::skills::matching(held, typed),
-            _ => Vec::new(),
+        let skills = match &self.skills {
+            Some(held) => crate::skills::offered_for(held, &self.input),
+            None => Vec::new(),
         };
         if !commands.is_empty() || !skills.is_empty() {
             return Offered::Slash { commands, skills };
@@ -343,7 +343,8 @@ impl Session {
     ///
     /// None adds a trailing space where there is more to type: a command expecting an argument
     /// gets one, and so do a skill and a file, while a directory does not, so the path can be
-    /// typed onwards into it.
+    /// typed onwards into it. A server's prompt gets the names of its required arguments instead,
+    /// each as `name=` with the caret after the last, so the person gives values and types no name.
     pub fn accept_completion(&mut self) {
         match self.offered() {
             Offered::Slash { .. } => {
@@ -360,7 +361,7 @@ impl Session {
                         return;
                     }
                     let kept = self.input[..start].to_string();
-                    self.put_in_the_box(format!("{kept}/{} ", skill.name));
+                    self.put_in_the_box(format!("{kept}{}", skill.taken_as()));
                 } else {
                     return;
                 }
@@ -379,7 +380,8 @@ impl Session {
                 }
                 let kept = self.input[..start].to_string();
                 let trailing = if entry.is_directory { "" } else { " " };
-                // Escaped, so a name holding a space is still one word when the line is read back.
+                // Escaped, so a name holding whitespace or a backslash is still one word, and the
+                // same name, when the line is read back.
                 let path = bravebot_mentions::escape(&entry.path);
                 self.put_in_the_box(format!("{kept}@{path}{trailing}"));
             }
@@ -398,7 +400,12 @@ impl Session {
         if self.shell || self.caret() != self.input.len() {
             return None;
         }
-        crate::command_table::complete_argument(&self.input)
+        let skills: Vec<&str> = self
+            .held_skills()
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect();
+        crate::command_table::complete_argument(&self.input, &skills)
     }
 
     /// Finish the level started after `/effort ` as far as the levels that fit it agree.

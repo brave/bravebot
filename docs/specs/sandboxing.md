@@ -30,14 +30,16 @@ guards:
   - symbol: find_in
     sites:
       - crates/agent/src/confine.rs: 1
+      - crates/agent/src/servers.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 1
       - crates/sandbox/src/programs.rs: 19
-      - crates/tui/src/clipboard.rs: 8
+      - crates/tui/src/clipboard.rs: 9
       - crates/tui/src/editor.rs: 2
   - symbol: find_in_with
     sites:
-      - crates/sandbox/src/programs.rs: 8
+      - crates/sandbox/src/programs.rs: 11
+      - crates/tui/src/clipboard.rs: 4
 documented-by: docs/website/docs/security/security.md
 ---
 
@@ -578,7 +580,7 @@ everything beneath it:
 
 | Where | Refused |
 | --- | --- |
-| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium token and the server list are; the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
+| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium token and the server list are (a directory `BRAVEBOT_HOME` moves it to is not covered, [Known costs](state-directory.md#known-costs)); the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
 | Windows, also | `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the unix spellings hold; the browser profiles `~/AppData/Local/BraveSoftware`, `~/AppData/Local/Google/Chrome`, `~/AppData/Local/Chromium`, `~/AppData/Local/Microsoft/Edge` and `~/AppData/Roaming/Mozilla`; and the platform's own stores, Credential Manager's files `~/AppData/Local/Microsoft/Credentials` and `~/AppData/Roaming/Microsoft/Credentials`, the keys the data protection API encrypts with `~/AppData/Roaming/Microsoft/Protect`, the account's private keys `~/AppData/Roaming/Microsoft/Crypto`, and the vault `~/AppData/Local/Microsoft/Vault` and `~/AppData/Roaming/Microsoft/Vault` (an application data directory moved out of the home is not covered) |
 | macOS, also | `~/Library/Keychains` and `/Library/Keychains`; the browser profiles under `~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Canary`, `Google/Chrome Dev`, `Chromium`, `Firefox`, `Microsoft Edge`, `Microsoft Edge Beta`, `Microsoft Edge Dev`, `Microsoft Edge Canary`, `Arc`, `Vivaldi`), `~/Library/Cookies` and `~/Library/Safari`; `~/Library/Messages`, `~/Library/Mail` and `~/Library/Thunderbird`; 1Password's group container `~/Library/Group Containers/2BUA8C4S2C.com.1password`; under `~/Library/Application Support` also `Slack`, `discord`, `Signal`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Claude`, `Insomnia`, `Bruno`, `Postman` and `sops/age`; and `~/Library/DBeaverData` |
 | Linux, also | `~/.local/share/keyrings`, `~/.local/share/kwalletd` and the X display's cookie `~/.Xauthority` (a cookie `XAUTHORITY` names elsewhere is not covered); the browser profiles `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/google-chrome-beta`, `~/.config/google-chrome-unstable`, `~/.config/chromium`, `~/.config/microsoft-edge`, `~/.config/microsoft-edge-beta`, `~/.config/microsoft-edge-dev`, `~/.config/vivaldi`, `~/.mozilla`, `~/snap/firefox/common/.mozilla`, `~/snap/chromium` and `~/snap/brave`, and every Flatpak application's data, `~/.var/app`; `~/.thunderbird`; under `~/.config` also `Slack`, `discord`, `Signal`, `1Password`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `JetBrains`, `Insomnia`, `Bruno` and `Postman`; and `~/.local/share/DBeaverData` |
@@ -2038,7 +2040,11 @@ A mode named while a turn runs is set as it is typed, and `off` waits for the tu
 failure sentence, its `scopes` and `request_path` refusals and the profile its programs start under
 all come from one mode, every stage of the running turn keeps it, and the change applies from the next turn; a delegate spawned by a later turn runs
 under the new mode. A move to `off` asks first, saying that programs then start with no profile, and
-a no keeps the mode. The managed floor holds: a mode looser than the managed file's `sandbox.mode`
+a no keeps the mode. A background job keeps the profile it started under ([RUN-15](tools/run.md#RUN-15)), so a
+move to `read-only` while jobs are running says which ones keep the earlier mode, by the names `/jobs`
+lists, and that `/jobs stop` ends them; with none running it says nothing of jobs
+`verified-by: bravebot_tui::sandbox_command::a_move_to_read_only_names_the_jobs_that_keep_the_earlier_mode`.
+The managed floor holds: a mode looser than the managed file's `sandbox.mode`
 pin, and `off` under a managed `run.network` of `closed`, is refused with a sentence naming the
 file, before anything is asked, and under the pin the sentence says which of reading and writing
 the mode does more of. Otherwise the command ranks as `--sandbox` does, so
@@ -2241,6 +2247,12 @@ lines of the person's `~/.ssh/config` ([SANDBOX-16](#SANDBOX-16)). In particular
 - A stage that starts with an option (`sh -c ...`, `git -C dir push`) has no operation to key on,
   so `/reach` refuses the line, and a grant for a command given no arguments covers it only while
   it is given none. Otherwise a grant made for one script would follow every script.
+- A remembered scope for a program the table names is attached only to a stage whose whole argv
+  the table gives that scope ([SANDBOX-16](#SANDBOX-16)), so `git push --receive-pack=<file>
+  origin`, `git pull -s <name>`, `kubectl get pods --kubeconfig=<file>` and `docker ps --config=<dir>`
+  carry neither the scope's rows nor the egress it keeps, whatever grant was remembered for the
+  program and its operation word. A scope for a program the table does not name
+  (`/reach aws -- make check`) is keyed on the shape alone, since the table reads no argv for it.
 - A grant is for the workspace root it was typed in, and the record keeps that root with the
   identity of the directory there (its creation time and inode, as the kept answer of
   [TRUST-23](trust-map.md#TRUST-23) does). It is read only where the session's workspace root is
@@ -2278,6 +2290,7 @@ scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a
 
 `verified-by: bravebot_agent::reach::a_grant_covers_the_file_and_the_operation_it_was_made_for`
 `verified-by: bravebot_agent::reach::an_assignment_in_front_of_a_step_removes_every_grant`
+`verified-by: bravebot_agent::reach::a_grant_for_a_program_the_table_names_covers_only_an_argv_the_table_gives_the_scope`
 `verified-by: bravebot_agent::reach::a_grant_is_read_back_by_the_sessions_it_was_made_for`
 `verified-by: bravebot_agent::reach::a_revoked_grant_is_gone_until_it_is_allowed_again`
 `verified-by: bravebot_agent::reach::a_line_that_is_not_a_grant_grants_nothing`
@@ -2300,6 +2313,7 @@ scope the planner asked a line for ([SANDBOX-27](#SANDBOX-27)); none remembers a
 `verified-by: bravebot_agent::reach::a_row_bound_to_another_directory_at_the_same_path_is_dropped`
 `verified-by: bravebot_agent::reach::remove_reaches_only_the_rows_of_this_checkout`
 `verified-by: bravebot_agent::confine::a_remembered_scope_reaches_the_command_it_was_made_for_and_no_other`
+`verified-by: bravebot_agent::confine::a_remembered_scope_is_not_attached_to_an_argv_the_table_refuses`
 `verified-by: bravebot_agent::confine::a_remembered_directory_is_read_and_written_only_where_the_grant_says`
 `verified-by: bravebot_agent::confine::a_remembered_reach_is_withheld_where_the_step_or_the_machine_has_changed`
 `verified-by: bravebot_agent::confine::the_plan_and_the_failure_line_name_a_remembered_scope`
@@ -2964,7 +2978,7 @@ mode widens a sandbox mode ([SANDBOX-22](#SANDBOX-22)).
 
 **What it costs.** A program that writes anywhere the account can reaches more than the session's
 directories, including a unix socket under such a row on macOS, where a network-outbound row
-follows a write row. A program directory the account can write, such as a Homebrew prefix, is
+follows a write row. A program directory the account owns or can write, such as a Homebrew prefix, is
 left out of the places bravebot finds its own helpers ([SANDBOX-30](#SANDBOX-30)) once a stage's
 policy holds it, and stays left out for the life of the process, after the permission mode
 changes. The rows are read from the directories as they are when a stage's policy is built, so a
@@ -3224,7 +3238,8 @@ the session only; and whether a covered line is announced in the transcript befo
 The programs bravebot starts on its own account and looks up by name, unconfined and with the
 person's access to `~/.ssh`, `~/.aws` and `~/.bravebot`, are the AWS CLI (`aws`), the clipboard
 tools, `osascript`, the inhibitor `/caffeinate` starts, a hook's program, a language server, the
-editor Ctrl-G opens, the credential authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
+editor Ctrl-G opens, the browser opener `auth login chatgpt` starts (`open`, `xdg-open` or `rundll32`,
+[CHATGPT-13](chatgpt-sign-in.md#CHATGPT-13)), the credential authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), the `ssh-keygen`, `ssh` and `git` that `doctor --push-identity` runs
 ([SANDBOX-16](#SANDBOX-16)), and what `doctor --sandbox-check` runs with no sandbox
 ([SANDBOX-21](#SANDBOX-21)): the `gh` of the stored-login row, the programs of a workflow's setup
 stages, and the programs of a workflow run again without the sandbox as the control, `git`, `sh`,
@@ -3251,13 +3266,20 @@ file. A new spawn that looks a name up through
 `PATH` is added to the list above, in the same change, or resolved first.
 
 - **Those directories are the session's.** Each directory the session was opened on, added, or
-  moved to, its scratch directory, the system temporary directory, and every row a stage's policy
-  grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it. A row that came with the
+  moved to, its scratch directory, the system temporary directory, every row a stage's policy
+  grants writes in ([SANDBOX-18](#SANDBOX-18)), whatever granted it, and every row the policy a
+  local MCP server is launched under grants writes in, its declared directory and its own home
+  among them ([SERVERS-10](mcp-servers.md#SERVERS-10)). A row that came with the
   whole machine ([SANDBOX-28](#SANDBOX-28), under bypass) counts only where the account itself
-  can write the directory or the program, so `/usr/bin` stays searched. A directory is added to the
-  set when it is opened or first granted to a stage, and not when a prompt describes the stage, and
-  is never removed from it, because closing a directory does not remove a file already written
-  there.
+  owns or can write the program, or a directory from the `PATH` entry up to the row, so `/usr/bin`
+  stays searched. Ownership counts as well as the write permission because a stage creates files as
+  the account and can set their modes, so a program it wrote and made read-only, with the
+  directories above it, is still one it wrote. A directory is added to the
+  set when it is opened, first granted to a stage, or granted to a server as it is launched, and
+  not when a prompt describes the stage or the server, and is never removed from it, because
+  closing a directory does not remove a file already written there. A server's rows are recorded
+  from the policy it is launched under, after the rows its backend cannot name are dropped and
+  before the launch.
 - **A command that opens no session leaves out the directory it ran in.** `doctor --push-identity`
   and `doctor --sandbox-check` are new processes, which know of no directory a stage wrote in an
   earlier session. Each leaves out the directory it ran in and the checkout holding it, the nearest
@@ -3382,6 +3404,20 @@ because the file index is not in the standard library, so only names are compare
 path is resolved as far as it exists. A recorded directory that does not exist has no identity, so
 another spelling of it is compared by name only until it exists.
 
+Under bypass a program the account owns is left out of the lookup whatever its mode, so a person's
+own read-only program under a row such as `~/.cargo/bin` reads as not installed, as one in a
+directory a stage may write does. A program in directories the account neither owns nor can write,
+such as `/usr/bin` on a system where root owns it, is found. Where the account owns the whole tree a
+program is in, as when bravebot runs as root, none is found under a row of that tree.
+
+A directory a person declares for a local MCP server is left out from the launch on, as a whole, so
+a program they keep in it or below it, and every program under a home directory declared as one,
+reads as not installed to every lookup above, and the next clipboard tool is tried. The lookup of a
+server's own program by name ([SERVERS-5](mcp-servers.md#SERVERS-5)) reads the same record, so a
+program named by a bare name that lies in a directory a started server may write is found by the
+launch that records the directory and not by a later resolution in the same process, such as a
+reconnect. A program named by an absolute path is not judged by any lookup and starts as before.
+
 `verified-by: bravebot_sandbox::programs::a_program_in_a_directory_a_stage_may_write_is_not_found`
 `verified-by: bravebot_sandbox::programs::the_program_behind_a_writable_directory_is_the_one_found`
 `verified-by: bravebot_sandbox::programs::a_program_is_found_when_no_writable_directory_is_involved`
@@ -3393,10 +3429,13 @@ another spelling of it is compared by name only until it exists.
 `verified-by: bravebot_sandbox::programs::a_path_entry_that_links_into_a_writable_directory_is_not_searched`
 `verified-by: bravebot_sandbox::programs::a_sibling_directory_sharing_a_name_prefix_is_not_writable`
 `verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_can_write_is_not_found`
-`verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_cannot_write_is_still_found`
+`verified-by: bravebot_sandbox::programs::a_program_in_a_row_the_account_neither_owns_nor_can_write_is_still_found`
+`verified-by: bravebot_sandbox::programs::a_program_the_account_made_read_only_in_a_held_row_is_not_found`
+`verified-by: bravebot_sandbox::programs::an_entry_reached_through_a_directory_the_account_owns_is_not_searched`
+`verified-by: bravebot_agent::confine::a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started`
 `verified-by: bravebot_sandbox::programs::a_registered_directory_is_kept_out_of_the_search`
 `verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_leaves_out_a_row_held_where_the_account_can_write`
-`verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_still_finds_a_program_in_a_held_row_the_account_cannot_write`
+`verified-by: bravebot_sandbox::programs::a_search_of_a_given_path_leaves_out_a_read_only_program_the_account_owns_in_a_held_row`
 `verified-by: bravebot_sandbox::programs::an_absolute_path_is_the_callers_own_choice`
 `verified-by: bravebot_sandbox::programs::start_removes_the_names_it_is_given_and_no_others`
 `verified-by: bravebot_sandbox::programs::start_hands_a_program_only_the_names_it_is_given`
@@ -3427,6 +3466,9 @@ another spelling of it is compared by name only until it exists.
 `verified-by: bravebot_connector::lib::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::lsp::a_server_found_only_where_a_stage_may_write_is_not_installed`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
+`verified-by: bravebot_agent::servers::a_directory_a_started_server_may_write_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::servers::describing_a_server_keeps_nothing_out_of_the_search_for_programs`
+`verified-by: bravebot_agent::servers::a_server_directory_that_is_not_text_is_kept_out_as_it_is_and_not_as_its_lookalike`
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
 `verified-by: bravebot_tui::caffeinate::a_program_the_inhibitor_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::editor::an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started`
@@ -3442,9 +3484,12 @@ another spelling of it is compared by name only until it exists.
 `verified-by: bravebot_tui::clipboard::a_copy_tool_installed_outside_every_writable_directory_is_started`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_installed_outside_every_writable_directory_is_read`
+`verified-by: bravebot_tui::clipboard::a_copy_tool_the_account_made_read_only_in_a_held_row_is_not_started`
+`verified-by: bravebot_tui::clipboard::a_paste_tool_the_account_made_read_only_in_a_held_row_is_not_started`
 `verified-by: bravebot_tui::clipboard::the_clipboard_entry_points_start_no_tool_found_only_in_a_directory_a_stage_may_write`
 `verified-by: bravebot_tui::clipboard::a_copy_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::clipboard::a_paste_tool_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::clipboard::the_reads_of_the_clipboard_start_no_tool_found_only_in_a_directory_a_stage_may_write`
 `verified-by: bravebot_cli::push_identity::the_checkout_holding_the_directory_is_left_out_with_it`
 `verified-by: bravebot_cli::push_identity::a_directory_under_no_checkout_is_left_out_by_itself`
 `verified-by: bravebot_cli::running::doctor_push_identity_starts_no_program_from_the_checkout_it_runs_in`

@@ -378,7 +378,8 @@ fn the_report_holds_no_program_output() {
 /// permitted, which turns every refused row into a failure of the check itself.
 #[test]
 fn the_suite_will_not_run_under_the_temporary_directory() {
-    let under_temporary = std::env::temp_dir().join("bravebot-usability-root");
+    let under_temporary =
+        std::env::temp_dir().join(format!("bravebot-usability-root-{}", std::process::id()));
 
     let refused = usability::run(&under_temporary, &[]);
 

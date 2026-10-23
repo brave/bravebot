@@ -19,7 +19,7 @@ that is merely carried.
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
-| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | **yes, every time** |
+| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | **yes, every time** |
 | [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
@@ -30,6 +30,7 @@ that is merely carried.
 | [`spawn_processor`](#spawn_processor) | `reads`, `about` | `instruction` | no |
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
+| [`search_skills`](#search_skills) | `query` | none | no |
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
 | [`propose_plan`](#propose_plan) | the plan | none | it *is* the plan you approve |
 | [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
@@ -78,7 +79,7 @@ interpreter. [`run`](#run) takes a command line, and bravebot compiles it itself
 
 ## `read_file`
 
-Reads a UTF-8 text file from the workspace and returns its lines.
+Reads a text file from the workspace and returns its lines.
 
 | Parameter | |
 |---|---|
@@ -86,11 +87,26 @@ Reads a UTF-8 text file from the workspace and returns its lines.
 | `path_ref` | a reference to a file whose name the planner was not shown, e.g. `ref:2` |
 | `offset` | 1-based line to start at |
 | `limit` | maximum lines to return, capped so one read cannot fill the conversation |
+| `output_of` | in a `.ipynb` notebook, the number of a code cell, from 1 as a read shows them, to get that cell's saved outputs as a reference instead of the cells |
+
+A `.ipynb` notebook that the agent may read comes back as its cells instead of its JSON: a
+`[N] kind` line, numbered from 1, then the cell's source. Saved outputs are never shown, only how many
+cells hold them, because an output is text a program or a web page produced. A notebook you have not
+vouched for is a reference like any other file.
+
+`output_of` asks for one cell's saved outputs. They come back as a reference, even in a notebook you
+vouched for, and a processor reads them. A stream, an error and a result's plain text are kept, a
+picture or other data is replaced by a line giving its type and size, and the result is cut at
+20,000 characters.
 
 Long files come back one page at a time, at most 500 lines and 100,000 characters, with each line
 shortened to 2,000 characters. A page of long lines ends at the last whole line that fits under the
 character cap. The result says so and gives the offset to continue from. A
-file that is not text is reported as binary, a picture being the exception.
+file that is not text is reported as binary, a picture being the exception. A UTF-16 or UTF-32
+file that begins with a byte order mark is shown decoded, and so is a file with a few bytes that
+are not UTF-8, such as Latin-1 text, with each such byte shown as U+FFFD. The result says when it
+decoded the file, and `edit_file` refuses a file that is not UTF-8, since it would write the file
+back as UTF-8.
 
 **A picture is quarantined whatever the trust map says, and leaves quarantine only through
 [`vet_content`](#vet_content).** A file whose extension names a picture or a PDF comes back as a
@@ -541,9 +557,10 @@ A server keeps its index under `~/.bravebot/lsp/`, keyed by the workspace and ne
 which is what makes the second session in a workspace fast. A question about a symbol should not
 change the tree you are working in.
 
-**Nothing prunes it.** A Rust workspace's index runs to a few hundred megabytes, and a machine that
-has been in many workspaces holds one for each. Deleting the directory costs the next session its
-indexing time and nothing else.
+**Only age prunes it.** A Rust workspace's index runs to a few hundred megabytes, and a machine that
+has been in many workspaces holds one for each until no server has started on it for
+[`retentionDays`](../customize/configuration.md#retentiondays) days, 30 where you state none.
+Deleting the directory at any time costs the next session its indexing time and nothing else.
 
 Nothing in that cache is read as trusted, whatever else `~/.bravebot` is trusted for. The bytes
 derive from workspace files, so they carry those files' labels, and the only thing that reads them is
@@ -571,6 +588,12 @@ possible.
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
 
+In the terminal, the prompt for a write whose `contents` the agent wrote offers `e`, which opens them in
+your editor and puts the write to you again as a diff of the text you saved
+([details](../security/permissions.md#changing-a-write-before-approving-it)). What you saved is
+scanned for credentials, and the agent is told that you changed the contents and not what they say. A
+write from a `contents_ref` does not offer it.
+
 Replacing a **trusted** file with `contents` keeps that file's line endings and its leading byte
 order mark, so a file using `\r\n` stays CRLF and a file that began with a mark still does. This
 happens before the diff you approve is built, so the approval shows the lines the write changes
@@ -596,6 +619,9 @@ prefers this to rewriting a whole body.
 | `new_text` | what goes in its place |
 | `replace_all` | replace every occurrence instead of requiring exactly one |
 | `edits` | instead of `old_text` and `new_text`: several pairs of them for this one file |
+| `cell` | in a `.ipynb` notebook, the number of the cell to change, from 1 as a read shows them, with `new_text` as its whole source; 0 with `insert_after` puts a cell first |
+| `cell_action` | `replace` (the default), `insert_after` or `delete` |
+| `cell_type` | the kind of cell `insert_after` makes, `code` (the default) or `markdown` |
 
 `edits` is applied in order, each pair to the text the one before it left, and all or nothing: if
 one pair fails, the agent is told which and the file is not changed. You are asked once, about one
@@ -622,6 +648,15 @@ looks for and in what it puts there, so the file keeps one terminator throughout
 An edit requires a **trusted** file, because locating a passage to replace is a decision and a
 decision may be taken only from trusted content. To change a file the agent may not read, the route
 is `spawn_processor` plus `write_file`.
+
+### Notebook cells
+
+A `.ipynb` file reads as its cells (see `read_file`), and `cell` changes one by its number instead of
+by a passage. `cell` is refused beside `old_text`, `edits` or `replace_all`, on a file that is not a
+notebook, and for a number the notebook has no cell for. The notebook is written back in the layout
+Jupyter writes, with every other cell, its metadata and the format version kept, and you approve the
+diff. Replacing a code cell drops that cell's saved outputs and execution count, since they describe
+source that is gone, and the diff shows them going.
 
 ## `apply_checkout`
 
@@ -839,7 +874,10 @@ which is naming a host rather than answering a question about one page. See
 
 **A redirect may not leave the approved host.** Every hop goes through the same gate, and a hop
 elsewhere is refused unless a rule allows that host too, since the end of a redirect chain is
-somewhere nobody was shown. That check applies only while a fetch is in flight: reaching the model
+somewhere nobody was shown. Before it is reported as refused, you are asked about the host the
+redirect named, drawn as a redirect from the host you approved. A yes sends that one fetch again
+with that host allowed for it alone and remembers nothing, and a no gives the refusal. Bypass mode
+does not answer it, and a `deny` rule refuses without asking. That check applies only while a fetch is in flight: reaching the model
 endpoint is this program operating rather than something a turn asked for, so a rule about a website
 cannot stop bravebot talking to its own backend.
 
@@ -952,7 +990,7 @@ of capabilities, and gets back one report.
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
 | `budget` | optional; the most tokens each delegate may spend, as `500000`, `500k` or `2m`. It can only lower the budget a [definition](../customize/agents.md) sets |
-| `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in |
+| `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in, and `checkout_with_changes` also copies into it the changes your working tree has now |
 
 | Kind | Holds | For |
 |---|---|---|
@@ -1006,6 +1044,15 @@ already in a checkout. A delegate in a checkout is not offered [`lsp`](#lsp). Ch
 remote-tracking refs and tags with your working directory and with each other, so the planner is
 told to run a `git fetch` once rather than have each delegate run one.
 
+**`isolation: checkout_with_changes` gives the delegate the tree you have.** It is a checkout as
+above, with the changes in your working tree copied in as they are when the checkout is made: the
+files the session wrote, and the paths `git status` lists as changed where the session trusts the
+whole tree. A file you deleted is deleted there. A file a deny rule covers, a link, a file over
+16 MiB and anything past 1,000 files or 64 MiB is left as the commit has it, and the delegate and the
+planner are told which paths were carried, which were not and why. Nothing is written in your working
+tree, and you are not asked, since the copy goes into the checkout bravebot made. Use it for a
+`checker` that has to build what the planner just wrote.
+
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask
 along. A run whose own context has met something untrusted cannot delegate at all.
@@ -1040,20 +1087,36 @@ approving a change whose reason is one of the tasks you did not read.
 
 ## `load_skill`
 
-Reads one of the skills the planner was listed.
+Reads one of the skills the planner was listed, or one `search_skills` found.
 
 | Parameter | |
 |---|---|
-| `name` | the name exactly as it was listed, e.g. `commit-style` |
+| `name` | the name exactly as it was listed or as `search_skills` returned it, e.g. `commit-style` |
 
 The name selects from a set fixed before the turn started and **never becomes a path**: a name holding
 `../` matches nothing and the call is refused. A name close to a real one is refused rather than
-guessed at. See [Skills](../customize/skills.md).
+guessed at. A skill whose file says `disable-model-invocation: true` is not in the set, so asking for
+it is refused the same way; you load it by naming it in your own line. See
+[Skills](../customize/skills.md).
 
 Where the skill keeps other files beside its `SKILL.md`, the result ends with the skill's directory
 and their names. Once a skill of your own is loaded, [`read_file`](#read_file) can read those files
 for the rest of the turn; a project's skill is read through the trust map like any other file in the
 project.
+
+## `search_skills`
+
+Finds a skill of your own or the project's by a word or phrase. Only a skill built into bravebot
+itself is listed for the planner by default; the rest are found this way.
+
+| Parameter | |
+|---|---|
+| `query` | one or more words; a skill matches only where every word is in its name or its description |
+
+A match's name and description are returned in full, never cut, with the same words
+[`load_skill`](#load_skill) then loads the body of. A query that matches more than 25 skills
+returns the first 25, in the order they would be listed, and says how many more matched: narrow
+the query rather than widening it. See [Skills](../customize/skills.md).
 
 ## `ask_user`
 
@@ -1066,6 +1129,17 @@ Puts up to four questions to you and waits. More than four is refused whole rath
 Questions are put one at a time. You may choose an option, answer in your own words, or skip. A
 skipped question is an answer to work with rather than a reason to ask again. An answer is remembered
 for the session, question by question.
+
+In the terminal, a series of more than one ends in a review that lists each question beside your
+answer. Nothing has been sent until you press Enter there. Left goes back a question, a number
+reopens that question from the review, and either brings back what you had answered. A single
+question has no review.
+
+With [`askIdleSeconds`](../customize/configuration.md#askidleseconds) set, the terminal closes a question
+that sits that long with no key pressed, and every question behind it. The planner is told that no
+answer was given in the time allowed and that you may be away, not that you declined, and the answers
+you had already given stay. A question closed this way is not remembered, so the planner can ask it
+again.
 
 **Asking stops once the planner's context has met something untrusted**, because at that point the
 question itself could have been shaped by content nobody vouched for. A quarantined read does not stop
@@ -1149,8 +1223,8 @@ Says when this turn should be asked again: the pace of the next tick of a self-p
 [`/loop`](commands.md#loop-interval-prompt), or, outside a loop, the first later look at something,
 which starts a loop over the line you typed. It is offered only where that later look can actually
 happen; a call from any other turn is answered the way any unoffered name is. A turn that runs a prompt
-bravebot wrote for a command, as [`/init`](commands.md#init) and [`/review`](commands.md#review-target-focus)
-do, is not offered it, so those cannot start a loop that repeats the fixed prompt.
+bravebot wrote for a command, as [`/init`](commands.md#init), [`/review`](commands.md#review-target-focus)
+and [`/help`](commands.md#help-question) do, is not offered it, so those cannot start a loop that repeats the fixed prompt.
 
 | Parameter | |
 |---|---|

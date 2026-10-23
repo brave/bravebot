@@ -337,6 +337,15 @@ other than the name it was given, and the record is an account of what happened.
 before either was kept reads as no model and an empty breakdown, which is not the same as a
 session that cost nothing: the total is still there.
 
+The record also keeps how many of its tokens the model read and how many it wrote, as two running
+totals beside the total. Read is the total less what the model wrote, so a prompt the service
+answered out of its own cache is counted as read. A turn, a failed or stopped turn, a manifest run
+and a request made beside the work (`/compact`, a commit message, a handoff, a question, a goal
+check, a suggestion) each add the split of what they spent. Undoing a turn restores the split with
+the total, and clearing the conversation resets it. A record written before the split was kept has
+neither figure, and a session continued from one holds the split of its later turns only, so the two
+can total less than the tokens. `bravebot stats` reports the difference ([CLI-37](cli.md#CLI-37)).
+
 **Why.** A transcript is read after the fact to find out why a session went the way it did, and
 both questions are unanswerable from a total alone. Twenty even turns and one turn that ran away
 come to the same figure and want different fixes. Two sessions cannot be compared at all without
@@ -355,6 +364,25 @@ than the one in force at the time.
 `verified-by: bravebot_tui::app::successful_outcomes_replace_progress_and_empty_following_turns_cost_nothing`
 `verified-by: bravebot_tui::remote_confirm::cumulative_usage_reaches_the_main_thread_unchanged`
 `verified-by: bravebot_tui::state::a_resumed_session_keeps_the_recorded_model_until_a_turn_replaces_it`
+`verified-by: bravebot_session::sessions::a_failed_turn_is_charged_once_and_a_turn_with_no_request_not_at_all`
+`verified-by: bravebot_session::sessions::a_record_from_before_the_split_reads_it_as_none_recorded`
+`verified-by: bravebot_session::sessions::a_rewind_point_from_before_the_split_reads_it_as_none_recorded`
+`verified-by: bravebot_session::sessions::a_continued_turn_adds_its_split_to_the_record`
+`verified-by: bravebot_session::sessions::a_stored_rewind_point_keeps_the_split_of_the_tokens_before_its_turn`
+`verified-by: bravebot_session::sessions::a_failed_manifest_record_keeps_the_split_of_what_it_spent`
+`verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
+`verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
+`verified-by: bravebot_tui::state::clearing_forgets_the_split`
+`verified-by: bravebot_tui::state::restoring_the_spend_leaves_no_split_from_before_it`
+`verified-by: bravebot_tui::state::a_resumed_session_carries_on_counting_the_split_it_was_written_with`
+`verified-by: bravebot_tui::app::a_finished_turn_is_charged_with_what_it_read_and_wrote`
+`verified-by: bravebot_tui::app::every_request_beside_the_work_is_charged_with_what_it_read_and_wrote`
+`verified-by: bravebot_tui::app::a_record_built_from_the_session_holds_the_split_it_has_counted`
+`verified-by: bravebot_tui::undo_tests::undoing_a_turn_takes_its_split_back_with_its_tokens`
+`verified-by: bravebot_tui::manifest_run::a_stopped_run_is_charged_with_the_split_of_its_latest_report`
+`verified-by: bravebot_ui_bridge::history::a_turn_records_its_split_and_a_resumed_one_adds_to_it`
+`verified-by: bravebot_ui_bridge::history::undoing_a_desktop_turn_takes_its_split_back_with_its_tokens`
+`verified-by: bravebot_cli::plain::a_failed_turn_is_charged_what_its_completed_requests_cost`
 
 <a id="SESSION-12"></a>
 ### SESSION-12: the record says where each turn's time went, not only how long it took
@@ -781,6 +809,7 @@ takes a number cannot also have it, so the number is on a word that has one.
 `verified-by: bravebot_tui::app::the_list_names_what_each_point_would_put_back`
 `verified-by: bravebot_tui::app::the_list_of_a_session_with_no_points_says_there_is_nothing`
 `verified-by: bravebot_session::rewind::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_tui::app::the_rewind_command_goes_back_the_number_it_was_given_and_nowhere_for_anything_else`
 
 
 <a id="SESSION-22"></a>
@@ -989,7 +1018,8 @@ planner message of its own needed to hold them. A recorded failure carries only 
 interface composed, never a message from the backend. A prompt handed back to the editor on
 cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
-each other. None of this is sent to the planner.
+each other. None of this is sent to the planner. What the planner is told of a failure is the note
+of [TURN-13](turns.md#TURN-13), which holds no more than the category and the request count.
 Accepted corrections remain within the cancelled turn through reload, export and later turns.
 
 **Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a
@@ -1504,9 +1534,11 @@ stay behind because they were given for work that the brief describes only in wo
   a directory is not saying that every file in it is worth copying anywhere: overwriting a file of
   credentials inside a project the user trusts copies them out of it and into the state directory.
   They leave the record once the point ages out, and 0600 covers them while they are there, but a
-  session that ends on such a turn leaves them in its record until the record is deleted. Nothing
-  here distinguishes a file worth keeping from one that is not, because nothing here reads the
-  bytes.
+  session that ends on such a turn leaves them in its record until the record is deleted: by the
+  person ([SESSION-30](#SESSION-30)), or once nothing has written the record for the retention
+  period, which is 30 days where none is stated
+  ([state-directory.md](state-directory.md#STATE-4)). Nothing here distinguishes a file worth keeping
+  from one that is not, because nothing here reads the bytes.
 
 - **A resumed session cannot rewind a file nobody vouched for.** What such a file held is kept in
   memory for the session that took the backup and left out of the record, so after a resume that

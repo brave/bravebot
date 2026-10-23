@@ -29,6 +29,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
+pub use bravebot_lsp::server::{cache_for, remove_unused_indexes};
 use bravebot_lsp::{
     Answer, BuildTooling, Declared, Diagnostics, Location, LspResult, Operation, Servers,
 };

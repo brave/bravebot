@@ -10,9 +10,9 @@ given a second name or a parent renamed leaves a decision about one thing and a 
 The clauses are `TRUST-2` in `docs/specs/trust-map.md`, whose table lists the names one file has and
 calls an uncovered cell a defect, `PERM-7` in `docs/specs/permissions.md`, which says a deny rule is
 about the file and not the spelling used to ask for it, `SANDBOX-18` and `SANDBOX-24` in
-`docs/specs/sandboxing.md`, and `PATH-007` in `docs/best-practices/paths.md`. `AWKWARD_NAMES` in
-`crates/agent/test-support/aliases.rs` is the tests' list of names to try. Do not report a spelling the
-table-driven tests already fail on, or a gap the table records with its issue.
+`docs/specs/sandboxing.md`, and `PATH-007` in `docs/best-practices/paths.md`. `held_names()` in
+`crates/agent/test-support/aliases.rs` is the tests' list of names to try. Do not report a spelling
+the table-driven tests already fail on, or a gap the table records with its issue.
 
 ### Where to start
 
@@ -21,6 +21,12 @@ table-driven tests already fail on, or a gap the table records with its issue.
 functions to open. `surface.json` lists every site:
 
 {identity_files}
+
+{deny_count} questions put to a deny rule about a path as it is spelled (`read_is_denied`), by file with
+the functions to open. `surface.json` lists every one under `deny_judgements`. A walk over a directory's
+entries asks it of every entry it meets, so open the callers of these as well as the functions named:
+
+{deny_files}
 
 The lines in `crates/agent/src/confine.rs` that put a row into a stage's sandbox profile or name the
 proxy's socket. The rows are the session's directories, the scratch directory, the proxy's socket
@@ -51,6 +57,11 @@ Where nothing can write in between, the site is sound and needs no more words.
 spelling, a path under another mount, a parent that is itself a link. A walk that judges each entry by
 its spelled name misses a second name of a file inside the walk, and a hard link has a different name
 and the same bytes.
+
+**A walk that judges each entry it meets.** For each function that visits the entries of a directory
+and reaches one of the questions above, write down what the question is asked about: the name the walk met the entry under, or the
+file the entry is. Then put a call that names one file beside the walk over the directory above it, and
+ask whether the two give one answer for the same bytes under every name the file has.
 
 **A row granted by name to something the stage can replace.** For each row in the list above: who
 creates the path, who may write its parent, and whether anything compares the identity of what it

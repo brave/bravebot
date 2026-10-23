@@ -806,7 +806,10 @@ fn sort_brave_first(themes: &mut [Theme]) {
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a theme name and the nine palette colours, each passed by position from one of the built-in themes"
+)]
 fn named(
     name: &'static str,
     background: Rgb,

@@ -395,8 +395,9 @@ pub struct Policy<'sink, S: Sink> {
     /// The directories of the user's own skills that this turn has loaded, spelled as the host
     /// names them.
     ///
-    /// Added only by [`Policy::reach_skill_directory`], one at a time as `load_skill` answers, so a
-    /// directory is here because a skill was loaded out of it this turn and for no other reason.
+    /// Added only by [`Policy::reach_skill_directory`], one at a time as `load_skill` answers or the
+    /// turn supplies a skill the person named, so a directory is here because a skill was loaded out
+    /// of it this turn and for no other reason.
     /// [`Policy::integrity_in_force`] reads it, and the workspace reads it to know where a read
     /// may land outside the project.
     skill_reach: Vec<std::path::PathBuf>,
@@ -480,6 +481,12 @@ pub struct Policy<'sink, S: Sink> {
     /// two go through one gate and are not the same act: only the first is something a turn asked
     /// for, and only the first is what a `WebFetch` rule is about.
     fetching: Option<String>,
+    /// The host a hop of the fetch in flight was refused for going to, until
+    /// [`Policy::take_fetch_hop`] hands it to whoever asks the person. A server's own bytes.
+    fetch_hop: Option<String>,
+    /// A host other than `fetching` that a person approved this one fetch to be redirected to,
+    /// while it is in flight. Set by [`Policy::before_fetch_via`], cleared with `fetching`.
+    fetching_via: Option<String>,
     /// The host and port a declared MCP server is at, while a request to it is in flight.
     ///
     /// Set by [`Policy::before_server_request`] and cleared by
@@ -621,6 +628,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             vouch_asked: std::collections::BTreeSet::new(),
             exposed: crate::credentials::Exposed::new(),
             fetching: None,
+            fetch_hop: None,
+            fetching_via: None,
             calling_server: None,
             calling_socket: None,
             server_hop: None,
@@ -770,7 +779,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // names it, which is a person having written that host down in advance.
             if redirected
                 && ruling != crate::permissions::Decision::Ruled(crate::permissions::Ruling::Allow)
+                && self.fetching_via.as_deref() != Some(host.as_str())
             {
+                // Kept for the prompt and nothing else: see `take_fetch_hop`.
+                self.fetch_hop = Some(host.clone());
                 return Err(self.deny(
                     "network",
                     Principle::IntegrityGate,
@@ -786,7 +798,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // What a `Location` header names is a server's own bytes, so a refusal repeating it
             // would be writing them into whatever formats that refusal. The declared destination
             // is what a person wrote down, so a refusal names that.
-            if crate::url::socket_of(url) != self.calling_socket {
+            //
+            // A url that names no socket is on none, the declared one included, so two of them
+            // are never taken for one place.
+            let on_declared_socket = match (crate::url::socket_of(url), &self.calling_socket) {
+                (Some(hop), Some(declared)) => hop == *declared,
+                _ => false,
+            };
+            if !on_declared_socket {
                 // Kept for the prompt and nothing else: see `take_server_hop`.
                 self.server_hop = Some(url.to_string());
                 return Err(self.deny(
@@ -888,6 +907,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         // What the egress gate checks each hop against, until the call reports back.
         self.fetching = Some(crate::url::host_of(url).unwrap_or_default());
+        self.fetch_hop = None;
+        self.fetching_via = None;
 
         let label = Capability::WebFetch.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
@@ -909,6 +930,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// egress being checked against a host that one call was approved for.
     pub fn fetch_finished(&mut self) {
         self.fetching = None;
+        self.fetching_via = None;
+    }
+
+    /// The host the last fetch's redirect was refused for going to, if it was.
+    ///
+    /// Taken rather than read, so one refusal is asked about once. `(U,pub)`: the host came out of
+    /// a `Location` header and is the server's own bytes, so it may be drawn for a person and
+    /// decides nothing until one of them says it may be fetched from (FETCH-4). A host a `deny`
+    /// rule covers is never kept: that refusal is final and there is nothing to ask.
+    pub fn take_fetch_hop(&mut self) -> Option<Labelled<String>> {
+        self.fetch_hop
+            .take()
+            .map(|host| Labelled::new(host, Label::untrusted_public()))
+    }
+
+    /// Record that a person approved this exact host as the place a fetch was redirected to.
+    ///
+    /// Only a person mints this, and it is single-use and bound to the host, as
+    /// [`Policy::endorse_fetch`] is bound to a URL (FETCH-3).
+    pub fn endorse_fetch_hop(&mut self, host: &str) {
+        self.issue_grant("fetch_url", "hop", host.to_string());
+    }
+
+    /// [`Policy::before_fetch`] for a fetch that a person has also approved being redirected to
+    /// `hop`, which the egress gate then lets that one request follow. Nothing is remembered: the
+    /// next fetch starts confined to its own host again.
+    pub fn before_fetch_via(&mut self, url: &str, hop: &str) -> Gated<Label> {
+        self.consume_grant("fetch_url", "hop", hop)?;
+        let label = self.before_fetch(url)?;
+        self.fetching_via = Some(hop.to_string());
+        Ok(label)
     }
 
     /// Whether a `fetch_url` call is between [`Policy::before_fetch`] and
@@ -933,7 +985,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The port counts, unlike anywhere a rule about a host decides. A declaration is one URL
     /// somebody wrote in full, and the machine it names runs other services on other ports, so a
-    /// hop that keeps the address and changes the port is a different service.
+    /// hop that keeps the address and changes the port is a different service. So does the
+    /// scheme, and a url whose port cannot be read names no socket at all: a hop to one is a
+    /// move, and so is every request to a server declared at one.
     ///
     /// No rule widens this, which is the other difference from a fetch. A `WebFetch` rule says
     /// which websites the planner may reach, and that is not a statement that one server's
@@ -1139,6 +1193,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.issue_grant("mcp_tools", "alias", alias.to_string());
     }
 
+    /// Record that `alias` announced a change to its tools, so its list is read again and put to a
+    /// person as a first list is (MCP-12). Nothing about the list as it now stands is in the record.
+    pub fn record_tool_list_change(&mut self, alias: &str) {
+        self.allow(
+            "mcp_tools_changed",
+            format!(
+                "the MCP server {alias} announced that its tools changed, so none of its tools is \
+                 offered until the list it now gives is vouched for"
+            ),
+        );
+    }
+
     /// Take the word of whoever endorsed a server's tool list and give the planner the list.
     ///
     /// A promotion road of its own (LABEL-8), and the one a server's words reach the planner by.
@@ -1281,6 +1347,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             vouch_asked: self.vouch_asked.clone(),
             exposed: self.exposed.clone(),
             fetching: self.fetching.clone(),
+            fetch_hop: self.fetch_hop.clone(),
+            fetching_via: self.fetching_via.clone(),
             calling_server: self.calling_server.clone(),
             calling_socket: self.calling_socket.clone(),
             server_hop: self.server_hop.clone(),
@@ -1403,8 +1471,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Only for a directory under `~/.bravebot/skills`, which is trusted by provenance. It is never
     /// asked of a project's skill directory, which the trust map governs like any other file of the
-    /// project, and nothing a file or a planner said is the argument: the caller is `load_skill`,
-    /// naming a directory the driver found before the turn began.
+    /// project, and nothing a file or a planner said is the argument: the callers are `load_skill`
+    /// and the turn supplying a skill the person named, each naming a directory the driver found
+    /// before the turn began.
     pub fn reach_skill_directory(&mut self, directory: &std::path::Path) {
         self.allow(
             "provenance",
@@ -1415,6 +1484,42 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ),
         );
         self.skill_reach.push(directory.to_path_buf());
+    }
+
+    /// Record that a skill only the person may have loaded was named as `/name` in the line they
+    /// typed, and that its instructions were put in front of the planner for the turn.
+    ///
+    /// The trail holds the name the catalogue gave the skill and how many characters of its body
+    /// went, and none of the body. Nothing is routed by it: the skill was matched exactly against
+    /// the names the driver found before the turn, and the body reaches the planner through
+    /// [`Policy::present`] with the label it was read with.
+    ///
+    /// This must only ever be reached from the prompt of a turn a person typed. Never point it at a
+    /// name found in model output, in a file or in anything a tool read: those are content, and this
+    /// would launder them into a request for a skill.
+    pub fn admit_named_skill(&mut self, name: &str, characters: usize) {
+        self.allow(
+            "provenance",
+            format!(
+                "skill {name}, {characters} characters, named by the user as /{name} in the line \
+                 they typed; the planner was not offered it"
+            ),
+        );
+    }
+
+    /// Record that a skill the person kept applied with `/mode` was put in the system prompt for
+    /// this turn, by its name and the size of what went (SKILL-21).
+    ///
+    /// Said per turn, since a mode stands without a line of its own in the transcript and the trail
+    /// is the only place a reader learns which skill's words a turn was given.
+    pub fn admit_skill_mode(&mut self, name: &str, characters: usize) {
+        self.allow(
+            "provenance",
+            format!(
+                "skill {name}, {characters} characters, kept in force by the user's /mode; the \
+                 planner was not offered it"
+            ),
+        );
     }
 
     /// The directories of the user's own skills loaded this turn, which a read may land in.
@@ -2159,6 +2264,47 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(Labelled::new(text, replied))
     }
 
+    /// Take the body a person saved from their editor, in place of the one a write proposed.
+    ///
+    /// The person wrote the text at their own keyboard, so it is trusted, which is the footing a
+    /// typed answer has in [`Policy::record_answers`]. It is public because it goes into their own
+    /// workspace, as the proposal it replaces was already going to.
+    ///
+    /// **Refuses unless the proposal was trusted and public already.** A body that carried
+    /// untrusted ancestry is not made trusted by somebody editing it, since what they kept of it is
+    /// still bytes nobody who wrote them can be asked about. A body that is still private has not
+    /// been released into the workspace, and this does not release it. Saving over a proposal that
+    /// was trusted and public raises nothing; the refusal is what keeps a proposal that came out of
+    /// quarantine from being promoted this way. A write from a quarantined reference is never
+    /// offered an edit, and this is the second place that says so.
+    ///
+    /// The edited text is never given back to the planner, and nothing here reads it.
+    pub fn adopt_edited_body(
+        &mut self,
+        tool: &str,
+        proposed: &Labelled<String>,
+        saved: String,
+    ) -> Gated<Labelled<String>> {
+        let was = proposed.label();
+        if !was.is_trusted() || !was.is_public() {
+            return Err(self.deny(
+                "answer",
+                Principle::IntegrityGate,
+                format!(
+                    "'{tool}' proposed a body labelled {was}; a person who edits it keeps some of \
+                     what they cannot vouch for or release, so the edited body cannot be trusted \
+                     and public either"
+                ),
+            ));
+        }
+        let edited = Label::trusted_public();
+        self.allow(
+            "answer",
+            format!("{tool}: the person edited the proposed body, recorded {edited}"),
+        );
+        Ok(Labelled::new(saved, edited))
+    }
+
     /// Label input piped into the process on stdin.
     ///
     /// Always `(U,priv)`. Nothing vouched for what a pipe carries: `gh pr diff` and
@@ -2311,6 +2457,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             format!(
                 "{characters} characters, typed by the user at their own keyboard while the turn \
                  was running; it may not route"
+            ),
+        );
+    }
+
+    /// Record that a line reached the turn from an input channel the person vouched for, while the
+    /// turn ran (CLI-36).
+    ///
+    /// The same footing as [`Policy::admit_interjection`] and for the same reason: the line carries
+    /// the person's words and may not route, and the trail records it as the person's own input.
+    /// What differs is the act that makes it theirs. Nobody typed this at a keyboard; the person
+    /// typed the flag that says the launching program's lines are theirs, and the trail says that.
+    ///
+    /// This must only ever be reached from a channel a flag the person typed on the command line
+    /// vouched for. A line from any other pipe is piped input, which is labelled by
+    /// [`Policy::label_piped_input`] and never reaches this.
+    pub fn admit_vouched_line(&mut self, characters: usize) {
+        self.allow(
+            "provenance",
+            format!(
+                "{characters} characters, sent on an input channel the person vouched for with a \
+                 flag they typed, while the turn was running; it may not route"
             ),
         );
     }
@@ -2759,6 +2926,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a run reached a limit its person gave it, and ended there (TURN-14).
+    ///
+    /// Counts and a fixed word for what they count, so the line carries no content (TRACE-2). A
+    /// run that stops leaves nothing else saying which of its limits did it, or how far the run
+    /// had got.
+    pub fn record_run_limit(&mut self, round: usize, counts: &'static str, made: u64, limit: u64) {
+        self.allow(
+            "run_limit",
+            format!(
+                "round {round}: {made} {counts} against a limit of {limit}; the run ended before \
+                 it went past it"
+            ),
+        );
+    }
+
     /// Record a call held for being the same as the ones before it, and what came of it (TURN-9).
     ///
     /// The round and the count only. The call's name and arguments are the planner's own and stay
@@ -2785,6 +2967,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow(
             "model-fallback",
             format!("round {round}: {from} failed as {category}; the turn moved to {to}"),
+        );
+    }
+
+    /// Put the model a processor's request names in the trail (TRACE-10).
+    ///
+    /// The name is the one the driver resolved from the person's configuration before sending, so
+    /// the line carries nothing the processor was given or answered, nor any name a service wrote.
+    pub fn record_processor_model(&mut self, id: &str, model: &str) {
+        self.allow(
+            "processor_model",
+            format!("{id}: the request names {model}"),
         );
     }
 
@@ -7416,22 +7609,35 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// the write was not approved. `call` is the tool, or a plan's step and its tool. The sentence
     /// is fixed text and names nothing the call carried (TRACE-2).
     pub fn refuse_unapproved_write(&mut self, call: &str) {
-        self.refuse_unapproved(call, "write", "written");
+        self.refuse_unapproved(call, "write", "nothing was written");
     }
 
     /// Record that a fetch was put to the person and not approved, so nothing was fetched
     /// (TRACE-1). The arguments and the reasons are those of [`Policy::refuse_unapproved_write`].
     pub fn refuse_unapproved_fetch(&mut self, call: &str) {
-        self.refuse_unapproved(call, "fetch", "fetched");
+        self.refuse_unapproved(call, "fetch", "nothing was fetched");
     }
 
-    /// The one sentence either of the two says, from words of this file's own, so no caller can put
+    /// Record that a call to `tool` of the server declared as `alias` was put to the person and not
+    /// approved, so the server was not called (TRACE-1). The reasons are those of
+    /// [`Policy::refuse_unapproved_write`]. The call is named as the gates name it, by the alias
+    /// the person gave the server and the word on the list they vouched for, never by anything the
+    /// server answered or the planner wrote beside it (TRACE-2).
+    pub fn refuse_unapproved_call(&mut self, alias: &str, tool: &str) {
+        self.refuse_unapproved(
+            &format!("{alias}:{tool}"),
+            "call",
+            "the server was not called",
+        );
+    }
+
+    /// The one sentence each of the three says, from words of this file's own, so no caller can put
     /// anything a call carried into the trail (TRACE-2).
     fn refuse_unapproved(&mut self, call: &str, asked: &'static str, undone: &'static str) {
         let _ = self.deny(
             "approval",
             Principle::Capability,
-            format!("{call}: the {asked} was not approved, so nothing was {undone}"),
+            format!("{call}: the {asked} was not approved, so {undone}"),
         );
     }
 
@@ -11213,33 +11419,48 @@ five
         assert!(!policy.plan_needs_approval(&a_plan()));
     }
 
-    /// RUN-20: a family remembered past the session stops the asking for the same sub-command on
-    /// the same repository with another number, and for nothing near it.
+    /// RUN-20: a scope remembered past the session stops the asking for each sub-command of its
+    /// group on the same repository with another number, and for nothing near it.
     #[test]
-    fn a_family_remembered_past_the_session_is_not_asked_about_for_another_number() {
-        let view = |number: &str, repo: &str| {
+    fn a_scope_remembered_past_the_session_is_not_asked_about_for_another_number() {
+        let line = |words: [&str; 2], number: &str, repo: &str| {
             plan_of(vec![step_named(
                 "gh",
-                &["pr", "view", number, "--repo", repo],
+                &[words[0], words[1], number, "--repo", repo],
             )])
         };
-        let family = crate::remembered::RememberedLine::family_of(&view("1081", "brave/bravebot"))
-            .expect("a listed line");
+        let scope =
+            crate::remembered::scopes::offered_for(&line(["pr", "view"], "1081", "brave/bravebot"))
+                .expect("a listed line");
         let mut record = crate::remembered::Remembered::new();
-        record.record(family, "an-earlier-session");
+        record.record_scope(scope, "an-earlier-session");
 
         let mut sink = RecordingSink::new();
         let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
         policy.recall(record);
-        assert!(!policy.plan_needs_approval(&view("1082", "brave/bravebot")));
-        assert!(policy.plan_needs_approval(&view("1082", "other/repo")));
-        assert!(policy.plan_needs_approval(&view("abc", "brave/bravebot")));
+        for words in [
+            ["pr", "view"],
+            ["pr", "diff"],
+            ["pr", "checks"],
+            ["issue", "view"],
+        ] {
+            assert!(
+                !policy.plan_needs_approval(&line(words, "1082", "brave/bravebot")),
+                "{words:?} was asked about"
+            );
+        }
+        assert!(policy.plan_needs_approval(&line(["pr", "view"], "1082", "other/repo")));
+        assert!(policy.plan_needs_approval(&line(["pr", "view"], "abc", "brave/bravebot")));
+        assert!(
+            policy.plan_needs_approval(&line(["pr", "merge"], "1082", "brave/bravebot")),
+            "a scope covered a sub-command that writes"
+        );
 
-        let mut writing = view("1082", "brave/bravebot");
+        let mut writing = line(["pr", "view"], "1082", "brave/bravebot");
         writing.writes = vec![std::path::PathBuf::from("/work/out.txt")];
         assert!(
             policy.plan_needs_approval(&writing),
-            "a family covered a line that names a file to write"
+            "a scope covered a line that names a file to write"
         );
     }
 
@@ -12223,6 +12444,106 @@ five
         );
     }
 
+    /// FETCH-4: the host a hop was refused for is kept for the prompt, as the server's own bytes,
+    /// and handed out once. A hop a `deny` rule refuses is final and leaves nothing to ask, and a
+    /// fetch that stayed on its host leaves nothing either.
+    #[test]
+    fn a_hop_refused_for_leaving_the_host_is_kept_untrusted_for_the_prompt() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:denied.test)"],
+            &[],
+            &[],
+        ));
+
+        let start = "https://example.com/start";
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the fetch was allowed");
+        policy.before_network("https://example.com/moved").unwrap();
+        assert!(policy.take_fetch_hop().is_none());
+
+        policy
+            .before_network("https://denied.test/landed")
+            .expect_err("a denied host was followed");
+        assert!(
+            policy.take_fetch_hop().is_none(),
+            "a denied host was kept to ask about"
+        );
+
+        policy
+            .before_network("https://elsewhere.test/landed")
+            .expect_err("a redirect off the approved host was allowed");
+        let hop = policy.take_fetch_hop().expect("the refused hop");
+        assert_eq!(hop.label(), Label::untrusted_public());
+        assert!(
+            policy.take_fetch_hop().is_none(),
+            "one refusal was handed out twice"
+        );
+
+        // A refusal does not outlive the fetch it belonged to.
+        policy
+            .before_network("https://elsewhere.test/landed")
+            .expect_err("still confined");
+        policy.fetch_finished();
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the next fetch");
+        assert!(policy.take_fetch_hop().is_none());
+    }
+
+    /// FETCH-4: an approval of a host a redirect led to is for that host, that fetch and that one
+    /// time. It does not carry to a different host, to the next fetch, or to a hop with no
+    /// approval behind it, and a `deny` rule still wins over it.
+    #[test]
+    fn an_approved_hop_is_for_that_host_and_that_fetch_alone() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:denied.test)"],
+            &[],
+            &[],
+        ));
+        let start = "https://example.com/start";
+
+        // Not minted by a person: the gate refuses, and the fetch cannot be made to follow it.
+        policy.endorse_fetch(start);
+        policy
+            .before_fetch_via(start, "elsewhere.test")
+            .expect_err("a hop was approved that nobody approved");
+
+        policy.endorse_fetch(start);
+        policy.endorse_fetch_hop("elsewhere.test");
+        policy
+            .before_fetch_via(start, "elsewhere.test")
+            .expect("the approved hop");
+        assert!(policy.before_network("https://example.com/moved").is_ok());
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_ok(),
+            "the host a person approved was refused"
+        );
+        assert!(
+            policy
+                .before_network("https://another.test/landed")
+                .is_err(),
+            "an approval for one host let the fetch go to another"
+        );
+        assert!(
+            policy.before_network("https://denied.test/landed").is_err(),
+            "an approval overrode a deny rule"
+        );
+        policy.fetch_finished();
+
+        // Gone with the fetch: the next one starts confined to its own host again.
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the next fetch");
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_err(),
+            "an approval was remembered for the next fetch"
+        );
+    }
+
     /// A refusal's text is what a caller formats into whatever it is building, including a
     /// message the planner reads. The host a redirect names was taken from a `Location` header,
     /// so it is a server's own bytes and saying it here would put them there.
@@ -12393,6 +12714,55 @@ five
             .before_network("https://127.0.0.1/mcp")
             .expect_err("a hop from implied port 80 to implied port 443 was followed");
         assert!(policy.take_server_hop().is_some());
+    }
+
+    /// A server answering plain text on a port is not the one answering TLS on it, so a hop that
+    /// keeps the address and the written port and changes the scheme has left the server.
+    #[test]
+    fn a_servers_request_cannot_be_redirected_to_the_other_scheme_on_the_same_port() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        policy.before_server_request("http://127.0.0.1:8931/mcp");
+        policy
+            .before_network("http://127.0.0.1:8931/mcp/v2")
+            .expect("the scheme the server was declared with was refused");
+        policy
+            .before_network("https://127.0.0.1:8931/mcp")
+            .expect_err("a hop to the other scheme on the declared port was followed");
+        assert!(policy.take_server_hop().is_some());
+    }
+
+    /// A port that cannot be read is a port the transport replaces with the scheme's default, so
+    /// two urls that write one name sockets the comparison cannot see. A url that names none is
+    /// on no socket, including the one that was declared, and is never taken for another that
+    /// names none either: the hop is a move and nothing is sent to it.
+    #[test]
+    fn a_hop_is_a_move_whenever_a_port_cannot_be_read() {
+        for port in ["", "abc", "99999"] {
+            let declared = format!("http://127.0.0.1:{port}/mcp");
+            let moved = format!("https://127.0.0.1:{port}/moved");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            policy.before_server_request(&declared);
+            policy
+                .before_network(&moved)
+                .expect_err("a hop between two ports nobody can read was taken for one socket");
+            assert!(policy.take_server_hop().is_some(), "{port:?}");
+
+            policy.before_server_request(&declared);
+            policy
+                .before_network(&declared)
+                .expect_err("a declaration whose socket cannot be read was taken for itself");
+            assert!(policy.take_server_hop().is_some(), "{port:?}");
+
+            policy.before_server_request("http://127.0.0.1:8931/mcp");
+            policy
+                .before_network(&moved)
+                .expect_err("a hop to a port nobody can read was followed");
+            assert!(policy.take_server_hop().is_some(), "{port:?}");
+        }
     }
 
     /// The destination a refused hop named is kept for the prompt, as the server's bytes, and
@@ -15597,6 +15967,31 @@ five
         );
     }
 
+    /// CLI-36: a line from a channel the person vouched for is accounted for as that, and is a
+    /// decision about provenance only: it does not lower what the context has met, so the planner
+    /// is not quarantined from its own steering.
+    #[test]
+    fn a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = policy_trusting(&mut sink, &[]);
+            policy.admit_vouched_line(31);
+            assert_eq!(policy.context_integrity(), Integrity::Trusted);
+        }
+
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("31 characters")
+                        && detail.contains("channel the person vouched for")
+                        && !detail.contains("keyboard")
+            )),
+            "the provenance decision left no trace: {:?}",
+            sink.events()
+        );
+    }
+
     /// An interjection is the user's own words, so it says nothing about content the planner has
     /// met. Reading a keystroke as something the context observed would mark everything the planner
     /// said after it untrusted, and it would then be quarantined from its own output.
@@ -17199,18 +17594,49 @@ five
         }
 
         /// AGENT-6. The list is read as `kind` is, so a private one is refused before any name in
-        /// it is compared with anything.
+        /// it is compared with anything. It names a server the run holds no grant for, so a
+        /// comparison made first would refuse it as a capability and name the servers held.
         #[test]
         fn a_private_server_list_cannot_direct_a_delegate() {
             let mut sink = RecordingSink::new();
             let mut policy = holding_weather_and_notes(&mut sink);
 
-            let private = Labelled::new(vec!["weather".to_string()], Label::untrusted_private());
+            let private = Labelled::new(vec!["gmail".to_string()], Label::untrusted_private());
             let err = policy
                 .before_delegate(&argument("worker"), &argument("fix it"), Some(&private))
                 .expect_err("a private list must not steer a delegate");
             assert_eq!(err.principle, Principle::Confinement);
-            assert!(format!("{err}").contains("mcp_servers"), "{err}");
+            let said = format!("{err}");
+            assert!(said.contains("mcp_servers"), "{said}");
+            assert!(
+                !said.contains("gmail") && !said.contains("weather"),
+                "the confinement refusal compared the list with the run's grants: {said}"
+            );
+        }
+
+        /// AGENT-6. Names are compared with the run's grants only after the integrity gate has
+        /// passed. A list naming a server the run holds no grant for, from a run that has met
+        /// something untrusted, is refused by the integrity gate, so the refusal says nothing
+        /// about which servers the run holds.
+        #[test]
+        fn a_fallen_run_is_refused_before_a_server_list_is_compared_with_its_grants() {
+            let mut sink = RecordingSink::new();
+            let mut fallen =
+                holding_weather_and_notes(&mut sink).resuming(crate::label::Integrity::Untrusted);
+
+            let err = fallen
+                .before_delegate(
+                    &argument("worker"),
+                    &argument("fix it"),
+                    Some(&keeping(&["gmail"])),
+                )
+                .expect_err("a fallen run cannot delegate");
+            assert_eq!(err.principle, Principle::IntegrityGate);
+            let said = format!("{err}");
+            assert!(
+                !said.contains("gmail") && !said.contains("weather"),
+                "the integrity refusal compared the list with the run's grants: {said}"
+            );
         }
 
         fn a_definition_budgeted_at(tokens: Option<u64>) -> crate::delegate::Definitions {
@@ -18095,6 +18521,49 @@ five
                         "approval",
                         Principle::Capability,
                         "step 2: write_file: the write was not approved, so nothing was written"
+                    ),
+                ]
+            );
+        }
+
+        /// TRACE-1: a call to a server's tool put to the person and not approved is a refusal under
+        /// `approval`, naming the tool as the alias the person gave the server and the word on its
+        /// list, in fixed words that carry nothing the call or the server held (TRACE-2), and the
+        /// turn does not end as clean. The regression it rejects is a no that leaves the question
+        /// in the trail and nothing about its answer. The two calls name different servers and
+        /// tools, so an entry that names one fixed tool or leaves the alias out fails it.
+        #[test]
+        fn an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_call("weather", "get_forecast");
+            turn.refuse_unapproved_call("notes", "append");
+            assert!(!turn.finish(), "a turn with an unapproved call ended clean");
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "weather:get_forecast: the call was not approved, so the server was not called"
+                    ),
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "notes:append: the call was not approved, so the server was not called"
                     ),
                 ]
             );
@@ -19271,6 +19740,55 @@ five
                 )
                 .expect("a trusted series may be answered");
             assert_eq!(answer.label(), Label::trusted_public());
+        }
+
+        /// WRITE-7: the text a person saves from their editor over a proposed write is trusted,
+        /// because a person wrote it, and public, because it goes into their workspace as the
+        /// proposal it replaces was already going to.
+        #[test]
+        fn an_edited_body_is_trusted_and_public() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let proposed =
+                policy.label_model_output("write_file", "what the planner wrote".to_string());
+            assert_eq!(
+                proposed.label(),
+                Label::trusted_public(),
+                "the fixture's proposal"
+            );
+
+            let edited = policy
+                .adopt_edited_body("write_file", &proposed, "what the person kept".to_string())
+                .expect("a trusted, public proposal may be edited");
+            assert_eq!(edited.label(), Label::trusted_public());
+        }
+
+        /// WRITE-7: nobody who edits an untrusted proposal can vouch for what they kept of it, so
+        /// saving one does not make it trusted, and one that is still private has not been released
+        /// into the workspace, so saving over it does not release it. Without the refusal a body
+        /// written after the planner met untrusted content is promoted by an editor round trip.
+        #[test]
+        fn a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it() {
+            for (context, held) in [
+                (Integrity::Untrusted, Confidentiality::Public),
+                (Integrity::Untrusted, Confidentiality::Private),
+                (Integrity::Trusted, Confidentiality::Private),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = open_policy(&mut sink).resuming(context).holding(held);
+                let proposed =
+                    policy.label_model_output("write_file", "bytes nobody released".to_string());
+                assert_ne!(
+                    proposed.label(),
+                    Label::trusted_public(),
+                    "the fixture's proposal"
+                );
+
+                let denial = policy
+                    .adopt_edited_body("write_file", &proposed, "the same bytes".to_string())
+                    .expect_err("a proposal that was not trusted and public stays as it was");
+                assert_eq!(denial.principle, Principle::IntegrityGate);
+            }
         }
 
         /// A planner shown private content writes private questions. They go to the person's own

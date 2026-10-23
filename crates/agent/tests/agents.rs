@@ -1105,3 +1105,49 @@ fn a_definition_in_a_working_directory_that_holds_the_home_directory_is_not_load
     assert_eq!(from_disk(&definitions), ["planted"]);
     assert!(notices.is_empty(), "{notices:?}");
 }
+
+/// A definition naming a skill its file keeps from the planner is told that its delegate is offered
+/// none of them, beside the notice for a name nothing found. The skill exists, so a check for names that
+/// match nothing is silent about it, and the definition would read as having a skill no delegate is
+/// ever given (SKILL-20).
+#[test]
+fn a_definition_naming_a_skill_kept_from_the_planner_is_told_it_is_offered_none() {
+    let scratch = Scratch::new("kept-skill-named");
+    let home = scratch.home();
+    let skill = home.join("skills/ship-it");
+    std::fs::create_dir_all(&skill).expect("create a skill directory");
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: ship-it\ndescription: d\ndisable-model-invocation: true\n---\n\nbody\n",
+    )
+    .expect("write a skill");
+    write_definition(
+        &home,
+        "reviewer",
+        &format!(
+            "{}\nskills: ship-it, shp-it, ship-it",
+            frontmatter("reviewer", "reviews", "reader")
+        ),
+        "REVIEW",
+    );
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink, &[]);
+    let (definitions, _) = agents::discover(&mut policy, &workspace, Some(&home));
+    let (catalogue, _) = bravebot_agent::skills::discover(&mut policy, &workspace, Some(&home));
+
+    let said: Vec<String> = agents::skills_not_found(&definitions, &catalogue)
+        .into_iter()
+        .map(|notice| notice.message)
+        .collect();
+
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(
+        said[0].contains("did not find") && said[0].ends_with(": shp-it"),
+        "the misspelt name was not said as not found: {said:?}"
+    );
+    assert!(
+        said[1].contains("keeps from the planner") && said[1].ends_with(": ship-it"),
+        "the kept skill was not said once, by name: {said:?}"
+    );
+}

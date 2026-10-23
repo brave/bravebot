@@ -152,6 +152,30 @@ try {
     await variants('03-running')
   })
 
+  // VIEW-34: off until the person asks, then the last eight lines of the round's thinking under
+  // the working row, and gone again when the button is pressed a second time.
+  await scene('03b-thinking', async () => {
+    const thought = ['The lock is taken in open(), so every reader waits on the writer.', 'A read side that takes a snapshot would not need it.', 'Check whether migrate() writes while a reader is open.']
+    await emit('phase', { phase: 'thinking' })
+    await emit('thinking', { text: thought.slice(0, 2).join('\n') + '\n' })
+    const toggle = page.locator('[data-test="thinking-toggle"]')
+    await toggle.waitFor()
+    if (await page.locator('[data-test="thinking"]').count()) throw new Error('the thinking was drawn before it was asked for')
+    await toggle.click()
+    await page.locator('[data-test="thinking"]').waitFor()
+    await emit('thinking', { text: thought[2] + '\n' + Array.from({ length: 8 }, (_, line) => `Step ${line + 1}: <b>read</b> the next call site.`).join('\n') })
+    await settle()
+    if (await page.locator('.thinking-text').innerText().then((text) => text.includes('lock is taken'))) throw new Error('more than the last eight lines were drawn')
+    await variants('03b-thinking')
+    await toggle.click()
+    await settle()
+    if (await page.locator('[data-test="thinking"]').count()) throw new Error('the thinking stayed drawn after it was turned off')
+    // The round ends and the next opens: the thinking is gone and the button is still there.
+    await emit('phase', { phase: 'planning' })
+    await settle()
+    if (!(await toggle.count())) throw new Error('the button went with the round that offered it')
+  })
+
   await scene('04-confirm', async () => {
     await emit('tool.finished', tool('Search', 'lock', 'Find other lock users', '3 matches'))
     await emit('confirm.request', { request: 1, path: 'src/store.ts', shownPath: 'src/store.ts', intent: 'edit', untrusted: false, existing: true, added: 3, removed: 1, exact: true, changes: [
@@ -170,7 +194,7 @@ try {
 
   await scene('06-run-output-vouch', async () => {
     await page.locator('.confirm .reject').last().click()
-    await emit('run.request', { request: 3, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, releasesPrivate: false, ambient: [], vouches: [{ program: 'npm', args: ['test'], display: 'npm test' }], summary: 'Run the store tests' })
+    await emit('run.request', { request: 3, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', shownBinary: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, shownDirectory: directory, releasesPrivate: false, ambient: [], vouches: [{ program: 'npm', args: ['test'], display: 'npm test' }], summary: 'Run the store tests' })
     await page.locator('.confirm.run').last().scrollIntoViewIfNeeded()
     await variants('06-run')
     await page.locator('.confirm.run .approve').first().click()
@@ -186,11 +210,15 @@ try {
 
   await scene('09-ask', async () => {
     await emit('ask.request', { request: 6, prompts: [
-      { header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers, one writer' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock' },
-      { header: 'Tests', question: 'Which suites should run?', rows: [{ index: 0, label: 'Unit', detail: null }, { index: 1, label: 'Integration', detail: null }], multiple: true, key: 'tests' },
+      { header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers, one writer' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock', place: 'the agent is asking (1 of 2)', last: false },
+      { header: 'Tests', question: 'Which suites should run?', rows: [{ index: 0, label: 'Unit', detail: null }, { index: 1, label: 'Integration', detail: null }], multiple: true, key: 'tests', place: 'the agent is asking (2 of 2)', last: true },
     ] })
     await page.locator('.confirm.ask').last().scrollIntoViewIfNeeded()
     await variants('09-ask')
+    // One question at a time: the second is drawn after the first is answered, and a skip on it ends the series.
+    await page.locator('.confirm.ask .choice').last().click()
+    await page.locator('.confirm.ask .approve').last().click()
+    await variants('09-ask-second')
     await page.locator('.confirm.ask .reject').last().click()
   })
 

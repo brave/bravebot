@@ -102,6 +102,43 @@ pub(crate) fn resolve_advisor(config: &Config, name: &str) -> Result<String, Str
     }
 }
 
+/// Puts `--processor-model` in force for this run, or says why no processor could run on it.
+///
+/// The flag outranks the `processorModel` setting, and `inherit` names no model, so it puts
+/// processors back on the run's own whatever the setting names. A model the machine refuses or no
+/// service answers for stops the run before it starts, as `--advisor`'s does, so a manifest run does
+/// not spend both planning calls before its first processing step meets the refusal. A sign-in is
+/// asked of the processor when it starts, as for the setting, since the run's own sign-in comes
+/// first and may be the one that covers the model (CLI-34).
+///
+/// Nothing is put in force when it is refused.
+pub(crate) fn put_processor_model_in_force(
+    config: &mut Config,
+    flag: Option<&str>,
+) -> Result<(), String> {
+    let Some(flag) = flag else {
+        return Ok(());
+    };
+    let named = bravebot_config::processor_model_named(flag);
+    if let Some(model) = named.as_deref().map(|name| config.model_named(name)) {
+        // Not `nothing_serves`, whose advice is about the run's own model: following it would not
+        // fix a processor model, and it names neither the model nor what it was named for.
+        match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
+            bravebot_agent::backend::Serving::Refused { file, why } => {
+                return Err(managed_refusal(&model, &file, why));
+            }
+            bravebot_agent::backend::Serving::NothingConfigured { .. } => {
+                return Err(bravebot_agent::report::processor_model_refusal(
+                    &bravebot_agent::compact::SideModelRefusal::NotServed(model),
+                ));
+            }
+            bravebot_agent::backend::Serving::Configured => {}
+        }
+    }
+    config.processor_model = named;
+    Ok(())
+}
+
 /// What a start or a run says where the machine-level layer refuses `model` (BACKEND-48).
 ///
 /// Here rather than at each site because four of them say it: a one-shot run, the report, the start

@@ -137,6 +137,7 @@ border.
 `verified-by: bravebot_tui::panel::the_width_is_clamped_at_both_ends`
 `verified-by: bravebot_tui::panel::a_narrowed_terminal_reclamps_without_forgetting_the_choice`
 `verified-by: bravebot_tui::panel::a_drag_from_the_border_never_selects_or_copies`
+`verified-by: bravebot_tui::panel::the_hint_line_runs_under_the_panel_to_the_right_edge`
 `verified-by: bravebot_tui::panel::the_resize_pointer_is_over_the_border_column_and_nowhere_else`
 `verified-by: bravebot_tui::panel::a_drag_holds_the_resize_pointer_and_its_end_follows_the_border`
 `verified-by: bravebot_tui::panel::a_panel_closed_under_the_pointer_gives_the_resize_pointer_back`
@@ -218,7 +219,11 @@ narrow for it.
    they complete, and left out until a token has been spent.
 6. **Language servers.** PANEL-13.
 7. **MCP servers.** PANEL-14.
-8. **Plan.** PANEL-10.
+8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote,
+   and a row naming `/files`, the command that opens the files state ([FILES-3](files-mode.md#FILES-3)).
+   It is left out until a file has been written. The Plan takes the rows it leaves, as PANEL-13
+   says of the server sections.
+9. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible
 characters, as they are wherever the interface draws text, since a directory or a branch is called
@@ -243,6 +248,7 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
+`verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_the_command_and_leaves_the_plan_its_rows`
 
 <a id="PANEL-10"></a>
 ### PANEL-10: the plan stays after the turn that wrote it
@@ -257,11 +263,24 @@ progress would fall below the cut, the rows shown move down the list until it is
 last row counts the rows left out above the ones shown apart from those below them (`+12 earlier`,
 `+15 earlier, +7 more`, `+3 more`).
 
+A row that is neither completed nor cancelled is drawn as work being done only while a turn is
+running. While none is, as after the turn that wrote the list has ended and in a resumed session,
+such a row is left open: its mark is hollow (`□`) where work being done has the filled one, so the
+two differ under `NO_COLOR`, and its text is dim. A compaction or another working state that is
+not a turn leaves it open too. Rows that are completed or cancelled are drawn as they are in any
+other plan.
+
+**Why.** Nothing is working on a row once the turn has ended. A filled mark beside an answer that
+says the work is finished reads as work still going.
+
 `verified-by: bravebot_tui::panel::the_plan_stays_after_the_turn_and_clear_empties_it`
 `verified-by: bravebot_tui::panel::an_empty_report_after_one_with_rows_keeps_that_plan`
 `verified-by: bravebot_tui::state::a_failed_or_stopped_turn_after_an_empty_report_keeps_its_plan`
 `verified-by: bravebot_tui::state::a_rewind_or_an_unsent_prompt_leaves_no_plan_after_an_empty_report`
 `verified-by: bravebot_tui::panel::a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it`
+`verified-by: bravebot_tui::panel::a_row_a_turn_left_open_is_drawn_apart_from_work_being_done`
+`verified-by: bravebot_tui::panel::a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open`
+`verified-by: bravebot_tui::sessions::a_resumed_session_draws_the_plan_it_was_left_with_as_left_open`
 
 <a id="PANEL-11"></a>
 ### PANEL-11: the panel draws only on what the person and the driver said
@@ -272,9 +291,15 @@ with `/issue` and `/pr`, or `--issue` and `--pr`), the planner's own `todo_write
 reading, the cache figures and the token total), the chord in force, the directory and branch the
 session runs in, the session's id (made by the driver from the operating system's random source, so
 no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
-servers (PANEL-14), or the model the person chose and the effort level in force. No row comes from a
+servers (PANEL-14), the model the person chose and the effort level in force, or the paths of the files
+the session wrote with the counts the kernel made ([FILES-2](files-mode.md#FILES-2)). No row comes from a
 reply, a tool result, a file's contents, a language server's reply, an issue or
 pull request body, or anything a job printed.
+
+The files state, and no other state of the panel, also draws the changes of a write, under
+[FILES-6](files-mode.md#FILES-6) and [FILES-7](files-mode.md#FILES-7). Those rows are in a region of
+their own, under a header, with a gutter and sign that no section of the panel has, and the ordinary
+sections are not drawn beside them, so the reason for the rule still holds.
 
 **Why.** The panel is the interface speaking in its own voice, like the scroller's footer
 ([SCROLL-5](scroller.md#SCROLL-5)). Text from any of those drawn in it would read as the interface's

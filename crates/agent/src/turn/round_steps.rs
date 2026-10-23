@@ -63,7 +63,10 @@ pub(super) struct Reminded {
 }
 
 /// The two reminders put to the planner after a round's results and any interjection.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the conversation and `reminded` are exclusive borrows and the rest is read-only state of the round, so a bundle would hold both kinds at once"
+)]
 pub(super) fn nudges(
     conversation: &mut Conversation,
     task: &Task,
@@ -305,7 +308,10 @@ pub(super) fn limit_the_tools<R: Reporter>(
 }
 
 /// Start the delegates a call asked for, each on a thread of the turn's scope.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the turn's scope, the delegates to start and each collaborator a delegate thread borrows"
+)]
 pub(super) fn start_delegates<'scope, 'env, S, C, R>(
     scope: &'scope std::thread::Scope<'scope, 'env>,
     started: Vec<(DelegateId, crate::delegate::Seeded)>,
@@ -431,7 +437,10 @@ pub(super) struct Retries {
 ///
 /// Decided from the error's category and status and from the turn's own flags. No reply text is
 /// read.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the failed completion and request, the turn's collaborators and counters, and three flags"
+)]
 pub(super) fn recover_from_failed_request<S: Sink, R: Reporter>(
     completion: Result<Completion, BackendError>,
     request: &ChatRequest,
@@ -527,7 +536,10 @@ pub(super) fn recover_from_failed_request<S: Sink, R: Reporter>(
 
 /// The request for one round: the conversation under the system prompt, the turn's effort and
 /// output schema, and the tools where the budget allows them.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the reporter is an exclusive borrow and the rest is read-only per-turn input held by the turn, which has no struct for them"
+)]
 pub(super) fn build_request<R: Reporter>(
     model: &str,
     conversation: &Conversation,
@@ -563,11 +575,28 @@ pub(super) fn build_request<R: Reporter>(
     request
 }
 
+/// What a compaction a turn made fires: the hooks, where they run, and where what they say goes.
+///
+/// Given for the turn a person asked for and not for a delegate, whose conversation is its own and
+/// not the session's.
+pub(super) struct AfterCompacting<'a> {
+    pub hooks: &'a bravebot_config::hooks::Hooks,
+    pub workspace: &'a Workspace,
+    /// The sentences the hooks said went wrong, for the turn's account of itself (HOOK-7).
+    pub said: &'a mut Vec<String>,
+}
+
 /// Shorten the conversation before a request when it is past the budget, or when the service
 /// refused the last one and there may be something to cut.
 ///
 /// Decided from token counts and the turn's own flags.
-#[allow(clippy::too_many_arguments)]
+///
+/// Once a summary has been adopted, the hooks declared for `compacted` run (HOOK-2). They read
+/// nothing of the summary and decide nothing about the turn, which goes on as it would have.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the turn's collaborators, its spend and step counters, the compaction flag and the hooks"
+)]
 pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     config: &Config,
     egress: &Egress,
@@ -582,6 +611,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     spent: &mut Elapsed,
     may_compact: &mut bool,
     retries: &mut Retries,
+    afterwards: Option<AfterCompacting<'_>>,
 ) -> Result<(), TurnError> {
     // Before the request rather than after the reply that overflowed. The figure being
     // compared is the last round's, so this is one round late by construction, which is why
@@ -638,6 +668,15 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
          summarised and the last {} kept as they are",
                     done.summarised, done.kept
                 ));
+                if let Some(after) = afterwards {
+                    after.said.extend(super::fire_hooks(
+                        after.hooks,
+                        bravebot_config::hooks::Moment::Compacted,
+                        None,
+                        after.workspace,
+                        reporter,
+                    ));
+                }
             }
             // Nothing to shorten yet, which is the ordinary answer and not worth a word.
             // Nothing was sent, so asking again next round is free, and a round or two later

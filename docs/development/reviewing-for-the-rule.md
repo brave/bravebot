@@ -58,10 +58,10 @@ of a reviewer without answering it.
 Seven places do branch on untrusted bytes, deliberately. Three are in the kernel, the fourth is
 the search in `bravebot-agent`, the fifth is the wording of the `lsp` diagnostics sentence from
 the counts a server computed, in `crates/agent/src/lsp.rs`, the sixth is `read_git`, also in
-`bravebot-agent`, and the seventh is the text-or-binary sniff of a read of an unvouched file, in
-`Workspace::survey` and `Workspace::read`. All seven are named under Known costs in
-[specs/labels.md](../specs/labels.md), because an unlisted exception is indistinguishable from a
-violation. A further one that mints a witness of its own moves a pinned count and so cannot arrive
+`bravebot-agent`, and the seventh is the text-or-binary sniff and decoding of a read of an unvouched
+file, in `Workspace::survey`, `Workspace::read` and `Workspace::page`. All seven are named under
+Known costs in [specs/labels.md](../specs/labels.md), because an unlisted exception is
+indistinguishable from a violation. A further one that mints a witness of its own moves a pinned count and so cannot arrive
 quietly. One added inside a function that already holds a counted `declassify` moves nothing: the
 counts pin how many times the bytes are released, not how many decisions are then taken from them,
 so `crates/core/src/policy.rs` still has to be read rather than counted. `crates/core/src/vetting.rs`
@@ -74,8 +74,9 @@ the `search` function in `crates/agent/src/tools.rs`, whose releases are counted
 is the same shape in `crates/agent/src/git/`: `Repository::search_blob` and `Repository::patch`
 compare a blob's bytes, and `Workspace::read_git` labels the answer from the paths shown, so a
 comparison added to a third file there is found by reading the diff as well.
-The seventh is the same shape: `bravebot_filetype::looks_binary` holds no `declassify`, so a second
-sniff of untrusted bytes elsewhere is found by reading the diff.
+The seventh is the same shape: `bravebot_filetype::looks_binary` and `decode_text` hold no
+`declassify`, so a second sniff or decoding of untrusted bytes elsewhere is found by reading the
+diff.
 
 ## The inverse mistake: inventing a violation
 
