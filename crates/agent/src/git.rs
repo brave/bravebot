@@ -892,6 +892,13 @@ mod tests {
             Some("Use run to read it with git instead.")
         );
 
+        assert_eq!(
+            h.repo
+                .ask(Query::Log, Some("main-worktree/HEAD"), None)
+                .map(|a| a.text),
+            Err(Declined::AnotherWorktree("main-worktree/HEAD".to_owned()))
+        );
+
         h.repo.put("HEAD", "ref: worktrees/other/HEAD\n");
         assert_eq!(
             h.repo.ask(Query::Log, None, None).map(|a| a.text),
