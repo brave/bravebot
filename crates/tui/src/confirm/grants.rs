@@ -63,6 +63,15 @@ pub(super) fn draw_fetch(
         Style::default().fg(theme::muted()),
         width,
     );
+    // Under the host, so a hop reads as one: the host above is where a server sent the fetch, and
+    // this is the one the person approved.
+    if let Some(from) = request.redirected_from.as_deref() {
+        header.extend(indented(
+            t!(fetch_redirected, from = from),
+            Style::default().fg(theme::fail()),
+            width,
+        ));
+    }
     // What the host is, where it is the metadata service of the machine this runs on. The
     // address above is what the request reaches and is not what it means: that service asks
     // nothing of whoever opens the socket and answers with the credentials of the role, so a

@@ -16,9 +16,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod anthropic;
+pub mod conversation;
+pub mod generate_content;
+pub mod llama_server;
+pub mod lm_studio;
 pub mod models;
 pub mod ollama;
 pub mod protocol;
+pub mod responses;
+
+#[cfg(test)]
+mod local_servers;
+#[cfg(test)]
+mod stand_in;
 
 use bravebot_config::{CacheTtl, Config, Secret};
 use bravebot_core::cancel::Cancel;
@@ -61,10 +72,39 @@ pub enum ChatError {
     ///
     /// Fails the request rather than falling back: see [`AichatClient::route`].
     Subscription(String),
+    /// The body is larger than the service takes, so it was not sent
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Sent nowhere and no token spent on it. A caller that can shorten the conversation does, as
+    /// it does where a service refuses the body.
+    BodyTooLarge { limit: usize },
+    /// The ChatGPT account's access token could not be had, or was refused twice
+    /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+    ///
+    /// A value from a closed set chosen from the step that failed, never text from a reply.
+    Account(AccountFailure),
     /// The caller asked for the reply to stop, whether or not it had begun arriving.
     ///
     /// Never retried: it is the one error that says the answer is no longer wanted.
     Cancelled,
+    /// The service said it was not going to finish the reply, whether part way through it or by
+    /// the reason it stopped.
+    ///
+    /// Named by the failure the service reported rather than by a status: the status was sent and
+    /// accepted before the reply began, so this is the only thing that says why it stopped. The
+    /// failure is one of a closed set this crate holds, never the service's text.
+    Reported {
+        failure: anthropic::protocol::Failure,
+    },
+    /// The model was cut off at the token ceiling with nothing to show for it.
+    ///
+    /// Distinct from [`ChatError::Incomplete`], which is a connection that died: this reply ended
+    /// because it ran out of room, so sending it again unchanged produces the same result. Only
+    /// where the reply said nothing before it stopped, which is what a model that spent the whole
+    /// ceiling on reasoning leaves. A reply that wrote anything is returned as
+    /// [`Completion::cut_off`], because throwing away what it did say is the one outcome nobody
+    /// asked for.
+    TooLong(CutOff),
 }
 
 impl fmt::Display for ChatError {
@@ -78,6 +118,36 @@ impl fmt::Display for ChatError {
                 f.write_str("the reply stopped before the server said it was finished")
             }
             Self::Cancelled => f.write_str("the reply was stopped while it was being waited for"),
+            Self::Reported { failure } => {
+                write!(f, "the service stopped the reply and reported {failure}")
+            }
+            Self::TooLong(cut_off) => {
+                let ceiling = cut_off.ceiling;
+                write!(f, "the model reached its output limit of {ceiling} tokens ")?;
+                match (&cut_off.call, cut_off.thought) {
+                    (
+                        Some(OpenCall {
+                            tool: Some(tool), ..
+                        }),
+                        _,
+                    ) => write!(
+                        f,
+                        "while writing a call to {tool}, so the call was not made"
+                    )?,
+                    (Some(OpenCall { tool: None, .. }), _) => {
+                        f.write_str("while writing a tool call, so the call was not made")?
+                    }
+                    (None, true) => f.write_str("while thinking, and wrote nothing")?,
+                    (None, false) => f.write_str("before writing anything")?,
+                }
+                f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
+            }
+            Self::BodyTooLarge { limit } => write!(
+                f,
+                "the request body is larger than the {limit} bytes the service takes, so it was not \
+                 sent. Shorten the conversation"
+            ),
+            Self::Account(failure) => write!(f, "{failure}"),
             Self::Subscription(detail) => write!(
                 f,
                 "the Leo subscription could not be used: {detail}. Run `bravebot auth login leo` to \
@@ -127,9 +197,10 @@ pub struct Completion {
     /// A caller showing this to a person has to say so, and one continuing a conversation with it
     /// is continuing from a sentence that stops mid-word.
     ///
-    /// Always `None` from this backend, which states no ceiling: the request carries no
-    /// `max_tokens` field, so whatever bounds a reply here belongs to the service and is not
-    /// reported as this. Only [`bravebot_bedrock`] sets it.
+    /// Always `None` from the aichat endpoint and from an OpenAI-compatible gateway, which state
+    /// no ceiling: the request carries no `max_tokens` field, so whatever bounds a reply there
+    /// belongs to the service and is not reported as this. Set by [`bravebot_bedrock`] and by
+    /// [`anthropic::AnthropicClient`], whose requests state one.
     pub cut_off: Option<CutOff>,
 }
 
@@ -156,6 +227,83 @@ pub struct OpenCall {
     pub tool: Option<String>,
     /// How many bytes of its arguments had arrived, counted and never read.
     pub arguments: usize,
+}
+
+/// Where a ChatGPT account's access token comes from, one request at a time
+/// ([CHATGPT-7](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-7)).
+///
+/// A trait for the reason [`Subscription`] is one: this crate does not know where the sign-in is
+/// kept or how it is renewed, and a token read once would be past its expiry in a long turn.
+pub trait AccountAccess {
+    /// The token to send the next request with: the stored one where it has more than a minute
+    /// left, and otherwise a new one.
+    fn access_token(&mut self) -> Result<Secret, AccountFailure>;
+
+    /// A token other than `refused`, which the serving host turned away. The caller sends the
+    /// request once more with it and does not ask again for the same request.
+    fn replace_refused(&mut self, refused: &Secret) -> Result<Secret, AccountFailure>;
+}
+
+/// Why a ChatGPT account's request was not sent, or was refused for its token.
+///
+/// Each is a step and no text from a reply, so a sentence made from it quotes nothing
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Where signing in again is the
+/// remedy the sentence names `bravebot auth login chatgpt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountFailure {
+    /// Nothing is stored.
+    NotSignedIn,
+    /// The authorization server said the refresh token is no longer valid, and the stored sign-in
+    /// was removed.
+    Ended,
+    /// The serving host refused the token it was sent, and a new one was refused as well.
+    Refused,
+    /// The sign-in file could not be read, or the claim on it could not be taken.
+    Unusable,
+    /// The token could not be renewed, and the reason is the class of the reply.
+    Renewal(RenewalFailure),
+}
+
+/// The class of a failed renewal, in the categories the other services' failures have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenewalFailure {
+    Refused,
+    RateLimited,
+    Unavailable,
+    Incomplete,
+    Transport,
+}
+
+impl fmt::Display for AccountFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotSignedIn => f.write_str(
+                "not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in",
+            ),
+            Self::Ended => f.write_str(
+                "the ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again",
+            ),
+            Self::Refused => f.write_str(
+                "OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login \
+                 chatgpt` to sign in again",
+            ),
+            Self::Unusable => f.write_str(
+                "the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` \
+                 to see why",
+            ),
+            Self::Renewal(class) => write!(
+                f,
+                "the ChatGPT sign-in could not be renewed: the request was {}",
+                match class {
+                    RenewalFailure::Refused => "refused",
+                    RenewalFailure::RateLimited => "rate-limited",
+                    RenewalFailure::Unavailable => "met with an unavailable service",
+                    RenewalFailure::Incomplete => "answered in a shape that could not be read",
+                    RenewalFailure::Transport => "not completed",
+                }
+            ),
+        }
+    }
 }
 
 /// A source of subscription credentials, one per request.
@@ -239,6 +387,12 @@ struct Gateway<'a> {
     /// one the gateway has never heard of.
     model: String,
     token: Option<Secret>,
+    /// The headers the block asked for, resolved by the caller.
+    ///
+    /// Resolved elsewhere for the reason the token is: a value may name a variable, and this crate
+    /// reads none. Carried and attached, never read: a name and a value from a settings file are
+    /// the person's own words, and nothing here decides anything on them.
+    headers: Vec<(String, Secret)>,
 }
 
 impl<'a> AichatClient<'a> {
@@ -304,7 +458,20 @@ impl<'a> AichatClient<'a> {
             provider,
             model: model.into(),
             token,
+            headers: Vec::new(),
         });
+        self
+    }
+
+    /// Also send the headers the gateway's block asked for, already resolved.
+    ///
+    /// Separate from [`Self::for_gateway`] because a value may name a variable and this crate reads
+    /// none: the caller that resolved the token resolves these at the same moment, from the same
+    /// environment. Does nothing where no gateway is set, these being a property of a gateway block.
+    pub fn with_gateway_headers(mut self, headers: Vec<(String, Secret)>) -> Self {
+        if let Some(gateway) = self.gateway.as_mut() {
+            gateway.headers = headers;
+        }
         self
     }
 
@@ -470,6 +637,7 @@ impl<'a> AichatClient<'a> {
                     caching: !self.breakpoints,
                     cache_ttl: !self.cache_ttl,
                     effort: !self.effort,
+                    ..Refusals::default()
                 },
             );
         }
@@ -523,6 +691,12 @@ impl<'a> AichatClient<'a> {
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
                 let (name, value) = gateway.provider.credential_header(token);
                 http = http.header(name, value);
+            }
+            // After the credential, and never over it: a name this request already set is refused
+            // where the block is read, because `Request::header` appends and a second copy of one
+            // of these would be sent rather than replace the first.
+            for (name, value) in &gateway.headers {
+                http = http.header(name.clone(), value.expose());
             }
             return Ok(http);
         }
@@ -709,6 +883,7 @@ impl<'a> AichatClient<'a> {
                         written: Labelled::new("", Label::untrusted_public()),
                         output_tokens: 0,
                         calling: None,
+                        thinking: Labelled::new("", Label::untrusted_public()),
                         counted_by_server: false,
                         attempt,
                     });
@@ -910,6 +1085,7 @@ impl<'a> AichatClient<'a> {
                 self.completed_usage = reported;
             }
 
+            let thinking = accumulated.take_thinking();
             progress(Progress {
                 written: Labelled::new(&accumulated.content()[written_before..], label),
                 output_tokens: reported.map_or_else(
@@ -917,6 +1093,7 @@ impl<'a> AichatClient<'a> {
                     |usage| usage.completion_tokens,
                 ),
                 calling: accumulated.calling().map(|name| Labelled::new(name, label)),
+                thinking: Labelled::new(&thinking, label),
                 counted_by_server: reported.is_some(),
                 attempt,
             });
@@ -988,6 +1165,12 @@ pub struct Progress<'a> {
     /// then this is the only sign of what the model is doing through a silence that can last
     /// minutes.
     pub calling: Option<Labelled<&'a str>>,
+    /// What the model thought since the last report, still labelled, for a service that sends its
+    /// thinking as it goes (BACKEND-46, BACKEND-59).
+    ///
+    /// Carried for a screen and read by nothing else: it is not part of the reply, is never
+    /// recorded, and never reaches a later request. Empty from a service that sends none.
+    pub thinking: Labelled<&'a str>,
     /// Whether that figure is the server's rather than an estimate.
     ///
     /// Worth knowing at the point of display: an estimate presented as a billed figure would be
@@ -1018,6 +1201,25 @@ const BACKOFF: Duration = Duration::from_secs(1);
 /// than a turn sitting unattended for minutes. Lower than `bravebot_net::LONGEST_RETRY_AFTER`,
 /// which only bounds the figure the network layer will carry.
 pub const LONGEST_WAIT: Duration = Duration::from_secs(120);
+
+/// The slowest a reply is taken to be written, in tokens a second.
+///
+/// Well under half the slowest rate measured on Bedrock, 69 tokens a second on Claude Opus 5.5, so
+/// a reply running to its ceiling on a slow day still finishes inside the bound.
+const SLOWEST_WRITING: u64 = 25;
+
+/// How long a reply may take to begin, reading the prompt, before the first token of it.
+const BEFORE_WRITING: Duration = Duration::from_secs(120);
+
+/// How long a reply that may run to `ceiling` tokens is given.
+///
+/// For a service whose requests state a ceiling, which is what says how long a reply can run.
+/// Never less than the bound the egress layer puts on a reply of unstated length, which stays the
+/// figure for a short reply.
+pub fn reply_bound(ceiling: u64) -> Duration {
+    (BEFORE_WRITING + Duration::from_secs(ceiling.div_ceil(SLOWEST_WRITING)))
+        .max(bravebot_net::Timeouts::default().reply)
+}
 
 /// How often a reply that has not started arriving looks up to see whether it should stop.
 ///
@@ -1121,6 +1323,15 @@ pub struct Refusals {
     pub cache_ttl: bool,
     /// It will not take a request that names how hard to think.
     pub effort: bool,
+    /// It will not take a request that asks for a tool's arguments as they are written.
+    ///
+    /// Learned by the Messages client alone, the one service here that is asked for them in the
+    /// request.
+    pub arguments_as_written: bool,
+    /// It will not take the ceiling a request states where nobody stated one.
+    ///
+    /// Learned by the Messages client alone, the one service here whose every request states one.
+    pub ceiling: bool,
 }
 
 /// What each service-and-model pair has refused.
@@ -1482,6 +1693,7 @@ mod tests {
                 caching: true,
                 cache_ttl: false,
                 effort: true,
+                ..Refusals::default()
             },
         );
 

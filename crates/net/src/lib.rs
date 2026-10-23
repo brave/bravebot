@@ -481,6 +481,9 @@ pub struct Request {
     /// Whether a reply from this machine is waited on for as long as it takes. See
     /// [`Request::patient_on_this_machine`].
     pub patient_on_this_machine: bool,
+    /// Whether a redirect in answer is a failure rather than a hop to follow. See
+    /// [`Request::refusing_redirects`].
+    pub redirects_refused: bool,
 }
 
 /// How long a reply may take, stated by the request that asks for it.
@@ -512,6 +515,7 @@ impl Request {
             reply: None,
             idle: None,
             patient_on_this_machine: false,
+            redirects_refused: false,
         }
     }
 
@@ -525,6 +529,7 @@ impl Request {
             reply: None,
             idle: None,
             patient_on_this_machine: false,
+            redirects_refused: false,
         }
     }
 
@@ -581,6 +586,17 @@ impl Request {
         self.patient_on_this_machine = true;
         self
     }
+
+    /// Answer a redirect with the status it came with, as [`EgressError::Status`], and send nothing
+    /// to the address it names.
+    ///
+    /// For a request to a host nobody but this program chose, carrying a credential that host alone
+    /// is meant to see ([CHATGPT-2](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-2)). A redirect
+    /// re-sends the request, and a hop is a place a reply named.
+    pub fn refusing_redirects(mut self) -> Self {
+        self.redirects_refused = true;
+        self
+    }
 }
 
 /// The one way out of the process.
@@ -609,8 +625,9 @@ impl Egress {
     /// As [`Egress::new`], with different bounds on how long a request may take.
     ///
     /// Exists so the bounds can be exercised in a test at a scale a test can wait for, and for the
-    /// one request a start waits on before it has said anything: asking a local Ollama what it
-    /// serves (`bravebot_aichat::ollama`). Every other request takes the defaults.
+    /// requests a start waits on before it has said anything: asking a local Ollama, LM Studio or
+    /// llama-server what it serves (`bravebot_aichat::ollama`, `lm_studio` and `llama_server`).
+    /// Every other request takes the defaults.
     pub fn with_timeouts(timeouts: Timeouts) -> Self {
         Self::with_transport(timeouts, Transport::shared())
     }
@@ -811,7 +828,10 @@ impl Egress {
     /// A body that fails while it is read is reported from here too, by the reader this hands back,
     /// so a request that got past the status is written to the diagnostic log however its body is
     /// then read.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the status, content type and boxed body reader return together, and both callers destructure the tuple"
+    )]
     fn fetch_checked<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -851,7 +871,10 @@ impl Egress {
     }
 
     /// The redirect loop itself: send, revalidate, follow, and hand back the body reader unread.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the same status, content type and body reader tuple, destructured by fetch_checked, its one caller"
+    )]
     fn follow<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -887,7 +910,7 @@ impl Egress {
             };
             let status = response.0;
 
-            if is_redirect(status) {
+            if is_redirect(status) && !request.redirects_refused {
                 if hops >= MAX_REDIRECTS {
                     return Err(EgressError::TooManyRedirects {
                         url: request.url.clone(),
@@ -1447,6 +1470,154 @@ mod tests {
             config.tls_config().root_certs(),
             ureq::tls::RootCerts::WebPki
         ));
+    }
+
+    /// `url` as the client reads it, written out in full with the port it connects to, or `None`
+    /// where the client cannot read it, has no host to connect to, or has no default port for its
+    /// scheme.
+    fn as_the_client_reads(url: &str) -> Option<String> {
+        let uri: ureq::http::Uri = url.parse().ok()?;
+        let scheme = uri.scheme_str()?.to_ascii_lowercase();
+        let default = match scheme.as_str() {
+            "http" => 80,
+            "https" => 443,
+            _ => return None,
+        };
+        let port = uri.port_u16().unwrap_or(default);
+        let host = uri
+            .host()
+            .filter(|host| !host.is_empty())?
+            .to_ascii_lowercase();
+        Some(format!("{scheme}://{host}:{port}/"))
+    }
+
+    /// Whether a hop left the declared socket is decided by `socket_of`, and where the bytes go is
+    /// decided by the client's parser. The two have to read one port from one url, so each url
+    /// here is read by the client as well: a url the client reads a port from keeps that port in
+    /// its socket, and a url it reads none from, although a `:` follows the host, names no socket
+    /// for a comparison to find equal to another that names none.
+    #[test]
+    fn a_socket_is_the_one_the_client_connects_to() {
+        for url in [
+            "http://h/a",
+            "https://h/a",
+            "HTTP://H:00080/c",
+            "http://h:0080/a",
+            "http://h:65535/a",
+            "http://h:065535/b",
+            "https://[::1]/x",
+            "http://[::1]:8080/x",
+            "http://u@h:81/a",
+            "http://h:81@h2:82/a",
+            "http://h:80?x=1",
+        ] {
+            let read = as_the_client_reads(url).expect("the client reads the url");
+            let socket = bravebot_core::url::socket_of(url);
+            assert!(socket.is_some(), "{url}");
+            assert_eq!(
+                socket,
+                bravebot_core::url::socket_of(&read),
+                "{url} is not the socket the client connects to"
+            );
+        }
+
+        for url in [
+            "http://127.0.0.1:/a",
+            "https://127.0.0.1:/b",
+            "http://h:abc/a",
+            "http://h:99999/a",
+            "http://h:65536/a",
+            "http://h:-80/a",
+            "http://h: 80/a",
+            "http://h:8o/a",
+            "http://h:80:90/a",
+            "http://h:?x=1",
+            "http://[::1]:/a",
+            "http://[::1]:abc/a",
+            "http://[::1]:99999/a",
+            "http://[::1]8080/a",
+            "http://[::1/a",
+        ] {
+            let read = url
+                .parse::<ureq::http::Uri>()
+                .ok()
+                .and_then(|uri| uri.port_u16());
+            assert_eq!(read, None, "the client reads a port from {url}");
+            assert_eq!(bravebot_core::url::socket_of(url), None, "{url}");
+        }
+    }
+
+    /// The rows above are the ones that went wrong. This is every combination of the pieces an
+    /// authority is written from, so a url nobody thought to list is held to the same thing: where
+    /// the client reads a url and a socket is reported for it, they are the same socket, and a url
+    /// the client reads with no port or a plain one always has a socket.
+    #[test]
+    fn no_url_the_client_reads_is_given_a_socket_it_does_not_connect_to() {
+        let schemes = ["http", "HTTPS", "ws", "ftp"];
+        let users = ["", "u@", "u:p@", "u@v@"];
+        // Whether each piece is written plainly: a host with nothing after it but a port, and a
+        // port that is none or digits that fit. Only a url written that way is owed a socket.
+        let hosts = [
+            ("h", true),
+            ("H", true),
+            ("[::1]", true),
+            ("[::1", false),
+            ("::1", false),
+            ("", false),
+            ("[::1]x", false),
+            ("[]", false),
+            ("h%41", false),
+        ];
+        let ports = [
+            ("", true),
+            (":", false),
+            (":80", true),
+            (":0", true),
+            (":+1", false),
+            (":x", false),
+            (":65536", false),
+            (":1:2", false),
+            (":080", true),
+            (":443", true),
+        ];
+        let rests = ["", "/p", "?q@z:9", "#f"];
+
+        let (mut compared, mut owed) = (0, 0);
+        for scheme in schemes {
+            for user in users {
+                for (host, plain_host) in hosts {
+                    for (port, plain_port) in ports {
+                        for rest in rests {
+                            let plain = plain_host && plain_port;
+                            let url = format!("{scheme}://{user}{host}{port}{rest}");
+                            let socket = bravebot_core::url::socket_of(&url);
+                            if matches!(scheme, "ws" | "ftp") {
+                                assert_eq!(socket, None, "{url} is not one the client connects to");
+                            }
+                            let Some(read) = as_the_client_reads(&url) else {
+                                continue;
+                            };
+                            if plain {
+                                owed += 1;
+                                assert!(socket.is_some(), "{url} is read by the client");
+                            }
+                            if let Some(socket) = socket {
+                                compared += 1;
+                                assert_eq!(
+                                    Some(socket),
+                                    bravebot_core::url::socket_of(&read),
+                                    "{url} is not the socket the client connects to"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            compared > 100 && owed > 100,
+            "{compared} compared, {owed} owed a socket"
+        );
     }
 
     /// Only a connection that ends here is waited on without bounds. A name that merely sounds
@@ -2527,6 +2698,41 @@ mod tests {
             connections.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "only the first hop was sent"
+        );
+    }
+
+    /// CHATGPT-2: a request that refuses redirects reports the redirect's own status and sends
+    /// nothing to the address it names, where the same request left alone follows it.
+    #[test]
+    fn a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further() {
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        );
+
+        let (port, connections) = serve_counting(vec![redirect("/second"), page("followed")]);
+        let followed = fetched(
+            &egress,
+            Request::get(format!("http://127.0.0.1:{port}/first")),
+        )
+        .expect("a redirect is followed unless the request refuses it");
+        assert_eq!(followed.status, 200);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        let (port, connections) = serve_counting(vec![redirect("/second"), page("not reached")]);
+        let outcome = fetched(
+            &egress,
+            Request::get(format!("http://127.0.0.1:{port}/first")).refusing_redirects(),
+        );
+        assert!(
+            matches!(outcome, Err(EgressError::Status { status: 302, .. })),
+            "{outcome:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            connections.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "nothing was sent to the address the redirect named"
         );
     }
 

@@ -17,7 +17,10 @@ struct Scratch {
 
 impl Scratch {
     fn new() -> Self {
-        let home = std::env::temp_dir().join("bravebot-agent-incognito-credentials");
+        let home = std::env::temp_dir().join(format!(
+            "bravebot-agent-incognito-credentials-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).expect("create scratch");
         // SAFETY: this binary holds one test, so nothing else is reading the environment.

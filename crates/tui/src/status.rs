@@ -14,7 +14,7 @@
 //! are workspace-relative names shown to the person who owns the workspace, and the counts are this
 //! program's own arithmetic. No model reads any of it.
 
-use bravebot_agent::servers::{Access, EffectivePolicy, PolicyEgress};
+use bravebot_agent::servers::EffectivePolicy;
 use bravebot_agent::watch;
 use bravebot_config::Config;
 use bravebot_core::label::Integrity;
@@ -184,12 +184,12 @@ pub struct Facts<'a> {
     /// Whether the turn in flight holds the two above, which it answers into as it runs. Then
     /// neither is read and the report says the rules are the turn's until it ends.
     pub turn_holds_rules: bool,
-    /// The loop repeating a prompt, where the person started one.
+    /// The loops repeating a prompt, where the person started any, oldest first.
     ///
     /// Absent from the report entirely when there is none, rather than reported as "no loop": a
     /// line saying a thing is not happening is a line on every report for the sake of the few
     /// where it is.
-    pub looping: Option<&'a crate::loops::Running>,
+    pub looping: &'a [crate::loops::Running],
     /// The condition the session is working towards, where the person set one.
     ///
     /// Left out when there is none, for the reason the loop is.
@@ -849,7 +849,8 @@ fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
 
     // What is going to happen without anybody typing anything, which is the one thing about a
     // session that a person cannot read off the transcript.
-    if let Some(running) = facts.looping {
+    let several = facts.looping.len() > 1;
+    for running in facts.looping {
         let pace = running.pace();
         let when = running.when(std::time::Instant::now());
         // The repeated line is the value, the way the goal line below carries its condition. A
@@ -859,8 +860,17 @@ fn running_lines(facts: &Facts<'_>) -> Vec<Line> {
         // Its first line only. A prompt is whatever somebody typed, a turn may arrange a loop over
         // one they pasted, and this panel spends one row per fact: the rest of a multi-line prompt
         // would land where the next fact goes.
+        //
+        // Told apart by number where there are several, the number `/loop stop` takes. A line
+        // `/after` holds is sent later, not repeated, and the label says so.
+        let label = match (running.once(), several) {
+            (true, true) => t!(status_after_numbered, number = running.number()).to_string(),
+            (true, false) => t!(status_after).to_string(),
+            (false, true) => t!(status_loop_numbered, number = running.number()).to_string(),
+            (false, false) => t!(status_loop).to_string(),
+        };
         lines.push(
-            Line::new(t!(status_loop), crate::render::one_line(running.prompt()))
+            Line::new(&label, crate::render::one_line(running.prompt()))
                 .with_note(format!("{pace} · {when}")),
         );
     }
@@ -1134,58 +1144,12 @@ fn server_policy_lines(servers: &[(String, EffectivePolicy)]) -> Vec<Line> {
             t!(status_server_policy),
             bravebot_agent::mcp::shown(alias),
         ));
-        lines.push(Line::new(
-            t!(status_server_policy_egress),
-            match policy.egress {
-                PolicyEgress::Closed => t!(status_server_policy_egress_closed),
-                PolicyEgress::Loopback => t!(status_server_policy_egress_loopback),
-                PolicyEgress::Open => t!(status_server_policy_egress_open),
-                PolicyEgress::Hosts => t!(status_server_policy_egress_hosts),
-            },
-        ));
-        lines.push(Line::new(
-            t!(status_server_policy_subprocesses),
-            match policy.children {
-                true => t!(status_server_policy_subprocesses_allowed),
-                false => t!(status_server_policy_subprocesses_refused),
-            },
-        ));
-        if let Some(directory) = &policy.starts_in {
-            lines.push(Line::new(
-                t!(status_server_policy_starts_in),
-                bravebot_agent::confirm::shown_path(directory),
-            ));
-        }
-        if policy.git_held_back {
-            lines.push(Line::new(
-                t!(status_server_policy_git),
-                t!(status_server_policy_git_held_back),
-            ));
-        }
-        for row in &policy.rows {
-            lines.push(Line::new(
-                match row.access {
-                    Access::Read => t!(status_server_policy_read),
-                    Access::Write => t!(status_server_policy_write),
-                    Access::ReadWrite => t!(status_server_policy_read_write),
-                },
-                bravebot_agent::confirm::shown_path(&row.path),
-            ));
-        }
-        if !policy.left_out.is_empty() {
-            let paths: Vec<String> = policy
-                .left_out
-                .iter()
-                .map(|path| bravebot_agent::confirm::shown_path(path))
-                .collect();
-            lines.extend(rows(
-                Line::new(
-                    t!(status_server_policy_left_out),
-                    t!(status_server_policy_left_out_reason),
-                ),
-                &paths,
-            ));
-        }
+        lines.extend(
+            policy
+                .described()
+                .into_iter()
+                .map(|(label, value)| Line::new(&label, value)),
+        );
     }
     lines
 }
@@ -1332,6 +1296,7 @@ pub(crate) fn offering(servers: &[(String, bravebot_agent::mcp::Offering)]) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_agent::servers::{Access, PolicyEgress};
     use bravebot_config::DEFAULT_MODEL;
 
     fn config_for(endpoint: &str, premium: Option<&str>) -> Config {
@@ -1494,7 +1459,7 @@ mod tests {
             turn_holds_rules: false,
             // Nothing repeating, which is every session that has not been asked to. Tests about
             // the loop line set this themselves.
-            looping: None,
+            looping: &[],
             // Nothing to work towards, on the same footing.
             goal: None,
             // Nothing watched, on the same footing. The test about the watch lines builds its
@@ -2057,7 +2022,7 @@ mod tests {
         running.ended(None, std::time::Instant::now());
 
         let mut facts = facts(&config, &trust);
-        facts.looping = Some(&running);
+        facts.looping = std::slice::from_ref(&running);
         let report = report(&facts);
 
         let line = report
@@ -2083,6 +2048,74 @@ mod tests {
         );
     }
 
+    /// LOOP-13: with several loops each has its own row under its number, the one `/loop stop`
+    /// takes, and a single loop's row keeps the plain label.
+    #[test]
+    fn the_report_has_a_row_per_loop_under_its_number() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut loops = crate::loops::Loops::default();
+        loops.start(crate::loops::Running::begin(crate::loops::request(
+            "5m check the deploy",
+        )));
+        loops.start(crate::loops::Running::begin(crate::loops::request(
+            "1h check the pull request",
+        )));
+
+        let mut facts = facts(&config, &trust);
+        facts.looping = loops.as_slice();
+        let report = report(&facts);
+        let rows: Vec<(String, &str)> = report
+            .lines
+            .iter()
+            .filter(|line| line.label.trim().starts_with(t!(status_loop).trim()))
+            .map(|line| (line.label.trim().to_string(), line.value.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    t!(status_loop_numbered, number = 1).to_string(),
+                    "check the deploy"
+                ),
+                (
+                    t!(status_loop_numbered, number = 2).to_string(),
+                    "check the pull request"
+                ),
+            ]
+        );
+    }
+
+    /// An `/after` line is sent later and not repeated (LOOP-18), so the panel labels it that way.
+    /// A wrong implementation lists it under the loop's label.
+    #[test]
+    fn the_report_lists_an_after_line_as_sent_later_and_not_as_a_loop() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let running = crate::loops::Running::after(
+            crate::loops::request_after("5m tail the log"),
+            std::time::Instant::now(),
+        );
+
+        let mut facts = facts(&config, &trust);
+        facts.looping = std::slice::from_ref(&running);
+        let report = report(&facts);
+
+        assert!(
+            !report
+                .lines
+                .iter()
+                .any(|line| line.label.trim() == t!(status_loop)),
+            "an after line was listed as a loop"
+        );
+        let line = report
+            .lines
+            .iter()
+            .find(|line| line.label.trim() == t!(status_after))
+            .expect("the after line is reported");
+        assert_eq!(line.value, "tail the log");
+    }
+
     /// A loop a turn arranged is always self-paced, so its pacing says nothing about the work.
     /// The line is the only thing on the row that can, and it is the one reached by pasting.
     #[test]
@@ -2096,7 +2129,7 @@ mod tests {
         );
 
         let mut facts = facts(&config, &trust);
-        facts.looping = Some(&running);
+        facts.looping = std::slice::from_ref(&running);
         let report = report(&facts);
 
         let line = report

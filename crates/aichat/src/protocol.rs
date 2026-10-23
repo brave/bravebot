@@ -375,6 +375,12 @@ struct NamedSchema {
 }
 
 impl ResponseFormat {
+    /// The `generateContent` client sends the raw schema as `responseJsonSchema`, not this
+    /// protocol's `response_format` wrapper.
+    pub fn schema(&self) -> &serde_json::Value {
+        &self.json_schema.schema
+    }
+
     /// A reply that is one JSON value matching `schema`.
     pub fn json_schema(schema: serde_json::Value) -> Self {
         Self {
@@ -823,9 +829,26 @@ pub struct ChunkChoice {
 pub struct Delta {
     #[serde(default)]
     pub content: Option<String>,
+    /// The model's working, for a service that sends it beside the text rather than inside it.
+    ///
+    /// Not asked for: nothing in a request makes a model send it, so this is whatever a service
+    /// volunteers. Read for the screen's thinking view and nothing else (BACKEND-59). A value that
+    /// is not text is read as nothing, since refusing the reply would fail the whole turn over a
+    /// field this reads for display.
+    #[serde(default, deserialize_with = "text_or_nothing")]
+    pub reasoning_content: Option<String>,
     /// Tool calls arrive in fragments, each naming the index it belongs to.
     #[serde(default)]
     pub tool_calls: Option<Vec<ToolCallDelta>>,
+}
+
+fn text_or_nothing<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(text) => Some(text),
+        _ => None,
+    })
 }
 
 /// A fragment of a tool call.
@@ -873,6 +896,11 @@ pub struct StreamAccumulator {
     /// Chunks carrying a piece of a tool argument, counted toward the live figure and never toward
     /// what the reply is charged.
     argument_chunks: u64,
+    /// The words of the model's thinking not yet handed to the caller's screen.
+    ///
+    /// Emptied at every report, so it holds one read's worth, and kept apart from `content`, which
+    /// is the reply. It adds nothing to the count, which is of what the reply is made of.
+    thinking: String,
     /// Whether the server said the reply was over, rather than the bytes merely stopping.
     ended: bool,
 }
@@ -922,6 +950,10 @@ impl StreamAccumulator {
                 self.content_chunks += 1;
             }
 
+            if let Some(words) = delta.reasoning_content {
+                self.thinking.push_str(&words);
+            }
+
             for fragment in delta.tool_calls.unwrap_or_default() {
                 let call = match self.calls.iter_mut().find(|(i, _)| *i == fragment.index) {
                     Some((_, call)) => call,
@@ -954,6 +986,14 @@ impl StreamAccumulator {
     /// The reply so far.
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    /// The thinking that arrived since it was last taken, for a screen to draw on request.
+    ///
+    /// No part of [`StreamAccumulator::content`] or of what [`StreamAccumulator::finish`] returns,
+    /// so what is recorded and what a later request carries is the reply alone.
+    pub fn take_thinking(&mut self) -> String {
+        std::mem::take(&mut self.thinking)
     }
 
     /// Note that the stream reached its end-of-reply marker.
@@ -1406,6 +1446,49 @@ mod tests {
                 1,
                 "a chunk carrying only reasoning counted as output written"
             );
+        }
+
+        /// The same field is what `/thinking` draws (BACKEND-59). A screen is handed each piece
+        /// once and in the order it arrived, since one that was handed everything again at every
+        /// report would draw the same words over and over, and what the reply holds is its text
+        /// alone however much was thought before it.
+        #[test]
+        fn thinking_is_taken_once_in_the_order_it_arrived_and_is_no_part_of_the_reply() {
+            let mut acc = StreamAccumulator::new();
+            acc.push(chunk(
+                r#"{"choices":[{"delta":{"reasoning_content":"the user "}}]}"#,
+            ));
+            acc.push(chunk(
+                r#"{"choices":[{"delta":{"reasoning_content":"wants a file"}}]}"#,
+            ));
+            assert_eq!(acc.take_thinking(), "the user wants a file");
+            assert_eq!(
+                acc.take_thinking(),
+                "",
+                "a piece of thinking was handed over twice"
+            );
+
+            acc.push(chunk(
+                r#"{"choices":[{"delta":{"reasoning_content":" and a name"}}]}"#,
+            ));
+            acc.push(chunk(r#"{"choices":[{"delta":{"content":"Hello"}}]}"#));
+            assert_eq!(acc.take_thinking(), " and a name");
+            let (content, ..) = acc.finish();
+            assert_eq!(content, "Hello");
+        }
+
+        /// A service may send the field in a shape that is not text, and a chunk this client
+        /// refused for it would fail a turn that read past the field before this client read it.
+        #[test]
+        fn reasoning_that_is_not_text_is_read_as_nothing_and_the_reply_still_arrives() {
+            for value in ["null", r#"{"text":"x"}"#, r#"["x"]"#, "7", "true"] {
+                let mut acc = StreamAccumulator::new();
+                acc.push(chunk(&format!(
+                    r#"{{"choices":[{{"delta":{{"reasoning_content":{value},"content":"Hello"}}}}]}}"#
+                )));
+                assert_eq!(acc.content(), "Hello", "reasoning_content: {value}");
+                assert_eq!(acc.take_thinking(), "", "reasoning_content: {value}");
+            }
         }
 
         #[test]

@@ -4,6 +4,7 @@ import { readAsk, readConfirm, readFetch, readRun, readShown, readTrust } from '
 const changelog: any = {
   request: 1,
   path: 'CHANGELOG.md',
+  shownPath: 'CHANGELOG.md',
   intent: 'edit',
   untrusted: false,
   existing: true,
@@ -25,6 +26,7 @@ const changelog: any = {
 const hostileWrite: any = {
   request: 1,
   path: 'notes/summary.md',
+  shownPath: 'notes/summary.md',
   intent: 'create',
   untrusted: true,
   existing: false,
@@ -48,15 +50,18 @@ const runTests: any = {
       resolved: '/opt/homebrew/bin/npm',
       startedAs: '/opt/homebrew/bin/npm',
       binary: '/opt/homebrew/Cellar/node/24.1.0/bin/node',
+      shownBinary: '/opt/homebrew/Cellar/node/24.1.0/bin/node',
       args: ['test', '--', '--runInBand'],
       display: 'npm test -- --runInBand',
     },
   ],
   directory: '/work/storefront',
+  shownDirectory: '/work/storefront',
   writes: [],
+  shownWrites: [],
   stdin: null,
   releasesPrivate: false,
-  confinement: { heading: 'Limited to', directories: ['/work/storefront'], sentences: ['Cannot reach the network.', 'Can write only inside the project.'] },
+  confinement: { heading: 'Limited to', directories: ['/work/storefront'], shownDirectories: ['/work/storefront'], sentences: ['Cannot reach the network.', 'Can write only inside the project.'] },
   requestedScopes: [],
   ambient: [],
   canBeRemembered: true,
@@ -122,7 +127,8 @@ describe('payload readers', () => {
   })
 
   it('reads trust and released-content payloads', () => {
-    expect(readTrust({ directory: '/work', keeping: null })).toEqual({ directory: '/work', keeping: null })
+    const question = { directory: '/work', shownDirectory: '/work', keeping: null, shownKeeping: null }
+    expect(readTrust(question)).toEqual(question)
     expect(readTrust({ keeping: null })).toBeNull()
     expect(readShown({ origin: 'o', reach: 'not_the_planner', label: '(U,pub)', preview: ['a'], lines: 1 })?.label).toBe('(U,pub)')
     expect(readShown({ origin: 'o', reach: 'elsewhere', label: '(U,pub)', preview: ['a'], lines: 1 })).toBeNull()
@@ -130,7 +136,7 @@ describe('payload readers', () => {
 })
 
 describe('a command stage', () => {
-  const stage = (extra: object) => ({ ...runTests, stages: [{ program: 'npm', args: [], display: 'npm', ...extra }] })
+  const stage = (extra: object) => ({ ...runTests, stages: [{ program: 'npm', shownBinary: 'npm', args: [], display: 'npm', ...extra }] })
 
   it('reads when the optional fields are absent or null', () => {
     expect(readRun(stage({}))?.stages[0]).toMatchObject({ startedAs: null, binary: null })
@@ -157,6 +163,33 @@ describe('a request that leaves out a field the bridge always sends', () => {
 
   it.each(['line', 'plan', 'writes', 'requestedScopes', 'ambient'])('is not a complete command request when %s is missing', (key) => {
     expect(readRun(without(runTests, key))).toBeNull()
+  })
+
+  it.each(['shownPath'])('is not a complete write request when %s is missing, so the card cannot draw the path as held', (key) => {
+    expect(readConfirm(without(changelog, key))).toBeNull()
+  })
+
+  it.each(['shownDirectory', 'shownWrites'])('is not a complete command request when %s is missing, so the card cannot draw a path as held', (key) => {
+    expect(readRun(without(runTests, key))).toBeNull()
+  })
+
+  it('is not a complete command request when a stage or the confinement lacks its spelled paths', () => {
+    expect(readRun({ ...runTests, stages: [without(runTests.stages[0], 'shownBinary')] })).toBeNull()
+    expect(readRun({ ...runTests, confinement: without(runTests.confinement, 'shownDirectories') })).toBeNull()
+  })
+
+  it.each(['shownDirectory', 'shownKeeping'])('is not a complete trust question when %s is missing', (key) => {
+    const question = { directory: '/work', shownDirectory: '/work', keeping: '/state/k.jsonl', shownKeeping: '/state/k.jsonl' }
+    expect(readTrust(question)).not.toBeNull()
+    expect(readTrust(without(question, key))).toBeNull()
+  })
+
+  it('is not a complete trust question when the spelled record is not text', () => {
+    expect(readTrust({ directory: '/work', shownDirectory: '/work', keeping: '/state/k.jsonl', shownKeeping: 5 } as never)).toBeNull()
+  })
+
+  it('is not a complete trust question when only one of the record and its spelling is there', () => {
+    expect(readTrust({ directory: '/work', shownDirectory: '/work', keeping: null, shownKeeping: '/state/k.jsonl' })).toBeNull()
   })
 
   it('is not a complete fetch request when ambient is missing', () => {

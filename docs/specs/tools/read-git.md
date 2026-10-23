@@ -110,6 +110,7 @@ the gix crates that start one.
 `verified-by: bravebot_agent::git::a_shallow_commit_is_read_as_having_no_parents`
 `verified-by: bravebot_agent::git::a_signature_time_is_shown_in_its_own_zone`
 `verified-by: bravebot_agent::git::objects_in_a_pack_and_stored_as_deltas_read_as_loose_ones_do`
+`verified-by: bravebot_agent::git::a_configuration_naming_programs_and_remotes_changes_no_answer_and_runs_nothing`
 
 <a id="GIT-2"></a>
 ### GIT-2: a repository is opened only where the trust map trusts all of its `.git`
@@ -140,6 +141,8 @@ this reader declines ([GIT-8](#GIT-8)), never what it runs.
 `verified-by: bravebot_core::policy::a_repository_nobody_vouched_for_is_not_trusted_beneath`
 `verified-by: bravebot_agent::git::survey_lists_the_files_a_read_opens_and_none_it_does_not`
 `verified-by: bravebot_agent::git::status_surveys_the_index_and_the_info_files_it_reads`
+`verified-by: bravebot_agent::git::a_name_under_git_in_another_case_is_listed_as_the_reader_spells_it`
+`verified-by: bravebot_agent::turn::a_distrusted_file_deep_under_git_keeps_the_repository_closed`
 
 <a id="GIT-3"></a>
 ### GIT-3: an answer is labelled by the whole of `.git` and by every path it showed
@@ -194,6 +197,7 @@ which object a file holds is not known until it is read.
 `verified-by: bravebot_agent::workspace::a_rule_over_a_git_file_a_symlinked_repository_lands_on_keeps_it_closed`
 `verified-by: bravebot_agent::git::a_withheld_path_is_left_out_of_every_answer_and_the_answer_says_so`
 `verified-by: bravebot_agent::git::a_withheld_path_is_neither_read_nor_listed`
+`verified-by: bravebot_agent::turn::a_named_file_a_deny_rule_covers_is_refused_before_the_repository_is_opened`
 
 <a id="GIT-5"></a>
 ### GIT-5: the question is log, show, diff, status, tags or search, and anything else is refused by name
@@ -303,6 +307,7 @@ from the one git would, and the rules were held against files it did not read.
 `verified-by: bravebot_agent::git::a_ref_in_another_worktrees_directory_is_never_read`
 `verified-by: bravebot_agent::git::a_loop_of_symbolic_refs_is_declined`
 `verified-by: bravebot_agent::tools::read_git_says_a_dot_git_that_is_a_file_is_declined`
+`verified-by: bravebot_agent::git::a_configuration_naming_programs_and_remotes_changes_no_answer_and_runs_nothing`
 
 <a id="GIT-9"></a>
 ### GIT-9: an answer is bounded, and one that stopped short says so
@@ -505,3 +510,5 @@ in anything other than the lines it printed would repeat or skip one on the next
 `verified-by: bravebot_agent::git::a_search_shows_every_file_it_read_whether_or_not_it_matched`
 `verified-by: bravebot_agent::git::a_search_leaves_out_a_withheld_file_and_says_so`
 `verified-by: bravebot_agent::git::a_search_pages_by_the_lines_it_prints`
+`verified-by: bravebot_agent::git::a_file_past_the_size_cap_is_shown_whether_or_not_the_pattern_would_match_it`
+`verified-by: bravebot_agent::turn::a_search_that_met_a_distrusted_file_past_the_size_cap_is_quarantined`

@@ -231,7 +231,6 @@ pub(super) struct ModelForTheTurn {
     pub(super) on_the_plan_model: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
     config: &Config,
     egress: &bravebot_net::Egress,
@@ -340,15 +339,20 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// `delegates` is the set the turn resolved, as narrowed by its `spawns:` lines, which decides
 /// whether a delegate is told it may delegate. `started_in` is the mode the turn began in, read
 /// once by the caller, which also updates it as the rounds go. `style` is the output style the
-/// turn resolved, which may differ from the one the task carries (INSTR-12). `memory` is what a
+/// turn resolved, which may differ from the one the task carries (INSTR-12). `skill_mode` is the
+/// name and gated words of the skill `/mode` keeps applied, which the turn read again (SKILL-21). `memory` is what a
 /// definition's kept memory says, which the caller reads through its policy and so keeps hold of.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
+)]
 pub(super) fn system_prompt(
     task: &Task,
     workspace: &Workspace,
     delegates: &Definitions,
     addressed: Option<&Addressed>,
     style: Option<&Style>,
+    skill_mode: Option<(&str, &str)>,
     preamble: &crate::preamble::Preamble,
     started_in: crate::permission_mode::PermissionMode,
     memory: impl Fn(bool, &str) -> String,
@@ -410,6 +414,17 @@ pub(super) fn system_prompt(
                     crate::delegate::addressed_prompt(
                         addressed,
                         &memory(addressed.keeps_memory(), addressed.name()),
+                    ),
+                );
+            }
+            // Ahead of the instructions files, so what the user's own `AGENTS.md` says has the last
+            // word over a skill, as it has over everything this program says (SKILL-21).
+            if let Some((name, words)) = skill_mode {
+                system.push(
+                    Provenance::Trusted("skill mode"),
+                    format!(
+                        "The user put the skill `{name}` in force as a mode for every turn of this \
+                         session, until they leave it. Follow it:\n\n{words}"
                     ),
                 );
             }

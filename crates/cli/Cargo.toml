@@ -11,6 +11,9 @@ repository.workspace = true
 name = "bravebot"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 bravebot-agent = { path = "../agent" }
 bravebot-approval = { path = "../approval" }

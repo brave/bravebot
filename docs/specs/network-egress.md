@@ -373,6 +373,45 @@ because its body is read to the end and a stop pressed meanwhile is not acted on
 `verified-by: bravebot_aichat::client::a_model_on_this_machine_that_goes_quiet_while_it_writes_is_waited_for`
 `verified-by: bravebot_aichat::client::a_quiet_local_model_is_not_waited_on_without_bound_by_a_client_nobody_can_stop`
 
+<a id="NET-11"></a>
+### NET-11: a client certificate is presented when one is named, and a request is refused when it cannot be
+
+`BRAVEBOT_CLIENT_CERT` names a file holding a certificate (with its chain, where there is one) and
+`BRAVEBOT_CLIENT_KEY` a file holding its unencrypted private key, both in the environment and
+read once with the other transport settings. Both together are set on the TLS configuration every
+client in this process is built from, so a server that asks for a certificate during the handshake
+is given this one. A settings file does not state them: only the environment does.
+
+Naming one without the other, a file that cannot be read, one holding no certificate or no key, an
+encrypted key, and a key that is not the one that belongs to the certificate are each a problem
+reported by path, every one of them rather than the first. While there is one, every TLS handshake
+is refused, as it is when [NET-7](#NET-7) leaves nothing trusted, instead of the request going to a
+server that would have been given the certificate without it. The pair is checked against itself
+once, when it is read: the TLS library panics at the first request on a pair that disagree.
+`doctor` ([CLI-7](cli.md#CLI-7)) names the two paths and says they loaded, or names each path that
+did not and ends on a configuration error. It never prints the key, and neither does the
+transport's `Debug`.
+
+**Why.** A gateway or proxy that requires mutual TLS fails at the handshake with nothing to say
+which end refused, and a program that had no way to name a certificate cannot be used behind one.
+Refusing rather than connecting without it is the same bargain NET-7 makes for a named authority: a
+setting that fails open is one whose failure looks like the server's.
+
+The key is a secret for the reason a proxy credential is under [NET-8](#NET-8): the report exists to
+be pasted into an issue, so it holds the path and the fact that it loaded. The passphrase an
+encrypted key needs is not read; see Known costs.
+
+`verified-by: bravebot_net::transport::a_certificate_and_key_that_agree_are_what_a_client_presents`
+`verified-by: bravebot_net::transport::naming_no_client_certificate_presents_none`
+`verified-by: bravebot_net::transport::a_key_that_does_not_belong_to_the_certificate_is_refused_with_its_path`
+`verified-by: bravebot_net::transport::a_certificate_file_that_cannot_be_read_is_refused_with_its_path`
+`verified-by: bravebot_net::transport::every_client_file_that_cannot_be_used_is_reported`
+`verified-by: bravebot_net::transport::a_certificate_named_without_a_key_is_refused_and_so_is_a_key_without_a_certificate`
+`verified-by: bravebot_net::transport::an_encrypted_key_is_refused_as_encrypted`
+`verified-by: bravebot_net::transport::a_debug_print_of_the_transport_holds_the_paths_and_none_of_the_key`
+`verified-by: bravebot_cli::doctor::the_network_section_names_a_client_certificate_that_loaded_and_never_its_key`
+`verified-by: bravebot_cli::doctor::the_network_section_names_each_client_file_that_cannot_be_used`
+
 ## Known costs
 
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own
@@ -427,6 +466,8 @@ because its body is read to the end and a stop pressed meanwhile is not acted on
   whole request, which on those connections means the `authorization` header the aichat and gateway
   backends carry (`x-goog-api-key` for a Google Vertex service), the `authorization` and `x-amz-security-token` pair a Bedrock request is signed
   with, the `mcp-session-id` an HTTP MCP server issued, and a body holding the conversation. The
+  `x-api-key` an Anthropic service takes is not among them: it is attached as a socket header, so a
+  hop that leaves the endpoint's own scheme, host and port is sent the conversation and not the key. The
   per-hop check there is the capability and nothing more, for the reason NET-2 gives, so an endpoint
   somebody configured can name any https host in a `Location` header and be sent all of it. NET-9
   bounds what a downgrade costs, not where a hop may land. What stands in front of this is that the
@@ -470,3 +511,23 @@ because its body is read to the end and a stop pressed meanwhile is not acted on
   refused, so a name whose first address is IPv6, on a network with no IPv6 route, fails the same way
   on each attempt. A request that fails for any of these reasons ends after three attempts with the
   same failure it would have ended with on the first.
+
+- **The certificate is offered to any https host that asks for one, and no test here has a server
+  that does.** The TLS library presents it to whichever server requests a certificate during a
+  handshake, and nothing records the host it was configured for, so an endpoint that redirects to
+  another host ([NET-2](#NET-2) revalidates the hop and no more) is offered it there too. The
+  subscription client built by `bravebot-skus` is handed the same configuration and presents it
+  alike. What would bound it is a setting naming the hosts, which is not decided here. Pinning that
+  a server demanding a certificate receives this one needs a TLS server in the test, and `bravebot-net`
+  has no dependency that is one; the tests pin what is handed to the client's configuration, and
+  the change was observed against `openssl s_server -Verify`.
+
+- **An encrypted key is refused, not decrypted.** Decrypting a key means a dependency this build
+  does not have, so no passphrase is read from the environment or the credential store either. A key that needs one is reported by path as encrypted, and the file has to be
+  given an unencrypted copy readable only by its owner.
+
+- **The pair is checked by a stand-in connection.** The TLS library offers no way to ask whether a
+  pair agree except building a configuration, which panics when they do not. The check does that
+  on a connection that carries nothing, catches the panic and withholds its report for that thread.
+  A library release that stopped panicking would still be caught, because any error other than the
+  stand-in's own counts as a pair that cannot be used.

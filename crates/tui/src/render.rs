@@ -1847,6 +1847,34 @@ mod tests {
             );
         }
 
+        /// A report the planner read is shown to the person as the same words, with no quarantine
+        /// margin: marking it would claim a confinement the report is not under.
+        #[test]
+        fn a_report_the_planner_read_is_drawn_plain() {
+            let mut session = Session::new("kernel-enforced");
+            let id = spawn(&mut session, "reader", "read the log");
+            session.delegate_finished(
+                id,
+                "answered after 1 round".to_string(),
+                false,
+                Some(Reported::Said("PLAIN-REPORT-WORDS".to_string())),
+            );
+
+            let screen = rendered(&session);
+            let plain = screen
+                .lines()
+                .find(|row| row.contains("PLAIN-REPORT-WORDS"))
+                .expect("the report was not drawn at all");
+            assert!(
+                !plain.contains(QUARANTINE_BAR),
+                "a report the planner read was drawn in the quarantine margin: {plain}"
+            );
+            assert!(
+                !screen.contains(QUARANTINE_BAR),
+                "the screen carries a quarantine margin for a report that was never kept: {screen}"
+            );
+        }
+
         /// A delegate that could not finish answered nothing, so there is nothing to draw under
         /// the line saying so. A block that invented one would be putting words in its mouth.
         #[test]
@@ -2960,6 +2988,33 @@ mod tests {
             );
         }
 
+        /// What is offered beneath the box goes with it: the commands a typed slash lists are drawn
+        /// under the prompt at rest and are not drawn under the scroller, which would otherwise
+        /// leave rows of choices that no key from in here can take.
+        #[test]
+        fn the_scroller_draws_nothing_offered_beneath_the_box() {
+            let mut session = reading();
+            session.close_scroller();
+            session.type_char('/');
+            let (at_rest, _) = screen(&session);
+            assert!(
+                at_rest.contains("/help"),
+                "nothing was offered beneath the box at rest, so the scroller proves nothing: {at_rest}"
+            );
+
+            session.open_scroller();
+            let (drawn, _) = screen(&session);
+            assert!(
+                !drawn.contains("/help"),
+                "a command was still offered under the scroller: {drawn}"
+            );
+            assert_eq!(
+                drawn_over(&session).height,
+                23,
+                "the offer kept rows from the transcript"
+            );
+        }
+
         /// The indicator went with the box, so the footer is the only thing left that can say a
         /// turn is still in flight. A person reading back through one that is going wrong is
         /// reading precisely because it is going wrong, and a screen with nothing moving on it
@@ -3982,7 +4037,7 @@ mod tests {
                 after_a_shell_line.type_char(c);
             }
             assert!(after_a_shell_line.queue_shell());
-            queue_command(&mut after_a_shell_line, "/rename deploy watch");
+            queue_command(&mut after_a_shell_line, "/forget-trust");
 
             let rows = rows_at(&after_a_command, 100, 30);
             assert!(
@@ -4000,8 +4055,7 @@ mod tests {
             );
             let rows = rows_at(&after_a_shell_line, 100, 30);
             assert!(
-                mark_under(&rows, "/rename deploy watch")
-                    .contains("after the shell line before it"),
+                mark_under(&rows, "/forget-trust").contains("after the shell line before it"),
                 "{rows:#?}"
             );
         }
@@ -4136,6 +4190,28 @@ mod tests {
             );
         }
 
+        /// PROMPT-1: a call about a file whose name ends in a space is drawn with the name
+        /// spelled, so the line is not read as one about the file without the space.
+        #[test]
+        fn a_call_about_a_file_draws_a_name_that_ends_in_a_space_spelled() {
+            let mut session = working();
+            session.finish_activity(
+                Activity::running("Read", "note.md ")
+                    .naming_a_file(true)
+                    .done("3 lines"),
+            );
+
+            let output = rendered(&session);
+            assert!(
+                output.contains("Read(\"note.md\u{2423}\")"),
+                "the name was not spelled: {output}"
+            );
+            assert!(
+                !output.contains("Read(note.md )"),
+                "the name was drawn as written: {output}"
+            );
+        }
+
         /// What the design turns on is the exception, and dropping the ordinary line is what
         /// leaves room for it to be noticed.
         #[test]
@@ -4195,6 +4271,45 @@ mod tests {
             assert!(
                 !output.contains("they want to know"),
                 "the working was drawn"
+            );
+        }
+
+        /// The model's thinking is drawn only while a person asked to see it, as plain text under a
+        /// heading of its own above the reply, with nothing in it able to act on the terminal, and
+        /// it is gone once the round's words replace the tail.
+        #[test]
+        fn the_models_thinking_is_drawn_only_when_asked_for_and_inert() {
+            let mut arriving = working();
+            arriving.thinking("the user wants **a file**\u{1b}[31m red");
+            arriving.streaming("Looking at it");
+            assert!(
+                !rendered(&arriving).contains("the user wants"),
+                "the thinking was drawn without being asked for"
+            );
+
+            arriving.toggle_thinking();
+            let output = rendered(&arriving);
+            assert!(output.contains("thinking"), "no heading: {output}");
+            assert!(
+                output.contains("the user wants **a file**"),
+                "markdown was read in the thinking: {output}"
+            );
+            assert!(
+                output.contains("\u{241b}[31m"),
+                "an escape reached the screen as one: {output}"
+            );
+            assert!(!output.contains('\u{1b}'));
+            assert!(
+                output.find("the user wants").unwrap() < output.find("Looking at it").unwrap(),
+                "the thinking was not above the reply: {output}"
+            );
+
+            arriving.narrate("Looking at it");
+            let output = rendered(&arriving);
+            assert!(output.contains("Looking at it"));
+            assert!(
+                !output.contains("the user wants"),
+                "the thinking outlived its round: {output}"
             );
         }
 
@@ -5862,6 +5977,45 @@ mod tests {
         );
     }
 
+    /// A line held by `/after` is not a loop, and the row under the box must not call it one. A wrong
+    /// implementation shares the loop's wording, which tells somebody a one-shot is repeating.
+    #[test]
+    fn the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_after(crate::loops::request_after("5m check the deploy"));
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains(t!(after_hint_next, next = "").trim()),
+            "{hint}"
+        );
+        assert!(!hint.contains(&t!(loop_hint).to_string()), "{hint}");
+    }
+
+    /// With a loop and an `/after` line both held, the row counts the loop and not the line that is
+    /// sent once. A wrong implementation counts both, and says two loops are repeating.
+    #[test]
+    fn the_hint_line_counts_loops_and_not_a_held_after_line() {
+        let mut session = Session::new("kernel-enforced");
+        session.start_loop(
+            crate::loops::request("1h check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        session.complete("done", Vec::new(), 0);
+        session.loop_turn_ended(None);
+        session.start_after(crate::loops::request_after("5m tail the log"));
+        assert_eq!(session.loops().len(), 2);
+        let hint = hint_row_at(&session, 120, 24);
+        assert!(
+            hint.contains(t!(loop_hint_next, next = "").trim()),
+            "{hint}"
+        );
+        assert!(
+            !hint.contains(t!(loop_hint_several, count = 2).trim()),
+            "{hint}"
+        );
+    }
+
     /// A word about a loop standing there in a session with none is a word nobody can account for,
     /// and this line is read at a glance.
     #[test]
@@ -5993,20 +6147,35 @@ mod tests {
     #[test]
     fn the_loop_part_names_a_moment_only_while_one_is_still_ahead() {
         let word = t!(loop_hint).to_string();
-        assert_eq!(loop_part(None), word, "a tick in flight names no moment");
+        assert_eq!(loop_part(1, None), word, "a tick in flight names no moment");
         assert_eq!(
-            loop_part(Some(std::time::Duration::ZERO)),
+            loop_part(1, Some(std::time::Duration::ZERO)),
             word,
             "a tick already due names no moment"
         );
         assert_eq!(
-            loop_part(Some(std::time::Duration::from_millis(999))),
+            loop_part(1, Some(std::time::Duration::from_millis(999))),
             word,
             "anything under a second is spelled 0s, which is that same nothing"
         );
         assert_eq!(
-            loop_part(Some(std::time::Duration::from_secs(90))),
+            loop_part(1, Some(std::time::Duration::from_secs(90))),
             t!(loop_hint_next, next = "1m 30s")
+        );
+    }
+
+    /// LOOP-13: with several live the row counts them and counts down to the soonest.
+    #[test]
+    fn the_loop_part_counts_the_loops_where_several_are_live() {
+        assert_eq!(loop_part(3, None), t!(loop_hint_several, count = 3));
+        assert_eq!(
+            loop_part(3, Some(std::time::Duration::from_secs(90))),
+            t!(loop_hint_several_next, count = 3, next = "1m 30s")
+        );
+        assert_eq!(
+            loop_part(2, Some(std::time::Duration::ZERO)),
+            t!(loop_hint_several, count = 2),
+            "a moment already gone is not spelled"
         );
     }
 
@@ -6614,6 +6783,26 @@ mod tests {
         );
     }
 
+    /// INPUT-48: the list names the chord that rewrites the line, and the one a settings file moved
+    /// it to, so the only place that says what the key does cannot go on naming a key that is dead.
+    #[test]
+    fn the_shortcuts_name_the_enhance_chord_in_force() {
+        let named = |bindings: &Keybindings| {
+            shortcuts(crate::vim::Editing::Ordinary, bindings)
+                .into_iter()
+                .find(|(_, meaning)| meaning.contains("more specific"))
+                .map(|(key, _)| key)
+        };
+        assert_eq!(named(&Keybindings::default()).as_deref(), Some("ctrl-p"));
+
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("enhance".to_string(), "alt-e".to_string());
+        assert_eq!(
+            named(&Keybindings::from_map(&moved)).as_deref(),
+            Some("alt-e")
+        );
+    }
+
     /// The list folds into columns, so it does not push the transcript off a short terminal the way
     /// one row per binding would.
     #[test]
@@ -6710,6 +6899,18 @@ mod tests {
                 command.name
             );
         }
+    }
+
+    /// SKILL-21. The mode in force is named on the box for as long as it is in force, and the box
+    /// of a session in none says nothing of one.
+    #[test]
+    fn the_box_names_the_mode_while_one_is_in_force() {
+        let mut session = Session::new("none");
+        assert!(!rendered_at(&session, 100, 24).contains("mode: "));
+        session.choose_skill_mode(Some("tdd-playbook".to_string()));
+        assert!(rendered_at(&session, 100, 24).contains("mode: tdd-playbook"));
+        session.choose_skill_mode(None);
+        assert!(!rendered_at(&session, 100, 24).contains("mode: "));
     }
 
     /// A skill row says where the skill was found. Nothing below the box wraps, so a description
@@ -8032,6 +8233,34 @@ mod tests {
         );
     }
 
+    /// A note is drawn at the column a reply's text and a prompt's text start in, so it lines up
+    /// with the rest of the transcript. A note at the margin, or indented past the reply, reads as a different kind
+    /// of line.
+    #[test]
+    fn a_note_starts_in_the_column_a_replys_text_starts_in() {
+        let mut session = Session::new("none");
+        for c in "my own prompt".chars() {
+            session.type_char(c);
+        }
+        session.submit();
+        session.complete("the reply text", Vec::new(), 0);
+        session.note("trusting /tmp/x");
+
+        let lines: Vec<String> = transcript_lines(&session, 90, 24)
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        let column = |word: &str| {
+            lines
+                .iter()
+                .find_map(|line| line.find(word).map(|at| line[..at].chars().count()))
+                .unwrap_or_else(|| panic!("{word} was not drawn: {lines:?}"))
+        };
+        assert!(column("the reply text") > 0, "{lines:?}");
+        assert_eq!(column("trusting"), column("the reply text"), "{lines:?}");
+        assert_eq!(column("trusting"), column("my own prompt"), "{lines:?}");
+    }
+
     /// ADDRESS-12. The name above a reply is the one the driver matched, so a reply claiming to be
     /// some other definition is drawn under the right one, and a reply nobody addressed is drawn
     /// under none.
@@ -8453,6 +8682,34 @@ mod tests {
         (0..width)
             .map(|column| buffer[(column, height - 1)].symbol())
             .collect()
+    }
+
+    /// LINK-4: the line under the box names the link while its words are there, and says how many
+    /// there are and to review them once there are more than the box shows. Without the long form a
+    /// thousand-character prompt looks like the three lines of it that fit.
+    #[test]
+    fn the_hint_line_names_the_link_and_gives_the_length_of_a_long_prompt() {
+        let mut session = Session::new("none");
+        session.prefill_from_link("fix the test");
+        let short = hint_row_at(&session, 120, 24);
+        assert!(short.contains("external link"), "{short}");
+        assert!(!short.contains("characters"), "{short}");
+
+        let mut session = Session::new("none");
+        session.prefill_from_link(&"a".repeat(1500));
+        let long = hint_row_at(&session, 140, 24);
+        assert!(long.contains("1500 characters"), "{long}");
+        assert!(long.contains("review"), "{long}");
+
+        let mut session = Session::new("none");
+        session.prefill_from_link(&"a".repeat(1000));
+        assert!(
+            !hint_row_at(&session, 140, 24).contains("characters"),
+            "1000 is not over the line"
+        );
+
+        let plain = Session::new("none");
+        assert!(!hint_row_at(&plain, 120, 24).contains("external link"));
     }
 
     /// The frame drawn after the terminal changed size is the one a terminal of that size would

@@ -576,8 +576,8 @@ export function conversation(entries: Entry[], tools = false): ExportTurn[] {
     }
     if (!tools) continue
     if (entry.kind === 'tool') {
-      const { verb, target, note, failed } = entry.activity
-      turns.push({ role: 'tool', verb, target, note, failed })
+      const { verb, shownTarget, note, failed } = entry.activity
+      turns.push({ role: 'tool', verb, target: shownTarget, note, failed })
     } else if (entry.kind === 'replayed-tool') {
       turns.push({ role: 'tool', verb: entry.text, target: '', note: null, failed: false })
     }
@@ -594,7 +594,7 @@ export function searchableText(entry: Entry): string {
     case 'turn-start': return ''
     case 'attached': return entry.path
     case 'consolidation': return 'Updating persistent memory'
-    case 'tool': return [entry.activity.verb, entry.activity.target, entry.activity.why, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
+    case 'tool': return [entry.activity.verb, entry.activity.shownTarget, entry.activity.why, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'quarantined': return [entry.shown.origin, entry.shown.label, ...entry.shown.preview].join(' ')
     case 'confirm': return [entry.request.path, entry.request.intent, ...entry.request.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'run': return [entry.request.summary, entry.request.directory, entry.request.line ?? '', ...entry.request.stages.map((stage) => stage.display)].join(' ')

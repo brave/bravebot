@@ -100,7 +100,10 @@ fn zeroed_sockaddr() -> libc::sockaddr_un {
 }
 
 /// The account this process runs as.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "`geteuid` and `getegid` take no argument and cannot fail"
+)]
 fn identity() -> (libc::uid_t, libc::gid_t) {
     // SAFETY: neither call takes a pointer or can fail.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -117,7 +120,10 @@ pub(crate) fn available() -> &'static Result<(), String> {
     ANSWER.get_or_init(probe)
 }
 
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "forks a child that runs only `isolate`, which is async-signal-safe"
+)]
 fn probe() -> Result<(), String> {
     let namespace = Namespace::prepare(None)?;
     // SAFETY: the child runs only `isolate`, which is async-signal-safe, and leaves with
@@ -159,7 +165,10 @@ fn probe() -> Result<(), String> {
 
 /// Creates the user and network namespaces, maps the account to itself and brings the loopback
 /// up.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "the namespace system calls act on memory this function owns"
+)]
 fn isolate(uid_map: &[u8], gid_map: &[u8]) -> io::Result<()> {
     // SAFETY: every call here is a plain system call on memory this function owns.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -175,7 +184,10 @@ fn isolate(uid_map: &[u8], gid_map: &[u8]) -> io::Result<()> {
     }
 }
 
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "`open` and `write` are given a NUL-terminated path and a live slice"
+)]
 fn write_file(path: &std::ffi::CStr, contents: &[u8]) -> io::Result<()> {
     // SAFETY: `path` is NUL-terminated and `contents` is a live slice.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -199,7 +211,10 @@ fn write_file(path: &std::ffi::CStr, contents: &[u8]) -> io::Result<()> {
 
 /// Sets `lo` up. A new network namespace has it down, and nothing in it, a forwarder included,
 /// can bind an address until it is up.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "the `ioctl` calls are given a zeroed `ifreq` and a socket this function closes"
+)]
 fn loopback_up() -> io::Result<()> {
     // SAFETY: `request` is a zeroed `ifreq`, which is valid for every field, and the calls are
     // given its address and a socket this function closes.
@@ -236,7 +251,10 @@ fn loopback_up() -> io::Result<()> {
 /// stage needs no grant to the proxy's socket. It is not a process the stage may attach to: the
 /// ruleset keeps a confined process from tracing one outside its domain, and it is not
 /// dumpable.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "system calls on memory this function owns, and a fork whose child runs only `serve_forever`"
+)]
 fn start_forwarder(forward: &Forward) -> io::Result<()> {
     // SAFETY: system calls on memory this function owns; the forked child runs only
     // `serve_forever`, which is async-signal-safe and never returns.
@@ -284,7 +302,7 @@ fn start_forwarder(forward: &Forward) -> io::Result<()> {
 
 /// Makes the calling process die with `parent` and not be one a program may read or write the
 /// memory of. A parent that has already gone ends it at once.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "`prctl` and `getppid` take integers")]
 fn tie_to(parent: libc::pid_t) {
     // SAFETY: `prctl` and `getppid` take integers.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -304,7 +322,10 @@ fn tie_to(parent: libc::pid_t) {
 }
 
 /// The forwarder: accepts each connection and hands it to a process of its own.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "system calls on integers and on memory this function owns"
+)]
 fn serve_forever(listener: libc::c_int, stage: libc::pid_t, forward: &Forward) -> ! {
     // SAFETY: system calls on integers and on memory this function owns.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -368,7 +389,10 @@ fn serve_forever(listener: libc::c_int, stage: libc::pid_t, forward: &Forward) -
 /// or bind a second socket to a name the proxy holds. Both are compared, since the process that
 /// runs the proxy also listens on sockets that are not this one, another stage's proxy among
 /// them.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "system calls given the address and size of a zeroed value of the type each fills"
+)]
 fn is_the_proxys_listener(connection: libc::c_int, forward: &Forward) -> bool {
     // SAFETY: each call is given the address of a zeroed value of the type it fills and that
     // type's size.
@@ -415,7 +439,10 @@ fn before_nul(path: &[libc::c_char]) -> &[libc::c_char] {
 /// Connects to the proxy's socket and copies bytes between it and `client` until both directions
 /// have ended. A connection to anything but the proxy's own listener ends without a byte moved in
 /// either direction.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "system calls on descriptors and a buffer this function owns"
+)]
 fn relay(client: libc::c_int, forward: &Forward) {
     // SAFETY: system calls on descriptors this function owns and on a buffer it owns.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -542,7 +569,10 @@ mod tests {
     }
 
     impl Started {
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "forks a child that runs only `start_forwarder`, which is async-signal-safe"
+        )]
         fn from(namespace: &Namespace) -> Self {
             let forward = namespace.forward.as_ref().expect("a forward");
             // SAFETY: the child runs only `start_forwarder`, which is async-signal-safe, and then
@@ -591,7 +621,10 @@ mod tests {
         }
 
         /// Ends the process that started the forwarder.
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "signals and waits for exactly the child `from` made"
+        )]
         fn stop(&mut self) {
             if let Some(stage) = self.stage.take() {
                 // SAFETY: a signal to, and the wait for, the child made in `from`.
@@ -666,7 +699,10 @@ mod tests {
     /// The process makes only calls that are safe between a fork and an exec, since this one has
     /// other threads. It answers on a pipe once it listens, so a connection made after that is
     /// queued and not refused.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "forks a child that runs only system calls on descriptors and memory it owns"
+    )]
     fn a_decoy_process_listening_at(path: &Path) -> libc::pid_t {
         let namespace = Namespace::prepare(Some((0, path))).expect("an address");
         let address = namespace.forward.as_ref().expect("an address");
@@ -711,7 +747,10 @@ mod tests {
 
     /// How `child` ended, or `None` where it had not by the time the wait ran out, in which case
     /// it is killed.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "waits for and signals the child the caller made"
+    )]
     fn exit_status_of(child: libc::pid_t) -> Option<i32> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
