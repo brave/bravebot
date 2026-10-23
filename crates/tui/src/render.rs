@@ -80,6 +80,11 @@ fn dim() -> Style {
     Style::default().fg(theme::muted())
 }
 
+/// Marks a row still outstanding once the turn that reported it has ended, hollow where the mark
+/// of a row being worked on is filled, so the two differ under `NO_COLOR` too, where the ink of a
+/// row is the terminal's own.
+const LEFT_OPEN_MARKER: &str = "□";
+
 /// Draw a task list beneath whatever it belongs to.
 ///
 /// The first row carries a branch so the block attaches to the line above rather than floating.
@@ -87,7 +92,11 @@ fn dim() -> Style {
 /// legible at a glance: the eye finds the unstruck lines. A cancelled one is struck too, with its
 /// marker in the muted colour rather than the success one, so dropped work does not read as
 /// finished work.
-fn todo_lines(todos: &[bravebot_core::todo::Row]) -> Vec<Line<'static>> {
+///
+/// `left_open` is whether the list is drawn for a turn that has already ended: a row still
+/// outstanding is then drawn hollow and dim rather than filled, running and bold, so it reads as
+/// work nobody is doing rather than work the turn above it is still going through.
+fn todo_lines(todos: &[bravebot_core::todo::Row], left_open: bool) -> Vec<Line<'static>> {
     todos
         .iter()
         .enumerate()
@@ -97,22 +106,26 @@ fn todo_lines(todos: &[bravebot_core::todo::Row]) -> Vec<Line<'static>> {
             } else {
                 "    ".to_string()
             };
-            let (marker, text) = if row.status == bravebot_core::todo::Status::Cancelled {
-                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+            let (glyph, marker, text) = if row.status == bravebot_core::todo::Status::Cancelled {
+                (row.marker, dim(), dim().add_modifier(Modifier::CROSSED_OUT))
             } else if row.struck() {
                 (
+                    row.marker,
                     Style::default().fg(theme::ok()),
                     dim().add_modifier(Modifier::CROSSED_OUT),
                 )
+            } else if left_open {
+                (LEFT_OPEN_MARKER, dim(), dim())
             } else {
                 (
+                    row.marker,
                     Style::default().fg(theme::running()),
                     Style::default().add_modifier(Modifier::BOLD),
                 )
             };
             Line::from(vec![
                 Span::styled(lead, dim()),
-                Span::styled(format!("{} ", row.marker), marker),
+                Span::styled(format!("{glyph} "), marker),
                 Span::styled(row.content.clone(), text),
             ])
         })
@@ -9385,6 +9398,56 @@ mod tests {
                 gone_colour, done_colour,
                 "a cancelled task was drawn in the colour finished work gets"
             );
+        }
+
+        /// A row left neither finished nor dropped must not go on reading as work being done
+        /// once the turn that reported it has ended, or an answer that says the turn is done
+        /// sits over a mark its own progress used for work still going on (#2897).
+        ///
+        /// Asserted against the same rows drawn while their turn runs, rather than against a
+        /// marker or colour named here, so a theme change that keeps the two apart does not fail
+        /// it. Finished and dropped rows are drawn the same either way, since neither reads as
+        /// ongoing work in the first place.
+        #[test]
+        fn a_turn_that_has_ended_draws_its_open_tasks_left_open() {
+            let tasks = list(&[
+                ("finished it", Status::Done),
+                ("dropped it", Status::Cancelled),
+                ("working on it", Status::Active),
+                ("still to do", Status::Pending),
+            ]);
+
+            let running = todo_lines(&tasks, false);
+            let ended = todo_lines(&tasks, true);
+
+            for index in [2, 3] {
+                let (live, left) = (&running[index], &ended[index]);
+                assert_ne!(
+                    left.spans[1].content, live.spans[1].content,
+                    "row {index} keeps the mark of work being done once its turn has ended"
+                );
+                assert_ne!(
+                    left.spans[1].style.fg, live.spans[1].style.fg,
+                    "row {index} keeps the ink of work being done once its turn has ended"
+                );
+                assert_ne!(
+                    left.spans[2].style, live.spans[2].style,
+                    "row {index} keeps the text styled as work being done once its turn has ended"
+                );
+                assert!(
+                    !left.spans[2]
+                        .style
+                        .add_modifier
+                        .contains(Modifier::CROSSED_OUT),
+                    "row {index} is struck through, so it reads as no longer outstanding"
+                );
+            }
+            for index in [0, 1] {
+                assert_eq!(
+                    ended[index], running[index],
+                    "row {index} was drawn differently once the turn ended"
+                );
+            }
         }
 
         /// The list stays visible after the turn, attached to the reply it belongs to.
