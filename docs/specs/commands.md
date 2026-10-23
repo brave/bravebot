@@ -390,12 +390,21 @@ the files under the root does not change which names `/style` takes. `/forget-tr
 and the git worktree around it ([TRUST-24](trust-map.md#TRUST-24)). A prompt and a command line can
 run a program that makes the `.git` entry that moves which root is around the directory, a line that
 starts a session here reads the answer, and one that moves the directory or leaves the session
-changes what is withdrawn, so all of those and `/add-dir`, `/reach`, `/mcp`, `/branch`, `/undo`,
-`/rewind` and `/hunks`, which have not been shown unable to make or remove the `.git` entry, hold it
-back. Behind `/compact`, `/btw`, `/recap`, `/memory`, `/after`, `/rename`, `/note`, `/style`, `/issue`,
-`/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed: `/after` arms a
-prompt that goes out when its delay is up and runs nothing now, so the turn it sends runs under the
-answer as `/forget-trust` left it whichever of the two is carried out first. A
+changes what is withdrawn, so all of those hold it back, as do `/branch`, which replaces the
+session's record and its reach and has not been read against the answer, and `/mcp`, `/undo`,
+`/rewind` and `/hunks`, which have not been shown unable to make or remove the `.git` entry. A rewind
+removes what a file tool wrote, which may be a `.git` entry written into an added directory that
+holds the working directory, and a server `/mcp` starts may write the directory its declaration
+names. Behind
+`/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/after`, `/rename`, `/note`, `/style`,
+`/issue`, `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed:
+`/after` arms a prompt that goes out when its delay is up and runs nothing now, so the turn it sends
+runs under the answer as `/forget-trust` left it whichever of the two is carried out first.
+`/add-dir` and `/reach` start no program and move neither the working directory nor the root. The first
+opens or closes a directory and a rule in the session's own trust map, and the second writes the
+reach record or the workspace's list of paths programs may reach, and neither writes a file the
+answer is kept in or makes a `.git` entry, so `/forget-trust` withdraws the same answers before them
+as after them. A
 command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
@@ -566,6 +575,8 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_style_typed_behind_a_line_that_could_change_it_waits_behind_it`
 `verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
 `verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_could_change_it_waits_behind_it`
+`verified-by: bravebot_tui::app::opening_or_closing_a_directory_does_not_change_what_forgetting_trust_withdraws`
+`verified-by: bravebot_agent::reach::a_reach_leaves_the_answer_kept_about_the_directory_as_it_was`
 `verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_leaves_the_record_alone_is_carried_out_when_typed`
 `verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_could_change_the_record_waits_behind_it`
 `verified-by: bravebot_session::sessions::a_save_for_a_command_line_keeps_the_name_and_the_notes_given_before_it`
