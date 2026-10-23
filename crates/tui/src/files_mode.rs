@@ -273,7 +273,7 @@ fn list_row(file: &File, highlighted: bool, width: usize) -> Line<'static> {
     let counted = counts(file.added(), file.removed());
     let taken = spans_width(&counted);
     let room = width.saturating_sub(taken + 3);
-    let path = crate::panel::ending(&crate::render::printable(&file.path), room);
+    let path = crate::panel::ending(&bravebot_agent::confirm::shown_name(&file.path), room);
     let gap = width.saturating_sub(crate::wrap::display_width(&path) + taken + 2);
     let mark = if highlighted { "▸" } else { " " };
     let style = if highlighted {
@@ -431,7 +431,7 @@ pub fn rows(
     let selected = state.selected.min(files.len().saturating_sub(1));
     if let Some(file) = files.get(selected) {
         let name = crate::panel::ending(
-            &crate::render::printable(&file.path),
+            &bravebot_agent::confirm::shown_name(&file.path),
             width.saturating_sub(2 + 12),
         );
         body.push(Line::from(vec![
@@ -835,6 +835,29 @@ mod tests {
         assert!(
             second.trim_end().ends_with("-1") && !second.contains('+'),
             "{second:?}"
+        );
+    }
+
+    /// FILES-5, PROMPT-1: a file whose name ends in a space, and one whose name is only a space,
+    /// are listed spelled, in the row and in the line under the list that names the selected one,
+    /// so neither is drawn as the file without the space or as nothing.
+    #[test]
+    fn a_name_that_ends_in_a_space_is_listed_spelled() {
+        let mut session = Session::new("none");
+        prompt(&mut session, "go");
+        wrote(&mut session, write("note.md ", "x\n", "y\n"));
+        wrote(&mut session, write(" ", "x\n", "y\n"));
+        opened(&mut session);
+        let panel = panel_of(&mut session, 120, 30);
+        for spelled in ["\"note.md\u{2423}\"", "\"\u{2423}\""] {
+            assert!(
+                panel.iter().any(|row| row.contains(spelled)),
+                "no row names {spelled}: {panel:#?}"
+            );
+        }
+        assert!(
+            !panel.iter().any(|row| row.contains("note.md  ")),
+            "a name was drawn as written: {panel:#?}"
         );
     }
 

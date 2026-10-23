@@ -4851,8 +4851,8 @@ fn a_session_in_lines_draws_a_checkouts_settings_as_pictures_before_the_startup_
         "the session did not draw the rule it ignored as pictures: {report}"
     );
     assert!(
-        report.contains("not granting the allow rule Bash(echo \u{241b}[8mallow-rule)"),
-        "the session did not draw the allow rule it dropped as pictures: {report}"
+        report.contains("not granting the allow rule \"Bash(echo \u{241b}[8mallow-rule)\""),
+        "the session did not draw the allow rule it dropped as pictures, quoted as a spelled rule is: {report}"
     );
 }
 
@@ -8854,6 +8854,45 @@ fn auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done(
         "{stderr}"
     );
     assert!(!marker.exists(), "a gateway of that name opened a browser");
+}
+
+/// CHATGPT-1 and CHATGPT-8: a turn whose model is `chatgpt/<name>` goes to the account and not to
+/// Brave's endpoint or to a service that is configured, and where nothing is stored it ends with
+/// the sentence that names the command. The run starts under a home of its own with no sign-in,
+/// so nothing it does can reach the account, and the sentence is the account client's: Brave's
+/// endpoint would have said no model service is configured.
+#[test]
+fn a_turn_on_a_chatgpt_model_with_no_sign_in_ends_naming_the_command_and_stores_nothing() {
+    let scratch = Scratch::new("cli-running-chatgpt-model-signed-out");
+
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &[
+            "-p",
+            "say something",
+            "--model",
+            "chatgpt/gpt-5.5",
+            "--trust-workspace",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("not signed in to a ChatGPT account")
+            && stderr.contains("bravebot auth login chatgpt"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("no model service is configured"),
+        "the name was looked up as a Brave model: {stderr}"
+    );
+    assert!(
+        !scratch.path.join(".bravebot/chatgpt-account.json").exists(),
+        "a refused turn stored a sign-in"
+    );
 }
 
 /// CHATGPT-11: logging out removes the one file and says what it leaves, is allowed in an

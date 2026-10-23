@@ -1952,7 +1952,7 @@ function Card({
           <span className="tool-body">
             <span className="call">
               <span className="verb">{activity.verb}</span>
-              {activity.target && <span className="target" data-tooltip={activity.target.length > TARGET_WIDTH ? activity.target : undefined}>{middleTruncate(activity.target, TARGET_WIDTH)}</span>}
+              {activity.shownTarget && <span className="target" data-tooltip={activity.shownTarget.length > TARGET_WIDTH ? activity.shownTarget : undefined}>{middleTruncate(activity.shownTarget, TARGET_WIDTH)}</span>}
             </span>
             {activity.why && <span className="why" data-tooltip={activity.why.length > WHY_WIDTH ? activity.why : undefined}>{activity.why}</span>}
           </span>

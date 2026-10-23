@@ -6923,3 +6923,539 @@ fn a_refused_responses_request_does_not_repeat_the_key() {
     let recorded = format!("{:?}", sink.events());
     assert!(!recorded.contains(RESPONSES_KEY) && !recorded.contains("say hello"));
 }
+
+// The ChatGPT account, reached at the serving host in the Responses protocol with the token of a
+// stored sign-in (CHATGPT-10). The host is a server on this machine here: the account's own host is
+// a constant that a test cannot point elsewhere, so what these read is the client given a provider.
+
+use bravebot_aichat::{AccountAccess, AccountFailure};
+
+const ACCOUNT_SESSION: &str = "placeholder-session-3c8e41d0";
+const ACCOUNT_TOKENS: [&str; 3] = [
+    "placeholder-access-token-one-77aa",
+    "placeholder-access-token-two-91cb",
+    "placeholder-access-token-three-04de",
+];
+
+/// A stored sign-in that hands out `ACCOUNT_TOKENS` in turn and records what it was asked.
+#[derive(Default)]
+struct StoredSignIn {
+    /// Which token is current. Moved on by a replacement, and by every request where `renews`.
+    current: usize,
+    /// Where each request finds a token that has just been renewed, as one near its expiry is.
+    renews: bool,
+    asked: usize,
+    refused: Vec<String>,
+    absent: Option<AccountFailure>,
+    replacement_fails: Option<AccountFailure>,
+}
+
+impl AccountAccess for StoredSignIn {
+    fn access_token(&mut self) -> Result<bravebot_config::Secret, AccountFailure> {
+        if let Some(failure) = self.absent {
+            return Err(failure);
+        }
+        let token = ACCOUNT_TOKENS[self.current.min(ACCOUNT_TOKENS.len() - 1)];
+        self.asked += 1;
+        if self.renews {
+            self.current += 1;
+        }
+        Ok(bravebot_config::Secret::new(token))
+    }
+
+    fn replace_refused(
+        &mut self,
+        refused: &bravebot_config::Secret,
+    ) -> Result<bravebot_config::Secret, AccountFailure> {
+        self.refused.push(refused.expose().to_string());
+        if let Some(failure) = self.replacement_fails {
+            return Err(failure);
+        }
+        self.current += 1;
+        Ok(bravebot_config::Secret::new(
+            ACCOUNT_TOKENS[self.current.min(ACCOUNT_TOKENS.len() - 1)],
+        ))
+    }
+}
+
+fn account_client<'a>(
+    egress: &'a Egress,
+    provider: &'a bravebot_config::provider::Provider,
+    sign_in: &'a mut StoredSignIn,
+) -> ResponsesClient<'a> {
+    ResponsesClient::for_account(egress, provider, "a-model", sign_in, ACCOUNT_SESSION)
+        .with_backoff(Duration::from_millis(1))
+}
+
+fn account_request(words: &str) -> ChatRequest {
+    ChatRequest::new("chatgpt/a-model", vec![Message::user(words)])
+}
+
+/// CHATGPT-10: a request carries the access token as a bearer and the three session headers, each
+/// holding the session's identifier and none holding the token. A gateway's headers and key are not
+/// the account's, so neither travels to it.
+#[test]
+fn an_account_request_carries_the_token_and_three_session_headers_and_nothing_a_gateway_would() {
+    let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+
+    ResponsesClient::for_account(&egress, &provider, "a-model", &mut sign_in, ACCOUNT_SESSION)
+        .with_gateway_headers(vec![(
+            "x-gateway-header".to_string(),
+            bravebot_config::Secret::new("a-gateway-value"),
+        )])
+        .complete(&mut policy, &account_request("hello"))
+        .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(sent.request_line, "POST /v1/responses HTTP/1.1");
+    assert_eq!(
+        sent.header("authorization"),
+        Some(format!("Bearer {}", ACCOUNT_TOKENS[0]).as_str())
+    );
+    for name in ["session-id", "thread-id", "x-client-request-id"] {
+        assert_eq!(sent.header(name), Some(ACCOUNT_SESSION), "{name}");
+    }
+    assert_eq!(sent.header("x-gateway-header"), None);
+    assert_eq!(sent.header("x-api-key"), None);
+    assert!(!sent.body.contains(ACCOUNT_TOKENS[0]), "{}", sent.body);
+    assert!(!sent.body.contains(ACCOUNT_SESSION), "{}", sent.body);
+    let body = json_of(&sent);
+    assert_eq!(body["model"], "a-model");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["store"], false);
+}
+
+/// CHATGPT-7: the token is asked for before each request and each attempt and not kept from the
+/// first, since one read at the start of a long turn is past its expiry by the end of it.
+#[test]
+fn an_account_asks_for_its_token_before_every_request_and_sends_the_one_it_is_given() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Frames(text_reply(&["one"])),
+        Attempt::Frames(text_reply(&["two"])),
+    ]);
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn {
+        renews: true,
+        ..StoredSignIn::default()
+    };
+
+    for _ in 0..2 {
+        account_client(&egress, &provider, &mut sign_in)
+            .complete(&mut policy, &account_request("hello"))
+            .expect("the reply was read");
+    }
+
+    let bearers: Vec<String> = [received.recv().unwrap(), received.recv().unwrap()]
+        .iter()
+        .map(|sent| sent.header("authorization").unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        bearers,
+        [
+            format!("Bearer {}", ACCOUNT_TOKENS[0]),
+            format!("Bearer {}", ACCOUNT_TOKENS[1])
+        ]
+    );
+    assert_eq!(sign_in.asked, 2);
+
+    // A request sent again after a failure asks again too: the wait before it is time in which a
+    // token near its expiry passes it.
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(503),
+        Attempt::Frames(text_reply(&["again"])),
+    ]);
+    let provider = responses_at(&endpoint);
+    let mut sign_in = StoredSignIn {
+        renews: true,
+        ..StoredSignIn::default()
+    };
+    account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &account_request("hello"))
+        .expect("the second attempt was answered");
+    let bearers: Vec<String> = [received.recv().unwrap(), received.recv().unwrap()]
+        .iter()
+        .map(|sent| sent.header("authorization").unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        bearers,
+        [
+            format!("Bearer {}", ACCOUNT_TOKENS[0]),
+            format!("Bearer {}", ACCOUNT_TOKENS[1])
+        ],
+        "an attempt after a failure was sent with the token of the one before"
+    );
+}
+
+/// CHATGPT-7: a token the host turns away is replaced and the request sent once more with the new
+/// one, and what is asked to be replaced is the token that was refused.
+#[test]
+fn a_token_the_host_refuses_is_replaced_once_and_the_request_is_sent_again_with_the_new_one() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(401),
+        Attempt::Frames(text_reply(&["ok"])),
+    ]);
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+
+    account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &account_request("hello"))
+        .expect("the second request was answered");
+
+    let first = received.recv().expect("the first request arrived");
+    let second = received.recv().expect("the second request arrived");
+    assert_eq!(
+        first.header("authorization"),
+        Some(format!("Bearer {}", ACCOUNT_TOKENS[0]).as_str())
+    );
+    assert_eq!(
+        second.header("authorization"),
+        Some(format!("Bearer {}", ACCOUNT_TOKENS[1]).as_str())
+    );
+    assert_eq!(sign_in.refused, [ACCOUNT_TOKENS[0]]);
+}
+
+/// CHATGPT-7 and CHATGPT-8: a replacement is not itself refused again and again. A second refusal
+/// ends the turn as the sign-in failing, with the words of the sign-in, and a replacement that
+/// cannot be made ends it with the reason it could not, with no second request sent.
+#[test]
+fn a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words() {
+    let egress = Egress::new();
+
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Status(401),
+        Attempt::Status(401),
+        Attempt::Frames(text_reply(&["never asked for"])),
+    ]);
+    let provider = responses_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+    let error = account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &account_request("hello"))
+        .expect_err("refused twice");
+    assert!(
+        matches!(error, ChatError::Account(AccountFailure::Refused)),
+        "{error:?}"
+    );
+    assert!(
+        error.to_string().contains("bravebot auth login chatgpt"),
+        "{error}"
+    );
+    assert_eq!(sign_in.refused.len(), 1, "replaced once and not again");
+    received.recv().unwrap();
+    received.recv().unwrap();
+    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+
+    for failure in [AccountFailure::Ended, AccountFailure::Unusable] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Status(401),
+            Attempt::Frames(text_reply(&["never asked for"])),
+        ]);
+        let provider = responses_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut sign_in = StoredSignIn {
+            replacement_fails: Some(failure),
+            ..StoredSignIn::default()
+        };
+        let error = account_client(&egress, &provider, &mut sign_in)
+            .complete(&mut policy, &account_request("hello"))
+            .expect_err("no token to send again");
+        assert!(
+            matches!(&error, ChatError::Account(found) if *found == failure),
+            "{failure:?}: {error:?}"
+        );
+        received.recv().unwrap();
+        assert!(
+            received.recv_timeout(Duration::from_millis(200)).is_err(),
+            "{failure:?}: a request was sent with no token to send"
+        );
+    }
+}
+
+/// CHATGPT-1 and CHATGPT-8: where nothing is stored no request is sent at all, and nothing is
+/// attached in place of a sign-in.
+#[test]
+fn an_account_with_no_sign_in_sends_nothing() {
+    let (endpoint, received) =
+        serve_attempts(vec![Attempt::Frames(text_reply(&["never asked for"]))]);
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn {
+        absent: Some(AccountFailure::NotSignedIn),
+        ..StoredSignIn::default()
+    };
+
+    let mut client = account_client(&egress, &provider, &mut sign_in);
+    let error = client
+        .complete(&mut policy, &account_request("hello"))
+        .expect_err("nobody is signed in");
+
+    assert!(
+        matches!(error, ChatError::Account(AccountFailure::NotSignedIn)),
+        "{error:?}"
+    );
+    assert_eq!(client.attempts(), 0);
+    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+}
+
+/// CHATGPT-2: a redirect in answer to a request carrying the token is a failure, and nothing is
+/// sent to the host it names. The token already stays on the socket it was addressed to, and the
+/// body, which holds the conversation, is the other thing a followed redirect would hand over.
+#[test]
+fn a_redirect_in_answer_to_an_account_request_is_a_failure_and_goes_nowhere() {
+    let (elsewhere, landed) = serve(r#"{}"#);
+    let (endpoint, received) = serve_redirect(format!("{elsewhere}/v1/responses"));
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+
+    let error = account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &account_request("a private conversation"))
+        .expect_err("a redirect is not an answer");
+
+    assert!(
+        matches!(
+            &error,
+            ChatError::Egress(bravebot_net::EgressError::Status { status: 307, .. })
+        ),
+        "{error:?}"
+    );
+    received.recv().expect("the host was asked");
+    assert!(
+        landed.recv_timeout(Duration::from_millis(300)).is_err(),
+        "the redirect was followed"
+    );
+    assert!(
+        sign_in.refused.is_empty(),
+        "a redirect is no refusal of the token"
+    );
+}
+
+/// The service a test stands in for the serving host: the account's id and protocol at a server of
+/// its own.
+fn chatgpt_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    let text = format!(
+        r#"{{"provider": {{"chatgpt": {{"name": "ChatGPT", "npm": "@ai-sdk/openai",
+            "options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+const ACCOUNT_LISTING: &str = r#"{"models":[
+    {"slug":"gpt-a","display_name":"GPT A","visibility":"list","supported_in_api":true,
+     "context_window":272000,"input_modalities":["text","image"]},
+    {"slug":"gpt-hidden","visibility":"hide","supported_in_api":true}]}"#;
+
+/// CHATGPT-9: the listing is `GET /models` at the serving host with the access token as a bearer.
+/// The account-scoped route a gateway has is not asked, since this host is not a gateway, and
+/// neither a gateway's key nor the session headers of a turn go with it.
+#[test]
+fn the_accounts_listing_is_asked_for_at_the_serving_host_with_the_token_and_nothing_else() {
+    let (endpoint, received) = serve(ACCOUNT_LISTING);
+    let provider = chatgpt_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let models = bravebot_aichat::models::list_from_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    )
+    .expect("the listing was read");
+
+    let sent = received.recv().expect("the host was asked");
+    assert_eq!(sent.request_line, "GET /v1/models HTTP/1.1");
+    assert_eq!(
+        sent.header("authorization"),
+        Some(format!("Bearer {}", ACCOUNT_TOKENS[0]).as_str())
+    );
+    assert_eq!(sent.header("x-api-key"), None);
+    assert_eq!(sent.header("session-id"), None);
+    assert_eq!(sent.header("brave-product"), None);
+    let keys: Vec<&str> = models.iter().map(|m| m.key.as_str()).collect();
+    assert_eq!(keys, ["chatgpt/gpt-a"]);
+    assert_eq!(models[0].conversation_tokens, Some(272_000));
+    assert_eq!(
+        models[0].advertised.input_modalities,
+        ["text".to_string(), "image".to_string()]
+    );
+}
+
+/// CHATGPT-2 and CHATGPT-9: a redirect in answer to the listing is a failure and nothing is sent
+/// to the host it names, which is the host the token would otherwise follow the request to.
+#[test]
+fn a_redirect_in_answer_to_the_accounts_listing_is_a_failure_and_goes_nowhere() {
+    let (elsewhere, landed) = serve(ACCOUNT_LISTING);
+    let (endpoint, received) = serve_redirect(format!("{elsewhere}/v1/models"));
+    let provider = chatgpt_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let error = bravebot_aichat::models::list_from_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    )
+    .expect_err("a redirect is not a listing");
+
+    assert!(
+        matches!(
+            &error,
+            ChatError::Egress(bravebot_net::EgressError::Status { status: 307, .. })
+        ),
+        "{error:?}"
+    );
+    received.recv().expect("the host was asked");
+    assert!(
+        landed.recv_timeout(Duration::from_millis(300)).is_err(),
+        "the redirect was followed"
+    );
+}
+
+/// CHATGPT-9: a body that is not an object holding `models` is a listing that cannot be read,
+/// whatever else it is: a gateway's envelope is not this service's, and nothing is guessed from it.
+/// A refusal is a failure too. An empty `models` is a listing, and offers nothing.
+#[test]
+fn a_reply_that_is_not_the_accounts_listing_cannot_be_read_and_an_empty_one_can() {
+    let egress = Egress::new();
+    for body in [
+        r#"{"data":[{"id":"gpt-a"}]}"#,
+        "not json",
+        r#"[{"slug":"gpt-a"}]"#,
+    ] {
+        let (endpoint, _received) = serve(body);
+        let provider = chatgpt_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let outcome = bravebot_aichat::models::list_from_account(
+            &mut policy,
+            &provider,
+            ACCOUNT_TOKENS[0],
+            &egress,
+        );
+        assert!(
+            matches!(outcome, Err(ChatError::Decode { .. })),
+            "{body}: {outcome:?}"
+        );
+    }
+
+    let (endpoint, _received) = serve_attempts(vec![Attempt::Status(401)]);
+    let provider = chatgpt_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let outcome = bravebot_aichat::models::list_from_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    );
+    assert!(
+        matches!(
+            outcome,
+            Err(ChatError::Egress(bravebot_net::EgressError::Status {
+                status: 401,
+                ..
+            }))
+        ),
+        "{outcome:?}"
+    );
+
+    let (endpoint, _received) = serve(r#"{"models":[]}"#);
+    let provider = chatgpt_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let models = bravebot_aichat::models::list_from_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    )
+    .expect("an empty listing is a listing");
+    assert!(models.is_empty());
+}
+
+/// CHATGPT-10: the service takes no body over about a mebibyte uncompressed, so a larger one is
+/// not sent, spends no token and is reported as too large, which a turn answers by shortening the
+/// conversation. A body below the limit is sent.
+#[test]
+fn a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token() {
+    let egress = Egress::new();
+
+    let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+    let provider = responses_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+    account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &account_request(&"a".repeat(1_000_000)))
+        .expect("a body below the limit is sent");
+    assert!(received.recv().unwrap().body.len() > 1_000_000);
+
+    let (endpoint, received) = serve_stream(text_reply(&["never asked for"]));
+    let provider = responses_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+    let mut client = account_client(&egress, &provider, &mut sign_in);
+    let error = client
+        .complete(&mut policy, &account_request(&"a".repeat(1_100_000)))
+        .expect_err("too large to send");
+    assert!(
+        matches!(error, ChatError::BodyTooLarge { limit } if limit == 1 << 20),
+        "{error:?}"
+    );
+    assert_eq!(client.attempts(), 0);
+    assert_eq!(
+        sign_in.asked, 0,
+        "a token was asked for a request that was not sent"
+    );
+    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+}
+
+/// A gateway entry is not the account: a 401 from it is its key being refused and no token is
+/// replaced, so the failure is the status and the sentence is not the sign-in's.
+#[test]
+fn a_gateways_refused_key_is_not_reported_as_the_chatgpt_sign_in_failing() {
+    let (endpoint, _) = serve_attempts(vec![Attempt::Status(401)]);
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let error = responses_client(&egress, &provider, "a-model")
+        .complete(&mut policy, &account_request("hello"))
+        .expect_err("the key was refused");
+
+    assert!(
+        matches!(
+            &error,
+            ChatError::Egress(bravebot_net::EgressError::Status { status: 401, .. })
+        ),
+        "{error:?}"
+    );
+}

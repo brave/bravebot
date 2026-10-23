@@ -72,6 +72,17 @@ pub enum ChatError {
     ///
     /// Fails the request rather than falling back: see [`AichatClient::route`].
     Subscription(String),
+    /// The body is larger than the service takes, so it was not sent
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Sent nowhere and no token spent on it. A caller that can shorten the conversation does, as
+    /// it does where a service refuses the body.
+    BodyTooLarge { limit: usize },
+    /// The ChatGPT account's access token could not be had, or was refused twice
+    /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+    ///
+    /// A value from a closed set chosen from the step that failed, never text from a reply.
+    Account(AccountFailure),
     /// The caller asked for the reply to stop, whether or not it had begun arriving.
     ///
     /// Never retried: it is the one error that says the answer is no longer wanted.
@@ -131,6 +142,12 @@ impl fmt::Display for ChatError {
                 }
                 f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
             }
+            Self::BodyTooLarge { limit } => write!(
+                f,
+                "the request body is larger than the {limit} bytes the service takes, so it was not \
+                 sent. Shorten the conversation"
+            ),
+            Self::Account(failure) => write!(f, "{failure}"),
             Self::Subscription(detail) => write!(
                 f,
                 "the Leo subscription could not be used: {detail}. Run `bravebot auth login leo` to \
@@ -210,6 +227,83 @@ pub struct OpenCall {
     pub tool: Option<String>,
     /// How many bytes of its arguments had arrived, counted and never read.
     pub arguments: usize,
+}
+
+/// Where a ChatGPT account's access token comes from, one request at a time
+/// ([CHATGPT-7](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-7)).
+///
+/// A trait for the reason [`Subscription`] is one: this crate does not know where the sign-in is
+/// kept or how it is renewed, and a token read once would be past its expiry in a long turn.
+pub trait AccountAccess {
+    /// The token to send the next request with: the stored one where it has more than a minute
+    /// left, and otherwise a new one.
+    fn access_token(&mut self) -> Result<Secret, AccountFailure>;
+
+    /// A token other than `refused`, which the serving host turned away. The caller sends the
+    /// request once more with it and does not ask again for the same request.
+    fn replace_refused(&mut self, refused: &Secret) -> Result<Secret, AccountFailure>;
+}
+
+/// Why a ChatGPT account's request was not sent, or was refused for its token.
+///
+/// Each is a step and no text from a reply, so a sentence made from it quotes nothing
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Where signing in again is the
+/// remedy the sentence names `bravebot auth login chatgpt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountFailure {
+    /// Nothing is stored.
+    NotSignedIn,
+    /// The authorization server said the refresh token is no longer valid, and the stored sign-in
+    /// was removed.
+    Ended,
+    /// The serving host refused the token it was sent, and a new one was refused as well.
+    Refused,
+    /// The sign-in file could not be read, or the claim on it could not be taken.
+    Unusable,
+    /// The token could not be renewed, and the reason is the class of the reply.
+    Renewal(RenewalFailure),
+}
+
+/// The class of a failed renewal, in the categories the other services' failures have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenewalFailure {
+    Refused,
+    RateLimited,
+    Unavailable,
+    Incomplete,
+    Transport,
+}
+
+impl fmt::Display for AccountFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotSignedIn => f.write_str(
+                "not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in",
+            ),
+            Self::Ended => f.write_str(
+                "the ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again",
+            ),
+            Self::Refused => f.write_str(
+                "OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login \
+                 chatgpt` to sign in again",
+            ),
+            Self::Unusable => f.write_str(
+                "the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` \
+                 to see why",
+            ),
+            Self::Renewal(class) => write!(
+                f,
+                "the ChatGPT sign-in could not be renewed: the request was {}",
+                match class {
+                    RenewalFailure::Refused => "refused",
+                    RenewalFailure::RateLimited => "rate-limited",
+                    RenewalFailure::Unavailable => "met with an unavailable service",
+                    RenewalFailure::Incomplete => "answered in a shape that could not be read",
+                    RenewalFailure::Transport => "not completed",
+                }
+            ),
+        }
+    }
 }
 
 /// A source of subscription credentials, one per request.

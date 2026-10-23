@@ -1405,6 +1405,66 @@ mod tests {
         assert_eq!(place.held("s").len(), 3, "{tilde}");
     }
 
+    /// `/forget-trust` withdraws the answers kept about the working directory and about the root of
+    /// the git worktree around it. `/reach` writes `reach.jsonl` and no file an answer is kept in,
+    /// starts no program and makes no `.git` entry, so a grant made, listed or removed, and a key
+    /// listed or forgotten, leave the answers and the root as they were, and `/forget-trust`
+    /// withdraws the same before it as after it. The regression it rejects is a form of `/reach`
+    /// that also keeps or withdraws an answer, or makes a `.git` entry, which would make
+    /// `/forget-trust` typed behind a waiting `/reach` act on something other than what it finds once
+    /// the `/reach` has been carried out. `/reach paths` changes the workspace's list in memory and
+    /// reads and writes no file, so it is not run here.
+    #[test]
+    fn a_reach_leaves_the_answer_kept_about_the_directory_as_it_was() {
+        let place = Place::new("leaves-the-kept-answer");
+        let root = place.home.parent().expect("the scratch").join("repository");
+        let package = root.join("packages/api");
+        std::fs::create_dir_all(root.join(".git")).expect("a repository");
+        std::fs::create_dir_all(&package).expect("a package");
+        let Some(identity) = Identity::of(&root) else {
+            return;
+        };
+        let store = crate::trusted::Store::new(&place.home, &root);
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
+        // Every file the answers are kept in, whichever directory one is about.
+        let answers = store.path().parent().expect("the answers' directory");
+        let kept = || {
+            let mut files: Vec<_> = std::fs::read_dir(answers)
+                .expect("the answers' directory")
+                .map(|entry| {
+                    let path = entry.expect("an entry").path();
+                    let bytes = std::fs::read(&path).expect("an answer's file");
+                    (path, String::from_utf8_lossy(&bytes).into_owned())
+                })
+                .collect();
+            files.sort();
+            files
+        };
+        let before = kept();
+        let named = place.project.display().to_string();
+
+        let granted = place.say_in("s", &package, &format!("{named} write always -- ls"));
+        assert_eq!(place.held_in("s", &package).len(), 1, "{granted}");
+        place.say_in("s", &package, "");
+        let removed = place.say_in("s", &package, "remove 1");
+        assert!(place.held_in("s", &package).is_empty(), "{removed}");
+        assert!(Store::new(&place.home).choose_key(&chosen("github.com", "acme", None)));
+        let listed = place.say_in("s", &package, "keys");
+        assert!(listed.contains("github.com/acme"), "{listed}");
+        let forgotten = place.say_in("s", &package, "keys remove 1");
+        assert!(forgotten.contains("github.com/acme"), "{forgotten}");
+        assert!(Store::new(&place.home).chosen_keys().is_empty());
+
+        assert_eq!(kept(), before);
+        assert_eq!(
+            crate::trusted::worktree_root_above(&package),
+            std::fs::canonicalize(&root).ok()
+        );
+    }
+
     /// The home, what is above it, `~/.ssh`, `~/.bravebot` and a place in it, a path that is not
     /// there and one that is not absolute are each refused, and nothing is written. The regression
     /// it rejects: the person's own words reaching the sandbox unjudged.

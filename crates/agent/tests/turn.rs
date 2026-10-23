@@ -49977,9 +49977,11 @@ fn a_finished_jobs_wake_up_labels_its_standard_error() {
 fn job_output_labels_standard_error() {
     let scratch = Scratch::new("background-job-output-stderr");
     let script = scratch.path.join("both");
+    // Standard error a second after standard output. A look that output ends returns at the first
+    // pipe to deliver, so it hands over one stream or both depending on which reader ran first.
     std::fs::write(
         &script,
-        "#!/bin/sh\necho OUT-MARKER-PLUGH\necho ERR-MARKER-XYZZY >&2\nsleep 1\n",
+        "#!/bin/sh\necho OUT-MARKER-PLUGH\nsleep 1\necho ERR-MARKER-XYZZY >&2\nsleep 1\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -49989,9 +49991,13 @@ fn job_output_labels_standard_error() {
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
+    // Waits for the exit, so the one answer holds what both pipes printed.
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"./both","background":true}"#),
-        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":30,"until_exit":true}"#,
+        ),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -67134,6 +67140,88 @@ fn a_quarantined_capped_files_result_still_says_it_is_incomplete() {
     );
 }
 
+/// What the planner is sent after a search whose time ran out before the first file, under
+/// `trust`. A spent clock is the state a real timeout leaves behind, and nothing was found, so
+/// the only sign the answer is partial is the claim the turn makes.
+fn a_search_whose_clock_ran_out(
+    name: &str,
+    trust: Option<bravebot_core::trust::TrustStore>,
+) -> String {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("f.txt"), "needle\n").unwrap();
+    let workspace = Workspace::new(&scratch.path)
+        .expect("workspace")
+        .with_search_caps(None, Some(std::time::Duration::ZERO));
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("search", r#"{"pattern":"needle","directory":"."}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("find needle");
+    match trust {
+        Some(trust) => turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::Unattended,
+            &mut sink,
+            trust,
+        ),
+        None => turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::Unattended,
+            &mut sink,
+        ),
+    }
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    received.recv().expect("second request")
+}
+
+/// SEARCH-3: a search that ran out of time says so to a planner that may read the answer, in words
+/// that name the clock and not the file cap. With nothing found, "no matches" is all the answer
+/// would otherwise say, and the planner would take a tree it never read for one without the needle.
+#[test]
+fn a_search_that_ran_out_of_time_tells_the_model_it_did_not_read_the_rest() {
+    let second =
+        a_search_whose_clock_ran_out("search-timed-out-trusted", Some(trusting_the_workspace()));
+
+    assert!(
+        second.contains("this search ran out of time") && second.contains("did not read the rest"),
+        "a search that ran out of time did not say so: {second}"
+    );
+    assert!(
+        !second.contains("did not reach the whole tree"),
+        "the clock was reported as the cap on files: {second}"
+    );
+}
+
+/// SEARCH-3: the time cap is a claim too when the planner is only handed a reference. The notice
+/// written into the body reaches nobody then, so a search that read nothing before its clock ran out
+/// has to be marked incomplete beside the reference.
+#[test]
+fn a_quarantined_search_that_ran_out_of_time_still_says_it_is_incomplete() {
+    let second = a_search_whose_clock_ran_out("search-timed-out-quarantined", None);
+
+    assert!(
+        !second.contains("ran out of time"),
+        "the body reached the model, so this is not the quarantined case: {second}"
+    );
+    assert!(
+        second.contains("incomplete"),
+        "a search that ran out of time reached the model as a plain reference: {second}"
+    );
+}
+
 // SANDBOX-28: asking the person for reach to a path a program cannot otherwise touch.
 
 /// What a turn that made `calls` in order left behind.
@@ -71665,7 +71753,10 @@ fn accepting_edits_and_an_allow_rule_do_not_answer_a_write_that_runs_code_later(
         scratch
     };
     let calls = || {
-        #[cfg_attr(not(unix), allow(unused_mut))]
+        #[cfg_attr(
+            not(unix),
+            allow(unused_mut, reason = "only the unix call below pushes to it")
+        )]
         let mut calls = vec![
             writing("src/a.rs", "fn main() {}\n"),
             writing(".git/hooks/pre-commit", "#!/bin/sh\necho ran\n"),

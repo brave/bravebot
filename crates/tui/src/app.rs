@@ -3664,9 +3664,9 @@ fn grant_proposed_rules(
         for rule in &held {
             session.note(t!(
                 session_permission_allow_granted_before,
-                rule = &rule.rule,
-                path = rule.path.display().to_string(),
-                record = store.path().display().to_string()
+                rule = bravebot_agent::confirm::shown_text(&rule.rule),
+                path = bravebot_agent::confirm::shown_path(&rule.path),
+                record = bravebot_agent::confirm::shown_path(store.path())
             ));
         }
     }
@@ -3736,8 +3736,8 @@ fn rules_from(
     for rule in proposed.iter().filter(|rule| !granted.contains(rule)) {
         session.note(t!(
             session_permission_allow_ignored,
-            rule = &rule.rule,
-            path = rule.path.display().to_string()
+            rule = bravebot_agent::confirm::shown_text(&rule.rule),
+            path = bravebot_agent::confirm::shown_path(&rule.path)
         ));
     }
     Some(permissions)
@@ -7872,6 +7872,35 @@ mod tests {
         );
     }
 
+    /// CHATGPT-9: the account's rows are met in the order a fetched gateway roster is, the model in
+    /// force first and the rest by name, and a listing that could not be had, or an account nobody
+    /// signed in to, adds none.
+    #[test]
+    fn the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none() {
+        use bravebot_agent::chatgpt::AccountModels;
+        let rows = || {
+            vec![
+                listed("chatgpt/gpt-a", None),
+                listed("chatgpt/gpt-b", None),
+                listed("chatgpt/gpt-c", None),
+            ]
+        };
+
+        let keys = |rows: Vec<bravebot_aichat::models::Model>| -> Vec<String> {
+            rows.into_iter().map(|row| row.key).collect()
+        };
+        assert_eq!(
+            keys(account_rows(
+                AccountModels::Offered(rows()),
+                "chatgpt/gpt-c"
+            )),
+            ["chatgpt/gpt-c", "chatgpt/gpt-a", "chatgpt/gpt-b"]
+        );
+        assert!(account_rows(AccountModels::Unreadable, "chatgpt/gpt-c").is_empty());
+        assert!(account_rows(AccountModels::Absent, "chatgpt/gpt-c").is_empty());
+        assert!(account_rows(AccountModels::Offered(Vec::new()), "chatgpt/gpt-c").is_empty());
+    }
+
     /// A gateway's models need no network to know, so a Brave listing that could not be fetched must
     /// not withdraw them: that is the position somebody offline is most likely to be in.
     #[test]
@@ -8437,6 +8466,103 @@ mod tests {
             bravebot_config::DEFAULT_CONTEXT_BUDGET
         );
         assert!(config.budget_is_guessed());
+    }
+
+    /// The listing the account's tests script: one model with a window a budget can be told apart
+    /// from the default by.
+    fn the_accounts_listing() -> Vec<bravebot_aichat::models::Model> {
+        vec![listed("chatgpt/gpt-5.5", Some(65_536))]
+    }
+
+    /// CHATGPT-9: a session or a turn on a model that is not the account's sends the stored token
+    /// nowhere. Each caller that wants the row of the model in force reaches the account only
+    /// through `list_models`, so each is run on a model of another service and the account is
+    /// asked about nothing: the lookup a session makes at its start, the one a run makes, the one a
+    /// turn addressed to a definition makes, and the structured-output check. A caller that asked
+    /// for every model would send the token at each of them.
+    #[test]
+    fn a_caller_on_a_model_that_is_not_the_accounts_never_asks_the_account() {
+        use models::scripted_account::{asked, offer};
+        let mut config = a_config_with_a_named_roster();
+        assert_eq!(config.default_model, "opus-arn");
+        offer(the_accounts_listing());
+
+        let mut session = Session::new("none");
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert_eq!(asked(), 0, "the lookup at session start asked");
+
+        adopt_listing_for_model(&mut config, "opus-arn");
+        assert_eq!(asked(), 0, "a run's lookup asked");
+
+        config_for_turn(&config, Some("opus-arn"));
+        assert_eq!(asked(), 0, "a turn addressed to a definition asked");
+
+        reads_structured_output(&config, "opus-arn");
+        assert_eq!(asked(), 0, "the structured-output check asked");
+
+        reads_structured_output(&config, "chatgpt");
+        assert_eq!(
+            asked(),
+            0,
+            "a name that only starts like the account's asked"
+        );
+    }
+
+    /// CHATGPT-9: a caller on one of the account's own models asks the account for its row, and the
+    /// window the listing states is the budget, which the default would otherwise stand in for.
+    /// Each caller is run on a fresh configuration so the budget it ends with is its own.
+    #[test]
+    fn a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists() {
+        use models::scripted_account::{asked, offer};
+        offer(the_accounts_listing());
+
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+        session.choose_model("chatgpt/gpt-5.5".to_string(), &config);
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert_eq!(asked(), 1, "the lookup at session start did not ask");
+        assert_eq!(config.context_budget, 65_536);
+
+        offer(the_accounts_listing());
+        let mut config = a_config_with_a_named_roster();
+        adopt_listing_for_model(&mut config, "chatgpt/gpt-5.5");
+        assert_eq!(asked(), 1, "a run's lookup did not ask");
+        assert_eq!(config.context_budget, 65_536);
+
+        offer(the_accounts_listing());
+        let config = a_config_with_a_named_roster();
+        let turn = config_for_turn(&config, Some("chatgpt/gpt-5.5"));
+        assert_eq!(asked(), 1, "a turn addressed to a definition did not ask");
+        assert_eq!(turn.context_budget, 65_536);
+
+        offer(the_accounts_listing());
+        assert!(reads_structured_output(&config, "chatgpt/gpt-5.5"));
+        assert_eq!(asked(), 1, "the structured-output check did not ask");
+    }
+
+    /// CHATGPT-9: the picker asks the account whatever model is in force, and offers what it lists
+    /// beside the rows already there. Run on a model of another service: a picker that asked only
+    /// for the account's own models would never show them to the person who has yet to choose one.
+    #[test]
+    fn the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers() {
+        use models::scripted_account::{asked, offer};
+        let config = a_config_with_a_named_roster();
+        assert_eq!(config.default_model, "opus-arn");
+        offer(the_accounts_listing());
+
+        let mut session = Session::new("none");
+        open_model_picker(&mut session, &config);
+
+        assert_eq!(asked(), 1, "the picker did not ask");
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        let keys: Vec<&str> = picker.matching().iter().map(|m| m.key.as_str()).collect();
+        assert!(keys.contains(&"chatgpt/gpt-5.5"), "{keys:?}");
+        assert!(
+            keys.contains(&"opus-arn"),
+            "a row already there was taken away: {keys:?}"
+        );
     }
 
     #[test]
@@ -12084,6 +12210,53 @@ mod tests {
         session.open_scroller();
         click(&mut session, row, column);
         assert!(context_rows(&session).is_empty());
+    }
+
+    /// MOUSE-13: a click on a started MCP server's row in the panel asks what a bare `/mcp` asks.
+    #[test]
+    fn a_click_on_the_panels_mcp_server_row_lists_the_servers() {
+        let (mut session, _) = panel_with_a_context();
+        session.servers.started = vec!["notes-server".to_string()];
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(&buffer, "notes-server");
+        assert_eq!(click(&mut session, row, column), Action::Mcp(String::new()));
+        assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-13: a drag over the row, a click beside it and a click over the scroller ask for
+    /// nothing.
+    #[test]
+    fn a_drag_over_an_mcp_server_row_or_a_click_in_the_scroller_lists_nothing() {
+        let (mut session, _) = panel_with_a_context();
+        session.servers.started = vec!["notes-server".to_string()];
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(&buffer, "notes-server");
+        swept(&mut session, (row, column), (row, column + 4));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 4);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        let (other, other_column) = find_on(&buffer, "PANELMARK");
+        assert_ne!(
+            click(&mut session, other, other_column),
+            Action::Mcp(String::new())
+        );
+
+        session.open_scroller();
+        assert_ne!(click(&mut session, row, column), Action::Mcp(String::new()));
+    }
+
+    /// The buffer of the session's frame, with its layout recorded.
+    fn drawn(session: &mut Session) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, session))
+            .expect("draw");
+        session.note_layout(laid);
+        terminal.backend().buffer().clone()
     }
 
     /// The row and column where `needle` is drawn in the session's own frame.
@@ -25636,10 +25809,10 @@ mod tests {
     /// The answer kept about the directory is read by a line that starts a session there and
     /// changed by one that moves the directory or leaves the session, and a prompt or a command line
     /// can run a program that makes the `.git` entry that moves the root around the directory. A
-    /// request that is not a turn, and a write to the record or the session's own choices, do none
-    /// of those, so behind them `/forget-trust` is carried out when it is typed. The regression it
-    /// rejects is every line holding it back, which leaves an answer a person withdrew in place
-    /// until the turn ends.
+    /// request that is not a turn, a write to the record or the session's own choices, a directory
+    /// opened or closed and a reach granted do none of those, so behind them `/forget-trust` is
+    /// carried out when it is typed. The regression it rejects is every line holding it back, which
+    /// leaves an answer a person withdrew in place until the turn ends.
     #[test]
     fn a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed() {
         if !crate::test_profile::in_isolated_profile() {
@@ -25650,6 +25823,10 @@ mod tests {
             "/btw what is this",
             "/recap",
             "/memory",
+            "/add-dir ../other",
+            "/add-dir close ../other",
+            "/reach",
+            "/reach docker -- docker build .",
             "/after 5m check the deploy",
             "/rename deploy watch",
             "/note a thought",
@@ -25676,10 +25853,11 @@ mod tests {
 
     /// A prompt and a command line can run a program that makes a `.git` entry, which changes which
     /// answers `/forget-trust` withdraws. A line that starts a session here reads the answer, one
-    /// that moves the directory or leaves the session changes what is withdrawn, and a command not
-    /// read against the file the answer is kept in is held back like them, so the answer is kept and
-    /// the command waits, naming the line. The regression it rejects is a command line or a prompt
-    /// added to the lines that leave the answer alone.
+    /// that moves the directory or leaves the session changes what is withdrawn, one that starts a
+    /// server or puts files back has not been shown unable to make or remove the `.git` entry, and a
+    /// command not read against the file the answer is kept in is held back like them, so the answer
+    /// is kept and the command waits, naming the line. The regression it rejects is a command line,
+    /// a prompt, or one of those commands added to the lines that leave the answer alone.
     #[test]
     fn a_forgotten_answer_typed_behind_a_line_that_could_change_it_waits_behind_it() {
         if !crate::test_profile::in_isolated_profile() {
@@ -25694,8 +25872,6 @@ mod tests {
             BACKGROUND_COMMAND,
             EXIT_COMMAND,
             "/cd crates/tui",
-            "/add-dir ../other",
-            "/reach",
             "/mcp",
             "/branch",
             "/undo",
@@ -29920,6 +30096,85 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// `/forget-trust` withdraws the answers kept about the working directory and about the root of
+    /// the git worktree around it. A directory opened or closed, one that holds the working
+    /// directory included, writes neither answer and leaves the root where it was, so the line says
+    /// the same and withdraws the same whether it is carried out before the directory is opened,
+    /// while it is open or after it is closed. That is what lets `/forget-trust` typed behind a
+    /// waiting `/add-dir` be carried out as it is typed. The regression it rejects is `/add-dir`
+    /// making a `.git` entry nearer the working directory, which names another root and leaves the
+    /// answer kept about the first.
+    #[test]
+    fn opening_or_closing_a_directory_does_not_change_what_forgetting_trust_withdraws() {
+        use bravebot_agent::trusted::{Identity, Store};
+
+        for forgotten_before in 0..=2 {
+            let scratch = crate::testutil::scratch_dir(&format!(
+                "bravebot-app-forget-trust-around-add-dir-{forgotten_before}"
+            ));
+            let _ = std::fs::remove_dir_all(&scratch);
+            let home = scratch.join("home");
+            let root = scratch.join("repo");
+            let package = root.join("packages/api");
+            let notes = scratch.join("notes");
+            for directory in [root.join(".git"), package.clone(), notes.clone()] {
+                std::fs::create_dir_all(directory).expect("create");
+            }
+            let Some(identity) = Identity::of(&root) else {
+                let _ = std::fs::remove_dir_all(&scratch);
+                return;
+            };
+            let store = Store::new(&home, &root);
+            assert!(
+                store.keep(&identity, "1-2", 7, false),
+                "the answer was not kept"
+            );
+            let mut workspace = Workspace::new(&package).expect("workspace");
+            let working = workspace.root().to_path_buf();
+            let mut trust = TrustStore::new(&working);
+            let mut session = Session::new("none");
+            let named = [&notes, &root].map(|directory| directory.display().to_string());
+
+            let mut said = None;
+            for step in 0..=2 {
+                if step == forgotten_before {
+                    said = Some(forget_trust(Some(&home), workspace.root()));
+                }
+                for directory in &named {
+                    match step {
+                        0 => add_directory(&mut session, &mut workspace, &mut trust, directory),
+                        1 => assert!(
+                            close_directory(&mut session, &mut workspace, &mut trust, directory),
+                            "{directory} was not closed"
+                        ),
+                        _ => {}
+                    }
+                }
+            }
+
+            assert_eq!(
+                workspace.root(),
+                working,
+                "the working directory moved when forgotten before step {forgotten_before}"
+            );
+            assert_eq!(
+                said,
+                Some(t!(
+                    session_trust_forgotten_root,
+                    directory = working.display(),
+                    root = root.canonicalize().expect("resolved").display()
+                )),
+                "forgotten before step {forgotten_before}"
+            );
+            assert_eq!(
+                store.kept(&identity),
+                None,
+                "the root's answer survived when forgotten before step {forgotten_before}"
+            );
+            let _ = std::fs::remove_dir_all(&scratch);
+        }
+    }
+
     /// With nothing kept there is nothing to take back, and the line says that rather than
     /// claiming to have forgotten something.
     #[test]
@@ -32579,6 +32834,75 @@ mod tests {
             rules.permissions.for_command(&["rm", "-rf", "build"]),
             Decision::Ruled(Ruling::Deny),
             "the file was not read again"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PROMPT-1: the lines said about an allow rule a checkout proposed name the rule and the file
+    /// as they are spelled, both when it is not granted and when it was granted before, so a rule
+    /// that holds a zero-width character, and a file under a directory that ends in a space, are not
+    /// read as the ones without them. The record a granted-before line names is spelled too.
+    #[test]
+    fn the_notes_about_a_checkouts_allow_rule_spell_the_rule_and_the_files() {
+        let root = crate::testutil::scratch_dir("bravebot-allow-notes-spelled");
+        let _ = std::fs::remove_dir_all(&root);
+        let checkout = root.join("proj ");
+        checkout_with_settings(
+            &checkout,
+            r#"{"permissions": {"allow": ["Bash(echo\u200bhi)"]}}"#,
+        );
+        let state = root.join("state ");
+        let sources = RuleSources {
+            state: Some(state.clone()),
+            named: None,
+            started: checkout.clone(),
+            managed: bravebot_config::Managed::default(),
+        };
+        let settings = sources.settings(&checkout);
+        let rules_with =
+            |ask: fn(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>| {
+                let mut session = Session::new("none");
+                rules_from(
+                    &mut session,
+                    &settings,
+                    &checkout,
+                    sources.grants(&checkout).as_ref(),
+                    Whence::Asked,
+                    "a-session",
+                    ask,
+                )
+                .expect("nobody left");
+                session
+            };
+        let spelled_rule = "\"Bash(echo\\u{200b}hi)\"";
+        let spelled_file = format!(
+            "\"{}/proj\u{2423}/.bravebot/settings.json\"",
+            root.display()
+        );
+
+        let ignored = rules_with(|_, _| Some(false));
+        let note = notes_of(&ignored).join("\n");
+        assert!(
+            note.contains(&format!(
+                "not granting the allow rule {spelled_rule} from {spelled_file}"
+            )),
+            "{note}"
+        );
+        assert!(!note.contains('\u{200b}'), "{note}");
+
+        rules_with(|_, _| Some(true));
+        let before = rules_with(never_asked);
+        let note = notes_of(&before).join("\n");
+        let spelled_record = format!("\"{}/state\u{2423}/", root.display());
+        assert!(
+            note.contains(&format!("granting the allow rule {spelled_rule} from {spelled_file}, which you allowed this project before")),
+            "{note}"
+        );
+        assert!(note.contains(&spelled_record), "{note}");
+        assert!(
+            !note.contains('\u{200b}') && !note.contains("proj /"),
+            "{note}"
         );
 
         std::fs::remove_dir_all(&root).ok();

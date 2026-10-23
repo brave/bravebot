@@ -107,7 +107,15 @@ that the responses opening a session carry, and the list of rules a checkout pro
 rule's text and file as the bridge spelled them. The notice above a transcript and the permissions
 list that say a yes was kept draw the file it is kept in, and the directory it is about, as spelled.
 The mobile app's write, run and trust cards, and the line its transcript keeps for a
-waiting write, draw the spelled paths the bridge sends and never the paths as held. A name that is
+waiting write, draw the spelled paths the bridge sends and never the paths as held. The line the
+transcript draws for a call about a file, such as `Write(note.md )`, draws the name spelled in the
+terminal, in lines, in the editor, in the desktop window (`shownTarget`) and in the mobile app, and so
+does the list of files a turn wrote in the terminal and the lists of files read and written in the
+desktop window's Context panel, which draw the name the bridge sent for the file (`shownFile`). A call about anything else, such as a search for a pattern, is drawn
+as written, and the target a call carries to a program or is matched on is the name as held. The
+notes said before the first prompt about an allow rule a checkout proposed, whether it was granted
+before or is not granted, draw the rule as a rule is drawn and the settings file and the record a yes
+is kept in as paths. A name that is
 empty, is only whitespace, has a space at either end of it or of a directory in it, or holds a character
 that draws as nothing (a zero-width character, a bidirectional control, a tag character, a variation
 selector, a no-break space) or as a blank cell (the blank braille pattern) is drawn quoted with each
@@ -162,7 +170,7 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_cli::plain::a_question_in_lines_spells_a_name_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::acp::the_title_of_a_question_about_a_file_spells_a_name_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::wire::a_write_and_a_credential_read_carry_the_name_spelled_for_a_person`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the write, credential-read, vouch and run cards, the startup question, the notice and the list of what is kept, and the list of proposed rules through react-dom and asserts each draws the name the agent spelled and not the name as written, ui/scripts/drive-remembered-trust.mjs asks the startup question in the real window about a directory whose name ends in a space, and make check-ui runs them)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the write, credential-read, vouch and run cards, the startup question, the notice and the list of what is kept, the list of proposed rules, a tool line and the Context lists of files read and written through react-dom and asserts each draws the name the agent spelled and not the name as written, ui/scripts/drive-remembered-trust.mjs asks the startup question in the real window about a directory whose name ends in a space, and make check-ui runs them)`
 `verified-by: bravebot_agent::confirm::a_name_that_draws_as_nothing_is_shown_as_what_it_is`
 `verified-by: bravebot_agent::confirm::a_directory_in_a_path_that_starts_or_ends_in_a_space_is_shown_as_what_it_is`
 `verified-by: bravebot_agent::confirm::a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name`
@@ -173,13 +181,21 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_ui_bridge::wire::a_run_request_carries_a_directory_that_is_not_text_spelled_as_the_bytes_it_holds`
 `verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::control_tests::the_startup_question_carries_the_directory_and_the_record_spelled_for_a_person`
+`verified-by: bravebot_agent::report::a_line_spells_the_name_of_a_file_and_nothing_else`
+`verified-by: bravebot_agent::report::a_list_of_files_names_a_file_without_its_slot_and_spelled`
+`verified-by: bravebot_agent::tools::a_file_calls_line_spells_a_name_a_person_could_not_otherwise_tell_apart`
+`verified-by: bravebot_agent::tools::a_stored_call_spells_the_name_of_its_file`
+`verified-by: bravebot_ui_bridge::reporting::a_calls_file_crosses_as_held_and_as_spelled`
+`verified-by: bravebot_ui_bridge::acp::a_call_is_titled_with_the_file_as_spelled_and_closed_on_the_name_as_held`
+`verified-by: bravebot_tui::render::a_call_about_a_file_draws_a_name_that_ends_in_a_space_spelled`
+`verified-by: bravebot_tui::app::the_notes_about_a_checkouts_allow_rule_spell_the_rule_and_the_files`
 `verified-by: bravebot_ui_bridge::acp::the_trust_question_spells_a_directory_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::acp::the_trust_question_names_the_record_as_the_bridge_spelled_it`
 `verified-by: bravebot_ui_bridge::acp::the_trust_question_names_a_directory_that_ends_in_a_space_as_the_terminal_does`
 `verified-by: bravebot_ui_bridge::opening_tests::the_response_opening_a_session_carries_the_directory_and_the_record_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::opening_tests::a_kept_answer_carries_its_file_and_its_root_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::rules::a_proposed_rule_and_its_file_are_reported_spelled_for_a_person`
-`verified-by: by-construction (the mobile app is not a crate this workspace compiles; mobile/src/__tests__/approvals.test.tsx and transcript.test.tsx render the write, run and trust cards and the waiting-write line through react-test-renderer and assert each draws the path the bridge spelled and not the path as held, mobile/src/__tests__/payloads.test.ts asserts a request without the spelled fields is not offered, and make check-mobile runs them)`
+`verified-by: by-construction (the mobile app is not a crate this workspace compiles; mobile/src/__tests__/approvals.test.tsx and transcript.test.tsx render the write, run and trust cards, the waiting-write line and a call's line through react-test-renderer and assert each draws the path the bridge spelled and not the path as held, mobile/src/__tests__/calls.test.ts asserts the list of calls does the same, mobile/src/__tests__/payloads.test.ts asserts a request without the spelled fields is not offered, and make check-mobile runs them)`
 `verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
 `verified-by: bravebot_tui::confirm::the_plan_prompt_shows_the_task_and_every_step`

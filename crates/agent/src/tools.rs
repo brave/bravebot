@@ -1593,6 +1593,16 @@ fn target_key(tool: &str) -> Option<&'static str> {
     }
 }
 
+/// Whether the target of a call to `tool` is a file's name or path, which a screen draws spelled
+/// ([`Activity::shown_target`]).
+///
+/// Read off the same table as the target itself ([`target_key`]), so a tool added there with a
+/// `path` or a `directory` is spelled without being listed twice. The tool's own name, which
+/// dispatch matched against its table, decides it: the target is never read to find out.
+pub fn names_a_file(tool: &str) -> bool {
+    matches!(target_key(tool), Some("path" | "directory"))
+}
+
 /// How a `run` command line is drawn: its first line, and nothing at all when it carries a
 /// value that declared itself a credential.
 ///
@@ -1830,7 +1840,9 @@ pub fn describe_stored_call(tool: &str, arguments: &str) -> String {
             .unwrap_or_default()
     };
 
-    Activity::running(crate::report::verb_for(tool), target).line()
+    Activity::running(crate::report::verb_for(tool), target)
+        .naming_a_file(names_a_file(tool))
+        .line()
 }
 
 /// Shape a count out of a labelled result and release it to the person watching.
@@ -2211,6 +2223,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     reporter.tool_started(
         Activity::running(verb, target.clone())
             .of_tool(&name)
+            .naming_a_file(names_a_file(&name))
             .saying_why(why.clone()),
     );
 
@@ -2394,6 +2407,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     // call was the slow one or whether a model or this machine was what took the time.
     let finished = Activity::running(verb, target)
         .of_tool(&name)
+        .naming_a_file(names_a_file(&name))
         .saying_why(why)
         .with_changes(std::mem::take(&mut produced.changes))
         .with_written(produced.written.take())
@@ -2461,6 +2475,8 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
 pub fn refused_without_running<S: Sink, R: Reporter>(
     policy: &mut Policy<'_, S>,
     reporter: &mut R,
+    mcp: Option<&crate::mcp::Offer>,
+    slots: &SlotStore,
     call: &ToolCall,
     text: String,
 ) -> Output {
@@ -2469,14 +2485,27 @@ pub fn refused_without_running<S: Sink, R: Reporter>(
     let produced = Produced::problem(text);
     // The reason the planner gave is drawn on both lines, as `dispatch` draws it: a call that is
     // held is still one the person watching reads, and arguments that are not JSON have none.
-    let why = why_of(policy, &name, &call.arguments().unwrap_or(Value::Null));
+    let arguments = call.arguments().unwrap_or(Value::Null);
+    let why = why_of(policy, &name, &arguments);
+    // The target is drawn the same way `dispatch_with` draws it, so a call held for being a
+    // repeat is shown with what it was about rather than nothing.
+    let server_tool = mcp.and_then(|offer| {
+        offer
+            .find(&name)
+            .map(|(alias, tool)| (offer, alias.to_string(), tool.to_string()))
+    });
+    let server = server_tool
+        .as_ref()
+        .map(|(_, alias, tool)| format!("{alias}:{tool}"))
+        .or_else(|| name.strip_prefix("mcp__").map(server_named));
+    let target = target_of(policy, &name, server.as_deref(), slots, &arguments);
     reporter.tool_started(
-        Activity::running(verb, "")
+        Activity::running(verb, target.clone())
             .of_tool(&name)
             .saying_why(why.clone()),
     );
     reporter.tool_finished(
-        Activity::running(verb, "")
+        Activity::running(verb, target)
             .of_tool(&name)
             .saying_why(why)
             .failed(produced.note.clone()),
@@ -13054,9 +13083,9 @@ mod tests {
     }
 
     /// A call held for being a repeat is drawn on both its lines with the reason the planner gave,
-    /// as `dispatch` draws every other call (TOOL-5). A held call announced with no reason, or
-    /// one drawn only on its first line, leaves the refusal with nothing of what the call was for;
-    /// a call whose arguments are not JSON, or that gave none, is drawn with an empty reason.
+    /// as `dispatch` draws every other call (TOOL-5), and with the target `dispatch` would draw for
+    /// the same call: a held call hard-coded to an empty target leaves the person watching with
+    /// nothing of what the call was about.
     #[test]
     fn a_held_call_is_drawn_with_the_reason_the_planner_gave() {
         use bravebot_core::capability::CapabilitySet;
@@ -13081,21 +13110,109 @@ mod tests {
                 &mut sink,
             )
             .expect("policy");
-            refused_without_running(&mut policy, &mut reporter, &call, "held".to_string());
+            let slots = SlotStore::new();
+            refused_without_running(
+                &mut policy,
+                &mut reporter,
+                None,
+                &slots,
+                &call,
+                "held".to_string(),
+            );
             let why = |rows: &[Activity]| rows.iter().map(|a| a.why.clone()).collect::<Vec<_>>();
-            (why(&reporter.started), why(&reporter.finished))
+            let target =
+                |rows: &[Activity]| rows.iter().map(|a| a.target.clone()).collect::<Vec<_>>();
+            (
+                why(&reporter.started),
+                why(&reporter.finished),
+                target(&reporter.started),
+                target(&reporter.finished),
+            )
         };
 
         assert_eq!(
             drawn(r#"{"path":"a.txt","why":"to find the sentinel"}"#),
             (
                 vec!["to find the sentinel".to_string()],
-                vec!["to find the sentinel".to_string()]
+                vec!["to find the sentinel".to_string()],
+                vec!["a.txt".to_string()],
+                vec!["a.txt".to_string()],
             )
         );
-        let none = (vec![String::new()], vec![String::new()]);
-        assert_eq!(drawn(r#"{"path":"a.txt"}"#), none);
-        assert_eq!(drawn("not json"), none);
+        assert_eq!(
+            drawn(r#"{"path":"a.txt"}"#),
+            (
+                vec![String::new()],
+                vec![String::new()],
+                vec!["a.txt".to_string()],
+                vec!["a.txt".to_string()],
+            )
+        );
+        assert_eq!(
+            drawn("not json"),
+            (
+                vec![String::new()],
+                vec![String::new()],
+                vec![String::new()],
+                vec![String::new()],
+            )
+        );
+    }
+
+    /// A held repeat of a call to a server's tool is drawn with the same target `dispatch_with`
+    /// would draw for it (TOOL-5): the alias and the tool the live offer answers for where one is
+    /// held, and the alias and the word parsed off the wire name's own `mcp__` prefix where none
+    /// is. The offer in each case names a different alias than the wire name itself would parse
+    /// to, so a target drawn from the wrong source is told apart from one drawn from the right one.
+    #[test]
+    fn a_held_call_to_a_servers_tool_is_drawn_with_its_target() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let drawn = |name: &str, mcp: Option<&crate::mcp::Offer>| {
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "c1",
+                "type": "function",
+                "function": { "name": name, "arguments": r#"{"city":"Lyon"}"# },
+            }))
+            .unwrap();
+            let mut sink = RecordingSink::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "ask the weather");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            let slots = SlotStore::new();
+            refused_without_running(
+                &mut policy,
+                &mut reporter,
+                mcp,
+                &slots,
+                &call,
+                "held".to_string(),
+            );
+            reporter.started[0].target.clone()
+        };
+
+        let offer = crate::mcp::offer_for_test(&[(
+            "mcp__weather__get_forecast",
+            "the-offers-alias",
+            "the-offers-tool",
+        )]);
+        assert_eq!(
+            drawn("mcp__weather__get_forecast", Some(&offer)),
+            r#"the-offers-alias:the-offers-tool {"city":"Lyon"}"#
+        );
+        assert_eq!(
+            drawn("mcp__weather__get_forecast", None),
+            r#"weather:get_forecast {"city":"Lyon"}"#
+        );
     }
 
     /// Every kind above the bottom of the tree is offered the way to delegate, with the kinds this
@@ -15894,6 +16011,25 @@ mod tests {
                 ),
                 "Run"
             );
+        }
+
+        /// A session read back off disk spells the name of the file a call was about as the live
+        /// line did (PROMPT-1), whatever namespace the model gave the tool, and draws the target
+        /// of a tool that names no file as written.
+        #[test]
+        fn a_stored_call_spells_the_name_of_its_file() {
+            let drawn = |tool: &str, arguments: &str| describe_stored_call(tool, arguments);
+
+            assert_eq!(
+                drawn("read_file", r#"{"path":"note.md "}"#),
+                "Read(\"note.md\u{2423}\")"
+            );
+            assert_eq!(
+                drawn("functions.write_file", r#"{"path":" "}"#),
+                "Write(\"\u{2423}\")"
+            );
+            assert_eq!(drawn("read_file", r#"{"path":"note.md"}"#), "Read(note.md)");
+            assert_eq!(drawn("search", r#"{"pattern":"todo "}"#), "Search(todo )");
         }
 
         /// A session read back off disk draws a call to a server's tool as the live one was
@@ -21474,6 +21610,65 @@ mod tests {
                 finished.last().is_some_and(|activity| activity.failed),
                 "the call was not reported failed: {finished:?}"
             );
+        }
+
+        /// The line a call is announced with spells the name of the file it is about, so a name that
+        /// is blank or ends in whitespace is not drawn as one without it (PROMPT-1). The target the
+        /// call carries stays what it was written as, since the files view matches on it, and a
+        /// tool whose target is not a file's name is drawn as written.
+        #[test]
+        fn a_file_calls_line_spells_a_name_a_person_could_not_otherwise_tell_apart() {
+            let scratch = Scratch::new("announced-names");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let announced = |tool: &str, arguments: Value| {
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let call: ToolCall = serde_json::from_value(json!({
+                    "id": "a",
+                    "function": {"name": tool, "arguments": arguments.to_string()}
+                }))
+                .expect("a call");
+                let mut reporter = crate::report::RecordingReporter::default();
+                with_tools(&workspace, |tools| {
+                    dispatch(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveWrites,
+                        &mut reporter,
+                        &call,
+                    )
+                });
+                let started = reporter.started.remove(0);
+                let finished = reporter.finished.remove(0);
+                assert_eq!(started.line(), finished.line(), "{tool}");
+                (started.target.clone(), started.line())
+            };
+
+            for (name, spelled) in [
+                ("note.md", "Read(note.md)"),
+                ("note.md ", "Read(\"note.md\u{2423}\")"),
+                (" ", "Read(\"\u{2423}\")"),
+                ("a\u{202e}b", "Read(\"a\\u{202e}b\")"),
+            ] {
+                let (target, line) = announced("read_file", json!({"path": name, "why": "look"}));
+                assert_eq!(target, name, "the call's own target was changed");
+                assert_eq!(line, spelled, "{name:?}");
+            }
+
+            // A directory is named as a file is, and a tool that names a pattern or a skill is not.
+            let (_, line) = announced("list_files", json!({"directory": "sub ", "why": "look"}));
+            assert_eq!(line, "List(\"sub\u{2423}\")");
+
+            // A search pattern is not a file's name: a trailing space in it is part of what is
+            // looked for, and the line draws it as written.
+            let (_, line) = announced("search", json!({"pattern": "todo ", "why": "look"}));
+            assert_eq!(line, "Search(todo )");
         }
 
         /// A processor call that misnames `reads`, or sends it as a string, is told which. Told

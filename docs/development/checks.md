@@ -34,6 +34,13 @@ reports more sites in a crate than it did. Mark a site that is right with
 `#[expect(clippy::lint, reason = "...")]`. `make check` runs it after clippy, CI runs it on pull
 requests, and [contrib/README.md](../../contrib/README.md#check-lint-increasepy) lists the lints.
 
+Every `#[allow]` and `#[expect]` ends its list with `reason = "..."`. clippy reads only the code the
+host compiles, so an `#[allow(unsafe_code)]` with no reason in a `#[cfg(windows)]` function passes
+on macOS and fails the Windows lint after the push. `crates/cli/tests/allow_reasons.rs` reads every
+source file under `crates/` as text, so a missing reason fails `make check` on any host. The code
+the i18n build script writes is not source, and a test in `crates/i18n/src/generate.rs` holds it to
+the same rule.
+
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
 [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
 with `bravebot_sandbox::programs::start`, which takes a `Resolved`, the variables the program

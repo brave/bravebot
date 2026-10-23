@@ -106,6 +106,13 @@ describe('transcript rows', () => {
     expect(textOf(byTestId(tree, 'row-approval-3'))).toContain('"note.md\u2423"')
   })
 
+  it('names the file of a call as the bridge spelled it, so a name ending in a space is not read as the one without', async () => {
+    const rows = [activity(2, 1, { verb: 'write', target: 'note.md ', shownTarget: '"note.md\u2423"', note: '1 line' })]
+    const tree = await render(<Transcript rows={rows} status="running" decisions={new Map()} empty={null} />)
+    expect(textOf(byTestId(tree, 'row-activity-2'))).toContain('"note.md\u2423"')
+    expect(textOf(byTestId(tree, 'row-activity-2'))).not.toContain('note.md ')
+  })
+
   it('says what the person answered once the question is resolved', async () => {
     const rows = [...SESSIONS['update-changelog']!.rows.slice(0, 2), { ...changelogRequest, resolved: true }]
     const tree = await render(<Transcript rows={rows} status="running" decisions={new Map([[3, 'approved']])} empty={null} />)

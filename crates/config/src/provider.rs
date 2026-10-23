@@ -67,6 +67,20 @@ const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
 /// [`Provider::answers_under_the_model_behind_an_alias`].
 const OPENAI_ID: &str = "openai";
 
+/// The id a model of the ChatGPT account is qualified by
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// Not the id of a gateway: where a `provider` entry has it, the entry keeps the name and no model
+/// is the account's.
+pub const CHATGPT_ID: &str = "chatgpt";
+
+/// Where a ChatGPT account's model requests go
+/// ([CHATGPT-2](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-2)).
+///
+/// A constant of the source. Nothing a settings file, a variable, a page or a reply says names
+/// another, so the account's access token goes to this host and no other.
+const CHATGPT_SERVING_HOST: &str = "https://api.openai.com/v1";
+
 /// The id naming Anthropic, which is reached at the endpoint compiled in for it, in the Messages
 /// protocol rather than the chat completions one: see [`Provider::protocol`].
 pub(crate) const ANTHROPIC_ID: &str = "anthropic";
@@ -411,6 +425,27 @@ pub enum Protocol {
 }
 
 impl Provider {
+    /// The service a stored ChatGPT sign-in reaches, spoken to in the Responses protocol
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Built by the same reading as an entry that names `@ai-sdk/openai`, from constants, so its
+    /// route, protocol and header are the ones such an entry has. It names no variable, holds no key
+    /// and lists no model: its token is the account's and its models are the account's.
+    pub fn chatgpt_account() -> Self {
+        let entry = serde_json::json!({
+            "name": "ChatGPT",
+            "npm": RESPONSES_SDK,
+            "options": {"baseURL": CHATGPT_SERVING_HOST},
+        });
+        let serde_json::Value::Object(entry) = entry else {
+            unreachable!("a JSON object literal");
+        };
+        match Self::one(CHATGPT_ID, &entry) {
+            Some(account) => account,
+            None => unreachable!("an entry that states its endpoint is reachable"),
+        }
+    }
+
     /// Every provider in a settings root, in the order the file listed them.
     ///
     /// Empty where the block is absent or shaped differently, on the same footing as the rest of the
@@ -1974,6 +2009,29 @@ mod tests {
 
         let exported = |name: &str| (name == "OPENAI_API_KEY").then(|| "a-key".to_string());
         assert_eq!(token(&provider.credential(exported)), Some("a-key"));
+    }
+
+    /// CHATGPT-2 and CHATGPT-10: the account is reached at the serving host in the Responses
+    /// protocol, and it names no variable to read a key from, so `OPENAI_API_KEY` and a gateway's
+    /// key are never what a request to it carries.
+    #[test]
+    fn the_chatgpt_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own() {
+        let account = Provider::chatgpt_account();
+        assert_eq!(account.id, "chatgpt");
+        assert_eq!(account.display_name(), "ChatGPT");
+        assert_eq!(account.protocol(), Protocol::Responses);
+        assert_eq!(
+            account.completion_url(),
+            "https://api.openai.com/v1/responses"
+        );
+        assert!(account.models.is_empty());
+        assert!(account.headers.is_empty());
+
+        let everything = |name: &str| Some(format!("{name}-value"));
+        assert!(
+            matches!(account.credential(everything), Credential::NotNeeded),
+            "a variable was read for the account"
+        );
     }
 
     /// A proxy, or an Azure-style deployment of the same protocol, is reached by stating where it

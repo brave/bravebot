@@ -112,7 +112,7 @@ pub fn create_new_at(parent: &File, part: &str) -> io::Result<File> {
 }
 
 /// Rename `file` to `to` in `parent`, replacing what is there, by the handle rather than by name.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "calls `NtSetInformationFile`")]
 pub fn rename_at(parent: &File, file: &File, _from: &str, to: &str) -> io::Result<()> {
     let name: Vec<u16> = to.encode_utf16().collect();
     let bytes = size_of_val(name.as_slice());
@@ -154,7 +154,7 @@ pub fn rename_at(parent: &File, file: &File, _from: &str, to: &str) -> io::Resul
 }
 
 /// Delete `file` once its last handle closes, which is the one the caller holds.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "calls `NtSetInformationFile`")]
 pub fn remove_at(_parent: &File, file: &File, _name: &str) {
     let information = FILE_DISPOSITION_INFORMATION { DeleteFile: true };
     let mut status = IO_STATUS_BLOCK::default();
@@ -175,7 +175,7 @@ pub fn remove_at(_parent: &File, file: &File, _name: &str) {
 ///
 /// The name is one component: the callers above hand it nothing with a separator in it. A name is
 /// matched without regard to case, as every other Windows program opens it.
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "calls `NtCreateFile`")]
 fn open_relative(
     parent: &File,
     name: &str,
@@ -230,7 +230,10 @@ fn open_relative(
 
 /// An `NTSTATUS` as the `io::Error` a Win32 call would have reported, so a name that is not there
 /// is `NotFound` here as it is on POSIX.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "calls `RtlNtStatusToDosError`, which takes a value and touches no memory of ours"
+)]
 fn check(status: NTSTATUS) -> io::Result<()> {
     if status >= 0 {
         return Ok(());
@@ -253,7 +256,10 @@ fn private(directory: bool) -> io::Result<SecurityDescriptor> {
 ///
 /// Taken from the process token rather than from a user name, because a name is not what the list
 /// holds and the same name can belong to two accounts, one on the machine and one in a domain.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "calls `OpenProcessToken`, `GetTokenInformation`, `ConvertSidToStringSidW` and `LocalFree`"
+)]
 pub fn current_account() -> io::Result<String> {
     // Sound because a call that returns nonzero has written an open handle nothing else owns,
     // which is what [`OwnedHandle`] takes responsibility for closing.
@@ -324,7 +330,10 @@ struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
 
 impl SecurityDescriptor {
     /// Parse SDDL into the form a file takes.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "calls `ConvertStringSecurityDescriptorToSecurityDescriptorW`"
+    )]
     fn of(sddl: &str) -> io::Result<Self> {
         let sddl: Vec<u16> = OsStr::new(sddl)
             .encode_wide()
@@ -348,7 +357,10 @@ impl SecurityDescriptor {
 }
 
 impl Drop for SecurityDescriptor {
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "calls `LocalFree` on the allocation this value owns"
+    )]
     fn drop(&mut self) {
         // Sound because the descriptor was allocated by the call that parsed it, which documents
         // `LocalFree` as its release, and is freed nowhere else.
@@ -362,7 +374,10 @@ impl Drop for SecurityDescriptor {
 /// # Safety
 ///
 /// `text` points at a readable, null-terminated UTF-16 string.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "an `unsafe fn` that reads the null-terminated UTF-16 string its caller vouches for"
+)]
 unsafe fn wide_to_string(text: *const u16) -> String {
     let mut end = text;
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
@@ -386,7 +401,7 @@ pub fn written(sddl: &str) -> io::Result<String> {
 
 /// The access-control list on the file or directory at `path`, in its written form.
 #[cfg(test)]
-#[allow(unsafe_code)]
+#[allow(unsafe_code, reason = "calls `GetSecurityInfo`")]
 pub fn list_at(path: &Path) -> io::Result<String> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
     use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
@@ -419,7 +434,10 @@ pub fn list_at(path: &Path) -> io::Result<String> {
 }
 
 #[cfg(test)]
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "calls `ConvertSecurityDescriptorToStringSecurityDescriptorW` and `LocalFree`"
+)]
 fn list_text(descriptor: &SecurityDescriptor) -> io::Result<String> {
     use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
     use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;

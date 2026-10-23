@@ -159,7 +159,7 @@ export const Context = memo(function Context({ live, audit, details }: {
           <ul className="files">
             {files.map((file) => (
               <li key={file.target} className={`file-row${file.confined ? ' confined' : ''}`}>
-                <FileLink path={file.target} onReveal={reveal} />
+                <FileLink path={file.target} shown={file.shown} onReveal={reveal} />
                 {file.confined && <Label mode="outline" className="tag" color="blue">confined</Label>}
               </li>
             ))}
@@ -179,7 +179,7 @@ export const Context = memo(function Context({ live, audit, details }: {
           <ul className="files">
             {writes.map((write) => (
               <li key={write.target} className={`file-row ${write.state}`}>
-                <FileLink path={write.target} onReveal={reveal} />
+                <FileLink path={write.target} shown={write.shown} onReveal={reveal} />
                 <Label mode="outline" className="tag" color={stateColor(write.state)}>{write.state}</Label>
               </li>
             ))}
@@ -249,14 +249,19 @@ function stateColor(state: string): 'green' | 'red' | 'yellow' | 'neutral' {
 /** How many characters of a path fit a row of this column before the middle gives way. */
 const PATH_WIDTH = 40
 
-/** A path in one of the lists, which takes the transcript to where it was touched. */
-function FileLink({ path, onReveal }: { path: string; onReveal: (path: string) => void }): React.JSX.Element {
-  const shown = middleTruncate(path, PATH_WIDTH)
+/**
+ * A path in one of the lists, which takes the transcript to where it was touched.
+ *
+ * `path` is what the call named and what the transcript is searched for; `shown` is the same name
+ * spelled so a blank or whitespace-ended one is visible (PROMPT-1), and is all that is drawn.
+ */
+function FileLink({ path, shown, onReveal }: { path: string; shown: string; onReveal: (path: string) => void }): React.JSX.Element {
+  const cut = middleTruncate(shown, PATH_WIDTH)
   return (
     <button type="button" className="context-link" onClick={() => onReveal(path)}
-      data-tooltip={shown === path ? `Show ${path} in the conversation` : path}>
+      data-tooltip={cut === shown ? `Show ${shown} in the conversation` : shown}>
       <FileGlyph name={path} />
-      <span className="file-path">{shown}</span>
+      <span className="file-path">{cut}</span>
     </button>
   )
 }
@@ -310,8 +315,8 @@ function Section({
  * The distinction is the whole point of the tool, so it is carried into the list rather
  * than flattened into "files". A name here does not mean the model saw the contents.
  */
-function touched(entries: Entry[]): { target: string; confined: boolean }[] {
-  const seen = new Map<string, boolean>()
+function touched(entries: Entry[]): { target: string; shown: string; confined: boolean }[] {
+  const seen = new Map<string, { shown: string; confined: boolean }>()
   for (const entry of entries) {
     if (entry.kind !== 'tool' || !entry.activity.target) continue
     if (entry.activity.failed) continue
@@ -322,9 +327,9 @@ function touched(entries: Entry[]): { target: string; confined: boolean }[] {
     const confined = entry.landing !== null && isConfined(entry.landing)
     // Once confined, always shown as confined: a file read into quarantine and later
     // named again should not lose the mark.
-    seen.set(entry.activity.target, (seen.get(entry.activity.target) ?? false) || confined)
+    seen.set(entry.activity.target, { shown: entry.activity.shownTarget, confined: (seen.get(entry.activity.target)?.confined ?? false) || confined })
   }
-  return [...seen].map(([target, confined]) => ({ target, confined }))
+  return [...seen].map(([target, { shown, confined }]) => ({ target, shown, confined }))
 }
 
 /** The agent decorates reference targets with a slot and label; match their underlying path. */
@@ -335,6 +340,8 @@ function fileTarget(target: string): string {
 /** One file the turn wrote, and how far that write got. */
 interface Write {
   target: string
+  /** `target` as the bridge spelled it, so a blank or whitespace-ended name is visible (PROMPT-1). */
+  shown: string
   state: 'approved' | 'applying' | 'applied' | 'failed' | 'refused' | 'waiting' | 'cancelled'
 }
 
@@ -355,6 +362,7 @@ export function written(entries: Entry[]): Write[] {
       const call = calls.get(entry.request.path)
       rows.set(entry.request.path, {
         target: entry.request.path,
+        shown: entry.request.shownPath,
         state:
           entry.interrupted ? 'cancelled' : entry.decision === 'approve'
             ? call ? outcome(call) : 'approved'
@@ -369,7 +377,7 @@ export function written(entries: Entry[]): Write[] {
     calls.set(target, entry.activity)
     // An outcome already recorded for this path — a decision, or the finish of the same
     // call — outranks a line that has not finished, so a pending row cannot overwrite it.
-    rows.set(target, { target, state: outcome(entry.activity) })
+    rows.set(target, { target, shown: entry.activity.shownFile, state: outcome(entry.activity) })
   }
   return [...rows.values()]
 }

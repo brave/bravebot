@@ -11,7 +11,7 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model and effort rows of the info panel, is built. Clicking other things on the screen, a context menu, edge
+drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, is built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
@@ -200,3 +200,18 @@ in it ([PANEL-11](info-panel.md#PANEL-11)).
 `verified-by: bravebot_tui::app::a_click_on_the_panels_context_reading_reports_the_context`
 `verified-by: bravebot_tui::app::a_drag_over_the_context_reading_or_a_click_in_the_scroller_reports_nothing`
 `verified-by: bravebot_tui::panel::only_the_context_reading_is_a_context_click_target`
+
+<a id="MOUSE-13"></a>
+### MOUSE-13: a click on a panel's MCP server row asks what `/mcp` asks
+
+In the info panel, a left click that sweeps nothing on the row of a started MCP server lists the
+servers, as a bare `/mcp` does. As for [MOUSE-12](#MOUSE-12), the press and the release are on one
+cell and the press is a single click, so a drag, a double click and a triple click are selections,
+and a click over the scroller or a history search asks for nothing. The heading, the rows around
+the servers and a language server's row are not targets, nor is a row cut for want of room. The
+command stays the way to do it without a mouse, and the listing is the session's own, with nothing
+a tool returned in it ([PANEL-11](info-panel.md#PANEL-11)).
+
+`verified-by: bravebot_tui::app::a_click_on_the_panels_mcp_server_row_lists_the_servers`
+`verified-by: bravebot_tui::app::a_drag_over_an_mcp_server_row_or_a_click_in_the_scroller_lists_nothing`
+`verified-by: bravebot_tui::panel::only_a_started_mcp_servers_rows_are_click_targets`

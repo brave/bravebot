@@ -573,6 +573,8 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input`
 `verified-by: bravebot_agent::turn::a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it`
 `verified-by: bravebot_tui::state::a_prompt_sent_while_a_turn_runs_waits_for_it`
+`verified-by: bravebot_tui::state::a_picture_pasted_into_a_line_sent_mid_turn_reaches_the_planner_as_a_sentence`
+`verified-by: bravebot_tui::state::a_folded_paste_in_a_line_sent_mid_turn_reaches_the_planner_as_its_words`
 `verified-by: bravebot_tui::state::a_waiting_prompt_goes_when_the_turn_ends`
 `verified-by: bravebot_tui::state::waiting_prompts_go_in_the_order_they_were_typed`
 `verified-by: bravebot_tui::state::stopping_a_turn_keeps_what_was_waiting_behind_it`

@@ -252,6 +252,8 @@ pub enum Target {
     Effort,
     /// The context reading: the same question `/context` asks.
     Context,
+    /// A started MCP server's row: the same question a bare `/mcp` asks.
+    Servers,
 }
 
 /// The target a press on screen row `row` of a panel drawn over `area` lands on, if any.
@@ -300,7 +302,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
         section(&mut body, t!(panel_language_servers).to_string(), rows);
     }
     if !session.servers.started.is_empty() {
-        let rows = session
+        let rows: Vec<_> = session
             .servers
             .started
             .iter()
@@ -311,7 +313,10 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
                 )
             })
             .collect();
+        let count = rows.len();
         section(&mut body, t!(panel_mcp_servers).to_string(), rows);
+        let first = body.len() - count;
+        targets.extend((first..first + count).map(|row| (row, Target::Servers)));
     }
 
     // Left out until a file has been written, and ahead of the plan so that the plan takes the rows
@@ -767,6 +772,34 @@ mod tests {
         );
         let short = Rect::new(area.x, 0, WIDTH, reading);
         assert_eq!(target_at(&session, short, short.y + reading, inside), None);
+    }
+
+    /// MOUSE-13. Rejects: a target on the MCP heading or the rows around the servers, and one on
+    /// a language server's row, which `/mcp` does not list.
+    #[test]
+    fn only_a_started_mcp_servers_rows_are_click_targets() {
+        let mut session = Session::new("none");
+        session.servers.started = vec!["notes".to_string(), "docs".to_string()];
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let rows = lines(&session, area.width, area.height);
+        let at = |needle: &str| {
+            rows.iter()
+                .position(|line| line.to_string().contains(needle))
+                .expect(needle) as u16
+        };
+        let inside = area.x + 3;
+        let target = |row: u16| target_at(&session, area, area.y + row, inside);
+
+        let heading = at(t!(panel_mcp_servers));
+        assert_eq!(target(heading), None);
+        assert_eq!(target(at("notes")), Some(Target::Servers));
+        assert_eq!(target(at("docs")), Some(Target::Servers));
+        assert_eq!(target(at("notes").max(at("docs")) + 1), None);
+        let short = Rect::new(area.x, 0, WIDTH, at("notes"));
+        assert_eq!(
+            target_at(&session, short, short.y + at("notes"), inside),
+            None
+        );
     }
 
     fn model_config() -> bravebot_config::Config {
