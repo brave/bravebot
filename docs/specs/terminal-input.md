@@ -2452,6 +2452,7 @@ and a person who typed one by accident would otherwise find out from what the ne
 `verified-by: bravebot_tui::state::r_with_fewer_characters_left_than_its_count_changes_nothing`
 `verified-by: bravebot_tui::state::undo_goes_back_a_change_at_a_time`
 `verified-by: bravebot_tui::state::the_repeat_key_opens_again_and_types_again`
+`verified-by: bravebot_tui::state::an_extent_that_names_no_quantity_takes_no_count`
 
 <a id="INPUT-36"></a>
 ### INPUT-36: Ctrl-Enter stops the turn and sends what is waiting, as one turn

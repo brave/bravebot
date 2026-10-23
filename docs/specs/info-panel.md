@@ -99,6 +99,7 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_session::store::only_the_two_panel_words_are_a_choice`
 `verified-by: bravebot_session::store::only_a_positive_whole_number_is_a_panel_width`
 `verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
+`verified-by: bravebot_tui::persist::a_press_that_closes_the_panel_is_read_back_next_session`
 
 <a id="PANEL-6"></a>
 ### PANEL-6: the panel takes its columns from the transcript, and only where the rest still fits

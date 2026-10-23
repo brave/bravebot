@@ -17285,6 +17285,48 @@ mod tests {
         );
     }
 
+    /// The extents that name no quantity take no count: there is no second end of the line to reach
+    /// for `D`, no second thing the keys of `iw` named, and no second selection for an operator
+    /// pressed over one, so the count is spent and the instruction acts on what the bare one does.
+    /// A copy always goes somewhere, so a count on `P` is how many.
+    #[test]
+    fn an_extent_that_names_no_quantity_takes_no_count() {
+        assert_eq!(edited("one two\nthree", 3, "D"), "one\nthree");
+        assert_eq!(
+            edited("one two\nthree", 3, "3D"),
+            "one\nthree",
+            "the count reached the next row"
+        );
+        assert_eq!(edited("one two three", 5, "diw"), "one  three");
+        assert_eq!(
+            edited("one two three", 5, "d3iw"),
+            "one  three",
+            "the count took more than the one word"
+        );
+        assert_eq!(edited("one two three", 5, "c3iwX"), "one X three");
+        assert_eq!(edited("one two three", 0, "vld"), "e two three");
+        for (keys, line) in [
+            ("v3d", "ne two three"),
+            ("vl3d", "e two three"),
+            ("v3x", "ne two three"),
+            ("v3cXY", "XYne two three"),
+            ("v3~", "One two three"),
+            ("v3U", "One two three"),
+            ("v3y", "one two three"),
+        ] {
+            assert_eq!(edited("one two three", 0, keys), line, "{keys}");
+        }
+        for (keys, line) in [
+            ("v3D", "two\nthree"),
+            ("v3X", "two\nthree"),
+            ("v3Cz", "z\ntwo\nthree"),
+        ] {
+            assert_eq!(edited("one\ntwo\nthree", 0, keys), line, "{keys}");
+        }
+        assert_eq!(edited("one\ntwo", 1, "v3Y3p"), "one\none\none\none\ntwo");
+        assert_eq!(edited("ab", 1, "yl3P"), "abbbb");
+    }
+
     /// A counted change is one change and one step to undo, because the count is part of one
     /// instruction rather than a way of pressing the key again. Carried out as N changes, it would
     /// take N presses of `u` to put back what one instruction took.

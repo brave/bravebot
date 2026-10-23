@@ -367,6 +367,33 @@ fn a_press_opens_the_next_session_too_and_a_corrupt_choice_leaves_it_closed() {
     });
 }
 
+/// A press that closes the panel is written too, so a person who closed one the last session left
+/// open finds it closed at the next start. Only the opening press writing the choice would leave the
+/// file saying `open` for good.
+#[test]
+fn a_press_that_closes_the_panel_is_read_back_next_session() {
+    with_temp_home("panel-close-press", || {
+        let wide = bravebot_tui::state::Laid {
+            columns: 120,
+            ..bravebot_tui::state::Laid::default()
+        };
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.note_layout(wide);
+        session.toggle_panel();
+        assert!(session.panel_open(), "the first press did not open it");
+        session.toggle_panel();
+        assert!(!session.panel_open(), "the second press did not close it");
+
+        let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+        next.adopt_panel();
+        assert!(
+            !next.panel_open(),
+            "the press that closed the panel was not read back next session"
+        );
+        assert_eq!(store::load_panel(), Some(false));
+    });
+}
+
 /// The editing choice outlives the session that made it, and the word it is stored as is resolved by
 /// the same rule as the word in a settings file. The choice outranks the file, because somebody who
 /// picked a box during a session picked it knowing what their settings said. A record somebody edited

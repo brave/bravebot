@@ -515,6 +515,7 @@ whatever next gives a session such a process has to revisit.
 `verified-by: bravebot_tui::logo::the_mark_names_the_agent_its_confinement_and_its_tier`
 `verified-by: bravebot_tui::logo::a_narrow_pane_still_reports_the_confinement_and_the_tier`
 `verified-by: bravebot_tui::status::the_confinement_line_names_the_mode_unless_it_is_workspace_write`
+`verified-by: bravebot_tui::logo::the_opening_screen_names_a_sandbox_mode_other_than_workspace_write`
 
 <a id="SANDBOX-11"></a>
 ### SANDBOX-11: a write row says what is at the path it names, and one that is not there is created

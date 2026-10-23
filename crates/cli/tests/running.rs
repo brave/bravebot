@@ -16227,6 +16227,66 @@ fn a_tool_limit_that_limits_nothing_is_refused_by_name() {
     }
 }
 
+/// CLI-26: the commands that start neither a session nor a task are refused both flags, each with
+/// the argument status and its own name in the refusal. The `doctor` row of the test above is one of
+/// twelve, and a list that lost any other would take the flag and ignore it.
+#[test]
+fn the_tool_limit_is_refused_beside_each_command_that_starts_no_session_or_task() {
+    let scratch = Scratch::new("cli-running-tools-refused-commands");
+    for command in [
+        "doctor",
+        "auth",
+        "mcp",
+        "permissions",
+        "sessions",
+        "stats",
+        "attach",
+        "reply",
+        "import-leo-creds",
+        "import-providers",
+        "completion",
+        "shell-init",
+    ] {
+        for flags in [&["--tools", "read_file"][..], &["--no-shell"][..]] {
+            let mut arguments = flags.to_vec();
+            arguments.push(command);
+            let output = bravebot(&scratch.path, &[], &arguments);
+            let (stdout, stderr) = said(&output);
+            assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+            assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+            assert!(
+                stderr.contains(command),
+                "{arguments:?} was not refused by name: {stderr}"
+            );
+        }
+    }
+}
+
+/// CLI-26: where `--no-shell` took `run` away, `read_git`'s description does not send the planner
+/// to it, and says instead that nothing on the list reads that history. The run with no flag is the
+/// control that the description does name `run` when it is offered, so a description that stopped
+/// naming it anywhere cannot pass for the limited one.
+#[cfg(unix)]
+#[test]
+fn a_no_shell_run_does_not_send_the_planner_from_read_git_to_run() {
+    let (control, _, _) = a_limited_run_asked_for_a_program("cli-running-git-run-control", &[]);
+    assert!(
+        control.contains("elsewhere it says so and you use run"),
+        "the control run's read_git never names run: {control}"
+    );
+    let (limited, _, _) =
+        a_limited_run_asked_for_a_program("cli-running-git-run-limited", &["--no-shell"]);
+    assert!(
+        !limited.contains("elsewhere it says so and you use run")
+            && !limited.contains("For --follow, blame or anything else use run."),
+        "read_git still sends the planner to run: {limited}"
+    );
+    assert!(
+        limited.contains("no tool on your list reads that history instead"),
+        "read_git does not say nothing on the list reads that history: {limited}"
+    );
+}
+
 /// REFER-3 and REFER-4 for the one-shot run: a directory the home layer names reaches the request
 /// as a listed reference, and the same block in a checkout's own settings file does not. The run
 /// builds its workspace in the entry point, so only the request on the wire says whether the block

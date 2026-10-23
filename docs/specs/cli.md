@@ -1496,6 +1496,8 @@ or narrow them.
 `verified-by: bravebot_cli::running::a_tools_list_offers_no_tool_of_an_approved_server`
 `verified-by: bravebot_cli::running::a_tool_limit_that_limits_nothing_is_refused_by_name`
 `verified-by: bravebot_cli::main::the_tool_limit_is_taken_out_wherever_it_appears`
+`verified-by: bravebot_cli::running::the_tool_limit_is_refused_beside_each_command_that_starts_no_session_or_task`
+`verified-by: bravebot_cli::running::a_no_shell_run_does_not_send_the_planner_from_read_git_to_run`
 
 <a id="CLI-27"></a>
 ### CLI-27: `--locked` starts a run that answers to the person's own settings and nothing in the checkout

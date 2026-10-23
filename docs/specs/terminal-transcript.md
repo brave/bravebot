@@ -505,6 +505,7 @@ the notes do, so the last of them is still held apart from whatever is said next
 
 `verified-by: bravebot_tui::render::a_note_is_not_drawn_as_a_detail_of_the_line_above_it`
 `verified-by: bravebot_tui::render::a_run_of_notes_is_not_spaced_apart`
+`verified-by: bravebot_tui::render::a_note_starts_in_the_column_a_replys_text_starts_in`
 
 
 <a id="VIEW-20"></a>
