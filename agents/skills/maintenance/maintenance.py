@@ -1481,12 +1481,20 @@ def candidate_paths(candidate):
 
 def ledger_field(text, also=""):
     """Text for one whitespace-separated ledger field, without loss: `%`, whitespace and the
-    characters in `also` become `%XX`, so two names that differ only there keep two keys."""
-    return re.sub(r"[%\s" + re.escape(also) + r"]", lambda found: "%%%02X" % ord(found.group(0)), text)
+    characters in `also` become `%XX` per UTF-8 byte, so two names that differ only there keep two keys."""
+    return re.sub(
+        r"[%\s" + re.escape(also) + r"]",
+        lambda found: "".join("%%%02X" % b for b in found.group(0).encode("utf-8", "surrogateescape")),
+        text,
+    )
 
 
 def ledger_value(field):
-    return re.sub(r"%([0-9A-F]{2})", lambda found: chr(int(found.group(1), 16)), field)
+    return re.sub(
+        r"(?:%[0-9A-F]{2})+",
+        lambda found: bytes.fromhex(found.group(0).replace("%", "")).decode("utf-8", "surrogateescape"),
+        field,
+    )
 
 
 def candidate_key(candidate, sources):

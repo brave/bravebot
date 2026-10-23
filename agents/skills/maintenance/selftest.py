@@ -997,6 +997,21 @@ class Ledger(unittest.TestCase):
             )
             self.assertEqual(m.scan(root, ("unreferenced",))["unreferenced"]["candidates"], [])
 
+    def test_unicode_whitespace_and_its_hex_lookalike_keep_two_keys_and_two_verdicts(self):
+        wide, lookalike = "crates/a/src/a\u2003b.rs", "crates/a/src/a 03b.rs"
+        with tree({wide: "pub fn same() {}\n", lookalike: "pub fn same() {}\n"}) as root:
+            manifest, _ = self.prepared(root)
+            by_path = {c["path"]: (i, c) for i, c in manifest["candidates"].items()}
+            self.assertEqual(len({c["key"] for _, c in by_path.values()}), 2)
+            verdicts = {by_path[wide][0]: {"verdict": "keep"}, by_path[lookalike][0]: {"verdict": "cleanup"}}
+            m.record(manifest, verdicts)
+            m.record({"root": str(root), "candidates": {}}, {})
+            entries = m.read_ledger(root)
+            self.assertEqual(
+                sorted((e["verdict"], e["paths"]) for e in entries.values()),
+                [("cleanup", [lookalike]), ("keep", [wide])],
+            )
+
     def test_a_line_that_is_not_a_verdict_is_reported_and_ignored(self):
         with tree(self.files) as root:
             (root / "docs").mkdir()
