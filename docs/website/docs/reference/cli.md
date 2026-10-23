@@ -143,7 +143,7 @@ combines with a session, `--plain` and a one-shot run, but not with `--resume`, 
 way of starting except `--mode manifest`.
 
 `--incognito` writes nothing under `~/.bravebot`. See
-[an incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
+[an incognito session](../using/incognito.md).
 
 `--safe` is for finding out whether your own configuration is why a session misbehaves. The run
 reads none of your hooks, skills, delegate definitions, `mcp.request` entries or `AGENTS.md` files,
@@ -212,8 +212,7 @@ failed to build is printed on stderr even without `--trace`, and never shares st
 
 This is a different axis from the [permission mode](../security/permissions.md#answering-in-advance-modes):
 `--mode` decides when control flow is settled, the other decides who answers a prompt, and the two
-compose. See [Non-interactive use](../using/headless.md) and
-[Sessions](../using/sessions.md) for the rest.
+compose. See [Plan first, then execute](../using/manifest-mode.md) for the rest.
 
 ## `--model <name>`
 
@@ -791,7 +790,7 @@ directory](#doctor), readable by you alone, and the ten most recent are kept. At
 `error`, a run that fails nowhere leaves no file. `info` adds the steps taken, such as a retry or a
 server starting, and `debug` adds the detail between them. `doctor` prints the directory.
 
-An [`--incognito`](../using/sessions.md) session writes no log.
+An [`--incognito`](../using/incognito.md) session writes no log.
 
 ## `bug-report`
 
@@ -808,7 +807,7 @@ that file as well. `doctor` names paths, model services and the names, never the
 environment variables, so read the file before posting it. No transcript, trace, settings file,
 environment value or file of the directory holds a place in it.
 
-Nothing reads the file back. An [`--incognito`](../using/sessions.md) session, or a machine with no
+Nothing reads the file back. An [`--incognito`](../using/incognito.md) session, or a machine with no
 home directory, writes no report, and the command exits with status 1. Any argument is refused with
 status 2.
 

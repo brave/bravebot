@@ -564,7 +564,7 @@ Deleting the directory at any time costs the next session its indexing time and 
 
 Nothing in that cache is read as trusted, whatever else `~/.bravebot` is trusted for. The bytes
 derive from workspace files, so they carry those files' labels, and the only thing that reads them is
-the server. An [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) writes
+the server. An [incognito session](../using/incognito.md) writes
 no cache: its server still runs and still answers, and it re-indexes each time.
 
 ## `write_file`

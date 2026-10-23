@@ -185,7 +185,7 @@ first run says nothing, and a release is announced on the launch after the one t
 Every way this can fail is silence: no network, a registry that will not answer, an answer of an
 unexpected shape. A registry that cannot be reached today does not withdraw a version it announced
 earlier, so the notice keeps showing until the registry answers with something else. A version that is not three numbers is never announced either, release candidates
-included. An [incognito session](using/sessions.md#a-session-that-leaves-nothing-behind) still
+included. An [incognito session](using/incognito.md) still
 reads an answer an ordinary session left, and neither records one nor asks. A launch that cannot
 write the record of its last check, because there is no home directory or the state directory is not
 writable, does not ask the registry at all.

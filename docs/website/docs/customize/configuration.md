@@ -715,7 +715,7 @@ The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a
 The model an isolated processor runs on. A processor rewrites or reads a file nobody vouched for, so
 a large rewrite is billed for the whole file in and the whole file out. Naming a cheaper model here
 moves those calls onto it, while the planner keeps the model the session is using. A
-[manifest run](../using/headless.md#planning-the-whole-run-first) plans on the run's model and carries
+[manifest run](../using/manifest-mode.md) plans on the run's model and carries
 out each processing step on this one. Without the key, and with `"inherit"`, a processor runs on the
 session's model. [`--processor-model`](../reference/cli.md#--processor-model-name) names the model for
 one run and wins over the key.
@@ -991,7 +991,7 @@ The session you are starting is never removed, so resuming a record older than t
 neither is a session running in the background or the language server index of the workspace you
 start in. Your
 rules, your answers to the startup question, your prompt history and the acceptances of findings are
-not swept. An [incognito](../using/sessions.md#a-session-that-leaves-nothing-behind) session removes
+not swept. An [incognito](../using/incognito.md) session removes
 nothing. A session left open in another terminal for longer than the period has its record removed by
 a new one, and its next save writes it again.
 

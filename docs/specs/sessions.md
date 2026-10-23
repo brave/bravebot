@@ -24,7 +24,10 @@ governs:
   - crates/agent/src/aside.rs
   - crates/ui-bridge/src/store.rs
   - crates/ui-bridge/src/bridge.rs
-documented-by: docs/website/docs/using/sessions.md
+documented-by:
+  - docs/website/docs/using/sessions.md
+  - docs/website/docs/using/manifest-mode.md
+  - docs/website/docs/using/rewind.md
 ---
 
 ## Scope

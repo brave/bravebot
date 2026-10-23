@@ -191,86 +191,9 @@ visible by its absence from what [`doctor`](../reference/cli.md) lists.
 
 ## Planning the whole run first
 
-```sh
-bravebot --mode manifest "collect every TODO comment into notes/todos.md"
-```
-
-`--mode manifest` decides **everything first**. The planner emits a step list, that list is refused or
-frozen, and a driver walks it with no model anywhere in the control path. The default, `--mode turn`,
-is what an unqualified `bravebot "task"` has always been: observe, decide, act, and decide again after
-each thing it reads.
-
-The gates are the same ones in both modes. What changes is the scope of the precommitment, from one
-turn to a whole run.
-
-The two planning calls run on the run's model. Each processing step runs on the model
-[`--processor-model`](../reference/cli.md#--processor-model-name) or the
-[`processorModel`](../customize/configuration.md#processormodel) setting names, so a plan can be made
-on a stronger model and carried out on a cheaper one.
-
-A plan that fails validation **fails the run whole**: nothing is half adopted, no step is patched to
-make a plan usable, and nothing re-plans once a step has read something. Where every effect will land
-is fixed before the first byte is read, and the driver cannot insert, skip, reorder or invent a step.
-A destination has to be text, so a plan that filled one with a number or a list is refused whole
-rather than reaching the step that would have used it. The same holds for the `contents` of a
-`write_file` step and the `instruction` of a processor step: a number or a list there is refused with
-"'contents' must be text" or "'instruction' must be text", where it used to be written as an empty
-file. An unknown mode name is refused rather than
-guessed, since guessing would run the mode you did not ask for.
-
-A session can start one of these runs too, with `/manifest`. See
-[Sessions](sessions.md#starting-a-plan-then-execute-run).
-
-### A plan is put to you first
-
-Between freezing the plan and walking it, the frozen plan is put to you: the task in your own words,
-then **every step in order**, each naming its tier, what it would do, and every destination the step
-fixed. The routing is part of what you are answering for, so the line carries the directory a search
-runs in and the glob it filters by, not the pattern alone.
-
-Declining stops the run, and the declined plan comes back with the error so you can still read it.
-Nothing has been read or written by then, so a declined run leaves the workspace exactly as it was.
-
-The question is asked **once**, and has no standing form: nothing between the plan and the run can
-reshape the plan, and a plan is written afresh for each run, so remembering an answer would be
-approving steps nobody has seen.
-
-**Approving a plan is not approving its writes.** This mode widens the scope of what you commit to in
-advance and does not replace the gates inside it, so each write is still put to you as its step
-reaches it.
-
-Where nobody can be asked the answer is no, as it is everywhere else. A command typed at a terminal is
-somebody: the plan goes out beside the progress and the answer is read back, which is the one question
-a one-shot run answers. Piped or redirected there is nobody, so the run stops before its first step
-unless permissions were skipped outright. `--dangerously-skip-permissions` approves the plan, and that
-is not a standing answer: it covers this run, is recorded nowhere, and the next run asks again unless
-the flag is given again.
-
-:::note
-At a terminal the plan is printed and a line is read, so a plan longer than the window is scrolled to
-in your terminal's own scrollback, and there is no going back to re-read a step once the answer is
-typed. A run [started from a session](sessions.md#starting-a-plan-then-execute-run) does not have this
-cost: that prompt is drawn and scrolled.
-:::
-
-### What a plan cannot use
-
-- **`edit_file`**, because locating a passage means having read the file, and the planner has read
-  nothing.
-- **`todo_write`**, because the manifest is already the task list.
-- **`run`, and any shell.** A command string is destination and payload at once.
-- **Piped stdin**, which is refused rather than dropped: a pipe is observed context, and this mode
-  does not observe before it plans. Name a workspace file with `--file` instead.
-
-Everything a step produces is quarantined, whatever its label. There is no planner left to show it
-to. The ways out are a later processor, a write back into the workspace, and a release the plan
-named in advance.
-
-### What comes back
-
-The goal in plain words, the proposed plan verbatim, the frozen steps, and what each one did, on
-success **and on failure**, never behind a flag. A failed plan is printed on stderr even without
-`--trace`, and never shares stdout with the reply.
+`--mode manifest` decides everything first: the planner emits a step list, and a driver walks it
+with no model anywhere in the control path. [Plan first, then execute](manifest-mode.md) covers how
+a plan is put to you, what a plan cannot use, and what comes back.
 
 ## Which model a run asks for
 

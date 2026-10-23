@@ -173,7 +173,7 @@ back on for you tomorrow. There is no flag the other way.
 
 Nothing writes your settings file. The standing key writes `~/.bravebot/vetting` instead.
 
-**An [incognito](../using/sessions.md#a-session-that-leaves-nothing-behind) session does not read that
+**An [incognito](../using/incognito.md) session does not read that
 file.** It is the one thing such a session reads differently, because the answer in it decides whether
 you are asked rather than what the session looks like. The other two routes work there as anywhere.
 

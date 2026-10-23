@@ -32,6 +32,7 @@ documented-by:
   - docs/website/docs/reference/cli.md
   - docs/website/docs/customize/signing-in.md
   - docs/website/docs/using/headless.md
+  - docs/website/docs/using/manifest-mode.md
 ---
 
 ## Scope

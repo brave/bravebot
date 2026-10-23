@@ -102,7 +102,7 @@ bravebot --mode manifest "collect every TODO comment into notes/todos.md"
 ```
 
 In a session, `/manifest <task>` does the same for one task.
-[A plan is put to you first](docs/website/docs/using/headless.md#a-plan-is-put-to-you-first) says
+[A plan is put to you first](docs/website/docs/using/manifest-mode.md#a-plan-is-put-to-you-first) says
 what the approval covers.
 
 ## Specs
@@ -125,7 +125,8 @@ machine, such as Ollama, keeps them on your machine.
 session record, no audit trail, and no change to the model or theme you have chosen. It still reads
 all of that, so the session is the one you configured rather than a fresh install. It edits your
 project as usual, since that is the work rather than a trace of it. See
-[docs/specs/incognito.md](docs/specs/incognito.md) for what it covers and what it does not.
+[Incognito sessions](docs/website/docs/using/incognito.md) for what it covers and what it does not,
+and [docs/specs/incognito.md](docs/specs/incognito.md) for the clauses.
 
 ## Reporting a Vulnerability
 

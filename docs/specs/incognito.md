@@ -14,7 +14,9 @@ governs:
   - crates/cli/src/main.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/auth.rs
-documented-by: docs/website/docs/using/sessions.md
+documented-by:
+  - docs/website/docs/using/sessions.md
+  - docs/website/docs/using/incognito.md
 ---
 
 ## Scope
