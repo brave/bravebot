@@ -1589,6 +1589,27 @@ impl Config {
             .map(|provider| (provider, model))
     }
 
+    /// The name the ChatGPT account knows `model` by, where `model` is one of its models
+    /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+    ///
+    /// Only the qualified form is: `chatgpt/` and then the name. A bare name never selects the
+    /// account, so `gpt-5` keeps meaning the `openai` gateway's model or Brave's. A `provider`
+    /// entry with the id `chatgpt` keeps the name, since one name cannot select two services, and
+    /// then no model is the account's.
+    ///
+    /// The returned name is what the request carries, and it is read from the model's own name:
+    /// the account has never heard of the id this crate files its models under.
+    pub fn chatgpt_model<'name>(&self, model: &'name str) -> Option<&'name str> {
+        let (id, wire) = model.split_once('/')?;
+        (id == provider::CHATGPT_ID
+            && !wire.is_empty()
+            && !self
+                .providers
+                .iter()
+                .any(|provider| provider.id == provider::CHATGPT_ID))
+        .then_some(wire)
+    }
+
     /// The AWS account that serves `model`, from the tier variables or from a `provider` block.
     ///
     /// The tier variables are asked first, being the older way to name a Bedrock model and the one
@@ -2988,6 +3009,51 @@ mod tests {
                 "{name:?} reached a gateway"
             );
         }
+    }
+
+    /// CHATGPT-9: a name selects the account only by carrying the account's id, since a bare
+    /// `gpt-5` already means the `openai` gateway's model or Brave's and a remembered choice would
+    /// otherwise change service silently. The account is asked for the part after the id.
+    #[test]
+    fn only_the_qualified_name_selects_the_chatgpt_account_and_only_the_rest_of_it_is_sent() {
+        let config = with_a_gateway("{}");
+        assert_eq!(config.chatgpt_model("chatgpt/gpt-5"), Some("gpt-5"));
+        assert_eq!(config.chatgpt_model("chatgpt/org/model"), Some("org/model"));
+        for name in [
+            "gpt-5",
+            "chatgpt",
+            "chatgpt/",
+            "openai/gpt-5",
+            "Chatgpt/gpt-5",
+            "chatgpt-5/gpt-5",
+            "openrouter/z-ai/glm-4.6",
+            DEFAULT_MODEL,
+        ] {
+            assert_eq!(
+                config.chatgpt_model(name),
+                None,
+                "{name:?} selected the account"
+            );
+        }
+    }
+
+    /// CHATGPT-9: an entry that already has the id keeps it. Taking the id over would send a
+    /// working gateway's requests, and the person's subscription with them, to another service.
+    #[test]
+    fn a_provider_entry_named_chatgpt_keeps_the_name_and_no_model_is_the_accounts() {
+        let settings = Settings::parse(
+            r#"{"provider": {"chatgpt": {
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"gpt-5": {}}
+            }}}"#,
+        );
+        let mut config = Config::from_lookup(complete_env).expect("configured");
+        config.providers = settings.providers().to_vec();
+
+        assert_eq!(config.chatgpt_model("chatgpt/gpt-5"), None);
+        let (provider, wire) = config.provider_for("chatgpt/gpt-5").expect("the gateway");
+        assert_eq!(provider.base_url, "https://gateway.example.invalid/v1");
+        assert_eq!(wire, "gpt-5");
     }
 
     /// The exception: with no Brave credentials, `automatic` names a backend that cannot be reached at

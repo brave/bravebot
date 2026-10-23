@@ -481,6 +481,9 @@ pub struct Request {
     /// Whether a reply from this machine is waited on for as long as it takes. See
     /// [`Request::patient_on_this_machine`].
     pub patient_on_this_machine: bool,
+    /// Whether a redirect in answer is a failure rather than a hop to follow. See
+    /// [`Request::refusing_redirects`].
+    pub redirects_refused: bool,
 }
 
 /// How long a reply may take, stated by the request that asks for it.
@@ -512,6 +515,7 @@ impl Request {
             reply: None,
             idle: None,
             patient_on_this_machine: false,
+            redirects_refused: false,
         }
     }
 
@@ -525,6 +529,7 @@ impl Request {
             reply: None,
             idle: None,
             patient_on_this_machine: false,
+            redirects_refused: false,
         }
     }
 
@@ -579,6 +584,17 @@ impl Request {
     /// to look at the token between pieces for that to be true.
     pub fn patient_on_this_machine(mut self) -> Self {
         self.patient_on_this_machine = true;
+        self
+    }
+
+    /// Answer a redirect with the status it came with, as [`EgressError::Status`], and send nothing
+    /// to the address it names.
+    ///
+    /// For a request to a host nobody but this program chose, carrying a credential that host alone
+    /// is meant to see ([CHATGPT-2](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-2)). A redirect
+    /// re-sends the request, and a hop is a place a reply named.
+    pub fn refusing_redirects(mut self) -> Self {
+        self.redirects_refused = true;
         self
     }
 }
@@ -894,7 +910,7 @@ impl Egress {
             };
             let status = response.0;
 
-            if is_redirect(status) {
+            if is_redirect(status) && !request.redirects_refused {
                 if hops >= MAX_REDIRECTS {
                     return Err(EgressError::TooManyRedirects {
                         url: request.url.clone(),
@@ -2682,6 +2698,41 @@ mod tests {
             connections.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "only the first hop was sent"
+        );
+    }
+
+    /// CHATGPT-2: a request that refuses redirects reports the redirect's own status and sends
+    /// nothing to the address it names, where the same request left alone follows it.
+    #[test]
+    fn a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further() {
+        let egress = Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated(TrustRoots::Bundled, None, None),
+        );
+
+        let (port, connections) = serve_counting(vec![redirect("/second"), page("followed")]);
+        let followed = fetched(
+            &egress,
+            Request::get(format!("http://127.0.0.1:{port}/first")),
+        )
+        .expect("a redirect is followed unless the request refuses it");
+        assert_eq!(followed.status, 200);
+        assert_eq!(connections.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        let (port, connections) = serve_counting(vec![redirect("/second"), page("not reached")]);
+        let outcome = fetched(
+            &egress,
+            Request::get(format!("http://127.0.0.1:{port}/first")).refusing_redirects(),
+        );
+        assert!(
+            matches!(outcome, Err(EgressError::Status { status: 302, .. })),
+            "{outcome:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            connections.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "nothing was sent to the address the redirect named"
         );
     }
 

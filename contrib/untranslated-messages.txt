@@ -48,7 +48,6 @@ fr:chatgpt-held-needs-a-terminal
 fr:chatgpt-held-unusable
 fr:chatgpt-name-is-a-gateway
 fr:chatgpt-needs-a-terminal
-fr:chatgpt-not-used-yet
 fr:chatgpt-not-while-incognito
 fr:chatgpt-nothing-to-forget
 fr:chatgpt-open-this
@@ -56,6 +55,7 @@ fr:chatgpt-page-done
 fr:chatgpt-page-not-found
 fr:chatgpt-replace
 fr:chatgpt-stored
+fr:chatgpt-use-by-name
 fr:chatgpt-waiting
 fr:cli-usage-sessions-delete
 fr:cli-usage-sessions-list

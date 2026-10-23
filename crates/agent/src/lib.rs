@@ -17,6 +17,7 @@ pub mod aside;
 pub mod attached;
 pub mod backend;
 mod calendar;
+mod chatgpt;
 pub mod cmdline;
 pub mod commit_message;
 pub mod compact;
