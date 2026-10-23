@@ -252,12 +252,18 @@ half itself when a task ends on a branch that changes a file where an answer is 
 
 `make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
 and TypeScript exports named nowhere but where they are defined or only from tests, allowances
-silencing the dead-code lint, blocks of lines and string literals repeated across files, and files
-and functions past a length. rustc warns about none of the first kind in a library crate, and no
-check compares one file with another. The scan reads no code and exits zero whatever it lists, so
-nothing runs it in CI. It is the deterministic half of the
-[maintenance skill](../../agents/skills/maintenance/SKILL.md), whose reviewers read each candidate
-and draft an issue for the ones worth fixing.
+silencing a lint about dead code or about a function that is too large, blocks of lines and string
+literals repeated across files, files and functions past a length, functions nested deeply or taking
+several booleans, files that use many other modules, public functions no test names, files holding
+a lot of shared mutable state, commented-out code, and functions returning string errors. rustc
+warns about none of the first kind in a library crate, and no check compares one file with another.
+The scan reads no code and exits zero whatever it lists, so nothing runs it in CI. It is the
+deterministic half of the [maintenance skill](../../agents/skills/maintenance/SKILL.md), whose
+reviewers read each candidate and draft an issue for the ones worth fixing. The skill also runs
+clippy's opinionated lints over the code that ships, which `make check-maintenance` does not, since
+it compiles. `docs/maintenance-reviewed` holds what reviewers decided, so a later run reaches
+candidates it has not read. [smells.md](../../agents/skills/maintenance/smells.md) says which smell
+each lane covers and which a lint already refuses.
 
 Wherever this page says a check fails a pull request, what does the failing is not the job going
 red. A job reports. What holds a merge is branch protection's list of required contexts, which is
