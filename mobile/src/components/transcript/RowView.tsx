@@ -103,7 +103,7 @@ function Activity({ row, live }: { row: Row; live: boolean }) {
   if (activity === null) return <Caption>An action that could not be shown.</Caption>
   const state = callState(row, activity, live)
   return (
-    <View testID={`row-activity-${row.id}`} style={styles.activity} accessible accessibilityLabel={`${displayString(activity.verb)} ${displayString(activity.target)}, ${CALL_STATE_WORD[state]}`}>
+    <View testID={`row-activity-${row.id}`} style={styles.activity} accessible accessibilityLabel={`${displayString(activity.verb)} ${displayString(activity.shownTarget)}, ${CALL_STATE_WORD[state]}`}>
       <View style={styles.activityLine}>
         <View testID={`activity-${state}-${row.id}`} style={styles.marker}>
           {state === 'running' || state === 'unfinished' ? (
@@ -116,7 +116,7 @@ function Activity({ row, live }: { row: Row; live: boolean }) {
         </View>
         <UntrustedText text={state === 'running' ? `${activity.verb} started` : state === 'unfinished' ? `${activity.verb} did not finish` : state === 'failed' ? `${activity.verb} failed` : activity.verb} size="meta" selectable={false} style={{ color: theme.ink.secondary }} />
         <View style={styles.target}>
-          <UntrustedText text={activity.target} mono numberOfLines={1} selectable={false} style={{ color: theme.ink.tertiary }} />
+          <UntrustedText text={activity.shownTarget} mono numberOfLines={1} selectable={false} style={{ color: theme.ink.tertiary }} />
         </View>
         {activity.note !== null && <UntrustedText text={activity.note} size="meta" selectable={false} style={[type.caption, { color: theme.ink.tertiary }]} />}
       </View>

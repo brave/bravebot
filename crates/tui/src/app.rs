@@ -3664,9 +3664,9 @@ fn grant_proposed_rules(
         for rule in &held {
             session.note(t!(
                 session_permission_allow_granted_before,
-                rule = &rule.rule,
-                path = rule.path.display().to_string(),
-                record = store.path().display().to_string()
+                rule = bravebot_agent::confirm::shown_text(&rule.rule),
+                path = bravebot_agent::confirm::shown_path(&rule.path),
+                record = bravebot_agent::confirm::shown_path(store.path())
             ));
         }
     }
@@ -3736,8 +3736,8 @@ fn rules_from(
     for rule in proposed.iter().filter(|rule| !granted.contains(rule)) {
         session.note(t!(
             session_permission_allow_ignored,
-            rule = &rule.rule,
-            path = rule.path.display().to_string()
+            rule = bravebot_agent::confirm::shown_text(&rule.rule),
+            path = bravebot_agent::confirm::shown_path(&rule.path)
         ));
     }
     Some(permissions)
@@ -32533,6 +32533,75 @@ mod tests {
             rules.permissions.for_command(&["rm", "-rf", "build"]),
             Decision::Ruled(Ruling::Deny),
             "the file was not read again"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// PROMPT-1: the lines said about an allow rule a checkout proposed name the rule and the file
+    /// as they are spelled, both when it is not granted and when it was granted before, so a rule
+    /// that holds a zero-width character, and a file under a directory that ends in a space, are not
+    /// read as the ones without them. The record a granted-before line names is spelled too.
+    #[test]
+    fn the_notes_about_a_checkouts_allow_rule_spell_the_rule_and_the_files() {
+        let root = crate::testutil::scratch_dir("bravebot-allow-notes-spelled");
+        let _ = std::fs::remove_dir_all(&root);
+        let checkout = root.join("proj ");
+        checkout_with_settings(
+            &checkout,
+            r#"{"permissions": {"allow": ["Bash(echo\u200bhi)"]}}"#,
+        );
+        let state = root.join("state ");
+        let sources = RuleSources {
+            state: Some(state.clone()),
+            named: None,
+            started: checkout.clone(),
+            managed: bravebot_config::Managed::default(),
+        };
+        let settings = sources.settings(&checkout);
+        let rules_with =
+            |ask: fn(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>| {
+                let mut session = Session::new("none");
+                rules_from(
+                    &mut session,
+                    &settings,
+                    &checkout,
+                    sources.grants(&checkout).as_ref(),
+                    Whence::Asked,
+                    "a-session",
+                    ask,
+                )
+                .expect("nobody left");
+                session
+            };
+        let spelled_rule = "\"Bash(echo\\u{200b}hi)\"";
+        let spelled_file = format!(
+            "\"{}/proj\u{2423}/.bravebot/settings.json\"",
+            root.display()
+        );
+
+        let ignored = rules_with(|_, _| Some(false));
+        let note = notes_of(&ignored).join("\n");
+        assert!(
+            note.contains(&format!(
+                "not granting the allow rule {spelled_rule} from {spelled_file}"
+            )),
+            "{note}"
+        );
+        assert!(!note.contains('\u{200b}'), "{note}");
+
+        rules_with(|_, _| Some(true));
+        let before = rules_with(never_asked);
+        let note = notes_of(&before).join("\n");
+        let spelled_record = format!("\"{}/state\u{2423}/", root.display());
+        assert!(
+            note.contains(&format!("granting the allow rule {spelled_rule} from {spelled_file}, which you allowed this project before")),
+            "{note}"
+        );
+        assert!(note.contains(&spelled_record), "{note}");
+        assert!(
+            !note.contains('\u{200b}') && !note.contains("proj /"),
+            "{note}"
         );
 
         std::fs::remove_dir_all(&root).ok();

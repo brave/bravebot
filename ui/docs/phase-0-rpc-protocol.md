@@ -994,10 +994,17 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 `Activity` serialises as:
 
 ```json
-{ "verb": "read", "target": "src/main.rs", "why": "see the entry point", "note": "412 lines",
+{ "verb": "read", "target": "src/main.rs", "shownTarget": "src/main.rs",
+  "why": "see the entry point", "note": "412 lines",
   "failed": false, "untrusted": false, "waitedSeconds": null,
   "changes": [ { "kind": "added", "text": "…" } ] }
 ```
+
+`target` is what the call is about as the model named it, and `shownTarget` is the same text
+spelled for a person where the call names a file (PROMPT-1): a name that is empty, is only
+whitespace, ends in a space or holds a character that draws as nothing arrives quoted with each
+such character made visible, and any other target arrives unchanged. A client draws `shownTarget`
+and matches a call to its confirmation on `target`.
 
 `why` is the planner's own line on what the call is for, the same on `tool.started` and
 `tool.finished`, and empty where it gave none. It is released for the screen and read by

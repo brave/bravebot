@@ -4135,6 +4135,28 @@ mod tests {
             );
         }
 
+        /// PROMPT-1: a call about a file whose name ends in a space is drawn with the name
+        /// spelled, so the line is not read as one about the file without the space.
+        #[test]
+        fn a_call_about_a_file_draws_a_name_that_ends_in_a_space_spelled() {
+            let mut session = working();
+            session.finish_activity(
+                Activity::running("Read", "note.md ")
+                    .naming_a_file(true)
+                    .done("3 lines"),
+            );
+
+            let output = rendered(&session);
+            assert!(
+                output.contains("Read(\"note.md\u{2423}\")"),
+                "the name was not spelled: {output}"
+            );
+            assert!(
+                !output.contains("Read(note.md )"),
+                "the name was drawn as written: {output}"
+            );
+        }
+
         /// What the design turns on is the exception, and dropping the ordinary line is what
         /// leaves room for it to be noticed.
         #[test]

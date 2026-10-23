@@ -33,7 +33,7 @@ export function callState(row: Pick<Row, 'event'>, activity: { failed: boolean }
   return activity.failed ? 'failed' : 'done'
 }
 
-/** One call per tool row, in row order. Only the row's kind, event and structured fields decide; the target and note are carried, never read. */
+/** One call per tool row, in row order. Only the row's kind, event and structured fields decide; the target and note are carried, never read. A call's target is the spelled one, since the list only draws it. */
 export function callsFrom(rows: readonly Row[], running: boolean): Call[] {
   const latest = latestTurn(rows)
   const calls: Call[] = []
@@ -44,7 +44,7 @@ export function callsFrom(rows: readonly Row[], running: boolean): Call[] {
     calls.push({
       id: row.id,
       verb: activity.verb,
-      target: activity.target,
+      target: activity.shownTarget,
       state: callState(row, activity, running && row.turn === latest),
       note: activity.note,
       untrusted: activity.untrusted,

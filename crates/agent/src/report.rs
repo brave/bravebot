@@ -69,6 +69,13 @@ pub struct Activity {
     pub verb: &'static str,
     /// What is being acted on, as the model named it. Empty where there is nothing to name.
     pub target: String,
+    /// Whether [`Activity::target`] is a file's name or path, which a screen spells with
+    /// [`Activity::shown_target`] so a blank or whitespace-ended name is visible (PROMPT-1).
+    ///
+    /// Set by dispatch from the tool's own name, a literal of this program, and never read out of
+    /// the target: a line that decided how to draw a name by looking at the name would be a
+    /// branch on content nobody vouched for.
+    pub names_a_file: bool,
     /// Why the planner made the call, in its own words. Empty where it gave no reason.
     ///
     /// Carried to a screen and nowhere else: the call runs the same with or without it, and
@@ -119,6 +126,7 @@ impl Activity {
         Self {
             verb,
             target: target.into(),
+            names_a_file: false,
             why: String::new(),
             tool: String::new(),
             note: None,
@@ -133,6 +141,13 @@ impl Activity {
     /// Say which tool this is, by the name dispatch matched rather than the word shown.
     pub fn of_tool(mut self, tool: &str) -> Self {
         self.tool = tool.to_string();
+        self
+    }
+
+    /// Say that the target is a file's name or path, where the tool's own name says it is
+    /// ([`crate::tools::names_a_file`]).
+    pub fn naming_a_file(mut self, names_a_file: bool) -> Self {
+        self.names_a_file = names_a_file;
         self
     }
 
@@ -184,12 +199,25 @@ impl Activity {
         self.note.is_none()
     }
 
+    /// The target as a person is shown it: a file's name spelled as
+    /// [`crate::confirm::shown_name`] spells it, anything else as it is.
+    ///
+    /// For a screen only. A name that needs no spelling comes back as it was, so the plain case
+    /// reads as it always did, and [`Activity::target`] stays what programs and the files view
+    /// match on. A call with nothing to name has no target, and it is not drawn as the empty name.
+    pub fn shown_target(&self) -> String {
+        match self.names_a_file && !self.target.is_empty() {
+            true => crate::confirm::shown_name(&self.target),
+            false => self.target.clone(),
+        }
+    }
+
     /// The line as one string, for a display with nowhere to put the parts separately.
     pub fn line(&self) -> String {
         if self.target.is_empty() {
             self.verb.to_string()
         } else {
-            format!("{}({})", self.verb, self.target)
+            format!("{}({})", self.verb, self.shown_target())
         }
     }
 }
@@ -1353,6 +1381,30 @@ mod tests {
             Activity::running("Read", "src/main.rs").line(),
             "Read(src/main.rs)"
         );
+    }
+
+    /// A line that names a file spells a name a person could not otherwise tell from another
+    /// (PROMPT-1), and one that names anything else draws it as written. The target itself is
+    /// left as it was, since a window matches a call to its confirmation on it.
+    #[test]
+    fn a_line_spells_the_name_of_a_file_and_nothing_else() {
+        let read = |target: &str| Activity::running("Read", target).naming_a_file(true);
+
+        assert_eq!(read("src/main.rs").line(), "Read(src/main.rs)");
+        assert_eq!(read("note.md ").line(), "Read(\"note.md\u{2423}\")");
+        assert_eq!(read(" ").line(), "Read(\"\u{2423}\")");
+        assert_eq!(read("a\u{200b}b").line(), "Read(\"a\\u{200b}b\")");
+        assert_eq!(read("note.md ").target, "note.md ");
+        assert_eq!(read("note.md ").shown_target(), "\"note.md\u{2423}\"");
+
+        // A search for `todo ` looks for the space too, and a line saying otherwise is wrong.
+        let search = Activity::running("Search", "todo ");
+        assert_eq!(search.line(), "Search(todo )");
+        assert_eq!(search.shown_target(), "todo ");
+
+        // A call that named nothing has no target to spell, so nothing is drawn for it.
+        assert_eq!(read("").shown_target(), "");
+        assert_eq!(read("").line(), "Read");
     }
 
     /// Some work has nothing to name, and an empty pair of brackets reads as a bug rather than

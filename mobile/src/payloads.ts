@@ -328,6 +328,8 @@ export function readShown(data: JsonValue): ShownView | null {
 export interface ActivityView {
   verb: string
   target: string
+  /** `target` spelled so a file's name that is blank or ends in whitespace is visible (PROMPT-1). Draw this and not `target`. */
+  shownTarget: string
   why: string
   note: string | null
   failed: boolean
@@ -339,12 +341,14 @@ export function readActivity(data: JsonValue): ActivityView | null {
   if (source === null) return null
   const verb = text(source, 'verb')
   const target = text(source, 'target')
+  // A bridge that sends no spelling sends a target that needs none, so the target is drawn as it is.
+  const shownTarget = source.shownTarget === undefined ? target : text(source, 'shownTarget')
   const why = source.why === undefined ? '' : text(source, 'why')
   const note = optionalText(source, 'note')
   const failed = flag(source, 'failed')
   const untrusted = flag(source, 'untrusted')
-  if (verb === null || target === null || why === null || note === undefined || failed === null || untrusted === null) return null
-  return { verb, target, why, note, failed, untrusted }
+  if (verb === null || target === null || shownTarget === null || why === null || note === undefined || failed === null || untrusted === null) return null
+  return { verb, target, shownTarget, why, note, failed, untrusted }
 }
 
 export function readPromptText(data: JsonValue): string | null {

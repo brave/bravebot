@@ -206,6 +206,42 @@ fn what_a_call_spent_at_a_model_reaches_a_front_end() {
     );
 }
 
+/// PROMPT-1: a call crosses with its file's name as held, which a window matches the call to its
+/// confirmation on, and as spelled, which is all it draws. A name that needs no spelling crosses as
+/// itself, a call that named nothing crosses with nothing to draw, and the target of a tool that
+/// names no file is not spelled.
+#[test]
+fn a_calls_file_crosses_as_held_and_as_spelled() {
+    let (mut reporter, events) = harness();
+
+    reporter.tool_started(Activity::running("Write", "note.md ").naming_a_file(true));
+    reporter.tool_started(Activity::running("Write", "note.md").naming_a_file(true));
+    reporter.tool_started(Activity::running("Search", "todo "));
+    reporter.tool_started(Activity::running("List", "").naming_a_file(true));
+
+    let events = events.lock().expect("not poisoned");
+    let crossed: Vec<(&str, &str)> = events
+        .iter()
+        .map(|event| {
+            (
+                event.data["target"].as_str().expect("a target"),
+                event.data["shownTarget"]
+                    .as_str()
+                    .expect("a spelled target"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        crossed,
+        [
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("note.md", "note.md"),
+            ("todo ", "todo "),
+            ("", ""),
+        ]
+    );
+}
+
 /// The word a call is being written under, and its end, reach a front-end so it can say what a
 /// long wait is for. A delegate's own call is not the turn's, so it is not sent.
 #[test]

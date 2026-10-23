@@ -49,6 +49,7 @@ const withoutModal = {
 }
 const { TrustPrompt } = evaluate((await build({ ...options('src/renderer/components/TrustPrompt.tsx'), plugins: [withoutModal] })).outputFiles[0].text)
 const { PathPermissions, RememberedHere } = load('src/renderer/components/Permissions.tsx')
+const { Context } = load('src/renderer/components/Context.tsx')
 const t = load('src/renderer/transcript.ts')
 
 const draw = (entry) =>
@@ -222,4 +223,58 @@ test('the list of rules a checkout proposed draws each rule and its file as spel
   assert.ok(markup.includes('<code>&quot;/work/proj␣/.bravebot/settings.json&quot;</code>'), markup)
   assert.ok(!markup.includes('exa\u200bmple'), markup)
   assert.ok(!markup.includes('/work/proj /.bravebot'), markup)
+})
+
+// A call's own `target` is what a window matches the call to its confirmation on, so it stays as the
+// model wrote it. What the transcript line and the Context lists draw is `shownTarget`.
+const call = (verb, target, shownTarget, note = 'done') =>
+  ({ verb, target, shownTarget, why: '', note, failed: false, untrusted: false, changes: [], waitedSeconds: null })
+
+test('a tool line draws the name of its file as spelled, and does not draw it as written', () => {
+  const markup = draw(t.started(call('Write', WRITTEN, SPELLED, null)))
+  assert.ok(markup.includes(`>${SPELLED_MARKUP}</span>`), markup)
+  assert.ok(!markup.includes(`>${WRITTEN}<`), markup)
+})
+
+test('the Context lists draw the files read and written as spelled', () => {
+  const live = {
+    handle: 'h', summary: { directory: '/work' }, todos: [], quarantine: [], phase: null, tokens: 0, running: false,
+    entries: [
+      { kind: 'tool', id: 'read', activity: call('Read', 'old.md ', '"old.md␣"'), landing: null },
+      { kind: 'tool', id: 'wrote', activity: call('Write', WRITTEN, SPELLED), landing: null },
+      { kind: 'tool', id: 'blank', activity: call('Write', ' ', '"␣"'), landing: null },
+    ],
+  }
+  const markup = renderToStaticMarkup(React.createElement(Context, { live }))
+  for (const name of [SPELLED_MARKUP, '&quot;old.md␣&quot;', BLANK_MARKUP]) {
+    assert.ok(markup.includes(`<span class="file-path">${name}</span>`), `${name}: ${markup}`)
+  }
+  for (const bare of ['>note.md <', '>old.md <', '> <']) {
+    assert.ok(!markup.includes(bare), `${bare}: ${markup}`)
+  }
+})
+
+test('a write that was asked about is listed once, under the name as spelled', () => {
+  const { written } = load('src/renderer/components/Context.tsx')
+  const asked = { kind: 'confirm', id: 'asked', request: { path: WRITTEN, shownPath: SPELLED }, decision: 'approve' }
+  const rows = written([{ kind: 'tool', id: 'wrote', activity: call('Write', WRITTEN, SPELLED), landing: null }, asked])
+  assert.deepEqual(rows, [{ target: WRITTEN, shown: SPELLED, state: 'applied' }])
+  assert.deepEqual(written([asked]), [{ target: WRITTEN, shown: SPELLED, state: 'approved' }])
+})
+
+test('a write named through a reference or a leading ./ is listed under the spelled name without them', () => {
+  const { written } = load('src/renderer/components/Context.tsx')
+  const rows = written([
+    { kind: 'tool', id: 'a', activity: call('Write', 'ref:1(U,priv):note.md ', '"ref:1(U,priv):note.md␣"'), landing: null },
+    { kind: 'tool', id: 'b', activity: call('Write', './other.md ', '"./other.md␣"'), landing: null },
+    { kind: 'tool', id: 'c', activity: call('Write', 'ref:2(U,priv):plain.md', 'ref:2(U,priv):plain.md'), landing: null },
+  ])
+  assert.deepEqual(rows.map((row) => row.shown), ['"note.md␣"', '"other.md␣"', 'plain.md'])
+})
+
+test('an exported or searched tool line holds the name as spelled', () => {
+  const entry = t.started(call('Write', WRITTEN, SPELLED, null))
+  assert.deepEqual(t.conversation([entry], true), [{ role: 'tool', verb: 'Write', target: SPELLED, note: null, failed: false }])
+  assert.ok(t.searchableText(entry).includes('note.md␣'), t.searchableText(entry))
+  assert.ok(!t.searchableText(entry).includes('note.md '), t.searchableText(entry))
 })

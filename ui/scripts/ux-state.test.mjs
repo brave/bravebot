@@ -187,8 +187,8 @@ test('memory edits use compare-and-replace and preserve recoverable history', ()
 
 test('write status follows execution outcome even when its tool row precedes the approval', () => {
   const { written } = load('src/renderer/components/Context.tsx')
-  const approval = { kind: 'confirm', id: 'approval', request: { path: 'a.ts' }, decision: 'approve' }
-  const tool = (note, failed = false) => ({ kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'a.ts', note, failed, changes: [] } })
+  const approval = { kind: 'confirm', id: 'approval', request: { path: 'a.ts', shownPath: 'a.ts' }, decision: 'approve' }
+  const tool = (note, failed = false) => ({ kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'a.ts', shownTarget: 'a.ts', note, failed, changes: [] } })
   assert.equal(written([approval])[0].state, 'approved')
   assert.equal(written([tool(null), approval])[0].state, 'applying')
   assert.equal(written([tool('done'), approval])[0].state, 'applied')
@@ -198,8 +198,8 @@ test('write status follows execution outcome even when its tool row precedes the
 
 test('a write the agent refused is listed as refused, and one that broke as failed', () => {
   const { written } = load('src/renderer/components/Context.tsx')
-  const tool = (note) => ({ kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'a.ts', note, failed: true, changes: [] } })
-  const approval = { kind: 'confirm', id: 'approval', request: { path: 'a.ts' }, decision: 'approve' }
+  const tool = (note) => ({ kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'a.ts', shownTarget: 'a.ts', note, failed: true, changes: [] } })
+  const approval = { kind: 'confirm', id: 'approval', request: { path: 'a.ts', shownPath: 'a.ts' }, decision: 'approve' }
   assert.equal(written([tool('refused: the session is in plan mode, so writing is refused')])[0].state, 'refused')
   assert.equal(written([tool('refused: a deny rule in the user\'s settings covers a.ts')])[0].state, 'refused')
   assert.equal(written([tool('refused: writing a.ts would put a credential in the tree'), approval])[0].state, 'refused')
@@ -309,9 +309,9 @@ test('appearance parsing accepts system/light/dark and maps legacy names to syst
 
 test('reference-backed writes and approval paths share one execution outcome', () => {
   const { written } = load('src/renderer/components/Context.tsx')
-  const tool = { kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'ref:3(U,priv):src/sample.txt', note: 'done', failed: false, changes: [] } }
-  const approval = { kind: 'confirm', id: 'approval', request: { path: 'src/sample.txt' }, decision: 'approve' }
-  assert.deepEqual(written([tool, approval]), [{ target: 'src/sample.txt', state: 'applied' }])
+  const tool = { kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'ref:3(U,priv):src/sample.txt', shownTarget: 'ref:3(U,priv):src/sample.txt', note: 'done', failed: false, changes: [] } }
+  const approval = { kind: 'confirm', id: 'approval', request: { path: 'src/sample.txt', shownPath: 'src/sample.txt' }, decision: 'approve' }
+  assert.deepEqual(written([tool, approval]), [{ target: 'src/sample.txt', shown: 'src/sample.txt', state: 'applied' }])
   assert.equal(written([{ ...approval, decision: null, interrupted: true }])[0].state, 'cancelled')
 })
 
@@ -535,7 +535,7 @@ test('a call that waited on a model of its own says how long, and one that asked
   new Function('require', 'module', 'exports', source)(require, module, module.exports)
   const { Row } = module.exports
 
-  const read = { verb: 'Read output', target: 'ref:1', note: '3 lines, read', failed: false, untrusted: false, changes: [], waitedSeconds: null }
+  const read = { verb: 'Read output', target: 'ref:1', shownTarget: 'ref:1', note: '3 lines, read', failed: false, untrusted: false, changes: [], waitedSeconds: null }
   const draw = (activity) => renderToStaticMarkup(React.createElement(Row, { entry: { kind: 'tool', id: 'row', activity, landing: null }, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
 
   assert.match(draw({ ...read, waitedSeconds: 8 }), /3 lines, read · 8s at the model/)
@@ -565,7 +565,7 @@ test('a call is drawn with the reason the planner gave for it, after the call', 
     return markup.includes(`>${call}<`) && reason > markup.indexOf(`>${call}<`)
   }
 
-  const read = { verb: 'Read', target: 'src/main.rs', why: 'see the entry point', note: '3 lines', failed: false, untrusted: false, changes: [], waitedSeconds: null }
+  const read = { verb: 'Read', target: 'src/main.rs', shownTarget: 'src/main.rs', why: 'see the entry point', note: '3 lines', failed: false, untrusted: false, changes: [], waitedSeconds: null }
   assert.ok(afterTheCall(draw({ kind: 'tool', id: 'row', activity: read, landing: null }), 'src/main.rs'), 'a finished call lost its reason or drew it ahead of the call')
   assert.ok(afterTheCall(draw({ kind: 'tool', id: 'row', activity: { ...read, note: null }, landing: null }), 'src/main.rs'), 'a running call lost its reason or drew it ahead of the call')
   assert.doesNotMatch(draw({ kind: 'tool', id: 'row', activity: { ...read, why: '' }, landing: null }), /class="why"/)
