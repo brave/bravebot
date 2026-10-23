@@ -496,7 +496,7 @@ list` are ordinary requests, and no rule matching variable names can tell one of
 exfiltration, so `AWS_PROFILE`, `GITHUB_TOKEN` and `NPM_TOKEN` are left where they are. What the run
 prompt tells you about the remainder is the truth: a run has the access your own shell has. Name
 anything of your own you want withheld in
-[`run.scrubEnv`](../customize/configuration.md#runscrubenv), where an entry may be a pattern such as
+[`run.scrubEnv`](../security/sandbox.md#runscrubenv), where an entry may be a pattern such as
 `AWS_*`.
 
 :::note

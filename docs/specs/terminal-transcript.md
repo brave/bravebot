@@ -36,7 +36,9 @@ governs:
   - crates/ui-bridge/src/turn.rs
   - ui/scripts/ux-state.test.mjs
   - ui/scripts/marking.test.mjs
-documented-by: docs/website/docs/using/transcript.md
+documented-by:
+  - docs/website/docs/using/transcript.md
+  - docs/website/docs/customize/theme.md
 ---
 
 ## Scope

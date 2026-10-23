@@ -25,6 +25,7 @@ documented-by:
   - docs/website/docs/security/permissions.md
   - docs/website/docs/security/permission-modes.md
   - docs/website/docs/security/permission-rules.md
+  - docs/website/docs/customize/managed-settings.md
 ---
 
 ## Scope

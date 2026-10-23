@@ -33,6 +33,7 @@ documented-by:
   - docs/website/docs/customize/mcp/gmail.md
   - docs/website/docs/customize/mcp/calendar.md
   - docs/website/docs/customize/mcp/github.md
+  - docs/website/docs/customize/managed-settings.md
 ---
 
 ## Scope

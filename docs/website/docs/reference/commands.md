@@ -184,7 +184,7 @@ outlives the session and applies in every directory, except one whose own settin
 `~/.bravebot/settings.json` does not.
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
-them. See [Configuration](../customize/configuration.md#choosing-a-model).
+them. See [Choosing a model](../customize/model.md).
 
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.
@@ -201,7 +201,7 @@ cursor and Escape restores the one that was in force when the picker opened.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory.
 Themes of your own are JSON files under `~/.bravebot/themes/`, and nothing in a workspace is read. See
-[Choosing a theme](../customize/configuration.md#choosing-a-theme) and
+[Choosing a theme](../customize/theme.md) and
 [Themes](../using/transcript.md#themes).
 
 ## `/advisor [model | off]`
@@ -300,7 +300,7 @@ except one whose own settings name an [`effort`](../customize/configuration.md#e
 outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
 is recorded. Picking the row for none removes the record, so from the next session your own file's
 level answers again. See
-[Choosing how hard to think](../customize/configuration.md#choosing-how-hard-to-think), which is also
+[Choosing how hard to think](../customize/effort.md), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.
 
@@ -332,7 +332,7 @@ carried out at once.
 
 The choice is written to `~/.bravebot/language`, so it applies in every directory. A session that records
 nothing, an incognito one for example, says the choice was not saved and keeps none. See
-[Choosing a language](../customize/configuration.md#choosing-a-language) for the order the sources are
+[Choosing a language](../customize/language.md) for the order the sources are
 read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
 
 ## `/add-dir <path>`

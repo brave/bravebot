@@ -193,7 +193,7 @@ that same question and discarded, and a terminal that answers with nothing holds
 its full 80 milliseconds. It happens once a session, before there is a box to type into.
 :::
 
-See [Configuration](../customize/configuration.md#choosing-a-theme) for where the choice is stored
+See [Choosing a theme](../customize/theme.md) for where the choice is stored
 and how to write one of your own.
 
 ## The model picker

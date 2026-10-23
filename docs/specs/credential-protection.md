@@ -25,6 +25,7 @@ guards:
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/security/security.md
+  - docs/website/docs/security/sandbox.md
 ---
 
 ## Scope

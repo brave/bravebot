@@ -32,16 +32,20 @@ macro_rules! page {
 }
 
 /// Every page, in path order. A test holds this to the files under `docs/website/docs`.
-const PAGES: [Page; 51] = [
+const PAGES: [Page; 57] = [
     page!("customize/agents"),
     page!("customize/configuration"),
+    page!("customize/effort"),
     page!("customize/hooks"),
     page!("customize/importing"),
     page!("customize/instructions"),
+    page!("customize/language"),
+    page!("customize/managed-settings"),
     page!("customize/mcp-servers"),
     page!("customize/mcp/calendar"),
     page!("customize/mcp/github"),
     page!("customize/mcp/gmail"),
+    page!("customize/model"),
     page!("customize/premium"),
     page!("customize/providers/anthropic"),
     page!("customize/providers/bedrock"),
@@ -54,6 +58,7 @@ const PAGES: [Page; 51] = [
     page!("customize/providers/openrouter"),
     page!("customize/signing-in"),
     page!("customize/skills"),
+    page!("customize/theme"),
     page!("development"),
     page!("how-it-works"),
     page!("install"),
@@ -68,6 +73,7 @@ const PAGES: [Page; 51] = [
     page!("security/permission-modes"),
     page!("security/permission-rules"),
     page!("security/permissions"),
+    page!("security/sandbox"),
     page!("security/security"),
     page!("security/trust"),
     page!("security/vetting"),

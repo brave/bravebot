@@ -67,7 +67,7 @@ models you use:
 
 ## What a request carries
 
-**Effort.** The level chosen with [`/effort`](../configuration.md#choosing-how-hard-to-think), or the
+**Effort.** The level chosen with [`/effort`](../effort.md), or the
 `effort` setting, is sent in `output_config`. It is not sent to a model whose listing says it reads
 none, and a model the listing does not describe, including every model of a block that lists `models`,
 is sent it and judged by Anthropic's answer: one that refuses it is not sent it again and is shown as
