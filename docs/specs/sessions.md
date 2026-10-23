@@ -27,6 +27,7 @@ governs:
 documented-by:
   - docs/website/docs/using/sessions.md
   - docs/website/docs/using/manifest-mode.md
+  - docs/website/docs/using/rewind.md
 ---
 
 ## Scope
