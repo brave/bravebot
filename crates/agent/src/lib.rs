@@ -16,6 +16,7 @@ pub mod answers;
 pub mod aside;
 pub mod attached;
 pub mod backend;
+pub mod bots;
 mod calendar;
 pub mod cmdline;
 pub mod commit_message;

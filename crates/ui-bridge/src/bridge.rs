@@ -314,6 +314,8 @@ impl Bridge {
             "connectors.remove" => crate::connectors::remove(request),
             "hooks.inspect" => crate::hooks::inspect(),
             "bot.define" => crate::definitions::make(request),
+            "bot.list" => crate::bots::list(request),
+            "bot.replace" => crate::bots::replace(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
             "doctor" => Ok(

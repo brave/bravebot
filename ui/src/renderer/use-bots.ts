@@ -14,6 +14,7 @@ export interface BotsInputs {
 /** The bot list on screen, and the edits that change it that need no session to be closed. */
 export function useBots({ openedLives, updateSession, setLive, setProblem }: BotsInputs) {
   const [bots, setBots] = useState<Bot[]>([])
+  const shownProblem = useRef<string | null>(null)
 
   /**
    * Read the bot list again.
@@ -24,7 +25,10 @@ export function useBots({ openedLives, updateSession, setLive, setProblem }: Bot
    */
   const readBots = useCallback(async () => {
     setBots(await window.bravebot.readBots().catch(() => []))
-  }, [])
+    const problem = await window.bravebot.readBotsProblem().catch(() => null)
+    if (problem !== null && problem !== shownProblem.current) setProblem(problem)
+    shownProblem.current = problem
+  }, [setProblem])
 
   // Read inside the event listener and inside `send`, both installed once and neither able to
   // close over a list that changes under them.

@@ -137,8 +137,10 @@ pub const DENIED: &[&str] = &[
     "connectors.disconnect",
     "connectors.remove",
     "bot.define",
+    "bot.list",
     "bot.migrate",
     "bot.redefine",
+    "bot.replace",
     "doctor",
     // Read files or attach them to a turn.
     "mentions.offer",

@@ -26,7 +26,6 @@ import { parseLayout, type StoredLayout } from '../shared/layout'
 import { parseView, type StoredView } from '../shared/view'
 import { parseRecents } from '../shared/recents'
 import { parseForks, type Fork } from '../shared/forks'
-import { type Bot } from '../shared/bots'
 import { SYSTEM } from '../shared/theme'
 
 const file = (): string => join(app.getPath('userData'), 'bravebot-ui.json')
@@ -47,7 +46,7 @@ export const botHome = (slug: string): string => join(app.getPath('userData'), '
  */
 export function readState(): StoredState {
   try {
-    return parseState(JSON.parse(readFileSync(file(), 'utf8')), botHome)
+    return parseState(JSON.parse(readFileSync(file(), 'utf8')))
   } catch {
     // No file here yet. There may be four older ones, though, and somebody's columns are not
     // worth losing to a rename.
@@ -79,10 +78,6 @@ function inherited(): StoredState {
     theme: SYSTEM,
     recents: parseRecents(legacy('recents.json')).directories,
     forks: parseForks(legacy('forks.json')).forks,
-    // Bots are newer than this file, so there is nothing to inherit. Listed all the same rather
-    // than left to `parseState` to default, because `update` writes this literal's shape: a key
-    // missing here is a key erased from disk by the next write of any other one.
-    bots: [],
   }
 }
 
@@ -95,7 +90,7 @@ function inherited(): StoredState {
  * judgement each of the files this replaces made about itself.
  */
 function update(change: Partial<StoredState>): void {
-  const next = parseState({ ...readState(), ...change }, botHome)
+  const next = parseState({ ...readState(), ...change })
   try {
     writeFileSync(file(), `${JSON.stringify(next, null, 2)}\n`, 'utf8')
   } catch {
@@ -127,16 +122,4 @@ export function putRecents(recents: string[]): void {
 /** Remember which session came out of which. Main-process only, for the same reason. */
 export function putForks(forks: Fork[]): void {
   update({ forks })
-}
-
-/**
- * Remember the bots.
- *
- * Unlike the two above, this one *is* reached from a window — a bot's name and purpose are things
- * somebody types. What the window cannot do is compose the whole record: `bravebot:bots:write`
- * hands over four fields and `src/main/bots.ts` keeps the other two, so the half of a bot that is
- * a report of what the agent did stays as unreachable from the renderer as the recents list is.
- */
-export function putBots(bots: Bot[]): void {
-  update({ bots })
 }

@@ -27,7 +27,7 @@
 // list is this driver's to write and the rest of that file is somebody's arrangement of the window.
 
 import { checker, launch, SIDEBAR_TAB } from './drive-support.mjs'
-import { appState, locateProfile } from './drive-profile.mjs'
+import { appBots, appState, locateProfile } from './drive-profile.mjs'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -50,6 +50,7 @@ const { check, problems } = checker()
 // would be a row these assertions did not make.
 const { userData, stateFile } = await locateProfile()
 const { readState, putKey } = appState(stateFile)
+const { readBots, putBots } = appBots()
 
 // What was there before this ran, so it can be there after. This driver's two keys only.
 //
@@ -72,7 +73,7 @@ const homes = MINE.map((slug) => join(userData, 'bot-homes', slug))
 for (const home of homes) rmSync(home, { recursive: true, force: true })
 
 // Only this driver's own rows, in case an earlier run was interrupted before its teardown.
-putKey('bots', (readState().bots ?? []).filter((bot) => !MINE.includes(bot.slug)))
+putBots(readBots().filter((bot) => !MINE.includes(bot.slug)))
 putKey('view', undefined)
 
 /**
@@ -173,7 +174,7 @@ check(
   'and say what they are for',
 )
 check(
-  readState().bots?.find((bot) => bot.slug === MINE[0])?.home === homes[0],
+  readBots().find((bot) => bot.slug === MINE[0])?.home === homes[0],
   'a new bot is given a home folder of its own under the app’s data directory',
 )
 
@@ -213,18 +214,6 @@ check((await faceOf(renamed)) === first, 'and keeps the face it had — the poin
 
 await app.close()
 
-// The two figures that decide when a bot is reminded to write its memory down. Seeded here rather
-// than earned, because earning them needs a model and this driver deliberately spends no tokens —
-// what is being checked is that they round-trip and that the window cannot touch them, which are
-// both questions about the record and not about a turn.
-const seed = { remembered: 1717171717171, quiet: 4 }
-putKey(
-  'bots',
-  (readState().bots ?? []).map((bot) =>
-    bot.slug === MINE[0] ? { ...bot, ...seed } : bot,
-  ),
-)
-
 const second_app = await launch()
 const back = await second_app.firstWindow()
 await back.waitForLoadState('domcontentloaded')
@@ -254,25 +243,15 @@ await back.screenshot({ path: '/tmp/bravebot-ui/22-bots-relaunched.png' })
 
 // --- what the window may not write --------------------------------------------------------
 
-const onDisk = (slug) => (readState().bots ?? []).find((bot) => bot.slug === slug) ?? null
+const onDisk = (slug) => readBots().find((bot) => bot.slug === slug) ?? null
 
-check(
-  onDisk(MINE[0])?.remembered === seed.remembered && onDisk(MINE[0])?.quiet === seed.quiet,
-  'the memory watermark and the quiet count come back off disk as they were written',
-)
 
 // Saving the details is the one way a window can write a bot at all, and it may say four things.
-// A save that reset either of these would hand the renderer a lever over when a bot is asked to
-// remember — the same reason the session id and the compaction watermark are not its to set.
 await openBot(back, backMine)
 await editDetail(back, 'Purpose', 'Draft weekly release notes from the commits since the last tag.')
 check(
   onDisk(MINE[0])?.purpose === 'Draft weekly release notes from the commits since the last tag.',
   'a purpose changed in the details is saved',
-)
-check(
-  onDisk(MINE[0])?.remembered === seed.remembered && onDisk(MINE[0])?.quiet === seed.quiet,
-  'and saving the details does not disturb them, the window has no way to say either',
 )
 
 // --- putting one away, and taking it back out ----------------------------------------------
@@ -296,7 +275,7 @@ const archive = back.locator('.bot-archive')
 const archivedRow = archive
   .locator('.bot-archived')
   .filter({ has: back.locator('.bot-name', { hasText: /^Release Notes \(weekly\)$/ }) })
-const alreadyAway = (readState().bots ?? []).filter(
+const alreadyAway = readBots().filter(
   (bot) => !MINE.includes(bot.slug) && bot.retired > 0,
 ).length
 // The fold's state belongs to the list rather than to the section, so it outlives the archive
@@ -355,8 +334,6 @@ check(
     after?.home === before?.home &&
     JSON.stringify(after?.conversations) === JSON.stringify(before?.conversations) &&
     after?.archived === before?.archived &&
-    after?.remembered === before?.remembered &&
-    after?.quiet === before?.quiet &&
     after?.created === before?.created,
   'and it comes back as itself — same slug, so the same memory file; same seed, so the same ' +
     'face; same session, so the same conversation. A restore is not a rebuild',
@@ -419,7 +396,7 @@ await second_app.close()
 
 // What this driver touched, put back. Only its own two keys — the rest of that file is somebody's
 // arrangement of this window, and the home folders the app made for its two bots.
-putKey('bots', (readState().bots ?? []).filter((bot) => !MINE.includes(bot.slug)))
+putBots(readBots().filter((bot) => !MINE.includes(bot.slug)))
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
 for (const home of homes) rmSync(home, { recursive: true, force: true })
 

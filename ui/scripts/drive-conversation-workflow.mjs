@@ -8,8 +8,8 @@ import { _electron as electron } from 'playwright-core'
 import { eventsFor, idA, installBridge, makeProfile } from './acceptance-fixture.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-conversation-regression')
 mkdirSync(output, { recursive: true })
-const { profile, directory } = makeProfile({ copy: true })
-const app = await electron.launch({args:['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling',`--user-data-dir=${profile}`],cwd:process.cwd(),timeout:40000})
+const { profile, directory, state } = makeProfile({ copy: true })
+const app = await electron.launch({args:['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling',`--user-data-dir=${profile}`],cwd:process.cwd(),timeout:40000,env:{...process.env,BRAVEBOT_HOME:state}})
 let page
 const originalClipboard = await app.evaluate(({clipboard})=>clipboard.readText())
 try {

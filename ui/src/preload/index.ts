@@ -227,6 +227,11 @@ const api = {
     return ipcRenderer.invoke('bravebot:bots:read') as Promise<Bot[]>
   },
 
+  /** What is wrong with the bots as last read or written, with the path and the reason, or `null`. */
+  readBotsProblem(): Promise<string | null> {
+    return ipcRenderer.invoke('bravebot:bots:problem') as Promise<string | null>
+  },
+
   /**
    * Define a bot, or change one that exists.
    *

@@ -1,6 +1,6 @@
 /**
- * The bots somebody has defined, and the one thing that decides whether a file on disk is that
- * list.
+ * The bots somebody has defined: the shape of a row and the choices a form makes about one. Which
+ * entries of the bots file are rows is the agent's bots module's judgement (BOT-3).
  *
  * A bot is a name, a purpose and a home folder of its own, with a history of conversations. Each
  * conversation runs in the bot's home folder or in a project somebody picked for it, and the bot
@@ -30,9 +30,6 @@
  * rather than an exception to it: the window may ask for a bot to be archived, and cannot say
  * what the field becomes.
  */
-
-import { isProjectPath } from './recents'
-import { isSessionId } from './forks'
 
 export interface Bot {
   /**
@@ -151,10 +148,6 @@ export function botProjects(bot: Bot): string[] {
   return [...new Set(bot.conversations.map((each) => each.directory).reverse())].filter((each) => each !== bot.home)
 }
 
-export interface StoredBots {
-  bots: Bot[]
-}
-
 /**
  * Enough that nobody meets the ceiling, few enough that the file stays a file.
  *
@@ -206,129 +199,6 @@ export function slugFor(name: string, taken: ReadonlySet<string> = new Set()): s
     if (!taken.has(tried)) return tried
   }
   return `${base}-${Date.now()}`
-}
-
-/** A non-empty line of text, with the whitespace-only case treated as the absence it is. */
-function isText(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0 && !value.includes('\0')
-}
-
-/**
- * A bot list, always.
- *
- * Entries are filtered rather than the file refused, the way the recents and the forks are: one
- * unreadable line should not cost somebody every bot they have. Nothing is coerced, and a slug
- * appears once — it names files, and two bots claiming one would be two bots sharing a memory.
- *
- * Two fields may be missing. `avatar` is repaired from the slug rather than costing the bot its
- * row, because an icon is a smaller thing than a bot. `home` is missing from every bot written
- * before bots had one, and `homeFor` supplies it; without `homeFor` such a bot is dropped, because
- * a bot with nowhere to run cannot be shown as one that can.
- *
- * A bot written before then also has a `directory` it was pinned to. Its conversations are paired
- * with that folder, so they keep running where they always ran.
- */
-export function parseBots(value: unknown, homeFor?: (slug: string) => string): StoredBots {
-  if (typeof value !== 'object' || value === null) return { bots: [] }
-  const { bots } = value as { bots?: unknown }
-  if (!Array.isArray(bots)) return { bots: [] }
-
-  const seen = new Set<string>()
-  const kept: Bot[] = []
-  for (const entry of bots) {
-    if (typeof entry !== 'object' || entry === null) continue
-    const {
-      slug,
-      name,
-      purpose,
-      avatar,
-      model,
-      home,
-      directory,
-      definition,
-      session,
-      conversations,
-      archived,
-      remembered,
-      quiet,
-      retired,
-      created,
-      updated,
-    } = entry as Record<string, unknown>
-
-    if (!isSlug(slug) || seen.has(slug)) continue
-    if (!isText(name) || !isText(purpose)) continue
-    const placed = isProjectPath(home) ? home : homeFor?.(slug)
-    if (!isProjectPath(placed)) continue
-    // Only bots written before homes existed carry this. It is where their conversations ran.
-    const legacy = isProjectPath(directory) ? directory : null
-    // Null and absent both mean "has not spoken yet". Anything else claiming to be an id has to
-    // look like one, and a bot pointing at a session that cannot exist is dropped rather than
-    // shown as openable.
-    if (session !== null && session !== undefined && !isSessionId(session)) continue
-    if (created !== undefined && (typeof created !== 'number' || !Number.isFinite(created))) continue
-    if (updated !== undefined && (typeof updated !== 'number' || !Number.isFinite(updated))) continue
-
-    const at = typeof created === 'number' ? created : Date.now()
-    seen.add(slug)
-    kept.push({
-      slug,
-      name,
-      purpose,
-      avatar: isText(avatar) ? avatar : slug,
-      model: isBotModel(model) && model !== null ? model : null,
-      home: placed,
-      definition: isSlug(definition) ? definition : null,
-      session: isSessionId(session) ? session : null,
-      conversations: parseConversations(conversations, isSessionId(session) ? session : null, legacy ?? placed),
-      // Clamped rather than refused. It is a watermark, and a nonsense one costs one needless
-      // re-grounding, where dropping the bot over it costs the bot.
-      archived:
-        typeof archived === 'number' && Number.isInteger(archived) && archived >= 0 ? archived : 0,
-      // Both clamped rather than refused, for the reason above them: these decide when a bot is
-      // reminded to write, and a nonsense figure costs one needless briefing where dropping the
-      // row over it costs the bot. Absent is the ordinary case — every bot written before this
-      // existed has neither.
-      remembered: typeof remembered === 'number' && Number.isFinite(remembered) && remembered >= 0
-        ? remembered
-        : 0,
-      quiet: typeof quiet === 'number' && Number.isInteger(quiet) && quiet >= 0 ? quiet : 0,
-      // Clamped rather than refused for the reason the three above it are, and absent is the
-      // ordinary case: every bot written before the archive existed is a bot still in use.
-      retired: typeof retired === 'number' && Number.isFinite(retired) && retired >= 0 ? retired : 0,
-      created: at,
-      updated: typeof updated === 'number' ? updated : at,
-    })
-    if (kept.length === BOTS_MAX) break
-  }
-  return { bots: kept }
-}
-
-/**
- * A bot's conversations, each id once.
- *
- * An entry is either a pair or, from a bot written before pairs existed, a bare id, which is
- * paired with `fallback`: the folder that bot was pinned to.
- */
-function parseConversations(value: unknown, session: string | null, fallback: string): BotConversationRef[] {
-  const seen = new Set<string>()
-  const kept: BotConversationRef[] = []
-  const add = (id: unknown, directory: unknown) => {
-    if (!isSessionId(id) || !isProjectPath(directory)) return
-    const key = `${directory}\u0000${id}`
-    if (seen.has(key)) return
-    seen.add(key)
-    kept.push({ id, directory })
-  }
-  for (const entry of Array.isArray(value) ? value : []) {
-    if (typeof entry === 'string') add(entry, fallback)
-    else if (typeof entry === 'object' && entry !== null) {
-      const { id, directory } = entry as Record<string, unknown>
-      add(id, directory)
-    }
-  }
-  if (session && !kept.some((each) => each.id === session)) add(session, fallback)
-  return kept
 }
 
 /** The one with this slug, or `null`. */

@@ -19,12 +19,14 @@ const directory = mkdtempSync(join(tmpdir(), 'bravebot-visual-project-'))
 const idA = '11111111-1111-4111-8111-111111111111'
 const idB = '22222222-2222-4222-8222-222222222222'
 const idC = '33333333-3333-4333-8333-333333333333'
+const state = join(profile, 'agent-state')
+mkdirSync(state)
+writeFileSync(join(state, 'bots.json'), JSON.stringify({ bots: [{ slug: 'review-bot', name: 'Review Bot', purpose: 'Review a disposable project and remember preferences.', avatar: 'review-bot', model: null, directory, session: idC, conversations: [idC], archived: 0, remembered: 0, quiet: 0, retired: 0, created: 1 }] }))
 writeFileSync(join(profile, 'bravebot-ui.json'), JSON.stringify({
-  bots: [{ slug: 'review-bot', name: 'Review Bot', purpose: 'Review a disposable project and remember preferences.', avatar: 'review-bot', model: null, directory, session: idC, conversations: [idC], archived: 0, remembered: 0, quiet: 0, retired: 0, created: 1 }],
   recents: [directory, '/Users/example/Documents/GitHub/a-very-long-project-name-that-needs-truncation'],
 }))
 
-const app = await electron.launch({ args: ['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000 })
+const app = await electron.launch({ args: ['.', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000, env: { ...process.env, BRAVEBOT_HOME: state } })
 const failures = []
 const small = new Map()
 const errors = []

@@ -111,10 +111,11 @@ import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Bot, botFolders, botOf, isBotModel, isSlug, slugFor, withBot } from '../shared/bots'
+import { type Bot, botFolders, botOf, isBotModel, isSlug, slugFor, withBot, withoutBot } from '../shared/bots'
 import { newAvatarSeed } from '../shared/avatar'
 import { isOpenedDirectory } from './opened'
-import { botHome, putBots, readState } from './state'
+import { readBots, updateBots, usableBots } from './bot-store'
+import { botHome } from './state'
 
 /** Where a bot's files live inside the checkout it works in, relative to that checkout. */
 const HOME = '.bravebot-ui'
@@ -145,13 +146,11 @@ const MEMORY_MAX = 64 * 1024
 const QUIET_MAX = 6
 
 /** Every bot defined. Never throws; an unreadable file is no bots. */
-export function bots(): Bot[] {
-  return readState().bots
-}
+export const bots = readBots
 
 /** The one with this slug, or `null`. */
-export function bot(slug: unknown): Bot | null {
-  return isSlug(slug) ? botOf(bots(), slug) : null
+export async function bot(slug: unknown): Promise<Bot | null> {
+  return isSlug(slug) ? botOf(await bots(), slug) : null
 }
 
 /**
@@ -166,12 +165,12 @@ export function bot(slug: unknown): Bot | null {
  * conversations, when it was made. Its seed changes only when the window sends a new one. A new one is given a slug composed here from the
  * name, so the thing that becomes a path segment is never a string that arrived as one.
  */
-export function botFromForm(value: unknown): Bot | null {
+export async function botFromForm(value: unknown): Promise<Bot | null> {
   if (typeof value !== 'object' || value === null) return null
   const sent = value as Record<string, unknown>
   const { slug, avatar, model } = sent
   if (model !== undefined && !isBotModel(model)) return null
-  const held = isSlug(slug) ? bot(slug) : null
+  const held = isSlug(slug) ? await bot(slug) : null
   // An edit of a bot that is kept names only what it changes. A new bot needs both.
   const name = sent.name === undefined && held ? held.name : sent.name
   const purpose = sent.purpose === undefined && held ? held.purpose : sent.purpose
@@ -183,7 +182,7 @@ export function botFromForm(value: unknown): Bot | null {
 
   // A new face is kept only when the window asks for one; a rename leaves the face as it was.
   if (held) return { ...held, name, purpose, model: model === undefined ? held.model : model, avatar: typeof avatar === 'string' ? avatar : held.avatar }
-  const made = slugFor(name, new Set(bots().map((each) => each.slug)))
+  const made = slugFor(name, new Set((await bots()).map((each) => each.slug)))
   return {
     slug: made,
     name,
@@ -221,9 +220,10 @@ export type DefineRequest = (method: 'bot.define' | 'bot.redefine', params: Reco
  */
 export async function saveFormBot(next: Bot, define: DefineRequest | null): Promise<Bot> {
   let kept = next
-  const stored = bot(next.slug)
+  const stored = await bot(next.slug)
   if (!stored) {
     if (!define) throw new Error('The agent is not running, so a bot cannot be made.')
+    await usableBots()
     const made = (await define('bot.define', {
       slug: next.slug,
       purpose: next.purpose,
@@ -236,11 +236,11 @@ export async function saveFormBot(next: Bot, define: DefineRequest | null): Prom
     await redefine(stored.definition, next, define)
     // The agent call took time, and the row may have moved on meanwhile: a conversation recorded,
     // a session released. Only the fields the form carries are laid over it.
-    kept = { ...(bot(next.slug) ?? stored), name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
+    kept = { ...((await bot(next.slug)) ?? stored), name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
   } else {
     kept = { ...stored, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
   }
-  saveBot(kept)
+  await saveBot(kept)
   return kept
 }
 
@@ -254,7 +254,7 @@ let saving: Promise<unknown> = Promise.resolve()
  */
 export function saveForm(value: unknown, define: DefineRequest | null): Promise<Bot | null> {
   const run = saving.then(async () => {
-    const form = botFromForm(value)
+    const form = await botFromForm(value)
     return form ? saveFormBot(form, define) : null
   })
   saving = run.catch(() => undefined)
@@ -307,7 +307,7 @@ export async function migrateBot(
   })) as { name?: unknown } | null
   if (!isSlug(made?.name)) throw new Error('The agent did not name the bot’s definition.')
   const next = { ...held, definition: made.name }
-  saveBot(next)
+  await saveBot(next)
   return next
 }
 
@@ -323,7 +323,7 @@ export async function saveBotModel(held: Bot, model: string | null, define: Defi
     if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
     await redefine(held.definition, next, define)
   }
-  saveBot(next)
+  await saveBot(next)
   return next
 }
 
@@ -337,8 +337,8 @@ async function redefine(name: string, bot: Bot, define: DefineRequest): Promise<
 }
 
 /** Write a bot down, replacing whatever shared its slug, and stamp when that happened. */
-export function saveBot(next: Bot): void {
-  putBots(withBot(bots(), { ...next, updated: Date.now() }))
+export async function saveBot(next: Bot): Promise<void> {
+  await updateBots((all) => withBot(all, { ...next, updated: Date.now() }))
 }
 
 /**
@@ -370,14 +370,14 @@ export function worksIn(held: Bot, directory: string | undefined): directory is 
 }
 
 /** Record a durable conversation and the folder it ran in, without discarding any earlier ones. */
-export function noteBotSession(slug: string, id: string, directory: string): void {
-  const held = bot(slug)
-  if (!held) return
-  const known = held.conversations.some((each) => each.id === id && each.directory === directory)
-  saveBot({
-    ...held,
-    session: id,
-    conversations: known ? held.conversations : [...held.conversations, { id, directory }],
+export async function noteBotSession(slug: string, id: string, directory: string): Promise<void> {
+  await changeBot(slug, (held) => {
+    const known = held.conversations.some((each) => each.id === id && each.directory === directory)
+    return {
+      ...held,
+      session: id,
+      conversations: known ? held.conversations : [...held.conversations, { id, directory }],
+    }
   })
 }
 
@@ -388,10 +388,8 @@ export function noteBotSession(slug: string, id: string, directory: string): voi
  * conversation this is not looking at, and adopting it would ask for a re-grounding that nothing
  * happened to justify.
  */
-export function noteBotArchived(slug: string, archived: number): void {
-  const held = bot(slug)
-  if (!held || !Number.isInteger(archived) || archived <= held.archived) return
-  saveBot({ ...held, archived })
+export async function noteBotArchived(slug: string, archived: number): Promise<void> {
+  await changeBot(slug, (held) => (Number.isInteger(archived) && archived > held.archived ? { ...held, archived } : null))
 }
 
 /**
@@ -404,23 +402,27 @@ export function noteBotArchived(slug: string, archived: number): void {
  * The window may ask for this and cannot say what it becomes. Null is the only value it can lead
  * to, which keeps the promise the split is made of: an id is something the agent said.
  */
-export function releaseBotSession(slug: unknown): void {
-  const held = bot(slug)
-  if (!held || held.session === null) return
-  saveBot({ ...held, session: null, archived: 0 })
+export async function releaseBotSession(slug: unknown): Promise<void> {
+  if (!isSlug(slug)) return
+  await changeBot(slug, (held) => (held.session === null ? null : { ...held, session: null, archived: 0 }))
 }
 
 /**
  * Forget a conversation that was deleted, in every bot that listed it. A bot whose continuation
  * pointer was that conversation starts a new one on its next turn.
  */
-export function forgetBotConversation(directory: string, id: string): void {
-  for (const held of bots()) {
-    const conversations = held.conversations.filter((each) => !(each.id === id && each.directory === directory))
-    const pointed = held.session === id
-    if (conversations.length === held.conversations.length && !pointed) continue
-    saveBot({ ...held, conversations, session: pointed ? null : held.session, archived: pointed ? 0 : held.archived })
-  }
+export async function forgetBotConversation(directory: string, id: string): Promise<void> {
+  await updateBots((all) => {
+    let changed = false
+    const next = all.map((held) => {
+      const conversations = held.conversations.filter((each) => !(each.id === id && each.directory === directory))
+      const pointed = held.session === id
+      if (conversations.length === held.conversations.length && !pointed) return held
+      changed = true
+      return { ...held, conversations, session: pointed ? null : held.session, archived: pointed ? 0 : held.archived, updated: Date.now() }
+    })
+    return changed ? next : null
+  })
 }
 
 /**
@@ -435,12 +437,24 @@ export function forgetBotConversation(directory: string, id: string): void {
  * The window may ask for this and cannot say what the field becomes, which is the arrangement
  * `releaseBotSession` above has and for the same reason.
  */
-export function retireBot(slug: unknown, retired: boolean): Bot | null {
-  const held = bot(slug)
+export async function retireBot(slug: unknown, retired: boolean): Promise<Bot | null> {
+  const held = await bot(slug)
   if (!held) return null
   const next = { ...held, retired: retired ? Date.now() : 0 }
-  saveBot(next)
+  await saveBot(next)
   return next
+}
+
+export async function removeBot(slug: string): Promise<void> {
+  await updateBots((all) => withoutBot(all, slug))
+}
+
+async function changeBot(slug: string, change: (held: Bot) => Bot | null): Promise<void> {
+  await updateBots((all) => {
+    const held = botOf(all, slug)
+    const next = held && change(held)
+    return next ? withBot(all, { ...next, updated: Date.now() }) : null
+  })
 }
 
 /** Where this app keeps its own files for a bot. Composed from a slug that has been judged. */
@@ -508,14 +522,14 @@ function memoryStamp(bot: Bot, directory: string): number {
  * another conversation, where an mtime falls perfectly ordinarily when a file is restored from a
  * checkout or a branch is switched. What matters is only that it differs from the mark.
  */
-export function noteBotMemory(slug: string, directory: string): void {
-  const held = bot(slug)
+export async function noteBotMemory(slug: string, directory: string): Promise<void> {
+  const held = await bot(slug)
   // A bot with a definition is told where its memory is by the agent on every turn (MEMORY-4), so
   // there is no briefing for a quiet spell to bring back and nothing to count (MEMORY-10).
   if (!held || held.definition !== null) return
   const stamp = memoryStamp(held, directory)
-  if (stamp !== held.remembered) saveBot({ ...held, remembered: stamp, quiet: 0 })
-  else saveBot({ ...held, quiet: held.quiet + 1 })
+  if (stamp !== held.remembered) await saveBot({ ...held, remembered: stamp, quiet: 0 })
+  else await saveBot({ ...held, quiet: held.quiet + 1 })
 }
 
 /**
@@ -524,13 +538,13 @@ export function noteBotMemory(slug: string, directory: string): void {
  * `noteBotMemory` reads a newer file than the mark as the bot writing, which would put off its next
  * reminder. The mark follows the change only when it was current before it.
  */
-export function keepingMemoryMark(slug: string, directory: string, change: () => void): void {
-  const before = bot(slug)
+export async function keepingMemoryMark(slug: string, directory: string, change: () => void): Promise<void> {
+  const before = await bot(slug)
   if (!before) return change()
   const stamp = memoryStamp(before, directory)
   change()
-  const after = bot(slug)
-  if (after && after.remembered === stamp) saveBot({ ...after, remembered: memoryStamp(after, directory) })
+  const after = await bot(slug)
+  if (after && after.remembered === stamp) await saveBot({ ...after, remembered: memoryStamp(after, directory) })
 }
 
 /**
@@ -551,10 +565,10 @@ export function nudgeDue(bot: Bot): boolean {
  * one that ignores it gets another `QUIET_MAX` turns of peace rather than a briefing attached to
  * everything it is ever asked, which is the failure that would make this worse than nothing.
  */
-export function noteBotNudged(slug: string): void {
-  const held = bot(slug)
+export async function noteBotNudged(slug: string): Promise<void> {
+  const held = await bot(slug)
   if (!held || held.quiet === 0) return
-  saveBot({ ...held, quiet: 0 })
+  await saveBot({ ...held, quiet: 0 })
 }
 
 /**
@@ -818,8 +832,8 @@ export function folderOf(held: Bot, directory: unknown): string | null {
  * What a bot's memory in one folder says, for showing it in the window. Never the path, only the
  * words.
  */
-export function memory(slug: unknown, directory: unknown): string | null {
-  const held = bot(slug)
+export async function memory(slug: unknown, directory: unknown): Promise<string | null> {
+  const held = await bot(slug)
   if (!held) return null
   const folder = folderOf(held, directory)
   if (!folder) return null

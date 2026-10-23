@@ -8,9 +8,9 @@ import { _electron as electron } from 'playwright-core'
 import { idA, idB, installBridge, makeProfile } from './acceptance-fixture.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-bot-history')
 mkdirSync(output, { recursive: true })
-const { profile, directory } = makeProfile({ conversations: [idA, '44444444-4444-4444-8444-444444444444'] })
+const { profile, directory, state } = makeProfile({ conversations: [idA, '44444444-4444-4444-8444-444444444444'] })
 writeFileSync(join(profile, 'experience.json'), JSON.stringify({conversations:{[JSON.stringify([directory,idA])]:{archived:true},[JSON.stringify([directory,idB])]:{botSlug:'review-bot'},[JSON.stringify([directory,'draft:older'])]:{botSlug:'review-bot',draft:'Earlier unsent review'}}}))
-const app = await electron.launch({args:['.',`--user-data-dir=${profile}`],cwd:process.cwd(),timeout:40000})
+const app = await electron.launch({args:['.',`--user-data-dir=${profile}`],cwd:process.cwd(),timeout:40000,env:{...process.env,BRAVEBOT_HOME:state}})
 let page
 try {
   page = await app.firstWindow(); page.setDefaultTimeout(7000)

@@ -7,9 +7,19 @@ evidence, and this file is updated when a change materially moves the status bel
 
 ### Status
 
-The design is proposed and waits for a design pull request. No implementation exists. The design is
-[design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md), which
-is `proposed`. The clauses and the slices below agree with the design.
+The design is proposed and waits for a design pull request. Slice 1 is built on the branch
+`bots/slice-1-rows-module`, stacked on the design branch, and waits for a pull request. No other
+slice exists. The design is [design/bots-layer.md](design/bots-layer.md) and the clauses are
+[specs/bots.md](specs/bots.md), which is `proposed`. The clauses and the slices below agree with the
+design.
+
+Slice 1 reads and writes the rows through the `bots` module of `bravebot-agent` and the bridge
+methods `bot.list` and `bot.replace`, which the graphical user interface calls with the folder
+Electron gives it as `dataFolder` on each request. The bridge takes the folder on each request
+because starting the bridge with a flag would need the same flag pinned in both programs that start
+it. A write of more than 100 rows through `bot.replace` is refused and writes nothing. The
+interface loads its page after its first read of the rows, so the move from `bravebot-ui.json`
+happens before the interface writes that file.
 
 The order of the remaining work:
 

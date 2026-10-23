@@ -176,15 +176,15 @@ export async function ensureWorld(world, opts) {
 
 /**
  * What the residents still lack: the ones not defined yet, and the ones owed a turn that have no
- * session. A read of this app's own state file, which is ours, not the agent's record format.
+ * session. A read of the bots file the world's agent keeps under its own `HOME`.
  */
 function residentsWanting(world) {
   let bots = []
   try {
-    const state = JSON.parse(readFileSync(join(world, 'userData', 'bravebot-ui.json'), 'utf8'))
+    const state = JSON.parse(readFileSync(join(world, '.bravebot', 'bots.json'), 'utf8'))
     bots = state.bots ?? []
   } catch {
-    // No state yet, or none that parses: everything is wanting, which is the right answer.
+    // No bots yet, or none that parse: everything is wanting, which is the right answer.
   }
   const missing = RESIDENT_BOTS.filter((bot) => !bots.some((have) => have.name === bot.name))
   const unspoken = RESIDENT_BOTS.filter(

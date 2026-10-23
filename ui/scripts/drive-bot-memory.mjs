@@ -30,7 +30,7 @@
 // perturbs `bravebot-ui.json`, and it puts its own keys back.
 
 import { checker, launch, COMPOSER_INPUT } from './drive-support.mjs'
-import { appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
+import { appBots, appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -40,16 +40,17 @@ const { check, problems } = checker()
 
 const { userData, stateFile } = await locateProfile()
 const { readState, putKey } = appState(stateFile)
+const { readBots, putBots } = appBots()
 const hadView = readState().view
 const checkout = scratchCheckout('bravebot-ui-drive-bot-memory')
 
 // This driver's own row and no more. `bots` holds somebody's actual bots, so clearing it to make
 // room is a destructive act one interrupted run away from happening. It adds one and removes one.
 const MINE = 'archivist'
-const withoutMine = () => (readState().bots ?? []).filter((bot) => bot.slug !== MINE)
-const stored = () => (readState().bots ?? []).find((bot) => bot.slug === MINE) ?? null
+const withoutMine = () => readBots().filter((bot) => bot.slug !== MINE)
+const stored = () => readBots().find((bot) => bot.slug === MINE) ?? null
 
-putKey('bots', withoutMine())
+putBots(withoutMine())
 putKey('view', undefined)
 
 /**
@@ -96,7 +97,7 @@ const first = await settle(page)
 if (first === 'unconfigured') {
   console.log('\nRESULT: skipped — this machine has no credentials for a live turn')
   await app.close()
-  putKey('bots', withoutMine())
+  putBots(withoutMine())
   putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
   rmSync(checkout, { recursive: true, force: true })
   process.exit(0)
@@ -118,9 +119,8 @@ check(
 // `noteBotMemory` runs on `turn.done`, which has already happened.
 const before = stored()
 check(before !== null, 'the bot has a row to seed')
-putKey(
-  'bots',
-  (readState().bots ?? []).map((bot) =>
+putBots(
+  readBots().map((bot) =>
     bot.slug === MINE
       ? { ...bot, quiet: 9, remembered: statSync(join(checkout, '.bravebot-ui', 'bots', `${MINE}.md`)).mtimeMs }
       : bot,
@@ -217,7 +217,7 @@ await back.close()
 
 // --- putting back only what this driver moved ---------------------------------------------
 
-putKey('bots', withoutMine())
+putBots(withoutMine())
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
 rmSync(checkout, { recursive: true, force: true })
 rmSync(join(userData, 'bots', MINE), { recursive: true, force: true })

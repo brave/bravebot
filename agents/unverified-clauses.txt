@@ -11,11 +11,6 @@ docs/specs/background-sessions.md:BG-1: a background session is an ordinary sess
 docs/specs/background-sessions.md:BG-9: attaching draws the session as a foreground one, and detaching leaves it running
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own
-docs/specs/bots.md:BOT-1: a bot's row has the fields the GUI's row has, and keeps them
-docs/specs/bots.md:BOT-2: a slug is lowercase letters and digits in runs joined by single hyphens
-docs/specs/bots.md:BOT-3: a name, a purpose, a model and an avatar are bounded text, and 100 bots is the ceiling
-docs/specs/bots.md:BOT-4: the rows are the file `~/.bravebot/bots.json`, which the terminal and the GUI read and write
-docs/specs/bots.md:BOT-5: one module of `bravebot-agent` reads and writes the rows, and both clients call it
 docs/specs/bots.md:BOT-6: the window reaches the writes of a bot only through the main process
 docs/specs/bots.md:BOT-7: the definition is written first, and the row only after it
 docs/specs/bots.md:BOT-8: deleting a bot removes its row and its history of memory versions, and nothing else

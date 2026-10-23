@@ -4,10 +4,13 @@ title: Bots
 status: proposed
 governs:
   - crates/agent/src/agents.rs
+  - crates/agent/src/bots.rs
   - crates/agent/src/memory.rs
   - crates/tui/src/app.rs
   - crates/ui-files/src/main.rs
+  - crates/ui-bridge/src/bots.rs
   - crates/ui-bridge/src/bridge.rs
+  - ui/src/main/bot-store.ts
   - ui/src/main/bots.ts
   - ui/src/main/index.ts
   - ui/src/main/state.ts
@@ -72,7 +75,8 @@ An archived bot keeps its slug, its avatar, its definition, its session and its 
 Bringing it back resumes its session. Archived bots count toward the ceiling in
 [BOT-3](#BOT-3).
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::a_written_row_reads_back_without_the_fields_the_row_no_longer_has`
+`verified-by: bravebot_agent::bots::a_bots_file_lists_each_bot_the_way_the_gui_read_it`
 
 <a id="BOT-2"></a>
 ### BOT-2: a slug is lowercase letters and digits in runs joined by single hyphens
@@ -96,7 +100,8 @@ that class).
 dot, `..` cannot be written, and lowercase keeps two names from being one file on a volume that
 folds case.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::a_slug_is_runs_of_lowercase_letters_and_digits_joined_by_single_hyphens`
+`verified-by: bravebot_agent::bots::every_entry_the_rules_drop_is_reported_with_its_reason`
 
 <a id="BOT-3"></a>
 ### BOT-3: a name, a purpose, a model and an avatar are bounded text, and 100 bots is the ceiling
@@ -170,7 +175,17 @@ never used for a turn ([BOT-9](#BOT-9)).
 **Why the archive counts.** An archive outside the ceiling would be a place to put bots to get past
 it.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::a_model_is_one_bounded_line_that_is_not_inherit`
+`verified-by: bravebot_agent::bots::an_absolute_path_is_either_spelling_and_never_a_device_or_stream`
+`verified-by: bravebot_agent::bots::a_bots_file_lists_each_bot_the_way_the_gui_read_it`
+`verified-by: bravebot_agent::bots::a_row_with_a_repairable_field_is_listed_repaired`
+`verified-by: bravebot_agent::bots::a_home_in_the_windows_spelling_is_kept_and_a_relative_one_is_replaced`
+`verified-by: bravebot_agent::bots::every_entry_the_rules_drop_is_reported_with_its_reason`
+`verified-by: bravebot_agent::bots::rows_past_the_hundredth_are_reported_with_their_slugs`
+`verified-by: bravebot_agent::bots::rows_are_written_in_the_byte_order_of_the_slug`
+`verified-by: bravebot_agent::bots::a_hundred_and_first_row_is_refused_and_every_row_is_kept`
+`verified-by: bravebot_ui_bridge::bots::what_a_read_dropped_and_a_file_it_could_not_use_are_answered_beside_the_rows`
+`verified-by: by-construction (the desktop sorts the list it draws with localeCompare, which a Rust test cannot run, so ui/scripts/bot-rows-bridge.test.mjs writes slugs of digits and hyphens through the real bravebot-rpc and asserts that the file holds them in byte order and that this is the order localeCompare gives in English, that a hand-edited file is listed in file order, a repaired row is listed repaired and a Windows path is accepted, and that a dropped row and a row past the 100th are each reported; ui/scripts/bot-store.test.mjs asserts the report reaches the window as one text naming each entry with its reason, and the path of a file that could not be read; make check-ui runs both)`
 
 <a id="BOT-4"></a>
 ### BOT-4: the rows are the file `~/.bravebot/bots.json`, which the terminal and the GUI read and write
@@ -266,7 +281,25 @@ reasons is enough:
 **Why the terminal does not change the avatar.** The seed in a row is what both programs draw the
 face from. A bot the terminal makes takes its slug as the seed, so both programs draw a face for it.
 
-`verified-by: none`
+`verified-by: bravebot_agent::bots::linux_uses_the_xdg_config_home_when_it_is_absolute`
+`verified-by: bravebot_agent::bots::linux_falls_back_to_dot_config_under_home`
+`verified-by: bravebot_agent::bots::macos_uses_application_support_under_home`
+`verified-by: bravebot_agent::bots::windows_uses_appdata`
+`verified-by: bravebot_agent::bots::a_missing_variable_names_no_data_folder`
+`verified-by: bravebot_agent::bots::a_missing_bots_file_gives_no_rows_and_makes_no_file`
+`verified-by: bravebot_agent::bots::a_file_that_does_not_parse_is_reported_and_never_overwritten`
+`verified-by: bravebot_agent::bots::the_first_write_makes_a_private_directory_and_file`
+`verified-by: bravebot_agent::bots::a_write_that_waits_past_the_limit_for_the_lock_is_refused_naming_it`
+`verified-by: bravebot_agent::bots::a_write_that_fails_before_the_rename_leaves_the_file_as_it_was`
+`verified-by: bravebot_agent::bots::the_rows_in_the_old_file_move_unchanged_and_the_old_file_is_untouched`
+`verified-by: bravebot_agent::bots::a_second_start_does_not_read_the_old_key_again`
+`verified-by: bravebot_agent::bots::an_existing_bots_file_is_not_moved_over`
+`verified-by: bravebot_agent::bots::a_move_that_waited_for_the_lock_finds_the_file_another_program_wrote`
+`verified-by: bravebot_agent::bots::nothing_to_move_leaves_no_bots_file`
+`verified-by: bravebot_agent::bots::an_old_file_that_cannot_be_converted_is_named_and_nothing_is_written`
+`verified-by: bravebot_agent::bots::nothing_is_moved_where_nothing_may_be_written`
+`verified-by: bravebot_ui_bridge::bots::a_bot_replaced_through_the_bridge_is_in_the_bots_file_and_listed_after_a_restart`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-rows-bridge.test.mjs runs the real bravebot-rpc against a scratch state directory and data folder and asserts that a bot the desktop makes is in bots.json and not in bravebot-ui.json, that a bot is listed again by a bridge started afterwards, that the rows of an old bravebot-ui.json written in the old forms move unchanged and in order and the old file is left as it was, that a second start does not read the old key again, that an absent or empty key leaves no bots file, and that an old file that does not parse, or whose bots key is not an array, gives no rows, names its path and refuses a make; ui/scripts/bot-store.test.mjs asserts that the desktop sends the data folder Electron names and never reads or writes the bots key of bravebot-ui.json, that a write the agent refuses is shown with its reason and the bot is not shown as saved, and that a file that could not be read is never written over; make check-ui runs both)`
 
 <a id="BOT-5"></a>
 ### BOT-5: one module of `bravebot-agent` reads and writes the rows, and both clients call it
@@ -316,7 +349,9 @@ there would relocate those decisions out of the driver without removing them, wh
 of this repository says is not a fix, so the argument is the person's own file ("Where the rows
 come from"), whichever crate holds the code.
 
-`verified-by: none`
+`verified-by: bravebot_ui_bridge::bots::a_bot_replaced_through_the_bridge_is_in_the_bots_file_and_listed_after_a_restart`
+`verified-by: bravebot_ui_bridge::bots::the_methods_are_denied_to_the_host_and_offered_to_no_client`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-store.test.mjs asserts that it reads and writes the rows only through bot.list and bot.replace, with changes made at the same moment each reaching the file, that the agent not running gives no rows and writes nothing, and that neither method is among those a window may send; make check-ui runs it)`
 
 ## Making and changing a bot
 

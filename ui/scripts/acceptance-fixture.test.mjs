@@ -147,17 +147,19 @@ test('installBridge hands the installer to the app with the ids and both options
   assert.deepEqual(calls[1][1], { directory: '/work/project', idA, idB, settings: true, nativePicker: true })
 })
 
-test('makeProfile writes the Review Bot into the profile and its memory into the project', () => {
-  const { profile, directory } = makeProfile()
+test('makeProfile writes the Review Bot into the bots file and its memory into the project', () => {
+  const { profile, directory, state: stateDirectory } = makeProfile()
   try {
     const state = JSON.parse(readFileSync(join(profile, 'bravebot-ui.json'), 'utf8'))
     assert.deepEqual(state.recents, [directory])
-    assert.equal(state.bots.length, 1)
-    assert.equal(state.bots[0].slug, 'review-bot')
-    assert.equal(state.bots[0].name, 'Review Bot')
-    assert.equal(state.bots[0].directory, directory)
-    assert.equal(state.bots[0].session, idA)
-    assert.deepEqual(state.bots[0].conversations, [idA, idB])
+    assert.equal('bots' in state, false, 'the bots are not in the desktop’s own preferences file')
+    const { bots } = JSON.parse(readFileSync(join(stateDirectory, 'bots.json'), 'utf8'))
+    assert.equal(bots.length, 1)
+    assert.equal(bots[0].slug, 'review-bot')
+    assert.equal(bots[0].name, 'Review Bot')
+    assert.equal(bots[0].directory, directory)
+    assert.equal(bots[0].session, idA)
+    assert.deepEqual(bots[0].conversations, [idA, idB])
     assert.equal(readFileSync(join(directory, '.bravebot-ui/bots/review-bot.md'), 'utf8'), '# Preferences\n\n- Keep reviews concise.\n')
     assert.notEqual(profile, directory)
     assert.equal(existsSync(`${directory}-copy`), false)
@@ -169,10 +171,10 @@ test('makeProfile writes the Review Bot into the profile and its memory into the
 
 test('makeProfile keeps the conversations it is given and makes the copy only when asked', () => {
   const other = '44444444-4444-4444-8444-444444444444'
-  const { profile, directory } = makeProfile({ conversations: [idA, other], copy: true })
+  const { profile, directory, state } = makeProfile({ conversations: [idA, other], copy: true })
   try {
-    const state = JSON.parse(readFileSync(join(profile, 'bravebot-ui.json'), 'utf8'))
-    assert.deepEqual(state.bots[0].conversations, [idA, other])
+    const { bots } = JSON.parse(readFileSync(join(state, 'bots.json'), 'utf8'))
+    assert.deepEqual(bots[0].conversations, [idA, other])
     assert.equal(existsSync(`${directory}-copy`), true)
   } finally {
     rmSync(profile, { recursive: true, force: true })

@@ -5,6 +5,7 @@ import { buildSync } from 'esbuild'
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { botRow, fakeBots, loadMain } from './fake-bots.mjs'
 const require = createRequire(import.meta.url)
 function load(path, electron = {}) {
   electron = { ...electron, app: { getAppPath: () => process.cwd(), ...electron.app } }
@@ -155,30 +156,37 @@ test('project search finds files in unopened folders; preview rejects traversal 
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('memory edits use compare-and-replace and preserve recoverable history', () => {
+/** A main-process module of the GUI that reads the bots `file` holds, as its own agent would answer. */
+function loadOverBots(module, electron, file) {
+  const loaded = loadMain(`export * from './src/main/${module}'\nexport { useBotsBridge } from './src/main/bot-store'\n`, { ...electron, app: { getAppPath: () => process.cwd(), ...electron.app } })
+  loaded.useBotsBridge(file.request)
+  return loaded
+}
+
+test('memory edits use compare-and-replace and preserve recoverable history', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'bravebot-ux-memory-'))
   const profile = join(directory, 'profile'), project = join(directory, 'project')
   mkdirSync(profile); mkdirSync(project)
   const electron = { app: { getPath: () => profile } }
   try {
-    const bots = load('src/main/bots.ts', electron)
-    const { parseBots } = load('src/shared/bots.ts')
-    bots.saveBot(parseBots({ bots: [{ slug: 'test', name: 'Test', purpose: 'Test', home: join(profile, 'bot-homes', 'test'), avatar: 'test',
-      conversations: [{ id: '11111111-1111-4111-8111-111111111111', directory: project }] }] }).bots[0])
-    const memory = load('src/main/memory.ts', electron)
-    assert.equal(memory.editMemory('test', project, 'First memory', null), 'First memory')
-    assert.throws(() => memory.editMemory('test', project, 'Lost edit', null), /changed/)
-    assert.equal(memory.editMemory('test', project, 'Second memory', 'First memory'), 'Second memory')
-    assert.deepEqual(memory.memoryHistory('test', project).map((entry) => entry.text), ['First memory', 'Second memory'])
+    const file = fakeBots()
+    const bots = loadOverBots('bots', electron, file)
+    await bots.saveBot(botRow({ slug: 'test', name: 'Test', purpose: 'Test', home: join(profile, 'bot-homes', 'test'), avatar: 'test',
+      conversations: [{ id: '11111111-1111-4111-8111-111111111111', directory: project }] }))
+    const memory = loadOverBots('memory', electron, file)
+    assert.equal(await memory.editMemory('test', project, 'First memory', null), 'First memory')
+    await assert.rejects(memory.editMemory('test', project, 'Lost edit', null), /changed/)
+    assert.equal(await memory.editMemory('test', project, 'Second memory', 'First memory'), 'Second memory')
+    assert.deepEqual((await memory.memoryHistory('test', project)).map((entry) => entry.text), ['First memory', 'Second memory'])
     // A folder this bot never worked in is not one a window may point the memory editor at.
-    assert.throws(() => memory.editMemory('test', directory, 'Elsewhere', null), /not worked in/)
+    await assert.rejects(memory.editMemory('test', directory, 'Elsewhere', null), /not worked in/)
     assert.equal(existsSync(join(directory, '.bravebot-ui')), false)
-    memory.editMemory('test', project, '', 'Second memory')
+    await memory.editMemory('test', project, '', 'Second memory')
     assert.equal(readFileSync(join(project, '.bravebot-ui', 'bots', 'test.md'), 'utf8'), '')
-    assert.equal(memory.memoryHistory('test', project).at(-2).text, 'Second memory')
+    assert.equal((await memory.memoryHistory('test', project)).at(-2).text, 'Second memory')
     writeFileSync(join(profile, 'bots', 'test', 'ground.md'), 'private briefing')
-    memory.removeMemoryHistory('test')
-    assert.deepEqual(memory.memoryHistory('test', project), [])
+    await memory.removeMemoryHistory('test')
+    assert.deepEqual(await memory.memoryHistory('test', project), [])
     assert.equal(existsSync(join(profile, 'bots', 'test')), false, 'the briefing and every history go with the bot')
     assert.equal(readFileSync(join(project, '.bravebot-ui', 'bots', 'test.md'), 'utf8'), '')
 
@@ -342,19 +350,19 @@ test('bot history includes every saved, associated and draft conversation withou
   assert.equal(history.at(-1).session, null)
 })
 
-test('starting and revisiting bot conversations preserves all earlier IDs across restart', () => {
+test('starting and revisiting bot conversations preserves all earlier IDs across restart', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'bravebot-history-'))
   const electron = { app: { getPath: () => directory } }
   const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333']
   try {
-    const { parseBots } = load('src/shared/bots.ts')
-    const storage = load('src/main/bots.ts', electron)
-    storage.saveBot(parseBots({ bots: [{slug:'review', name:'Review', purpose:'Review', home:'/home/review', conversations:[{id:ids[0], directory:'/project'}], session:ids[0]}] }).bots[0])
-    storage.noteBotSession('review', ids[1], '/home/review')
-    storage.noteBotSession('review', ids[2], '/project')
-    storage.noteBotSession('review', ids[0], '/project')
-    storage.releaseBotSession('review')
-    const reopened = load('src/main/bots.ts', electron).bot('review')
+    const file = fakeBots()
+    const storage = loadOverBots('bots', electron, file)
+    await storage.saveBot(botRow({ slug: 'review', name: 'Review', purpose: 'Review', home: '/home/review', conversations: [{ id: ids[0], directory: '/project' }], session: ids[0] }))
+    await storage.noteBotSession('review', ids[1], '/home/review')
+    await storage.noteBotSession('review', ids[2], '/project')
+    await storage.noteBotSession('review', ids[0], '/project')
+    await storage.releaseBotSession('review')
+    const reopened = await loadOverBots('bots', electron, file).bot('review')
     assert.deepEqual(reopened.conversations, [
       { id: ids[0], directory: '/project' }, { id: ids[1], directory: '/home/review' }, { id: ids[2], directory: '/project' },
     ])
