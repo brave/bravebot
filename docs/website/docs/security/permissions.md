@@ -386,7 +386,7 @@ been no prompt: a path the trust map already covers, or one a rule allows, is re
 still asked about, because research is most of what planning is. It constrains the write tools rather
 than making the turn incapable of changing anything: a command you approve may write whatever it likes.
 
-A [manifest run](../using/headless.md) is refused from its frozen plan, before the plan is put to you,
+A [manifest run](../using/manifest-mode.md) is refused from its frozen plan, before the plan is put to you,
 where any step in it writes a file. A plan that writes nothing runs. The plan is where the mode has to
 be answered, because a body the plan carried going to a path you vouched for raises no write prompt at
 all, so a refusal that waited for one would let the whole run through.
@@ -707,7 +707,7 @@ want to answer is Ctrl-C, which starts no session. No box grants anything by its
 
 ## Approving a whole run in advance
 
-A [manifest run](../using/headless.md) is the one prompt about a whole run rather than about one thing at
+A [manifest run](../using/manifest-mode.md) is the one prompt about a whole run rather than about one thing at
 the moment it is due. It can be, because that mode fixes every step while your task is still the only
 input, so nothing the run goes on to read can change the plan.
 

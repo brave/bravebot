@@ -102,7 +102,7 @@ bravebot --mode manifest "collect every TODO comment into notes/todos.md"
 ```
 
 In a session, `/manifest <task>` does the same for one task.
-[A plan is put to you first](docs/website/docs/using/headless.md#a-plan-is-put-to-you-first) says
+[A plan is put to you first](docs/website/docs/using/manifest-mode.md#a-plan-is-put-to-you-first) says
 what the approval covers.
 
 ## Specs

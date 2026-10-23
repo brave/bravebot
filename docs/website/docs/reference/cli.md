@@ -212,8 +212,7 @@ failed to build is printed on stderr even without `--trace`, and never shares st
 
 This is a different axis from the [permission mode](../security/permissions.md#answering-in-advance-modes):
 `--mode` decides when control flow is settled, the other decides who answers a prompt, and the two
-compose. See [Non-interactive use](../using/headless.md) and
-[Sessions](../using/sessions.md) for the rest.
+compose. See [Plan first, then execute](../using/manifest-mode.md) for the rest.
 
 ## `--model <name>`
 

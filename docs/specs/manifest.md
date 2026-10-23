@@ -28,6 +28,7 @@ guards:
 documented-by:
   - docs/website/docs/using/headless.md
   - docs/website/docs/using/sessions.md
+  - docs/website/docs/using/manifest-mode.md
 ---
 
 ## Scope

@@ -869,7 +869,7 @@ own record and the session records its name, so the session still resumes as a c
 
 In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
-[Non-interactive use](../using/headless.md) for the `--mode manifest` form.
+[Plan first, then execute](../using/manifest-mode.md) for the `--mode manifest` form.
 
 ## `/memory`
 
@@ -1187,7 +1187,7 @@ left comes with you, and its loop, goal and watches end. The session you left is
 turn left it and stays resumable. Servers started for this process keep running.
 
 It is refused, with a line saying why, for an id that is no session of this directory, for the
-session already open, for a [manifest run](../using/sessions.md#a-manifest-run-is-recorded-but-cannot-be-continued),
+session already open, for a [manifest run](../using/manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued),
 and for a session a running background session holds. Where this directory records no other session
 it says so. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
 else, and none of what you type after it is sent to the planner.

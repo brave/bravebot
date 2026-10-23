@@ -66,9 +66,10 @@ listed, so two directories that share a store do not show each other's sessions,
 [background sessions](#sessions-in-the-background) instead.
 
 `--continue` takes the session the picker would offer first and picks it up exactly as naming its id
-would. It passes over a [manifest run](#a-manifest-run-is-recorded-but-cannot-be-continued) rather
-than refusing it. Where this directory holds nothing continuable it says so and fails rather than
-starting a fresh session.
+would. It passes over a
+[manifest run](manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued) rather than
+refusing it. Where this directory holds nothing continuable it says so and fails rather than starting
+a fresh session.
 
 **From inside a session**, [`/resume`](../reference/commands.md#resume-id) opens the same list, or
 takes an id, and moves you onto that session without leaving the program.
@@ -91,9 +92,10 @@ is reset and the title is marked.
 From inside a session, [`/branch`](../reference/commands.md#branch-name) does the same and moves
 you onto the copy, saying the id of the original so `--resume` reaches it.
 
-A [manifest run](#a-manifest-run-is-recorded-but-cannot-be-continued) is refused, because there is no
-conversation inside one to carry on from. An [incognito](#a-session-that-leaves-nothing-behind)
-session writes no copy, so forking in one opens the conversation and records nothing.
+A [manifest run](manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued) is refused,
+because there is no conversation inside one to carry on from. An
+[incognito](#a-session-that-leaves-nothing-behind) session writes no copy, so forking in one opens the
+conversation and records nothing.
 
 ### A session that changed directory
 
@@ -112,14 +114,8 @@ directory you resumed from.
 
 ### A manifest run is recorded, but cannot be continued
 
-A [plan-then-execute run](headless.md#planning-the-whole-run-first) cannot be resumed. Its
-conversation is empty, because a session is turns over one conversation and a manifest run has none.
-The picker marks the row and refuses Enter. Naming one on the command line prints what it produced,
-and still does not continue it. That print is a **report rather than a refusal**: it goes to stdout
-and exits successfully, because reading a run back is what naming one is for.
-
-The record holds its goal, its proposed plan, its frozen steps and what each one did, finished or
-not.
+A plan-then-execute run is recorded as its own record and cannot be resumed. See
+[Plan first, then execute](manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued).
 
 ## What a resume restores
 
@@ -470,34 +466,9 @@ permissions, and closes any directory `/add-dir` had opened.
 
 ## Starting a plan-then-execute run
 
-```
-/manifest collect every TODO comment into notes/todos.md
-```
-
-starts one [plan-then-execute run](headless.md#planning-the-whole-run-first) and hands the session
-back afterwards. It is a run, not a mode the session holds: a session is several turns over one
-conversation, each deciding what to do next after the last one read something, so nothing about the
-session could stay in that mode.
-
-The session is **blocked for the duration.** There is no planner inside a manifest run to hand a line
-to, so you can read, scroll and stop, but not send.
-
-**The conversation is neither read nor written.** It does not go in, because the planner that reads
-the task may hold the task and nothing else. Nothing comes back out either, because every step's
-result is quarantined and there is no planner left to show it to. What the transcript shows is the
-goal as the planner understood it, the frozen plan, each step as it runs, and the reply, none of it in
-the exchange a later turn resumes. The run leaves the conversation exactly as declining a plan leaves
-the workspace.
-
-The run is written down as **its own record** and the session records its name, so the session still
-resumes as a conversation while the run stays a run the picker refuses. A run you stopped is not
-written at all, since there is nothing in it to read. A run that fails or is stopped after it wrote a
-file keeps what it learned about that file: the file stays untrusted, and the saved session resumes with
-the same trust.
-
-The plan is [put to you before it runs](headless.md#a-plan-is-put-to-you-first), drawn and scrolled
-here rather than printed on one line. In [plan mode](../security/permissions.md#answering-in-advance-modes)
-a plan with a write in it does not run at all, decided before the plan is put to anybody.
+[`/manifest`](../reference/commands.md#manifest-task) starts one plan-then-execute run and hands
+the session back afterwards. [Plan first, then execute](manifest-mode.md#starting-a-plan-then-execute-run)
+has the rest.
 
 ## Taking turns back
 
