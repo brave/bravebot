@@ -14,7 +14,14 @@ OpenCode. Brave has always shipped user agents, and this one is the user's agent
 - As fast as it can be.
 - Nothing hidden: what it read and what it decided are on the screen.
 - Developed completely in the open.
-- No lock-in: other providers and models, settings on your own machine.
+- No lock-in: Brave Leo, Anthropic, OpenAI, Google Vertex AI, AWS Bedrock, OpenRouter and other
+  OpenAI-compatible gateways, and local models in Ollama, LM Studio and llama-server, with settings
+  on your own machine.
+- Easy to switch to: it reads `AGENTS.md` (or `CLAUDE.md` where there is none) and skills in
+  `.claude/skills`, offers on first run to copy the model service Claude Code or opencode already
+  reaches, and imports Claude Code sessions with `bravebot sessions import claude-code`.
+- Where you work: the terminal, an editor that speaks the Agent Client Protocol such as Zed
+  (`bravebot-acp`), and scripts and pipes (`bravebot -p`).
 - The power of a shell without the risk: command lines are compiled into the trust model rather than handed to one.
 
 ## Getting started
@@ -75,6 +82,11 @@ Behaviour is specified clause by clause, and each clause names the tests that pi
 We do not use your data and we do not store it. Prompts and used file contents are sent to Brave's
 endpoint to produce a reply and are discarded once it has been produced. Nothing is retained and
 nothing is used for training. Local settings are stored in `~/.bravebot` on your own machine.
+
+That describes Brave's endpoint. If you configure another provider (Anthropic, OpenAI, Google
+Vertex AI, AWS Bedrock or a gateway), your prompts and file contents go to that provider instead,
+and its terms govern what it retains and whether it trains on them. A model server on your own
+machine, such as Ollama, keeps them on your machine.
 
 `bravebot --incognito` runs a session that adds nothing to `~/.bravebot`: no prompt history, no
 session record, no audit trail, and no change to the model or theme you have chosen. It still reads
