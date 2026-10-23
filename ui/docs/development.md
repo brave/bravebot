@@ -394,3 +394,20 @@ check that backend credentials exist.
 To check the bundle, use the [packaged-app drivers](testing.md#current-regression-checks).
 AppKit takes the menu-bar name from the bundle's `CFBundleName`; changing
 `app.name` would also change Electron's user-data location.
+
+## The README pictures
+
+The pictures in the root `README.md`, `docs/assets/readme-banner.svg`,
+`docs/assets/readme-how-it-works.svg` and `docs/assets/readme-plan-first.svg`, are written by
+`scripts/readme-art.mjs`. The bots in them are the figures `src/renderer/avatar/pixels.ts` builds
+for fixed seeds, so they are faces real bots have. After changing the script or the avatar
+generator, run it from `ui/` and commit the result:
+
+```bash
+node scripts/readme-art.mjs
+```
+
+Nothing checks that the committed files match the script. Each file is a self-contained document,
+because GitHub serves it as an image and blocks scripts, web fonts and other files. The motion is
+CSS, and it stops under `prefers-reduced-motion`. `scripts/readme-art.test.mjs` holds the files to
+those properties. Open an SVG in a browser to see it move.

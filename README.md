@@ -1,4 +1,14 @@
-# bravebot
+<h1 align="center">
+  <img src="docs/assets/readme-banner.svg" alt="bravebot: a general-purpose agent that a web page cannot redirect." width="100%">
+</h1>
+
+<p align="center">
+  <a href="#getting-started">Install</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="https://brave.github.io/bravebot/">Documentation</a> ·
+  <a href="docs/specs/README.md">Specs</a> ·
+  <a href="#reporting-a-vulnerability">Report a vulnerability</a>
+</p>
 
 > **Not a released or supported Brave product.** Brave does not release or support bravebot at this
 > time. It is early, and it is being developed in the open. Binaries, the install script, and the
@@ -8,21 +18,21 @@
 Brave Bot is a general-purpose agent, meant as a drop-in replacement for Claude Code, Codex and
 OpenCode. Brave has always shipped user agents, and this one is the user's agent in both senses:
 
-- Structural resistance to indirect prompt injection: a web page cannot redirect an agent working
-  on your behalf.
-- As few tokens as possible.
-- As fast as it can be.
-- Nothing hidden: what it read and what it decided are on the screen.
-- Developed completely in the open.
-- No lock-in: Brave Leo, Anthropic, OpenAI, Google Vertex AI, AWS Bedrock, OpenRouter and other
+- **Structural resistance to indirect prompt injection:** a web page cannot redirect an agent
+  working on your behalf.
+- **As few tokens as possible.**
+- **As fast as it can be.**
+- **Nothing hidden:** what it read and what it decided are on the screen.
+- **Developed completely in the open.**
+- **No lock-in:** Brave Leo, Anthropic, OpenAI, Google Vertex AI, AWS Bedrock, OpenRouter and other
   OpenAI-compatible gateways, and local models in Ollama, LM Studio and llama-server, with settings
   on your own machine.
-- Easy to switch to: it reads `AGENTS.md` (or `CLAUDE.md` where there is none) and skills in
+- **Easy to switch to:** it reads `AGENTS.md` (or `CLAUDE.md` where there is none) and skills in
   `.claude/skills`, offers on first run to copy the model service Claude Code or opencode already
   reaches, and imports Claude Code sessions with `bravebot sessions import claude-code`.
-- Where you work: the terminal, an editor that speaks the Agent Client Protocol such as Zed
+- **Where you work:** the terminal, an editor that speaks the Agent Client Protocol such as Zed
   (`bravebot-acp`), and scripts and pipes (`bravebot -p`).
-- The power of a shell without the risk: command lines are compiled into the trust model rather than handed to one.
+- **The power of a shell without the risk:** command lines are compiled into the trust model rather than handed to one.
 
 ## Getting started
 
@@ -63,6 +73,10 @@ in-tree under [docs/website](docs/website).
 
 ## How it works
 
+<p align="center">
+  <img src="docs/assets/readme-how-it-works.svg" alt="Instructions in a web page are blocked and never reach the planner. The planner is handed a reference to the page, ref:2, and starts processors that work on it. A processor holds no tools, no memory and no conversation." width="100%">
+</p>
+
 Before data is processed it is labelled as trusted or untrusted and as public or private.
 An example of untrusted content is text from a web page. An example of private data is a project's secrets.
 Brave Bot can work with untrusted and private content, but it never lets that content into its planner's context.
@@ -70,7 +84,26 @@ Processors are used to work on immutable untrusted content. A processor is a sub
 One or more labelled data slots are passed into a processor, and it outputs at most one new immutable data slot.
 The planner is never influenced by untrusted context.
 
-Traces of the gates running are in [docs/specs/](docs/specs/README.md).
+[How Brave Bot works](docs/website/docs/how-it-works.md) covers labels, quarantine and processors
+in full. Traces of the gates running are in [docs/specs/](docs/specs/README.md).
+
+### Plan first, then execute
+
+<p align="center">
+  <img src="docs/assets/readme-plan-first.svg" alt="Manifest mode in three steps. The planner writes the whole plan before it has read anything. You approve the plan once, before the first step runs. A driver runs the steps with no model in the control path, and nothing is re-planned." width="100%">
+</p>
+
+The default decides each step after the last one has run. `--mode manifest` plans the whole run
+before anything is read, asks you to approve the plan, and then runs the steps with nothing
+re-planned:
+
+```sh
+bravebot --mode manifest "collect every TODO comment into notes/todos.md"
+```
+
+In a session, `/manifest <task>` does the same for one task.
+[A plan is put to you first](docs/website/docs/using/headless.md#a-plan-is-put-to-you-first) says
+what the approval covers.
 
 ## Specs
 
