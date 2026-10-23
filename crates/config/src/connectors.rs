@@ -526,21 +526,23 @@ mod tests {
     /// Set a file's mode outright.
     fn set_mode(path: &Path, mode: u32) {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .expect("set the mode");
     }
 
     fn home(files: &[(&str, &str)]) -> scratch::Dir {
         let dir = scratch::Dir::new();
         let authority = dir.path().join("authority");
-        std::fs::create_dir_all(&authority).unwrap();
-        std::fs::write(authority.join("agent"), "#!/bin/sh\n").unwrap();
+        std::fs::create_dir_all(&authority).expect("make the authority folder");
+        std::fs::write(authority.join("agent"), "#!/bin/sh\n").expect("write the authority");
         set_mode(&authority.join("agent"), 0o755);
         set_mode(&authority, 0o755);
-        std::fs::create_dir_all(dir.path().join("connectors")).unwrap();
+        std::fs::create_dir_all(dir.path().join("connectors")).expect("make connectors/");
         for (name, text) in files {
             let named = authority.join("agent").display().to_string();
             let text = text.replace("/opt/authority/agent", &named);
-            std::fs::write(dir.path().join("connectors").join(name), text).unwrap();
+            std::fs::write(dir.path().join("connectors").join(name), text)
+                .expect("write the definition");
             set_mode(&dir.path().join("connectors").join(name), 0o644);
         }
         set_mode(&dir.path().join("connectors"), 0o755);
@@ -998,7 +1000,7 @@ mod tests {
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ));
                 let _ = std::fs::remove_dir_all(&path);
-                std::fs::create_dir_all(&path).unwrap();
+                std::fs::create_dir_all(&path).expect("make the scratch directory");
                 Self(path)
             }
             pub fn path(&self) -> &std::path::Path {
