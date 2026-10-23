@@ -373,19 +373,29 @@ it already holds, and `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forge
 behind a waiting `/note` for `/rename` and a waiting `/rename` for `/note`, they are carried out as
 they are typed. A `/note` typed behind a waiting `!make` is written at once and stamped with the turn
 the running turn is. `/style` acts on the pick that every turn reads when it is built and on the
-person's own style files its name is looked up among, which a program cannot write. A prompt, every
-command that begins a turn, and `/clear`, `/cd`, `/add-dir`, `/reach`, `/mcp`, `/branch`, `/handoff`,
-`/resume`, `/bg`, `/exit`, `/after`, `/undo`, `/rewind` and `/hunks` hold it back, and it names the line. A
-command line and `/compact`, `/btw`, `/recap`, `/memory`, `/rename`, `/note`, `/forget-trust`,
-`/issue`, `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` do not, so behind any of those it
-is carried out as it is typed. `/forget-trust` acts on the answer kept about the working directory
+person's own style files its name is looked up among, which a program cannot write. A file is read
+only where its path does not land in the reach the workspace holds: the root, the directories added,
+the checkouts the session kept and the paths programs were let reach. A prompt, every command that
+begins a turn, and `/clear`, `/cd`, `/add-dir`, `/reach`, `/branch`, `/handoff`, `/resume`, `/bg`
+and `/exit` hold it back, since each moves or ends that reach or leaves for another session, and it
+names the line. A command line and `/compact`, `/btw`, `/recap`, `/memory`, `/undo`, `/rewind`,
+`/hunks`, `/mcp`, `/after`, `/rename`, `/note`, `/forget-trust`, `/issue`, `/pr`, `/sandbox`,
+`/model`, `/effort` and `/advisor` do not, so behind any of those it is carried out as it is typed:
+`/undo`, `/rewind` and `/hunks` put back files the workspace resolves and move no reach, `/mcp`
+starts or ends a server confined so that it cannot write under `~/.bravebot`, and `/after` arms a
+prompt that goes out when its delay is up and sends nothing now, so a style typed after it is the
+one the turn it sends is built with. The project's own style names are the list held when the line
+was typed and the turn reads the pick under its own trust map, so a rewind that changes the map or
+the files under the root does not change which names `/style` takes. `/forget-trust` acts on the answer kept about the working directory
 and the git worktree around it ([TRUST-24](trust-map.md#TRUST-24)). A prompt and a command line can
 run a program that makes the `.git` entry that moves which root is around the directory, a line that
 starts a session here reads the answer, and one that moves the directory or leaves the session
-changes what is withdrawn, so all of those and `/add-dir`, `/reach`, `/mcp`, `/branch`, `/after`, `/undo`,
-`/rewind` and `/hunks`, which have not been read against the file the answer is kept in, hold it back.
-Behind `/compact`, `/btw`, `/recap`, `/memory`, `/rename`, `/note`, `/style`, `/issue`, `/pr`,
-`/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed. A
+changes what is withdrawn, so all of those and `/add-dir`, `/reach`, `/mcp`, `/branch`, `/undo`,
+`/rewind` and `/hunks`, which have not been shown unable to make or remove the `.git` entry, hold it
+back. Behind `/compact`, `/btw`, `/recap`, `/memory`, `/after`, `/rename`, `/note`, `/style`, `/issue`,
+`/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed: `/after` arms a
+prompt that goes out when its delay is up and runs nothing now, so the turn it sends runs under the
+answer as `/forget-trust` left it whichever of the two is carried out first. A
 command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.

@@ -25491,10 +25491,11 @@ mod tests {
     }
 
     /// A turn reads the style when it is built, and nothing a command line, a request that is not a
-    /// turn or a write to the record does changes which style a name is, so behind any of those
-    /// `/style` is carried out when it is typed and the line stays where it was. The regression it
-    /// rejects is every line holding it back, which leaves a style picked behind a `!make` unset
-    /// until the turn ends.
+    /// turn, a write to the record, a rewind or a hunk put back, a server started or a prompt armed
+    /// for later does changes which style a name is, so behind any of those `/style` is carried out
+    /// when it is typed and the line stays where it was. The regression it rejects is every line
+    /// holding it back, which leaves a style picked behind a `!make` or an `/undo` unset until the
+    /// turn ends.
     #[test]
     fn a_style_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed() {
         if !crate::test_profile::in_isolated_profile() {
@@ -25506,6 +25507,11 @@ mod tests {
             "/btw what is this",
             "/recap",
             "/memory",
+            "/undo",
+            "/rewind",
+            "/hunks",
+            "/mcp",
+            "/after 5m check the deploy",
             "/rename deploy watch",
             "/note a thought",
             FORGET_TRUST_COMMAND,
@@ -25531,9 +25537,9 @@ mod tests {
     }
 
     /// A prompt begins a turn that reads the style, a line that begins a turn does the same, one that
-    /// replaces the session starts the next from the style settings name, and one that moves or
-    /// reopens the directories the session is made of has not been read against the style files a name
-    /// is looked up among, so `/style` waits behind each and names it. The regression it rejects is
+    /// leaves for another session starts the next from the style settings name, and one that moves
+    /// or ends the reach decides whether a file under `~/.bravebot` is one a name is looked up among,
+    /// so `/style` waits behind each and names it. The regression it rejects is
     /// the list of lines that leave the style alone extended to a prompt: a style picked behind a
     /// waiting prompt would open the turn that prompt began, which the person typed under the old one.
     #[test]
@@ -25547,20 +25553,15 @@ mod tests {
             "/cd crates/tui",
             "/add-dir ../other",
             "/reach",
-            "/mcp",
             "/branch",
             "/handoff the next goal",
             "/resume",
             BACKGROUND_COMMAND,
             EXIT_COMMAND,
-            "/undo",
-            "/rewind",
-            "/hunks",
             "/plan the task",
             "/init",
             "/review",
             "/loop 5m check the deploy",
-            "/after 5m check the deploy",
         ] {
             // A prompt is named by what it is and a command by the line typed.
             let named = match waiting {
@@ -25649,6 +25650,7 @@ mod tests {
             "/btw what is this",
             "/recap",
             "/memory",
+            "/after 5m check the deploy",
             "/rename deploy watch",
             "/note a thought",
             "/style off",
@@ -25703,7 +25705,6 @@ mod tests {
             "/init",
             "/review",
             "/loop 5m check the deploy",
-            "/after 5m check the deploy",
         ] {
             let Some((kept, said, waiting_lines, _)) = trust_forgotten_behind(waiting) else {
                 return;
