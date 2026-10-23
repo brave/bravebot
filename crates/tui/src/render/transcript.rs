@@ -533,8 +533,9 @@ fn entry_extras(
         lines.extend(quarantined_lines(shown, width as usize));
     }
 
-    // The plan the turn worked to, kept next to what it produced.
-    lines.extend(todo_lines(&entry.todos));
+    // The plan the turn worked to, kept next to what it produced. The turn that reported it has
+    // already ended, so a row still outstanding is drawn left open rather than as work going on.
+    lines.extend(todo_lines(&entry.todos, true));
 
     // The whole plan, where the person asked for it to be printed (VIEW-37).
     lines.extend(plan_lines(
@@ -1764,7 +1765,7 @@ pub(crate) fn plan_item_row(session: &Session, item: usize) -> Option<u16> {
         &mut Vec::new(),
         at,
     );
-    lines.extend(todo_lines(&entry.todos[..item]));
+    lines.extend(todo_lines(&entry.todos[..item], true));
     let within = lines
         .iter()
         .map(|line| rows_of(line, width))
