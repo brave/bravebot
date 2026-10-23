@@ -14,7 +14,9 @@ OpenCode. Brave has always shipped user agents, and this one is the user's agent
 - As fast as it can be.
 - Nothing hidden: what it read and what it decided are on the screen.
 - Developed completely in the open.
-- No lock-in: other providers and models, settings on your own machine.
+- No lock-in: Brave Leo, Anthropic, OpenAI, Google Vertex AI, AWS Bedrock, OpenRouter and other
+  OpenAI-compatible gateways, and local models in Ollama, LM Studio and llama-server, with settings
+  on your own machine.
 - The power of a shell without the risk: command lines are compiled into the trust model rather than handed to one.
 
 ## Getting started
