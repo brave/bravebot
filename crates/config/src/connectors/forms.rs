@@ -135,11 +135,11 @@ fn personal_name(value: &str) -> bool {
 
 /// A phone number in E.164: `+` then 8 to 15 digits, the first not 0.
 fn e164(value: &str) -> bool {
-    value.len() >= 9
-        && value.len() <= 16
-        && value.starts_with('+')
-        && !value[1..].starts_with('0')
-        && value[1..].bytes().all(|b| b.is_ascii_digit())
+    value.strip_prefix('+').is_some_and(|digits| {
+        (8..=15).contains(&digits.len())
+            && !digits.starts_with('0')
+            && digits.bytes().all(|b| b.is_ascii_digit())
+    })
 }
 
 /// A wall-clock time with no offset, `YYYY-MM-DDThh:mm:ss`, read in a time zone named beside it.
@@ -176,11 +176,11 @@ fn iata(value: &str) -> bool {
 
 /// A calendar day that exists, `dd/mm/yyyy`, as some services take one.
 fn date_dmy(value: &str) -> bool {
-    let b = value.as_bytes();
-    b.len() == 10
-        && b[2] == b'/'
-        && b[5] == b'/'
-        && date(&format!("{}-{}-{}", &value[6..], &value[3..5], &value[..2]))
+    let mut parts = value.split('/');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(day), Some(month), Some(year), None) => date(&format!("{year}-{month}-{day}")),
+        _ => false,
+    }
 }
 
 /// A calendar day, `YYYY-MM-DD`, that exists.
@@ -196,7 +196,10 @@ fn date(value: &str) -> bool {
     {
         return false;
     }
-    let number = |r: std::ops::Range<usize>| value[r].parse::<u32>().unwrap_or(0);
+    let number = |r: std::ops::Range<usize>| {
+        b[r].iter()
+            .fold(0, |n, digit| n * 10 + u32::from(digit - b'0'))
+    };
     let (year, month, day) = (number(0..4), number(5..7), number(8..10));
     let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
     let days = match month {
@@ -227,24 +230,21 @@ fn datetime(value: &str) -> bool {
         }
         None => return false,
     };
-    let hhmm = |s: &str, hours: u32| {
-        let b = s.as_bytes();
-        b.len() == 5
-            && b[2] == b':'
-            && b.iter()
-                .enumerate()
-                .all(|(i, c)| i == 2 || c.is_ascii_digit())
-            && s[..2].parse::<u32>().is_ok_and(|h| h < hours)
-            && s[3..].parse::<u32>().is_ok_and(|m| m < 60)
+    // Two digits below `bound`.
+    let two = |s: &str, bound: u32| {
+        s.len() == 2
+            && s.bytes().all(|c| c.is_ascii_digit())
+            && s.parse::<u32>().is_ok_and(|n| n < bound)
     };
-    let offset_fine =
-        offset.is_none_or(|o| (o.starts_with('+') || o.starts_with('-')) && hhmm(&o[1..], 24));
+    let hhmm = |s: &str| {
+        s.split_once(':')
+            .is_some_and(|(h, m)| two(h, 24) && two(m, 60))
+    };
+    let offset_fine = offset.is_none_or(|o| o.strip_prefix(['+', '-']).is_some_and(hhmm));
     date(day)
-        && clock.len() == 8
-        && clock.as_bytes()[5] == b':'
-        && hhmm(&clock[..5], 24)
-        && clock[6..].bytes().all(|c| c.is_ascii_digit())
-        && clock[6..].parse::<u32>().is_ok_and(|s| s < 60)
+        && clock
+            .rsplit_once(':')
+            .is_some_and(|(hm, ss)| hhmm(hm) && two(ss, 60))
         && offset_fine
 }
 
@@ -396,6 +396,7 @@ mod tests {
             "+0447700900",
             "+44 7700",
             "+12345",
+            "+1234567",
             "+1234567890123456",
             "+4477009001a3",
         ] {
@@ -419,6 +420,8 @@ mod tests {
             "20-11-2026",
             "20x11/2026",
             "20/11x2026",
+            "2/11/02026",
+            "20/11/2026/05",
         ] {
             assert!(check("date-dmy", bad).is_err(), "{bad}");
         }
@@ -482,6 +485,8 @@ mod tests {
             "2026-10-09T10:00:+5Z",
             "2026-10-09T10:00:60Z",
             "2026-10-09T10:00:00+25:00",
+            "2026-10-09T1:00:00Z",
+            "2026-10-09T10:00:00~01:00",
         ] {
             assert!(check("datetime", bad).is_err(), "{bad} passed");
         }
