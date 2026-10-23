@@ -296,28 +296,9 @@ pulled and `/model` lists what came back. A first run with nothing configured of
 block for you where Ollama is running ([Importing from Claude Code, opencode or a local model
 server](../configuration.md#importing-from-claude-code-opencode-or-a-local-model-server)).
 
-LM Studio and llama-server want no key either, so their blocks differ from this one in the name and
-the address. LM Studio's server listens on port `1234` once it is started, and llama-server's on
-`9931` unless it is told another port:
-
-```json
-{
-  "provider": {
-    "lmstudio": {
-      "name": "LM Studio (local)",
-      "options": { "baseURL": "http://127.0.0.1:1234/v1" }
-    },
-    "llama-server": {
-      "name": "llama-server (local)",
-      "options": { "baseURL": "http://127.0.0.1:9931/v1" }
-    }
-  },
-  "model": "lmstudio/qwen/qwen3-coder-30b"
-}
-```
-
-The model names are the ones each server lists: `/model` shows them once the block is in place. A
-first run offers to write either block where the server is running, as it does for Ollama.
+LM Studio and llama-server want no key either. [Ollama](ollama.md), [LM Studio](lm-studio.md) and
+[llama-server](llama-server.md) each have a page that says how the first run finds the server, what
+its block looks like and what to state for its context window.
 
 ### Which models are offered
 

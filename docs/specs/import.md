@@ -15,7 +15,11 @@ governs:
   - crates/cli/src/plain.rs
   - crates/cli/src/session_import.rs
   - crates/cli/src/background.rs
-documented-by: docs/website/docs/customize/configuration.md
+documented-by:
+  - docs/website/docs/customize/configuration.md
+  - docs/website/docs/customize/providers/ollama.md
+  - docs/website/docs/customize/providers/lm-studio.md
+  - docs/website/docs/customize/providers/llama-server.md
 ---
 
 ## Scope

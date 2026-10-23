@@ -1950,6 +1950,10 @@ A server that asks for a key is not offered, because the request carries none. W
 of Ollama, LM Studio and llama-server answers, each is asked about in that order, and one at a port an
 earlier answer already wrote is not offered again.
 
+[Ollama](providers/ollama.md), [LM Studio](providers/lm-studio.md) and
+[llama-server](providers/llama-server.md) each have a page that also gives the block to write
+yourself.
+
 **What can be imported.** A Claude Code Bedrock setup, under bravebot's own names, when a region is
 named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
 bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. An `openai` entry that names
