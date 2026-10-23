@@ -65,6 +65,13 @@ fr:colour-codes-not-drawn
 fr:command-hunks
 fr:count-remembered
 fr:diff-no-final-newline
+fr:doctor-chatgpt
+fr:doctor-chatgpt-signed-in
+fr:doctor-dropped-chatgpt-account-no-bound-fixed-before-issue
+fr:doctor-dropped-chatgpt-account-nothing-decides-each-use
+fr:doctor-dropped-chatgpt-account-renewable-without-authority
+fr:doctor-ends-chatgpt-account
+fr:doctor-outlives-chatgpt-account
 fr:doctor-retention
 fr:doctor-retention-paused
 fr:doctor-settings-retention-ignored

@@ -324,7 +324,9 @@ Each token is a credential at a tier, in the terms of [credential-protection.md]
 - **What would end each is recorded:** signing out of the ChatGPT account, or removing this program's
   access in the account's settings, at OpenAI. This program cannot do either for the person.
   `bravebot auth logout chatgpt` removes the copy here and ends nothing at OpenAI. Whether an access token
-  minted before a revocation survives it is a fact the exchange records.
+  minted before a revocation survives it is a fact the exchange records, and none has: the record says an
+  access token already issued may run to its own expiry, and `doctor` says so with the words that this has
+  not been observed, not that nothing survives.
 - **Neither is bound to its presenter.** Nothing asks the authorization server for a sender-constrained
   form, so the record says bearer, with the answer `NotAttempted`, until the exchange records whether one
   is offered.
@@ -333,9 +335,12 @@ A token is held in the secret type that spec describes, so it is redacted wherev
 buffers are cleared and kept out of crash artifacts. It reaches no program a turn starts, no prompt and no
 record, and it is never passed as a command-line argument.
 
-**Not built:** the tier and what would end each token are not recorded in the account `doctor` gives of a held
-credential ([CRED-25](credential-protection.md#CRED-25)), since `doctor` does not report this sign-in
-([CHATGPT-11](#CHATGPT-11)).
+The record holds one entry for the pair, `Held::ChatgptAccount`, since the two tokens are one arrangement ended at
+one surface. Its walk is the three drops an AWS session has, on the conditions that the token is presented by this
+program, that nothing here asks OpenAI to narrow it to a run, and that the refresh token replaces it without
+asking anybody, each one nobody attempted because no narrower or bound form has been asked for. It is a bearer
+secret with the answer `NotAttempted`, and a leak of it has no figure for how quickly it would be noticed.
+[CHATGPT-11](#CHATGPT-11) is where `doctor` reports it.
 
 **Why.** A file of its own because the shape differs from the gateway keys, which are one string under an id
 with no expiry, and from the Leo batch, which is spent a credential at a time. Held because the arrangement
@@ -348,6 +353,7 @@ while the arrangement is understood.
 `verified-by: bravebot_skus::chatgpt::account::no_file_is_no_sign_in`
 `verified-by: bravebot_skus::chatgpt::account::a_file_that_cannot_be_used_is_an_error_naming_its_defect_and_not_an_absent_sign_in`
 `verified-by: bravebot_skus::chatgpt::account::a_refusal_of_a_malformed_file_quotes_none_of_it`
+`verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
 `verified-by: bravebot_skus::chatgpt::account::the_tokens_are_redacted_wherever_the_account_is_printed`
 `verified-by: bravebot_skus::chatgpt::account::the_file_is_readable_by_its_owner_alone_and_so_is_its_replacement`
 `verified-by: bravebot_skus::chatgpt::account::a_write_that_stops_part_way_leaves_the_last_good_file_and_no_temporary`
@@ -588,11 +594,14 @@ nothing. Its exit status is the one the other ways of that command give: 0 where
 line holds no token, claim, identifier, email or account name.
 
 `bravebot doctor` names the account as a held credential at its tier and says what would end it, and the
-expiry. The list `auth login` prints says **signed in** on this way's line where the file holds a sign-in.
-Signing in again over one asks first and replaces the tokens only on a yes.
-
-**Not built:** the line in `bravebot doctor`. The list `auth login` prints, `auth status` and `auth logout` are
-built.
+expiry. Where the file holds a sign-in it prints a `chatgpt` line with the instant the access token
+expires, then the account every held credential is given ([CRED-25](credential-protection.md#CRED-25)): what
+would end it, the tier, the binding, what revoking would not reach and the gate each drop failed. Where nothing
+is stored it prints nothing about the sign-in, as it prints nothing for a gateway block that names no
+credential. Where the file cannot be read it prints the line with the remedy and the run ends in failure, as a
+file of gateway keys that cannot be read does, since the sign-in it held has stopped being used. The list
+`auth login` prints says **signed in** on this way's line where the file holds a sign-in. Signing in again over
+one asks first and replaces the tokens only on a yes.
 
 **Why.** Each is an answer about whether the next request will work, and none needs the secret to give it.
 A sign-in that OpenAI has ended is found out by a refresh and removed by it ([CHATGPT-7](#CHATGPT-7)), so
@@ -604,6 +613,7 @@ line is the one thing in a pasted report that says whose account it was.
 `verified-by: bravebot_cli::chatgpt::a_stored_sign_in_is_reported_by_its_expiry_alone`
 `verified-by: bravebot_cli::chatgpt::a_token_past_its_expiry_is_still_signed_in_and_nothing_stored_is_not`
 `verified-by: bravebot_cli::chatgpt::a_file_that_cannot_be_used_is_unusable_and_no_place_to_keep_one_is_said_apart`
+`verified-by: bravebot_cli::running::doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it`
 `verified-by: bravebot_cli::chatgpt::a_stored_sign_in_needs_a_terminal_to_be_asked_about_and_a_first_one_does_not`
 
 <a id="CHATGPT-12"></a>
@@ -681,10 +691,10 @@ The sign-in is the `chatgpt` module of `bravebot-skus` and the command is `crate
 crate does not hold and depends on no crate of this workspace, so [CHATGPT-5](#CHATGPT-5)'s first condition
 holds by reading its manifest.
 
-- **Built whole:** [CHATGPT-3](#CHATGPT-3), [CHATGPT-4](#CHATGPT-4), [CHATGPT-12](#CHATGPT-12) and
-  [CHATGPT-13](#CHATGPT-13).
-- **Built in part,** each naming what is not: [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2),
-  [CHATGPT-6](#CHATGPT-6), [CHATGPT-8](#CHATGPT-8) and [CHATGPT-11](#CHATGPT-11).
+- **Built whole:** [CHATGPT-3](#CHATGPT-3), [CHATGPT-4](#CHATGPT-4), [CHATGPT-6](#CHATGPT-6),
+  [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12) and [CHATGPT-13](#CHATGPT-13).
+- **Built in part,** each naming what is not: [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2) and
+  [CHATGPT-8](#CHATGPT-8).
 - **Built in part,** the replacing of an access token, which is the `renew` module and has no caller yet:
   [CHATGPT-7](#CHATGPT-7) and [CHATGPT-14](#CHATGPT-14), each naming what is not.
 - **Not built:** [CHATGPT-9](#CHATGPT-9), the account's models in the picker; [CHATGPT-10](#CHATGPT-10), requests to the

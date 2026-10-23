@@ -771,27 +771,60 @@ fn report_backends(
     // configuration and the file the batch sits in is a fact about the machine.
     let subscription = bravebot_skus::store::load().ok();
     for held in config.held(subscription.is_some()) {
-        fact(t!(doctor_ends), what_would_end(held));
-        fact(t!(doctor_tier), what_tier_it_stands_at(held.tier()));
-        if let Some(noticed) = how_soon_a_leak_is_noticed(held) {
-            fact(t!(doctor_noticed), noticed);
-        }
-        if let Some(binding) = how_it_is_bound(held) {
-            fact(t!(doctor_binding), binding);
-        }
-        if let Some(survives) = what_outlives_revoking(held) {
-            fact(t!(doctor_outlives), survives);
-        }
-        // How it got here, after what would end it: the lines above name the credential
-        // and the address somebody acts on, and these say which gate each drop failed and
-        // whether anybody could have done otherwise.
-        for drop in held.walk() {
-            if let Some(dropped) = why_it_dropped(held, *drop) {
-                fact(t!(doctor_dropped), dropped);
-            }
+        report_held(held);
+    }
+    report_chatgpt_sign_in(ending);
+    subscription
+}
+
+/// The account of one held credential: what would end it, the tier its walk stopped at, and the
+/// rest of what the record holds for it.
+fn report_held(held: bravebot_config::Held<'_>) {
+    fact(t!(doctor_ends), what_would_end(held));
+    fact(t!(doctor_tier), what_tier_it_stands_at(held.tier()));
+    if let Some(noticed) = how_soon_a_leak_is_noticed(held) {
+        fact(t!(doctor_noticed), noticed);
+    }
+    if let Some(binding) = how_it_is_bound(held) {
+        fact(t!(doctor_binding), binding);
+    }
+    if let Some(survives) = what_outlives_revoking(held) {
+        fact(t!(doctor_outlives), survives);
+    }
+    // How it got here, after what would end it: the lines above name the credential
+    // and the address somebody acts on, and these say which gate each drop failed and
+    // whether anybody could have done otherwise.
+    for drop in held.walk() {
+        if let Some(dropped) = why_it_dropped(held, *drop) {
+            fact(t!(doctor_dropped), dropped);
         }
     }
-    subscription
+}
+
+/// What `doctor` says of a ChatGPT sign-in (CHATGPT-11): that one is stored and when its access token
+/// expires, then the account of the credential like any other that is held.
+///
+/// Nothing at all where none is stored, as for a gateway block that names no credential: a line
+/// saying so on every machine that never signed in is one to learn to skip, and `auth status chatgpt`
+/// is the command that answers the question. A file that cannot be read is reported with its remedy
+/// and ends the run in failure, as a file of gateway keys does, since the sign-in it held has stopped
+/// being used. Only the instant is shown: the file also holds the tokens, the identifier of the
+/// client OpenAI issued and a host identifier, and none of them belongs in a report people paste.
+fn report_chatgpt_sign_in(ending: &mut Ending) {
+    match crate::chatgpt::standing() {
+        crate::chatgpt::Standing::SignedIn { expires } => {
+            fact(
+                t!(doctor_chatgpt),
+                t!(doctor_chatgpt_signed_in, expires = expires),
+            );
+            report_held(bravebot_config::Held::ChatgptAccount);
+        }
+        crate::chatgpt::Standing::Unusable(reason) => {
+            *ending = ends_on(*ending, Ending::Failed);
+            fact(t!(doctor_chatgpt), reason);
+        }
+        crate::chatgpt::Standing::NotSignedIn | crate::chatgpt::Standing::Nowhere => {}
+    }
 }
 
 /// What a run would actually request, and the subscription where one means something.
@@ -944,6 +977,10 @@ pub(crate) fn doctor() -> ExitCode {
             // Said here too, since a layer that tried to declare a server is wrong whatever else
             // the configuration is, and its author is not told anywhere else.
             report_mcp_declared(&settings, &mut ending);
+            // And the sign-in, which is a fact about the machine rather than about this
+            // configuration: a held credential is missing from the report exactly when somebody is
+            // debugging a setup that does not load.
+            report_chatgpt_sign_in(&mut ending);
             // The one line from the section above that still has to be printed. A pin is the case
             // where the person reading this can do nothing about the error, so the file that holds
             // it is the only actionable thing in the report.
@@ -1383,6 +1420,7 @@ pub(crate) fn what_would_end(held: bravebot_config::Held<'_>) -> String {
             t!(doctor_ends_gateway_token, gateway = host)
         }
         bravebot_config::Held::SubscriptionBatch => t!(doctor_ends_subscription_batch).to_string(),
+        bravebot_config::Held::ChatgptAccount => t!(doctor_ends_chatgpt_account).to_string(),
     }
 }
 
@@ -1430,7 +1468,8 @@ pub(crate) fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Opt
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsAccessKey
         | bravebot_config::Held::GatewayToken { .. }
-        | bravebot_config::Held::SubscriptionBatch => None,
+        | bravebot_config::Held::SubscriptionBatch
+        | bravebot_config::Held::ChatgptAccount => None,
     }
 }
 
@@ -1546,6 +1585,21 @@ pub(crate) fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
+        (Held::ChatgptAccount, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_chatgpt_account_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::ChatgptAccount, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_chatgpt_account_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::ChatgptAccount, Condition::RenewableWithoutAuthority) => t!(
+            doctor_dropped_chatgpt_account_renewable_without_authority,
+            gate = gate,
+            answer = answer
+        ),
         // The conditions each credential's walk does not hold. Gate 2 is passed by the
         // subscription batch, which is why it has no account of the gates below the one it
         // stopped at; the rest are the other conditions of the gates each credential does drop
@@ -1560,6 +1614,14 @@ pub(crate) fn why_it_dropped(
         )
         | (
             Held::AwsSession,
+            Condition::NothingCanRefuseAUse
+            | Condition::BoundEnforcedWithinReach
+            | Condition::BoundWithNoEnd
+            | Condition::NotMintedForOneStep
+            | Condition::IssuerEndsNothing,
+        )
+        | (
+            Held::ChatgptAccount,
             Condition::NothingCanRefuseAUse
             | Condition::BoundEnforcedWithinReach
             | Condition::BoundWithNoEnd
@@ -1604,6 +1666,7 @@ fn whether_anybody_asked(attempt: bravebot_config::Attempt) -> &'static str {
 pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<&'static str> {
     match held {
         bravebot_config::Held::AwsAccessKey => Some(t!(doctor_outlives_aws_access_key)),
+        bravebot_config::Held::ChatgptAccount => Some(t!(doctor_outlives_chatgpt_account)),
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsSession
         | bravebot_config::Held::GatewayToken { .. }
