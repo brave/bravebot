@@ -279,7 +279,7 @@ no figure in it, the way to the bindings, the trail key, the figures, the move k
 background jobs, and a running loop after all of them), and the mode is the last to go. A note about what a press just did is drawn at the right of the same row and takes its
 room ahead of all of them, since a part fitted against the whole width is one the note writes over.
 
-See [modes](../security/permissions.md#answering-in-advance-modes) for what each one answers and what
+See [modes](../security/permission-modes.md) for what each one answers and what
 choosing one costs.
 
 ## Stopping and leaving

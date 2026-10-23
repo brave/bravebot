@@ -38,7 +38,7 @@ bravebot --accept-edits -p "apply the lint fixes"
 `--dangerously-skip-permissions` lifts the refusal of every effect, because a flag you typed is an instruction rather than a guess
 made in your name. It does not lift the second half: the planner's questions are declined in that mode
 too, since they are not permissions. It is a mode for a container with no network and nothing in it
-worth losing. See [modes](../security/permissions.md#answering-in-advance-modes).
+worth losing. See [modes](../security/permission-modes.md).
 
 **An `allow` rule in your [settings file](../customize/configuration.md#permissions) decides nothing
 here.** A `deny` rule and an `ask` rule still hold, since one refuses before there is anything to

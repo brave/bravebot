@@ -691,7 +691,7 @@ nobody declared: `bravebot mcp disable docs` takes that out.
 
 ## Refused by an administrator
 
-The machine's [administrator file](configuration.md#pinned-by-an-administrator) can keep a server
+The machine's [administrator file](managed-settings.md) can keep a server
 from starting in every session on the machine, and cannot give one. It names servers by the host a
 url reaches or the command a program runs, never by the name you gave it:
 

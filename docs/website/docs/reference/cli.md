@@ -105,9 +105,9 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--goal <condition>` | keep working until a judge says the condition holds, or end on status 7 ([below](#--goal-condition)) |
 | `--max-rounds <n>` | stop the run when the agent asks for a round of tool calls past this many, and end on status 8 ([below](#--max-rounds-n-and---max-tokens-n)) |
 | `--max-tokens <n>` | stop the run before a request once it has spent this many tokens, and end on status 8 ([below](#--max-rounds-n-and---max-tokens-n)) |
-| `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
+| `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../security/sandbox.md#runnetwork)) |
 | `--sandbox <mode>` | how far the programs the agent runs may reach: `strict`, `read-only` (which also stops the agent's file tools writing), `workspace-write` or `off`. Without it the mode is `workspace-write` ([`sandbox.mode`](../security/security.md)). Where a machine-level file pins `sandbox.mode`, a mode that reads more of the machine, writes more or both is refused, and the refusal says which and names the pinned mode to run with |
-| `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
+| `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../security/sandbox.md#sandboxfilesystem)) |
 | `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
 | `--issue <url>`, `--pr <url>` | give the session it opens its issue and pull request links, as `/issue` and `/pr` do ([below](#--issue-url-and---pr-url)) |
@@ -176,7 +176,7 @@ unknown name even with `--dangerously-skip-permissions`. `--tools` offers no MCP
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
 question, including the ones that decide trust. See
-[modes](../security/permissions.md#answering-in-advance-modes) for what it costs.
+[modes](../security/permission-modes.md) for what it costs.
 
 ### `--accept-edits`
 
@@ -210,7 +210,7 @@ still whoever is reading the output. With either end piped or redirected there i
 the run stops before its first step unless `--dangerously-skip-permissions` was given. A plan that
 failed to build is printed on stderr even without `--trace`, and never shares stdout with the reply.
 
-This is a different axis from the [permission mode](../security/permissions.md#answering-in-advance-modes):
+This is a different axis from the [permission mode](../security/permission-modes.md):
 `--mode` decides when control flow is settled, the other decides who answers a prompt, and the two
 compose. See [Plan first, then execute](../using/manifest-mode.md) for the rest.
 
@@ -223,7 +223,7 @@ bravebot --model opus "review the diff on this branch"
 Names the model for one run, and outranks every other way one is named. Where no flag names one, a
 run asks for the model a session opening in the same directory would: a
 [`model`](../customize/configuration.md#model) key in the checkout's settings or the file
-`--settings` names, then the choice [`/model`](../customize/configuration.md#choosing-a-model)
+`--settings` names, then the choice [`/model`](../customize/model.md)
 recorded, then the key in `~/.bravebot/settings.json`, then an exported
 `BRAVEBOT_DEFAULT_MODEL`, then the model the build was made with. So a script uses the model
 you picked without your having to write it down twice, a checkout that names its model gets it, and
@@ -1015,7 +1015,7 @@ bravebot import-providers
 Reads what Claude Code and opencode configured in your home directory, and asks a running Ollama, LM
 Studio and llama-server on this machine what each serves, shows what it would add to
 `~/.bravebot/settings.json`, and asks once for each. It takes no arguments, needs a terminal to ask on, and refuses in an incognito session. See
-[Importing from Claude Code, opencode or a local model server](../customize/configuration.md#importing-from-claude-code-opencode-or-a-local-model-server).
+[Importing from Claude Code, opencode or a local model server](../customize/importing.md).
 
 ## `mcp`
 
@@ -1075,7 +1075,7 @@ When no rule matches, it says so and the ordinary approval gates decide. An `all
 checkout's settings is not in force until you grant it at the question a session asks, so it is
 never reported as the rule that decides: a line says it would allow the call and is not in force.
 It starts nothing and changes nothing. It checks the rules only, not the
-[permission modes](../security/permissions.md), and a command line that names no call exits 2.
+[permission modes](../security/permission-modes.md), and a command line that names no call exits 2.
 
 ## `stats`
 

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 1
+sidebar_position: 4
 title: AWS Bedrock
 description: Reach models through your own AWS account, name more than three, and sign in when AWS has no session.
 ---

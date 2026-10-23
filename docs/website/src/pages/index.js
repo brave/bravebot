@@ -51,7 +51,7 @@ const FEATURES = [
   },
 ];
 
-// The commands the root README gives. The quickstart has the rest: a directory, a version, and
+// The commands the root README gives. The install page has the rest: a directory, a version, and
 // checking a download by hand.
 const INSTALL = [
   {value: 'npm', label: 'npm', command: 'npm install -g @brave/bravebot'},
@@ -126,7 +126,7 @@ function Hero({repository}) {
           ))}
         </Tabs>
         <p className={styles.more}>
-          <Link to="/quickstart#install">All install options</Link>
+          <Link to="/install">All install options</Link>
         </p>
       </div>
     </header>

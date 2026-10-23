@@ -114,7 +114,7 @@ file keeps what it learned about that file: the file stays untrusted, and the sa
 the same trust.
 
 The plan is [put to you before it runs](#a-plan-is-put-to-you-first), drawn and scrolled
-here rather than printed on one line. In [plan mode](../security/permissions.md#answering-in-advance-modes)
+here rather than printed on one line. In [plan mode](../security/permission-modes.md)
 a plan with a write in it does not run at all, decided before the plan is put to anybody.
 
 ## A manifest run is recorded, but cannot be continued

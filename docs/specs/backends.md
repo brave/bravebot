@@ -47,6 +47,15 @@ documented-by:
   - docs/website/docs/customize/providers/anthropic.md
   - docs/website/docs/customize/providers/bedrock.md
   - docs/website/docs/customize/providers/openai-compatible.md
+  - docs/website/docs/customize/providers/ollama.md
+  - docs/website/docs/customize/providers/lm-studio.md
+  - docs/website/docs/customize/providers/llama-server.md
+  - docs/website/docs/customize/providers/openai.md
+  - docs/website/docs/customize/providers/google-vertex.md
+  - docs/website/docs/customize/providers/openrouter.md
+  - docs/website/docs/customize/model.md
+  - docs/website/docs/customize/effort.md
+  - docs/website/docs/customize/managed-settings.md
 ---
 
 ## Scope

@@ -26,7 +26,7 @@ A session started with `--dangerously-skip-permissions` is the one exception: th
 at all, and the map is the one a yes would have written. That mode already approves vouching for
 every unvouched file the planner reads, so the tree becomes trusted a file at a time either way. A
 resume still takes the map from its own record even there. See
-[modes](permissions.md#answering-in-advance-modes).
+[modes](permission-modes.md).
 
 ## Nothing is trusted until it is granted
 
