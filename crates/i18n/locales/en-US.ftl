@@ -483,6 +483,8 @@ doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-subscription-batch =
     an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot auth logout leo` ends this machine's custody and leaves the batch spendable by whatever copied the file
+doctor-ends-chatgpt-account =
+    a ChatGPT sign-in: issued by OpenAI to the account that signed in, and the refresh token replaces the access token without asking anybody, so the access token's expiry ends that copy rather than this program's access; ended at OpenAI by signing out of the account or removing this program's access in its settings, since `bravebot auth logout chatgpt` ends this machine's custody and leaves the tokens live there
 # Which tier the gate walk left a credential on, shown under the account of what would end it. One
 # sentence per tier rather than per credential: the tier is where the walk stopped, and what is
 # particular to a credential is the line above this one. Delegated is here although nothing stands
@@ -508,6 +510,8 @@ doctor-noticed-aws-session =
 doctor-outlives = outlives
 doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
+doctor-outlives-chatgpt-account =
+    an access token OpenAI already issued from the refresh token, which may run to its own expiry: whether revoking the sign-in reaches it has not been observed
 # Whether a derived credential is bound to the party that presents it. Shown only for the
 # credentials minted from something else. A bearer secret is usable by whatever holds a copy, and the
 # two bearer sentences keep apart an issuer that offers no bound form from one nobody has asked.
@@ -554,6 +558,19 @@ doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents a credential from the batch itself and nothing is asked to authorise the request
+doctor-dropped-chatgpt-account-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents the access token itself and nothing is asked to authorise the request
+doctor-dropped-chatgpt-account-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the sign-in may do is fixed before it is issued, since nothing here asks OpenAI to narrow it to this run
+doctor-dropped-chatgpt-account-renewable-without-authority =
+    gate { $gate }, { $answer }: the agent renews it without further authority, since the refresh token replaces the access token without asking anybody
+# The ChatGPT sign-in, shown only where one is stored. A sign-in that cannot be read is shown on the
+# same line with the sentence that names its remedy. The instant is the one the access token expires,
+# written as 2026-10-22T21:05:27Z, and is the only part of the file shown: the file also holds the
+# tokens and identifiers, which belong in no report people paste. A past instant is still signed in,
+# since the token is replaced when it is next used.
+doctor-chatgpt = chatgpt
+doctor-chatgpt-signed-in = signed in, the access token expires { $expires }
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock

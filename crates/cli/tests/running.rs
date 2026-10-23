@@ -8666,6 +8666,117 @@ fn auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request(
     assert!(stdout.contains("bravebot auth logout chatgpt"), "{stdout}");
 }
 
+/// CHATGPT-11 and CRED-25: `doctor` names a stored ChatGPT sign-in as a held credential at its
+/// tier, with what would end it and the instant the access token expires, and prints nothing the
+/// file holds beyond that instant. Nothing stored is nothing said, a sign-in whose instant has
+/// passed is still signed in, and a file that cannot be used is named with its remedy and ends the
+/// run in failure, since the sign-in it held has stopped being used.
+#[test]
+fn doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it() {
+    // A model keyed by a variable, so a report that finds nothing else wrong ends in success and the
+    // status says what the sign-in did.
+    let settings = TWO_GATEWAYS.replacen('{', r#"{"model": "openrouter/z-ai/glm-4.6", "#, 1);
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("OPENROUTER_API_KEY", "placeholder-variable-key"));
+    let scratch = |name: &str| Scratch::new(name).with_settings(&settings);
+
+    let nothing = scratch("cli-running-doctor-chatgpt-none");
+    let output = bravebot(&nothing.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("chatgpt ")),
+        "a sign-in is named where none is stored: {stdout}{stderr}"
+    );
+
+    let held = scratch("cli-running-doctor-chatgpt")
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127));
+    let output = bravebot(&held.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    for secret in [
+        A_CHATGPT_ACCESS_TOKEN,
+        A_CHATGPT_REFRESH_TOKEN,
+        A_CHATGPT_CLIENT,
+        A_CHATGPT_HOST,
+    ] {
+        assert!(
+            !stdout.contains(secret) && !stderr.contains(secret),
+            "the report holds a value from the sign-in file: {stdout}{stderr}"
+        );
+    }
+    let lines: Vec<&str> = stdout.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("chatgpt "))
+        .unwrap_or_else(|| panic!("the sign-in is not named: {stdout}"));
+    assert!(
+        lines[at].contains("signed in, the access token expires 2026-10-22T21:05:27Z"),
+        "{}",
+        lines[at]
+    );
+    let account = lines[at + 1..].join("\n");
+    assert!(
+        account.contains("a ChatGPT sign-in: issued by OpenAI"),
+        "what would end the sign-in follows its line: {account}"
+    );
+    assert!(account.contains("held: a permanent secret"), "{account}");
+    assert!(account.contains("a bearer secret"), "{account}");
+    assert!(
+        account.contains("whether revoking the sign-in reaches it has not been observed"),
+        "{account}"
+    );
+
+    let lapsed = scratch("cli-running-doctor-chatgpt-lapsed")
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1));
+    let (stdout, _) = said(&bravebot(&lapsed.path, &environment, &["doctor"]));
+    assert!(
+        stdout.contains("signed in, the access token expires 1970-01-01T00:00:01Z"),
+        "a past instant is reported as something other than signed in: {stdout}"
+    );
+
+    // A configuration that does not load skips the sections built from it, and the sign-in is a
+    // fact about the machine: it is named there too, and the status is still the configuration's.
+    let broken = scratch("cli-running-doctor-chatgpt-broken-configuration")
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127));
+    let output = bravebot(
+        &broken.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "ai-chat.example.invalid"),
+        ],
+        &["doctor"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("chatgpt ")),
+        "the sign-in is not named beside a configuration that does not load: {stdout}"
+    );
+
+    let garbled = scratch("cli-running-doctor-chatgpt-garbled").with_state(
+        "chatgpt-account.json",
+        r#"{"access_token": "placeholder-chatgpt-access-token" oops"#,
+    );
+    let output = bravebot(&garbled.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    let line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("chatgpt "))
+        .unwrap_or_else(|| panic!("the unusable file is not named: {stdout}"));
+    assert!(line.contains("bravebot auth login chatgpt"), "{line}");
+    assert!(
+        !stdout.contains("placeholder-chatgpt-access-token"),
+        "{stdout}"
+    );
+}
+
 /// Put stand-in `open` and `xdg-open` under `scratch` that record being run in `marker`, and return
 /// the `PATH` that finds them.
 #[cfg(unix)]

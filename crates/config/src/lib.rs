@@ -639,6 +639,20 @@ pub enum Held<'a> {
     /// the issuer is Brave's own service, and the surface is the order rather than an address this
     /// configuration could name differently on two machines.
     SubscriptionBatch,
+    /// The sign-in a person made to OpenAI with a ChatGPT account, kept in
+    /// `~/.bravebot/chatgpt-account.json` as an access token and the refresh token that replaces it.
+    ///
+    /// Held. The refresh token mints an access token without asking anybody, so what this program
+    /// holds is permanent whatever the access token's stated lifetime: gate 1 fails because this
+    /// program presents the token itself, gate 2 because nothing narrows what the token may do to
+    /// this run, and gate 3 on being renewed without further authority, which is the false pass
+    /// CRED-9 names. One entry for the pair, as for the batch, since the two are one arrangement
+    /// ended at one surface: signing out of the account, or removing this program's access in the
+    /// account's settings, at OpenAI.
+    ///
+    /// No parameter. The file holds one sign-in whatever the account, and an identifier or an email
+    /// in a pasted report is the one thing in it that says whose account it was.
+    ChatgptAccount,
 }
 
 impl<'a> Held<'a> {
@@ -647,13 +661,14 @@ impl<'a> Held<'a> {
     /// The gateway arrangement is a credential plus the host that would end it, so a list of the
     /// kinds has to be given one: a caller walking this is asking which arrangements exist rather
     /// than which are configured, and the host it passes is what the gateway entry will name.
-    pub const fn all(gateway_host: &'a str) -> [Self; 5] {
+    pub const fn all(gateway_host: &'a str) -> [Self; 6] {
         [
             Self::SigningKey,
             Self::AwsAccessKey,
             Self::AwsSession,
             Self::GatewayToken { host: gateway_host },
             Self::SubscriptionBatch,
+            Self::ChatgptAccount,
         ]
     }
 
@@ -765,6 +780,25 @@ impl<'a> Held<'a> {
                 condition: Condition::NothingDecidesEachUse,
                 attempt: Attempt::NotAttempted,
             }],
+            // Three drops, on the same conditions as an AWS session and for the same reasons: the
+            // token is presented by this program, nothing here asks OpenAI to narrow it to a run,
+            // and the refresh token replaces it without anybody being asked. Not attempted rather
+            // than refused: the sign-in has only run against a stand-in server, so no refusal of a
+            // narrower or bound form has been seen from OpenAI.
+            Self::ChatgptAccount => &[
+                GateDrop {
+                    condition: Condition::NothingDecidesEachUse,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::NoBoundFixedBeforeIssue,
+                    attempt: Attempt::NotAttempted,
+                },
+                GateDrop {
+                    condition: Condition::RenewableWithoutAuthority,
+                    attempt: Attempt::NotAttempted,
+                },
+            ],
         }
     }
 
@@ -783,7 +817,8 @@ impl<'a> Held<'a> {
             Self::SigningKey
             | Self::AwsAccessKey
             | Self::AwsSession
-            | Self::GatewayToken { .. } => Tier::Held,
+            | Self::GatewayToken { .. }
+            | Self::ChatgptAccount => Tier::Held,
         }
     }
 
@@ -817,7 +852,8 @@ impl<'a> Held<'a> {
             Self::SigningKey
             | Self::AwsAccessKey
             | Self::GatewayToken { .. }
-            | Self::SubscriptionBatch => None,
+            | Self::SubscriptionBatch
+            | Self::ChatgptAccount => None,
         }
     }
 
@@ -836,8 +872,13 @@ impl<'a> Held<'a> {
     /// was minted, and nothing is minted from a credential in it. A re-import mints a further
     /// batch from the order rather than from this one, so it is the order that has something under
     /// it, and the order is not a credential this program holds.
+    ///
+    /// True for the ChatGPT sign-in, because an access token already minted from the refresh token
+    /// is a bearer token that runs to its own expiry unless OpenAI checks it against the revocation
+    /// on every use. Whether it does is not recorded anywhere: no revocation has been made against
+    /// a real sign-in, and the report says so rather than telling somebody that nothing survives.
     pub fn outlives_revocation(self) -> bool {
-        matches!(self, Self::AwsAccessKey)
+        matches!(self, Self::AwsAccessKey | Self::ChatgptAccount)
     }
 
     /// Whether this derived credential is bound to its presenter or a bearer secret, which CRED-26
@@ -845,20 +886,24 @@ impl<'a> Held<'a> {
     ///
     /// `None` for a credential that is not derived from another: the signing key, a long-lived
     /// access key and a gateway's token are each issued once and held as they were issued, so
-    /// there is no derivative for a bound form to be asked of. The two derived credentials are
-    /// both bearer secrets today.
+    /// there is no derivative for a bound form to be asked of. The three derived credentials
+    /// are all bearer secrets today.
     ///
     /// An AWS session is [`Attempt::Refused`]: STS issues session credentials that any holder of
     /// the three values can sign with, and offers no form checked against the presenter. A
     /// subscription batch is [`Attempt::NotAttempted`]: a presentation is signed over a resource
     /// string and is single-use and bound to its issuer, which does not identify the presenter,
-    /// and nothing here has asked Brave's subscription service for a form that would.
+    /// and nothing here has asked Brave's subscription service for a form that would. The ChatGPT
+    /// sign-in's access token is the same answer: nothing asks OpenAI's authorization server for a
+    /// sender-constrained form, so it is a bearer secret nobody has asked for more of.
     ///
     /// A claim about the arrangement, so it moves only when the arrangement does.
     pub fn binding(self) -> Option<Binding> {
         match self {
             Self::AwsSession => Some(Binding::Bearer(Attempt::Refused)),
-            Self::SubscriptionBatch => Some(Binding::Bearer(Attempt::NotAttempted)),
+            Self::SubscriptionBatch | Self::ChatgptAccount => {
+                Some(Binding::Bearer(Attempt::NotAttempted))
+            }
             Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => None,
         }
     }
@@ -1626,6 +1671,10 @@ impl Config {
     /// A build that cannot reach the Brave backend is left out of it whatever the file holds,
     /// because the batch buys the premium half of that backend's roster and nothing else reads it,
     /// and CRED-2 gives a credential nothing reads no tier.
+    ///
+    /// [`Held::ChatgptAccount`] is not in it, for the opposite reason: the sign-in is held on every
+    /// machine that made one, whatever backend this configuration reaches, so a caller that reads
+    /// the file adds it.
     pub fn held(&self, subscription_imported: bool) -> Vec<Held<'_>> {
         let mut held = Vec::new();
         if self.serves_aichat() {
@@ -2273,10 +2322,11 @@ mod tests {
     /// available files a decision made here as a fact about the world, and the credential stops
     /// being worth looking at again.
     ///
-    /// True of all five: AWS mints a bounded session and ends it, this project's own backend
-    /// issues the signing key, a gateway block names no issuer for anything to have asked, and
-    /// Brave's subscription service mints a batch nobody has asked to gate use of. None of those
-    /// is a counterparty saying no.
+    /// True of all six: AWS mints a bounded session and ends it, this project's own backend
+    /// issues the signing key, a gateway block names no issuer for anything to have asked,
+    /// Brave's subscription service mints a batch nobody has asked to gate use of, and OpenAI has
+    /// been asked for no narrower or bound form of the ChatGPT sign-in. None of those is a
+    /// counterparty saying no.
     #[test]
     fn every_drop_this_configuration_records_is_one_nobody_attempted() {
         for held in Held::all("gateway.invalid") {
@@ -2498,9 +2548,10 @@ mod tests {
     }
 
     /// CRED-26: a derived credential records whether it is bound to its presenter or a bearer
-    /// secret, and the record keeps a refusal apart from a request nobody made. The AWS session and
-    /// the subscription batch are the two derived credentials and both are bearer secrets, for
-    /// different reasons: STS offers no bound form, and nobody has asked the subscription service.
+    /// secret, and the record keeps a refusal apart from a request nobody made. The AWS session, the
+    /// subscription batch and the ChatGPT sign-in are the derived credentials and all are bearer
+    /// secrets, for different reasons: STS offers no bound form, and nobody has asked the
+    /// subscription service or OpenAI.
     /// A record that answered both alike, or answered neither, would leave a bound and an unbound
     /// credential at one tier indistinguishable, which is what the clause is for.
     ///
@@ -2520,6 +2571,11 @@ mod tests {
             Held::AwsSession.binding(),
             Held::SubscriptionBatch.binding(),
             "an issuer that offers no bound form and one nobody asked are recorded alike"
+        );
+        assert_eq!(
+            Held::ChatgptAccount.binding(),
+            Some(Binding::Bearer(Attempt::NotAttempted)),
+            "the sign-in is not recorded as a bearer secret nobody asked a bound form of"
         );
 
         for held in [
@@ -2546,6 +2602,42 @@ mod tests {
         assert_eq!(Held::AwsSession.tier(), Tier::Held);
         assert_eq!(Held::SubscriptionBatch.walk().len(), 1);
         assert_eq!(Held::AwsSession.walk().len(), 3);
+    }
+
+    /// CRED-25 and CHATGPT-6: the ChatGPT sign-in is a permanent secret this program renews by
+    /// itself, so it stands at Held with the walk an AWS session has, and it is the one derived
+    /// credential whose revocation is recorded as possibly leaving something minted from it
+    /// working. Held to each of those, since a record that put it at Granted would call a token
+    /// the refresh token replaces unaided a bounded one, and one that said nothing survives would
+    /// send somebody who signed out at OpenAI away believing the access token had stopped.
+    ///
+    /// It is not in what a configuration holds: the file is a fact about the machine, so a
+    /// configuration that reaches the Brave backend and one that reaches only Bedrock hold the
+    /// same set, which is not the set with the sign-in in it.
+    #[test]
+    fn a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation() {
+        assert_eq!(Held::ChatgptAccount.tier(), Tier::Held);
+        let conditions: Vec<Condition> = Held::ChatgptAccount
+            .walk()
+            .iter()
+            .map(|drop| drop.condition)
+            .collect();
+        assert_eq!(
+            conditions,
+            [
+                Condition::NothingDecidesEachUse,
+                Condition::NoBoundFixedBeforeIssue,
+                Condition::RenewableWithoutAuthority,
+            ]
+        );
+        assert!(Held::ChatgptAccount.outlives_revocation());
+        assert_eq!(Held::ChatgptAccount.noticed_within(), None);
+
+        let brave = Config::from_lookup(complete_env).expect("configured");
+        assert!(
+            !brave.held(true).contains(&Held::ChatgptAccount),
+            "a configuration is accounted for a sign-in only the machine can say it holds"
+        );
     }
 
     /// Without Bedrock the aichat credentials are still required. Relaxing them for everyone would
