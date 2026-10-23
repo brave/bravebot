@@ -20,9 +20,9 @@ use crate::anthropic::protocol::Failure;
 use crate::anthropic::what_was_written;
 use crate::protocol::{ChatRequest, SseDecoder, ToolCall, Usage};
 use crate::{
-    ATTEMPTS, BACKOFF, CHUNKS_AHEAD, ChatError, Completion, CutOff, OpenCall, Progress, Refusals,
-    WAKE, learned_key, log_retry, pause_before_retry, refuses_the_body, remember, remembered,
-    reply_bound, worth_another_attempt,
+    ATTEMPTS, AccountAccess, BACKOFF, CHUNKS_AHEAD, ChatError, Completion, CutOff, OpenCall,
+    Progress, Refusals, WAKE, learned_key, log_retry, pause_before_retry, refuses_the_body,
+    remember, remembered, reply_bound, worth_another_attempt,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -46,6 +46,22 @@ fn worth_asking_again(allowed: u32, attempt: u32, error: &ChatError) -> bool {
             && matches!(error, ChatError::Reported { failure } if failure.is_transient()))
 }
 
+/// The largest body sent to a ChatGPT account's serving host, which takes none larger uncompressed
+/// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+const ACCOUNT_BODY_LIMIT: usize = 1 << 20;
+
+/// What a request to a ChatGPT account's serving host carries beyond a gateway's, and the token it
+/// is sent with.
+struct AccountRequests<'a> {
+    access: &'a mut dyn AccountAccess,
+    /// The identifier of the session, which is the value of each of the three session headers.
+    session: String,
+    /// The token the last attempt was sent with, which is what a refusal of it replaces.
+    sent: Option<Secret>,
+    /// Whether this call has already replaced a token the host refused. A second refusal ends it.
+    replaced: bool,
+}
+
 /// One client for one request, to a service that takes the Responses protocol.
 pub struct ResponsesClient<'a> {
     attempts: u32,
@@ -60,6 +76,8 @@ pub struct ResponsesClient<'a> {
     /// service has never heard of.
     model: String,
     token: Option<Secret>,
+    /// Set where the service is a ChatGPT account, whose token is asked for before each request.
+    account: Option<AccountRequests<'a>>,
     /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
     headers: Vec<(String, Secret)>,
     cancel: Option<Cancel>,
@@ -92,12 +110,37 @@ impl<'a> ResponsesClient<'a> {
             provider,
             model: model.into(),
             token,
+            account: None,
             headers: Vec::new(),
             cancel: None,
             effort: true,
             recalled: Refusals::default(),
             backoff: BACKOFF,
         }
+    }
+
+    /// A client for a ChatGPT account, whose `provider` is the one
+    /// [`Provider::chatgpt_account`] builds and whose token `access` hands out one request at a
+    /// time ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Each request carries the token and the three session headers with `session` as the value of
+    /// each, refuses a redirect, and is not sent where its body is larger than the service takes.
+    /// A token the host refuses is replaced once and the request sent again.
+    pub fn for_account(
+        egress: &'a Egress,
+        provider: &'a Provider,
+        model: impl Into<String>,
+        access: &'a mut dyn AccountAccess,
+        session: impl Into<String>,
+    ) -> Self {
+        let mut client = Self::new(egress, provider, model, None);
+        client.account = Some(AccountRequests {
+            access,
+            session: session.into(),
+            sent: None,
+            replaced: false,
+        });
+        client
     }
 
     /// Requests handed to egress in the last call, including capability probes.
@@ -215,14 +258,14 @@ impl<'a> ResponsesClient<'a> {
         )
     }
 
-    /// The request for one attempt, addressed and authenticated.
+    /// The encoded body of one request.
     ///
     /// The options a model's block carries are merged into the body and never interpreted. They come
     /// from the settings file, which is the person's own configuration surface, so they are trusted
     /// exactly as far as a variable they exported would be. A key the request already set wins,
     /// because a configuration must not rewrite the conversation a turn built, and the fields in
     /// [`protocol::OWNED`] are the request's whether or not the turn set them.
-    fn build(&self, request: &ChatRequest) -> Result<Request, ChatError> {
+    fn encode(&self, request: &ChatRequest) -> Result<Vec<u8>, ChatError> {
         let mut body = serde_json::to_value(self.body_for(request))
             .map_err(|error| ChatError::Encode(error.to_string()))?;
         if let (Some(object), Some(options)) = (
@@ -237,25 +280,37 @@ impl<'a> ResponsesClient<'a> {
                 }
             }
         }
-        let body =
-            serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))?;
+        serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))
+    }
 
+    /// The request for one attempt, addressed and authenticated.
+    fn build(&self, body: Vec<u8>, token: Option<&Secret>) -> Request {
         let mut http = Request::post(self.provider.completion_url(), body)
             .header("content-type", "application/json")
             .header("accept", "text/event-stream");
         for (name, value) in self.provider.fixed_headers() {
             http = http.header(*name, *value);
         }
-        if let Some(token) = self.token.as_ref().map(Secret::expose) {
+        if let Some(token) = token.map(Secret::expose) {
             // Kept on the socket the request was addressed to, so a redirect to another host does
             // not carry the key along, which is the footing a bearer token has everywhere here.
             let (name, value) = self.provider.credential_header(token);
             http = http.socket_header(name, value);
         }
-        // After the credential, and never over it: a name this request already set is refused
-        // where the block is read.
-        for (name, value) in &self.headers {
-            http = http.header(name.clone(), value.expose());
+        if let Some(account) = &self.account {
+            // Constants and a value generated here, so none can carry a line break or a length a
+            // reply chose. Nothing else is added: a gateway's headers are not carried to the
+            // account, and a redirect is a failure whatever host it names.
+            for name in ["session-id", "thread-id", "x-client-request-id"] {
+                http = http.header(name, account.session.as_str());
+            }
+            http = http.refusing_redirects();
+        } else {
+            // After the credential, and never over it: a name this request already set is refused
+            // where the block is read.
+            for (name, value) in &self.headers {
+                http = http.header(name.clone(), value.expose());
+            }
         }
         // A stream's headers come at once and the model writes after them. Where nobody stated a
         // ceiling the reply is bounded as a gateway's is, since nothing says how long it may run.
@@ -266,7 +321,48 @@ impl<'a> ResponsesClient<'a> {
         if let Some(gap) = self.provider.patience.idle_timeout {
             http = http.idle_within(gap);
         }
-        Ok(http)
+        http
+    }
+
+    /// Whether `error` is the serving host turning away the token the last attempt was sent with,
+    /// where this call has not yet replaced one.
+    fn refused_the_token(&self, error: &ChatError) -> bool {
+        self.account
+            .as_ref()
+            .is_some_and(|account| !account.replaced && account.sent.is_some())
+            && matches!(
+                error,
+                ChatError::Egress(EgressError::Status { status: 401, .. })
+            )
+    }
+
+    /// Ask for a token other than the one the host refused. The next attempt asks for its token
+    /// again and is sent the one this made.
+    fn replace_the_token(&mut self) -> Result<(), ChatError> {
+        let Some(account) = self.account.as_mut() else {
+            return Ok(());
+        };
+        account.replaced = true;
+        if let Some(refused) = account.sent.take() {
+            account
+                .access
+                .replace_refused(&refused)
+                .map_err(ChatError::Account)?;
+        }
+        Ok(())
+    }
+
+    /// A refusal of the token after it was replaced is the sign-in failing, which the person is
+    /// told in the words of the sign-in. Any other failure is reported as it came.
+    fn as_the_accounts(&self, error: ChatError) -> ChatError {
+        match error {
+            ChatError::Egress(EgressError::Status { status: 401, .. })
+                if self.account.is_some() =>
+            {
+                ChatError::Account(crate::AccountFailure::Refused)
+            }
+            other => other,
+        }
     }
 
     fn cancelled(&self) -> bool {
@@ -342,10 +438,19 @@ impl<'a> ResponsesClient<'a> {
         self.completed_usage = None;
         self.retried_usage = None;
         self.recall();
+        if let Some(account) = self.account.as_mut() {
+            account.sent = None;
+            account.replaced = false;
+        }
         let mut attempt = 1;
         let mut probed = false;
         loop {
             match self.stream_once(policy, request, attempt, &mut progress) {
+                // Replaced once and sent again at once: the token may have been revoked early or
+                // this clock may run behind, and a new one is what the host is asking for.
+                Err(error) if self.refused_the_token(&error) => {
+                    self.replace_the_token()?;
+                }
                 // Sent again immediately rather than after a wait: nothing is busy, the request was
                 // simply carrying something this model does not take.
                 Err(error) if self.worth_dropping_effort(request, &error) => {
@@ -372,12 +477,18 @@ impl<'a> ResponsesClient<'a> {
                 }
                 result => {
                     self.probe_settled(probed, result.is_err());
-                    return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
-                        completion
-                    });
+                    // No copy of the token outlives the call that was sent with it.
+                    if let Some(account) = self.account.as_mut() {
+                        account.sent = None;
+                    }
+                    return result
+                        .map(|mut completion| {
+                            if let Some(usage) = self.retried_usage {
+                                completion.usage.add(usage);
+                            }
+                            completion
+                        })
+                        .map_err(|error| self.as_the_accounts(error));
                 }
             }
         }
@@ -400,7 +511,23 @@ impl<'a> ResponsesClient<'a> {
             return Err(ChatError::Cancelled);
         }
 
-        let http = self.build(request)?;
+        let body = self.encode(request)?;
+        // Before a token is asked for, which can mean a renewal: a body that is not going to be sent
+        // spends nothing.
+        if self.account.is_some() && body.len() > ACCOUNT_BODY_LIMIT {
+            return Err(ChatError::BodyTooLarge {
+                limit: ACCOUNT_BODY_LIMIT,
+            });
+        }
+        let token = match self.account.as_mut() {
+            Some(account) => {
+                let token = account.access.access_token().map_err(ChatError::Account)?;
+                account.sent = Some(token.clone());
+                Some(token)
+            }
+            None => self.token.clone(),
+        };
+        let http = self.build(body, token.as_ref());
         self.attempts += 1;
         let stream = self.egress.fetch_streaming(
             policy,

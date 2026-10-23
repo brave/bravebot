@@ -138,7 +138,7 @@ fn sign_in() -> ExitCode {
             path = signed_in.stored_in.display().to_string()
         )
     );
-    println!("{}", t!(chatgpt_not_used_yet));
+    println!("{}", t!(chatgpt_use_by_name));
     ExitCode::SUCCESS
 }
 
