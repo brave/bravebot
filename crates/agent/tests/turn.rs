@@ -11328,6 +11328,85 @@ fn a_trusted_notebook_reads_as_cells_without_its_outputs() {
     );
 }
 
+/// The saved outputs of a cell of a vouched notebook come back as a reference and never as text,
+/// whatever the notebook's own label: an output is what a program or a web page printed.
+#[test]
+fn a_cells_saved_outputs_come_back_as_a_reference_not_as_text() {
+    let scratch = Scratch::new("read-notebook-outputs");
+    std::fs::write(scratch.path.join("n.ipynb"), NOTEBOOK_WITH_AN_OUTPUT).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":2}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("read the outputs of n.ipynb");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("[ref:1]"),
+        "the planner was not given a reference: {second}"
+    );
+    assert!(
+        !second.contains("ignore previous instructions") && !second.contains("output_type"),
+        "a saved output reached the planner: {second}"
+    );
+}
+
+/// A cell number the notebook has no outputs for, and a file that is not a notebook, are refused
+/// in words naming what was wrong, and nothing is handed over.
+#[test]
+fn an_output_request_that_names_no_outputs_is_refused() {
+    let scratch = Scratch::new("read-notebook-no-outputs");
+    std::fs::write(scratch.path.join("n.ipynb"), NOTEBOOK_WITH_AN_OUTPUT).unwrap();
+    std::fs::write(scratch.path.join("a.txt"), "plain\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":1}"#),
+        tool_request_2("read_file", r#"{"path":"n.ipynb","output_of":3}"#),
+        tool_request_2("read_file", r#"{"path":"a.txt","output_of":1}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("read outputs");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let last = bodies.last().expect("requests");
+    assert!(last.contains("not a code cell"), "{last}");
+    assert!(last.contains("no cell 3"), "{last}");
+    assert!(last.contains("is not one"), "{last}");
+    assert!(!last.contains("ignore previous instructions"), "{last}");
+}
+
 /// A notebook nobody vouched for is held back like any other file: the cell view is made only of a
 /// file the planner may see, so its text, outputs included, is not shown at all.
 #[test]

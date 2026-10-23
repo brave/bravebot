@@ -6,8 +6,8 @@
 //! already established is trusted: the view is shaped by the workspace for a read that was not
 //! quarantined, and an edit refuses an untrusted file before it gets here (EDIT-2).
 //!
-//! Saved outputs are never in the view. A cell's output is text a program, a web page or a dataset
-//! produced, so nothing here carries it to a planner (READ-9).
+//! Saved outputs are never in the cell view. A cell's output is text a program, a web page or a
+//! dataset produced, so it is shaped only for a reference carried as untrusted (READ-9, READ-10).
 
 use serde_json::{Map, Value, json};
 
@@ -123,6 +123,136 @@ pub fn cells_view(text: &str) -> Option<String> {
         ));
     }
     Some(out)
+}
+
+/// The most characters of saved output one `output_of` read carries.
+pub const MAX_OUTPUT_CHARS: usize = 20_000;
+
+/// Whether cell `cell` of the notebook can have its saved outputs read, or why not.
+///
+/// Asked of a notebook the caller has already established is trusted, the way [`cells_view`] is:
+/// it reads the notebook's structure (the version, the cell count, the cell's kind and whether it
+/// holds any outputs) and nothing of what an output says.
+pub fn check_outputs_of(text: &str, cell: usize) -> Result<(), String> {
+    let notebook = parse(text)?;
+    let cells = notebook
+        .get("cells")
+        .and_then(Value::as_array)
+        .ok_or("the file has no \"cells\" list")?;
+    let slot = cell
+        .checked_sub(1)
+        .and_then(|at| cells.get(at))
+        .ok_or_else(|| {
+            format!(
+                "the notebook has {} cell(s), numbered from 1, so there is no cell {cell}. Read \
+                 the notebook to see its cells",
+                cells.len()
+            )
+        })?;
+    if slot.get("cell_type").and_then(Value::as_str) != Some("code") {
+        return Err(format!(
+            "cell {cell} is not a code cell, so it holds no outputs"
+        ));
+    }
+    let has_outputs = slot
+        .get("outputs")
+        .and_then(Value::as_array)
+        .is_some_and(|outputs| !outputs.is_empty());
+    if !has_outputs {
+        return Err(format!("cell {cell} holds no saved outputs"));
+    }
+    Ok(())
+}
+
+/// The saved outputs of cell `cell` as text, for a reference that is carried as untrusted.
+///
+/// Meant to be called inside [`bravebot_core::policy::Policy::render_in_place`] over text labelled
+/// untrusted, so it shapes and decides nothing: it always returns a string, and an input it cannot
+/// read gives an empty one. Text is kept; a picture or any other non-text form is replaced by a
+/// line giving its type and size, since base64 spends the cap on nothing a reader can use. The
+/// result is cut at [`MAX_OUTPUT_CHARS`] characters.
+pub fn outputs_view(text: &str, cell: usize) -> String {
+    let mut out = String::new();
+    let notebook: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+    let outputs = notebook
+        .get("cells")
+        .and_then(Value::as_array)
+        .and_then(|cells| cell.checked_sub(1).and_then(|at| cells.get(at)))
+        .and_then(|slot| slot.get("outputs"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for output in outputs {
+        let kind = output
+            .get("output_type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        match kind {
+            "stream" => {
+                let name = output
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("stream");
+                out.push_str(&format!("[{name}]\n"));
+                push_text(&mut out, output.get("text"), false);
+            }
+            "error" => {
+                let name = output.get("ename").and_then(Value::as_str).unwrap_or("");
+                let value = output.get("evalue").and_then(Value::as_str).unwrap_or("");
+                out.push_str(&format!("[error] {name}: {value}\n"));
+                push_text(&mut out, output.get("traceback"), true);
+            }
+            "execute_result" | "display_data" => {
+                out.push_str(&format!("[{kind}]\n"));
+                let bundle = output.get("data").and_then(Value::as_object);
+                for (mime, data) in bundle.into_iter().flatten() {
+                    if mime == "text/plain" {
+                        push_text(&mut out, Some(data), false);
+                    } else {
+                        let size = match data {
+                            Value::String(text) => text.len(),
+                            Value::Array(lines) => {
+                                lines.iter().filter_map(Value::as_str).map(str::len).sum()
+                            }
+                            other => other.to_string().len(),
+                        };
+                        out.push_str(&format!(
+                            "({mime}, {size} characters as stored, not shown)\n"
+                        ));
+                    }
+                }
+            }
+            other => out.push_str(&format!("[{other}]\n")),
+        }
+    }
+    if let Some((at, _)) = out.char_indices().nth(MAX_OUTPUT_CHARS) {
+        out.truncate(at);
+        out.push_str(&format!("\n(cut at {MAX_OUTPUT_CHARS} characters)\n"));
+    }
+    out
+}
+
+/// Append a text field stored either as one string or as a list of lines, ending in a newline.
+///
+/// A stream's lines keep their own newlines and are joined as they are. A traceback's do not, so
+/// each of its lines gets one.
+fn push_text(out: &mut String, field: Option<&Value>, whole_lines: bool) {
+    let start = out.len();
+    match field {
+        Some(Value::String(text)) => out.push_str(text),
+        Some(Value::Array(lines)) => {
+            for line in lines.iter().filter_map(Value::as_str) {
+                out.push_str(line);
+                if whole_lines && !line.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        }
+        _ => {}
+    }
+    if out.len() > start && !out.ends_with('\n') {
+        out.push('\n');
+    }
 }
 
 /// Split source into the lines a notebook stores it as, each keeping its newline.
@@ -304,6 +434,76 @@ mod tests {
              (saved outputs are not shown: 1 cell(s) hold them)\n"
         );
         assert!(!view.contains("ignore previous instructions"));
+    }
+
+    const WITH_RICH_OUTPUTS: &str = r##"{"nbformat": 4, "cells": [
+      {"cell_type": "markdown", "source": "text"},
+      {"cell_type": "code", "source": "x", "outputs": [
+        {"output_type": "stream", "name": "stdout", "text": ["a\n", "b\n"]},
+        {"output_type": "execute_result", "data": {"text/plain": ["42"],
+          "image/png": "QUJDREVGR0g="}},
+        {"output_type": "error", "ename": "KeyError", "evalue": "'k'",
+          "traceback": ["frame one", "frame two"]}
+      ]},
+      {"cell_type": "code", "source": "y", "outputs": []}
+    ]}"##;
+
+    #[test]
+    fn an_output_view_keeps_text_and_replaces_a_picture_with_its_size() {
+        let view = outputs_view(WITH_RICH_OUTPUTS, 2);
+        assert_eq!(
+            view,
+            "[stdout]\na\nb\n[execute_result]\n(image/png, 12 characters as stored, not shown)\n42\n\
+             [error] KeyError: 'k'\nframe one\nframe two\n"
+        );
+        assert!(!view.contains("QUJDREVGR0g="));
+    }
+
+    #[test]
+    fn an_output_view_is_cut_at_the_cap() {
+        let long = "z".repeat(MAX_OUTPUT_CHARS + 500);
+        let text = json!({"nbformat": 4, "cells": [{"cell_type": "code", "source": "",
+            "outputs": [{"output_type": "stream", "name": "stdout", "text": long}]}]})
+        .to_string();
+        let view = outputs_view(&text, 1);
+        assert!(view.contains(&format!("(cut at {MAX_OUTPUT_CHARS} characters)")));
+        assert_eq!(
+            view.matches('z').count(),
+            MAX_OUTPUT_CHARS - "[stdout]\n".len()
+        );
+    }
+
+    #[test]
+    fn an_output_view_of_unreadable_input_is_empty() {
+        assert_eq!(outputs_view("not json", 1), "");
+        assert_eq!(outputs_view(WITH_RICH_OUTPUTS, 9), "");
+        assert_eq!(outputs_view(WITH_RICH_OUTPUTS, 0), "");
+    }
+
+    #[test]
+    fn outputs_are_asked_of_a_code_cell_that_holds_some() {
+        assert_eq!(check_outputs_of(WITH_RICH_OUTPUTS, 2), Ok(()));
+        assert!(
+            check_outputs_of(WITH_RICH_OUTPUTS, 1)
+                .unwrap_err()
+                .contains("not a code cell")
+        );
+        assert!(
+            check_outputs_of(WITH_RICH_OUTPUTS, 3)
+                .unwrap_err()
+                .contains("no saved outputs")
+        );
+        let past = check_outputs_of(WITH_RICH_OUTPUTS, 4).unwrap_err();
+        assert!(
+            past.contains("3 cell(s)") && past.contains("no cell 4"),
+            "{past}"
+        );
+        assert!(
+            check_outputs_of(WITH_RICH_OUTPUTS, 0)
+                .unwrap_err()
+                .contains("no cell 0")
+        );
+        assert!(check_outputs_of("not json", 1).is_err());
     }
 
     #[test]

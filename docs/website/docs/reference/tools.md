@@ -87,11 +87,17 @@ Reads a text file from the workspace and returns its lines.
 | `path_ref` | a reference to a file whose name the planner was not shown, e.g. `ref:2` |
 | `offset` | 1-based line to start at |
 | `limit` | maximum lines to return, capped so one read cannot fill the conversation |
+| `output_of` | in a `.ipynb` notebook, the number of a code cell, from 1 as a read shows them, to get that cell's saved outputs as a reference instead of the cells |
 
 A `.ipynb` notebook that the agent may read comes back as its cells instead of its JSON: a
 `[N] kind` line, numbered from 1, then the cell's source. Saved outputs are never shown, only how many
 cells hold them, because an output is text a program or a web page produced. A notebook you have not
 vouched for is a reference like any other file.
+
+`output_of` asks for one cell's saved outputs. They come back as a reference, even in a notebook you
+vouched for, and a processor reads them. A stream, an error and a result's plain text are kept, a
+picture or other data is replaced by a line giving its type and size, and the result is cut at
+20,000 characters.
 
 Long files come back one page at a time, at most 500 lines and 100,000 characters, with each line
 shortened to 2,000 characters. A page of long lines ends at the last whole line that fits under the
