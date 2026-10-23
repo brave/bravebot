@@ -11,7 +11,7 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking a call or a delegate in the scroller is built. Clicking other things on the screen, a context menu, edge
+drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model and effort rows of the info panel, is built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
@@ -163,3 +163,25 @@ nothing. The watch key stays the way to do it without a mouse.
 `verified-by: bravebot_tui::app::a_click_on_a_delegate_in_the_scroller_opens_that_delegates_view`
 `verified-by: bravebot_tui::app::a_drag_over_a_delegate_or_a_click_off_one_opens_no_view`
 `verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_opens_no_delegate`
+
+<a id="MOUSE-11"></a>
+### MOUSE-11: a click on the panel's model or effort row asks what the command asks
+
+In the info panel, a left click that sweeps nothing on the row that names the model asks for the
+model picker, as `/model` does, and one on the row that names the effort asks for the effort picker,
+as `/effort` does. The commands are typed at the plain prompt, so a click over the scroller or a history search asks for nothing. Where a definition in force names the model the click is refused as the command
+is ([CLI-17](cli.md#CLI-17)), with the same note. The press and the release are on one cell and the
+press is a single click, so a drag, a double click and a triple click are selections and copy as
+before, and a press that began elsewhere and was let go on the row is not a click on it. The border
+column is the panel's resize handle ([PANEL-6](info-panel.md#PANEL-6)) and a row that is not drawn,
+for want of room or because the effort is not one the model reads, is not a target. The command
+stays the way to do it without a mouse, and the click acts only on rows the person's own choices
+put there ([PANEL-11](info-panel.md#PANEL-11)).
+
+`verified-by: bravebot_tui::app::a_click_on_the_panels_model_or_effort_row_opens_that_picker`
+`verified-by: bravebot_tui::app::a_click_off_the_models_rows_asks_for_no_picker`
+`verified-by: bravebot_tui::app::a_drag_or_a_double_click_over_the_model_row_opens_no_picker`
+`verified-by: bravebot_tui::app::a_press_elsewhere_let_go_on_the_model_row_opens_no_picker`
+`verified-by: bravebot_tui::app::a_click_on_the_model_row_over_the_scroller_opens_no_picker`
+`verified-by: bravebot_tui::app::a_click_on_the_model_row_under_a_standing_definition_is_refused_as_the_command_is`
+`verified-by: bravebot_tui::panel::only_the_drawn_model_and_effort_rows_are_click_targets`

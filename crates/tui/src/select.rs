@@ -110,6 +110,11 @@ impl Click {
     pub fn count(&self) -> u8 {
         self.count
     }
+
+    /// The cell the press landed on, as a row and a column.
+    pub fn cell(&self) -> (u16, u16) {
+        (self.row, self.column)
+    }
 }
 
 /// Which press of a run this one is: 1 for a lone press, 2 for a double click, 3 for a triple
