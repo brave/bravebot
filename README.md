@@ -83,6 +83,11 @@ We do not use your data and we do not store it. Prompts and used file contents a
 endpoint to produce a reply and are discarded once it has been produced. Nothing is retained and
 nothing is used for training. Local settings are stored in `~/.bravebot` on your own machine.
 
+That describes Brave's endpoint. If you configure another provider (Anthropic, OpenAI, Google
+Vertex AI, AWS Bedrock or a gateway), your prompts and file contents go to that provider instead,
+and its terms govern what it retains and whether it trains on them. A model server on your own
+machine, such as Ollama, keeps them on your machine.
+
 `bravebot --incognito` runs a session that adds nothing to `~/.bravebot`: no prompt history, no
 session record, no audit trail, and no change to the model or theme you have chosen. It still reads
 all of that, so the session is the one you configured rather than a fresh install. It edits your
