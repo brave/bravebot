@@ -189,37 +189,7 @@ impl Connectors {
                     ));
                 }
                 if resource.step == StepKind::Act {
-                    let narrows = !resource.narrow.is_empty();
-                    let takes_on = resource.uses_field("on");
-                    if !resource.text {
-                        let no_text = "      takes no text: give neither contents nor from_slot\n";
-                        lines.push_str(no_text);
-                    }
-                    if narrows && resource.uses_field("select") {
-                        lines.push_str(&format!(
-                            "      acts on every match, so select must use one of: {}\n",
-                            resource.narrow.join(" ")
-                        ));
-                    }
-                    if takes_on {
-                        lines.push_str(&format!(
-                            "      on names the out_slot of one of these fetches: {}; to act on an item you can name, give item instead where uses allows it\n",
-                            connector
-                                .surface
-                                .resources
-                                .iter()
-                                .filter(|(_, r)| r.step == StepKind::Fetch && r.receipt)
-                                .map(|(n, _)| n.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ));
-                    }
-                    if narrows && takes_on {
-                        lines.push_str(&format!(
-                            "      the fetch named in on either names its item or its select uses one of: {}; a selector with none of them is refused\n",
-                            resource.narrow.join(" ")
-                        ));
-                    }
+                    lines.push_str(&act_lines(connector, resource));
                 }
                 for (option, terms) in &resource.narrow_when {
                     lines.push_str(&format!(
@@ -397,31 +367,7 @@ impl Connectors {
             }
         }
 
-        // Every field given that the definition names a form for is held to it, as the authority
-        // holds every field it uses.
-        let formed = resource.forms.keys().chain(surface.forms.keys());
-        for field in formed.filter(|field| given(field)) {
-            let form = resource
-                .forms
-                .get(field)
-                .or_else(|| surface.forms.get(field));
-            if let Some(form) = form {
-                forms::check(form, step.text(field)).map_err(|why| format!("'{field}' {why}"))?;
-            }
-        }
-        let limited = surface
-            .values
-            .iter()
-            .map(|(field, values)| (field, resource.values.get(field).unwrap_or(values)));
-        let own = resource
-            .values
-            .iter()
-            .filter(|(field, _)| !surface.values.contains_key(*field));
-        for (field, values) in limited.chain(own) {
-            if given(field) && !values.iter().any(|v| value_matches(v, step.text(field))) {
-                return Err(format!("'{field}' must be one of {}", values.join(", ")));
-            }
-        }
+        check_values(connector, resource, step)?;
         let terms = selector::terms(step.text("select"))?;
         for (key, value) in &terms {
             if !resource
@@ -447,44 +393,11 @@ impl Connectors {
         }
 
         // The step an act lands on, with its resource: the fetch named in `on`, or the act itself.
-        let mut target = (step, resource);
-        if given("on") {
-            let on = SlotId::new(step.text("on"));
-            let fetch = plan
-                .steps()
-                .iter()
-                .find(|s| s.out_slot() == Some(&on) && s.tier() == Tier::Fetch)
-                .ok_or_else(|| format!("'on' names '{on}', which no fetch filled"))?;
-            // The item an act lands on comes from a fetch of its own connector and place, so it
-            // cannot reach outside the place the plan locked for the act.
-            if fetch.tool() != CONNECTOR_FETCH
-                || fetch.text("connector") != step.text("connector")
-                || fetch.text("place") != step.text("place")
-            {
-                return Err(format!(
-                    "'on' names '{on}', which no fetch from this act's connector and place filled"
-                ));
-            }
-            let fetched = surface
-                .resources
-                .get(fetch.text("resource"))
-                .ok_or_else(|| {
-                    format!("'on' names '{on}', which no resource of this connector filled")
-                })?;
-            if !fetched.receipt {
-                return Err(format!(
-                    "'on' names '{on}', filled by '{}', which chooses no single item",
-                    fetch.text("resource")
-                ));
-            }
-            if !resource.narrow.is_empty() && !names_or_narrows(fetched, fetch, &resource.narrow)? {
-                return Err(format!(
-                    "the fetch it acts on has to name its item or narrow its choice with one of {}",
-                    resource.narrow.join(" ")
-                ));
-            }
-            target = (fetch, fetched);
-        }
+        let target = if given("on") {
+            landing(plan, step, connector, resource)?
+        } else {
+            (step, resource)
+        };
         // An option the definition holds to stricter narrowing, such as an approval, lands only
         // on an item a fetch named or chose by one of its terms.
         // A key may be one of the definition's option patterns, as `add_label:*` is, matched as the
@@ -503,37 +416,160 @@ impl Connectors {
             }
         }
         if resource.step == StepKind::Act {
-            let carried = ["contents", "from_slot"]
-                .iter()
-                .filter(|f| given(f))
-                .count();
-            match (resource.text, carried) {
-                (true, 1) | (false, 0) => {}
-                (true, _) => {
-                    return Err(format!(
-                        "'{name}' needs exactly one of contents or from_slot"
-                    ));
-                }
-                (false, _) => {
-                    return Err(format!(
-                        "'{name}' takes no text; its option says what it does"
-                    ));
-                }
-            }
-            // An act on every match of its own selector lands on all of them, so the selector
-            // has to narrow as a resolve's must.
-            if given("select")
-                && !resource.narrow.is_empty()
-                && !uses_one_of(&terms, &resource.narrow)
-            {
-                return Err(format!(
-                    "'{name}' acts on every match, so its selector has to narrow with one of {}",
-                    resource.narrow.join(" ")
-                ));
-            }
+            check_act(name, resource, step, &terms)?;
         }
         Ok(())
     }
+}
+
+/// What the planner is told about an act beyond its fields: the text it takes, the narrowing it
+/// needs, and the fetches it may land on.
+fn act_lines(connector: &Connector, resource: &Resource) -> String {
+    let mut lines = String::new();
+    let narrows = !resource.narrow.is_empty();
+    let takes_on = resource.uses_field("on");
+    if !resource.text {
+        let no_text = "      takes no text: give neither contents nor from_slot\n";
+        lines.push_str(no_text);
+    }
+    if narrows && resource.uses_field("select") {
+        lines.push_str(&format!(
+            "      acts on every match, so select must use one of: {}\n",
+            resource.narrow.join(" ")
+        ));
+    }
+    if takes_on {
+        lines.push_str(&format!(
+            "      on names the out_slot of one of these fetches: {}; to act on an item you can name, give item instead where uses allows it\n",
+            connector
+                .surface
+                .resources
+                .iter()
+                .filter(|(_, r)| r.step == StepKind::Fetch && r.receipt)
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if narrows && takes_on {
+        lines.push_str(&format!(
+            "      the fetch named in on either names its item or its select uses one of: {}; a selector with none of them is refused\n",
+            resource.narrow.join(" ")
+        ));
+    }
+    lines
+}
+
+/// Every field a step gives that its definition names a form or values for, held to them.
+fn check_values(connector: &Connector, resource: &Resource, step: &Step) -> Result<(), String> {
+    let surface = &connector.surface;
+    let given = |field: &str| !step.text(field).trim().is_empty();
+    // Every field given that the definition names a form for is held to it, as the authority
+    // holds every field it uses.
+    let formed = resource.forms.keys().chain(surface.forms.keys());
+    for field in formed.filter(|field| given(field)) {
+        let form = resource
+            .forms
+            .get(field)
+            .or_else(|| surface.forms.get(field));
+        if let Some(form) = form {
+            forms::check(form, step.text(field)).map_err(|why| format!("'{field}' {why}"))?;
+        }
+    }
+    let limited = surface
+        .values
+        .iter()
+        .map(|(field, values)| (field, resource.values.get(field).unwrap_or(values)));
+    let own = resource
+        .values
+        .iter()
+        .filter(|(field, _)| !surface.values.contains_key(*field));
+    for (field, values) in limited.chain(own) {
+        if given(field) && !values.iter().any(|v| value_matches(v, step.text(field))) {
+            return Err(format!("'{field}' must be one of {}", values.join(", ")));
+        }
+    }
+    Ok(())
+}
+
+/// The fetch an act's `on` names, with its resource, once it is one the act may land on.
+fn landing<'a>(
+    plan: &'a Manifest,
+    step: &Step,
+    connector: &'a Connector,
+    resource: &Resource,
+) -> Result<(&'a Step, &'a Resource), String> {
+    let surface = &connector.surface;
+    let on = SlotId::new(step.text("on"));
+    let fetch = plan
+        .steps()
+        .iter()
+        .find(|s| s.out_slot() == Some(&on) && s.tier() == Tier::Fetch)
+        .ok_or_else(|| format!("'on' names '{on}', which no fetch filled"))?;
+    // The item an act lands on comes from a fetch of its own connector and place, so it
+    // cannot reach outside the place the plan locked for the act.
+    if fetch.tool() != CONNECTOR_FETCH
+        || fetch.text("connector") != step.text("connector")
+        || fetch.text("place") != step.text("place")
+    {
+        return Err(format!(
+            "'on' names '{on}', which no fetch from this act's connector and place filled"
+        ));
+    }
+    let fetched = surface
+        .resources
+        .get(fetch.text("resource"))
+        .ok_or_else(|| format!("'on' names '{on}', which no resource of this connector filled"))?;
+    if !fetched.receipt {
+        return Err(format!(
+            "'on' names '{on}', filled by '{}', which chooses no single item",
+            fetch.text("resource")
+        ));
+    }
+    if !resource.narrow.is_empty() && !names_or_narrows(fetched, fetch, &resource.narrow)? {
+        return Err(format!(
+            "the fetch it acts on has to name its item or narrow its choice with one of {}",
+            resource.narrow.join(" ")
+        ));
+    }
+    Ok((fetch, fetched))
+}
+
+/// What an act alone is held to: the text its resource says it carries, and a selector that
+/// narrows where it acts on every match.
+fn check_act(
+    name: &str,
+    resource: &Resource,
+    step: &Step,
+    terms: &[(String, String)],
+) -> Result<(), String> {
+    let given = |field: &str| !step.text(field).trim().is_empty();
+    let carried = ["contents", "from_slot"]
+        .iter()
+        .filter(|f| given(f))
+        .count();
+    match (resource.text, carried) {
+        (true, 1) | (false, 0) => {}
+        (true, _) => {
+            return Err(format!(
+                "'{name}' needs exactly one of contents or from_slot"
+            ));
+        }
+        (false, _) => {
+            return Err(format!(
+                "'{name}' takes no text; its option says what it does"
+            ));
+        }
+    }
+    // An act on every match of its own selector lands on all of them, so the selector
+    // has to narrow as a resolve's must.
+    if given("select") && !resource.narrow.is_empty() && !uses_one_of(terms, &resource.narrow) {
+        return Err(format!(
+            "'{name}' acts on every match, so its selector has to narrow with one of {}",
+            resource.narrow.join(" ")
+        ));
+    }
+    Ok(())
 }
 
 /// The time zone this machine says it is in, as an IANA name such as `Europe/London`: where
