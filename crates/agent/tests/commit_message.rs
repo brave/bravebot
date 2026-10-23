@@ -4,7 +4,10 @@
 //! the request has no tool in it, and a diff the driver may not send, or that shows nothing, makes
 //! no request at all.
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "each test binary that includes `repository` uses only some of its helpers"
+)]
 mod repository;
 
 #[path = "../test-support/mock_model.rs"]

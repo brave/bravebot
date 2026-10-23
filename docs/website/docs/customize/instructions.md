@@ -103,7 +103,8 @@ kept there is optional, so absence is a case to do without rather than a reason 
 
 `HOME` is what names it. Stock Windows sets no `HOME`, so there `USERPROFILE` is read after it and
 the first of the two that is set wins: that is the platform stating where the profile is, the same
-thing `HOME` does on Unix, rather than a guess past an answer. See
+thing `HOME` does on Unix, rather than a guess past an answer. `BRAVEBOT_HOME`, holding an absolute
+path, names the directory itself ahead of both. See
 [Configuration](configuration.md) for the rest of what lives in that directory.
 
 Note the two roots are spelled differently. Your own skills and delegate definitions sit directly

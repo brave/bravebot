@@ -203,6 +203,23 @@ impl Session {
         self.style.as_ref()
     }
 
+    /// Only a name, which each turn resolves again, so it can name a skill that has since gone.
+    pub fn skill_mode(&self) -> Option<&str> {
+        self.skill_mode.as_deref()
+    }
+
+    /// Keep this skill applied to every later turn, or `None` to leave the mode (SKILL-21).
+    pub fn choose_skill_mode(&mut self, name: Option<String>) {
+        self.skill_mode = name;
+    }
+
+    /// Put back the mode a resumed record held, and say so, since the transcript shown has no line
+    /// of its own for it.
+    pub fn resume_skill_mode(&mut self, name: &str) {
+        self.skill_mode = Some(name.to_string());
+        self.note(t!(session_mode_resumed, skill = name));
+    }
+
     /// The names of the project's styles offered after the others, as last read.
     pub fn project_styles(&self) -> &[String] {
         &self.project_styles
@@ -579,6 +596,20 @@ impl Session {
             })
     }
 
+    /// What a release at this cell acts on in the info panel, if the panel drew a row there. Read
+    /// against the panel's rectangle as the last frame recorded it.
+    pub fn panel_target_at(&self, row: u16, column: u16) -> Option<crate::panel::Target> {
+        if self.files.is_some() {
+            return None;
+        }
+        let (_, area) = self
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)?;
+        crate::panel::target_at(self, *area, row, column)
+    }
+
     /// Begin dragging the panel's border where the button went down, and say whether it was
     /// there. A press that is not leaves the session untouched.
     pub fn begin_panel_drag(&mut self, row: u16, column: u16) -> bool {
@@ -664,7 +695,7 @@ impl Session {
     /// on a file with no end in view, and holding a laptop awake for that is holding it awake for
     /// as long as the session is open.
     pub fn work_pending(&self) -> bool {
-        self.status == Status::Working || self.looping.is_some()
+        self.status == Status::Working || !self.looping.is_empty()
     }
 
     /// Hold the machine awake where `/caffeinate` is on and work is pending, and release it
@@ -826,7 +857,8 @@ impl Session {
 
     /// Charge what a suggestion's request cost to the turn it followed, outside any turn's own
     /// figures and still in the session's total, as an aside is.
-    pub fn charge_suggestion(&mut self, tokens: u64) {
-        self.charge(tokens);
+    pub fn charge_suggestion(&mut self, usage: bravebot_aichat::protocol::Usage) {
+        self.charge(usage.total());
+        self.charged_split(usage.total(), usage.completion_tokens);
     }
 }

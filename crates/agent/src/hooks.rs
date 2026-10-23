@@ -60,13 +60,39 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-/// How long a hook that states no `timeout` may run before it is stopped.
+/// How long a hook that states no `timeout` may run before it is stopped, except for one on
+/// `session-ended`, which has [`SESSION_END_LIMIT`].
 ///
 /// Short, because every hook holds the turn open while it runs and a person watching a session has
 /// no way to tell a slow hook from a slow model. A formatter or a notification finishes well inside
 /// this; anything that does not wants to be a background job of its own rather than something a
 /// turn waits on.
 pub const LIMIT: Duration = Duration::from_secs(30);
+
+/// How long a `session-ended` hook that states no `timeout` may run before it is stopped.
+///
+/// Shorter than [`LIMIT`], because the person is leaving: this hook holds the process open after
+/// everything else is done, with nothing on screen to say why. An entry that states its own
+/// `timeout` keeps it, since that is a bound the person wrote (HOOK-7).
+pub const SESSION_END_LIMIT: Duration = Duration::from_secs(5);
+
+/// How long a hook on `moment` that states no `timeout` may run before it is stopped.
+///
+/// The one place that says, so what a front end shows an entry as being held to is what is applied.
+/// Matched without a wildcard, so a moment added to the vocabulary has to say which bound it has.
+pub fn default_limit(moment: Moment) -> Duration {
+    match moment {
+        Moment::SessionEnded => SESSION_END_LIMIT,
+        Moment::FileChanged
+        | Moment::TurnStarted
+        | Moment::ToolFinished
+        | Moment::TurnFinished
+        | Moment::PromptShown
+        | Moment::CheckoutMade
+        | Moment::Compacted
+        | Moment::SessionStarted => LIMIT,
+    }
+}
 
 /// How often the wait looks up to see whether the process is done.
 const TICK: Duration = Duration::from_millis(50);
@@ -128,15 +154,15 @@ pub enum Trouble {
 /// for in an order they wrote down, and a formatter racing a commit would be this deciding that
 /// the order did not matter.
 pub fn fire(hooks: &Hooks, moment: Moment, tool: Option<&str>, directory: &Path) -> Vec<Fired> {
-    fire_within(hooks, moment, tool, directory, LIMIT)
+    fire_within(hooks, moment, tool, directory, default_limit(moment))
 }
 
-/// [`fire`], for a stated default bound rather than the one a turn uses. A hook that declared its
-/// own `timeout` keeps it.
+/// [`fire`], for a stated default bound rather than the one [`default_limit`] gives the moment. A
+/// hook that declared its own `timeout` keeps it.
 ///
 /// So that a test of what happens to a hook that outstays its welcome does not have to wait the
-/// real bound out. Nothing else states one: how long a turn will wait on a hook is this module's
-/// decision and the file's, not a caller's.
+/// real bound out. Nothing else states one but [`SessionMoments`], for the same reason: how long a
+/// turn will wait on a hook is this module's decision and the file's, not a caller's.
 pub fn fire_within(
     hooks: &Hooks,
     moment: Moment,
@@ -145,6 +171,279 @@ pub fn fire_within(
     limit: Duration,
 ) -> Vec<Fired> {
     fire_watched(hooks, moment, tool, directory, limit, &mut |_| {})
+}
+
+/// The hooks in force for a run that reads them once: what the file in the state directory declares,
+/// and none in a safe session, which is what leaves nothing to fire.
+pub fn in_force(home: Option<&Path>) -> Hooks {
+    match bravebot_core::safe::engaged() {
+        true => Hooks::default(),
+        false => Hooks::load(home),
+    }
+}
+
+/// The two ends of a session an interface opened, which that interface fires (HOOK-10).
+///
+/// A turn fires none of this. A session is many turns, and a command that should run once when it
+/// opens would otherwise run again at each turn, so the interface owning the session holds one of
+/// these for as long as the session lasts and the turns never see it.
+///
+/// The hooks are read once, when the session begins, and the same ones fire at its end: a file
+/// edited halfway through does not give a session an end it did not begin with. Both run in the
+/// directory the session opened in, so a relative path in a `session-ended` hook is the one its
+/// `session-started` twin ran from, however far `/cd` has since moved the session.
+///
+/// No rewind coverage gap is marked for either, as a turn's hooks mark one. A rewind point puts back
+/// what a turn wrote: `session-started` runs before the first turn does and `session-ended` after
+/// the last, so there is no turn whose restore either could leave incomplete.
+pub struct SessionMoments {
+    hooks: Hooks,
+    directory: PathBuf,
+    /// The bound of a `session-ended` hook that states no `timeout`.
+    end_limit: Duration,
+    started: bool,
+    ended: bool,
+}
+
+impl SessionMoments {
+    /// Read the hooks for a session opened in `directory`.
+    pub fn read(home: Option<&Path>, directory: &Path) -> Self {
+        Self {
+            hooks: in_force(home),
+            directory: directory.to_path_buf(),
+            end_limit: default_limit(Moment::SessionEnded),
+            started: false,
+            ended: false,
+        }
+    }
+
+    /// The same, for a stated bound on a `session-ended` hook that states none of its own.
+    ///
+    /// So that a test of a hook that outstays it does not have to wait the real bound out, as
+    /// [`fire_within`] is for the turn's.
+    pub fn ending_within(mut self, limit: Duration) -> Self {
+        self.end_limit = limit;
+        self
+    }
+
+    /// Whether [`Self::started`] is about to run a hook, so an interface can draw what the person
+    /// is waiting on before the hook holds it back.
+    pub fn will_start_a_hook(&self) -> bool {
+        !self.started
+            && self
+                .hooks
+                .firing(Moment::SessionStarted, None)
+                .next()
+                .is_some()
+    }
+
+    /// Fire `session-started`, and say what went wrong where something did.
+    ///
+    /// Once: a call after the first fires nothing, so an interface that begins another conversation
+    /// inside the session it has open (`/resume`) cannot fire it a second time.
+    pub fn started(&mut self) -> Vec<String> {
+        self.started_watched(&mut |_| {})
+    }
+
+    /// [`Self::started`], telling `watch` as each hook starts and ends (HOOK-9).
+    ///
+    /// For an interface whose first turn is running while the hook does, such as a window, so the
+    /// person is told what the turn is waiting on.
+    pub fn started_watched(&mut self, watch: &mut dyn FnMut(Watch<'_>)) -> Vec<String> {
+        if std::mem::replace(&mut self.started, true) {
+            return Vec::new();
+        }
+        crate::turn::trouble_sentences(fire_watched(
+            &self.hooks,
+            Moment::SessionStarted,
+            None,
+            &self.directory,
+            default_limit(Moment::SessionStarted),
+            watch,
+        ))
+    }
+
+    /// Fire `session-ended`, and say what went wrong where something did.
+    ///
+    /// Only for a session that fired `session-started`, so one that never began leaves nothing to
+    /// end, and once however the interface is left.
+    pub fn ended(&mut self) -> Vec<String> {
+        if !self.started || std::mem::replace(&mut self.ended, true) {
+            return Vec::new();
+        }
+        crate::turn::trouble_sentences(fire_within(
+            &self.hooks,
+            Moment::SessionEnded,
+            None,
+            &self.directory,
+            self.end_limit,
+        ))
+    }
+}
+
+/// How many `file-changed` entries a session keeps, so a file of them cannot become a directory
+/// of paths looked at every few seconds. Entries past it, in the order the file lists them, are
+/// not kept.
+pub const MAX_WATCHED: usize = 8;
+
+/// How often a watched file is looked at, which is how late a change is noticed.
+pub const BETWEEN_LOOKS: Duration = Duration::from_secs(5);
+
+/// The least time between the end of one run of an entry and the start of its next, so a command
+/// that writes the file it is watching runs once in this time and not continuously.
+pub const BETWEEN_RUNS: Duration = Duration::from_secs(5);
+
+/// What one look at a watched file found: its size and modification time, or nothing where it is
+/// not there. The whole of what is kept of it, so no byte of the file and no name the filesystem
+/// produced reaches anything.
+type Token = Option<(u64, std::time::SystemTime)>;
+
+fn looked_at(path: &Path) -> Token {
+    let found = std::fs::metadata(path).ok()?;
+    Some((found.len(), found.modified().ok()?))
+}
+
+struct Watched {
+    hook: Hook,
+    path: PathBuf,
+    seen: Token,
+    next_look: Instant,
+    /// A change seen and not yet run, because the entry ran too lately to run again.
+    pending: bool,
+    /// Measured from the end of a run, so a command slower than the interval is not started again
+    /// the moment it finishes.
+    not_before: Instant,
+}
+
+/// The `file-changed` entries of a session, each looking at the one file it names (HOOK-2).
+///
+/// Looks and nothing else: a change is a size or modification time that differs between two looks,
+/// and what a hook is told is the moment alone (HOOK-5), so no filesystem-produced string reaches
+/// it and none reaches a turn. It begins no turn, as a watch a turn armed does
+/// ([`crate::watch`]), and nothing it holds is written to disk, so it ends with the process
+/// (FSWATCH-11).
+pub struct FileChanged {
+    watched: Vec<Watched>,
+    directory: PathBuf,
+    between_looks: Duration,
+}
+
+impl FileChanged {
+    /// Read the entries for a session opened in `directory`, taking the first look at each file
+    /// now. A relative path is the file in that directory.
+    pub fn read(home: Option<&Path>, directory: &Path, now: Instant) -> Self {
+        let watched = in_force(home)
+            .firing(Moment::FileChanged, None)
+            .filter_map(|hook| {
+                let path = directory.join(hook.path()?);
+                Some(Watched {
+                    hook: hook.clone(),
+                    seen: looked_at(&path),
+                    path,
+                    next_look: now + BETWEEN_LOOKS,
+                    pending: false,
+                    not_before: now,
+                })
+            })
+            .take(MAX_WATCHED)
+            .collect();
+        Self {
+            watched,
+            directory: directory.to_path_buf(),
+            between_looks: BETWEEN_LOOKS,
+        }
+    }
+
+    /// The same, looking at the stated interval rather than every [`BETWEEN_LOOKS`], so a test does
+    /// not wait the real one out.
+    pub fn looking_every(mut self, interval: Duration) -> Self {
+        self.between_looks = interval;
+        for entry in &mut self.watched {
+            entry.next_look = entry.next_look.min(Instant::now() + interval);
+        }
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.watched.is_empty()
+    }
+
+    /// Look at each file whose look is due and run the entries whose file changed, once each however
+    /// many changes the window held, and say what went wrong where something did.
+    pub fn poll(&mut self, now: Instant) -> Vec<String> {
+        let mut fired = Vec::new();
+        for entry in &mut self.watched {
+            if now >= entry.next_look {
+                entry.next_look = now + self.between_looks;
+                let token = looked_at(&entry.path);
+                if token != entry.seen {
+                    entry.seen = token;
+                    entry.pending = true;
+                }
+            }
+            if entry.pending && now >= entry.not_before {
+                entry.pending = false;
+                let began = Instant::now();
+                let trouble = run(
+                    &entry.hook,
+                    &announcement(Moment::FileChanged),
+                    &self.directory,
+                    default_limit(Moment::FileChanged),
+                    None,
+                );
+                entry.not_before = now + began.elapsed() + BETWEEN_RUNS;
+                fired.push(Fired {
+                    program: entry.hook.run().first().cloned().unwrap_or_default(),
+                    moment: Moment::FileChanged.as_str(),
+                    trouble,
+                });
+            }
+        }
+        crate::turn::trouble_sentences(fired)
+    }
+}
+
+/// A [`FileChanged`] looked at on a thread of its own, for an interface that has no turn to hold
+/// open and must not stop drawing while a command runs.
+///
+/// What a hook said when it went wrong is collected by [`Self::said`]. Dropping it asks the thread
+/// to stop; a command already running ends or reaches its bound (HOOK-7).
+pub struct Watching {
+    said: std::sync::mpsc::Receiver<Vec<String>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Watching {
+    /// Begin looking, or `None` where no entry is kept.
+    pub fn begin(mut watched: FileChanged) -> Option<Self> {
+        if watched.is_empty() {
+            return None;
+        }
+        let (send, said) = std::sync::mpsc::channel();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let asked = stop.clone();
+        std::thread::spawn(move || {
+            while !asked.load(std::sync::atomic::Ordering::Relaxed) {
+                let trouble = watched.poll(Instant::now());
+                if !trouble.is_empty() && send.send(trouble).is_err() {
+                    return;
+                }
+                std::thread::sleep(TICK);
+            }
+        });
+        Some(Self { said, stop })
+    }
+
+    /// What the entries have said since the last call.
+    pub fn said(&self) -> Vec<String> {
+        self.said.try_iter().flatten().collect()
+    }
+}
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// One edge of a hook running, for whoever is drawing the wait.
@@ -366,6 +665,30 @@ mod tests {
             announcement(Moment::Compacted),
             "{\"event\":\"compacted\"}\n"
         );
+        assert_eq!(
+            announcement(Moment::SessionStarted),
+            "{\"event\":\"session-started\"}\n"
+        );
+        assert_eq!(
+            announcement(Moment::SessionEnded),
+            "{\"event\":\"session-ended\"}\n"
+        );
+        assert_eq!(
+            announcement(Moment::FileChanged),
+            "{\"event\":\"file-changed\"}\n"
+        );
+    }
+
+    /// HOOK-7, HOOK-10: a session begins holding its end to the bound that moment has by default,
+    /// five seconds, which is the bound a front end is told. The regression it rejects is a bound
+    /// of its own at the start of a session, which the tests that pass a short one in its place
+    /// would not see.
+    #[test]
+    fn a_session_begins_holding_its_end_to_the_bound_that_moment_has() {
+        let moments = SessionMoments::read(None, Path::new("."));
+
+        assert_eq!(moments.end_limit, default_limit(Moment::SessionEnded));
+        assert_eq!(moments.end_limit, Duration::from_secs(5));
     }
 
     /// SANDBOX-30: a hook's bare program name is looked up as every program started unconfined is,

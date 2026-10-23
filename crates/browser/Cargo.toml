@@ -11,6 +11,9 @@ repository.workspace = true
 name = "bravebot-browser"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 rand = { workspace = true }
 serde_json = { workspace = true }

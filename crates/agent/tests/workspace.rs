@@ -1,8 +1,15 @@
 //! Tests for the label-aware file tools, exercised against a real temporary directory.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 mod repository;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "test-support/aliases.rs is shared with turn.rs, and this file never asks Consumer::DenyRule"
+)]
 #[path = "../test-support/aliases.rs"]
 mod aliases;
 
@@ -36,7 +43,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-workspace-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-workspace-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -7753,7 +7761,10 @@ fn a_destination_outside_the_workspace_is_refused() {
 #[test]
 fn a_destination_reached_through_a_symlink_out_of_the_workspace_is_refused() {
     let scratch = Scratch::new("confines-symlink");
-    let outside = std::env::temp_dir().join("bravebot-workspace-confines-target");
+    let outside = std::env::temp_dir().join(format!(
+        "bravebot-workspace-confines-target-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).expect("target directory");
     std::os::unix::fs::symlink(&outside, scratch.path.join("link")).expect("symlink");
@@ -7772,7 +7783,10 @@ fn a_destination_reached_through_a_symlink_out_of_the_workspace_is_refused() {
 #[test]
 fn a_destination_reached_through_a_dangling_symlink_out_of_the_workspace_is_refused() {
     let scratch = Scratch::new("confines-dangling");
-    let outside = std::env::temp_dir().join("bravebot-workspace-confines-dangling-target");
+    let outside = std::env::temp_dir().join(format!(
+        "bravebot-workspace-confines-dangling-target-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).expect("target directory");
     std::os::unix::fs::symlink(outside.join("out.txt"), scratch.path.join("link.txt"))
@@ -7791,7 +7805,10 @@ fn a_destination_reached_through_a_dangling_symlink_out_of_the_workspace_is_refu
 #[test]
 fn a_destination_inside_a_directory_the_user_added_is_confined() {
     let scratch = Scratch::new("confines-added");
-    let other = std::env::temp_dir().join("bravebot-workspace-confines-added-other");
+    let other = std::env::temp_dir().join(format!(
+        "bravebot-workspace-confines-added-other-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&other);
     std::fs::create_dir_all(&other).expect("other directory");
 
@@ -12660,6 +12677,36 @@ fn a_repo_map_says_when_the_file_cap_stopped_it() {
     let (map, _) = map_of(&whole, trust, None, ".").expect("map");
     assert!(!map.truncated, "a complete map claimed to be cut short");
     assert_eq!(map.files, 5);
+}
+
+/// A tree with a directory that cannot be opened is not the tree the map shows, and a map that says
+/// nothing reads as complete. The files beside the directory are still mapped.
+#[cfg(unix)]
+#[test]
+fn a_repo_map_says_when_a_directory_could_not_be_opened() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("map-unreadable");
+    let locked = scratch.path.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::write(scratch.path.join("kept.rs"), "pub fn kept_function() {}\n").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A superuser opens it anyway, which leaves nothing to observe.
+    if std::fs::read_dir(&locked).is_ok() {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: a mode 000 directory can be opened here, so none is unreadable");
+        return;
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let trust = trusting_all_but(&workspace, &[]);
+
+    let map = map_of(&workspace, trust, None, ".");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (map, _) = map.expect("an unreadable nested directory failed the map");
+
+    assert!(map.unreadable, "the missing directory was not reported");
+    assert!(!map.truncated, "a directory left out was reported as a cap");
+    assert!(map.body.contains("kept_function"), "{}", map.body);
+    assert_eq!(map.files, 1);
 }
 
 /// The argument names a directory; a file there is refused in the tool's words, not left to the

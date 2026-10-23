@@ -11,7 +11,8 @@
 
 use crate::protocol::{
     Listing, PromptListing, PromptResult, RpcNotification, RpcRequest, RpcResponse, ToolResult,
-    call_params, declares_prompts, get_prompt_params, initialize_params, paged, paged_prompts,
+    call_params, declares_prompts, declares_tools_list_changed, get_prompt_params,
+    initialize_params, is_tools_list_changed, paged, paged_prompts,
 };
 use crate::{McpError, McpResult, log_step, malformed, named};
 use bravebot_core::event::Sink;
@@ -45,6 +46,10 @@ pub struct StdioServer {
     /// Whether the handshake said the server has prompts, which is what a request for them waits
     /// on (MCP-10).
     prompts: bool,
+    /// Whether the handshake said the server notifies when its tools change (MCP-12).
+    announces_tools: bool,
+    /// Set when the server announced a change that has not been taken yet.
+    tools_changed: bool,
 }
 
 /// How many lines the reader holds ahead of a request that is waiting for one.
@@ -174,6 +179,8 @@ impl StdioServer {
             bound: Duration::from_secs(bravebot_config::mcp::TOOL_SECS),
             stopped: false,
             prompts: false,
+            announces_tools: false,
+            tools_changed: false,
         })
     }
 
@@ -245,6 +252,7 @@ impl StdioServer {
             if line.trim().is_empty() {
                 continue;
             }
+            self.tools_changed |= self.announces_tools && is_tools_list_changed(&line);
 
             let response: RpcResponse = match serde_json::from_str(&line) {
                 Ok(r) => r,
@@ -291,6 +299,7 @@ impl StdioServer {
             )
             .and_then(|initialized| {
                 self.prompts = declares_prompts(&initialized);
+                self.announces_tools = declares_tools_list_changed(&initialized);
                 self.notify("notifications/initialized")
             });
         log_step("mcp.initialize", &done);
@@ -303,6 +312,20 @@ impl StdioServer {
         let listed = paged(|params| self.send_request("tools/list", params));
         log_step("mcp.list_tools", &listed);
         Ok(listed?.listing(&self.name))
+    }
+
+    /// Whether the server has announced that its tools changed since this was last asked, which
+    /// is only ever so for a server that declared it would (MCP-12).
+    ///
+    /// What the server has written while nothing was waiting for a reply is read here, so an
+    /// announcement made between two turns is found without a request being made.
+    pub fn take_tools_changed(&mut self) -> bool {
+        while let Ok(line) = self.lines.try_recv() {
+            if let Ok(line) = line {
+                self.tools_changed |= self.announces_tools && is_tools_list_changed(&line);
+            }
+        }
+        std::mem::take(&mut self.tools_changed)
     }
 
     /// List the prompts this server offers, as the text a person is shown in a menu. None where the

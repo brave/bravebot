@@ -177,8 +177,12 @@ cli-option-interactive = Ouvrir la session interactive et envoyer cette invite c
 cli-option-trace = Afficher le journal d'audit
 cli-option-json = Afficher un objet de résultat sur stdout au lieu de la réponse
 cli-option-json-stream = Afficher un événement par ligne sur stdout pendant l'exécution, puis l'objet de résultat
+cli-option-input-format = Lire des tours sur stdin en lignes JSON avec lines (implique --json-stream)
+cli-option-trust-input-lines = Tenir les lignes de stdin pour vos propres mots et non ceux d'un programme (demande --input-format lines)
 cli-option-output-schema = Exiger que la réponse respecte le schéma JSON de ce fichier ; avec --json, la valeur est dans « structured »
 cli-option-goal = Travailler vers cette condition : après chaque tour, un juge dit si elle est remplie, et le travail est renvoyé jusqu'à ce qu'elle le soit ; termine avec le statut 7 si elle ne l'est jamais
+cli-option-max-rounds = Arrêter l'exécution quand l'agent demande plus de cycles d'appels d'outils que ce nombre, avec le statut 8
+cli-option-max-tokens = Arrêter l'exécution avant une requête une fois ce nombre de jetons dépensé, avec le statut 8
 cli-option-incognito = Ne rien écrire dans ~/.bravebot : ni historique, ni session, ni préférence
 cli-option-safe =
     Ne charger ni hooks, ni skills, ni définitions, ni serveurs MCP, ni AGENTS.md. La connexion, le modèle et les permissions s'appliquent toujours
@@ -296,7 +300,18 @@ cli-goal-stalled =
     l'objectif a renvoyé le travail sans qu'un tour fasse d'appel d'outil, et a cessé de le renvoyer
 cli-goal-failed = l'objectif n'a pas pu être vérifié : { $problem }
 cli-output-schema-needs-a-path = --output-schema demande le chemin d'un fichier de schéma JSON
+cli-input-format-unknown = --input-format accepte lines
+cli-trust-input-lines-needs-lines = --trust-input-lines demande --input-format lines
+cli-input-lines-not-with-incognito = --input-format lines ne va pas avec --incognito : chaque tour est poursuivi à partir de l'enregistrement de la session, et une exécution incognito n'en écrit aucun
+cli-input-lines-not-with-a-manifest = --input-format lines ne va pas avec --mode manifest : une exécution planifiée a une seule tâche et aucun tour à ajouter
+cli-input-lines-no-prompt = aucune ligne prompt n'est arrivée avant la fin de l'entrée
+cli-input-lines-session-lost = la session que cette exécution poursuit n'est plus lisible, donc le tour n'a pas été exécuté : { $problem }
+cli-input-lines-session-unsaved = le tour précédent n'a écrit aucun enregistrement de session, donc il n'y a rien à poursuivre et le tour n'a pas été exécuté
 cli-output-schema-not-with-a-manifest = --output-schema est incompatible avec --mode manifest, qui donne une réponse par étape et aucune pour l'exécution
+cli-max-rounds-needs-a-count = --max-rounds demande un nombre entier de 1 à { $most }
+cli-max-tokens-needs-a-count = --max-tokens demande un nombre entier de jetons, 1 ou plus
+cli-limit-not-with-a-manifest = { $flag } est incompatible avec --mode manifest, qui planifie tout le déroulement d'abord et ne fait aucun cycle d'appels d'outils
+cli-limit-not-with-a-goal = { $flag } est incompatible avec --goal, qui renvoie le travail pour des tours supplémentaires et compterait la limite à nouveau dans chacun
 cli-output-schema-not-served = --output-schema est incompatible avec { $model }, auquel on ne peut pas demander une réponse conforme à un schéma
 cli-output-schema-unreadable = impossible de lire le schéma de sortie { $path } : { $problem }
 cli-output-schema-not-json = le schéma de sortie { $path } n'est pas du JSON
@@ -369,6 +384,8 @@ onboarding-import-both =
     { $first } et { $second } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-import-three =
     { $first }, { $second } et { $third } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
+onboarding-import-many =
+    { $sources } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
@@ -482,6 +499,10 @@ doctor-gateway-token-stored = enregistré par bravebot auth login gateway (jamai
 doctor-gateway-token-absent =
     aucun trouvé (définissez une variable nommée dans `env`, ou lancez bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = aucun requis (le bloc n'en nomme aucun)
+doctor-header-reserved = { $name } dans le bloc provider n'est pas envoyé : ce programme définit lui-même cet en-tête
+doctor-header-not-a-name = { $name } dans le bloc provider n'est pas envoyé : ce n'est pas un nom d'en-tête
+doctor-header-not-a-value = { $name } dans le bloc provider n'est pas envoyé : une valeur d'en-tête ne peut pas contenir de fin de ligne ni de caractère de contrôle
+doctor-header-substitution = { $name } dans le bloc provider n'est pas envoyé : une référence à une variable n'est lue que comme valeur entière, pas à l'intérieur d'une valeur plus longue
 doctor-gateway-keys = clés de passerelle
 doctor-gateway-keys-unreadable =
     { $path } ne peut pas être lu, donc aucune clé qu'il contient n'est envoyée (bravebot auth login gateway le laisse tel quel)
@@ -683,6 +704,10 @@ doctor-proxy-unsupported = { $protocol } n'est pas pris en charge par cette vers
 doctor-proxy-unparseable = pas un proxy
 doctor-proxy-unparseable-detail = { $variable } contient une valeur qui ne peut pas être lue comme une adresse de proxy, elle n'est donc pas la route utilisée (sa valeur n'est jamais affichée)
 doctor-no-proxy = sans proxy
+doctor-client-certificate = certificat client
+doctor-client-certificate-loaded = { $certificate }, clé { $key } (chargé ; la clé n'est jamais affichée)
+doctor-client-certificate-refused = désigné et inutilisable, donc toute connexion TLS sera refusée
+doctor-client-certificate-unusable = inutilisable
 doctor-network-file = indiqué dans
 doctor-network-file-detail = { $names } depuis { $path }
 doctor-network-file-ignored = ignoré
@@ -762,6 +787,9 @@ spend-limit-without-a-limit = Continuer sans limite
 spend-limit-raised = la limite de la session est maintenant de { $limit } { $unit }
 spend-limit-lifted = la session n'a plus de limite
 spend-limit-stopped = arrêté à la limite de la session : { $spent } { $unit } dépensés pour une limite de { $limit }
+# Ce que dit une exécution arrêtée par une limite que son auteur lui a donnée, avant le cycle ou la requête qu'elle aurait faits.
+run-limit-rounds = arrêt à la limite de cycles d'appels d'outils ({ $most }) : le planificateur en a demandé un autre, qui n'a pas été exécuté
+run-limit-tokens = arrêt à la limite de jetons ({ $most }) : { $spent } ont été dépensés et la requête suivante n'a pas été envoyée
 repeated-call-header = Appel répété
 repeated-call-reached = Le planificateur a fait { $count } fois de suite le même appel à { $tool }. Il n'a pas été exécuté. Exécutez-le encore une fois, ou choisissez une autre voie.
 repeated-call-refuse = Ne pas l'exécuter, et dire au planificateur d'essayer une autre approche
@@ -780,14 +808,15 @@ hook-stopped =
     arrêté
 
 
-## Importer un service de modèle configuré par Claude Code ou opencode, ou servi par un Ollama lancé
+## Importer un service de modèle configuré par Claude Code ou opencode, ou servi par un Ollama, un LM Studio ou un llama-server lancé
 
 import-found = { $source } configure un service de modèle que bravebot peut utiliser, dans { $files }.
 import-found-exported =
     { $source } configure un service de modèle que bravebot peut utiliser, dans l'environnement de ce processus.
 import-found-running = { $source } tourne à { $url } et sert des modèles que bravebot peut utiliser.
-import-ollama-window = le serveur l'a chargé avec une fenêtre de contexte de { $window } jetons
+import-window = le serveur l'a chargé avec une fenêtre de contexte de { $window } jetons
 import-ollama-window-small = Ollama abandonne les premiers tours au-delà de cette fenêtre, donc l'entrée ci-dessous l'enregistre comme contextWindow et une conversation est gardée sous cette fenêtre plutôt que sous { $assumed } jetons. Définissez OLLAMA_CONTEXT_LENGTH plus haut avant de démarrer Ollama pour en garder davantage.
+import-lm-studio-window-small = Une conversation plus longue que cette fenêtre ne tient pas dans le modèle tel que LM Studio l'a chargé, donc l'entrée ci-dessous l'enregistre comme contextWindow et une conversation est gardée sous cette fenêtre plutôt que sous { $assumed } jetons. Chargez le modèle avec une longueur de contexte plus grande dans LM Studio pour en garder davantage.
 import-adds = L'import ajoute ceci à { $file } :
 import-adds-gateway = provider.{ $id }, joignable à { $endpoint } : { $entry }
 import-key-held = provider.{ $id } : une clé est détenue pour cette entrée ; elle fait l'objet d'une question à part
@@ -798,7 +827,7 @@ import-named = Non ajoutés, puisqu'un niveau les nomme déjà :
 import-named-model = { $model } dans provider.{ $id }, nommé par { $variable }
 import-pinned = Non proposés, puisque { $file } les définit pour tous les utilisateurs de cette machine :
 import-left-heading = Trouvés dans { $source } et non importés :
-import-left-anthropic-api = l'API native d'Anthropic, dont aucun service ici ne parle le format d'échange
+import-left-anthropic-api = un réglage de l'API native d'Anthropic, non repris : ajoutez un bloc provider.anthropic qui indique où se trouve la clé
 import-left-vertex = Google Vertex AI sans projet Google Cloud, ou par des identifiants Google Cloud, qu'aucun service ici ne joint
 import-left-bearer-token =
     une clé d'API Bedrock ; bravebot signe plutôt les requêtes Bedrock avec la chaîne d'identifiants AWS
@@ -808,7 +837,7 @@ import-left-another-sdk = une entrée qui passe par un SDK autre qu'un SDK compa
 import-left-no-endpoint = aucune adresse joignable n'est indiquée ni connue pour cette entrée
 import-left-substitution =
     sa clé est construite à partir d'une substitution opencode au milieu d'une valeur plus longue, que bravebot ne fait pas
-import-left-elsewhere = désigne un serveur sur une autre machine, qui n'est pas interrogé
+import-left-elsewhere = désigne une adresse autre que la boucle locale de cette machine, qui n'est pas interrogée
 import-left-no-tool-model = tourne là, sans aucun modèle capable d'appeler des outils
 import-question = Importer ceci depuis { $source } ?
 import-key-question =
@@ -833,7 +862,7 @@ import-needs-a-terminal = import-providers demande confirmation avant d'écrire 
 import-not-while-incognito = un import enregistre des réglages sur le disque, ce qu'une session incognito ne fera pas
 import-no-home = il n'y a pas de répertoire personnel où écrire les réglages
 import-nothing-found =
-    ni Claude Code ni opencode ne configure de service de modèle que bravebot puisse utiliser, et aucun Ollama qui en serve un ne tourne ici
+    ni Claude Code ni opencode ne configure de service de modèle que bravebot puisse utiliser, et aucun Ollama, LM Studio ou llama-server qui en serve un ne tourne ici
 import-nothing-new = il ne reste rien à importer : chaque nom trouvé est déjà défini, ou épinglé
 import-takes-nothing-else = import-providers ne prend aucun argument
 
@@ -851,7 +880,7 @@ auth-logout-needs-a-way = bravebot auth logout a besoin du nom de la façon dont
 auth-ways-heading = Façons de se connecter à un service de modèle :
 auth-way-leo = Brave Leo Premium, depuis une installation de Brave abonnée
 auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
-auth-way-import = Un service de modèle de Claude Code, opencode ou Ollama, importé dans les réglages
+auth-way-import = Un service de modèle de Claude Code, opencode, Ollama, LM Studio ou llama-server, importé dans les réglages
 auth-way-gateway = Une clé pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
 auth-gateway-held = une clé enregistrée pour { $ids }
 auth-gateway-held-unreadable = le fichier des clés de passerelle ne peut pas être lu
@@ -1004,7 +1033,7 @@ mcp-problem-twice =
     environnement
 mcp-problem-reads = reads n'est pas une liste de chemins absolus
 mcp-problem-directory = le répertoire n'est pas un chemin absolu
-mcp-problem-url = l'url n'est pas en http ou en https avec un hôte
+mcp-problem-url = l'url n'est pas en http ou en https avec un hôte et, si elle écrit un port, un nombre jusqu'à 65535
 mcp-problem-credentials =
     l'url porte un utilisateur ou un mot de passe, ce qui garderait un identifiant en clair
 mcp-problem-header = { $name } n'est pas un jeton d'en-tête HTTP valide
@@ -1083,6 +1112,9 @@ mcp-no-current-directory = le répertoire courant n'a pas pu être lu : { $error
 mcp-none-declared = aucun serveur MCP n'est déclaré dans { $path }
 mcp-list-declared-in = déclarations dans { $path }
 mcp-approved = approuvé
+mcp-get-policy = une session ici le confinerait à :
+mcp-get-policy-home = dossier personnel
+mcp-get-policy-home-throwaway = un nouveau dossier dans le dossier temporaire, créé à son démarrage
 mcp-unapproved = non approuvé
 mcp-unapproved-run-approve = non approuvé : lancez bravebot mcp approve { $alias }
 mcp-refused-by-managed = non démarré : { $reason }
@@ -1224,6 +1256,8 @@ mcp-tools-yes = Oui, les proposer
 mcp-tools-no = Non, continuer sans eux
 mcp-tools-declined = { $alias } ne propose aucun outil dans cette session : sa liste n'a pas été approuvée
 mcp-tools-refused = { $alias } ne propose aucun outil dans cette session : { $reason }
+mcp-tools-changed = { $alias } a modifié ses outils : il n'en propose aucun tant que la liste qu'il donne maintenant n'est pas approuvée
+mcp-tools-reread-failed = { $alias } ne propose aucun outil dans cette session : sa liste modifiée n'a pas pu être lue ({ $reason })
 
 ## One call to a tool of an MCP server
 
@@ -1823,6 +1857,7 @@ vet-always-covers =
 fetch-title = récupérer ceci ?
 fetch-verb = Récupérer
 fetch-host = communication avec { $host }
+fetch-redirected = redirigé depuis { $from }, l'hôte pour lequel cette récupération a été approuvée
 fetch-authority-metadata =
     il s'agit du service de métadonnées de cette machine : il ne demande rien à qui le
     joint et répond avec les identifiants du rôle sous lequel elle tourne.
@@ -2011,11 +2046,15 @@ status-server-policy-read-write = lecture, écriture
 status-server-policy-left-out = écartés
 status-server-policy-left-out-reason = absents du disque, et cette plateforme n'accorde aucun chemin absent du disque
 status-loop = Boucle
+status-loop-numbered = Boucle { $number }
 status-loop-every = toutes les { $every }
 status-loop-self-paced = cadencée par chaque tour
 status-loop-next = prochaine dans { $next }
 status-loop-running = en cours
 status-loop-unpaced = en attente que le tour dise quand
+status-loop-once = une fois
+status-after = Après
+status-after-numbered = Après { $number }
 status-goal = Objectif
 status-goal-paused = suspendu, /goal resume le réarme
 status-goal-usage = { $note } · { $elapsed } · { $tokens }
@@ -2248,6 +2287,12 @@ ask-key-answer = répondre
 ask-key-skip = passer
 ask-key-skip-question = passer la question
 ask-key-back-to-options = revenir aux options
+ask-key-back = retour
+ask-key-send = envoyer
+ask-key-change = modifier une réponse
+ask-review-title = vérifiez vos réponses
+ask-review-heading = Rien n'a encore été envoyé.
+ask-review-skipped = (passée)
 
 
 ## Confier la ligne à un éditeur
@@ -2324,6 +2369,14 @@ command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre
 command-advisor = Nommer le modèle que le planificateur peut consulter, dire lequel, ou abandonner le choix
 command-style = Choisir la manière dont le planificateur répond : lister les styles, en choisir un, ou effacer le choix
+command-mode = Garder une compétence appliquée à chaque tour : lister, choisir ou quitter
+session-mode-set = la compétence { $skill } est en vigueur dès le prochain tour, jusqu'à ce que vous la quittiez avec /mode off
+session-mode-in-force = mode : { $skill } ; disponibles : { $skills }
+session-mode-none = aucun mode ; disponibles : { $skills }
+session-mode-cleared = mode quitté
+session-mode-unknown = aucune compétence nommée { $skill } ; disponibles : { $skills }
+session-mode-resumed = cette session était dans le mode { $skill }, qui est de nouveau en vigueur
+input-skill-mode = mode : { $skill }
 command-config = Choisir le mode d'édition de la zone de saisie
 command-language = Choisir la langue de l'interface au prochain démarrage, ou abandonner le choix
 command-add-dir = Ouvrir un autre répertoire et l'approuver pour cette session, ou en fermer un
@@ -2345,12 +2398,14 @@ command-resume = Reprendre une autre session de ce répertoire, par identifiant 
 command-background = Confier cette session à un processus en arrière-plan et la laisser tourner
 command-forget-trust = Ne plus retenir que ce répertoire est approuvé, pour que les sessions suivantes ici demandent
 command-loop = Renvoyer une consigne encore et encore, dire ce qui se répète, ou l'arrêter
+command-after = Envoyer une consigne une seule fois, après un délai
 command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fixez soit jugée remplie
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
 command-files = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
+command-thinking = Afficher ou masquer la réflexion du modèle à mesure qu'elle arrive
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
 command-plan = Passer en mode plan, et commencer une tâche si vous en donnez une
 command-manifest = Planifier une tâche en entier, vous montrer le plan, puis l'exécuter sans rien replanifier
@@ -2657,13 +2712,13 @@ loop-needs-a-prompt =
     /loop demande quelque chose à répéter, comme /loop 5m vérifie le déploiement, ou
     /loop surveille la compilation pour laisser chaque tour dire quand recommencer
 loop-started-every =
-    répétition toutes les { $every } ; /loop stop l'arrête, comme ctrl-c ou partir
+    boucle { $number } : répétition toutes les { $every } ; /loop stop { $number } l'arrête, comme ctrl-c ou partir
 loop-started-self-paced =
-    répétition au rythme que fixe chaque tour ; /loop stop l'arrête, comme ctrl-c ou partir
+    boucle { $number } : répétition au rythme que fixe chaque tour ; /loop stop { $number } l'arrête, comme ctrl-c ou partir
 # La réponse à la commande nue. La consigne en fait partie parce que la note ci-dessus a défilé,
 # et qui demande ce qui se répète a le plus souvent perdu de vue ce qu'il avait lancé.
-loop-active = répétition : { $prompt } · { $pace } · { $when }
-loop-ends-with = /loop stop l'arrête, comme ctrl-c ou partir
+loop-active = boucle { $number }, répétition : { $prompt } · { $pace } · { $when }
+loop-ends-with = /loop stop <numéro> en arrête une, /loop stop seul arrête la seule, et ctrl-c ou partir les arrêtent toutes
 loop-none =
     rien ne se répète. /loop 5m vérifie le déploiement envoie une ligne toutes les cinq minutes,
     /loop surveille la compilation laisse chaque tour dire quand recommencer, et /loop stop arrête
@@ -2673,31 +2728,48 @@ loop-none =
 # les mesures, et une partie qui ne tient pas dans le terminal est une partie que la ligne laisse.
 loop-hint = en boucle
 loop-hint-next = en boucle, prochaine dans { $next }
+loop-hint-several = { $count } boucles
+loop-hint-several-next = { $count } boucles, prochaine dans { $next }
 loop-interval-raised = l'intervalle a été relevé à { $every }, le plus rapide qu'une boucle aille
 loop-interval-capped = l'intervalle a été plafonné à { $every }, le plus long qu'une boucle vive
-loop-replaced = la boucle qui tournait a été remplacée
-loop-tick = boucle { $count }
+loop-full = { $count } boucles se répètent déjà, ce qu'une session peut en tenir ; /loop stop <numéro> en arrête une
+loop-stop-which = { $count } boucles se répètent, /loop stop demande donc le numéro de celle à arrêter ; /loop les liste
+loop-no-such = aucune boucle n'a le numéro { $number } ; /loop liste ce qui se répète
+loop-stopped-numbered = la boucle { $number } est arrêtée
+loop-stopped-all = les { $count } boucles sont arrêtées
+loop-cleared-all = les { $count } boucles sont arrêtées, car elles appartenaient à la session effacée
+loop-tick = boucle { $number }, passage { $count }
 loop-tick-quiet = { $quiet ->
-    [one] boucle { $count }, après { $quiet } passage sans rien trouver
-   *[other] boucle { $count }, après { $quiet } passages sans rien trouver
+    [one] boucle { $number }, passage { $count }, après { $quiet } passage sans rien trouver
+   *[other] boucle { $number }, passage { $count }, après { $quiet } passages sans rien trouver
     }
 loop-stopped = la boucle est arrêtée
 loop-cleared = la boucle est arrêtée, car elle appartenait à la session effacée
-loop-aged-out = la boucle a tourné une semaine et s'est arrêtée d'elle-même
-loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle est donc arrêtée
-loop-finished = ce tour a dit que la boucle est terminée, la boucle est donc arrêtée
+loop-aged-out = la boucle { $number } a tourné une semaine et s'est arrêtée d'elle-même
+loop-unpaced = ce tour n'a pas dit quand recommencer, la boucle { $number } est donc arrêtée
+loop-finished = ce tour a dit que la boucle est terminée, la boucle { $number } est donc arrêtée
 loop-busy = /loop commence par un tour à lui, il attend donc la fin de celui-ci
 loop-replaces-goal =
     l'objectif qui était fixé a été retiré : une session ne travaille qu'à une chose à la fois
 loop-armed-by-the-turn =
-    nouveau regard dans { $after }, en répétant ce que vous avez demandé ; /loop stop l'arrête,
-    comme ctrl-c ou partir
+    boucle { $number } : nouveau regard dans { $after }, en répétant ce que vous avez demandé ;
+    /loop stop { $number } l'arrête, comme ctrl-c ou partir
 loop-not-armed-under-a-goal =
     un regard plus tard a été demandé sans être lancé : cette session travaille vers un objectif,
     et elle fait une chose à la fois
 loop-not-armed-under-a-watch =
     un regard plus tard a été demandé sans être lancé : cette session surveille déjà un fichier,
     et elle fait une chose à la fois
+after-needs-a-delay =
+    /after demande un délai et quelque chose à envoyer, comme dans /after 5m vérifie le déploiement
+after-started =
+    envoi unique dans { $delay }, boucle { $number } ; /loop stop { $number } l'annule, comme ctrl-c ou partir
+after-active = boucle { $number }, envoi différé : { $prompt } · { $when }
+after-sent = envoi de ce que /after retenait
+after-hint = envoi différé
+after-hint-next = envoi dans { $next }
+after-delay-raised = le délai a été relevé à { $delay }, ce qui est le plus court que /after accepte
+after-delay-capped = le délai a été plafonné à { $delay }, ce qui est le plus long que /after attend
 
 
 ## Travailler jusqu'à ce qu'une condition soit remplie
@@ -2996,6 +3068,9 @@ agent-model-outranked =
 agent-style-not-used =
     le style { $style } n'a pas été utilisé : son fichier n'est pas de confiance ou n'est plus un
     style, donc ce tour s'est ouvert avec les mots habituels
+agent-skill-mode-not-used =
+    le mode { $skill } n'a pas été appliqué : sa compétence est introuvable ou n'est pas de confiance,
+    donc ce tour s'est déroulé sans lui
 agent-checkout-not-applied =
     { $definition } demande une copie de travail à part, que seuls ses délégués reçoivent, donc ce
     tour travaille dans votre répertoire de travail
@@ -3205,6 +3280,11 @@ caffeinate-explained =
 # Laissé dans la transcription quand /caffeinate s'active, et quand il se désactive.
 caffeinate-on = l'ordinateur reste éveillé pendant qu'un tour s'exécute ou qu'une boucle attend
 caffeinate-off = l'ordinateur peut de nouveau se mettre en veille
+# Laissé dans la transcription quand /thinking s'active, et quand il se désactive.
+thinking-on = la réflexion du modèle s'affiche à mesure qu'elle arrive, pour cette session seulement
+thinking-off = la réflexion du modèle est masquée
+# Le titre au-dessus de la réflexion du modèle pendant qu'elle arrive.
+transcript-thinking = réflexion
 # Laissé dans la transcription quand le programme qui empêche la veille n'a pas pu démarrer, ce qui
 # désactive /caffeinate.
 caffeinate-unavailable = /caffeinate est indisponible : `{ $program }` n'a pas pu être démarré ({ $reason })
@@ -3398,6 +3478,21 @@ commit-message-stopped = la rédaction du message de commit a été arrêtée
 handoff-started = transmis : ceci est une nouvelle session, et la précédente est restée telle quelle. Pour y revenir, lancez `bravebot --resume { $id }`
 resume-handed-off = depuis { $id }
 
+enhance-ready = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Échap remet ce que vous aviez écrit
+enhance-ready-vi = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Ctrl-C remet ce que vous aviez écrit
+enhance-invisible-removed = { $count ->
+    [one] { $count } caractère invisible a été retiré de la ligne améliorée
+   *[other] { $count } caractères invisibles ont été retirés de la ligne améliorée
+    }
+enhance-untrusted = l'amélioration n'a pas été proposée : cette conversation a rencontré du contenu non fiable, donc la réécriture ne serait pas faite de mots que le planificateur aurait pu retenir
+enhance-unusable = l'amélioration n'a pas été proposée : elle est revenue vide ou de plus de { $limit } caractères
+enhance-line-changed = l'amélioration n'a pas été proposée : la ligne a changé pendant son écriture
+enhance-failed = la ligne n'a pas pu être améliorée : { $problem }
+enhance-stopped = l'amélioration a été arrêtée
+enhance-not-a-command = { $key } réécrit une invite, et une ligne qui commence par / est une commande ou une compétence, donc elle a été laissée telle quelle
+enhance-not-with-a-picture = { $key } réécrit des mots, et cette ligne contient une image ou un fichier déposé, donc elle a été laissée telle quelle
+enhance-too-long = { $key } réécrit une ligne de { $limit } caractères au plus, et celle-ci est plus longue, donc elle a été laissée telle quelle
+
 # /sandbox. Le mode est le choix d'une personne, et les phrases disent ce qu'il change et à partir de quand.
 session-sandbox-report = mode du bac à sable : { $detail }
 session-sandbox-from-command = { $mode } depuis /sandbox
@@ -3436,3 +3531,25 @@ doctor-push-unanswered = { $host } n'a donné aucune réponse pour cette clé
 doctor-push-chosen = Choisie
 doctor-push-chosen-by = git.identities nomme cette clé pour le propriétaire
 doctor-push-chosen-at-prompt = vous avez choisi cette clé pour le propriétaire à une demande d'exécution ; /reach keys dans le client en terminal la liste et l'oublie
+
+# Ce qu'est le gestionnaire d'un lien bravebot:// dans la table d'usage.
+cli-usage-handle-uri = Ouvrir une session depuis un lien bravebot://open, son invite placée dans la zone de saisie sans être envoyée
+# Dit quand --handle-uri reçoit autre chose que le lien seul, ou une option qui changerait le
+# fonctionnement de la session. Un lien porte un répertoire et des mots, rien d'autre.
+deep-link-takes-one-link = --handle-uri prend un lien bravebot://open et rien d'autre
+# Dit quand le réglage deepLinks vaut false.
+deep-link-switched-off = Les liens qui ouvrent une session sont désactivés par le réglage deepLinks
+# Dit quand un lien est lu dans un programme sans terminal où ouvrir la session.
+deep-link-needs-a-terminal = Un lien ouvre une session dans un terminal, et ce programme n'en a pas
+# Les façons dont un lien est refusé. Aucune ne cite le lien : son texte est celui d'un autre.
+deep-link-not-a-link = Ce n'est pas un lien bravebot://open
+deep-link-too-long = Ce lien dépasse les { $limit } octets lus
+deep-link-parameter = Un lien peut porter dir et prompt, chacun une fois, et rien d'autre
+deep-link-encoding = Le texte de ce lien n'est pas de l'UTF-8 encodé en pourcentage valide
+deep-link-directory = Le dir du lien n'est pas un chemin absolu
+# La première ligne d'une session qu'un lien a démarrée dans le répertoire personnel à cause de ce
+# qu'il désignait. Le chemin est celui du lien et arrive échappé.
+deep-link-started-in-home = Le lien désignait { $dir }, qui n'est pas un répertoire auquel vous avez accordé votre confiance ici, donc cette session a démarré dans votre répertoire personnel
+# Sous la zone de saisie tant que les mots qu'un lien extérieur y a mis s'y trouvent encore.
+deep-link-banner = Invite d'un lien externe, pas encore envoyée  ·  lisez-la, puis Entrée l'envoie
+deep-link-banner-long = Invite d'un lien externe, { $count } caractères, non envoyée  ·  faites défiler et relisez tout d'abord

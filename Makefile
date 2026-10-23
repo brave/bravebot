@@ -55,9 +55,10 @@ help:
 	@echo "  make check-affected-containers  The Docker checks they need [BASE=ref]"
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
-	@echo "  make check-maintenance     Dead code, repeated code and long files, as candidates for the maintenance skill"
+	@echo "  make check-maintenance     Dead, repeated, deeply nested, coupled or untested code, as candidates for the maintenance skill"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
+	@echo "  make check-lint-increase   Whether this branch adds sites of the clippy lints held to the base"
 	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
 	@echo "  make check-pr-body         Whether a pull request body (PR_BODY) has a Not covered line, with an issue per case"
 	@echo "  make check-docs            Build the documentation website under docs/website"
@@ -95,6 +96,7 @@ help:
 	@echo "Releasing:"
 	@echo "  make bump-version BUMP=bugfix|minor|major   Set the next version"
 	@echo "  make github-release                         Tag it; Jenkins and npm publish are later"
+	@echo "  make npm-bootstrap                          Create the name of each new platform package, before its first publish"
 	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
 	@echo "  make package-manifests TAG=v<version>       Write the Homebrew cask and WinGet manifests into dist/packages"
 	@echo "  make app-bundle                             Package the desktop application, release build"
@@ -163,6 +165,7 @@ RUST_TEST_THREADS ?= 4
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
+	@python3 contrib/check-lint-increase.py
 	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
 	@python3 contrib/check-versions.py
 	@python3 contrib/check-toolchain.py
@@ -176,6 +179,14 @@ check:
 check-versions:
 	@python3 contrib/check-versions.py --selftest
 	@python3 contrib/check-versions.py
+
+# Whether this branch adds sites of a clippy lint the tree has hundreds of: clippy runs over the
+# libraries and binaries at the merge base and here, and a lint with more sites in a crate than it
+# had fails. Nothing is recorded in the tree. Run by `check` and, on a pull request, by CI. It
+# compiles the workspace twice, so it skips a change that touches nothing clippy reads.
+.PHONY: check-lint-increase
+check-lint-increase:
+	@python3 contrib/check-lint-increase.py
 
 # Whether clippy here knows the lints CI will fail on. Run by `check`; on its own it costs
 # nothing and answers immediately.
@@ -238,13 +249,17 @@ check-security:
 	python3 agents/skills/security-audit/security-audit.py --mechanical-only
 
 # The scan half of the maintenance skill: public items nothing names, items only tests name,
-# allowances silencing the dead-code lint, blocks and string literals repeated across files, and
-# files and functions past a length. It reads no code, so a candidate may be wrong in either
-# direction, and it exits zero whatever it finds. Deciding which candidates are worth an issue
-# needs a reading of the code: run the maintenance skill for that half.
+# allowances silencing a lint, blocks and string literals repeated across files, files and
+# functions past a length, deeply nested functions, modules that use many others, public functions
+# no test names, shared mutable state, commented-out code and string-typed errors. It reads no
+# code, so a candidate may be wrong in either direction, and it exits zero whatever it finds.
+# Candidates that docs/maintenance-reviewed holds a verdict for are left out. The clippy lane is
+# left out, because it compiles and this target needs no toolchain: the skill runs it. Deciding
+# which candidates are worth an issue needs a reading of the code: run the maintenance skill for
+# that half.
 .PHONY: check-maintenance
 check-maintenance: check-maintenance-selftest
-	python3 agents/skills/maintenance/maintenance.py --mechanical-only
+	python3 agents/skills/maintenance/maintenance.py --mechanical-only --no-clippy
 
 # agents/unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
 # check-spec fails while it and the specs disagree, so this is what to run after giving a clause
@@ -435,10 +450,10 @@ check-affected-containers:
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -469,6 +484,9 @@ check-maintenance-selftest:
 
 check-session-review-selftest:
 	python3 agents/skills/session-review/selftest.py
+
+check-lint-increase-selftest:
+	python3 contrib/check-lint-increase.py --selftest
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest
@@ -1139,7 +1157,15 @@ github-release:
 	echo "then publish npm: make publish-npm TAG=$(TAG)"; \
 	echo "watch CI with: gh run watch --repo brave/bravebot"
 
+# Publishes a placeholder under each platform package name the registry has no package of, so
+# that package can be given a trusted publisher on npmjs.com. Needs npm login as a maintainer who
+# can publish @brave. Does nothing when every name exists. publish-npm refuses until it has run.
+.PHONY: npm-bootstrap
+npm-bootstrap:
+	node npm/scripts/bootstrap-platform-packages.js
+
 # Without TAG on the command line, the latest GitHub release: this tree may be bumped past it.
+# Refuses first when the registry has no package of a platform's name (make npm-bootstrap).
 .PHONY: publish-npm
 publish-npm:
 	@set -eu; \
@@ -1148,6 +1174,7 @@ publish-npm:
 	else \
 		tag="$$(gh release view --repo brave/bravebot --json tagName --jq .tagName)"; \
 	fi; \
+	node npm/scripts/bootstrap-platform-packages.js --check; \
 	echo "dispatching publish-npm.yml for $$tag"; \
 	gh workflow run publish-npm.yml --repo brave/bravebot --ref "$$tag" -f tag="$$tag"; \
 	echo "watch it with: gh run watch --repo brave/bravebot"

@@ -357,6 +357,7 @@ write, so one made while the question waited is refused too.
 `verified-by: bravebot_cli::mcp::a_link_made_while_the_question_waits_is_not_written_through`
 `verified-by: bravebot_config::import::a_destination_requests_a_server_once_and_withdraws_only_it`
 `verified-by: bravebot_cli::running::a_server_enabled_in_a_checkout_is_requested_there_until_disabled`
+`verified-by: bravebot_agent::servers::a_requested_name_that_is_not_an_alias_is_shown_quoted_with_its_escapes`
 
 <a id="SERVERS-3"></a>
 ### SERVERS-3: adding a server is a command a person types, and typing it is not the approval
@@ -813,7 +814,7 @@ drawn above the list.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again. A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later process asks again about a list that is the
+asked again, unless the server announces that its tools changed ([MCP-12](mcp.md#MCP-12)). A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later process asks again about a list that is the
 same: the driver has no way to tell that it is, short of deciding from the server's bytes, and a
 decision taken from them is the one thing the driver may not do ([LABEL-8](labels.md#LABEL-8)). A
 `tools` line in `mcp-approved` is passed over and dropped the next time the file is written. The answer, a yes or a no, belongs to the MCP session the process started, so
@@ -1131,6 +1132,13 @@ Nothing in the settings answers that question in advance. A `WebFetch` rule name
 planner may reach, and what goes out here is one server's call with its arguments and its session
 id, so a rule about a host is not consent to hand those to a different service.
 
+The socket is the scheme, the host and the port the client connects to, so a hop that changed the
+scheme has left it too, whichever port both write. A port is written in digits after a `:` and is
+at most 65535. A url whose `:` is followed by anything else names no socket, since the client may
+connect to the scheme's default instead of what the url spells. Such a url cannot be declared, a hop
+to one is a move, and so is every request to a server declared at one, so two urls that name no
+socket are never taken for one place.
+
 The destination is shown where a server's bytes may be shown and nowhere else. It reaches the
 prompt, which is drawn for a person and parsed by nothing afterwards, and it does not reach the
 refusal the planner is given: that names the declared destination, which is what somebody wrote
@@ -1197,6 +1205,18 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_mcp::http::a_failed_server_request_stops_confining_the_turns_other_egress`
 `verified-by: bravebot_core::policy::a_rule_does_not_let_a_servers_request_be_redirected_off_its_host`
 `verified-by: bravebot_core::policy::a_servers_request_cannot_be_redirected_to_another_port_on_the_same_host`
+`verified-by: bravebot_core::policy::a_servers_request_cannot_be_redirected_to_the_other_scheme_on_the_same_port`
+`verified-by: bravebot_core::policy::a_hop_is_a_move_whenever_a_port_cannot_be_read`
+`verified-by: bravebot_core::url::a_change_of_scheme_is_a_change_of_socket`
+`verified-by: bravebot_core::url::a_port_spelled_another_way_is_the_same_socket`
+`verified-by: bravebot_core::url::a_colon_that_is_not_followed_by_a_port_names_no_socket`
+`verified-by: bravebot_net::lib::a_socket_is_the_one_the_client_connects_to`
+`verified-by: bravebot_net::lib::no_url_the_client_reads_is_given_a_socket_it_does_not_connect_to`
+`verified-by: bravebot_net::egress::a_redirect_to_the_other_scheme_on_the_declared_port_is_not_sent_there`
+`verified-by: bravebot_net::egress::a_server_declared_with_a_port_that_cannot_be_read_is_sent_nothing`
+`verified-by: bravebot_config::mcp::a_url_writing_a_port_that_is_not_one_is_refused`
+`verified-by: bravebot_config::mcp::a_stored_url_with_a_colon_and_no_port_is_reported_and_kept_as_written`
+`verified-by: bravebot_mcp::http::a_url_can_be_declared_exactly_when_it_names_a_socket`
 `verified-by: bravebot_core::policy::a_refused_hop_off_a_server_is_kept_untrusted_for_the_prompt`
 `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement`
 `verified-by: bravebot_agent::mcp::a_hop_the_person_says_is_a_move_is_declared_and_the_call_reaches_it`
@@ -1606,6 +1626,9 @@ persisting secrets in configuration files or leaking them to other origins acros
 `verified-by: bravebot_config::mcp::http_headers_and_bearer_env_are_validated_digested_and_roundtripped`
 `verified-by: bravebot_net::egress::socket_scoped_headers_and_authorization_are_dropped_across_different_sockets_on_redirect`
 `verified-by: bravebot_net::egress::socket_scoped_headers_are_kept_on_same_socket_redirect`
+`verified-by: bravebot_net::egress::a_redirect_to_the_other_scheme_on_the_declared_port_is_not_sent_there`
+`verified-by: bravebot_net::egress::a_server_declared_with_a_port_that_cannot_be_read_is_sent_nothing`
+`verified-by: bravebot_core::url::a_change_of_scheme_is_a_change_of_socket`
 `verified-by: bravebot_mcp::http::configured_headers_are_attached_to_requests`
 `verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
 `verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
@@ -1954,8 +1977,16 @@ refusal is read. Taking the lines from the value the launch passes to the backen
 second reading of the declaration, is what keeps a path shown as granted from being one the backend
 never received.
 
-Not built: `bravebot mcp get` prints the declaration and the digest and not the policy a session
-would build from it (#2910).
+`bravebot mcp get <alias>` ends with the same lines for a local server before any session starts it,
+under a line saying a session here would confine it to them. They are the policy a launch would
+hand the backend, built by the launch's own steps under the network decision and host list this
+process settled, and nothing is started to show them: the allowed-hosts proxy is not, so its port is
+not known and the egress line says only that it would be held to it, and the server's own directory
+is not made. Where that directory is kept under the state directory its path is a row, listed after
+the others, and where this session may write nothing there it is a throwaway whose path does not
+exist yet, so a line says that in place of a row. A server a session would not start has the
+sentence the session says for it in the place of the lines, and a server reached over HTTP has
+neither.
 
 `verified-by: bravebot_agent::servers::a_servers_view_lists_the_rows_its_backend_was_handed_and_names_each_path_left_out`
 `verified-by: bravebot_agent::servers::a_servers_view_keeps_apart_two_paths_a_lossy_rendering_would_join`
@@ -1965,4 +1996,9 @@ would build from it (#2910).
 `verified-by: bravebot_agent::mcp::a_session_names_the_policy_each_confined_server_was_started_under_and_no_other`
 `verified-by: bravebot_tui::status::a_started_servers_policy_is_listed_row_by_row_with_what_each_row_allows`
 `verified-by: bravebot_tui::status::a_session_with_no_confined_server_shows_no_server_policy`
+`verified-by: bravebot_agent::servers::a_foreseen_policy_is_the_one_a_launch_hands_its_backend`
+`verified-by: bravebot_agent::servers::a_foreseen_policy_lists_an_absent_path_as_left_out_where_the_platform_cannot_name_it`
+`verified-by: bravebot_agent::servers::a_foreseen_server_a_session_would_not_start_says_why_and_a_remote_one_has_no_policy`
+`verified-by: bravebot_agent::servers::a_foreseen_policy_holds_the_session_network_decision_and_starts_no_proxy`
+`verified-by: bravebot_cli::mcp::get_lists_the_policy_a_session_would_confine_a_local_server_to`
 `verified-by: bravebot_tui::status::a_path_in_a_servers_policy_is_drawn_without_sending_its_control_characters`

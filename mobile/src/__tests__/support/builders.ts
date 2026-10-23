@@ -14,7 +14,7 @@ export function narration(id: number, turn: number, text: string): Row {
 export function activity(
   id: number,
   turn: number,
-  fields: { verb: string; target: string; why?: string; note: string | null; failed?: boolean; untrusted?: boolean },
+  fields: { verb: string; target: string; shownTarget?: string; why?: string; note: string | null; failed?: boolean; untrusted?: boolean },
 ): Row {
   return {
     id,
@@ -24,6 +24,7 @@ export function activity(
     data: {
       verb: fields.verb,
       target: fields.target,
+      shownTarget: fields.shownTarget ?? fields.target,
       why: fields.why ?? '',
       note: fields.note,
       failed: fields.failed ?? false,

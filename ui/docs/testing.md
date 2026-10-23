@@ -55,7 +55,9 @@ matter:
 - `pnpm run drive:fetch`: a fetch the planner asks for, through the real app and bridge,
   against a model service and a website the script serves itself. The website is the
   witness: an approval sends one request to the host the card showed, a refusal sends none,
-  and an earlier approval does not answer a later fetch. No paid inference.
+  and an earlier approval does not answer a later fetch. A redirect to another host is asked
+  about in a card that names the host it was approved for, and a yes or a no to it is read
+  off the website the same way. No paid inference.
 - `pnpm run drive:language-server`: a language server the planner asks for, through the real
   app and bridge, against a model service and a server the script supplies. The server is
   the witness: an approval starts one process, the next message asks nobody and starts none,
@@ -153,7 +155,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:markdown` | Markdown rendering, light and dark |
 | `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
 | `pnpm run drive:run` | Approving a command from the window, end to end through a live turn |
-| `pnpm run drive:fetch` | Approving and refusing a fetch from the window, end to end, against a local model service and website |
+| `pnpm run drive:fetch` | Approving and refusing a fetch, and a redirect to another host, from the window, end to end, against a local model service and website |
 | `pnpm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
 | `pnpm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
 | `pnpm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |

@@ -1593,6 +1593,16 @@ fn target_key(tool: &str) -> Option<&'static str> {
     }
 }
 
+/// Whether the target of a call to `tool` is a file's name or path, which a screen draws spelled
+/// ([`Activity::shown_target`]).
+///
+/// Read off the same table as the target itself ([`target_key`]), so a tool added there with a
+/// `path` or a `directory` is spelled without being listed twice. The tool's own name, which
+/// dispatch matched against its table, decides it: the target is never read to find out.
+pub fn names_a_file(tool: &str) -> bool {
+    matches!(target_key(tool), Some("path" | "directory"))
+}
+
 /// How a `run` command line is drawn: its first line, and nothing at all when it carries a
 /// value that declared itself a credential.
 ///
@@ -1830,7 +1840,9 @@ pub fn describe_stored_call(tool: &str, arguments: &str) -> String {
             .unwrap_or_default()
     };
 
-    Activity::running(crate::report::verb_for(tool), target).line()
+    Activity::running(crate::report::verb_for(tool), target)
+        .naming_a_file(names_a_file(tool))
+        .line()
 }
 
 /// Shape a count out of a labelled result and release it to the person watching.
@@ -2211,6 +2223,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     reporter.tool_started(
         Activity::running(verb, target.clone())
             .of_tool(&name)
+            .naming_a_file(names_a_file(&name))
             .saying_why(why.clone()),
     );
 
@@ -2394,6 +2407,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     // call was the slow one or whether a model or this machine was what took the time.
     let finished = Activity::running(verb, target)
         .of_tool(&name)
+        .naming_a_file(names_a_file(&name))
         .saying_why(why)
         .with_changes(std::mem::take(&mut produced.changes))
         .with_written(produced.written.take())
@@ -2461,6 +2475,8 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
 pub fn refused_without_running<S: Sink, R: Reporter>(
     policy: &mut Policy<'_, S>,
     reporter: &mut R,
+    mcp: Option<&crate::mcp::Offer>,
+    slots: &SlotStore,
     call: &ToolCall,
     text: String,
 ) -> Output {
@@ -2469,14 +2485,27 @@ pub fn refused_without_running<S: Sink, R: Reporter>(
     let produced = Produced::problem(text);
     // The reason the planner gave is drawn on both lines, as `dispatch` draws it: a call that is
     // held is still one the person watching reads, and arguments that are not JSON have none.
-    let why = why_of(policy, &name, &call.arguments().unwrap_or(Value::Null));
+    let arguments = call.arguments().unwrap_or(Value::Null);
+    let why = why_of(policy, &name, &arguments);
+    // The target is drawn the same way `dispatch_with` draws it, so a call held for being a
+    // repeat is shown with what it was about rather than nothing.
+    let server_tool = mcp.and_then(|offer| {
+        offer
+            .find(&name)
+            .map(|(alias, tool)| (offer, alias.to_string(), tool.to_string()))
+    });
+    let server = server_tool
+        .as_ref()
+        .map(|(_, alias, tool)| format!("{alias}:{tool}"))
+        .or_else(|| name.strip_prefix("mcp__").map(server_named));
+    let target = target_of(policy, &name, server.as_deref(), slots, &arguments);
     reporter.tool_started(
-        Activity::running(verb, "")
+        Activity::running(verb, target.clone())
             .of_tool(&name)
             .saying_why(why.clone()),
     );
     reporter.tool_finished(
-        Activity::running(verb, "")
+        Activity::running(verb, target)
             .of_tool(&name)
             .saying_why(why)
             .failed(produced.note.clone()),
@@ -2887,6 +2916,74 @@ fn until_exit_from(
     }
 }
 
+/// The cell a `read_file` call asked the saved outputs of, where it asked.
+///
+/// Refused where it is not a whole number from 1, or the file is not named as a notebook: a value
+/// taken as another would hand back the outputs of a cell the planner did not name.
+fn output_of_from(arguments: &Value, path: &str) -> Result<Option<usize>, String> {
+    let Some(value) = arguments.get("output_of").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    if !crate::notebook::is_notebook_path(path) {
+        return Err(
+            "error: 'output_of' names a cell of a .ipynb notebook, and this is not one. Leave it \
+             out to read the file"
+                .to_string(),
+        );
+    }
+    match value.as_u64() {
+        Some(cell @ 1..) => usize::try_from(cell).map(Some).map_err(|_| {
+            "error: 'output_of' is not a cell number this notebook can have".to_string()
+        }),
+        _ => Err(
+            "error: 'output_of' must be a cell number from 1, as a read of the notebook \
+                  shows them"
+                .to_string(),
+        ),
+    }
+}
+
+/// The saved outputs of one cell of a notebook the planner may read, as a reference.
+///
+/// The notebook's structure is read under its own trusted label, to say whether the cell exists
+/// and holds outputs. The text of the outputs is shaped under a label tainted untrusted, inside the
+/// kernel, so the planner is handed a reference and a processor is the way to the words.
+fn notebook_outputs<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    path: &Labelled<String>,
+    (field, shown_path): (&str, &str),
+    cell: usize,
+) -> Produced {
+    let source = match workspace.read(policy, path) {
+        Ok(contents) => contents,
+        Err(e) => return file_tool_problem(policy, "read_file", field, &e, shown_path),
+    };
+    let current = match policy.read_trusted_content("read_file", &source) {
+        Ok(text) => text,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    if let Err(reason) = crate::notebook::check_outputs_of(&current, cell) {
+        return Produced::problem(format!("error: {reason}"));
+    }
+    let carried = Labelled::new(
+        current,
+        bravebot_core::label::taint_all([
+            source.label(),
+            bravebot_core::label::Label::untrusted_public(),
+        ]),
+    );
+    let outputs = policy.render_in_place("read_file", &carried, |json| {
+        crate::notebook::outputs_view(&json, cell)
+    });
+    Produced::new(
+        outputs,
+        shown_path.to_string(),
+        format!("outputs of cell {cell}, quarantined"),
+    )
+    .of_content()
+}
+
 fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -3168,6 +3265,25 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 &shown_path,
             ),
         });
+    }
+
+    // The saved outputs of one notebook cell, when the planner asked for them (READ-10). Only
+    // reached for a file the planner may see: a notebook held back above is already a reference to
+    // the whole file, outputs included. What comes back is untrusted whatever the notebook's path
+    // is trusted as, because a vouch covers what a person wrote into the cells and an output is
+    // what a program, a web page or a dataset printed. It is a reference, never text.
+    match output_of_from(arguments, &proposed_path) {
+        Ok(Some(cell)) => {
+            return priced(notebook_outputs(
+                policy,
+                workspace,
+                &path,
+                (path_field(destination), &shown_path),
+                cell,
+            ));
+        }
+        Ok(None) => {}
+        Err(refusal) => return priced(Produced::problem(refusal)),
     }
 
     // The planner already holds this window if an earlier answer put it there and the file has not
@@ -5309,6 +5425,92 @@ fn bring_back<S: Sink, C: Confirmer>(
 /// An `old_text` and the `new_text` that replaces it, as the planner wrote them.
 type EditPair = (Labelled<String>, Labelled<String>);
 
+/// An `edit_file` call that names a notebook cell instead of a passage.
+struct CellRequest {
+    cell: usize,
+    action: CellAction,
+    kind: crate::notebook::CellKind,
+    new_text: Option<Labelled<String>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CellAction {
+    Replace,
+    InsertAfter,
+    Delete,
+}
+
+/// The cell an `edit_file` call addresses, where it gives `cell` (EDIT-8).
+///
+/// `cell` is the number the read showed, from 1, or 0 for an insert at the start. Every argument is
+/// the planner's own, and none of them is read from the file.
+fn cell_request(arguments: &Value) -> Result<Option<CellRequest>, String> {
+    let Some(cell) = arguments.get("cell").filter(|cell| !cell.is_null()) else {
+        if arguments.get("cell_action").is_some() || arguments.get("cell_type").is_some() {
+            return Err(
+                "error: 'cell_action' and 'cell_type' go with 'cell', which names the \
+                        notebook cell to change"
+                    .to_string(),
+            );
+        }
+        return Ok(None);
+    };
+    let Some(cell) = cell.as_u64().map(|cell| cell as usize) else {
+        return Err("error: 'cell' must be a whole number, the cell's number from the read".into());
+    };
+    if ["old_text", "edits", "replace_all"]
+        .iter()
+        .any(|key| arguments.get(key).is_some())
+    {
+        return Err(
+            "error: 'cell' addresses a notebook cell, so it cannot be given with \
+                    'old_text', 'edits' or 'replace_all'"
+                .to_string(),
+        );
+    }
+    let action = match arguments.get("cell_action").and_then(Value::as_str) {
+        None | Some("replace") => CellAction::Replace,
+        Some("insert_after") => CellAction::InsertAfter,
+        Some("delete") => CellAction::Delete,
+        Some(_) => {
+            return Err(
+                "error: 'cell_action' must be \"replace\", \"insert_after\" or \"delete\"".into(),
+            );
+        }
+    };
+    let kind = match arguments.get("cell_type").and_then(Value::as_str) {
+        None => crate::notebook::CellKind::Code,
+        Some(name) => crate::notebook::CellKind::named(name)
+            .ok_or("error: 'cell_type' must be \"code\" or \"markdown\"")?,
+    };
+    if action != CellAction::InsertAfter && arguments.get("cell_type").is_some() {
+        return Err("error: 'cell_type' is for an insert_after, which makes a new cell".into());
+    }
+    let new_text = argument(arguments, "new_text");
+    match (action, &new_text) {
+        (CellAction::Delete, Some(_)) => {
+            return Err("error: deleting a cell takes no 'new_text'".into());
+        }
+        (CellAction::Replace | CellAction::InsertAfter, None) => {
+            return Err(
+                "error: 'new_text' is required and must be a string: the cell's source".into(),
+            );
+        }
+        _ => {}
+    }
+    if action != CellAction::InsertAfter && cell == 0 {
+        return Err(
+            "error: cells are numbered from 1; 0 is only for an insert_after at the start".into(),
+        );
+    }
+    Ok(Some(CellRequest {
+        cell,
+        action,
+        kind,
+        new_text,
+    }))
+}
+
 /// The passages an `edit_file` call carries: the `edits` array, or the single `old_text` and
 /// `new_text` pair, never both.
 fn edit_pairs(arguments: &Value) -> Result<Vec<EditPair>, &'static str> {
@@ -5350,7 +5552,10 @@ fn edit_pairs(arguments: &Value) -> Result<Vec<EditPair>, &'static str> {
 ///
 /// `recording` reaches no further than the scan below: an edit's findings are written to the same
 /// record a whole-file write's are.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is borrowed from the turn's tools or the dispatch and owned by a different holder, so no struct exists to bundle them"
+)]
 fn edit_file<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -5375,9 +5580,23 @@ fn edit_file<S: Sink, C: Confirmer>(
     };
     let (proposed, destination, shown_path, proposed_path) =
         (found.path, found.destination, found.shown, found.released);
-    let pairs = match edit_pairs(arguments) {
-        Ok(pairs) => pairs,
+    let cell_request = match cell_request(arguments) {
+        Ok(request) => request,
         Err(problem) => return Produced::problem(problem),
+    };
+    let pairs = match &cell_request {
+        // A cell edit carries its text in `new_text` alone and locates nothing by it.
+        Some(_) if !crate::notebook::is_notebook_path(&proposed_path) => {
+            return Produced::problem(
+                "error: 'cell' addresses a cell of a .ipynb notebook, and this is not one. Give \
+                 'old_text' and 'new_text' for a passage",
+            );
+        }
+        Some(_) => Vec::new(),
+        None => match edit_pairs(arguments) {
+            Ok(pairs) => pairs,
+            Err(problem) => return Produced::problem(problem),
+        },
     };
     // Absent or non-boolean means the strict single-match behaviour, which is the safe
     // reading of an ambiguous argument.
@@ -5406,6 +5625,31 @@ fn edit_file<S: Sink, C: Confirmer>(
         };
         passages.push((old_text, new_text));
     }
+    // The cell's source is the planner's own text, held to the same gate as a passage.
+    let cell_edit = match &cell_request {
+        Some(request) => {
+            let source = match &request.new_text {
+                Some(text) => match policy.read_planner_argument("edit_file", "new_text", text) {
+                    Ok(text) => text,
+                    Err(denial) => return Produced::problem(format!("refused: {denial}")),
+                },
+                None => String::new(),
+            };
+            Some(match request.action {
+                CellAction::Replace => crate::notebook::CellEdit::Replace {
+                    cell: request.cell,
+                    source,
+                },
+                CellAction::InsertAfter => crate::notebook::CellEdit::Insert {
+                    after: request.cell,
+                    kind: request.kind,
+                    source,
+                },
+                CellAction::Delete => crate::notebook::CellEdit::Delete { cell: request.cell },
+            })
+        }
+        None => None,
+    };
 
     // Reading to locate the passage is non-destructive and confined, so the path may be
     // promoted here exactly as it is for read_file. The write below is what needs a person.
@@ -5453,6 +5697,15 @@ fn edit_file<S: Sink, C: Confirmer>(
     let total = passages.len();
     let mut running = current.clone();
     let mut occurrences = 0;
+    if let Some(edit) = &cell_edit {
+        // A cell is found by its number, which the planner gave, and the file is read as the
+        // notebook it is: the file is trusted, as `read_trusted_content` above established.
+        match crate::notebook::apply(&current, edit) {
+            Ok(contents) => running = contents,
+            Err(e) => return Produced::problem(format!("error: {e}")),
+        }
+        occurrences = 1;
+    }
     for (at, (old_text, new_text)) in passages.iter().enumerate() {
         match crate::replace::replace(&running, old_text, new_text, replace_all) {
             Ok(r) => {
@@ -5586,7 +5839,23 @@ fn edit_file<S: Sink, C: Confirmer>(
                 ..
             } = reviewed;
             let note = carried_note(note, &scanned);
-            let headline = format!("edited {shown_path}: {occurrences} replacement(s)");
+            let headline = match &cell_request {
+                Some(request) => match request.action {
+                    CellAction::Replace => {
+                        format!("edited {shown_path}: replaced cell {}", request.cell)
+                    }
+                    CellAction::InsertAfter => {
+                        format!(
+                            "edited {shown_path}: inserted a cell after cell {}",
+                            request.cell
+                        )
+                    }
+                    CellAction::Delete => {
+                        format!("edited {shown_path}: deleted cell {}", request.cell)
+                    }
+                },
+                None => format!("edited {shown_path}: {occurrences} replacement(s)"),
+            };
             // What a server that is already running makes of the file now (LSP-12). It reads the
             // file, which this edit has just changed, and the sentence is counts and lines.
             let headline = match diagnostics_after_a_write(policy, servers, &proposed_path) {
@@ -6483,7 +6752,10 @@ fn released_reason<S: Sink>(
 /// value if they agree. The half of `read_output` that comes after the reference is accepted and
 /// any check has spoken, returning the text, how many lines it holds and who released it, or the
 /// result to hand back instead.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy and confirmer are `&mut` borrows of the turn while the rest is read-only state of one read, so bundling them would split one borrow across two values"
+)]
 fn release_output<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     slots: &SlotStore,
@@ -7748,7 +8020,10 @@ fn run_call<S: Sink>(
 /// line remembered or its scopes and key kept where the person asked for that, and a refusal comes
 /// back as the result of the call. No labelled value is built or released here: the plan, the
 /// reference's name and the confinement are the driver's own structure.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the plan and its scopes are the driver's own structure and `policy` and `confirmer` are exclusive borrows, so none of them can share a bundle without the borrows aliasing"
+)]
 fn ask_about_the_run<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &Tools<'_>,
@@ -8946,6 +9221,7 @@ fn fetch_not_approved<S: Sink, C: Confirmer>(
     let request = crate::confirm::FetchRequest {
         url: url.to_string(),
         host: host.to_string(),
+        redirected_from: None,
     };
     if confirmer.confirm_fetch(&request) != Decision::Reject {
         return None;
@@ -9012,13 +9288,25 @@ fn fetch_url<S: Sink, C: Confirmer>(
     // of the page a processor will read. Nothing of the planner's or of a server's reaches it, and
     // every hop of the chain re-sends it, because the egress crate re-sends the whole request.
     let request = bravebot_net::Request::get(&url).header("accept", FETCH_ACCEPT);
-    let fetched = tools
-        .chat
-        .egress
-        .fetch_watching(policy, request, label, Some(tools.cancel));
+    let mut fetched =
+        tools
+            .chat
+            .egress
+            .fetch_watching(policy, request.clone(), label, Some(tools.cancel));
     // Before anything returns, so a failure does not leave the rest of the turn's egress being
     // checked against the host this one call was approved for.
     policy.fetch_finished();
+
+    // A hop the gate stopped for leaving the approved host is put to the person (FETCH-4). A no
+    // leaves `fetched` the refusal it was, and a yes sends the one request again with that host
+    // allowed for it alone.
+    if fetched.is_err()
+        && let Some(hop) = policy.take_fetch_hop()
+        && let Some(followed) =
+            fetch_followed_to(policy, tools, confirmer, &url, &host, &hop, request)
+    {
+        fetched = followed;
+    }
 
     match fetched {
         Ok(response) => {
@@ -9055,6 +9343,51 @@ fn fetch_url<S: Sink, C: Confirmer>(
         // which is the one thing of a server's that could otherwise reach this sentence.
         Err(error) => Produced::problem(format!("error: fetching {url} failed: {error}")),
     }
+}
+
+/// Put a host a fetch was redirected to to the person, and on a yes send the request again with
+/// that host allowed for it alone (FETCH-4). `None` for a no, which leaves the refusal the gate gave.
+///
+/// The host is a server's own bytes, so it is drawn and decides nothing until the person says the
+/// fetch may go there: the answer is bound to the host as it was drawn, spent once, and gone when
+/// the request reports back. Nothing about the answer reaches the planner, whose sentence is the
+/// same on both (FETCH-6).
+fn fetch_followed_to<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    url: &str,
+    approved: &str,
+    hop: &Labelled<String>,
+    request: bravebot_net::Request,
+) -> Option<Result<bravebot_net::Response, bravebot_net::EgressError>> {
+    let shown = policy.render_in_place("fetch_url", hop, |host| host);
+    let host = {
+        let proof = policy.authorise_display_release("where a fetch was redirected to");
+        shown.declassify(&proof)
+    };
+    let question = crate::confirm::FetchRequest {
+        url: url.to_string(),
+        host: host.clone(),
+        redirected_from: Some(approved.to_string()),
+    };
+    if confirmer.confirm_fetch(&question) == Decision::Reject {
+        policy.refuse_unapproved_fetch("fetch_url");
+        return None;
+    }
+
+    policy.endorse_fetch(url);
+    policy.endorse_fetch_hop(&host);
+    let label = policy.before_fetch_via(url, &host).ok()?;
+    if let Some(spent) = bravebot_core::ambient::at_host(&host) {
+        policy.record_ambient(&[spent]);
+    }
+    let followed = tools
+        .chat
+        .egress
+        .fetch_watching(policy, request, label, Some(tools.cancel));
+    policy.fetch_finished();
+    Some(followed)
 }
 
 /// How long a download may run from the moment the reply begins.
@@ -9305,7 +9638,10 @@ fn download_url<S: Sink, C: Confirmer>(
 /// it said about a call that failed: both go to the planner quarantined and are marked on the
 /// screen. The sentences this process writes name the tool by the alias the person gave the
 /// server and the word they read on its list, and nothing the server answered.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "every argument is forwarded to `mcp::call`, which takes the same list, and the dispatch holds each apart"
+)]
 fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     offer: &crate::mcp::Offer,
@@ -11749,6 +12085,133 @@ fn read_git<S: Sink, C: Confirmer>(
 
 #[cfg(test)]
 mod tests {
+    /// EDIT-8: a malformed cell argument is refused before the file is read, so nothing is written.
+    /// Each row is a call that is wrong in one way, with the words of the refusal that names it.
+    #[test]
+    fn a_malformed_cell_argument_is_refused() {
+        let refused = [
+            (json!({"cell_action": "delete"}), "go with 'cell'"),
+            (json!({"cell_type": "markdown"}), "go with 'cell'"),
+            (json!({"cell": 1.5, "new_text": "x"}), "whole number"),
+            (json!({"cell": -1, "new_text": "x"}), "whole number"),
+            (json!({"cell": "1", "new_text": "x"}), "whole number"),
+            (
+                json!({"cell": 1, "cell_action": "move", "new_text": "x"}),
+                "'cell_action' must be",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "insert_after", "cell_type": "raw", "new_text": "x"}),
+                "'cell_type' must be",
+            ),
+            (
+                json!({"cell": 1, "cell_type": "markdown", "new_text": "x"}),
+                "is for an insert_after",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "replace", "cell_type": "code", "new_text": "x"}),
+                "is for an insert_after",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "delete", "cell_type": "code"}),
+                "is for an insert_after",
+            ),
+            (
+                json!({"cell": 1, "cell_action": "delete", "new_text": "x"}),
+                "takes no 'new_text'",
+            ),
+            (json!({"cell": 1}), "'new_text' is required"),
+            (
+                json!({"cell": 1, "cell_action": "insert_after"}),
+                "'new_text' is required",
+            ),
+            (json!({"cell": 1, "new_text": 7}), "'new_text' is required"),
+            (json!({"cell": 0, "new_text": "x"}), "numbered from 1"),
+            (
+                json!({"cell": 0, "cell_action": "delete"}),
+                "numbered from 1",
+            ),
+            (
+                json!({"cell": 1, "old_text": "a", "new_text": "x"}),
+                "cannot be given with",
+            ),
+            (
+                json!({"cell": 1, "edits": [], "new_text": "x"}),
+                "cannot be given with",
+            ),
+            (
+                json!({"cell": 1, "replace_all": true, "new_text": "x"}),
+                "cannot be given with",
+            ),
+        ];
+        for (arguments, words) in refused {
+            match cell_request(&arguments) {
+                Err(problem) => assert!(
+                    problem.contains(words),
+                    "{arguments} was refused with {problem:?}, which does not say {words:?}"
+                ),
+                Ok(_) => panic!("{arguments} was accepted"),
+            }
+        }
+    }
+
+    /// EDIT-8: the calls the table above sits beside are accepted, with the action, the cell
+    /// number and the cell type each mapped to the request they name. A call with no `cell` is not
+    /// a cell edit.
+    #[test]
+    fn a_well_formed_cell_argument_is_accepted_as_what_it_names() {
+        use crate::notebook::CellKind;
+        let accepted = [
+            (
+                json!({"cell": 2, "new_text": "x"}),
+                CellAction::Replace,
+                2,
+                CellKind::Code,
+            ),
+            (
+                json!({"cell": 2, "cell_action": "replace", "new_text": "x"}),
+                CellAction::Replace,
+                2,
+                CellKind::Code,
+            ),
+            (
+                json!({"cell": 0, "cell_action": "insert_after", "cell_type": "markdown", "new_text": "x"}),
+                CellAction::InsertAfter,
+                0,
+                CellKind::Markdown,
+            ),
+            (
+                json!({"cell": 3, "cell_action": "insert_after", "new_text": "x"}),
+                CellAction::InsertAfter,
+                3,
+                CellKind::Code,
+            ),
+            (
+                json!({"cell": 1, "cell_action": "delete"}),
+                CellAction::Delete,
+                1,
+                CellKind::Code,
+            ),
+        ];
+        for (arguments, action, cell, kind) in accepted {
+            let request = cell_request(&arguments)
+                .unwrap_or_else(|problem| panic!("{arguments} was refused: {problem}"))
+                .unwrap_or_else(|| panic!("{arguments} was not read as a cell edit"));
+            assert!(request.action == action, "{arguments}: wrong action");
+            assert_eq!(request.cell, cell, "{arguments}");
+            assert!(request.kind == kind, "{arguments}: wrong cell type");
+        }
+        assert!(
+            cell_request(&json!({"old_text": "a", "new_text": "b"}))
+                .is_ok_and(|request| request.is_none()),
+            "a passage edit was read as a cell edit"
+        );
+        assert!(
+            cell_request(&json!({"cell": null, "old_text": "a", "new_text": "b"}))
+                .is_ok_and(|request| request.is_none()),
+            "a null cell was read as a cell edit"
+        );
+    }
+
     /// WRITE-7: the editor is offered for the planner's own text in a trusted context and for
     /// nothing else. A body from a quarantined reference is never offered one, whatever its label
     /// says, and neither is text a planner wrote after it had met untrusted content: the person's
@@ -12620,9 +13083,9 @@ mod tests {
     }
 
     /// A call held for being a repeat is drawn on both its lines with the reason the planner gave,
-    /// as `dispatch` draws every other call (TOOL-5). A held call announced with no reason, or
-    /// one drawn only on its first line, leaves the refusal with nothing of what the call was for;
-    /// a call whose arguments are not JSON, or that gave none, is drawn with an empty reason.
+    /// as `dispatch` draws every other call (TOOL-5), and with the target `dispatch` would draw for
+    /// the same call: a held call hard-coded to an empty target leaves the person watching with
+    /// nothing of what the call was about.
     #[test]
     fn a_held_call_is_drawn_with_the_reason_the_planner_gave() {
         use bravebot_core::capability::CapabilitySet;
@@ -12647,21 +13110,109 @@ mod tests {
                 &mut sink,
             )
             .expect("policy");
-            refused_without_running(&mut policy, &mut reporter, &call, "held".to_string());
+            let slots = SlotStore::new();
+            refused_without_running(
+                &mut policy,
+                &mut reporter,
+                None,
+                &slots,
+                &call,
+                "held".to_string(),
+            );
             let why = |rows: &[Activity]| rows.iter().map(|a| a.why.clone()).collect::<Vec<_>>();
-            (why(&reporter.started), why(&reporter.finished))
+            let target =
+                |rows: &[Activity]| rows.iter().map(|a| a.target.clone()).collect::<Vec<_>>();
+            (
+                why(&reporter.started),
+                why(&reporter.finished),
+                target(&reporter.started),
+                target(&reporter.finished),
+            )
         };
 
         assert_eq!(
             drawn(r#"{"path":"a.txt","why":"to find the sentinel"}"#),
             (
                 vec!["to find the sentinel".to_string()],
-                vec!["to find the sentinel".to_string()]
+                vec!["to find the sentinel".to_string()],
+                vec!["a.txt".to_string()],
+                vec!["a.txt".to_string()],
             )
         );
-        let none = (vec![String::new()], vec![String::new()]);
-        assert_eq!(drawn(r#"{"path":"a.txt"}"#), none);
-        assert_eq!(drawn("not json"), none);
+        assert_eq!(
+            drawn(r#"{"path":"a.txt"}"#),
+            (
+                vec![String::new()],
+                vec![String::new()],
+                vec!["a.txt".to_string()],
+                vec!["a.txt".to_string()],
+            )
+        );
+        assert_eq!(
+            drawn("not json"),
+            (
+                vec![String::new()],
+                vec![String::new()],
+                vec![String::new()],
+                vec![String::new()],
+            )
+        );
+    }
+
+    /// A held repeat of a call to a server's tool is drawn with the same target `dispatch_with`
+    /// would draw for it (TOOL-5): the alias and the tool the live offer answers for where one is
+    /// held, and the alias and the word parsed off the wire name's own `mcp__` prefix where none
+    /// is. The offer in each case names a different alias than the wire name itself would parse
+    /// to, so a target drawn from the wrong source is told apart from one drawn from the right one.
+    #[test]
+    fn a_held_call_to_a_servers_tool_is_drawn_with_its_target() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let drawn = |name: &str, mcp: Option<&crate::mcp::Offer>| {
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "c1",
+                "type": "function",
+                "function": { "name": name, "arguments": r#"{"city":"Lyon"}"# },
+            }))
+            .unwrap();
+            let mut sink = RecordingSink::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "ask the weather");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            let slots = SlotStore::new();
+            refused_without_running(
+                &mut policy,
+                &mut reporter,
+                mcp,
+                &slots,
+                &call,
+                "held".to_string(),
+            );
+            reporter.started[0].target.clone()
+        };
+
+        let offer = crate::mcp::offer_for_test(&[(
+            "mcp__weather__get_forecast",
+            "the-offers-alias",
+            "the-offers-tool",
+        )]);
+        assert_eq!(
+            drawn("mcp__weather__get_forecast", Some(&offer)),
+            r#"the-offers-alias:the-offers-tool {"city":"Lyon"}"#
+        );
+        assert_eq!(
+            drawn("mcp__weather__get_forecast", None),
+            r#"weather:get_forecast {"city":"Lyon"}"#
+        );
     }
 
     /// Every kind above the bottom of the tree is offered the way to delegate, with the kinds this
@@ -13984,6 +14535,33 @@ mod tests {
         );
     }
 
+    /// A wait is a way to spend part of one turn watching, and a planner that took it for a way to
+    /// be told later would end its turn promising to report on a job nobody is watching. Both
+    /// places the tool is offered say the wait ends with the turn.
+    #[test]
+    fn job_output_says_its_wait_stays_inside_the_turn() {
+        let tool = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "job_output")
+        .expect("job_output is offered");
+
+        let said = &tool.function.description;
+        for stated in [
+            "still a wait inside this turn",
+            "cannot tell you about anything that happens after the turn ends",
+        ] {
+            assert!(
+                said.contains(stated),
+                "job_output's description no longer says '{stated}': {said}"
+            );
+        }
+    }
+
     /// `until_exit` turns a wait that output ends into one that only the exit, the bound, the token
     /// or a stop ends. A flag taken for `false` where it was not understood hands back a wait that
     /// output ends, one given with no `wait_seconds` has no bound to wait to, and one given with
@@ -14034,6 +14612,116 @@ mod tests {
             assert!(
                 refusal.contains("true or false"),
                 "the refusal does not say what is allowed: {refusal}"
+            );
+        }
+    }
+
+    /// A map that says nothing reads as the whole tree, and a planner told nothing concludes that a
+    /// symbol is absent when the map was cut. Each way a map falls short has its own sentence, and a
+    /// map that fell short in none says nothing after its body.
+    #[test]
+    fn a_map_says_each_way_it_fell_short_and_a_whole_one_says_nothing() {
+        use crate::workspace::RepoMap;
+        let whole = RepoMap {
+            body: "a.rs:\n  fn one()\n".to_string(),
+            found: 3,
+            shown: 3,
+            files: 1,
+            unvouched: 0,
+            skipped: 0,
+            truncated: false,
+            unreadable: false,
+        };
+        assert_eq!(
+            map_as_told(&whole),
+            whole.body,
+            "a whole map carries a note"
+        );
+
+        let fell_short = [
+            (
+                "fewer declarations shown than found",
+                RepoMap {
+                    shown: 1,
+                    ..whole.clone()
+                },
+                "this map shows 1 of 3 declarations, most referenced first",
+            ),
+            (
+                "the walk stopped at a cap",
+                RepoMap {
+                    truncated: true,
+                    ..whole.clone()
+                },
+                "the walk stopped at a cap on files or bytes, so this map is incomplete",
+            ),
+            (
+                "a directory could not be opened",
+                RepoMap {
+                    unreadable: true,
+                    ..whole.clone()
+                },
+                "part of this tree could not be read and is not in this map",
+            ),
+            (
+                "files nobody vouched for",
+                RepoMap {
+                    unvouched: 2,
+                    ..whole.clone()
+                },
+                "2 source files were left out because nobody vouched for them",
+            ),
+            (
+                "one file nobody vouched for",
+                RepoMap {
+                    unvouched: 1,
+                    ..whole.clone()
+                },
+                "1 source file was left out because nobody vouched for it",
+            ),
+            (
+                "files left out as unreadable or too large",
+                RepoMap {
+                    skipped: 2,
+                    ..whole.clone()
+                },
+                "2 source files were left out as unreadable, too large or not safe to show",
+            ),
+        ];
+        let sentences: Vec<&str> = fell_short.iter().map(|(_, _, said)| *said).collect();
+        for (how, map, said) in &fell_short {
+            let told = map_as_told(map);
+            assert!(
+                told.starts_with(&whole.body),
+                "{how}: the body is not first: {told}"
+            );
+            assert!(
+                told.ends_with(')') && told.contains(&format!("\n\n({said}")),
+                "{how}: the map does not say so: {told}"
+            );
+            for other in sentences.iter().filter(|other| *other != said) {
+                assert!(
+                    !told.contains(other),
+                    "{how}: the map also says '{other}': {told}"
+                );
+            }
+        }
+    }
+
+    /// A wait is a way to spend part of one turn watching. A planner that reads it as a way to be
+    /// told about something after the turn ends waits for news that cannot arrive, so the tool says
+    /// where the wait ends and what happens to the job then.
+    #[test]
+    fn job_output_says_its_wait_ends_with_the_turn() {
+        let said = tool_description(Scheduling::ArrangingALook, "job_output");
+        for stated in [
+            "a wait inside this turn",
+            "anything that happens after the turn ends",
+            "says whether it is killed then or kept",
+        ] {
+            assert!(
+                said.contains(stated),
+                "job_output no longer says '{stated}': {said}"
             );
         }
     }
@@ -15323,6 +16011,25 @@ mod tests {
                 ),
                 "Run"
             );
+        }
+
+        /// A session read back off disk spells the name of the file a call was about as the live
+        /// line did (PROMPT-1), whatever namespace the model gave the tool, and draws the target
+        /// of a tool that names no file as written.
+        #[test]
+        fn a_stored_call_spells_the_name_of_its_file() {
+            let drawn = |tool: &str, arguments: &str| describe_stored_call(tool, arguments);
+
+            assert_eq!(
+                drawn("read_file", r#"{"path":"note.md "}"#),
+                "Read(\"note.md\u{2423}\")"
+            );
+            assert_eq!(
+                drawn("functions.write_file", r#"{"path":" "}"#),
+                "Write(\"\u{2423}\")"
+            );
+            assert_eq!(drawn("read_file", r#"{"path":"note.md"}"#), "Read(note.md)");
+            assert_eq!(drawn("search", r#"{"pattern":"todo "}"#), "Search(todo )");
         }
 
         /// A session read back off disk draws a call to a server's tool as the live one was
@@ -20905,6 +21612,65 @@ mod tests {
             );
         }
 
+        /// The line a call is announced with spells the name of the file it is about, so a name that
+        /// is blank or ends in whitespace is not drawn as one without it (PROMPT-1). The target the
+        /// call carries stays what it was written as, since the files view matches on it, and a
+        /// tool whose target is not a file's name is drawn as written.
+        #[test]
+        fn a_file_calls_line_spells_a_name_a_person_could_not_otherwise_tell_apart() {
+            let scratch = Scratch::new("announced-names");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let announced = |tool: &str, arguments: Value| {
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let call: ToolCall = serde_json::from_value(json!({
+                    "id": "a",
+                    "function": {"name": tool, "arguments": arguments.to_string()}
+                }))
+                .expect("a call");
+                let mut reporter = crate::report::RecordingReporter::default();
+                with_tools(&workspace, |tools| {
+                    dispatch(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveWrites,
+                        &mut reporter,
+                        &call,
+                    )
+                });
+                let started = reporter.started.remove(0);
+                let finished = reporter.finished.remove(0);
+                assert_eq!(started.line(), finished.line(), "{tool}");
+                (started.target.clone(), started.line())
+            };
+
+            for (name, spelled) in [
+                ("note.md", "Read(note.md)"),
+                ("note.md ", "Read(\"note.md\u{2423}\")"),
+                (" ", "Read(\"\u{2423}\")"),
+                ("a\u{202e}b", "Read(\"a\\u{202e}b\")"),
+            ] {
+                let (target, line) = announced("read_file", json!({"path": name, "why": "look"}));
+                assert_eq!(target, name, "the call's own target was changed");
+                assert_eq!(line, spelled, "{name:?}");
+            }
+
+            // A directory is named as a file is, and a tool that names a pattern or a skill is not.
+            let (_, line) = announced("list_files", json!({"directory": "sub ", "why": "look"}));
+            assert_eq!(line, "List(\"sub\u{2423}\")");
+
+            // A search pattern is not a file's name: a trailing space in it is part of what is
+            // looked for, and the line draws it as written.
+            let (_, line) = announced("search", json!({"pattern": "todo ", "why": "look"}));
+            assert_eq!(line, "Search(todo )");
+        }
+
         /// A processor call that misnames `reads`, or sends it as a string, is told which. Told
         /// only that the argument was required, a planner that sent `read` holding a string sent
         /// the same call again word for word.
@@ -21170,6 +21936,36 @@ mod tests {
         assert!(produced.failed, "a name one character out loaded a page");
     }
 
+    /// The regression it rejects: the list of specs or a spec's page being known to `help` and not
+    /// reachable through `load_skill`, or a spec's page answering as the list does.
+    #[cfg(unix)]
+    #[test]
+    fn a_spec_page_loads_by_the_name_the_list_gives_it() {
+        let fixture = SkillFixture::new("help-spec-loads");
+        let workspace = fixture.workspace();
+        let catalogue = fixture.catalogue(&workspace);
+        let mut sink = RecordingSink::new();
+        let mut policy = skill_policy(&mut sink);
+
+        let index = load_named(&mut policy, &catalogue, "bravebot-help");
+        assert!(index.contains("- bravebot-help/specs: "), "{index}");
+        let list = load_named(&mut policy, &catalogue, "bravebot-help/specs");
+        assert!(
+            list.contains("- bravebot-help/specs/commands: Slash commands (CMD, "),
+            "{list}"
+        );
+        let page = load_named(&mut policy, &catalogue, "bravebot-help/specs/commands");
+        assert!(page.contains("\nCMD-24: "), "{page}");
+        assert_ne!(page, list);
+
+        let produced = load_skill(
+            &mut policy,
+            &catalogue,
+            &json!({ "name": "bravebot-help/specs/command" }),
+        );
+        assert!(produced.failed, "a name one character out loaded a spec");
+    }
+
     /// The regression it rejects: a page answering for a skill of the user's own that took the
     /// place of the built-in index, which would hand the planner built-in text the user replaced.
     #[cfg(unix)]
@@ -21200,6 +21996,15 @@ mod tests {
         assert!(
             produced.failed,
             "a built-in page answered for the user's skill"
+        );
+        let produced = load_skill(
+            &mut policy,
+            &catalogue,
+            &json!({ "name": "bravebot-help/specs/commands" }),
+        );
+        assert!(
+            produced.failed,
+            "a built-in spec page answered for the user's skill"
         );
     }
 

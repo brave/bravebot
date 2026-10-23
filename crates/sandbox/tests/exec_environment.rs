@@ -2,6 +2,10 @@
 #![cfg(target_os = "macos")]
 #![forbid(unsafe_code)]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_sandbox::{
     Environment, Sandbox, Stream, Streams, macos::SeatbeltSandbox, policy::SandboxPolicy,

@@ -378,6 +378,7 @@ would claim a confinement that is not there; drawing an unread one plain would h
 
 `verified-by: bravebot_tui::render::a_report_the_planner_may_not_read_is_marked_where_it_is_drawn`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
+`verified-by: bravebot_tui::render::a_report_the_planner_read_is_drawn_plain`
 
 <a id="WATCH-14"></a>
 ### WATCH-14: the session is the first row of the list, and choosing it goes back to the conversation

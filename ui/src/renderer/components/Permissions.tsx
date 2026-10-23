@@ -64,9 +64,9 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
  */
 export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy: boolean; onForget: () => void }): React.JSX.Element {
   return <ul className="grant-list"><li className="grant-row">
-    <Icon name="pin" /><code>{kept.path}</code>
+    <Icon name="pin" /><code>{kept.shownPath}</code>
     <span className="grant-state" data-test="remembered-when">{`Trusted ${ago(kept.at)}`}</span>
-    {kept.root && <span className="grant-state" data-test="remembered-root">{`for ${kept.root}`}</span>}
+    {kept.shownRoot && <span className="grant-state" data-test="remembered-root">{`for ${kept.shownRoot}`}</span>}
     <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
   </li></ul>
 }

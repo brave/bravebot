@@ -50,7 +50,7 @@ export function ConfirmCard({ view, target, busy, onDecide }: Common & { view: C
       }
       actions={<Actions onReject={() => onDecide('reject')} onApprove={() => onDecide('approve')} approveLabel="Approve write" busy={busy} />}
     >
-      <ReadOnlyField label="Path" value={view.path} mono testID="confirm-path" />
+      <ReadOnlyField label="Path" value={view.shownPath} mono testID="confirm-path" />
       <Field label="Effect">
         <UI>{view.existing ? 'Changes a file that exists' : 'Creates a new file'}</UI>
         <Meta>
@@ -111,20 +111,19 @@ export function RunCard({ view, target, busy, onDecide }: Common & { view: RunVi
                   <Meta>Did not resolve to a file</Meta>
                 </Field>
               ) : (
-                <ReadOnlyField label="Resolves to" value={stage.resolved} mono testID={`run-stage-${at}-resolved`} />
+                // The file the step runs, and the path that starts it where that is another, spelled
+                // by the bridge: `resolved`, `startedAs` and `binary` are drawn as held and are not
+                // drawn here, since a path ending in a space reads as the one without it.
+                <ReadOnlyField label="Runs" value={stage.shownBinary} mono testID={`run-stage-${at}-binary`} />
               )}
-              {stage.startedAs !== null && stage.startedAs !== stage.resolved && (
-                <ReadOnlyField label="Started as" value={stage.startedAs} mono testID={`run-stage-${at}-started`} />
-              )}
-              {stage.binary !== null && <ReadOnlyField label="Runs" value={stage.binary} mono testID={`run-stage-${at}-binary`} />}
             </View>
           ))}
         </Evidence>
       </Field>
-      <ReadOnlyField label="Directory" value={view.directory} mono />
-      {view.writes.length > 0 && (
+      <ReadOnlyField label="Directory" value={view.shownDirectory} mono />
+      {view.shownWrites.length > 0 && (
         <Field label="Writes to">
-          {view.writes.map((path, at) => (
+          {view.shownWrites.map((path, at) => (
             <UntrustedText key={at} text={path} mono />
           ))}
         </Field>
@@ -147,7 +146,7 @@ export function RunCard({ view, target, busy, onDecide }: Common & { view: RunVi
       )}
       {view.confinement !== null && (
         <Field label={<UntrustedText text={view.confinement.heading} size="meta" style={{ color: theme.ink.tertiary }} />}>
-          {view.confinement.directories.map((path, at) => (
+          {view.confinement.shownDirectories.map((path, at) => (
             <UntrustedText key={`d${at}`} text={path} mono />
           ))}
           {view.confinement.sentences.map((sentence, at) => (
@@ -284,12 +283,12 @@ export function TrustCard({ view, target, busy, onAnswer }: Common & { view: Tru
       }
     >
       <UI style={styles.strong}>Do you trust this directory?</UI>
-      <ReadOnlyField label="Directory" value={view.directory} mono />
-      {view.keeping === null ? (
+      <ReadOnlyField label="Directory" value={view.shownDirectory} mono />
+      {view.shownKeeping === null ? (
         <UI>This answer is not kept. It applies to this session only.</UI>
       ) : (
         <>
-          <ReadOnlyField label="A yes is kept in" value={view.keeping} mono />
+          <ReadOnlyField label="A yes is kept in" value={view.shownKeeping} mono />
           <UI>A yes is written to that file and applies to later sessions in this directory.</UI>
         </>
       )}

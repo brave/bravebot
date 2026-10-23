@@ -132,6 +132,8 @@ a second run of the same call. The planner is told the search is incomplete eith
 `verified-by: bravebot_agent::turn::a_truncated_search_tells_the_model_it_is_incomplete`
 `verified-by: bravebot_agent::turn::a_complete_search_makes_no_truncation_claim`
 `verified-by: bravebot_agent::turn::a_quarantined_search_still_tells_the_model_it_is_incomplete`
+`verified-by: bravebot_agent::turn::a_search_that_ran_out_of_time_tells_the_model_it_did_not_read_the_rest`
+`verified-by: bravebot_agent::turn::a_quarantined_search_that_ran_out_of_time_still_says_it_is_incomplete`
 `verified-by: bravebot_agent::workspace::a_search_that_could_not_reach_every_file_says_so`
 `verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_says_so`
 `verified-by: bravebot_agent::workspace::a_search_that_reached_every_file_makes_no_claim`

@@ -2,8 +2,9 @@ import { Modal } from './Modal'
 import { Alert, Button, Icon } from '../nala'
 
 interface Props {
+  /** The directory the question is about, spelled for a person (PROMPT-1). */
   directory: string
-  /** The file a yes would be kept in, or null where the answer cannot be kept (TRUST-23). */
+  /** The file a yes would be kept in, spelled for a person, or null where the answer cannot be kept (TRUST-23). */
   keeping: string | null
   /** What a yes also grants beyond the files (RUN-5), in the bridge's words, or null where the question says nothing of it. */
   confinedLines: string | null

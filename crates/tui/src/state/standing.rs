@@ -26,46 +26,141 @@ impl Session {
             return;
         }
         let after = crate::loops::spell(wakeup.after);
-        self.looping = Some(crate::loops::Running::armed(
+        // Only reached where no loop is live, but the cap is the session's to hold rather than
+        // the caller's.
+        if self.looping.is_full() {
+            self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
+            return;
+        }
+        let number = self.looping.start(crate::loops::Running::armed(
             prompt.to_string(),
             wakeup,
             Instant::now(),
         ));
-        self.note(t!(loop_armed_by_the_turn, after = after));
+        self.note(t!(loop_armed_by_the_turn, number = number, after = after));
     }
 
-    /// Say what is repeating and when the next tick is due, or that nothing is.
+    /// Arm a line to be sent once, when the delay is up, and send nothing now.
+    ///
+    /// It takes a place among the loops, so it counts towards the cap, replaces a goal the way
+    /// `/loop` does and is ended by the same things: `/loop stop`, Ctrl-C, a cancelled turn,
+    /// `/clear`, and leaving. It is not written down, for the reason a loop is not. Unlike `/loop` it
+    /// may be typed while a turn runs, since nothing starts until the delay is up and the session is
+    /// idle.
+    pub fn start_after(&mut self, request: crate::loops::Request) {
+        if self.looping.is_full() {
+            self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
+            return;
+        }
+        if self.goal.take().is_some() {
+            self.note(t!(loop_replaces_goal));
+        }
+        self.end_watches_for_another_kind();
+        match request.adjusted {
+            Some(crate::loops::Held::Raised(delay)) => {
+                self.note(t!(after_delay_raised, delay = crate::loops::spell(delay)))
+            }
+            Some(crate::loops::Held::Capped(delay)) => {
+                self.note(t!(after_delay_capped, delay = crate::loops::spell(delay)))
+            }
+            None => {}
+        }
+        let pacing = request.pacing;
+        // Numbered before anything is said about it, so what is said is the number it has.
+        let number = self
+            .looping
+            .start(crate::loops::Running::after(request, Instant::now()));
+        if let crate::loops::Pacing::Once(delay) = pacing {
+            self.note(t!(
+                after_started,
+                number = number,
+                delay = crate::loops::spell(delay)
+            ));
+        }
+    }
+
+    /// Say what is repeating and when each tick is due, or that nothing is.
     ///
     /// What the bare command answers. The line is part of it because a loop is announced once, at
     /// the top of a session that has since scrolled, and somebody who has come back to a room with
-    /// a loop running in it is asking what they set going as much as when it next goes.
+    /// loops running in it is asking what they set going as much as when it next goes. Each is
+    /// numbered the way `/loop stop` names it.
     ///
     /// Its first line only, the way `/status` carries it: a prompt is whatever somebody typed, and
     /// the rest of a pasted one would arrive as a wall of transcript nobody asked for.
     pub fn report_loop(&mut self) {
-        let Some(running) = self.looping.as_ref() else {
+        if self.looping.is_empty() {
             self.note(t!(loop_none));
             return;
-        };
-        let prompt = crate::render::one_line(running.prompt());
-        let pace = running.pace();
-        let when = running.when(Instant::now());
-        self.note(t!(
-            loop_active,
-            prompt = &prompt,
-            pace = &pace,
-            when = &when
-        ));
+        }
+        let now = Instant::now();
+        let lines: Vec<String> = self
+            .looping
+            .iter()
+            .map(|running| match running.once() {
+                true => t!(
+                    after_active,
+                    number = running.number(),
+                    prompt = &crate::render::one_line(running.prompt()),
+                    when = &running.when(now)
+                )
+                .to_string(),
+                false => t!(
+                    loop_active,
+                    number = running.number(),
+                    prompt = &crate::render::one_line(running.prompt()),
+                    pace = &running.pace(),
+                    when = &running.when(now)
+                )
+                .to_string(),
+            })
+            .collect();
+        for line in lines {
+            self.note(line);
+        }
         self.note(t!(loop_ends_with));
     }
 
-    /// Stop the loop, and say whether there was one.
-    pub fn stop_loop(&mut self) -> bool {
-        let stopped = self.looping.take().is_some();
-        if stopped {
-            self.note(t!(loop_stopped));
+    /// End the loop a person named, or the only one where they named none, and say what happened.
+    ///
+    /// A bare `stop` with several live is refused and says so: which of them was meant is the one
+    /// thing a guess here gets wrong, and the loop it ends is a turn on a schedule somebody was
+    /// counting on. Returns whether a loop ended.
+    pub fn stop_loop(&mut self, which: Option<usize>) -> bool {
+        if self.looping.is_empty() {
+            self.note(t!(loop_none));
+            return false;
         }
-        stopped
+        match which {
+            None if self.looping.len() > 1 => {
+                self.note(t!(loop_stop_which, count = self.looping.len()));
+                false
+            }
+            None => self.stop_loops(),
+            Some(number) if self.looping.stop(number) => {
+                self.note(t!(loop_stopped_numbered, number = number));
+                true
+            }
+            Some(number) => {
+                self.note(t!(loop_no_such, number = number));
+                false
+            }
+        }
+    }
+
+    /// End every loop, and say so where there were any. What Ctrl-C and a stopped turn do.
+    pub fn stop_loops(&mut self) -> bool {
+        match self.looping.stop_all() {
+            0 => false,
+            1 => {
+                self.note(t!(loop_stopped));
+                true
+            }
+            count => {
+                self.note(t!(loop_stopped_all, count = count));
+                true
+            }
+        }
     }
 
     /// Every live watch, oldest first, for the report that lists them.
@@ -79,7 +174,7 @@ impl Session {
     /// than guessing, so what the planner is told matches what the session will actually do.
     pub fn arming(&self) -> watch::Arming {
         use watch::Arming;
-        if self.looping.is_some() {
+        if !self.looping.is_empty() {
             return Arming::UnderALoop;
         }
         if self.goal.is_some() {
@@ -109,7 +204,7 @@ impl Session {
         under: impl Into<std::path::PathBuf>,
         first: watch::Looked,
     ) {
-        if self.looping.is_some() {
+        if !self.looping.is_empty() {
             self.note(t!(watch_not_armed_under_a_loop));
             return;
         }
@@ -412,35 +507,49 @@ impl Session {
     }
 
     pub(super) fn loop_tick_at(&mut self, now: Instant) -> Option<String> {
-        let running = self.looping.as_ref()?;
-        if running.aged_out(now) {
-            self.looping = None;
-            self.note(t!(loop_aged_out));
+        for number in self.looping.age_out(now) {
+            self.note(t!(loop_aged_out, number = number));
+        }
+        if self.status != Status::Idle || !self.queued.is_empty() {
             return None;
         }
-        if self.status != Status::Idle || !self.queued.is_empty() || !running.due(now) {
-            return None;
-        }
-        self.dispatch_tick()
+        // One at a time, soonest first: the session is idle for one turn, and the rest wait their
+        // turn behind it rather than interrupting it.
+        let number = self.looping.next_due(now)?;
+        self.dispatch_tick_of(number)
     }
 
     /// Arm the next tick from the turn that has just ended.
     ///
     /// `wakeup` is what a self-paced turn asked for. Nothing happens where the finished turn was
     /// not a tick: a person typing their own prompt in the middle of a loop is not a tick of it,
-    /// and must not reset the clock.
+    /// and must not reset the clock. Only the loop whose tick that was is touched, and that is the
+    /// one with a tick in flight.
     pub fn loop_turn_ended(&mut self, wakeup: Option<crate::loops::Wakeup>) {
-        let Some(running) = self.looping.as_mut() else {
+        let Some(running) = self.looping.in_flight_mut() else {
             return;
         };
+        let number = running.number();
+        let once = running.once();
         if !running.ended(wakeup, Instant::now()) {
-            self.looping = None;
-            if wakeup.is_some_and(|wakeup| wakeup.stop) {
-                self.note(t!(loop_finished));
+            self.looping.stop(number);
+            if once {
+                // Sent, and said so when it went: nothing is left to announce.
+            } else if wakeup.is_some_and(|wakeup| wakeup.stop) {
+                self.note(t!(loop_finished, number = number));
             } else {
-                self.note(t!(loop_unpaced));
+                self.note(t!(loop_unpaced, number = number));
             }
         }
+    }
+
+    /// Send a tick of the loop that goes next, announcing which one it is.
+    ///
+    /// For the tests, which send a tick whether or not its moment has come.
+    #[cfg(test)]
+    pub(super) fn dispatch_tick(&mut self) -> Option<String> {
+        let number = self.looping.next_to_go()?;
+        self.dispatch_tick_of(number)
     }
 
     /// Send a tick, announcing which one it is.
@@ -450,15 +559,24 @@ impl Session {
     /// itself makes, and only once: [`crate::loops::Running::dispatching`] hands it to the first tick
     /// and has nothing to hand any tick after that. A `@path` in the prompt is read back out of it
     /// every tick, the way it is for any other prompt.
-    pub(super) fn dispatch_tick(&mut self) -> Option<String> {
-        let running = self.looping.as_mut()?;
+    pub(super) fn dispatch_tick_of(&mut self, number: usize) -> Option<String> {
+        let running = self.looping.get_mut(number)?;
         let (prompt, pasted, attached) = running.dispatching();
         let count = running.ticks();
         let quiet = running.quiet();
-        if quiet > 0 {
-            self.note(t!(loop_tick_quiet, count = count, quiet = quiet));
+        // The loop's number is always said, the one `/loop stop` takes, so a tick count is never
+        // mistaken for it.
+        if running.once() {
+            self.note(t!(after_sent));
+        } else if quiet > 0 {
+            self.note(t!(
+                loop_tick_quiet,
+                number = number,
+                count = count,
+                quiet = quiet
+            ));
         } else {
-            self.note(t!(loop_tick, count = count));
+            self.note(t!(loop_tick, number = number, count = count));
         }
         Some(self.begin_turn(prompt, (attached, pasted), Vec::new()))
     }

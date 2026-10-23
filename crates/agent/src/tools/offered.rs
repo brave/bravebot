@@ -240,7 +240,12 @@ fn table(
              than as anything you can look at, whoever vouched for the directory it is in. Give \
              that reference to spawn_processor with a question about it and the answer comes back \
              the way any processor's does. That is how to check a screenshot or read a scanned \
-             page."
+             page. \
+             \
+             A .ipynb notebook comes back as its cells, numbered from 1, with their source only: \
+             edit_file changes a cell by that number. Saved outputs are not shown unless you \
+             ask for one cell's with output_of, and they come back as a reference like a \
+             picture does, because a program or a web page may have written them."
             ),
             json!({
                 "type": "object",
@@ -249,6 +254,15 @@ fn table(
                         "type": "string",
                         "description": "Workspace-relative path, e.g. src/main.rs. Give this \
                                         or path_ref, never both."
+                    },
+                    "output_of": {
+                        "type": "integer",
+                        "description": "In a .ipynb notebook, the number of a code cell, from \
+                                        1 as a read of the notebook shows them, to get the \
+                                        cell's saved outputs instead of the cells. They come \
+                                        back as a reference for spawn_processor, never as \
+                                        text, and a picture in one is a line giving its size. \
+                                        offset and limit are ignored."
                     },
                     "path_ref": {
                         "type": "string",
@@ -369,7 +383,10 @@ fn table(
              write_file when changing part of a file: the user approves a diff, which is \
              easier to review than a whole body. The user must approve each edit before it \
              happens, so explain what you are changing. To change several places in one \
-             file, give them together in edits: the user approves one diff.",
+             file, give them together in edits: the user approves one diff. In a .ipynb \
+             notebook, name a cell by the number a read showed instead of a passage: give \
+             cell and new_text to replace that cell's source (its saved outputs are dropped), \
+             or cell_action insert_after or delete.",
             json!({
                 "type": "object",
                 "properties": {
@@ -399,6 +416,27 @@ fn table(
                         "type": "boolean",
                         "description": "Replace every occurrence instead of requiring \
                                         exactly one. Defaults to false."
+                    },
+                    "cell": {
+                        "type": "integer",
+                        "description": "In a .ipynb notebook, the number of the cell to \
+                                        change, from 1 as a read of the notebook shows \
+                                        them, with new_text as the cell's whole new \
+                                        source. With cell_action insert_after, the cell \
+                                        the new one goes after, or 0 to put it first. \
+                                        Not given with old_text, edits or replace_all."
+                    },
+                    "cell_action": {
+                        "type": "string",
+                        "enum": ["replace", "insert_after", "delete"],
+                        "description": "What to do to the cell. Defaults to replace. \
+                                        delete takes no new_text."
+                    },
+                    "cell_type": {
+                        "type": "string",
+                        "enum": ["code", "markdown"],
+                        "description": "The kind of cell insert_after makes. Defaults to \
+                                        code."
                     },
                     "edits": {
                         "type": "array",

@@ -400,7 +400,12 @@ impl Session {
         if self.shell || self.caret() != self.input.len() {
             return None;
         }
-        crate::command_table::complete_argument(&self.input)
+        let skills: Vec<&str> = self
+            .held_skills()
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect();
+        crate::command_table::complete_argument(&self.input, &skills)
     }
 
     /// Finish the level started after `/effort ` as far as the levels that fit it agree.

@@ -481,6 +481,12 @@ pub struct Policy<'sink, S: Sink> {
     /// two go through one gate and are not the same act: only the first is something a turn asked
     /// for, and only the first is what a `WebFetch` rule is about.
     fetching: Option<String>,
+    /// The host a hop of the fetch in flight was refused for going to, until
+    /// [`Policy::take_fetch_hop`] hands it to whoever asks the person. A server's own bytes.
+    fetch_hop: Option<String>,
+    /// A host other than `fetching` that a person approved this one fetch to be redirected to,
+    /// while it is in flight. Set by [`Policy::before_fetch_via`], cleared with `fetching`.
+    fetching_via: Option<String>,
     /// The host and port a declared MCP server is at, while a request to it is in flight.
     ///
     /// Set by [`Policy::before_server_request`] and cleared by
@@ -622,6 +628,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             vouch_asked: std::collections::BTreeSet::new(),
             exposed: crate::credentials::Exposed::new(),
             fetching: None,
+            fetch_hop: None,
+            fetching_via: None,
             calling_server: None,
             calling_socket: None,
             server_hop: None,
@@ -771,7 +779,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // names it, which is a person having written that host down in advance.
             if redirected
                 && ruling != crate::permissions::Decision::Ruled(crate::permissions::Ruling::Allow)
+                && self.fetching_via.as_deref() != Some(host.as_str())
             {
+                // Kept for the prompt and nothing else: see `take_fetch_hop`.
+                self.fetch_hop = Some(host.clone());
                 return Err(self.deny(
                     "network",
                     Principle::IntegrityGate,
@@ -787,7 +798,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // What a `Location` header names is a server's own bytes, so a refusal repeating it
             // would be writing them into whatever formats that refusal. The declared destination
             // is what a person wrote down, so a refusal names that.
-            if crate::url::socket_of(url) != self.calling_socket {
+            //
+            // A url that names no socket is on none, the declared one included, so two of them
+            // are never taken for one place.
+            let on_declared_socket = match (crate::url::socket_of(url), &self.calling_socket) {
+                (Some(hop), Some(declared)) => hop == *declared,
+                _ => false,
+            };
+            if !on_declared_socket {
                 // Kept for the prompt and nothing else: see `take_server_hop`.
                 self.server_hop = Some(url.to_string());
                 return Err(self.deny(
@@ -889,6 +907,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         // What the egress gate checks each hop against, until the call reports back.
         self.fetching = Some(crate::url::host_of(url).unwrap_or_default());
+        self.fetch_hop = None;
+        self.fetching_via = None;
 
         let label = Capability::WebFetch.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
@@ -910,6 +930,37 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// egress being checked against a host that one call was approved for.
     pub fn fetch_finished(&mut self) {
         self.fetching = None;
+        self.fetching_via = None;
+    }
+
+    /// The host the last fetch's redirect was refused for going to, if it was.
+    ///
+    /// Taken rather than read, so one refusal is asked about once. `(U,pub)`: the host came out of
+    /// a `Location` header and is the server's own bytes, so it may be drawn for a person and
+    /// decides nothing until one of them says it may be fetched from (FETCH-4). A host a `deny`
+    /// rule covers is never kept: that refusal is final and there is nothing to ask.
+    pub fn take_fetch_hop(&mut self) -> Option<Labelled<String>> {
+        self.fetch_hop
+            .take()
+            .map(|host| Labelled::new(host, Label::untrusted_public()))
+    }
+
+    /// Record that a person approved this exact host as the place a fetch was redirected to.
+    ///
+    /// Only a person mints this, and it is single-use and bound to the host, as
+    /// [`Policy::endorse_fetch`] is bound to a URL (FETCH-3).
+    pub fn endorse_fetch_hop(&mut self, host: &str) {
+        self.issue_grant("fetch_url", "hop", host.to_string());
+    }
+
+    /// [`Policy::before_fetch`] for a fetch that a person has also approved being redirected to
+    /// `hop`, which the egress gate then lets that one request follow. Nothing is remembered: the
+    /// next fetch starts confined to its own host again.
+    pub fn before_fetch_via(&mut self, url: &str, hop: &str) -> Gated<Label> {
+        self.consume_grant("fetch_url", "hop", hop)?;
+        let label = self.before_fetch(url)?;
+        self.fetching_via = Some(hop.to_string());
+        Ok(label)
     }
 
     /// Whether a `fetch_url` call is between [`Policy::before_fetch`] and
@@ -934,7 +985,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The port counts, unlike anywhere a rule about a host decides. A declaration is one URL
     /// somebody wrote in full, and the machine it names runs other services on other ports, so a
-    /// hop that keeps the address and changes the port is a different service.
+    /// hop that keeps the address and changes the port is a different service. So does the
+    /// scheme, and a url whose port cannot be read names no socket at all: a hop to one is a
+    /// move, and so is every request to a server declared at one.
     ///
     /// No rule widens this, which is the other difference from a fetch. A `WebFetch` rule says
     /// which websites the planner may reach, and that is not a statement that one server's
@@ -1140,6 +1193,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.issue_grant("mcp_tools", "alias", alias.to_string());
     }
 
+    /// Record that `alias` announced a change to its tools, so its list is read again and put to a
+    /// person as a first list is (MCP-12). Nothing about the list as it now stands is in the record.
+    pub fn record_tool_list_change(&mut self, alias: &str) {
+        self.allow(
+            "mcp_tools_changed",
+            format!(
+                "the MCP server {alias} announced that its tools changed, so none of its tools is \
+                 offered until the list it now gives is vouched for"
+            ),
+        );
+    }
+
     /// Take the word of whoever endorsed a server's tool list and give the planner the list.
     ///
     /// A promotion road of its own (LABEL-8), and the one a server's words reach the planner by.
@@ -1282,6 +1347,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             vouch_asked: self.vouch_asked.clone(),
             exposed: self.exposed.clone(),
             fetching: self.fetching.clone(),
+            fetch_hop: self.fetch_hop.clone(),
+            fetching_via: self.fetching_via.clone(),
             calling_server: self.calling_server.clone(),
             calling_socket: self.calling_socket.clone(),
             server_hop: self.server_hop.clone(),
@@ -1436,6 +1503,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             format!(
                 "skill {name}, {characters} characters, named by the user as /{name} in the line \
                  they typed; the planner was not offered it"
+            ),
+        );
+    }
+
+    /// Record that a skill the person kept applied with `/mode` was put in the system prompt for
+    /// this turn, by its name and the size of what went (SKILL-21).
+    ///
+    /// Said per turn, since a mode stands without a line of its own in the transcript and the trail
+    /// is the only place a reader learns which skill's words a turn was given.
+    pub fn admit_skill_mode(&mut self, name: &str, characters: usize) {
+        self.allow(
+            "provenance",
+            format!(
+                "skill {name}, {characters} characters, kept in force by the user's /mode; the \
+                 planner was not offered it"
             ),
         );
     }
@@ -2379,6 +2461,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a line reached the turn from an input channel the person vouched for, while the
+    /// turn ran (CLI-36).
+    ///
+    /// The same footing as [`Policy::admit_interjection`] and for the same reason: the line carries
+    /// the person's words and may not route, and the trail records it as the person's own input.
+    /// What differs is the act that makes it theirs. Nobody typed this at a keyboard; the person
+    /// typed the flag that says the launching program's lines are theirs, and the trail says that.
+    ///
+    /// This must only ever be reached from a channel a flag the person typed on the command line
+    /// vouched for. A line from any other pipe is piped input, which is labelled by
+    /// [`Policy::label_piped_input`] and never reaches this.
+    pub fn admit_vouched_line(&mut self, characters: usize) {
+        self.allow(
+            "provenance",
+            format!(
+                "{characters} characters, sent on an input channel the person vouched for with a \
+                 flag they typed, while the turn was running; it may not route"
+            ),
+        );
+    }
+
     /// Transform content without exposing it, keeping its label.
     ///
     /// A tool often needs to reshape what it read, joining lines or adding a truncation notice, before
@@ -2819,6 +2922,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             format!(
                 "round {round}: {spent} {unit} spent against a limit of {limit}; the person was \
                  asked and {then}"
+            ),
+        );
+    }
+
+    /// Record that a run reached a limit its person gave it, and ended there (TURN-14).
+    ///
+    /// Counts and a fixed word for what they count, so the line carries no content (TRACE-2). A
+    /// run that stops leaves nothing else saying which of its limits did it, or how far the run
+    /// had got.
+    pub fn record_run_limit(&mut self, round: usize, counts: &'static str, made: u64, limit: u64) {
+        self.allow(
+            "run_limit",
+            format!(
+                "round {round}: {made} {counts} against a limit of {limit}; the run ended before \
+                 it went past it"
             ),
         );
     }
@@ -12326,6 +12444,106 @@ five
         );
     }
 
+    /// FETCH-4: the host a hop was refused for is kept for the prompt, as the server's own bytes,
+    /// and handed out once. A hop a `deny` rule refuses is final and leaves nothing to ask, and a
+    /// fetch that stayed on its host leaves nothing either.
+    #[test]
+    fn a_hop_refused_for_leaving_the_host_is_kept_untrusted_for_the_prompt() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:denied.test)"],
+            &[],
+            &[],
+        ));
+
+        let start = "https://example.com/start";
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the fetch was allowed");
+        policy.before_network("https://example.com/moved").unwrap();
+        assert!(policy.take_fetch_hop().is_none());
+
+        policy
+            .before_network("https://denied.test/landed")
+            .expect_err("a denied host was followed");
+        assert!(
+            policy.take_fetch_hop().is_none(),
+            "a denied host was kept to ask about"
+        );
+
+        policy
+            .before_network("https://elsewhere.test/landed")
+            .expect_err("a redirect off the approved host was allowed");
+        let hop = policy.take_fetch_hop().expect("the refused hop");
+        assert_eq!(hop.label(), Label::untrusted_public());
+        assert!(
+            policy.take_fetch_hop().is_none(),
+            "one refusal was handed out twice"
+        );
+
+        // A refusal does not outlive the fetch it belonged to.
+        policy
+            .before_network("https://elsewhere.test/landed")
+            .expect_err("still confined");
+        policy.fetch_finished();
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the next fetch");
+        assert!(policy.take_fetch_hop().is_none());
+    }
+
+    /// FETCH-4: an approval of a host a redirect led to is for that host, that fetch and that one
+    /// time. It does not carry to a different host, to the next fetch, or to a hop with no
+    /// approval behind it, and a `deny` rule still wins over it.
+    #[test]
+    fn an_approved_hop_is_for_that_host_and_that_fetch_alone() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_permissions(permissions(
+            &["WebFetch(domain:denied.test)"],
+            &[],
+            &[],
+        ));
+        let start = "https://example.com/start";
+
+        // Not minted by a person: the gate refuses, and the fetch cannot be made to follow it.
+        policy.endorse_fetch(start);
+        policy
+            .before_fetch_via(start, "elsewhere.test")
+            .expect_err("a hop was approved that nobody approved");
+
+        policy.endorse_fetch(start);
+        policy.endorse_fetch_hop("elsewhere.test");
+        policy
+            .before_fetch_via(start, "elsewhere.test")
+            .expect("the approved hop");
+        assert!(policy.before_network("https://example.com/moved").is_ok());
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_ok(),
+            "the host a person approved was refused"
+        );
+        assert!(
+            policy
+                .before_network("https://another.test/landed")
+                .is_err(),
+            "an approval for one host let the fetch go to another"
+        );
+        assert!(
+            policy.before_network("https://denied.test/landed").is_err(),
+            "an approval overrode a deny rule"
+        );
+        policy.fetch_finished();
+
+        // Gone with the fetch: the next one starts confined to its own host again.
+        policy.endorse_fetch(start);
+        policy.before_fetch(start).expect("the next fetch");
+        assert!(
+            policy
+                .before_network("https://elsewhere.test/landed")
+                .is_err(),
+            "an approval was remembered for the next fetch"
+        );
+    }
+
     /// A refusal's text is what a caller formats into whatever it is building, including a
     /// message the planner reads. The host a redirect names was taken from a `Location` header,
     /// so it is a server's own bytes and saying it here would put them there.
@@ -12496,6 +12714,55 @@ five
             .before_network("https://127.0.0.1/mcp")
             .expect_err("a hop from implied port 80 to implied port 443 was followed");
         assert!(policy.take_server_hop().is_some());
+    }
+
+    /// A server answering plain text on a port is not the one answering TLS on it, so a hop that
+    /// keeps the address and the written port and changes the scheme has left the server.
+    #[test]
+    fn a_servers_request_cannot_be_redirected_to_the_other_scheme_on_the_same_port() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        policy.before_server_request("http://127.0.0.1:8931/mcp");
+        policy
+            .before_network("http://127.0.0.1:8931/mcp/v2")
+            .expect("the scheme the server was declared with was refused");
+        policy
+            .before_network("https://127.0.0.1:8931/mcp")
+            .expect_err("a hop to the other scheme on the declared port was followed");
+        assert!(policy.take_server_hop().is_some());
+    }
+
+    /// A port that cannot be read is a port the transport replaces with the scheme's default, so
+    /// two urls that write one name sockets the comparison cannot see. A url that names none is
+    /// on no socket, including the one that was declared, and is never taken for another that
+    /// names none either: the hop is a move and nothing is sent to it.
+    #[test]
+    fn a_hop_is_a_move_whenever_a_port_cannot_be_read() {
+        for port in ["", "abc", "99999"] {
+            let declared = format!("http://127.0.0.1:{port}/mcp");
+            let moved = format!("https://127.0.0.1:{port}/moved");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            policy.before_server_request(&declared);
+            policy
+                .before_network(&moved)
+                .expect_err("a hop between two ports nobody can read was taken for one socket");
+            assert!(policy.take_server_hop().is_some(), "{port:?}");
+
+            policy.before_server_request(&declared);
+            policy
+                .before_network(&declared)
+                .expect_err("a declaration whose socket cannot be read was taken for itself");
+            assert!(policy.take_server_hop().is_some(), "{port:?}");
+
+            policy.before_server_request("http://127.0.0.1:8931/mcp");
+            policy
+                .before_network(&moved)
+                .expect_err("a hop to a port nobody can read was followed");
+            assert!(policy.take_server_hop().is_some(), "{port:?}");
+        }
     }
 
     /// The destination a refused hop named is kept for the prompt, as the server's bytes, and
@@ -15694,6 +15961,31 @@ five
                 e,
                 Event::GatePassed { gate: "provenance", detail }
                     if detail.contains("31 characters") && detail.contains("typed by the user")
+            )),
+            "the provenance decision left no trace: {:?}",
+            sink.events()
+        );
+    }
+
+    /// CLI-36: a line from a channel the person vouched for is accounted for as that, and is a
+    /// decision about provenance only: it does not lower what the context has met, so the planner
+    /// is not quarantined from its own steering.
+    #[test]
+    fn a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = policy_trusting(&mut sink, &[]);
+            policy.admit_vouched_line(31);
+            assert_eq!(policy.context_integrity(), Integrity::Trusted);
+        }
+
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("31 characters")
+                        && detail.contains("channel the person vouched for")
+                        && !detail.contains("keyboard")
             )),
             "the provenance decision left no trace: {:?}",
             sink.events()

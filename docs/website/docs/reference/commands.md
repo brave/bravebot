@@ -26,6 +26,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/limit` | `[<amount> \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
+| `/mode` | `[skill \| off]` | Keep a skill applied to every turn: list skills, pick one, or leave |
 | `/help` | `<question>` | Ask a question about bravebot, answered from its own documentation |
 | `/changelog` | | Show what changed in this version |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
@@ -40,13 +41,15 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
 | `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it from the next turn |
-| `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
+| `/loop` | `[[interval] <prompt> \| stop [n]]` | Send a prompt again and again, say what is repeating, or stop it |
+| `/after` | `<delay> <prompt>` | Send a prompt once, after a delay |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/panel` | | Show or hide the info panel beside the transcript |
 | `/files` | | List the files the session wrote and show every edit to the highlighted one |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
+| `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
@@ -264,6 +267,25 @@ a built-in style or one of your own. The file is read again at the start of each
 whose file is no longer trusted is not used and the turn says so. The `style` setting does not
 name a project's style.
 
+## `/mode [skill | off]`
+
+Keeps one skill applied to every turn until you leave it, for a skill that says how to work, such as
+a review checklist or a test-first playbook. `/mode` alone says which skill is the mode and lists
+the names it could take, `/mode tdd-playbook` puts that skill in force from the next turn, and
+`/mode off` leaves it. A name is compared whole against the skills the planner would be offered, plus
+[the ones only you can load](../customize/skills.md#a-skill-only-you-can-load): a prefix, a different
+case or a skill from a project you have not trusted is not taken, and the mode you had stays.
+
+The skill's instructions go in the system prompt of each turn, after bravebot's own words and ahead of
+your `AGENTS.md`, so your own instructions still have the last word. They are not added to the
+conversation, so a long session holds them once. The skill is read again at the start of each turn, so
+one that was edited is followed, and one that is gone or no longer trusted is not applied: the turn
+says so and goes on without it. Only the instructions apply; the skill's `model` and `effort` do not.
+
+The mode's name is shown in the bottom border of the box while it is in force, it is written to the
+session's record, and a resumed session is back in it and says so. A delegate is not given it.
+Typed while a turn runs, `/mode` waits for the turn to end.
+
 ## `/effort [level]`
 
 Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) above a row for
@@ -440,20 +462,41 @@ does, so `/sandbox workspace-write` replaces a checkout's `strict`. Only you can
 or `AGENTS.md` line can. The opening screen and `/status` name the mode in force. The desktop app has
 no such command yet.
 
+## `/after <delay> <prompt>`
+
+Sends one prompt once, after a delay, and then forgets it.
+
+```
+/after 45m check whether the integration tests passed
+```
+
+The delay is the first word: a number and `s`, `m`, `h` or `d`, from five seconds to seven days. The
+rest of the line is sent unchanged, as a prompt, when the delay is up and the session is idle. It
+takes the place of a loop, so `/loop stop`, Ctrl-C, `/clear` and leaving end it, `/loop` says what is
+pending, and it is not kept in the session record.
+
 ## `/loop [interval] <prompt>`
 
-Sends one prompt again and again until you stop it, says what is repeating, or ends it.
+Sends a prompt again and again until you stop it, says what is repeating, or ends one. A session
+holds up to five loops at once, numbered in the order they began.
 
 ```
 /loop 5m check the deploy          # now, and every five minutes
 /loop check the deploy every 20m   # the same, written the other way round
 /loop watch the build              # now, and each turn says when the next is due
-/loop                              # what is repeating, and how to end it
-/loop stop                         # end it
+/loop                              # what is repeating, each loop under its number
+/loop stop                         # end the loop, when only one is running
+/loop stop 2                       # end loop 2 and leave the others
 ```
 
-`stop` is the ending whenever it is the whole of the line that would be sent, whatever its case and
-with or without a pace, so `/loop STOP` and `/loop 5m stop` end the loop too. A line that only begins
+A second `/loop` starts another loop and leaves the first running. A sixth is refused. Ticks go one
+at a time, whichever is due first, and each is announced with its loop's number. `/loop stop` with
+several running ends none of them and asks for a number. Ctrl-C, stopping a turn, `/clear` and
+setting a goal end every loop.
+
+`stop`, alone or with a number, is the ending whenever it is the whole of the line that would be sent,
+whatever its case and with or without a pace, so `/loop STOP`, `/loop 5m stop` and `/loop stop 2`
+end a loop too. A line that only begins
 with the word is a line: `/loop stop the deploy` is a loop over `stop the deploy`, and
 `/loop stop the deploy every 20m` is that line every twenty minutes. The bare command with no loop
 running says so, and so does `/loop stop`.
@@ -518,15 +561,15 @@ Six things end a loop, and each says so:
 
 | What | When |
 |---|---|
-| you ask | `/loop stop`, which ends the loop and leaves the turn in flight running |
-| you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving |
-| a turn is stopped | any turn cancelled while a loop runs, tick or not |
+| you ask | `/loop stop`, or `/loop stop <number>` where several are live, which ends the loop and leaves the turn in flight running |
+| you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving; it ends every loop |
+| a turn is stopped | any turn cancelled while a loop runs, tick or not; it ends every loop |
 | the turn says it is finished | a self-paced tick that calls `schedule_next` with `stop`, which ends the loop with no further tick |
-| the session moves on | `/clear`, and leaving |
+| the session moves on | `/clear`, and leaving, which end every loop; so does setting a goal |
 | age | seven days after it started |
 
 **A loop, a [goal](#goal-condition) and a [watch](#watch-stop-n) are never live together**, because a
-session does one of the three at a time. Whichever of a loop and a goal was asked for second stands,
+session does one of the three at a time. Several loops may be live together, since the rule is about kinds. Whichever of a loop and a goal was asked for second stands,
 and the one it replaced is reported as stopped. Asking for either ends every live watch.
 
 **A loop is never written down.** It is not in the session record, so `--resume` restores none and it
@@ -745,6 +788,18 @@ It runs `/usr/bin/caffeinate` on macOS, `systemd-inhibit` on Linux and PowerShel
 write. If there is no such `cat`, or the program cannot be started, or stops by itself, the transcript
 says so and `/caffeinate` turns off.
 
+## `/thinking`
+
+Shows the model's thinking as it arrives, and typed again hides it. It is off when a session opens
+and applies to this session only. While it is on, the last few lines of what the model has thought
+this round are drawn dimmed, under a heading, above the reply as it is written, and they go when the
+round's words arrive. Only a service that sends its thinking shows any: Bedrock sends it when asked,
+and Brave's endpoint or an OpenAI-compatible gateway shows what a model sends in `reasoning_content`.
+The thinking is for the screen alone: it is not saved to the session, not exported, and not sent in a
+later request, and turning it on changes nothing the model is asked. The desktop window has no
+command: a Thinking button appears in the line that says a turn is running once the session has been
+sent thinking, and shows the last eight lines of it under that line on the same terms.
+
 ## `/checkouts [apply <n> | remove <n>]`
 
 Lists the checkouts this session keeps for its delegates, brings the files written in one back into your working directory, and removes one by its number.
@@ -909,9 +964,10 @@ or the session's. Typed while a turn runs it waits for the turn to end.
 Asks the planner to answer a question about using bravebot from the documentation carried inside
 the program, so the answer comes from the version you are running and not from a checkout or the
 website: `/help how do I stop a background job`. The request names the built-in `bravebot-help`
-skill, whose pages the planner loads one at a time, only the ones the question needs. If the pages it
-loaded do not answer the question, it says so. Without the command, the planner loads the same skill
-on its own when a question is about using bravebot.
+skill, whose pages the planner loads one at a time, only the ones the question needs. The skill also
+holds the clause headings of the specifications, for a question about exactly what bravebot does. If
+the pages it loaded do not answer the question, it says so. Without the command, the planner loads
+the same skill on its own when a question is about using bravebot.
 
 The question is sent as you typed it, inside a sentence the program wrote, and the line you typed is
 not sent. It is a line you typed, so a file you name in it with `@` is read as it is in any prompt.
@@ -1359,7 +1415,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/panel`, `/files`, `/caffeinate`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/panel`, `/files`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
@@ -1371,10 +1427,20 @@ waiting `/clear` names the new session, and the line they wait behind is named u
 A waiting `/sandbox` line changes the sandbox mode and nothing else, so it holds back none of them but another `/sandbox`: a `/note` typed
 behind a waiting `/sandbox off` is written at once. `/issue` and `/pr` set a link on the session's record, which only `/clear`, `/handoff`,
 `/branch`, `/resume`, `/bg` and `/exit` replace, so they are carried out as you type them behind any other waiting line, a prompt
-included. `/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
+included. `/rename` and `/note` act on the name and the notes the session's record holds. A prompt, a command that sends a request, `/clear`,
+`/undo`, `/rewind`, `/hunks`, `/cd`, `/compact`, `/handoff`, `/branch`, `/resume`, `/bg` and `/exit` can change them, so they wait behind those. They are
+carried out as you type them behind a command line, behind `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`, `/pr`,
+`/sandbox`, `/model`, `/effort` and `/advisor`, and behind a waiting `/note` or `/rename`: a `/note` typed behind a waiting `!make` is written at once.
+`/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
 request or leaves for another session, and behind the other two. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
 `/reach`, `/branch`, `/add-dir`, `/cd`, `/mcp`, `/rename`, `/note`, `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox` they are carried
-out as you type them. What they say goes into the history as you type them,
+out as you type them. `/style` picks what every turn opens its prompt with, so it waits behind a prompt, behind a command that begins a turn, behind `/clear`, `/cd`, `/add-dir`,
+`/reach` and `/branch`, which move or end the paths a style file under `~/.bravebot` may not be read from, and behind `/handoff`, `/resume`, `/bg` and `/exit`, which
+begin another session; behind a command line, `/compact`,
+`/btw`, `/recap`, `/memory`, `/undo`, `/rewind`, `/hunks`, `/mcp`, `/after` and the settings commands above it is carried out as you type it. `/forget-trust` withdraws the answer kept about the
+directory, which a program a prompt or a command line runs can change the meaning of by making a `.git` entry, so it waits behind those as well as behind the
+commands that start a session here, move the directory or leave the session, and behind `/undo`, `/rewind`, `/hunks` and `/mcp`; it is carried out as you type it behind `/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/after` and the settings commands
+above it. What they say goes into the history as you type them,
 so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and
 a question the turn asks takes the screen until you have answered it. A list still open when the turn

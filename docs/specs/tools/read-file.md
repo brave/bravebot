@@ -4,6 +4,7 @@ title: read_file
 status: normative
 governs:
   - crates/agent/src/workspace.rs
+  - crates/agent/src/notebook.rs
   - crates/agent/src/conversation.rs
   - crates/filetype/src/lib.rs
 documented-by: docs/website/docs/reference/tools.md
@@ -33,6 +34,7 @@ bytes at another.
 `verified-by: bravebot_core::policy::a_path_that_lost_its_trust_fills_the_slot_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_an_unvouched_path_is_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted`
+`verified-by: bravebot_agent::turn::a_read_the_planner_may_not_see_still_says_when_no_file_is_there`
 
 <a id="READ-2"></a>
 ### READ-2: a long file is paged, and says where to continue from
@@ -370,3 +372,62 @@ the rounds after it, to tell the planner what it already had.
 `verified-by: bravebot_agent::conversation::a_kept_read_follows_its_message_to_its_new_position`
 `verified-by: bravebot_agent::conversation::a_window_shown_again_is_recorded_under_its_latest_token`
 `verified-by: bravebot_agent::workspace::requests_that_come_to_the_same_lines_are_one_window`
+
+<a id="READ-9"></a>
+### READ-9: a notebook the planner may read is shown as its cells, without their outputs
+
+A `.ipynb` file, named so by its extension alone, that the planner may be shown and that is a
+version 4 notebook, reads as its cells in the order the file holds them: a `[N] kind` line, N
+counting from 1, and then the cell's source. The result closes with the number of cells that hold
+saved outputs, and shows none of them. Paging, the change token and the caps of
+[READ-2](#READ-2) apply to that view as they do to a file's lines, so `offset` and `limit` count
+lines of the view. A file that is not valid JSON, or not a version 4 notebook, reads as the
+lines it is.
+
+A notebook the planner may not see is [READ-1](#READ-1) and is not opened, so none of its cells
+reach a context. The view is made only of a file whose label is trusted, and a slot filled from
+a notebook holds the file's own bytes, so a processor reads the JSON, outputs included, under
+the label the path gave it.
+
+**Why.** The JSON of a notebook is mostly pictures encoded as text and strings with escapes, which
+spends a page on a few cells and gives the planner nothing it can edit by. A saved output is text
+that a program, a web page or a dataset produced, so it is not shown to a planner even from a notebook
+somebody vouched for: the vouch covers what a person wrote into the cells. The way to them is
+[READ-10](#READ-10), or a processor reading the notebook.
+
+`verified-by: bravebot_agent::turn::a_trusted_notebook_reads_as_cells_without_its_outputs`
+`verified-by: bravebot_agent::turn::an_untrusted_notebook_is_not_shown_as_cells`
+`verified-by: bravebot_agent::notebook::the_view_numbers_cells_from_one_and_leaves_outputs_out`
+`verified-by: bravebot_agent::notebook::a_file_that_is_not_a_version_4_notebook_has_no_view`
+`verified-by: bravebot_agent::notebook::an_empty_notebook_says_so`
+`verified-by: bravebot_agent::notebook::only_a_path_ending_in_ipynb_names_a_notebook`
+
+<a id="READ-10"></a>
+### READ-10: a cell's saved outputs are read on request and come back as a reference
+
+`output_of`, a cell number counting from 1 as the view of [READ-9](#READ-9) shows them, asks for the
+saved outputs of that cell instead of the notebook's cells. It is accepted only for a path named a
+notebook by its extension and for a code cell that holds outputs; a number that is not a whole number
+from 1, a cell the notebook does not have, a cell that is not a code cell, a cell with no outputs and
+a file that is not a version 4 notebook are each refused in words naming which. A notebook the planner
+may not see is [READ-1](#READ-1), and the read of it is the reference to the whole file, outputs
+included. `offset` and `limit` are ignored.
+
+The result is text shaped for a processor and is labelled untrusted whatever the notebook's path is
+trusted as, so `Policy::present` holds it back and the planner is handed a reference: the labelled
+text is made in the kernel from the file's bytes, and the driver neither shows nor branches on it. A
+stream and an error are kept as text, a result's `text/plain` is kept, and every other form of data,
+a picture included, is replaced by a line giving its type and its size in characters as the file stores it. The result is cut at
+20,000 characters and says so.
+
+**Why.** A saved output is what a program, a web page or a dataset printed, so it can hold text
+written to steer a model, and a vouch for the notebook covers only what a person wrote into its
+cells. Asking for one cell's outputs by number spends a page on what the planner asked about and not
+on every picture in the file. A picture's base64 is a cap spent on nothing a reader can use.
+
+`verified-by: bravebot_agent::turn::a_cells_saved_outputs_come_back_as_a_reference_not_as_text`
+`verified-by: bravebot_agent::turn::an_output_request_that_names_no_outputs_is_refused`
+`verified-by: bravebot_agent::notebook::an_output_view_keeps_text_and_replaces_a_picture_with_its_size`
+`verified-by: bravebot_agent::notebook::an_output_view_is_cut_at_the_cap`
+`verified-by: bravebot_agent::notebook::an_output_view_of_unreadable_input_is_empty`
+`verified-by: bravebot_agent::notebook::outputs_are_asked_of_a_code_cell_that_holds_some`

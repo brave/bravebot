@@ -57,6 +57,9 @@ pub struct Reached {
     declaration: Digest,
     home: Option<SessionScratch>,
     policy: Option<EffectivePolicy>,
+    /// The filters the declaration put on the list, which a list read again is held to (MCP-12).
+    tools: Vec<String>,
+    exclude_tools: Vec<String>,
 }
 
 impl Reached {
@@ -72,7 +75,17 @@ impl Reached {
             declaration,
             home: None,
             policy: None,
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
         }
+    }
+
+    /// The same server, with the filters its declaration put on its list, which a list read again
+    /// after the server announced a change is held to as the first was (MCP-12).
+    pub fn filtered_by(mut self, tools: &[String], exclude_tools: &[String]) -> Self {
+        self.tools = tools.to_vec();
+        self.exclude_tools = exclude_tools.to_vec();
+        self
     }
 
     /// The same server, with the policy its process was started under (SERVERS-20). A server with
@@ -224,6 +237,9 @@ struct Server {
     /// What the process was started under, where it is one this session confined, which a local
     /// server is and a remote one is not (SERVERS-20). Held here so nothing asking waits on a call.
     policy: Option<EffectivePolicy>,
+    /// The filters on its list, applied to a list read again (MCP-12).
+    tools: Vec<String>,
+    exclude_tools: Vec<String>,
     /// After `connection`, since fields drop in order: the process is stopped before its home goes.
     _home: Option<SessionScratch>,
 }
@@ -328,6 +344,8 @@ impl Session {
                     prompts: reached.prompts,
                     connection: Mutex::new(reached.connection),
                     policy: reached.policy,
+                    tools: reached.tools,
+                    exclude_tools: reached.exclude_tools,
                     _home: reached.home,
                 })
             })
@@ -536,6 +554,14 @@ impl Session {
             ))) {
                 continue;
             }
+            self.reread(
+                policy,
+                server,
+                &mut Said {
+                    reporter: &mut *reporter,
+                    notices: &mut settled.notices,
+                },
+            );
             // Taken out rather than held, so nothing is locked while the person reads the list.
             let listing = {
                 let mut state = held(&server.state);
@@ -559,7 +585,51 @@ impl Session {
         settled
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Read `server`'s tools again where it announced that they changed, and put the list it now
+    /// gives to the person as a first list is (MCP-12).
+    ///
+    /// What was vouched for was the list as it stood, so the change withdraws it: none of the
+    /// server's tools is offered until the new list is vouched for, and the earlier answer, a no
+    /// included, is not carried over by comparing the two lists, since that would be a decision
+    /// taken from the server's bytes. A list that cannot be read offers none of its tools. Only a
+    /// local server is read this way: a remote one has no stream a notice could arrive on between
+    /// its requests.
+    fn reread<S: Sink, R: Reporter>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        server: &Server,
+        said: &mut Said<'_, R>,
+    ) {
+        let alias = server.alias.as_str();
+        let listed = match &mut *held(&server.connection) {
+            Connection::Stdio(stdio) => match stdio.take_tools_changed() {
+                true => bravebot_mcp::listed_or_none(alias, stdio.list_tools()),
+                false => return,
+            },
+            Connection::Http(_) => return,
+        };
+        policy.record_tool_list_change(alias);
+        match listed {
+            Ok(listing) => {
+                let listing = listing.filtered(&server.tools, &server.exclude_tools);
+                *held(&server.state) = State::Unasked(listing);
+                said.notice(t!(mcp_tools_changed, alias = alias));
+            }
+            Err(error) => {
+                *held(&server.state) = State::Declined;
+                said.notice(t!(
+                    mcp_tools_reread_failed,
+                    alias = alias,
+                    reason = error.to_string()
+                ));
+            }
+        }
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are what `settle` holds for one server plus the list it took out, and it has one caller"
+    )]
     fn settle_one<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -732,7 +802,6 @@ impl Session {
     /// person says it is where the server now is: only then is it read as a url, held to the
     /// managed layer, and reached. The handshake there comes before the declaration is rewritten,
     /// so a destination that does not answer is not written down.
-    #[allow(clippy::too_many_arguments)]
     fn moved<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -1366,6 +1435,31 @@ impl Offer {
     }
 }
 
+/// An offer for a test that only needs [`Offer::find`] to answer, built without reaching a
+/// server. Each entry is the wire name a call is made under, the alias `find` answers with and
+/// the tool's own word; the three are not derived from one another here, so a test can tell a
+/// lookup that used the offer apart from one that fell back to parsing the wire name itself.
+#[cfg(test)]
+pub(crate) fn offer_for_test(entries: &[(&str, &str, &str)]) -> Offer {
+    Offer {
+        session: Session::new(Vec::new(), PathBuf::new(), None, false, Managed::default()),
+        tools: entries
+            .iter()
+            .map(|(wire, alias, tool)| Offered {
+                wire: wire.to_string(),
+                alias: alias.to_string(),
+                drawn: Drawn {
+                    name: tool.to_string(),
+                    description: None,
+                    arguments: Vec::new(),
+                },
+            })
+            .collect(),
+        deferred: false,
+        loaded: Vec::new(),
+    }
+}
+
 /// How a call to a server's tool ended, before it is told to the planner.
 pub(crate) enum Called {
     /// The server answered, with content nobody vouched for.
@@ -1382,7 +1476,10 @@ pub(crate) enum Called {
 /// the person said at an earlier call to stop asking for it in this project; a call carrying the
 /// person's private data asks whatever was said (PERM-9). The arguments reach the server only past
 /// the endorsement the answer minted.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the policy, offer, egress, confirmer, reporter and the alias, tool and arguments of a call"
+)]
 pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     offer: &Offer,

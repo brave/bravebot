@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Hooks
-description: Run a command of your own when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, when a checkout is made for a delegate, or when a conversation is compacted.
+description: Run a command of your own when a session starts or ends, when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, when a checkout is made for a delegate, or when a conversation is compacted.
 ---
 
 # Hooks
@@ -30,7 +30,7 @@ inside a checkout, so a command named in one would be a command that arrived wit
 }
 ```
 
-## The six moments
+## The nine moments
 
 Each entry names one moment in `on`:
 
@@ -42,6 +42,9 @@ Each entry names one moment in `on`:
 | `prompt-shown` | just before a prompt or a question is put to you |
 | `checkout-made` | once a checkout has been made for a delegate, before that delegate's first request |
 | `compacted` | after a summary has replaced the older part of the conversation in the request |
+| `session-started` | when the interface you opened has begun a session, before it sends a turn |
+| `session-ended` | when you leave that interface, however it ended |
+| `file-changed` | when the file the entry names has changed since the last look |
 
 `turn-finished` fires even when the turn was cancelled or failed on its first request, because the
 commonest thing to attach to it is telling somebody who walked away, and a turn that died is exactly
@@ -50,6 +53,19 @@ when they want telling.
 A `tool-finished` entry may add `"tool": "write_file"` to fire for calls of that name alone. An entry
 naming no tool fires for every call. A `tool` on any other moment is about a call that does
 not happen there, so that entry fires for nothing.
+
+A `file-changed` entry names the one file to watch in `path`, a literal path that is relative to the
+directory you opened bravebot in or absolute, and not a pattern or a directory:
+
+```json
+{ "on": "file-changed", "path": ".envrc", "run": ["/usr/bin/notify-send", ".envrc changed"] }
+```
+
+The full-screen interface looks at the file every 5 seconds and runs the command when its size or
+modification time differs from the last look, or when it appears or is deleted. Several changes in
+one window run it once, and it does not run again until 5 seconds after the last run ended. No turn
+starts and the model is told nothing. The command is told the moment and not the path, so one
+command for two files is two entries. Up to 8 entries are kept, and the looks end when you leave.
 
 Two entries on one moment are two commands, run one after the other in the order the file lists them.
 A word this build does not fire declares no hook and leaves the rest of the file in force.
@@ -91,6 +107,26 @@ was nothing worth summarising, when the summary was refused or could not be made
 summarising its own conversation. It is told that a compaction happened and nothing of the summary
 or of what it replaced, like every hook, and what it prints does not reach the planner. It cannot
 undo the compaction, and one that fails is reported while the conversation stays shortened.
+
+`session-started` and `session-ended` are for a command that should run once for the session rather
+than at every turn, such as starting a local service or writing a log line. They belong to the
+interface you opened and fire once for it: the full-screen interface, a session in lines
+(`--plain`), and a one-shot run (`-p`), which is a session of one turn. A turn never fires them, and
+neither does a delegate. `/resume` and `/clear` begin another conversation in the interface you
+already have open and fire neither. A session you hand to the background with `/bg` goes on, so
+`session-ended` does not fire for it. A run that was refused before it could send anything, or an
+interface you left at one of the questions it opens with, began no session, so neither fires.
+
+The hooks file is read when the session begins, and the same hooks fire when it ends. Both run in the
+directory the session opened in.
+
+The desktop app, an editor that hosts bravebot over ACP and the local host fire them too, once for
+each session they hold. A session there begins with its first turn, so one you opened and sent
+nothing to fires neither, and ends when you close it, or when the app or the editor ends and the
+process waits up to ten seconds for the hook. `session-ended` runs after the turn that was running
+when you closed the session has ended. If a `session-started` hook cannot be started, the first turn
+says so. A `session-ended` hook that cannot be started has nowhere to say so, because the session is
+already closed.
 
 ## A hook is a program and its arguments
 
@@ -175,8 +211,8 @@ than from something a program read.
 
 ## How long a hook may run
 
-A hook is stopped after 30 seconds. An entry may set its own limit with `timeout`, in whole seconds
-from 1 to 600:
+A hook is stopped after 30 seconds, and a `session-ended` hook after 5, since you are leaving. An
+entry may set its own limit with `timeout`, in whole seconds from 1 to 600:
 
 ```json
 { "on": "turn-finished", "run": ["make", "test"], "timeout": 300 }
@@ -219,8 +255,6 @@ since you mistyped its path.
   line names only one of them.
 - **A hook that reaches its time limit is stopped alone.** The program it started is stopped and the
   programs that one started keep running.
-- **There is no moment for a session.** Something that should happen once when the program opens fires
-  per turn instead.
 - **`compacted` does not say who asked, and there is no moment before a compaction.** A compaction you
   asked for and one the budget forced run the same hooks with the same line. A command that has to
   save something while the full history is still in the request has no moment to attach to.

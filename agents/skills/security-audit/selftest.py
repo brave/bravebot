@@ -1240,6 +1240,27 @@ def test_privileged_job_runs_project_code():
         str(kinds(found)),
     )
 
+    mutants_step = (
+        CHECKOUT_CLEAN
+        + "      - name: Measure\n        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+        "        run: |\n          python3 contrib/measure-mutants.py run --package bravebot-core --save x.json\n"
+    )
+    found = run(project_code_workflow(ISSUES_WRITE, mutants_step))
+    check(
+        "the mutation script's run mode is reported where it holds the token, since it runs cargo",
+        kinds(found) == ["privileged-job-runs-project-code"],
+        str(kinds(found)),
+    )
+    report_step = (
+        CHECKOUT_CLEAN
+        + "      - name: Report\n        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"
+        "        run: python3 contrib/measure-mutants.py report shards/*.json\n"
+    )
+    check(
+        "the mutation script's report mode reads files and is clean beside the token",
+        run(project_code_workflow(ISSUES_WRITE, report_step)) == [],
+    )
+
     check(
         "the same build in a job holding only contents: read is clean",
         run(

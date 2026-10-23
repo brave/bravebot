@@ -3,11 +3,13 @@
 use bravebot_i18n::t;
 use bravebot_session::audit::TrailLine;
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 use std::sync::{Arc, OnceLock};
+use unicode_width::UnicodeWidthStr;
 
 use crate::colour_codes;
 use crate::logo;
@@ -327,7 +329,10 @@ fn entry_extras(
 
     // The expand key acts on the rows from the call to the end of what it returned, so the end is
     // taken here, before anything that hangs beneath the call is drawn.
-    if has_more_to_show(entry) {
+    //
+    // A delegate's block is recorded the same way, as the rows a click on it opens its view for
+    // (MOUSE-10). Nothing about it can be expanded, so [`lay_out`] tells the two apart.
+    if has_more_to_show(entry) || entry.delegate.is_some() {
         calls.push((began, lines.len(), index));
     }
 
@@ -407,6 +412,27 @@ fn push_entries(
     }
 }
 
+/// How many of the last lines of the model's thinking are drawn, so that thinking takes at most
+/// this much height from the reply under it.
+const THINKING_ROWS: usize = 8;
+
+/// The model's thinking, dimmed and italic under a heading, the last few lines of it.
+fn thinking_lines(text: &str, lines: &mut Vec<Line<'static>>) {
+    let style = dim().add_modifier(Modifier::ITALIC);
+    lines.push(Line::from(Span::styled(
+        format!("  {}", t!(transcript_thinking)),
+        dim(),
+    )));
+    let all: Vec<&str> = text.lines().collect();
+    let from = all.len().saturating_sub(THINKING_ROWS);
+    for line in &all[from..] {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", printable(line)),
+            style,
+        )));
+    }
+}
+
 /// What follows the entries: the reply still arriving, what a command that is running has printed,
 /// what a command typed during the turn answered, the invitation on the opening screen, and the
 /// close of a delegate's view.
@@ -414,6 +440,15 @@ fn push_entries(
 /// Drawn from the session's live state rather than from entries, so it is built afresh on every
 /// frame and is as long as one reply, never as long as the conversation.
 fn push_tail(session: &Session, width: u16, opening: bool, lines: &mut Vec<Line<'static>>) {
+    // The model's thinking above the reply, where it came first, while a person has asked to see
+    // it. Plain text under a heading of its own and never markdown, so what the model wrote cannot
+    // draw as structure, and gone when the round ends: the reply replaces it, and nothing recorded
+    // held it.
+    if !session.thinking_so_far().is_empty() && !session.watching_a_delegate() {
+        thinking_lines(session.thinking_so_far(), lines);
+        lines.push(Line::raw(""));
+    }
+
     // The reply being written right now, under everything that has already happened. Drawn from
     // the session rather than from the transcript because it is not an entry yet: when the round
     // ends the same words arrive as one, in this same place and this same shape, and the tail is
@@ -807,6 +842,7 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
     let mut at = starts[first];
     let mut shown: Vec<Line<'static>> = Vec::new();
     let mut skip = 0;
+    let mut continued = Vec::new();
     let head = entries.lines[first..]
         .iter()
         .zip(starts[first..].windows(2).map(|pair| pair[1] - pair[0]));
@@ -819,6 +855,15 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
             skip = offset - at;
         }
         shown.push(line.clone());
+        note_continued(
+            &mut continued,
+            at,
+            (rows, line),
+            offset,
+            height,
+            area.y,
+            width,
+        );
         at += rows;
         if at >= offset + height {
             break;
@@ -834,6 +879,7 @@ fn draw_kept(frame: &mut Frame, area: Rect, session: &Session) -> Option<Laid> {
         width,
         height: area.height,
         rows: total.min(usize::from(u16::MAX)) as u16,
+        continued,
         ..Laid::default()
     })
 }
@@ -847,6 +893,72 @@ pub(super) fn link_references(frame: &mut Frame, area: Rect, session: &Session) 
     if let Some(repository) = session.repository() {
         crate::issue_link::link_references(frame.buffer_mut(), area, repository);
     }
+}
+
+/// Record the screen rows, among those a line of `rows` rows starting at row `at` of the
+/// transcript is drawn over, that are not the first of it: the ones the wrap made. Each comes with
+/// whether the wrap broke the line at a blank, which a copy puts back as a space, or inside a word.
+///
+/// `offset` is the first row of the transcript on the screen, `height` how many it shows, `top`
+/// the screen row the transcript starts at and `width` the width the line was wrapped to.
+fn note_continued(
+    out: &mut Vec<(u16, bool)>,
+    at: usize,
+    (rows, line): (usize, &Line<'_>),
+    offset: usize,
+    height: usize,
+    top: u16,
+    width: u16,
+) {
+    if rows < 2 || at + rows <= offset || at >= offset + height {
+        return;
+    }
+    let breaks = blank_breaks(line, width, rows);
+    for row in (at + 1)..(at + rows) {
+        if row >= offset && row < offset + height {
+            let at_blank = breaks.get(row - at - 1).copied().unwrap_or(false);
+            out.push((top + (row - offset) as u16, at_blank));
+        }
+    }
+}
+
+/// For each break the wrap made in `line` at `width`, whether it fell on a blank.
+///
+/// The screen alone cannot say: a word that ends in the last column has its blank dropped and
+/// the next word starts the next row, which looks like a row cut inside a word. So the line is
+/// wrapped by itself, through the same wrapping that draws it, and the character the text
+/// resumes at after each row is read from the line.
+fn blank_breaks(line: &Line<'_>, width: u16, rows: usize) -> Vec<bool> {
+    let width = width.max(1);
+    let area = Rect::new(0, 0, width, rows.min(usize::from(u16::MAX)) as u16);
+    let mut buffer = Buffer::empty(area);
+    Paragraph::new(line.clone())
+        .wrap(Wrap { trim: false })
+        .render(area, &mut buffer);
+    let text: Vec<char> = line
+        .spans
+        .iter()
+        .flat_map(|span| span.content.chars())
+        .collect();
+    let mut at = 0;
+    let mut breaks = Vec::new();
+    for row in 0..area.height.saturating_sub(1) {
+        let filled = (0..width)
+            .rev()
+            .find(|&column| buffer[(column, row)].symbol() != " ")
+            .map_or(0, |column| column + 1);
+        let mut column = 0;
+        while column < filled {
+            let symbol = buffer[(column, row)].symbol();
+            at += symbol.chars().count();
+            column += (symbol.width() as u16).max(1);
+        }
+        let at_blank = text.get(at).is_some_and(|c| c.is_whitespace());
+        breaks.push(at_blank);
+        // The blank the wrap broke at is not drawn on either row.
+        at += usize::from(at_blank);
+    }
+    breaks
 }
 
 /// The transcript laid out at a width: the lines to draw, and where the rows worth reaching are.
@@ -884,10 +996,18 @@ pub(super) fn lay_out(session: &Session, width: u16, height: u16) -> (Vec<Line<'
         at = at.saturating_add(rows_of(line, width));
     }
     starts.push(at);
-    laid.expandable = calls
-        .into_iter()
-        .map(|(first, last, index)| (starts[first], starts[last].saturating_sub(1), index))
-        .collect();
+    let viewed = session.viewed();
+    for (first, last, index) in calls {
+        let rows = (starts[first], starts[last].saturating_sub(1), index);
+        if viewed
+            .get(index)
+            .is_some_and(|entry| entry.delegate.is_some())
+        {
+            laid.delegates.push(rows);
+        } else {
+            laid.expandable.push(rows);
+        }
+    }
     laid.rows = at;
     (lines, laid)
 }
@@ -897,6 +1017,21 @@ pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) 
         return laid;
     }
     let (lines, mut laid) = lay_out(session, area.width, area.height);
+    let line_rows: Vec<(usize, Line<'static>)> = lines
+        .iter()
+        .map(|line| {
+            let rows = usize::from(rows_of(line, area.width));
+            // Only a line the wrap cut needs its text kept to say how.
+            (
+                rows,
+                if rows > 1 {
+                    line.clone()
+                } else {
+                    Line::default()
+                },
+            )
+        })
+        .collect();
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
 
     // Scroll counts up from the bottom, so new output stays in view by default. The count has to
@@ -918,6 +1053,23 @@ pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) 
     } else {
         max_offset
     };
+
+    let (mut at, height) = (0usize, usize::from(area.height));
+    for (rows, line) in line_rows {
+        if at >= usize::from(offset) + height {
+            break;
+        }
+        note_continued(
+            &mut laid.continued,
+            at,
+            (rows, &line),
+            usize::from(offset),
+            height,
+            area.y,
+            area.width,
+        );
+        at += rows;
+    }
 
     frame.render_widget(paragraph.scroll((offset, 0)), area);
     link_references(frame, area, session);
@@ -989,6 +1141,20 @@ pub(super) mod counted {
 
 #[cfg(test)]
 mod tests {
+    /// A word ending in the last column has its blank dropped, and the row after it looks like
+    /// one cut inside a word. The layout says which it was.
+    #[test]
+    fn a_break_is_told_from_one_inside_a_word() {
+        let at_blank = Line::raw("aaaa bbbbb ccccccccc eeee");
+        assert_eq!(super::blank_breaks(&at_blank, 20, 2), vec![true]);
+        let inside = Line::raw("abcdefghijklmnopqrstuvw");
+        assert_eq!(super::blank_breaks(&inside, 20, 2), vec![false]);
+        let spaced = Line::raw("aaaa  bbbbb ccccccccc  eeee ffff");
+        assert_eq!(super::blank_breaks(&spaced, 20, 2), vec![true]);
+        let mixed = Line::raw("one two three abcdefghijklmnopqrstuvw");
+        assert_eq!(super::blank_breaks(&mixed, 20, 3), vec![true, false]);
+    }
+
     use super::*;
     use crate::render::QUARANTINE_BAR;
     use bravebot_agent::diff::Change;

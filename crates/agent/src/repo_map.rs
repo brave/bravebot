@@ -677,6 +677,49 @@ class Widget : public Base {
         assert_eq!(map.body.lines().count(), map.shown + 1);
     }
 
+    /// The budget comes from the planner's call, so a value of nought would otherwise map nothing
+    /// and one of any size would ask for the whole of a large repository. A value outside the range
+    /// gives the map of the nearest end of it, and one too large to count in characters does not
+    /// overflow.
+    #[test]
+    fn a_budget_outside_the_range_gives_the_map_of_the_nearest_end() {
+        let text: String = (0..3_000)
+            .map(|n| format!("pub fn function_number_{n}() {{}}\n"))
+            .collect();
+        let files = [("big.rs", text.as_str())];
+
+        let smallest = built(&files, MIN_BUDGET);
+        assert!(smallest.shown > 0, "the smallest map shows nothing");
+        assert_eq!(built(&files, 0), smallest, "a budget of nought");
+        assert_eq!(
+            built(&files, MIN_BUDGET - 1),
+            smallest,
+            "just below the range"
+        );
+
+        let largest = built(&files, MAX_BUDGET);
+        assert!(
+            largest.shown < largest.found,
+            "the largest budget holds every declaration, so a larger one cannot be told apart"
+        );
+        assert!(largest.body.len() <= MAX_BUDGET * CHARS_PER_TOKEN);
+        assert_eq!(
+            built(&files, MAX_BUDGET + 1),
+            largest,
+            "just above the range"
+        );
+        assert_eq!(
+            built(&files, MAX_BUDGET * 10),
+            largest,
+            "far above the range"
+        );
+        assert_eq!(
+            built(&files, usize::MAX),
+            largest,
+            "the most a call can name"
+        );
+    }
+
     #[test]
     fn a_tight_budget_keeps_the_declaration_that_ranks_first_not_the_first_in_the_file() {
         let mut text: String = (0..400)
