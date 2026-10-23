@@ -623,7 +623,8 @@ const CONTRACTS: &[Contract] = &[
     // `place` is always routing and never a slot: it is the repository, mailbox or channel
     // the step reads from or lands in. A fetch may have none, as a search across places does;
     // the definition says which resources need one. `select` is a selector in the definition's
-    // vocabulary.
+    // vocabulary, and `with` the named values the definition asks for, such as an event's start,
+    // each held to its form.
     Contract {
         tool: CONNECTOR_FETCH,
         tier: Tier::Fetch,
@@ -634,6 +635,7 @@ const CONTRACTS: &[Contract] = &[
             "place",
             "item",
             "select",
+            "with",
             "out_slot",
         ],
         slot_output: Some("out_slot"),
@@ -643,7 +645,7 @@ const CONTRACTS: &[Contract] = &[
         counts: &[],
         texts: &[],
         alternatives: &[],
-        routing: &["connector", "resource", "place", "item", "select"],
+        routing: &["connector", "resource", "place", "item", "select", "with"],
         headline: &["resource"],
         verb: "fetch",
     },
@@ -653,7 +655,9 @@ const CONTRACTS: &[Contract] = &[
     // are read and an empty default would name a slot called "".
     //
     // `path` is a place in the service, such as a file in a branch, not a workspace path.
-    // `title` is carried content the plan wrote, like `contents`.
+    // `title` is carried content the plan wrote, like `contents`. `take` is routing: which field of
+    // which earlier fetch fills which `with` value is fixed before the run, and the value itself
+    // is known only to the authority, which takes it from that fetch's receipt.
     Contract {
         tool: CONNECTOR_ACT,
         tier: Tier::Act,
@@ -664,8 +668,10 @@ const CONTRACTS: &[Contract] = &[
             "place",
             "item",
             "select",
+            "with",
             "path",
             "option",
+            "take",
             "on",
             "title",
             "contents",
@@ -684,8 +690,10 @@ const CONTRACTS: &[Contract] = &[
             "place",
             "item",
             "select",
+            "with",
             "path",
             "option",
+            "take",
         ],
         headline: &["resource"],
         verb: "act",
@@ -730,8 +738,8 @@ fn routing_default(tool: &str, field: &str) -> Option<&'static str> {
         ("list_files", "pattern") | ("search", "include") => Some(""),
         // A connector step's optional routing is locked as the absence of a value, and the
         // definition decides whether the resource needs it.
-        (CONNECTOR_FETCH, "place" | "item" | "select")
-        | (CONNECTOR_ACT, "item" | "select" | "path" | "option") => Some(""),
+        (CONNECTOR_FETCH, "place" | "item" | "select" | "with")
+        | (CONNECTOR_ACT, "item" | "select" | "with" | "path" | "option" | "take") => Some(""),
         _ => None,
     }
 }
@@ -1045,8 +1053,8 @@ impl fmt::Display for Origin {
     }
 }
 
-/// One connector act's release: which slot leaves, where its content came from, and the one
-/// connector and place it goes to.
+/// One connector act's release: the slot it carries, where it carries one, where its content and
+/// any it takes came from, and the one connector and place it goes to.
 ///
 /// Fixed at validation, from the frozen plan alone, which is what makes it a precommitted
 /// release: the plan was written from the task string and nothing had been read when this was
@@ -1054,7 +1062,9 @@ impl fmt::Display for Origin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Release {
     pub step: usize,
-    pub slot: SlotId,
+    /// The slot whose content leaves, where the act carries one. An act that only takes values
+    /// sends none: the authority reads them from the receipts it issued.
+    pub slot: Option<SlotId>,
     pub origins: BTreeSet<Origin>,
     pub connector: String,
     pub place: String,
@@ -1121,9 +1131,9 @@ impl Manifest {
         }
     }
 
-    /// Every connector act that carries a slot, with where that slot's content came from, as
-    /// [`Manifest::origins`] finds it. An act that carries text the plan wrote releases nothing,
-    /// since that text was written before anything was read.
+    /// Every connector act that carries a slot or takes a value from one, with where that content
+    /// came from, as [`Manifest::origins`] finds it. An act that carries text the plan wrote
+    /// releases nothing, since that text was written before anything was read.
     pub fn releases(&self) -> Vec<Release> {
         let origins = self.origins();
         (0..self.steps.len())
@@ -1131,8 +1141,8 @@ impl Manifest {
             .collect()
     }
 
-    /// The release the step at `index` makes, where it is a connector act carrying a slot, with
-    /// that slot's origins looked up in `origins`.
+    /// The release the step at `index` makes, where it is a connector act carrying a slot or taking
+    /// values from fetches, with the origins of each looked up in `origins`.
     fn release_at(
         &self,
         index: usize,
@@ -1142,11 +1152,23 @@ impl Manifest {
         if step.tool != CONNECTOR_ACT {
             return None;
         }
-        let slot = SlotId::new(step.args.get("from_slot").and_then(Arg::text)?);
+        let carried = step
+            .args
+            .get("from_slot")
+            .and_then(Arg::text)
+            .map(SlotId::new);
+        let taken = taken_slots(step.text("take"));
+        if carried.is_none() && taken.is_empty() {
+            return None;
+        }
         Some(Release {
             step: index,
-            origins: origins.get(&slot).cloned().unwrap_or_default(),
-            slot,
+            origins: carried
+                .iter()
+                .chain(&taken)
+                .flat_map(|slot| origins.get(slot).cloned().unwrap_or_default())
+                .collect(),
+            slot: carried,
             connector: step.text("connector").to_string(),
             place: step.text("place").to_string(),
         })
@@ -1178,6 +1200,16 @@ impl Manifest {
         }
         origins
     }
+}
+
+/// The slots an act's `take` names. A malformed `take` names none here; the connector check
+/// refuses it.
+fn taken_slots(take: &str) -> Vec<SlotId> {
+    crate::selector::take_terms(take)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, slot, _)| slot)
+        .collect()
 }
 
 /// Whether a path stays inside the workspace.
@@ -1950,7 +1982,7 @@ mod tests {
         assert_eq!(releases.len(), 1);
         let release = &releases[0];
         assert_eq!(release.step, 3);
-        assert_eq!(release.slot, SlotId::new("fix"));
+        assert_eq!(release.slot, Some(SlotId::new("fix")));
         assert_eq!(release.destination(), "github brave/bravebot");
         assert_eq!(
             release.origins,
@@ -2024,5 +2056,39 @@ mod tests {
         assert!(noted.describe_step(2).contains(
             "content from github brave/bravebot to github brave/bravebot; the authority"
         ));
+    }
+
+    /// An act that carries one slot and takes values from another names the origins of both, and
+    /// one that only takes values releases no slot of its own.
+    #[test]
+    fn a_release_names_what_an_act_carries_and_what_it_takes() {
+        let plan = validate(&Draft::new(vec![
+            read("docs/x.md", "doc"),
+            fetch("find_pull", "brave/bravebot", "pr"),
+            act("comment", "brave/bravebot")
+                .with_text("item", "1")
+                .with_text("take", "branch:pr.head")
+                .with_text("from_slot", "doc"),
+            act("protect", "brave/bravebot").with_text("take", "branch:pr.head"),
+        ]))
+        .unwrap();
+        let releases = plan.releases();
+        assert_eq!(releases.len(), 2);
+        assert_eq!(releases[0].slot, Some(SlotId::new("doc")));
+        assert_eq!(
+            releases[0].origins,
+            BTreeSet::from([
+                Origin::Workspace,
+                Origin::Place {
+                    connector: "github".into(),
+                    place: "brave/bravebot".into()
+                }
+            ])
+        );
+        assert_eq!(releases[1].slot, None);
+        assert_eq!(
+            releases[1].describe(),
+            "content from github brave/bravebot to github brave/bravebot"
+        );
     }
 }
