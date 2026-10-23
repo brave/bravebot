@@ -14,10 +14,11 @@
 //!
 //! # What is here and what is not
 //!
-//! The sign-in, the file it is stored in, and the forgetting of it. The refresh of an expired
-//! access token, the models the account offers and the requests to the serving host wait for the
-//! Responses protocol and are not here. The ID token is not verified: that needs a signature
-//! verifier this crate does not hold, and the reply's `id_token` is dropped unread.
+//! The sign-in, the file it is stored in, the forgetting of it, and the replacing of an access
+//! token that is about to expire ([`Renewer`]). The models the account offers and the requests to
+//! the serving host wait for the Responses protocol and are not here. The ID token is not
+//! verified: that needs a signature verifier this crate does not hold, and the reply's `id_token`
+//! is dropped unread.
 //!
 //! The listener binds `127.0.0.1` only, on a port the operating system chooses. The hosts are
 //! constants ([`Hosts::compiled_in`]), and a test points the flow at a server of its own through a
@@ -28,11 +29,13 @@ mod authorize;
 mod encoding;
 mod exchange;
 mod listener;
+mod renew;
 #[cfg(test)]
 mod stand_in;
 
 pub use account::{Account, AccountError, Defect, path};
 pub use listener::Pages;
+pub use renew::{Access, Renewer, TokenError};
 
 use std::path::Path;
 use std::time::Duration;

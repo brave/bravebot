@@ -1,10 +1,11 @@
-//! The code exchange: the authorization code and the PKCE verifier, presented to the token
-//! endpoint, for an access token and a refresh token.
+//! The requests to the token endpoint: the code exchange, which presents the authorization code and
+//! the PKCE verifier, and the refresh, which presents the refresh token.
 //!
 //! The reply is bytes this program did not write. What is taken from it is two tokens that are never
-//! read, a number of seconds, and whether the scope that allows this use was granted. The rest of
-//! the body, including the ID token and every error text, is dropped in this module
-//! ([CHATGPT-5](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-5)).
+//! read, a number of seconds, and whether the scope that allows this use was granted. The one field
+//! of an error body that is read is the code, compared with the one value that says a refresh token
+//! is no longer valid. The rest of the body, including the ID token and every error text, is dropped
+//! in this module ([CHATGPT-5](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-5)).
 
 use super::authorize::{RESOURCE, USE_SCOPE};
 use super::encoding::percent_encode;
@@ -28,6 +29,35 @@ pub(super) struct Tokens {
     pub(super) lifetime: u64,
     /// Whether the scope that allows this program to use the subscription's tokens was granted.
     pub(super) allows_use: bool,
+}
+
+/// The error code that says a refresh token is no longer valid: RFC 6749 section 5.2's
+/// `invalid_grant`. Not observed in a refused refresh from this server, which the spec lists as
+/// unrecorded, so a refresh refused with any other code is a failure of the request and ends nothing.
+const ENDED: &str = "invalid_grant";
+
+/// The statuses a refused refresh is read for its error code at. RFC 6749 gives 400, and a server
+/// answering a token as unauthorized gives 401.
+const ENDED_STATUSES: [u16; 2] = [400, 401];
+
+/// What a refresh gave.
+///
+/// No equality, which the tokens do not have: see [`Secret`].
+pub(super) struct Renewed {
+    pub(super) access: Secret,
+    /// A new refresh token, where the server replaced the one presented. `None` keeps it.
+    pub(super) refresh: Option<Secret>,
+    /// Seconds the access token lasts from the moment of the reply.
+    pub(super) lifetime: u64,
+}
+
+/// Why a refresh did not give tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Refused {
+    /// The server says the refresh token is no longer valid: the sign-in is over.
+    Ended,
+    /// The request failed in some other way, which ends nothing.
+    Failed(Class),
 }
 
 /// The agent that talks to the token endpoint, from the transport the caller states.
@@ -64,7 +94,66 @@ pub(super) fn exchange(
         ("redirect_uri", redirect_uri),
         ("resource", RESOURCE),
     ]));
-    post(agent, &hosts.token, &body)
+    let granted = granted(send(agent, &hosts.token, &body)?)?;
+    Ok(Tokens {
+        access: granted.access,
+        refresh: granted.refresh.ok_or(Class::Incomplete)?,
+        lifetime: granted.lifetime,
+        allows_use: granted.allows_use,
+    })
+}
+
+/// Present the refresh token under the client, for a new access token.
+///
+/// The reply's scope is not read: the sign-in already checked the use was allowed, and a refresh
+/// that states none changes nothing about that.
+pub(super) fn refresh(
+    agent: &ureq::Agent,
+    hosts: &Hosts,
+    client_id: &str,
+    refresh_token: &Secret,
+) -> Result<Renewed, Refused> {
+    let body = Secret::new(form(&[
+        ("grant_type", "refresh_token"),
+        ("client_id", client_id),
+        ("refresh_token", refresh_token.expose()),
+        ("resource", RESOURCE),
+    ]));
+    let mut response = send(agent, &hosts.token, &body).map_err(Refused::Failed)?;
+    let status = response.status().as_u16();
+    if ENDED_STATUSES.contains(&status) && says_ended(&mut response) {
+        return Err(Refused::Ended);
+    }
+    let granted = granted(response).map_err(Refused::Failed)?;
+    Ok(Renewed {
+        access: granted.access,
+        refresh: granted.refresh,
+        lifetime: granted.lifetime,
+    })
+}
+
+/// Whether a refused refresh's body names the one error code that ends a sign-in.
+///
+/// A body that cannot be read or is not the shape is not that code: nothing is concluded from it.
+fn says_ended(response: &mut ureq::http::Response<ureq::Body>) -> bool {
+    let Ok(text) = response
+        .body_mut()
+        .with_config()
+        .limit(REPLY_LIMIT)
+        .read_to_string()
+    else {
+        return false;
+    };
+    let text = Secret::new(text);
+    let Ok(parsed) = serde_json::from_str(text.expose()) else {
+        return false;
+    };
+    let document = Document::of(parsed);
+    document
+        .read()
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        == Some(ENDED)
 }
 
 /// A form body, each name and value percent-encoded.
@@ -76,14 +165,23 @@ fn form(fields: &[(&str, &str)]) -> String {
         .join("&")
 }
 
-fn post(agent: &ureq::Agent, url: &str, body: &Secret) -> Result<Tokens, Class> {
-    let mut response = agent
+/// Send the form and return the reply, whatever its status: the caller decides what a status
+/// means, since a refresh reads a refusal's code and the exchange does not.
+fn send(
+    agent: &ureq::Agent,
+    url: &str,
+    body: &Secret,
+) -> Result<ureq::http::Response<ureq::Body>, Class> {
+    agent
         .post(url)
         .header("content-type", "application/x-www-form-urlencoded")
         .header("accept", "application/json")
         .send(body.expose().as_bytes())
-        .map_err(|_| Class::Transport)?;
+        .map_err(|_| Class::Transport)
+}
 
+/// The tokens of a reply, or the class of its status where it is not a success.
+fn granted(mut response: ureq::http::Response<ureq::Body>) -> Result<Granted, Class> {
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
         return Err(class_of(status));
@@ -110,8 +208,17 @@ fn class_of(status: u16) -> Class {
     }
 }
 
+/// What a successful reply holds. The refresh token is optional because a refresh need not replace
+/// it, and the exchange refuses a reply without one.
+struct Granted {
+    access: Secret,
+    refresh: Option<Secret>,
+    lifetime: u64,
+    allows_use: bool,
+}
+
 /// The tokens of a reply, or `Incomplete` where it is not the shape the exchange records.
-fn parse(text: &str) -> Result<Tokens, Class> {
+fn parse(text: &str) -> Result<Granted, Class> {
     let document = Document::of(serde_json::from_str(text).map_err(|_| Class::Incomplete)?);
     let value = document.read();
 
@@ -124,7 +231,11 @@ fn parse(text: &str) -> Result<Tokens, Class> {
             .ok_or(Class::Incomplete)
     };
     let access = token("access_token")?;
-    let refresh = token("refresh_token")?;
+    // Absent or null is no new refresh token. One that is present must be a usable one.
+    let refresh = match value.get("refresh_token") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(_) => Some(token("refresh_token")?),
+    };
 
     let lifetime = match value.get("expires_in") {
         None | Some(serde_json::Value::Null) => DEFAULT_LIFETIME,
@@ -135,7 +246,7 @@ fn parse(text: &str) -> Result<Tokens, Class> {
         .and_then(serde_json::Value::as_str)
         .is_some_and(|granted| granted.split_whitespace().any(|scope| scope == USE_SCOPE));
 
-    Ok(Tokens {
+    Ok(Granted {
         access,
         refresh,
         lifetime,
@@ -161,7 +272,10 @@ mod tests {
         let tokens = parse(&reply(",\"expires_in\":1800")).expect("a reply");
 
         assert_eq!(tokens.access.expose(), "an-access");
-        assert_eq!(tokens.refresh.expose(), "a-refresh");
+        assert_eq!(
+            tokens.refresh.as_ref().expect("a refresh token").expose(),
+            "a-refresh"
+        );
         assert_eq!(tokens.lifetime, 1800);
         assert!(tokens.allows_use);
     }
@@ -220,8 +334,9 @@ mod tests {
             "not json",
             "[]",
             "{}",
-            "{\"access_token\":\"a\"}",
             "{\"refresh_token\":\"r\"}",
+            "{\"access_token\":\"a\",\"refresh_token\":\"\"}",
+            "{\"access_token\":\"a\",\"refresh_token\":1}",
             "{\"access_token\":\"\",\"refresh_token\":\"r\"}",
             "{\"access_token\":1,\"refresh_token\":\"r\"}",
         ] {
@@ -254,5 +369,127 @@ mod tests {
     #[test]
     fn a_form_encodes_each_value() {
         assert_eq!(form(&[("a", "x&b=y"), ("c", "d e")]), "a=x%26b%3Dy&c=d%20e");
+    }
+
+    /// A refresh reply with no refresh token keeps the one presented, which is how a server that
+    /// does not rotate answers. One that sends a token that is empty or not text is not read as
+    /// keeping it.
+    #[test]
+    fn a_reply_without_a_refresh_token_keeps_the_one_presented() {
+        let kept = parse("{\"access_token\":\"a\"}").expect("a reply");
+        assert!(kept.refresh.is_none());
+        let null = parse("{\"access_token\":\"a\",\"refresh_token\":null}").expect("a reply");
+        assert!(null.refresh.is_none());
+        for unusable in ["\"\"", "7", "[]"] {
+            assert!(
+                matches!(
+                    parse(&format!(
+                        "{{\"access_token\":\"a\",\"refresh_token\":{unusable}}}"
+                    )),
+                    Err(Class::Incomplete)
+                ),
+                "{unusable}"
+            );
+        }
+    }
+
+    fn at(server: &super::super::stand_in::Server) -> (ureq::Agent, Hosts) {
+        (
+            agent(ureq::Agent::config_builder()),
+            Hosts::at(&server.base),
+        )
+    }
+
+    /// The code exchange needs a refresh token in the reply: an access token alone cannot be
+    /// renewed, so a sign-in stored from it would end within the hour.
+    #[test]
+    fn the_exchange_refuses_a_reply_that_grants_no_refresh_token() {
+        use super::super::stand_in::{Reply, serve};
+        let server = serve(vec![Reply::json(200, "{\"access_token\":\"a\"}")]);
+        let (agent, hosts) = at(&server);
+
+        let outcome = exchange(
+            &agent,
+            &hosts,
+            "client",
+            &Secret::new("code"),
+            &Secret::new("verifier"),
+            "http://127.0.0.1:1/auth/callback",
+        );
+
+        assert!(matches!(outcome, Err(Class::Incomplete)));
+        server.finish();
+    }
+
+    /// A refresh presents the four fields the exchange records and no other, to the token
+    /// endpoint, with no credential in a header.
+    #[test]
+    fn a_refresh_presents_the_refresh_token_under_the_client_and_the_resource() {
+        use super::super::stand_in::{Reply, named, serve};
+        let server = serve(vec![Reply::json(
+            200,
+            "{\"access_token\":\"new\",\"expires_in\":900}",
+        )]);
+        let (agent, hosts) = at(&server);
+
+        let renewed = refresh(&agent, &hosts, "client", &Secret::new("old-refresh"))
+            .unwrap_or_else(|e| panic!("a refresh, not {e:?}"));
+        let asked = server.finish();
+
+        assert_eq!(renewed.access.expose(), "new");
+        assert!(renewed.refresh.is_none());
+        assert_eq!(renewed.lifetime, 900);
+        let form = asked[0].form();
+        let names: Vec<&str> = form.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["grant_type", "client_id", "refresh_token", "resource"]
+        );
+        assert_eq!(named(&form, "grant_type"), "refresh_token");
+        assert_eq!(named(&form, "client_id"), "client");
+        assert_eq!(named(&form, "refresh_token"), "old-refresh");
+        assert_eq!(named(&form, "resource"), "https://api.openai.com/v1");
+        assert_eq!(asked[0].header("authorization"), None);
+    }
+
+    /// Only a 400 or 401 whose error code is `invalid_grant` ends the sign-in. The same code at
+    /// another status, another code at those statuses, and a body that is not the shape are each a
+    /// failure of the request, so a busy server or a proxy's page cannot delete a person's sign-in.
+    #[test]
+    fn only_the_recorded_code_at_a_refusing_status_ends_the_sign_in() {
+        use super::super::stand_in::{Reply, serve};
+        let cases: [(u16, &str, Refused); 8] = [
+            (400, "{\"error\":\"invalid_grant\"}", Refused::Ended),
+            (401, "{\"error\":\"invalid_grant\"}", Refused::Ended),
+            (
+                403,
+                "{\"error\":\"invalid_grant\"}",
+                Refused::Failed(Class::Refused),
+            ),
+            (
+                500,
+                "{\"error\":\"invalid_grant\"}",
+                Refused::Failed(Class::Unavailable),
+            ),
+            (
+                400,
+                "{\"error\":\"invalid_request\"}",
+                Refused::Failed(Class::Refused),
+            ),
+            (400, "not json", Refused::Failed(Class::Refused)),
+            (400, "{\"error\":7}", Refused::Failed(Class::Refused)),
+            (
+                429,
+                "{\"error\":\"invalid_grant\"}",
+                Refused::Failed(Class::RateLimited),
+            ),
+        ];
+        for (status, body, expected) in cases {
+            let server = serve(vec![Reply::json(status, body)]);
+            let (agent, hosts) = at(&server);
+            let outcome = refresh(&agent, &hosts, "client", &Secret::new("r"));
+            server.finish();
+            assert_eq!(outcome.err(), Some(expected), "{status} {body}");
+        }
     }
 }

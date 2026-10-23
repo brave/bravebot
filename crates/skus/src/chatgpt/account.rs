@@ -154,15 +154,32 @@ pub(super) fn load_at(path: &Path) -> Result<Option<Account>, AccountError> {
 }
 
 pub(super) fn save_at(path: &Path, account: &Account) -> Result<(), AccountError> {
+    let _claim = claim(path)?;
+    write_held(path, account)
+}
+
+pub(super) fn forget_at(path: &Path) -> Result<bool, AccountError> {
+    let _claim = claim(path)?;
+    remove_held(path)
+}
+
+/// The claim every write and removal of the file is made under. A caller that holds one across a
+/// request for new tokens writes with [`write_held`] and removes with [`remove_held`], which take
+/// none of their own: a second claim by the process that holds the first would wait on itself.
+pub(super) fn claim(path: &Path) -> Result<Claim, AccountError> {
+    Claim::take_as(path, CLAIM, ABANDONED_AFTER).map_err(unwritable)
+}
+
+/// Write the file, the caller holding the claim.
+pub(super) fn write_held(path: &Path, account: &Account) -> Result<(), AccountError> {
     use std::io::Write;
 
-    let _claim = Claim::take_as(path, CLAIM, ABANDONED_AFTER).map_err(unwritable)?;
     let text = encode(account);
     write_through(path, |file| file.write_all(text.expose().as_bytes())).map_err(unwritable)
 }
 
-pub(super) fn forget_at(path: &Path) -> Result<bool, AccountError> {
-    let _claim = Claim::take_as(path, CLAIM, ABANDONED_AFTER).map_err(unwritable)?;
+/// Remove the file, the caller holding the claim. Whether there was one is the answer.
+pub(super) fn remove_held(path: &Path) -> Result<bool, AccountError> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
