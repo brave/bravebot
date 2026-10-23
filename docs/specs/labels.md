@@ -17,7 +17,7 @@ guards:
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/skills.rs: 1
-      - crates/agent/src/tools.rs: 29
+      - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 14
       - crates/agent/tests/incognito.rs: 1
@@ -146,7 +146,7 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 40
+      - crates/agent/src/tools.rs: 41
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7

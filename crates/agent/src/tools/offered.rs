@@ -243,7 +243,9 @@ fn table(
              page. \
              \
              A .ipynb notebook comes back as its cells, numbered from 1, with their source only: \
-             edit_file changes a cell by that number. Saved outputs are not shown."
+             edit_file changes a cell by that number. Saved outputs are not shown unless you \
+             ask for one cell's with output_of, and they come back as a reference like a \
+             picture does, because a program or a web page may have written them."
             ),
             json!({
                 "type": "object",
@@ -252,6 +254,15 @@ fn table(
                         "type": "string",
                         "description": "Workspace-relative path, e.g. src/main.rs. Give this \
                                         or path_ref, never both."
+                    },
+                    "output_of": {
+                        "type": "integer",
+                        "description": "In a .ipynb notebook, the number of a code cell, from \
+                                        1 as a read of the notebook shows them, to get the \
+                                        cell's saved outputs instead of the cells. They come \
+                                        back as a reference for spawn_processor, never as \
+                                        text, and a picture in one is a line giving its size. \
+                                        offset and limit are ignored."
                     },
                     "path_ref": {
                         "type": "string",

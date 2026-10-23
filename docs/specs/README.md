@@ -87,7 +87,7 @@ the routing-versus-content split they share.
 | Spec | Id | Clauses | Tool |
 |---|---|---|---|
 | [tools/tool-surface.md](tools/tool-surface.md) | `TOOL` | 6 | the surface every tool shares |
-| [tools/read-file.md](tools/read-file.md) | `READ` | 9 | `read_file` |
+| [tools/read-file.md](tools/read-file.md) | `READ` | 10 | `read_file` |
 | [tools/list-files.md](tools/list-files.md) | `LIST` | 5 | `list_files` |
 | [tools/search.md](tools/search.md) | `SEARCH` | 12 | `search` |
 | [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |

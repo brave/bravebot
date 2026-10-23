@@ -2887,6 +2887,74 @@ fn until_exit_from(
     }
 }
 
+/// The cell a `read_file` call asked the saved outputs of, where it asked.
+///
+/// Refused where it is not a whole number from 1, or the file is not named as a notebook: a value
+/// taken as another would hand back the outputs of a cell the planner did not name.
+fn output_of_from(arguments: &Value, path: &str) -> Result<Option<usize>, String> {
+    let Some(value) = arguments.get("output_of").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    if !crate::notebook::is_notebook_path(path) {
+        return Err(
+            "error: 'output_of' names a cell of a .ipynb notebook, and this is not one. Leave it \
+             out to read the file"
+                .to_string(),
+        );
+    }
+    match value.as_u64() {
+        Some(cell @ 1..) => usize::try_from(cell).map(Some).map_err(|_| {
+            "error: 'output_of' is not a cell number this notebook can have".to_string()
+        }),
+        _ => Err(
+            "error: 'output_of' must be a cell number from 1, as a read of the notebook \
+                  shows them"
+                .to_string(),
+        ),
+    }
+}
+
+/// The saved outputs of one cell of a notebook the planner may read, as a reference.
+///
+/// The notebook's structure is read under its own trusted label, to say whether the cell exists
+/// and holds outputs. The text of the outputs is shaped under a label tainted untrusted, inside the
+/// kernel, so the planner is handed a reference and a processor is the way to the words.
+fn notebook_outputs<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    path: &Labelled<String>,
+    (field, shown_path): (&str, &str),
+    cell: usize,
+) -> Produced {
+    let source = match workspace.read(policy, path) {
+        Ok(contents) => contents,
+        Err(e) => return file_tool_problem(policy, "read_file", field, &e, shown_path),
+    };
+    let current = match policy.read_trusted_content("read_file", &source) {
+        Ok(text) => text,
+        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    };
+    if let Err(reason) = crate::notebook::check_outputs_of(&current, cell) {
+        return Produced::problem(format!("error: {reason}"));
+    }
+    let carried = Labelled::new(
+        current,
+        bravebot_core::label::taint_all([
+            source.label(),
+            bravebot_core::label::Label::untrusted_public(),
+        ]),
+    );
+    let outputs = policy.render_in_place("read_file", &carried, |json| {
+        crate::notebook::outputs_view(&json, cell)
+    });
+    Produced::new(
+        outputs,
+        shown_path.to_string(),
+        format!("outputs of cell {cell}, quarantined"),
+    )
+    .of_content()
+}
+
 fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
@@ -3168,6 +3236,25 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 &shown_path,
             ),
         });
+    }
+
+    // The saved outputs of one notebook cell, when the planner asked for them (READ-10). Only
+    // reached for a file the planner may see: a notebook held back above is already a reference to
+    // the whole file, outputs included. What comes back is untrusted whatever the notebook's path
+    // is trusted as, because a vouch covers what a person wrote into the cells and an output is
+    // what a program, a web page or a dataset printed. It is a reference, never text.
+    match output_of_from(arguments, &proposed_path) {
+        Ok(Some(cell)) => {
+            return priced(notebook_outputs(
+                policy,
+                workspace,
+                &path,
+                (path_field(destination), &shown_path),
+                cell,
+            ));
+        }
+        Ok(None) => {}
+        Err(refusal) => return priced(Produced::problem(refusal)),
     }
 
     // The planner already holds this window if an earlier answer put it there and the file has not
