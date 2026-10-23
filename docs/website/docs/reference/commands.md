@@ -184,7 +184,7 @@ outlives the session and applies in every directory, except one whose own settin
 `~/.bravebot/settings.json` does not.
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
-them. See [Configuration](../customize/configuration.md#choosing-a-model).
+them. See [Choosing a model](../customize/model.md).
 
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.

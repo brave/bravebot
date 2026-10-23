@@ -223,7 +223,7 @@ bravebot --model opus "review the diff on this branch"
 Names the model for one run, and outranks every other way one is named. Where no flag names one, a
 run asks for the model a session opening in the same directory would: a
 [`model`](../customize/configuration.md#model) key in the checkout's settings or the file
-`--settings` names, then the choice [`/model`](../customize/configuration.md#choosing-a-model)
+`--settings` names, then the choice [`/model`](../customize/model.md)
 recorded, then the key in `~/.bravebot/settings.json`, then an exported
 `BRAVEBOT_DEFAULT_MODEL`, then the model the build was made with. So a script uses the model
 you picked without your having to write it down twice, a checkout that names its model gets it, and

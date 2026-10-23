@@ -20,7 +20,9 @@ governs:
   - crates/tui/src/prompt_files.rs
 guards:
   - symbol: commands
-documented-by: docs/website/docs/reference/commands.md
+documented-by:
+  - docs/website/docs/reference/commands.md
+  - docs/website/docs/customize/model.md
 ---
 
 ## Scope
