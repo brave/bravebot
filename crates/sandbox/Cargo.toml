@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 
 # The core dump limit, which is a Unix call rather than a Linux one. Already a dependency of

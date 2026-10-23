@@ -36,11 +36,17 @@ pub struct LockedText {
 // The mapping is this value's alone and nothing writes to it between construction and drop, so it
 // may be read from any thread and moved to any other.
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "the mapping is owned by this value alone, so moving the value to another thread is sound"
+)]
 // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
 unsafe impl Send for LockedText {}
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "nothing writes to the mapping between construction and drop, so reads from any thread are sound"
+)]
 // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
 unsafe impl Sync for LockedText {}
 
@@ -50,7 +56,10 @@ unsafe impl Sync for LockedText {}
 // it.
 #[cfg(unix)]
 impl LockedText {
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "copy_nonoverlapping into fresh pages mapped at least text.len() bytes long, which nothing else refers to"
+    )]
     pub fn new(text: &str) -> Self {
         if text.is_empty() {
             return Self {
@@ -77,7 +86,10 @@ impl LockedText {
         }
     }
 
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "from_raw_parts and from_utf8_unchecked over len bytes copied from a str, which clearing leaves as UTF-8"
+    )]
     pub fn as_str(&self) -> &str {
         // The `len` bytes at `start` were copied from a `str`, and clearing overwrites them with
         // zero bytes, each of which is still UTF-8. The borrow ends before the drop that unmaps
@@ -96,7 +108,10 @@ impl LockedText {
     /// Overwrite the text where it lies, leaving it as many zero bytes long as it was. Volatile,
     /// because nothing reads these zeros back and a store nobody observes is one a compiler is
     /// entitled to delete.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "write_volatile of zero to each of the len bytes inside the mapping new wrote, so it is not elided"
+    )]
     fn clear(&mut self) {
         for offset in 0..self.len {
             // Inside the `len` bytes `new` wrote.
@@ -116,7 +131,10 @@ impl Clone for LockedText {
 
 #[cfg(unix)]
 impl Drop for LockedText {
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "munmap of the mapping new made, called once because a value is dropped once, which releases the lock"
+    )]
     fn drop(&mut self) {
         self.clear();
         if self.mapped != 0 {
@@ -130,7 +148,10 @@ impl Drop for LockedText {
 
 #[cfg(unix)]
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "sysconf(_SC_PAGESIZE) takes no pointers and reads a system constant"
+)]
 fn page_size() -> usize {
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
@@ -140,7 +161,10 @@ fn page_size() -> usize {
 /// Fresh anonymous pages, readable and writable by this process alone.
 #[cfg(unix)]
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "mmap of fresh anonymous private pages, with a failed mapping turned into handle_alloc_error"
+)]
 fn map(len: usize) -> std::ptr::NonNull<u8> {
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let start = unsafe {
@@ -167,7 +191,10 @@ fn map(len: usize) -> std::ptr::NonNull<u8> {
 /// grants or refuses, and asks nothing of the memory, so any range may be passed.
 #[cfg(unix)]
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "mlock on pages this process maps only requests residency, so any range is safe to pass"
+)]
 fn lock(start: std::ptr::NonNull<u8>, len: usize) -> bool {
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let locked = unsafe { libc::mlock(start.as_ptr().cast(), len) };
@@ -262,7 +289,10 @@ mod tests {
     /// `<sys/proc_info.h>`. Asked about an address nothing maps, it describes the next region up,
     /// or none.
     #[cfg(target_os = "macos")]
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "proc_pidinfo(PROC_PIDREGIONINFO) fills a local RegionInfo of the size passed, and the written size is checked"
+    )]
     fn residency(address: *const u8) -> Option<bool> {
         #[repr(C)]
         #[derive(Default)]
@@ -311,7 +341,10 @@ mod tests {
         Some(info.user_wired_count > 0)
     }
 
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "getrlimit(RLIMIT_MEMLOCK) fills a local rlimit through a valid pointer, for a test of the lock limit"
+    )]
     fn memory_lock_limits() -> libc::rlimit {
         let mut limit = libc::rlimit {
             rlim_cur: 0,
@@ -323,7 +356,10 @@ mod tests {
         limit
     }
 
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "setrlimit(RLIMIT_MEMLOCK) reads a borrowed rlimit, lowering the limit so a test sees a refused lock"
+    )]
     fn set_memory_lock_limits(limit: &libc::rlimit) {
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let written = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, limit) };

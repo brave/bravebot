@@ -427,7 +427,9 @@ one write.
 ## Open questions
 
 - Whether a person may arm a watch themselves, with a command, rather than only by asking for one in
-  a prompt. `/watch` lists them and ends one and arms none. Nothing here needs a planner, and a
+  a prompt. `/watch` lists them and ends one and arms none. A `file-changed` hook
+  ([HOOK-2](hooks.md#HOOK-2)) runs a person's own command for a named file and begins no turn, so
+  it answers the part of this that asks for no planner. Nothing here needs a planner, and a
   person who wants to be told when a file changes is the one case where the whole feature costs a
   turn only at the moment it fires.
 - Whether the five-second look should become an operating-system notification. The observable

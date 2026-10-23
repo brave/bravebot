@@ -13,6 +13,7 @@
 use crate::exit::{Ending, fail};
 use crate::progress::printable;
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
+use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
     Home, Person, drawn, indent, no_state_directory, problem, say,
 };
@@ -725,7 +726,50 @@ fn get<R: BufRead, W: Write>(
     if let Some(refused) = refused(managed, &declaration) {
         say(person, format!("{indent}{refused}"));
     }
+    for line in confinement_lines(alias, &declaration, home) {
+        say(person, format!("{indent}{line}"));
+    }
     Ok(())
+}
+
+/// What a session would confine `declaration` to, as the lines `get` ends with (SERVERS-20): the
+/// policy [`bravebot_agent::servers::foreseen`] builds the way a launch does, in the words
+/// `/status` uses for one that was started, or the sentence a launch would say for a server it does
+/// not start. Nothing for a server reached over HTTP, which no session confines.
+fn confinement_lines(alias: &str, declaration: &Declaration, home: &Home) -> Vec<String> {
+    let hosts = bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts);
+    match bravebot_agent::servers::foreseen(
+        alias,
+        declaration,
+        home,
+        bravebot_config::run_network(),
+        hosts,
+        &|name| std::env::var_os(name),
+    ) {
+        Foreseen::Remote => Vec::new(),
+        Foreseen::Unstarted(sentence) => vec![sentence],
+        Foreseen::Confined { policy, home } => {
+            let mut described = policy.described();
+            if home == OwnHome::Throwaway {
+                described.push((
+                    t!(mcp_get_policy_home).to_string(),
+                    t!(mcp_get_policy_home_throwaway).to_string(),
+                ));
+            }
+            let width = described
+                .iter()
+                .map(|(label, _)| label.chars().count())
+                .max()
+                .unwrap_or(0);
+            std::iter::once(t!(mcp_get_policy).to_string())
+                .chain(
+                    described
+                        .into_iter()
+                        .map(|(label, value)| format!("  {label:<width$}  {value}")),
+                )
+                .collect()
+        }
+    }
 }
 
 /// What `get` and `list` add for a server the managed layer keeps from starting, which is the line
@@ -1690,6 +1734,127 @@ mod tests {
         };
         let outcome = run(&words(args), Ok(&cwd), &home, &managed, &here, &mut person);
         (outcome, String::from_utf8(person.screen).unwrap())
+    }
+
+    /// SERVERS-20: `get` says what a session would confine a local server to, before one starts it.
+    /// The rows are the ones a session lists under `/status` for it, in the same words, and a row is
+    /// there for the directory the declaration names, so a person can check a refusal from inside
+    /// the server against what it was granted. A server a session would not start has the
+    /// sentence the session says, and no policy it would never be started under; one reached over
+    /// HTTP has none.
+    #[test]
+    fn get_lists_the_policy_a_session_would_confine_a_local_server_to() {
+        let (Ok(_), Some(_)) = (
+            bravebot_sandbox::for_current_platform(),
+            bravebot_sandbox::base::Prelude::current(),
+        ) else {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        };
+        let directory = outside_any_repository("get-policy");
+        let work = outside_any_repository("get-policy-work");
+        let work_text = work.display().to_string();
+        let (outcome, _) = typing(
+            &directory,
+            &[
+                "add",
+                "weather",
+                "--dir",
+                &work_text,
+                "-e",
+                "PATH=/usr/bin:/bin",
+                "--",
+                "/bin/sh",
+            ],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        let (outcome, got) = typing(&directory, &["get", "weather"], "");
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let indent = " ".repeat(2 + "weather".len() + 3);
+        let lines: Vec<&str> = got.lines().collect();
+        let heading = lines
+            .iter()
+            .position(|line| line.trim() == t!(mcp_get_policy))
+            .unwrap_or_else(|| panic!("no policy under the declaration: {got}"));
+        let rows = &lines[heading + 1..];
+        assert!(rows.iter().all(|line| line.starts_with(&indent)), "{got}");
+        let said = |label: &str, value: &str| {
+            let spelled = format!("{label} {value}");
+            rows.iter()
+                .any(|line| line.split_whitespace().collect::<Vec<_>>().join(" ") == spelled)
+        };
+        assert!(
+            said(t!(status_server_policy_starts_in), &work_text),
+            "the directory it starts in: {got}"
+        );
+        assert!(
+            said(t!(status_server_policy_read_write), &work_text),
+            "the directory it may write: {got}"
+        );
+        assert!(
+            rows.iter().any(|line| line
+                .trim_start()
+                .starts_with(t!(status_server_policy_egress))),
+            "{got}"
+        );
+        let home = mcp::server_home(&directory, &declaration_of(&directory, "weather").digest());
+        assert!(
+            !home.exists(),
+            "get made the server's home, {}",
+            home.display()
+        );
+        assert!(
+            rows.iter()
+                .any(|line| line.contains(&home.display().to_string())),
+            "the home a launch makes is a row before it is made: {got}"
+        );
+
+        let (outcome, _) = typing(
+            &directory,
+            &[
+                "add",
+                "nowhere",
+                "-e",
+                "PATH=/nonexistent",
+                "--",
+                "no-such-program",
+            ],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (_, missing) = typing(&directory, &["get", "nowhere"], "");
+        assert!(
+            missing.contains("nowhere was not started"),
+            "a program no session finds has no policy to show: {missing}"
+        );
+        assert!(!missing.contains(t!(mcp_get_policy)), "{missing}");
+
+        let (outcome, _) = typing(
+            &directory,
+            &["add", "remote", "--http", "https://a.example.com"],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (_, remote) = typing(&directory, &["get", "remote"], "");
+        assert!(!remote.contains(t!(mcp_get_policy)), "{remote}");
+        assert!(!remote.contains("not started"), "{remote}");
+    }
+
+    /// `alias` as the state directory declares it.
+    fn declaration_of(directory: &Path, alias: &str) -> Declaration {
+        let (_, declarations) = readable(&Home {
+            directory: Some(directory.to_path_buf()),
+            writable: true,
+        })
+        .expect("readable");
+        declarations
+            .get(alias)
+            .expect("declared")
+            .declaration
+            .expect("usable")
     }
 
     /// No session starts a server the machine's administrator refused, whatever its approval says,

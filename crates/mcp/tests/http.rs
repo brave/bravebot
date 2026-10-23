@@ -977,3 +977,43 @@ fn a_remote_prompt_with_no_text_is_a_failure_and_not_an_empty_prompt() {
         "got: {error}"
     );
 }
+
+/// A server is declared by a url and every request to it is held to that url's socket. A url that
+/// can be declared and names no socket would have its first request refused as a move, and one
+/// that names a socket and cannot be declared would be unusable for no reason, so the two readers
+/// of a url, which live in different crates, answer alike for every url declared this way.
+#[test]
+fn a_url_can_be_declared_exactly_when_it_names_a_socket() {
+    let schemes = ["http", "HTTPS"];
+    let hosts = [
+        "h", "H", "1.2.3.4", "[::1]", "[::1", "::1", "", "[::1]x", "[]", "h%41",
+    ];
+    let ports = [
+        "", ":", ":80", ":0", ":+1", ":-1", ":x", ":65535", ":65536", ":1:2", ":080", ":443",
+    ];
+    let rests = ["", "/p", "?q", "#f"];
+
+    let (mut declared, mut refused) = (0, 0);
+    for scheme in schemes {
+        for host in hosts {
+            for port in ports {
+                for rest in rests {
+                    let url = format!("{scheme}://{host}{port}{rest}");
+                    let can_be_declared =
+                        bravebot_config::mcp::Declaration::http(url.clone()).is_ok();
+                    let names_a_socket = bravebot_core::url::socket_of(&url).is_some();
+                    assert_eq!(can_be_declared, names_a_socket, "{url}");
+                    if can_be_declared {
+                        declared += 1;
+                    } else {
+                        refused += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        declared > 50 && refused > 50,
+        "{declared} declared, {refused} refused"
+    );
+}

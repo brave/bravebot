@@ -196,6 +196,20 @@ struct ListedByGateway {
     /// The window, where the gateway reports one.
     #[serde(default)]
     context_length: Option<u64>,
+    /// The window as Anthropic's listing states it, which is the only place it is named this.
+    ///
+    /// A field of its own rather than a second name for the one above, since a gateway stating both
+    /// would fail to decode as a duplicate, and held as it arrived because a gateway may state it in
+    /// a form that is not a whole number, and a roster that cannot be read offers nothing.
+    #[serde(default)]
+    max_input_tokens: Option<serde_json::Value>,
+    /// What the model can do, in the shape Anthropic's listing gives: an object with a `supported`
+    /// flag under each capability.
+    ///
+    /// Held as it arrived and read for one capability, because another gateway may put something
+    /// else under the same name and a roster that fails to decode offers nothing.
+    #[serde(default)]
+    capabilities: Option<serde_json::Value>,
     /// What the model accepts, which is where a gateway says whether it can call tools.
     ///
     /// Absent for a gateway that does not report it, and then nothing is filtered: a roster that
@@ -210,6 +224,21 @@ struct ListedByGateway {
     /// that needs one.
     #[serde(default)]
     architecture: Option<Architecture>,
+}
+
+impl ListedByGateway {
+    /// Whether the listing says this model reads no effort level.
+    ///
+    /// Only an explicit `false`: a listing that does not mention the capability, or states it in
+    /// another shape, is not a listing claiming none.
+    fn states_no_effort(&self) -> bool {
+        self.capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.get("effort"))
+            .and_then(|effort| effort.get("supported"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+    }
 }
 
 /// The modality half of what a gateway reports about one model.
@@ -243,10 +272,16 @@ struct Architecture {
 ///
 /// A service that cannot be asked is answered from the list compiled in for it, with no request,
 /// and its rows are built as a listing's are, so a pick off them is recorded and routed the same.
+///
+/// `headers` is what the block's `options.headers` asked for, resolved by the caller from the same
+/// environment the token came from. The roster request carries them because a gateway that needs a
+/// header to route a request needs it to answer a listing too, and a roster asked without one is a
+/// person seeing no models with nothing local to explain it.
 pub fn list_from_gateway<S: Sink>(
     policy: &mut Policy<'_, S>,
     provider: &bravebot_config::provider::Provider,
     token: Option<&str>,
+    headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
     // Vertex AI has no listing a key can call, so asking would carry the key to be answered 404.
@@ -261,7 +296,7 @@ pub fn list_from_gateway<S: Sink>(
         return Ok(offered_by_gateway(provider, listed));
     }
 
-    if token.is_some() {
+    if token.is_some() && provider.answers_for_an_account() {
         // Any failure falls through to the wide roster: a gateway with no such route answers 404,
         // one that has it under another name answers something undecodable, and neither is a reason
         // to offer nothing when a list that does work is one request away.
@@ -270,13 +305,21 @@ pub fn list_from_gateway<S: Sink>(
             provider,
             provider.account_models_url(),
             token,
+            headers,
             egress,
         ) {
             return Ok(offered_by_gateway(provider, listed));
         }
     }
 
-    let listed = fetch_listing(policy, provider, provider.models_url(), token, egress)?;
+    let listed = fetch_listing(
+        policy,
+        provider,
+        provider.models_url(),
+        token,
+        headers,
+        egress,
+    )?;
     Ok(offered_by_gateway(provider, listed))
 }
 
@@ -286,24 +329,188 @@ fn fetch_listing<S: Sink>(
     provider: &bravebot_config::provider::Provider,
     url: String,
     token: Option<&str>,
+    headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
     let mut request = Request::get(&url).header("accept", "application/json");
+    for (name, value) in provider.fixed_headers() {
+        request = request.header(*name, *value);
+    }
     if let Some(token) = token {
         let (name, value) = provider.credential_header(token);
-        request = request.header(name, value);
+        // An Anthropic or a Google key stays on the socket the request was addressed to, as the
+        // request for a reply keeps it. The other credential headers are left as they were.
+        request = match provider.protocol() {
+            bravebot_config::provider::Protocol::Messages
+            | bravebot_config::provider::Protocol::GenerateContent => {
+                request.socket_header(name, value)
+            }
+            bravebot_config::provider::Protocol::ChatCompletions
+            | bravebot_config::provider::Protocol::Responses => request.header(name, value),
+        };
+    }
+    // Carried, never read: `Request::header` appends, and a name this request already set is
+    // refused where the block is read rather than compared against here.
+    for (name, value) in headers {
+        request = request.header(name.clone(), value.expose());
     }
 
+    let listed: GatewayListing = read_listing(policy, request, &url, egress)?;
+    Ok(listed.data)
+}
+
+/// Send one roster request and decode what answers it as `T`.
+///
+/// The one place a gateway's or the account's reply is decoded, so the roster of every service
+/// reaches a picker through the same declassification site.
+fn read_listing<S: Sink, T: serde::de::DeserializeOwned>(
+    policy: &mut Policy<'_, S>,
+    request: Request,
+    url: &str,
+    egress: &Egress,
+) -> Result<T, ChatError> {
     let response = egress.fetch(policy, request, Label::untrusted_public())?;
     let label = response.body.label();
     let (bytes, _) = policy
         .decode_transport("gateway models", label)
         .decode(response.body);
 
-    let listed: GatewayListing = serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
+    serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
         detail: format!("{e} (received {} bytes from {url})", bytes.len()),
-    })?;
-    Ok(listed.data)
+    })
+}
+
+/// What the serving host of a ChatGPT account answers a listing with
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)): an object whose `models` key
+/// holds the rows.
+#[derive(Debug, Deserialize)]
+struct AccountListing {
+    models: Vec<ListedByAccount>,
+}
+
+/// One row of the account's listing.
+///
+/// Every field but the list is held as it arrived, because the shape is read from another
+/// program's source and has not been observed, and a field in a form this code did not expect must
+/// cost that row its place and no more: a listing that fails to decode offers nothing.
+#[derive(Debug, Default, Deserialize)]
+struct ListedByAccount {
+    /// What a request names.
+    #[serde(default)]
+    slug: serde_json::Value,
+    /// What to show a person choosing, where the service has a friendlier name than the slug.
+    #[serde(default)]
+    display_name: serde_json::Value,
+    /// `list` for a model the account's own clients show. Any other value, or none, is a model the
+    /// service keeps out of its pickers.
+    #[serde(default)]
+    visibility: serde_json::Value,
+    /// Whether a request made as this program makes it can reach the model.
+    #[serde(default)]
+    supported_in_api: serde_json::Value,
+    #[serde(default)]
+    context_window: serde_json::Value,
+    #[serde(default)]
+    input_modalities: serde_json::Value,
+    /// The levels of effort the model takes, one entry each. Only whether there are any is read.
+    #[serde(default)]
+    supported_reasoning_levels: serde_json::Value,
+}
+
+/// The models a ChatGPT account may use, from the serving host's listing
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// `provider` is [`bravebot_config::provider::Provider::chatgpt_account`], or a service standing in
+/// for it in a test, and `token` is the account's access token. The token goes to the listing's
+/// address on the socket the request is addressed to, and a redirect in answer is a failure: the
+/// host was compiled in, and a hop is a place a reply named.
+///
+/// A row is offered when its `visibility` is `list` and `supported_in_api` is true. Nothing is
+/// capped, and a row is not dropped for what it says about tools, since the listing says nothing
+/// about them. A listing that is read and has no such row offers nothing.
+pub fn list_from_account<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    provider: &bravebot_config::provider::Provider,
+    token: &str,
+    egress: &Egress,
+) -> Result<Vec<Model>, ChatError> {
+    let url = provider.models_url();
+    let (name, value) = provider.credential_header(token);
+    let request = Request::get(&url)
+        .header("accept", "application/json")
+        .socket_header(name, value)
+        .refusing_redirects();
+
+    let listed: AccountListing = read_listing(policy, request, &url, egress)?;
+    Ok(offered_by_account(provider, listed.models))
+}
+
+/// The picker rows an account's listing becomes, in the order it listed them.
+///
+/// Separated from the request so the filtering is testable without a server. Every key is
+/// qualified by the account's id, which is what a choice is remembered as and what later selects
+/// this service rather than the `openai` gateway offering a model of the same name.
+fn offered_by_account(
+    provider: &bravebot_config::provider::Provider,
+    listed: Vec<ListedByAccount>,
+) -> Vec<Model> {
+    // One row to a name: the picker remembers a choice by its key, and a second row for the same
+    // key would be one nobody could tell from the first.
+    let mut seen = std::collections::HashSet::new();
+    listed
+        .into_iter()
+        .filter(|row| {
+            row.visibility.as_str() == Some("list") && row.supported_in_api.as_bool() == Some(true)
+        })
+        .filter_map(|row| {
+            let slug = row.slug.as_str().filter(|slug| !slug.trim().is_empty())?;
+            if !seen.insert(slug.to_string()) {
+                return None;
+            }
+            let strings = |value: &serde_json::Value| -> Vec<String> {
+                value
+                    .as_array()
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            Some(Model {
+                key: format!("{}/{slug}", provider.id),
+                display_name: row
+                    .display_name
+                    .as_str()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or(slug)
+                    .to_string(),
+                // The account's own subscription, which is not Brave's.
+                premium: false,
+                provider: Some(provider.display_name().to_string()),
+                conversation_tokens: Some(
+                    row.context_window
+                        .as_u64()
+                        .filter(|window| *window > 0)
+                        .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
+                ),
+                // A listing that names the levels is the service saying what it takes, and one
+                // that names none for a model says it takes none. A row with no such field, or one
+                // in a form other than a list, did not say, which is not a row claiming none: the
+                // answer is then the one the service gives a request that carries a level.
+                reads_effort: match row.supported_reasoning_levels.as_array() {
+                    Some(levels) => !levels.is_empty(),
+                    None => true,
+                } && crate::reads_effort(&provider.completion_url(), slug),
+                advertised: Advertised {
+                    input_modalities: strings(&row.input_modalities),
+                    output_modalities: Vec::new(),
+                    parameters: None,
+                },
+            })
+        })
+        .collect()
 }
 
 /// The envelope a gateway's roster arrives in.
@@ -354,6 +561,12 @@ fn offered_by_gateway(
                     .and_then(|model| model.context_window)
                     .or(provider.context_window)
                     .or(entry.context_length)
+                    // Zero is a placeholder rather than a window, as it is on the Brave roster.
+                    .or(entry
+                        .max_input_tokens
+                        .as_ref()
+                        .and_then(serde_json::Value::as_u64)
+                        .filter(|window| *window > 0))
                     .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
             ),
             // A gateway states its parameters per model, and reasoning is not one field but two:
@@ -366,7 +579,8 @@ fn offered_by_gateway(
             // A refusal outranks the row either way round. A listing is what the gateway says it
             // would do and a refusal is what it did, so a row still advertising the parameter it
             // has already turned a request down for describes nothing that will be sent again.
-            reads_effort: crate::reads_effort(&provider.chat_completions_url(), &entry.id)
+            reads_effort: crate::reads_effort(&provider.completion_url(), &entry.id)
+                && !entry.states_no_effort()
                 && entry
                     .supported_parameters
                     .as_ref()
@@ -778,6 +992,131 @@ mod tests {
         assert!(models[0].reads_effort);
     }
 
+    fn anthropic() -> bravebot_config::provider::Provider {
+        let serde_json::Value::Object(root) =
+            serde_json::from_str(r#"{"provider": {"anthropic": {"env": ["ANTHROPIC_API_KEY"]}}}"#)
+                .expect("json")
+        else {
+            panic!("not an object");
+        };
+        bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider")
+    }
+
+    /// The shape Anthropic's listing answers with, as its reference gives it: the window under
+    /// `max_input_tokens` and what the model can do as an object with a `supported` flag under each
+    /// capability. The names are the provider's id in front of what a request carries, and the
+    /// window is the one the model states, since the default is far below it.
+    #[test]
+    fn an_anthropic_listing_is_offered_under_the_providers_id_with_the_window_it_states() {
+        let models = from_gateway(
+            &anthropic(),
+            r#"{"data": [
+                {"type": "model", "id": "claude-opus-5-5", "display_name": "Claude Opus 5.5",
+                 "created_at": "2026-09-21T00:00:00Z", "max_input_tokens": 1000000,
+                 "max_tokens": 128000,
+                 "capabilities": {"effort": {"supported": true, "low": {"supported": true}}}},
+                {"type": "model", "id": "claude-haiku-4-5", "display_name": "Claude Haiku 4.5",
+                 "max_input_tokens": 200000, "max_tokens": 64000}
+            ], "has_more": false, "first_id": "claude-opus-5-5", "last_id": "claude-haiku-4-5"}"#,
+        );
+
+        let keys: Vec<&str> = models.iter().map(|m| m.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["anthropic/claude-opus-5-5", "anthropic/claude-haiku-4-5"]
+        );
+        assert_eq!(models[0].conversation_tokens, Some(1_000_000));
+        assert_eq!(models[1].conversation_tokens, Some(200_000));
+        assert_eq!(models[0].provider.as_deref(), Some("anthropic"));
+    }
+
+    /// A zero where a window belongs is a placeholder, and a budget taken from it would compact
+    /// before a turn could start.
+    #[test]
+    fn an_anthropic_window_of_zero_or_nothing_is_the_assumed_one() {
+        let models = from_gateway(
+            &anthropic(),
+            r#"{"data": [
+                {"id": "claude-zero", "max_input_tokens": 0},
+                {"id": "claude-null", "max_input_tokens": null},
+                {"id": "claude-absent"}
+            ]}"#,
+        );
+        for model in &models {
+            assert_eq!(
+                model.conversation_tokens,
+                Some(bravebot_config::provider::CONTEXT_WINDOW),
+                "{}",
+                model.key
+            );
+        }
+    }
+
+    /// Anthropic's listing says per model whether an effort level is read, and a model it says reads
+    /// none is not offered one. Only an explicit `false` says so: a row that does not mention the
+    /// capability, or that states it in another shape, is not a row claiming none.
+    #[test]
+    fn an_anthropic_model_the_listing_says_reads_no_effort_says_so() {
+        let models = from_gateway(
+            &anthropic(),
+            r#"{"data": [
+                {"id": "reads", "capabilities": {"effort": {"supported": true}}},
+                {"id": "reads-none", "capabilities": {"effort": {"supported": false}}},
+                {"id": "silent"},
+                {"id": "no-effort-key", "capabilities": {"batch": {"supported": true}}}
+            ]}"#,
+        );
+        let reads: Vec<(&str, bool)> = models
+            .iter()
+            .map(|model| (model.key.as_str(), model.reads_effort))
+            .collect();
+        assert_eq!(
+            reads,
+            [
+                ("anthropic/reads", true),
+                ("anthropic/reads-none", false),
+                ("anthropic/silent", true),
+                ("anthropic/no-effort-key", true),
+            ]
+        );
+    }
+
+    /// A window stated as a float, a string or a negative number is not a window, and does not stop the
+    /// rest of the roster being read: a roster that fails to decode offers nothing at all.
+    #[test]
+    fn a_window_in_a_form_that_is_not_a_whole_number_leaves_the_roster_readable() {
+        let models = from_gateway(
+            &anthropic(),
+            r#"{"data": [
+                {"id": "as-a-float", "max_input_tokens": 200000.5},
+                {"id": "as-text", "max_input_tokens": "200000"},
+                {"id": "as-negative", "max_input_tokens": -1},
+                {"id": "as-a-whole-number", "max_input_tokens": 200000}
+            ]}"#,
+        );
+        let windows: Vec<Option<u64>> = models.iter().map(|m| m.conversation_tokens).collect();
+        let assumed = Some(bravebot_config::provider::CONTEXT_WINDOW);
+        assert_eq!(windows, [assumed, assumed, assumed, Some(200_000)]);
+    }
+
+    /// Another gateway may put something else under `capabilities`, and a roster that fails to
+    /// decode offers nothing at all, so no shape of the field may stop the rest being read.
+    #[test]
+    fn a_gateway_stating_capabilities_in_another_shape_still_has_its_roster_read() {
+        let models = from_gateway(
+            &gateway(),
+            r#"{"data": [
+                {"id": "as-a-list", "capabilities": ["chat", "tools"]},
+                {"id": "as-text", "capabilities": "chat"},
+                {"id": "as-nothing", "capabilities": null}
+            ]}"#,
+        );
+        assert_eq!(models.len(), 3);
+        assert!(models.iter().all(|model| model.reads_effort));
+    }
+
     /// A roster describing no parameters leaves the level to be judged by the service, and the
     /// judgment is the only description of the field there is. A row that went on claiming a level
     /// is read after the service refused it would show somebody a charge they chose and stopped
@@ -801,6 +1140,7 @@ mod tests {
                 caching: true,
                 cache_ttl: false,
                 effort: true,
+                ..crate::Refusals::default()
             },
         );
 
@@ -832,6 +1172,7 @@ mod tests {
                 caching: false,
                 cache_ttl: false,
                 effort: true,
+                ..crate::Refusals::default()
             },
         );
 
@@ -884,6 +1225,7 @@ mod tests {
                 caching: false,
                 cache_ttl: false,
                 effort: true,
+                ..crate::Refusals::default()
             },
         );
 
@@ -978,5 +1320,123 @@ mod tests {
         assert!(models[0].advertised.input_modalities.is_empty());
         assert!(models[0].advertised.output_modalities.is_empty());
         assert_eq!(models[0].advertised.parameters, None);
+    }
+
+    fn from_account(body: &str) -> Vec<Model> {
+        let listed: AccountListing = serde_json::from_str(body).expect("the test body parses");
+        offered_by_account(
+            &bravebot_config::provider::Provider::chatgpt_account(),
+            listed.models,
+        )
+    }
+
+    /// CHATGPT-9: the account's own picker shows a model only when its visibility is `list`, and a
+    /// request made as this program makes it reaches only a model with `supported_in_api`, so a row
+    /// short of either is a row that fails when picked or one the service keeps out of its own.
+    /// A row stating neither is not stating both, and a key carries the account's identifier,
+    /// without which the name would select the `openai` gateway's model of that name.
+    #[test]
+    fn only_a_row_the_account_lists_and_takes_in_the_api_is_offered_under_the_accounts_identifier()
+    {
+        let models = from_account(
+            r#"{"models": [
+                {"slug": "gpt-a", "display_name": "GPT A", "visibility": "list", "supported_in_api": true},
+                {"slug": "gpt-hidden", "visibility": "hide", "supported_in_api": true},
+                {"slug": "gpt-app-only", "visibility": "list", "supported_in_api": false},
+                {"slug": "gpt-silent"},
+                {"slug": "gpt-no-visibility", "supported_in_api": true},
+                {"slug": "gpt-no-api-flag", "visibility": "list"},
+                {"slug": "gpt-b", "visibility": "list", "supported_in_api": true}
+            ]}"#,
+        );
+        let keys: Vec<&str> = models.iter().map(|m| m.key.as_str()).collect();
+        assert_eq!(keys, ["chatgpt/gpt-a", "chatgpt/gpt-b"]);
+        assert_eq!(models[0].display_name, "GPT A");
+        assert_eq!(
+            models[1].display_name, "gpt-b",
+            "a row naming no friendlier name is shown by its slug"
+        );
+        assert_eq!(models[0].provider.as_deref(), Some("ChatGPT"));
+        assert!(
+            !models[0].premium,
+            "the account's subscription is not Leo's"
+        );
+    }
+
+    /// CHATGPT-9: the window a row states is the budget a turn compacts against, and a row stating
+    /// none or a figure that is not a whole number leaves the assumed one, since a roster that
+    /// failed to decode would offer nothing and a window above the real one removes compaction.
+    #[test]
+    fn a_window_the_account_states_is_taken_and_a_missing_or_malformed_one_is_the_assumed_one() {
+        let models = from_account(
+            r#"{"models": [
+                {"slug": "stated", "visibility": "list", "supported_in_api": true, "context_window": 272000},
+                {"slug": "silent", "visibility": "list", "supported_in_api": true},
+                {"slug": "zero", "visibility": "list", "supported_in_api": true, "context_window": 0},
+                {"slug": "words", "visibility": "list", "supported_in_api": true, "context_window": "large"},
+                {"slug": "fraction", "visibility": "list", "supported_in_api": true, "context_window": 1.5}
+            ]}"#,
+        );
+        assert_eq!(models[0].conversation_tokens, Some(272_000));
+        for model in &models[1..] {
+            assert_eq!(
+                model.conversation_tokens,
+                Some(bravebot_config::provider::CONTEXT_WINDOW),
+                "{}",
+                model.key
+            );
+        }
+    }
+
+    /// CHATGPT-9 and BACKEND-22: a row that lists the effort levels it takes reads one, a row whose
+    /// list is empty says it takes none, and a row that does not mention the subject is not a row
+    /// claiming none.
+    #[test]
+    fn an_account_row_reads_an_effort_level_only_where_the_listing_does_not_say_it_takes_none() {
+        let models = from_account(
+            r#"{"models": [
+                {"slug": "levels", "visibility": "list", "supported_in_api": true,
+                 "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}]},
+                {"slug": "none", "visibility": "list", "supported_in_api": true,
+                 "supported_reasoning_levels": []},
+                {"slug": "silent", "visibility": "list", "supported_in_api": true}
+            ]}"#,
+        );
+        let reads: Vec<(&str, bool)> = models
+            .iter()
+            .map(|m| (m.key.as_str(), m.reads_effort))
+            .collect();
+        assert_eq!(
+            reads,
+            [
+                ("chatgpt/levels", true),
+                ("chatgpt/none", false),
+                ("chatgpt/silent", true)
+            ]
+        );
+    }
+
+    /// CHATGPT-9: a row in a form this code did not expect costs that row its place and no more. A
+    /// name that is not a string, or is blank, is no model; a name listed twice is one row; the
+    /// modalities a row names are the strings in its list; and no other row is lost to either.
+    #[test]
+    fn an_account_row_in_an_unexpected_form_is_dropped_alone_and_the_rest_is_still_offered() {
+        let models = from_account(
+            r#"{"models": [
+                {"slug": 7, "visibility": "list", "supported_in_api": true},
+                {"slug": "  ", "visibility": "list", "supported_in_api": true},
+                {"visibility": "list", "supported_in_api": true},
+                {"slug": "kept", "display_name": 4, "visibility": "list", "supported_in_api": true,
+                 "input_modalities": ["text", 3, "image"]},
+                {"slug": "kept", "display_name": "Again", "visibility": "list", "supported_in_api": true}
+            ]}"#,
+        );
+        assert_eq!(models.len(), 1, "{models:?}");
+        assert_eq!(models[0].key, "chatgpt/kept");
+        assert_eq!(models[0].display_name, "kept");
+        assert_eq!(
+            models[0].advertised.input_modalities,
+            ["text".to_string(), "image".to_string()]
+        );
     }
 }

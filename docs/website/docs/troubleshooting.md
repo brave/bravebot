@@ -172,7 +172,8 @@ or lower `BRAVEBOT_CONTEXT_BUDGET`, if the window your model advertises is large
 **It stopped calling tools and just answered.** A bounded turn reached its round limit: the planner
 is told it has no tools left, so it answers with what it has. Ask again with a narrower task. An
 interactive turn carries no such limit, so this is a one-shot or manifest run, where the default is
-200 rounds.
+200 rounds. A one-shot run given `--max-rounds` or `--max-tokens` does not answer when it reaches
+one: it stops and exits with status 8.
 
 ## Sessions
 
@@ -194,7 +195,8 @@ being read against code that has moved since.
 **`no state directory: … names nothing`**. Nothing resolved a directory to keep things in, so this
 run has no settings of your own, no session to resume, no prompt history and no skills. `doctor`
 names the variables it looked at and what is not kept without one. On Windows `USERPROFILE` answers
-where `HOME` is unset, so a stock install resolves one.
+where `HOME` is unset, so a stock install resolves one. `BRAVEBOT_HOME` answers first when it holds an
+absolute path, and is passed over when it holds anything else.
 
 **A session is not where I expected it.** `doctor` prints the state directory it resolved and the
 variable it came from, which is the quickest way to settle where anything is being written.

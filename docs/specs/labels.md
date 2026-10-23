@@ -10,21 +10,25 @@ governs:
 guards:
   - symbol: Labelled::new
     sites:
+      - crates/agent/src/backend.rs: 2
       - crates/agent/src/commit_message.rs: 1
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/skills.rs: 1
-      - crates/agent/src/tools.rs: 29
+      - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 14
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
-      - crates/aichat/src/lib.rs: 5
-      - crates/bedrock/src/lib.rs: 6
+      - crates/aichat/src/anthropic.rs: 8
+      - crates/aichat/src/generate_content.rs: 7
+      - crates/aichat/src/responses.rs: 6
+      - crates/aichat/src/lib.rs: 7
+      - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 120
+      - crates/core/src/policy.rs: 121
       - crates/core/src/slot.rs: 5
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 3
@@ -41,18 +45,18 @@ guards:
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 37
-      - crates/agent/src/turn.rs: 5
+      - crates/agent/src/tools.rs: 38
+      - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
       - crates/agent/tests/workspace.rs: 59
-      - crates/aichat/tests/client.rs: 2
-      - crates/bedrock/src/lib.rs: 2
+      - crates/aichat/tests/client.rs: 12
+      - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
       - crates/core/src/policy.rs: 63
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 4
-      - crates/mcp/tests/stdio.rs: 6
+      - crates/mcp/tests/stdio.rs: 7
       - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
     sites:
@@ -69,6 +73,7 @@ guards:
       - crates/agent/src/workspace.rs: 9
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
+      - crates/agent/tests/turn.rs: 2
       - crates/agent/tests/workspace.rs: 279
       - crates/core/src/policy.rs: 25
       - crates/core/src/value.rs: 3
@@ -131,7 +136,7 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 15
+      - crates/agent/src/turn.rs: 16
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
@@ -141,7 +146,7 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 39
+      - crates/agent/src/tools.rs: 41
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
@@ -170,11 +175,14 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 15
+      - crates/agent/src/tools.rs: 16
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::decode_transport
     sites:
+      - crates/aichat/src/anthropic.rs: 2
+      - crates/aichat/src/generate_content.rs: 2
+      - crates/aichat/src/responses.rs: 1
       - crates/aichat/src/lib.rs: 2
       - crates/aichat/src/models.rs: 2
       - crates/aichat/src/ollama.rs: 1
@@ -483,6 +491,8 @@ and the content has no say in it.
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | pasted text | none, for the same reason, but with the characters a terminal draws as nothing taken out first and counted on the screen ([PASTE-10](pasting.md#PASTE-10)): a character map that reads no meaning from the text and decides no effect | `verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many` |
 | a prompt typed while a turn is running | none, for the same reason, and recorded the same way | `verified-by: bravebot_core::policy::an_interjection_is_recorded_in_the_audit_trail` |
+| a line sent while a turn is running on an input channel the person vouched for with `--trust-input-lines` | none, for the reason a typed line gets none: the flag the person typed is the vouching, and the trail records it as that and not as typed ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_core::policy::a_vouched_line_is_recorded_as_that_and_does_not_lower_the_context` `verified-by: bravebot_agent::turn::a_line_from_a_vouched_channel_is_recorded_as_vouched_for_and_not_as_typed` |
+| a line on an input channel nobody vouched for | untrusted and private, as input piped into the process is, because the launching program is not necessarily the person ([CLI-36](cli.md#CLI-36)) | `verified-by: bravebot_cli::running::lines_nobody_vouched_for_never_reach_the_planner_and_vouched_ones_do` |
 | a message another background session sent | the label it was sent with, read back from the word beside the text, so a message never arrives better than it left; untrusted and private where there is no word or the word names no label ([MSG-9](session-messages.md#MSG-9)) | `verified-by: bravebot_core::policy::a_message_from_another_session_keeps_the_label_it_was_sent_with` `verified-by: bravebot_core::policy::a_message_whose_label_cannot_be_read_is_untrusted_and_private` `verified-by: bravebot_agent::turn::a_message_that_is_not_labelled_trusted_reaches_the_planner_as_a_reference` |
 | a system prompt named on the command line | none, for the reason the user's own message gets none: the person who typed the flag is the person the planner works for, and the words are plain text that grants no permission | `verified-by: bravebot_agent::turn::words_that_allow_writes_allow_none` |
 

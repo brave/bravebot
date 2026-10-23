@@ -206,6 +206,45 @@ fn what_a_call_spent_at_a_model_reaches_a_front_end() {
     );
 }
 
+/// PROMPT-1: a call crosses with its file's name as held, which a window matches the call to its
+/// confirmation on, as spelled, which is what it draws on the line, and as spelled without the slot
+/// a reference was drawn under and a leading `./`, which is what it lists the file under. A name
+/// that needs no spelling crosses as itself, a call that named nothing crosses with nothing to
+/// draw, and the target of a tool that names no file is not spelled or stripped.
+#[test]
+fn a_calls_file_crosses_as_held_and_as_spelled() {
+    let (mut reporter, events) = harness();
+
+    reporter.tool_started(Activity::running("Write", "note.md ").naming_a_file(true));
+    reporter.tool_started(Activity::running("Write", "note.md").naming_a_file(true));
+    reporter.tool_started(Activity::running("Write", "ref:1(U,priv):a.md ").naming_a_file(true));
+    reporter.tool_started(Activity::running("Search", "./todo "));
+    reporter.tool_started(Activity::running("List", "").naming_a_file(true));
+
+    let events = events.lock().expect("not poisoned");
+    let crossed: Vec<(&str, &str, &str)> = events
+        .iter()
+        .map(|event| {
+            let text = |key: &str| event.data[key].as_str().expect(key);
+            (text("target"), text("shownTarget"), text("shownFile"))
+        })
+        .collect();
+    assert_eq!(
+        crossed,
+        [
+            ("note.md ", "\"note.md\u{2423}\"", "\"note.md\u{2423}\""),
+            ("note.md", "note.md", "note.md"),
+            (
+                "ref:1(U,priv):a.md ",
+                "\"ref:1(U,priv):a.md\u{2423}\"",
+                "\"a.md\u{2423}\""
+            ),
+            ("./todo ", "./todo ", "./todo "),
+            ("", "", ""),
+        ]
+    );
+}
+
 /// The word a call is being written under, and its end, reach a front-end so it can say what a
 /// long wait is for. A delegate's own call is not the turn's, so it is not sent.
 #[test]
@@ -235,6 +274,35 @@ fn the_call_being_written_is_reported_and_a_delegates_is_not() {
             &serde_json::json!("Edit")
         ],
         "a delegate's call was drawn as the planner's, or the end of a call was lost"
+    );
+}
+
+/// VIEW-34: the model's thinking crosses as the words that arrived, in order and untouched. A frame
+/// with none is not an event, and a delegate's is not the turn's.
+#[test]
+fn the_models_thinking_is_reported_in_order_and_a_delegates_and_an_empty_one_are_not() {
+    use bravebot_core::delegate::DelegateId;
+
+    let (mut reporter, events) = harness();
+
+    reporter.thinking("first ".into());
+    reporter.thinking(String::new());
+    reporter.thinking("  second\n".into());
+    reporter.reporting_for(Some(DelegateId::nth(1)));
+    reporter.thinking("a delegate's".into());
+    reporter.reporting_for(None);
+    reporter.thinking("third".into());
+
+    let events = events.lock().expect("not poisoned");
+    let said: Vec<&str> = events
+        .iter()
+        .filter(|e| e.name == "thinking")
+        .map(|e| e.data["text"].as_str().expect("text"))
+        .collect();
+    assert_eq!(
+        said,
+        vec!["first ", "  second\n", "third"],
+        "a delegate's thought was drawn as the planner's, an empty frame was sent, or the words were altered"
     );
 }
 

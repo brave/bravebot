@@ -331,6 +331,12 @@ scrolls a list longer than the screen.
 
 Answer 2 at the server question answers for the server and not for its list.
 
+A local server that says in its handshake that it announces changes to its tools is asked for its
+list again when it does. At the next turn you ask for, bravebot says the server changed its tools
+and puts the list it gives now to you as above. None of that server's tools is offered until you say
+yes to it, including the ones you had said yes to, and a no you gave earlier does not stand for the
+new list. A remote server is not read this way.
+
 The model sees each tool under a name like `mcp__weather__get_current_conditions`, with a sentence
 bravebot writes, saying which server it belongs to and that every call is put to you, before the
 server's own words. No built-in tool can be shadowed by one, since no built-in's name starts with
@@ -655,7 +661,23 @@ declared in /Users/you/.bravebot/mcp.json
             variables: PATH
             digest: 25edc5e806956f3254b5ff2b116f1c07ae5ad8d4a5df00f6d15c0f8aadfec43f
             approved
+            a session here would confine it to:
+              egress        any address
+              subprocesses  allowed
+              starts in     /Users/you/work
+              read          /usr/lib
+              read, write   /Users/you/work
+              ...
 ```
+
+For a server that runs on your machine, `get` ends with the confinement a session would start it
+under, in the words `/status` uses for one that is running, so you can read what a server would be
+allowed before you approve it. Nothing is started to show it. Under an allowed-hosts
+list the egress line says the server would be held to the proxy that applies the list. The server's
+own directory is not made: where it is kept under your state directory its path is listed, and where
+the session may write nothing there it is a new directory in the temporary directory and the line
+says so. A server a session would not start has the sentence the session says for it, and a server
+reached over HTTP has no such lines.
 
 ## Removing one
 

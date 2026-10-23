@@ -48,7 +48,7 @@ test('nothing is said where every setting is in force', () => {
 
 test('each kind of setting that is not in force is something to say', () => {
   assert.equal(t.notInForce(rules({ unreadable: [{ rule: 'Bsh(ls)', said: 'x' }] })), true)
-  assert.equal(t.notInForce(rules({ proposed: [{ rule: 'Bash(ls)', file: '/p/.bravebot/settings.json' }] })), true)
+  assert.equal(t.notInForce(rules({ proposed: [{ rule: 'Bash(ls)', shownRule: 'Bash(ls)', file: '/p/.bravebot/settings.json', shownFile: '/p/.bravebot/settings.json' }] })), true)
   assert.equal(t.notInForce(rules({ directories: ['../other'] })), true)
 })
 
@@ -64,7 +64,7 @@ test('an entry that is not a rule is reported in the agent’s own words', () =>
 
 test('an allow rule a project wrote is named with its file, and said not to stop a question', () => {
   const markup = render(RulesBanner, {
-    rules: rules({ proposed: [{ rule: 'Bash(cargo test)', file: '/home/someone/project/.bravebot/settings.json' }] }),
+    rules: rules({ proposed: [{ rule: 'Bash(cargo test)', shownRule: 'Bash(cargo test)', file: '/home/someone/project/.bravebot/settings.json', shownFile: '/home/someone/project/.bravebot/settings.json' }] }),
   })
 
   assert.ok(markup.includes('<code>Bash(cargo test)</code>'), markup)
@@ -84,7 +84,7 @@ test('the count is of everything not in force', () => {
   const markup = render(RulesBanner, {
     rules: rules({
       unreadable: [{ rule: 'a', said: 'a is wrong' }],
-      proposed: [{ rule: 'Bash(ls)', file: '/f' }, { rule: 'Edit', file: '/f' }],
+      proposed: [{ rule: 'Bash(ls)', shownRule: 'Bash(ls)', file: '/f', shownFile: '/f' }, { rule: 'Edit', shownRule: 'Edit', file: '/f', shownFile: '/f' }],
       directories: ['../other'],
     }),
   })
@@ -95,7 +95,7 @@ test('the count is of everything not in force', () => {
 test('what a settings file wrote is drawn as text and never as markup', () => {
   const forged = '<img src="https://example.com/x.png"><a href="https://example.com">x</a>'
   const markup = render(RulesBanner, {
-    rules: rules({ unreadable: [{ rule: forged, said: forged }], proposed: [{ rule: forged, file: forged }], directories: [forged] }),
+    rules: rules({ unreadable: [{ rule: forged, said: forged }], proposed: [{ rule: forged, shownRule: forged, file: forged, shownFile: forged }], directories: [forged] }),
   })
 
   for (const forbidden of ['<img', '<a ', '<a>']) assert.ok(!markup.includes(forbidden), `drew ${forbidden}: ${markup}`)

@@ -21,7 +21,10 @@ use bravebot_core::{Pipeline, Stage};
 use std::path::Path;
 use std::time::Duration;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "`pipelines.rs` is shared by several test binaries, and this one calls only its `run`"
+)]
 #[path = "../test-support/pipelines.rs"]
 mod pipelines;
 

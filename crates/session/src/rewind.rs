@@ -165,6 +165,7 @@ mod tests {
             conversation: bravebot_agent::Conversation::new().snapshot(),
             turns,
             tokens: 10,
+            split: Default::default(),
             spend: Default::default(),
             timing: Default::default(),
             cached: None,

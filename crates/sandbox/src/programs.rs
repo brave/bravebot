@@ -448,7 +448,10 @@ fn the_account_owns_or_can_write(_path: &Path) -> bool {
 
 /// The user id this process runs as.
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "`libc::geteuid` takes no arguments, cannot fail and has no preconditions"
+)]
 fn the_effective_user() -> u32 {
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe { libc::geteuid() }
@@ -459,7 +462,10 @@ fn the_effective_user() -> u32 {
 /// Asked of the platform and not read from the mode bits, which leave out ownership, access lists
 /// and a read-only volume.
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "`libc::access` is given a NUL-terminated `CString` that lives for the call, so the FFI call is sound"
+)]
 fn the_account_can_write(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let Ok(name) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
@@ -993,7 +999,7 @@ mod tests {
     #[test]
     fn the_system_temp_directory_counts_as_writable() {
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let temporary = std::env::temp_dir().join("bravebot-programs-temp");
+        let temporary = std::env::temp_dir().join(format!("bb-programs-{}", std::process::id()));
         executable(&temporary, "aws");
         let found = find_in(OsStr::new("aws"), &path_of(&[&temporary]), &[]);
         let _ = std::fs::remove_dir_all(&temporary);

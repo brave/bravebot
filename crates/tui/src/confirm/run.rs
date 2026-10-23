@@ -422,7 +422,7 @@ pub(super) fn draw_run(
             Span::styled(
                 format!(
                     "  {}",
-                    t!(run_in_directory, directory = &request.directory())
+                    t!(run_in_directory, directory = &request.shown_directory())
                 ),
                 Style::default().fg(theme::muted()),
             ),
@@ -621,7 +621,7 @@ fn plan_rows(request: &RunRequest) -> Vec<Line<'static>> {
         // The binary, under the name. A name is not a program: $PATH decides what `grep` means,
         // and a person about to vouch for one should be looking at what they are vouching for.
         lines.push(Line::from(Span::styled(
-            format!("       {}", step.binary()),
+            format!("       {}", bravebot_agent::confirm::shown_binary(step)),
             Style::default().fg(theme::muted()),
         )));
     }
@@ -763,10 +763,10 @@ fn always_rows(request: &RunRequest, offers_always: bool) -> Vec<Line<'static>> 
             lines.push(Line::from(Span::styled(
                 format!(
                     "       {}  {}",
-                    command.display(),
+                    bravebot_agent::confirm::shown_command(&command),
                     t!(
                         run_in_directory,
-                        directory = command.directory.display().to_string()
+                        directory = bravebot_agent::confirm::shown_path(&command.directory)
                     )
                 ),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -854,7 +854,7 @@ fn record_rows(path: &std::path::Path) -> Vec<Line<'static>> {
         Style::default().fg(theme::muted()),
     )));
     lines.push(Line::from(Span::styled(
-        format!("       {}", path.display()),
+        format!("       {}", bravebot_agent::confirm::shown_path(path)),
         Style::default().add_modifier(Modifier::BOLD),
     )));
     lines
@@ -964,7 +964,7 @@ fn reach_rows(request: &RunRequest, kept: &[String], path: &std::path::Path) -> 
         Style::default().fg(theme::muted()),
     )));
     lines.push(Line::from(Span::styled(
-        format!("       {}", path.display()),
+        format!("       {}", bravebot_agent::confirm::shown_path(path)),
         Style::default().add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(Span::styled(
@@ -992,7 +992,11 @@ fn key_choice_rows(
     ));
     for (at, candidate) in choice.candidates.iter().enumerate() {
         lines.push(Line::from(Span::styled(
-            format!("       {}  {}", at + 1, candidate.display()),
+            format!(
+                "       {}  {}",
+                at + 1,
+                bravebot_agent::confirm::shown_path(candidate)
+            ),
             Style::default().add_modifier(Modifier::BOLD),
         )));
     }
@@ -1009,7 +1013,10 @@ fn key_choice_rows(
         Style::default().fg(theme::muted()),
     )));
     lines.push(Line::from(Span::styled(
-        format!("       {}", choice.record.display()),
+        format!(
+            "       {}",
+            bravebot_agent::confirm::shown_path(&choice.record)
+        ),
         Style::default().add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(Span::styled(
@@ -1031,7 +1038,7 @@ fn pattern_rows(path: &std::path::Path) -> Vec<Line<'static>> {
         Style::default().fg(theme::muted()),
     )));
     lines.push(Line::from(Span::styled(
-        format!("       {}", path.display()),
+        format!("       {}", bravebot_agent::confirm::shown_path(path)),
         Style::default().add_modifier(Modifier::BOLD),
     )));
     // The half that makes a pattern a wider grant than any key here, so it is the half that is

@@ -358,6 +358,7 @@ somebody opened a pager to look at.
 
 `verified-by: bravebot_tui::render::the_scroller_takes_the_whole_screen_but_its_own_footer`
 `verified-by: bravebot_tui::render::the_usual_hint_comes_back_when_the_scroller_closes`
+`verified-by: bravebot_tui::render::the_scroller_draws_nothing_offered_beneath_the_box`
 
 <a id="SCROLL-10"></a>
 ### SCROLL-10: `x` expands the call the view is on past its glimpse, and collapses it again

@@ -63,6 +63,7 @@ cli-usage-sessions-list = List the sessions recorded for this directory
 cli-usage-sessions-delete = Delete one recorded session, its trail and its search index
 cli-usage-sessions-purge = Delete every session recorded for this directory
 cli-usage-sessions-import = Copy sessions another agent kept for this directory
+cli-usage-stats = Total the turns and tokens recorded sessions spent; takes --days <n>, --models and --project [<dir>]
 cli-usage-bg = Start a session that keeps running after the terminal closes
 cli-usage-attach = Join a background session's terminal
 cli-usage-reply = Send a prompt to an idle background session
@@ -175,8 +176,12 @@ cli-option-interactive = Open the interactive session and send this prompt as it
 cli-option-trace = Print the audit trail
 cli-option-json = Print one result object on stdout instead of the reply
 cli-option-json-stream = Print one event per line on stdout as the run goes, then the result object
+cli-option-input-format = Read turns from stdin as JSON lines when given lines (implies --json-stream)
+cli-option-trust-input-lines = Treat the lines on stdin as your own words and not a program's (needs --input-format lines)
 cli-option-output-schema = Require the reply to match the JSON Schema in this file; with --json the value is in "structured"
 cli-option-goal = Work towards this condition: after each turn a judge says whether it holds, and the work goes back until it does; exits with status 7 if it never does
+cli-option-max-rounds = Stop the run when the agent asks for more than this many rounds of tool calls, ending on status 8
+cli-option-max-tokens = Stop the run before a request once this many tokens are spent, ending on status 8
 cli-option-incognito = Write nothing to ~/.bravebot: no history, no session record, no preference
 cli-option-safe =
     Load none of your own hooks, skills, definitions, MCP servers or AGENTS.md. Sign-in, model and permissions still apply
@@ -318,7 +323,18 @@ cli-goal-stalled =
     the goal has sent the work back without a turn making a tool call, and has stopped sending it
 cli-goal-failed = the goal could not be checked: { $problem }
 cli-output-schema-needs-a-path = --output-schema requires the path of a JSON Schema file
+cli-input-format-unknown = --input-format takes lines
+cli-trust-input-lines-needs-lines = --trust-input-lines requires --input-format lines
+cli-input-lines-not-with-incognito = --input-format lines does not go with --incognito: each turn is carried on from the session record, and an incognito run writes none
+cli-input-lines-not-with-a-manifest = --input-format lines does not go with --mode manifest: a manifest run has one task and no turns to add
+cli-input-lines-no-prompt = no prompt line arrived before the input ended
+cli-input-lines-session-lost = the session this run carries on from cannot be read back, so the turn was not run: { $problem }
+cli-input-lines-session-unsaved = the turn before this one wrote no session record, so there is nothing to carry on from and the turn was not run
 cli-output-schema-not-with-a-manifest = --output-schema cannot be used with --mode manifest, which has a reply for each step and none for the run
+cli-max-rounds-needs-a-count = --max-rounds requires a whole number from 1 to { $most }
+cli-max-tokens-needs-a-count = --max-tokens requires a whole number of tokens, 1 or more
+cli-limit-not-with-a-manifest = { $flag } cannot be used with --mode manifest, which plans the whole run first and makes no rounds of tool calls
+cli-limit-not-with-a-goal = { $flag } cannot be used with --goal, which sends the work back for further rounds and would count the limit afresh in each of them
 cli-output-schema-not-served = --output-schema cannot be used with { $model }, which cannot be asked for a reply that matches a schema
 cli-output-schema-unreadable = cannot read the output schema { $path }: { $problem }
 cli-output-schema-not-json = the output schema { $path } is not JSON
@@ -385,17 +401,21 @@ onboarding-no-model = no model service is configured yet
 # case is one import away rather than a whole configuration away.
 onboarding-subscription-unusable = the subscription that is stored could not be used: { $problem }
 # Said before the routes where Claude Code or opencode configures a service bravebot can use, or a
-# running Ollama serves one, and nobody was there to be asked about it: a one-shot run, --json, a
-# pipe, or doctor.
+# running Ollama, LM Studio or llama-server serves one, and nobody was there to be asked about it: a
+# one-shot run, --json, a pipe, or doctor.
 onboarding-import-one =
     { $source } configures a model service bravebot can use: run `bravebot auth login import` in a terminal to import it.
-# The same, where the one source is Ollama running on this machine.
+# The same, where the one source is a server running on this machine: Ollama, LM Studio or
+# llama-server.
 onboarding-import-running =
     { $source } is running here with models bravebot can use: run `bravebot auth login import` in a terminal to import it.
 onboarding-import-both =
     { $first } and { $second } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
 onboarding-import-three =
     { $first }, { $second } and { $third } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
+# Where more than three have one. The names arrive as one comma-separated list.
+onboarding-import-many =
+    { $sources } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
 # Said instead, where a service is configured and only the model in force is Brave's own. A
 # settings block copied out of another tool names its models and names no default, so this is
 # where somebody following that route lands, and what they have to do is name one of their own.
@@ -463,6 +483,8 @@ doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-subscription-batch =
     an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot auth logout leo` ends this machine's custody and leaves the batch spendable by whatever copied the file
+doctor-ends-chatgpt-account =
+    a ChatGPT sign-in: issued by OpenAI to the account that signed in, and the refresh token replaces the access token without asking anybody, so the access token's expiry ends that copy rather than this program's access; ended at OpenAI by signing out of the account or removing this program's access in its settings, since `bravebot auth logout chatgpt` ends this machine's custody and leaves the tokens live there
 # Which tier the gate walk left a credential on, shown under the account of what would end it. One
 # sentence per tier rather than per credential: the tier is where the walk stopped, and what is
 # particular to a credential is the line above this one. Delegated is here although nothing stands
@@ -488,6 +510,8 @@ doctor-noticed-aws-session =
 doctor-outlives = outlives
 doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
+doctor-outlives-chatgpt-account =
+    an access token OpenAI already issued from the refresh token, which may run to its own expiry: whether revoking the sign-in reaches it has not been observed
 # Whether a derived credential is bound to the party that presents it. Shown only for the
 # credentials minted from something else. A bearer secret is usable by whatever holds a copy, and the
 # two bearer sentences keep apart an issuer that offers no bound form from one nobody has asked.
@@ -534,6 +558,19 @@ doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents a credential from the batch itself and nothing is asked to authorise the request
+doctor-dropped-chatgpt-account-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents the access token itself and nothing is asked to authorise the request
+doctor-dropped-chatgpt-account-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the sign-in may do is fixed before it is issued, since nothing here asks OpenAI to narrow it to this run
+doctor-dropped-chatgpt-account-renewable-without-authority =
+    gate { $gate }, { $answer }: the agent renews it without further authority, since the refresh token replaces the access token without asking anybody
+# The ChatGPT sign-in, shown only where one is stored. A sign-in that cannot be read is shown on the
+# same line with the sentence that names its remedy. The instant is the one the access token expires,
+# written as 2026-10-22T21:05:27Z, and is the only part of the file shown: the file also holds the
+# tokens and identifiers, which belong in no report people paste. A past instant is still signed in,
+# since the token is replaced when it is next used.
+doctor-chatgpt = chatgpt
+doctor-chatgpt-signed-in = signed in, the access token expires { $expires }
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock
@@ -547,6 +584,12 @@ doctor-gateway-token-stored = stored by bravebot auth login gateway (never print
 doctor-gateway-token-absent =
     none found (set a variable its `env` names, or run bravebot auth login gateway { $id })
 doctor-gateway-token-not-needed = none needed (the block names none)
+# A header a gateway block named and this build does not send, with the name the file wrote and the
+# reason. The name only: a header a gateway routes on is often a second credential.
+doctor-header-reserved = { $name } in the provider block is not sent: this program sets that header itself
+doctor-header-not-a-name = { $name } in the provider block is not sent: it is not a header name
+doctor-header-not-a-value = { $name } in the provider block is not sent: a header value cannot hold a line ending or a control character
+doctor-header-substitution = { $name } in the provider block is not sent: a variable reference is read as the whole value, not inside a longer one
 doctor-gateway-keys = gateway keys
 doctor-gateway-keys-unreadable =
     { $path } cannot be read, so no key in it is sent (bravebot auth login gateway leaves it as it is)
@@ -761,6 +804,13 @@ doctor-state-directory-logs = diagnostic logs { $path }
 doctor-state-directory-unprotected = not restricted
 doctor-state-directory-permissions =
     prompt history, session records and saved choices carry your profile directory's permissions
+# A value that is not an absolute path names no directory, so the state directory is the one the
+# profile directory gives and the report above says `HOME` named it. Without this line somebody who
+# set the variable and sees no effect has nothing to tell them it was read and passed over. Only the
+# variable's name is said, as for the proxy variables, since a value may carry a credential.
+doctor-state-directory-passed-over = passed over
+doctor-state-directory-passed-over-detail =
+    { $variable } is not an absolute path, so it names no directory
 # What outlives a session is kept in this directory, so a machine without one keeps none of it, and
 # nothing else in the report says so. Every variable that was looked at is named, since which ones
 # they are is a fact about the platform rather than something the reader should have to know. The
@@ -813,6 +863,10 @@ doctor-proxy-unsupported = { $protocol } is not supported by this build, so requ
 doctor-proxy-unparseable = not a proxy
 doctor-proxy-unparseable-detail = { $variable } is set to something that cannot be read as a proxy address, so it is not the route (its value is never printed)
 doctor-no-proxy = not proxied
+doctor-client-certificate = client certificate
+doctor-client-certificate-loaded = { $certificate }, key { $key } (loaded; the key is never printed)
+doctor-client-certificate-refused = named and unusable, so every TLS connection will be refused
+doctor-client-certificate-unusable = unusable
 doctor-network-file = stated in
 doctor-network-file-detail = { $names } from { $path }
 doctor-network-file-ignored = ignored
@@ -907,6 +961,9 @@ spend-limit-without-a-limit = Go on without a limit
 spend-limit-raised = the session limit is now { $limit } { $unit }
 spend-limit-lifted = the session has no limit
 spend-limit-stopped = stopped at the session limit: { $spent } { $unit } spent against a limit of { $limit }
+# What a run says when a limit its person gave it ended it, before the round or request it would have made.
+run-limit-rounds = stopped at the limit on rounds of tool calls ({ $most }): the planner asked for another and it was not run
+run-limit-tokens = stopped at the limit on tokens ({ $most }): { $spent } were spent and the next request was not sent
 repeated-call-header = Repeated call
 repeated-call-reached = The planner has made the same { $tool } call { $count } times in a row. It was not run. Run it again, or choose another way forward.
 repeated-call-refuse = Do not run it, and tell the planner to try another approach
@@ -937,7 +994,7 @@ hook-stopped =
     stopped
 
 
-## Importing a model service Claude Code or opencode configured, or a running Ollama serves
+## Importing a model service Claude Code or opencode configured, or a running Ollama, LM Studio or llama-server serves
 
 # Said above everything an import would write, naming the files it was read from. Every name and
 # value follows before the question, because what is written is what the person approves.
@@ -945,13 +1002,15 @@ import-found = { $source } configures a model service bravebot can use, in { $fi
 # Where no file was read: the setup is exported rather than written down.
 import-found-exported =
     { $source } configures a model service bravebot can use, in this process's environment.
-# Where the source is a server that answered rather than a file: Ollama, at the address asked.
+# Where the source is a server that answered rather than a file: Ollama, LM Studio or llama-server,
+# at the address asked.
 import-found-running = { $source } is running at { $url }, serving models bravebot can use.
 # Under the model, where the running server stated the window it holds that model loaded with.
-import-ollama-window = the server has it loaded with a context window of { $window } tokens
+import-window = the server has it loaded with a context window of { $window } tokens
 # Said where that window is below the one a conversation is otherwise budgeted against. The entry
 # listed below it carries the figure as contextWindow, so a conversation is kept within it.
 import-ollama-window-small = Ollama drops the earliest turns beyond that window, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Set OLLAMA_CONTEXT_LENGTH higher before starting Ollama to keep more.
+import-lm-studio-window-small = A conversation longer than that window does not fit the model as LM Studio has loaded it, so the entry below records it as contextWindow and a conversation is kept within it rather than within { $assumed } tokens. Load the model with a longer context length in LM Studio to keep more.
 import-adds = Importing it adds these to { $file }:
 # One gateway, with the host its requests go to: that host is where a credential is sent, so it is
 # the part of the entry the question is really about.
@@ -966,7 +1025,7 @@ import-named-model = { $model } in provider.{ $id }, named by { $variable }
 import-pinned = Not offered, since { $file } sets them for every user of this machine:
 # Found and not imported, one line each, by name and reason and never by value.
 import-left-heading = Found in { $source } and not imported:
-import-left-anthropic-api = Anthropic's own API, whose wire format no service here speaks
+import-left-anthropic-api = a setting for Anthropic's own API, which is not carried over: add a provider.anthropic block that names where the key lives
 import-left-vertex = Google Vertex AI without a Google Cloud project, or through Google Cloud credentials, neither of which a service here reaches
 import-left-bearer-token =
     a Bedrock API key; bravebot signs Bedrock requests through the AWS credential chain instead
@@ -976,7 +1035,7 @@ import-left-another-sdk = an entry reached through an SDK other than an OpenAI-c
 import-left-no-endpoint = no reachable endpoint is stated or known for it
 import-left-substitution =
     its key is built from an opencode substitution inside a longer value, which bravebot does not make
-import-left-elsewhere = names a server on another machine, which is not asked
+import-left-elsewhere = names an address other than this machine's loopback, which is not asked
 import-left-no-tool-model = running there, with no model that can call tools
 import-question = Import this from { $source }?
 # Asked on its own, after the import is approved, and never showing the key.
@@ -1003,7 +1062,7 @@ import-needs-a-terminal = import-providers asks before it writes anything, so it
 import-not-while-incognito = an import writes settings to disk, which an incognito session will not do
 import-no-home = there is no home directory to write settings in
 import-nothing-found =
-    neither Claude Code nor opencode configures a model service bravebot can use, and no Ollama serving one is running here
+    neither Claude Code nor opencode configures a model service bravebot can use, and no Ollama, LM Studio or llama-server serving one is running here
 import-nothing-new = nothing is left to import: every name found is already set, or pinned
 import-takes-nothing-else = import-providers takes no arguments
 
@@ -1024,8 +1083,9 @@ auth-logout-needs-a-way = bravebot auth logout needs the name of the way to sign
 auth-ways-heading = Ways to sign in to a model service:
 auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
 auth-way-bedrock = An AWS account, for Amazon Bedrock
-auth-way-import = A model service Claude Code, opencode or Ollama has, imported into settings
+auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
 auth-way-gateway = A key for a gateway a provider block in settings names, typed here and kept by bravebot
+auth-way-chatgpt = A ChatGPT Plus or Pro account, signed in to in a browser
 # The status of the gateway way where keys are stored. The ids are provider ids.
 auth-gateway-held = a key stored for { $ids }
 auth-gateway-held-unreadable = the file of gateway keys cannot be read
@@ -1126,6 +1186,11 @@ auth-status-not-all-usable = a sign-in asked about is not usable
 auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock or gateway
 auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
 auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
+# The instant is the one the access token expires, written as 2026-10-22T21:05:27Z. The token is
+# replaced when it is next used, so a past instant is still signed in.
+auth-status-chatgpt-expires = the access token expires { $expires }
+auth-status-chatgpt-none = no ChatGPT sign-in is stored; run bravebot auth login chatgpt
+auth-status-chatgpt-nowhere = this machine has nowhere to keep a sign-in, so none is stored
 auth-status-bedrock-good = the AWS session gives credentials to sign a request with
 # The next four are fixed sentences because a line of `auth status` carries no text the AWS CLI
 # chose: its error text names accounts and roles, and its profile list can embed an account id.
@@ -1133,6 +1198,64 @@ auth-status-bedrock-lapsed = the AWS session has lapsed: run `bravebot auth logi
 auth-status-bedrock-no-profile = the AWS CLI has no profile by this name: name one it has in settings
 auth-status-bedrock-no-cli = the AWS CLI is not installed, and Bedrock credentials come from it
 auth-status-bedrock-undecodable = the AWS CLI answered with something that is not a credential
+
+
+## Signing in with a ChatGPT account
+
+chatgpt-not-while-incognito = signing in stores a token on disk, which an incognito session will not do
+chatgpt-needs-a-terminal =
+    signing in to ChatGPT shows an address to open and waits for the browser, so bravebot auth login chatgpt needs a terminal on standard error
+chatgpt-held-needs-a-terminal =
+    a ChatGPT sign-in is already stored and replacing it needs an answer, so bravebot auth login chatgpt needs a terminal on standard input
+chatgpt-name-is-a-gateway =
+    a provider block named chatgpt is a gateway, and one name cannot select two services: rename the block, then run bravebot auth login chatgpt again
+chatgpt-held = A ChatGPT sign-in is already stored.
+# Beside the way in the list of ways, where the file a sign-in is kept in cannot be read.
+chatgpt-held-unusable = a stored sign-in cannot be read
+chatgpt-replace = Replace it?
+chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
+chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
+chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
+chatgpt-use-by-name = Pick one of the account's models in /model to use this sign-in, or name one, as in bravebot --model chatgpt/<model>
+chatgpt-forgotten =
+    forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings
+chatgpt-nothing-to-forget = no ChatGPT sign-in is stored
+# Why the sign-in stopped. Each is chosen from the step that failed and, for a failed request, the
+# class of its status. None repeats anything the browser, OpenAI or a settings file said.
+chatgpt-failed-listener =
+    could not listen for the browser on the loopback address, so no browser was opened and nothing was changed
+chatgpt-failed-timed-out =
+    the browser did not return to bravebot in time, so the sign-in stopped and nothing was stored; a browser on another machine reaches this machine's loopback port only if the port named above is forwarded to it
+chatgpt-failed-no-code =
+    the browser returned no authorization code, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-no-client =
+    the browser returned no usable client for bravebot, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-client-changed =
+    the browser returned a different client from the one stored, so the sign-in stopped and nothing was changed; run bravebot auth logout chatgpt and sign in again
+chatgpt-failed-no-use-scope =
+    the sign-in did not allow bravebot to use the subscription's tokens, so nothing was stored; run bravebot auth login chatgpt and allow it, or use an API key with the openai gateway
+chatgpt-failed-exchange = the sign-in could not be completed: { $reason }; nothing was stored
+chatgpt-class-refused = the authorization server refused the request
+chatgpt-class-rate-limited = the authorization server is limiting requests; try again later
+chatgpt-class-unavailable = the authorization server is unavailable; try again later
+chatgpt-class-incomplete = the authorization server's reply was incomplete
+chatgpt-class-transport = the authorization server could not be reached
+# The detail is a path and what the operating system said about it.
+chatgpt-account-nowhere = there is nowhere to keep a ChatGPT sign-in: { $detail }
+chatgpt-account-unusable =
+    the stored ChatGPT sign-in could not be read: { $detail }; run bravebot auth login chatgpt to sign in again, or bravebot auth logout chatgpt to forget it
+chatgpt-account-malformed =
+    the stored ChatGPT sign-in is unusable: { $defect }; run bravebot auth login chatgpt to sign in again, or bravebot auth logout chatgpt to forget it
+chatgpt-account-unwritable = the ChatGPT sign-in could not be stored: { $detail }; nothing was changed
+chatgpt-defect-empty = the file holds nothing, which an interrupted write leaves behind
+chatgpt-defect-not-json = the file is not valid JSON
+chatgpt-defect-other-version = it was written by another version, and this build reads version 1
+chatgpt-defect-missing-field = a field is missing or empty
+chatgpt-defect-no-expiry = it has no expiry
+# The two pages the browser is shown: after it returns to bravebot, and for any other request to the
+# port. They are shown in the browser, not in the terminal.
+chatgpt-page-done = You can close this tab and return to bravebot, which says whether the sign-in worked.
+chatgpt-page-not-found = Not found.
 
 
 ## Declaring an MCP server, and approving one
@@ -1199,7 +1322,7 @@ mcp-problem-twice =
     { $name } is given twice: a variable has one value, stored or read from your environment
 mcp-problem-reads = reads is not a list of absolute paths
 mcp-problem-directory = the directory is not an absolute path
-mcp-problem-url = the url is not http or https with a host
+mcp-problem-url = the url is not http or https with a host and, where it writes a port, a number up to 65535
 mcp-problem-credentials =
     the url carries a user or a password, which would keep a credential in plain text
 mcp-problem-header = { $name } is not a valid HTTP header token
@@ -1283,6 +1406,11 @@ mcp-list-declared-in = declared in { $path }
 mcp-approved = approved
 mcp-unapproved = unapproved
 mcp-unapproved-run-approve = unapproved: run bravebot mcp approve { $alias }
+# The heading `get` puts over the policy a session would start a local server under, which the lines
+# beneath it spell out with the labels /status uses.
+mcp-get-policy = a session here would confine it to:
+mcp-get-policy-home = home
+mcp-get-policy-home-throwaway = a new directory in the temporary directory, made when it starts
 mcp-refused-by-managed = not started: { $reason }
 mcp-cannot-be-used = cannot be used: { $problem }
 mcp-unusable = { $alias } cannot be used: { $problem }
@@ -1432,6 +1560,8 @@ mcp-tools-yes = Yes, offer them
 mcp-tools-no = No, continue without them
 mcp-tools-declined = { $alias } offers no tool in this session: its list was not approved
 mcp-tools-refused = { $alias } offers no tool in this session: { $reason }
+mcp-tools-changed = { $alias } changed its tools: it offers none until the list it gives now is approved
+mcp-tools-reread-failed = { $alias } offers no tool in this session: its changed list could not be read ({ $reason })
 
 ## One call to a tool of an MCP server
 
@@ -2084,6 +2214,9 @@ vet-picture-yes = let it see this
 fetch-title = fetch this?
 fetch-verb = Fetch
 fetch-host = talking to { $host }
+# Said under the host where the fetch was approved for another host and a redirect led here, so
+# the question reads as a hop the person was never shown and not as a fresh fetch.
+fetch-redirected = redirected from { $from }, which is the host this fetch was approved for
 # Said where the host is the metadata service of the machine this is running on, which is a host
 # like any other to everything in between: it asks for no credential and hands out the ones of
 # the role this machine runs as. A person shown the address alone has been shown a number.
@@ -2292,11 +2425,15 @@ status-server-policy-read-write = read, write
 status-server-policy-left-out = left out
 status-server-policy-left-out-reason = not on disk, and this platform grants no path that is not
 status-loop = Loop
+status-loop-numbered = Loop { $number }
 status-loop-every = every { $every }
 status-loop-self-paced = paced by each turn
 status-loop-next = next in { $next }
 status-loop-running = running now
 status-loop-unpaced = waiting for the turn to say when
+status-loop-once = once
+status-after = After
+status-after-numbered = After { $number }
 status-goal = Goal
 status-goal-paused = paused, /goal resume arms it
 status-goal-usage = { $note } · { $elapsed } · { $tokens }
@@ -2559,6 +2696,12 @@ ask-key-answer = answer
 ask-key-skip = skip
 ask-key-skip-question = skip the question
 ask-key-back-to-options = back to the options
+ask-key-back = back
+ask-key-send = send
+ask-key-change = change an answer
+ask-review-title = review your answers
+ask-review-heading = Nothing has been sent yet.
+ask-review-skipped = (skipped)
 
 
 ## Handing the line to an editor
@@ -2680,6 +2823,11 @@ caffeinate-explained =
 # Left in the transcript when /caffeinate turns on, and when it turns off.
 caffeinate-on = the computer is kept awake while a turn runs or a loop waits
 caffeinate-off = the computer may sleep again
+# Left in the transcript when /thinking turns on, and when it turns off.
+thinking-on = the model's thinking is shown as it arrives, for this session only
+thinking-off = the model's thinking is hidden
+# The heading over the model's thinking while it arrives.
+transcript-thinking = thinking
 # Left in the transcript when the program that holds off sleep would not start, which turns
 # /caffeinate off.
 caffeinate-unavailable = /caffeinate is unavailable: `{ $program }` could not be started ({ $reason })
@@ -2791,6 +2939,14 @@ command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
 command-advisor = Name the model the planner may consult, say which it may, or drop the choice
 command-style = Choose how the planner answers: list the styles, pick one, or clear the pick
+command-mode = Keep a skill applied to every turn: list skills, pick one, or leave
+session-mode-set = the { $skill } skill is in force from the next turn, until you leave it with /mode off
+session-mode-in-force = mode: { $skill }; available: { $skills }
+session-mode-none = no mode; available: { $skills }
+session-mode-cleared = mode left
+session-mode-unknown = no skill called { $skill }; available: { $skills }
+session-mode-resumed = this session was in the { $skill } mode, which is in force again
+input-skill-mode = mode: { $skill }
 command-config = Choose how the input box edits text
 command-language = Choose the interface language for the next start, or drop the choice
 command-add-dir = Open another directory and trust it for this session, or close one
@@ -2812,12 +2968,14 @@ command-recap = Recap where this session stands, without putting it in the conve
 command-clear = Start a new session here, keeping this one resumable
 command-forget-trust = Stop remembering that this directory is trusted, so later sessions here ask
 command-loop = Send a prompt again and again, say what is repeating, or stop it
+command-after = Send a prompt once, after a delay
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-jobs = List this turn's background jobs, and stop one by its name
 command-panel = Show or hide the info panel beside the transcript
 command-files = List the files the session wrote and show every edit to the one highlighted
 command-caffeinate = Keep the computer awake while a turn or loop is pending
+command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one
 command-plan = Enter plan mode, and start on a task if you give one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
@@ -3230,46 +3388,64 @@ loop-needs-a-prompt =
     /loop needs something to repeat, as in /loop 5m check the deploy, or /loop watch the build to
     let each turn say when to run again
 loop-started-every =
-    repeating every { $every }; /loop stop ends it, and so does ctrl-c or leaving
+    loop { $number }: repeating every { $every }; /loop stop { $number } ends it, and so does ctrl-c or leaving
 loop-started-self-paced =
-    repeating at a pace each turn sets; /loop stop ends it, and so does ctrl-c or leaving
+    loop { $number }: repeating at a pace each turn sets; /loop stop { $number } ends it, and so does ctrl-c or leaving
 # The answer to the bare command. The line is in it because the note above scrolls away, and
 # somebody asking what is repeating has usually lost sight of what they set going.
-loop-active = repeating: { $prompt } · { $pace } · { $when }
-loop-ends-with = /loop stop ends it, and so does ctrl-c or leaving
+loop-active = loop { $number }, repeating: { $prompt } · { $pace } · { $when }
+loop-ends-with = /loop stop <number> ends one, /loop stop alone ends the only one, and ctrl-c or leaving ends them all
 loop-none =
     nothing is repeating. /loop 5m check the deploy sends a line every five minutes, /loop watch the
-    build lets each turn say when to run again, and /loop stop ends either of them
+    build lets each turn say when to run again, and /loop stop <number> ends one of them
 # The part of the row under the box that says a loop is live, which between ticks is the only thing
 # on the screen that does. Short on purpose: it shares that row with the mode and the readings, and
 # a part a narrow terminal has no room for is a part the row gives up.
 loop-hint = looping
 loop-hint-next = looping, next in { $next }
+loop-hint-several = { $count } loops
+loop-hint-several-next = { $count } loops, next in { $next }
 loop-interval-raised = the interval was raised to { $every }, which is as fast as a loop goes
 loop-interval-capped = the interval was capped at { $every }, which is as long as a loop lives
-loop-replaced = the loop that was running has been replaced
-loop-tick = loop { $count }
+loop-full = { $count } loops are already repeating, which is as many as a session holds; /loop stop <number> ends one
+loop-stop-which = { $count } loops are repeating, so /loop stop needs the number of the one to end; /loop lists them
+loop-no-such = no loop is numbered { $number }; /loop lists what is repeating
+loop-stopped-numbered = loop { $number } is stopped
+loop-stopped-all = all { $count } loops are stopped
+loop-cleared-all = all { $count } loops are stopped, because they belonged to the session that was cleared
+loop-tick = loop { $number }, tick { $count }
 loop-tick-quiet = { $quiet ->
-    [one] loop { $count }, after { $quiet } tick that found nothing
-   *[other] loop { $count }, after { $quiet } ticks that found nothing
+    [one] loop { $number }, tick { $count }, after { $quiet } tick that found nothing
+   *[other] loop { $number }, tick { $count }, after { $quiet } ticks that found nothing
     }
 loop-stopped = the loop is stopped
 loop-cleared = the loop is stopped, because it belonged to the session that was cleared
-loop-aged-out = the loop has run for a week and stopped itself
-loop-unpaced = that turn did not say when to run again, so the loop has stopped
-loop-finished = that turn said the loop is finished, so the loop has stopped
+loop-aged-out = loop { $number } has run for a week and stopped itself
+loop-unpaced = that turn did not say when to run again, so loop { $number } has stopped
+loop-finished = that turn said the loop is finished, so loop { $number } has stopped
 loop-busy = /loop starts with a turn of its own, so it waits until this one is done
 loop-replaces-goal =
     the goal that was set has been cleared: a session works towards one thing at a time
 loop-armed-by-the-turn =
-    looking again in { $after }, repeating what you asked; /loop stop ends it, and so does ctrl-c
-    or leaving
+    loop { $number }: looking again in { $after }, repeating what you asked; /loop stop { $number }
+    ends it, and so does ctrl-c or leaving
 loop-not-armed-under-a-goal =
     a later look was asked for and not started: this session is working towards a goal, and it
     does one thing at a time
 loop-not-armed-under-a-watch =
     a later look was asked for and not started: this session is already watching a file, and it
     does one thing at a time
+
+after-needs-a-delay =
+    /after needs a delay and something to send, as in /after 5m check the deploy
+after-started =
+    sending that once, in { $delay }, as loop { $number }; /loop stop { $number } cancels it, and so does ctrl-c or leaving
+after-active = loop { $number }, sending later: { $prompt } · { $when }
+after-sent = sending what /after held
+after-hint = sending later
+after-hint-next = sending in { $next }
+after-delay-raised = the delay was raised to { $delay }, which is as short as /after goes
+after-delay-capped = the delay was capped at { $delay }, which is as long as /after waits
 
 
 ## Working towards a condition
@@ -3546,6 +3722,21 @@ commit-message-failed = the commit message could not be drafted: { $problem }
 commit-message-stopped = the commit message was stopped
 handoff-started = handed off: this is a new session, and the earlier one is as it was. To return to it, run `bravebot --resume { $id }`
 
+enhance-ready = the enhanced line is in the box. Edit it, then Enter sends it, or Esc puts back what you wrote
+enhance-ready-vi = the enhanced line is in the box. Edit it, then Enter sends it, or Ctrl-C puts back what you wrote
+enhance-invisible-removed = { $count ->
+    [one] removed { $count } invisible character from the enhanced line
+   *[other] removed { $count } invisible characters from the enhanced line
+    }
+enhance-untrusted = the enhancement was not offered: this conversation has met something untrusted, so the rewrite would not be words the planner could have held
+enhance-unusable = the enhancement was not offered: it came back empty or longer than { $limit } characters
+enhance-line-changed = the enhancement was not offered: the line changed while it was being written
+enhance-failed = the line could not be enhanced: { $problem }
+enhance-stopped = the enhancement was stopped
+enhance-not-a-command = { $key } rewrites a prompt, and a line that begins with / is a command or a skill, so it was left as written
+enhance-not-with-a-picture = { $key } rewrites words, and this line holds a picture or a dropped file, so it was left as written
+enhance-too-long = { $key } rewrites a line of up to { $limit } characters, and this one is longer, so it was left as written
+
 # What the session says about a manifest run started from it. The plan, each step and the reply are
 # shown as they happen, so what is left to say is that a run is starting, where it was written down,
 # and what went wrong where something did. That a run is not a turn of the conversation is what the
@@ -3610,6 +3801,12 @@ agent-model-outranked =
 agent-style-not-used =
     the { $style } style was not used: its file is not trusted or is no longer a style, so this turn
     opened with the usual words
+# Said where the skill the person put in force with /mode could not be applied to a turn: it is no
+# longer found, or its file is no longer trusted. The turn goes on without it. The skill is the name
+# the person typed.
+agent-skill-mode-not-used =
+    the { $skill } mode was not applied: its skill is not found or not trusted, so this turn ran
+    without it
 # Said where a turn is addressed to a definition whose isolation line asks for a checkout of its
 # own. Only a delegate is given one, so the person's own turn works in their working directory. The
 # definition's name is the word of a vouched-for file.
@@ -3970,6 +4167,37 @@ sessions-purge-question = Delete the recorded sessions for { $directory }, { $co
 sessions-purge-needs-yes = sessions purge asks before it deletes, and there is no terminal to ask on. Pass -y to delete without asking, or --dry-run to see what it would delete.
 sessions-purge-declined = Nothing was deleted.
 sessions-purge-done = Deleted: { $count }.
+# What `bravebot stats` says. The figures are numbers the program wrote down, so the only words
+# here are the headings and the sentence saying what the figures cover.
+stats-usage = stats takes --days and a number of days, --models, and --project with a directory if it is not this one
+stats-scope-everything = Every recorded session, in every project
+stats-scope-days = { $days ->
+    [one] Sessions last written in the last day, in every project
+   *[other] Sessions last written in the last { $days } days, in every project
+    }
+stats-scope-project = Every recorded session in { $project }
+stats-scope-days-project = { $days ->
+    [one] Sessions last written in the last day, in { $project }
+   *[other] Sessions last written in the last { $days } days, in { $project }
+    }
+stats-column-model = Model
+stats-column-sessions = Sessions
+stats-column-turns = Turns
+stats-column-tokens = Tokens
+stats-column-read = Read
+stats-column-written = Written
+# Tokens a record holds that its split into read and written does not cover: every token of a
+# session written before the split was kept.
+stats-column-unsplit = Unsplit
+stats-row-total = Total
+# A session whose record names no model: one written before the model was kept, one whose turns
+# never reached a server, and one copied in from another program.
+stats-model-unknown = unknown
+stats-incognito = An incognito session leaves no record, so none is counted.
+stats-unreadable = { $count ->
+    [one] 1 entry in the sessions directory could not be read as a record and is not counted.
+   *[other] { $count } entries in the sessions directory could not be read as records and are not counted.
+    }
 sessions-state-working = working
 sessions-state-idle = idle
 sessions-state-stopped = stopped
@@ -4096,3 +4324,25 @@ agent-plan-approval-accept-edits-detail = Leave plan mode and carry the plan out
 agent-plan-approval-ask = Yes, ask before each edit
 agent-plan-approval-ask-detail = Leave plan mode and carry the plan out, asking before every write and command.
 agent-plan-approval-keep-planning = No, keep planning
+
+# What the handler for a bravebot:// link is, in the usage table and the option list.
+cli-usage-handle-uri = Open a session from a bravebot://open link, its prompt put in the box and not sent
+# Said where `--handle-uri` is given anything but the one link, or a flag that would change how the
+# session runs. A link carries a directory and words, and nothing else.
+deep-link-takes-one-link = --handle-uri takes one bravebot://open link and nothing else
+# Said where the `deepLinks` setting is false.
+deep-link-switched-off = Links that open a session are switched off by the deepLinks setting
+# Said where a link is read in a program with no terminal to open the session on.
+deep-link-needs-a-terminal = A link opens a session in a terminal, and this program has none
+# The ways a link is refused. None of them quotes the link: its text is somebody else's.
+deep-link-not-a-link = That is not a bravebot://open link
+deep-link-too-long = That link is longer than the { $limit } bytes read
+deep-link-parameter = A link may carry dir and prompt, each once, and nothing else
+deep-link-encoding = That link's text is not valid percent-encoded UTF-8
+deep-link-directory = The link's dir is not an absolute path
+# The first line of a session a link started in the home directory because of where it pointed. The
+# path is the link's own and arrives escaped.
+deep-link-started-in-home = The link named { $dir }, which is not a directory you have trusted here, so this session started in your home directory
+# Under the box while the words an outside link put there are still in it.
+deep-link-banner = Prompt from an external link, not sent yet  ·  read it, then Enter sends it
+deep-link-banner-long = Prompt from an external link, { $count } characters, not sent  ·  scroll and review it all first

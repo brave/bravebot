@@ -169,6 +169,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         },
         turns: 0,
         tokens: 0,
+        split: Default::default(),
         model: None,
         spend: Default::default(),
         timing: Default::default(),
@@ -209,6 +210,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         server_children_may_run: false,
         checkouts: Vec::new(),
         agent: None,
+        skill_mode: None,
     }
 }
 

@@ -1878,3 +1878,96 @@ fn plain_authorization_header_is_stripped_on_cross_socket_redirect() {
         "regular header must be preserved: {second_headers:?}"
     );
 }
+
+/// A server whose first answer redirects to its own port over `https`, and which reports every
+/// connection after that one.
+///
+/// A later connection is the second hop reaching the port. It is closed unanswered, so a client
+/// that starts a TLS handshake there fails at once and the test does not wait on it.
+fn serve_a_redirect_to_its_own_port_over_tls() -> (String, std::sync::mpsc::Receiver<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    let (later, reached) = std::sync::mpsc::channel();
+
+    thread::spawn(move || {
+        let Ok((stream, _)) = listener.accept() else {
+            return;
+        };
+        handle(
+            stream,
+            &redirect_to(&format!("https://127.0.0.1:{port}/moved")),
+        );
+        while let Ok((stream, _)) = listener.accept() {
+            let _ = later.send(());
+            drop(stream);
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), reached)
+}
+
+/// A server declared on a written port is on the scheme it was declared with. A reply that keeps
+/// the address and the port and changes the scheme names a server that speaks something else
+/// there, so the hop is a move and the credential is not sent to it.
+#[test]
+fn a_redirect_to_the_other_scheme_on_the_declared_port_is_not_sent_there() {
+    let (base, reached) = serve_a_redirect_to_its_own_port_over_tls();
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let url = format!("{base}/start");
+    policy.before_server_request(&url);
+    let request = Request::get(&url).socket_header("authorization", "Bearer test-secret");
+    let error = egress
+        .fetch(&mut policy, request, Label::untrusted_public())
+        .expect_err("a hop to the other scheme on the declared port was followed");
+
+    assert!(matches!(error, EgressError::Denied(_)), "{error}");
+    assert!(
+        policy.take_server_hop().is_some(),
+        "the refused hop is kept for the question about a move"
+    );
+    assert!(
+        reached.try_recv().is_err(),
+        "the second hop connected to the declared port"
+    );
+}
+
+/// A url whose port cannot be read is connected to on the scheme's default, which is not the port
+/// it spells. A request to a server declared that way is refused at the gate, before anything
+/// connects, and is put to the person as a move rather than sent to port 80 or 443 with the
+/// credential configured for the declared one.
+#[test]
+fn a_server_declared_with_a_port_that_cannot_be_read_is_sent_nothing() {
+    for url in [
+        "http://127.0.0.1:/mcp",
+        "http://127.0.0.1:abc/mcp",
+        "http://127.0.0.1:99999/mcp",
+    ] {
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        policy.before_server_request(url);
+        let request = Request::get(url).socket_header("authorization", "Bearer test-secret");
+        let error = egress
+            .fetch(&mut policy, request, Label::untrusted_public())
+            .expect_err("a request to a socket nobody can read was sent");
+
+        assert!(matches!(error, EgressError::Denied(_)), "{url}: {error}");
+        assert!(policy.take_server_hop().is_some(), "{url}");
+    }
+}

@@ -6,12 +6,14 @@ import importlib.util
 import io
 import json
 import os
+import re
 # These tests run git with argument lists against temporary repositories.
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("maintenance", HERE / "maintenance.py")
@@ -300,8 +302,12 @@ class Allowances(unittest.TestCase):
                 fn platform_and_feature() {}
                 #[cfg_attr(target_os = "windows", allow(dead_code))]
                 fn windows() {}
+                #[allow(clippy::disallowed_methods)]
+                fn unrelated_lint() {}
                 #[allow(clippy::too_many_arguments)]
-                fn other_lint() {}
+                fn admits_many_arguments() {}
+                #[expect(clippy::cognitive_complexity, reason = "one state machine")]
+                fn admits_complexity() {}
                 const TEXT: &str = "#[allow(dead_code)]";
                 #[cfg(test)]
                 mod tests {
@@ -311,7 +317,7 @@ class Allowances(unittest.TestCase):
                 """
             ),
         }
-        self.assertEqual([c["line"] for c in found(files, "allowances")], [1, 3, 5, 9])
+        self.assertEqual([c["line"] for c in found(files, "allowances")], [1, 3, 5, 9, 15, 17])
 
 
 class Duplicates(unittest.TestCase):
@@ -574,6 +580,508 @@ class Pipeline(unittest.TestCase):
         self.assertFalse(any(EM_DASH in body for body in bodies))
         self.assertTrue(text.rstrip().endswith("Nothing has been posted."))
         self.assertIn("needs a shorter title", text)
+
+
+def nested(depth):
+    """A function whose deepest statement sits `depth` blocks inside its body."""
+    body = "x();"
+    for _ in range(depth):
+        body = "if a {\n" + body + "\n}"
+    return "fn deep() {\n" + body + "\n}\n"
+
+
+def names(files, lane, key="symbol"):
+    return sorted(c[key] for c in found(files, lane))
+
+
+class Complexity(unittest.TestCase):
+    def test_a_function_nested_six_blocks_deep_is_a_candidate_and_five_is_not(self):
+        files = {
+            "crates/a/src/lib.rs": nested(m.NESTING).replace("deep", "too_deep")
+            + nested(m.NESTING - 1).replace("deep", "deep_enough"),
+        }
+        self.assertEqual(names(files, "complexity"), ["too_deep"])
+
+    def test_a_brace_in_a_string_is_not_a_block(self):
+        braces = 'fn braces() {\n    let s = "{{{{{{{{{{";\n    work(s);\n}\n'
+        self.assertEqual(names({"crates/a/src/lib.rs": braces}, "complexity"), [])
+
+    def test_boolean_parameters_count_from_three_and_self_and_generic_bounds_do_not_hide_them(self):
+        files = {
+            "crates/a/src/lib.rs": textwrap.dedent(
+                """\
+                fn three(a: bool, b: bool, c: bool) {}
+                fn two(a: bool, b: bool, c: u8) {}
+                struct S;
+                impl S {
+                    fn method(&self, a: bool, b: bool) {}
+                    fn method_with_three(&mut self, a: bool, b: bool, c: bool) {}
+                }
+                fn bounded<F: Fn(bool) -> bool>(f: F, a: bool, b: bool, c: bool) {}
+                """
+            ),
+        }
+        self.assertEqual(names(files, "complexity"), ["bounded", "method_with_three", "three"])
+
+    def test_many_parameters_are_a_candidate_outside_rust_where_clippy_refuses_them(self):
+        many = ", ".join(f"p{i}" for i in range(m.PARAMETERS))
+        fewer = ", ".join(f"p{i}" for i in range(m.PARAMETERS - 1))
+        typed = ", ".join(f"p{i}: u8" for i in range(m.PARAMETERS))
+        files = {
+            "crates/a/src/lib.rs": f"fn rust_many({typed}) {{}}\n",
+            "contrib/tool.py": f"def python_many({many}):\n    pass\n\n\nclass K:\n    def python_method(self, {fewer}):\n        pass\n",
+            "ui/src/a.ts": f"export function tsMany({many}) {{\n  return 1;\n}}\n",
+        }
+        self.assertEqual(names(files, "complexity"), ["python_many", "tsMany"])
+
+    def test_python_depth_counts_blocks_and_not_the_lines_of_one_statement(self):
+        blocks = "".join("    " * (i + 1) + "if a:\n" for i in range(m.NESTING)) + "    " * (m.NESTING + 1) + "go()\n"
+        staircase = "".join(f"{' ' * (8 + 4 * i)}argument_{i},\n" for i in range(m.NESTING + 2))
+        wrapped = "def wrapped():\n    value = compute(\n" + staircase + "    )\n"
+        files = {"contrib/tool.py": "def blocks():\n" + blocks + "\n\n" + wrapped}
+        self.assertEqual(names(files, "complexity"), ["blocks"])
+
+    def test_tests_are_not_candidates(self):
+        files = {
+            "crates/a/src/lib.rs": "#[cfg(test)]\nmod tests {\n" + nested(m.NESTING + 2) + "}\n",
+            "crates/a/tests/it.rs": nested(m.NESTING + 2),
+        }
+        self.assertEqual(names(files, "complexity"), [])
+
+
+def uses(count, prefix="crate::"):
+    return "".join(f"use {prefix}module_{i};\n" for i in range(count))
+
+
+class Coupling(unittest.TestCase):
+    def test_a_file_using_twelve_other_modules_is_a_candidate_and_eleven_is_not(self):
+        files = {
+            "crates/a/src/wide.rs": uses(m.COUPLING),
+            "crates/a/src/narrow.rs": uses(m.COUPLING - 1),
+        }
+        self.assertEqual([c["path"] for c in found(files, "coupling")], ["crates/a/src/wide.rs"])
+
+    def test_grouped_imports_count_one_module_per_path_and_nested_groups_do_not_add_more(self):
+        grouped = "use crate::{" + ", ".join(f"m{i}::Thing" for i in range(m.COUPLING - 2)) + ", last::{one, two}, extra};\n"
+        files = {"crates/a/src/grouped.rs": grouped}
+        (candidate,) = found(files, "coupling")
+        self.assertEqual(candidate["rank"], m.COUPLING)
+
+    def test_types_named_from_the_crate_root_are_one_dependency(self):
+        items = "use crate::{" + ", ".join(f"Item{i}" for i in range(m.COUPLING * 2)) + "};\n"
+        self.assertEqual(found({"crates/a/src/items.rs": items}, "coupling"), [])
+
+    def test_a_re_export_a_test_and_a_string_are_not_uses(self):
+        files = {
+            "crates/a/src/lib.rs": uses(m.COUPLING - 1)
+            + "pub use crate::exported::Thing;\npub(crate) use crate::also::Other;\n"
+            + 'const S: &str = "crate::in_a_string";\n'
+            + "#[cfg(test)]\nmod tests {\n    use crate::only_in_tests;\n}\n",
+        }
+        self.assertEqual(found(files, "coupling"), [])
+
+    def test_other_bravebot_crates_count_with_the_modules(self):
+        crates = "".join(f"use bravebot_crate_{i}::thing;\n" for i in range(4))
+        files = {"crates/a/src/mixed.rs": uses(m.COUPLING - 4) + crates}
+        (candidate,) = found(files, "coupling")
+        self.assertIn("and 4 other crates", candidate["detail"])
+
+
+def public_functions(count, prefix="f"):
+    return "".join(f"pub fn {prefix}{i}() {{}}\n" for i in range(count))
+
+
+def calls(count, prefix="f"):
+    return "fn caller() {\n" + "".join(f"    a::{prefix}{i}();\n" for i in range(count)) + "}\n"
+
+
+class Untested(unittest.TestCase):
+    def files(self, **extra):
+        return {
+            "crates/a/src/lib.rs": public_functions(m.UNTESTED),
+            "crates/b/src/lib.rs": calls(m.UNTESTED),
+            **extra,
+        }
+
+    def test_public_functions_called_elsewhere_and_named_in_no_test_are_a_candidate(self):
+        (candidate,) = found(self.files(), "untested")
+        self.assertEqual((candidate["path"], candidate["rank"]), ("crates/a/src/lib.rs", m.UNTESTED))
+
+    def test_a_function_a_test_names_is_not_counted_whichever_kind_of_test_names_it(self):
+        in_tests_directory = self.files(**{"crates/a/tests/it.rs": "fn t() { a::f0(); }\n"})
+        in_unit_test = self.files()
+        in_unit_test["crates/a/src/lib.rs"] += "#[cfg(test)]\nmod tests {\n    fn t() { f0(); }\n}\n"
+        self.assertEqual(found(in_tests_directory, "untested"), [])
+        self.assertEqual(found(in_unit_test, "untested"), [])
+
+    def test_a_function_nothing_calls_is_left_to_the_unreferenced_lane(self):
+        files = {"crates/a/src/lib.rs": public_functions(m.UNTESTED)}
+        self.assertEqual(found(files, "untested"), [])
+        self.assertEqual(len(found(files, "unreferenced")), m.UNTESTED)
+
+    def test_a_file_with_fewer_than_the_threshold_is_not_a_candidate(self):
+        files = {"crates/a/src/lib.rs": public_functions(m.UNTESTED - 1), "crates/b/src/lib.rs": calls(m.UNTESTED - 1)}
+        self.assertEqual(found(files, "untested"), [])
+
+
+class SharedState(unittest.TestCase):
+    marks = (
+        "struct S { a: Mutex<u8>, b: Mutex<u8>, c: RwLock<u8>, d: RefCell<u8>, e: AtomicBool, f: AtomicU32 }\n"
+        "fn go() { thread::spawn(|| {}); let (t, r) = mpsc::channel(); }\n"
+    )
+
+    def test_eight_marks_make_a_candidate_and_name_what_they_are(self):
+        (candidate,) = found({"crates/a/src/lib.rs": self.marks}, "shared-state")
+        self.assertEqual(candidate["rank"], m.SHARED_STATE)
+        self.assertIn("2 Mutex", candidate["detail"])
+        self.assertIn("1 thread spawn", candidate["detail"])
+
+    def test_an_import_a_test_and_a_comment_are_not_marks(self):
+        seven = self.marks.replace(" let (t, r) = mpsc::channel();", "")
+        files = {
+            "crates/a/src/lib.rs": "use std::sync::{Mutex, RwLock};\n// a Mutex here\n" + seven
+            + "#[cfg(test)]\nmod tests {\n    static M: Mutex<u8> = Mutex::new(0);\n}\n",
+        }
+        self.assertEqual(found(files, "shared-state"), [])
+
+
+class Stale(unittest.TestCase):
+    def test_two_lines_of_commented_out_code_are_a_block_and_one_line_is_not(self):
+        files = {
+            "crates/a/src/lib.rs": textwrap.dedent(
+                """\
+                fn f() {
+                    // let old = compute(1);
+                    // old.apply();
+                    // if old.ok() {
+                    //     done();
+                    // }
+                    let x = 1;
+                    // g();
+                    let y = 2;
+                    // the loop runs until x = 3
+                    // so this is a sentence about it
+                }
+                """
+            ),
+        }
+        (candidate,) = found(files, "stale")
+        self.assertIn("commented-out code at 2-6", candidate["detail"])
+        self.assertNotIn("8", candidate["detail"].split("at ")[1])
+
+    def test_a_doc_comment_example_is_not_commented_out_code(self):
+        files = {"crates/a/src/lib.rs": "/// let a = make();\n/// a.use_it();\nfn f() {}\n"}
+        self.assertEqual(found(files, "stale"), [])
+
+    def test_python_and_typescript_blocks(self):
+        files = {
+            "contrib/tool.py": "# import os\n# value = compute()\n# a sentence about it\nx = 1\n",
+            "ui/src/a.ts": "// const a = 1;\n// run(a);\nexport const b = 2;\n",
+        }
+        self.assertEqual(sorted(c["path"] for c in found(files, "stale")), ["contrib/tool.py", "ui/src/a.ts"])
+
+    def test_a_todo_with_no_issue_is_a_candidate_and_one_citing_an_issue_or_in_a_string_is_not(self):
+        files = {
+            "crates/a/src/lib.rs": "// TODO: handle the other case\nfn f() {}\n",
+            "crates/b/src/lib.rs": "// TODO(#1234): handle the other case\nfn f() {}\n",
+            "crates/c/src/lib.rs": 'const LIST: &str = "TODO list";\nfn f() {}\n',
+            "crates/d/src/lib.rs": "// FIXME see issues/77\nfn f() {}\n",
+        }
+        self.assertEqual([c["path"] for c in found(files, "stale")], ["crates/a/src/lib.rs"])
+
+
+def string_errors(count):
+    return "".join(f"fn refuses_{i}() -> Result<(), String> {{ Ok(()) }}\n" for i in range(count))
+
+
+class ErrorTypes(unittest.TestCase):
+    def test_functions_returning_strings_or_boxed_errors_are_named_and_a_typed_error_is_not(self):
+        files = {
+            "crates/a/src/lib.rs": textwrap.dedent(
+                """\
+                fn a() -> Result<(), String> { Ok(()) }
+                fn b(x: u8) -> Result<Vec<(u8, u8)>, String> { Ok(vec![]) }
+                pub fn c() -> Result<u8, Box<dyn std::error::Error + Send + Sync>> { Ok(1) }
+                fn d() -> Result<u8, MyError> { Ok(1) }
+                fn e() -> Result<u8, &'static str> { Ok(1) }
+                fn f() -> Result<String, MyError> { Ok(String::new()) }
+                """
+            ),
+        }
+        (candidate,) = found(files, "error-types")
+        self.assertEqual(candidate["rank"], 4)
+        for name in ("a", "b", "c", "e"):
+            self.assertIn(f"`{name}`", candidate["detail"])
+        for name in ("d", "f"):
+            self.assertNotIn(f"`{name}`", candidate["detail"])
+
+    def test_fewer_than_the_threshold_and_tests_are_not_candidates(self):
+        files = {
+            "crates/a/src/lib.rs": string_errors(m.STRING_ERRORS - 1),
+            "crates/b/src/lib.rs": "fn real() {}\n#[cfg(test)]\nmod tests {\n" + string_errors(m.STRING_ERRORS) + "}\n",
+        }
+        self.assertEqual(found(files, "error-types"), [])
+
+
+def diagnostic(lint, path, line, column=1, message="a message", primary=True):
+    return json.dumps(
+        {
+            "reason": "compiler-message",
+            "message": {
+                "message": message,
+                "code": {"code": f"clippy::{lint}"},
+                "spans": [{"file_name": path, "line_start": line, "column_start": column, "is_primary": primary}],
+            },
+        }
+    )
+
+
+class Clippy(unittest.TestCase):
+    files = {
+        "crates/a/src/lib.rs": "fn a() {}\n" * 5 + "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n",
+        "crates/b/src/lib.rs": "fn b() {}\n" * 12,
+    }
+
+    def scanned(self, *lines, files=None):
+        with tree(files or self.files) as root:
+            result = m.scan(root, ("clippy",), clippy=lambda _: ("\n".join(lines), ""))
+        return result["clippy"]["candidates"]
+
+    def test_hits_are_grouped_by_lint_and_file_and_ranked_by_weight_times_count(self):
+        candidates = self.scanned(
+            diagnostic("let_underscore_must_use", "crates/a/src/lib.rs", 1),
+            diagnostic("let_underscore_must_use", "crates/a/src/lib.rs", 3),
+            *[diagnostic("wildcard_imports", "crates/b/src/lib.rs", n) for n in range(1, 6)],
+            diagnostic("wildcard_imports", "crates/a/src/lib.rs", 2),
+        )
+        self.assertEqual(
+            [(c["lint"], c["path"], c["rank"]) for c in candidates],
+            [
+                ("let_underscore_must_use", "crates/a/src/lib.rs", 6),
+                ("wildcard_imports", "crates/b/src/lib.rs", 5),
+                ("wildcard_imports", "crates/a/src/lib.rs", 1),
+            ],
+        )
+        self.assertIn("2 times, at 1, 3", candidates[0]["detail"])
+
+    def test_what_is_not_asked_for_or_not_code_that_ships_is_left_out(self):
+        candidates = self.scanned(
+            diagnostic("needless_return", "crates/a/src/lib.rs", 1),
+            diagnostic("panic", "crates/a/src/lib.rs", 8),
+            diagnostic("panic", "target/debug/build/x/out.rs", 1),
+            diagnostic("panic", "crates/a/src/lib.rs", 2, primary=False),
+            "not json at all",
+            json.dumps({"reason": "compiler-artifact"}),
+        )
+        self.assertEqual(candidates, [])
+
+    def test_a_diagnostic_reported_twice_counts_once(self):
+        candidates = self.scanned(*[diagnostic("panic", "crates/b/src/lib.rs", 4, column=9)] * 3)
+        self.assertEqual(candidates[0]["rank"], m.CLIPPY_LINTS["panic"])
+
+    def test_a_note_says_why_clippy_was_not_run(self):
+        with tree(self.files) as root:
+            result = m.scan(root, ("clippy",), clippy=lambda _: ("", "cargo is not installed"))
+            with mock.patch.object(m.shutil, "which", return_value=None):
+                output, note = m.run_clippy(root)
+        self.assertEqual(result["clippy"]["candidates"], [])
+        self.assertEqual(result["clippy"]["note"], "cargo is not installed")
+        self.assertEqual((output, "not installed" in note), ("", True))
+        self.assertIn("note: cargo is not installed", m.report(result))
+
+    def test_it_asks_about_code_that_ships_and_every_lint_it_ranks(self):
+        command = m.clippy_command()
+        self.assertIn("--lib", command)
+        self.assertIn("--bins", command)
+        self.assertNotIn("--all-targets", command)
+        for lint in m.CLIPPY_LINTS:
+            self.assertIn(f"-Wclippy::{lint}", command)
+
+    def test_the_lane_is_left_out_when_asked_and_by_make_check_maintenance(self):
+        with tree(self.files) as root, mock.patch.object(m, "run_clippy", side_effect=AssertionError("ran clippy")):
+            code, out, _ = quiet(m.main, ["--mechanical-only", "--no-clippy", "--root", str(root)])
+        self.assertEqual(code, 0)
+        self.assertNotIn("clippy:", out)
+        makefile = (m.ROOT / "Makefile").read_text()
+        self.assertIn("maintenance.py --mechanical-only --no-clippy", makefile)
+
+
+class Ledger(unittest.TestCase):
+    files = {"crates/a/src/lib.rs": unused(3)}
+
+    def prepared(self, root, **options):
+        work = root / ".work"
+        code, out, _ = quiet(
+            m.main, ["prepare", "unreferenced", "--root", str(root), "--work-dir", str(work), *options.get("args", [])]
+        )
+        self.assertEqual(code, 0)
+        return json.loads(Path(json.loads(out)["manifest"]).read_text()), work
+
+    def judged(self, root, verdicts, **options):
+        manifest, work = self.prepared(root, **options)
+        (prompt,) = manifest["lanes"][0]["reviewer_prompts"]
+        ids = {c["symbol"]: i for i, c in manifest["candidates"].items()}
+        Path(prompt["results_file"]).write_text(
+            json.dumps({"candidates": [{"id": ids[s], "verdict": v, "reason": f"{s} is {v}"} for s, v in verdicts.items()]})
+        )
+        code, out, _ = quiet(m.main, ["record", "--work-dir", str(work)])
+        self.assertEqual(code, 0)
+        return out
+
+    def remaining(self, root, **options):
+        return sorted(c["symbol"] for c in m.scan(root, ("unreferenced",), **options)["unreferenced"]["candidates"])
+
+    def test_a_kept_or_drafted_candidate_is_left_out_while_its_file_is_unchanged(self):
+        with tree(self.files) as root:
+            out = self.judged(root, {"unused_number_0": "keep", "unused_number_1": "cleanup", "unused_number_2": "unclear"})
+            result = m.scan(root, ("unreferenced",))["unreferenced"]
+            ledger = (root / m.LEDGER).read_text()
+        self.assertIn("2 verdicts written", out)
+        self.assertEqual([c["symbol"] for c in result["candidates"]], ["unused_number_2"])
+        self.assertEqual(result["carried"], 2)
+        self.assertIn("unreferenced:crates/a/src/lib.rs::unused_number_0 keep ", ledger)
+        self.assertIn("unreferenced:crates/a/src/lib.rs::unused_number_1 cleanup ", ledger)
+        self.assertNotIn("unused_number_2", ledger)
+        self.assertIn("unused_number_0 is keep", ledger)
+
+    def test_an_edit_to_the_file_or_asking_afresh_offers_the_candidate_again(self):
+        with tree(self.files) as root:
+            self.judged(root, {f"unused_number_{i}": "keep" for i in range(3)})
+            self.assertEqual(self.remaining(root), [])
+            self.assertEqual(len(self.remaining(root, fresh=True)), 3)
+            (root / "crates/a/src/lib.rs").write_text(unused(3) + "// edited\n")
+            self.assertEqual(len(self.remaining(root)), 3)
+
+    def test_a_verdict_is_for_the_item_and_survives_the_line_moving(self):
+        with tree(self.files) as root:
+            before = m.scan(root, ("unreferenced",))["unreferenced"]["candidates"][0]
+            (root / "crates/a/src/lib.rs").write_text("// a line above\n" + unused(3))
+            after = m.scan(root, ("unreferenced",))["unreferenced"]["candidates"][0]
+        self.assertEqual(before["key"], after["key"])
+        self.assertNotEqual(before["digest"], after["digest"])
+        self.assertNotEqual(before["line"], after["line"])
+
+    def test_the_cap_reaches_the_next_candidates_once_the_first_are_recorded(self):
+        with tree(self.files) as root:
+            first = [c["symbol"] for c in m.scan(root, ("unreferenced",), limit=1)["unreferenced"]["candidates"]]
+            self.judged(root, {first[0]: "keep"})
+            second = [c["symbol"] for c in m.scan(root, ("unreferenced",), limit=1)["unreferenced"]["candidates"]]
+        self.assertEqual(len(first + second), 2)
+        self.assertNotEqual(first, second)
+
+    def test_recording_drops_entries_for_files_that_changed_and_keeps_the_rest(self):
+        files = {"crates/a/src/lib.rs": unused(1), "crates/b/src/lib.rs": "pub fn b_unused() {}\n"}
+        with tree(files) as root:
+            self.judged(root, {"unused_number_0": "keep", "b_unused": "keep"})
+            (root / "crates/b/src/lib.rs").write_text("pub fn b_unused() {}\n// changed\n")
+            manifest = {"root": str(root), "candidates": {}}
+            m.record(manifest, {})
+            ledger = (root / m.LEDGER).read_text()
+        self.assertIn("unused_number_0", ledger)
+        self.assertNotIn("b_unused", ledger)
+
+    def test_files_that_differ_only_in_whitespace_keep_two_keys_and_two_verdicts(self):
+        spaced, joined = "crates/a/src/a b.rs", "crates/a/src/a_b.rs"
+        with tree({spaced: "pub fn same() {}\n", joined: "pub fn same() {}\n"}) as root:
+            self.assertTrue((root / spaced).exists() and (root / joined).exists())
+            manifest, _ = self.prepared(root)
+            by_path = {c["path"]: (i, c) for i, c in manifest["candidates"].items()}
+            self.assertEqual(len({c["key"] for _, c in by_path.values()}), 2)
+            verdicts = {by_path[spaced][0]: {"verdict": "keep"}, by_path[joined][0]: {"verdict": "cleanup"}}
+            m.record(manifest, verdicts)
+            m.record({"root": str(root), "candidates": {}}, {})
+            entries = m.read_ledger(root)
+            self.assertEqual(
+                sorted((e["verdict"], e["paths"]) for e in entries.values()),
+                [("cleanup", [joined]), ("keep", [spaced])],
+            )
+            self.assertEqual(m.scan(root, ("unreferenced",))["unreferenced"]["candidates"], [])
+
+    def test_unicode_whitespace_and_its_hex_lookalike_keep_two_keys_and_two_verdicts(self):
+        wide, lookalike = "crates/a/src/a\u2003b.rs", "crates/a/src/a 03b.rs"
+        with tree({wide: "pub fn same() {}\n", lookalike: "pub fn same() {}\n"}) as root:
+            manifest, _ = self.prepared(root)
+            by_path = {c["path"]: (i, c) for i, c in manifest["candidates"].items()}
+            self.assertEqual(len({c["key"] for _, c in by_path.values()}), 2)
+            verdicts = {by_path[wide][0]: {"verdict": "keep"}, by_path[lookalike][0]: {"verdict": "cleanup"}}
+            m.record(manifest, verdicts)
+            m.record({"root": str(root), "candidates": {}}, {})
+            entries = m.read_ledger(root)
+            self.assertEqual(
+                sorted((e["verdict"], e["paths"]) for e in entries.values()),
+                [("cleanup", [lookalike]), ("keep", [wide])],
+            )
+
+    def test_a_line_that_is_not_a_verdict_is_reported_and_ignored(self):
+        with tree(self.files) as root:
+            (root / "docs").mkdir()
+            (root / m.LEDGER).write_text("# header\n\nbroken line\nkey unclear 2026-01-01 abc crates/a/src/lib.rs\n")
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                entries = m.read_ledger(root)
+        self.assertEqual(entries, {})
+        self.assertEqual(err.getvalue().count("not a verdict line"), 2)
+
+    def test_every_lane_keys_a_candidate_with_no_whitespace_and_no_two_alike(self):
+        with tree(every_lane()) as root, mock.patch.object(m, "FILE_LINES", 10):
+            result = m.scan(root, m.LANES, clippy=lambda _: (CLIPPY_HIT, ""))
+            keys = [c["key"] for entry in result.values() for c in entry["candidates"]]
+        self.assertEqual({lane for lane, entry in result.items() if entry["candidates"]}, set(m.LANES))
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertFalse([k for k in keys if re.search(r"\s", k)])
+        self.assertEqual(sum(k.startswith("allowances:") for k in keys), 2)
+
+
+CLIPPY_HIT = diagnostic("panic", "crates/a/src/lib.rs", 1)
+
+
+def every_lane():
+    """A tree with at least one candidate in every lane but the one that needs clippy's output."""
+    many = ", ".join(f"p{i}" for i in range(m.PARAMETERS))
+    literal = 'const A: &str = "a long enough literal here";\n'
+    marks = (
+        "struct S { a: Mutex<u8>, b: Mutex<u8>, c: RwLock<u8>, d: RefCell<u8>, e: AtomicBool, f: AtomicU32 }\n"
+        "fn go() { thread::spawn(|| {}); let (t, r) = mpsc::channel(); }\n"
+    )
+    return {
+        "crates/a/src/lib.rs": "#[allow(dead_code)]\nfn plain() {}\n#[allow(dead_code)]\nfn other() {}\npub fn unused_one() {}\n"
+        + nested(m.NESTING) + uses(m.COUPLING) + string_errors(m.STRING_ERRORS) + "// TODO: later\n"
+        + "pub fn only_tested() {}\n" + marks + public_functions(m.UNTESTED),
+        "crates/a/tests/it.rs": "fn t() { a::only_tested(); }\n",
+        "crates/b/src/lib.rs": block("one", 12) + calls(m.UNTESTED),
+        "crates/c/src/lib.rs": block("one", 12),
+        "crates/d/src/lib.rs": literal * 2 + "fn d() {}\n",
+        "crates/e/src/lib.rs": literal + "fn e() {}\n",
+        "contrib/tool.py": f"def many({many}):\n    pass\n",
+    }
+
+
+class Prompts(unittest.TestCase):
+    def test_every_lane_has_a_prompt_that_states_the_rule_its_question_and_its_notes(self):
+        with tree(every_lane()) as root, mock.patch.object(m, "FILE_LINES", 10):
+            work = root / ".work"
+            result, path = m.prepare(root, m.LANES, (), work, clippy=lambda _: (CLIPPY_HIT, ""))
+            manifest = json.loads(Path(path).read_text())
+            prompts = {
+                entry["lane"]: Path(entry["reviewer_prompts"][0]["prompt_file"]).read_text()
+                for entry in manifest["lanes"]
+                if entry["reviewer_prompts"]
+            }
+        self.assertEqual(set(prompts), set(m.LANES))
+        for lane, text in prompts.items():
+            with self.subTest(lane=lane):
+                self.assertIn("never have untrusted content in their context", text)
+                self.assertIn(m.QUESTION[lane], text)
+                self.assertIn(m.LANE_NOTES[lane], text)
+                self.assertIn(f"**{m.PREFIX[lane]}1**", text)
+
+    def test_a_lane_without_a_cap_of_its_own_keeps_thirty_and_the_new_lanes_fifteen(self):
+        many = "".join(f"pub fn unused_{i}() {{}}\n" for i in range(40))
+        files = {"crates/a/src/lib.rs": many, "crates/b/src/lib.rs": "".join(nested(m.NESTING).replace("deep", f"deep_{i}") for i in range(20))}
+        with tree(files) as root:
+            result = m.scan(root, ("unreferenced", "complexity"))
+            capped = m.scan(root, ("unreferenced", "complexity"), limit=4)
+        self.assertEqual((len(result["unreferenced"]["candidates"]), len(result["complexity"]["candidates"])), (30, 15))
+        self.assertEqual((len(capped["unreferenced"]["candidates"]), len(capped["complexity"]["candidates"])), (4, 4))
 
 
 if __name__ == "__main__":

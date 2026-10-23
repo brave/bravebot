@@ -25,6 +25,7 @@ fn save(
             conversation: &conversation.snapshot(),
             turns: session.turns,
             tokens: session.tokens,
+            split: session.split(),
             spend: session.spend_by_turn(),
             timing: session.timing_by_turn(),
             model: None,
@@ -427,6 +428,85 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
         assert_eq!(
             trust.integrity_of("new-refusal"),
             Some(Integrity::Untrusted)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// Undoing a turn takes the tokens back to what they were before it, and the split of how many of
+/// them were read and written goes back with them, in the session that took the turn and in one
+/// resumed from its record. A split left as the later turns made it would hold more than the total
+/// it divides.
+#[test]
+fn undoing_a_turn_takes_its_split_back_with_its_tokens() {
+    if !in_isolated_profile() {
+        return;
+    }
+    use bravebot_aichat::protocol::Message;
+    for resumed in [false, true] {
+        let root = scratch_dir(&format!("undo-split-{resumed}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let root = workspace.root();
+        let mut trust = bravebot_agent::workspace::trust_store(root);
+        let mut programs = TrustedPrograms::new();
+        let mut conversation = Conversation::new();
+        let mut session = Session::new("test");
+        let mut stored =
+            sessions::Handle::begin(root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        for (index, (tokens, written)) in [(11, 4), (12, 7)].into_iter().enumerate() {
+            let start = conversation.recounted().len();
+            session.paste(&format!("turn {index}"));
+            session.submit().unwrap();
+            session.rewind.open(
+                rewind_point(&session, &conversation, &trust, &programs, &stored),
+                format!("turn {index}"),
+            );
+            conversation.push(Message::user(format!("turn {index}")));
+            conversation.push(Message::assistant("done"));
+            session.complete("done", vec![], tokens);
+            session.charged_split(tokens, written);
+            session.record_turn(start, &conversation);
+        }
+        save(&mut stored, &session, &conversation, &trust, &programs);
+        if resumed {
+            let record = sessions::load(root, stored.id()).unwrap();
+            conversation = Conversation::restored(record.conversation.clone());
+            let mut reopened = Session::new("test");
+            reopened.replay(
+                &conversation,
+                &record.title,
+                &sessions::recall(root, &record),
+            );
+            reopened.restore_accounts(&record);
+            reopened.restore_rewind_points(record.rewind_points(root), &conversation);
+            session = reopened;
+        }
+        assert_eq!(
+            session.split(),
+            sessions::Split {
+                read: 12,
+                written: 11
+            },
+            "resumed: {resumed}, the split did not come back from the record with the tokens"
+        );
+
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+
+        assert_eq!(session.tokens, 11);
+        assert_eq!(
+            session.split(),
+            sessions::Split::of(11, 4),
+            "resumed: {resumed}, the undone turn's split stayed in the session"
         );
         std::fs::remove_dir_all(root).unwrap();
     }

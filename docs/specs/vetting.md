@@ -310,6 +310,7 @@ somebody who was never asked either question.
 `verified-by: bravebot_tui::confirm::what_the_check_said_is_drawn_inside_the_margin_too`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said`
+`verified-by: bravebot_agent::turn::a_second_check_is_sent_nothing_the_first_one_said`
 
 <a id="CHECK-10"></a>
 ### CHECK-10: every prompt that would promote quarantined content runs a check first

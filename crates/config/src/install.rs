@@ -1,9 +1,9 @@
 //! How this copy of bravebot was installed, and the command that updates it.
 //!
-//! Four ways of installing have an update command this program can name: the npm package, whose
-//! launcher says which it is, the install script, which writes down where it put the binary, and
-//! the Homebrew cask and the WinGet package, each of which keeps the binary under a directory only
-//! that package manager creates.
+//! Five ways of installing have an update command this program can name: the npm package, whose
+//! launcher says which it is, the install script and the PowerShell install script, each of which
+//! writes down where it put the binary, and the Homebrew cask and the WinGet package, each of which
+//! keeps the binary under a directory only that package manager creates.
 //! Everything else, a build from source above all, has no command here. Naming one for a copy
 //! nobody can account for would send somebody a line that replaces a binary that is not theirs.
 //!
@@ -36,8 +36,17 @@ const WINGET_COMMAND: &str = "winget upgrade Brave.Bravebot";
 const SCRIPT_COMMAND: &str =
     "curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | sh";
 
+/// What updates a PowerShell script install: the same line that installed it.
+const POWERSHELL_COMMAND: &str =
+    "irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex";
+
 /// The file the install script writes the installed path into.
 const INSTALLED_BY_FILE: &str = "installed-by";
+
+/// The file the PowerShell install script writes the installed path into. A file of its own, so a
+/// copy that only `install.sh` knows how to update is never offered the PowerShell line, and the
+/// other way round.
+const INSTALLED_BY_POWERSHELL_FILE: &str = "installed-by-powershell";
 
 /// How this copy was installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +55,8 @@ pub enum Install {
     Npm,
     /// The install script, which recorded where it put the binary.
     Script,
+    /// The PowerShell install script, which recorded where it put the binary in a file of its own.
+    PowerShell,
     /// The Homebrew cask, which keeps the binary under `Caskroom/bravebot/`.
     Homebrew,
     /// The WinGet package, which keeps the binary under `WinGet/Packages/Brave.Bravebot_*/`.
@@ -61,6 +72,7 @@ impl Install {
         match self {
             Self::Npm => NPM_COMMAND,
             Self::Script => SCRIPT_COMMAND,
+            Self::PowerShell => POWERSHELL_COMMAND,
             Self::Homebrew => HOMEBREW_COMMAND,
             Self::Winget => WINGET_COMMAND,
         }
@@ -75,27 +87,41 @@ pub fn installed_how() -> Option<Install> {
         // A wrong answer downgrades to "unknown"; nothing is granted on the strength of it.
         // nosemgrep: rust.lang.security.current-exe.current-exe
         std::env::current_exe().ok().as_deref(),
-        recorded_install().as_deref(),
+        recorded_install(INSTALLED_BY_FILE).as_deref(),
+        recorded_install(INSTALLED_BY_POWERSHELL_FILE).as_deref(),
     )
 }
 
-/// Decide from the launcher's word and the recorded path, so neither the environment nor the
+/// Decide from the launcher's word and the recorded paths, so neither the environment nor the
 /// filesystem is needed to test it.
 ///
-/// The recorded path has to be the binary that is actually running. A checkout built from source,
+/// A recorded path has to be the binary that is actually running. A checkout built from source,
 /// on a machine where the script installed a copy as well, is not a script install: it is a build
 /// nothing here knows how to update, and telling its user to curl over the top of it would replace
-/// somebody else's copy rather than theirs.
-fn method(via: Option<&str>, running: Option<&Path>, recorded: Option<&Path>) -> Option<Install> {
+/// somebody else's copy rather than theirs. Each script's record is read for that script alone,
+/// since its line is the one that replaces what it wrote.
+fn method(
+    via: Option<&str>,
+    running: Option<&Path>,
+    recorded: Option<&Path>,
+    recorded_by_powershell: Option<&Path>,
+) -> Option<Install> {
     if via == Some(NPM) {
         return Some(Install::Npm);
     }
     if let Some(manager) = running.and_then(package_manager) {
         return Some(manager);
     }
-    match (running, recorded) {
-        (Some(running), Some(recorded)) if same_file(running, recorded) => Some(Install::Script),
-        _ => None,
+    let is_running = |record: Option<&Path>| match (running, record) {
+        (Some(running), Some(record)) => same_file(running, record),
+        _ => false,
+    };
+    if is_running(recorded) {
+        Some(Install::Script)
+    } else if is_running(recorded_by_powershell) {
+        Some(Install::PowerShell)
+    } else {
+        None
     }
 }
 
@@ -139,9 +165,9 @@ fn same_file(left: &Path, right: &Path) -> bool {
     left == right || resolved(left) == resolved(right)
 }
 
-/// Where the install script says it put the binary.
-fn recorded_install() -> Option<PathBuf> {
-    let path = crate::settings::home()?.join(INSTALLED_BY_FILE);
+/// Where an install script says it put the binary, from the file it writes that to.
+fn recorded_install(file: &str) -> Option<PathBuf> {
+    let path = crate::settings::home()?.join(file);
     let contents = std::fs::read_to_string(path).ok()?;
     let recorded = contents.lines().next()?.trim();
     (!recorded.is_empty()).then(|| PathBuf::from(recorded))
@@ -156,12 +182,12 @@ mod tests {
     #[test]
     fn the_launcher_saying_npm_is_what_makes_it_an_npm_install() {
         assert_eq!(
-            method(Some("npm"), None, None),
+            method(Some("npm"), None, None, None),
             Some(Install::Npm),
             "the launcher was not believed"
         );
         assert_eq!(
-            method(Some("something else"), None, None),
+            method(Some("something else"), None, None, None),
             None,
             "a word nothing sets was taken for an installation"
         );
@@ -173,9 +199,45 @@ mod tests {
             method(
                 None,
                 Some(Path::new("/usr/local/bin/bravebot")),
-                Some(Path::new("/usr/local/bin/bravebot"))
+                Some(Path::new("/usr/local/bin/bravebot")),
+                None
             ),
             Some(Install::Script)
+        );
+    }
+
+    /// The PowerShell script's record is its own: the binary it recorded is a PowerShell install, and
+    /// the line that updates it is the PowerShell one. The regression this rejects is reading that
+    /// record as the shell script's, which would send a Windows copy a `curl ... | sh` line that
+    /// cannot run there.
+    #[test]
+    fn the_binary_the_powershell_script_recorded_is_a_powershell_install() {
+        let running = Path::new("C:/Users/someone/AppData/Local/Programs/bravebot/bravebot.exe");
+        assert_eq!(
+            method(None, Some(running), None, Some(running)),
+            Some(Install::PowerShell)
+        );
+    }
+
+    /// Each script's record decides for that script alone. A path that only the shell script
+    /// recorded is not a PowerShell install and the other way round, and where neither record names
+    /// the running binary there is no command to offer.
+    #[test]
+    fn each_script_is_recognised_by_its_own_record() {
+        let running = Path::new("/home/someone/bin/bravebot");
+        let elsewhere = Path::new("/usr/local/bin/bravebot");
+        assert_eq!(
+            method(None, Some(running), Some(running), Some(elsewhere)),
+            Some(Install::Script)
+        );
+        assert_eq!(
+            method(None, Some(running), Some(elsewhere), Some(running)),
+            Some(Install::PowerShell)
+        );
+        assert_eq!(
+            method(None, Some(running), Some(elsewhere), Some(elsewhere)),
+            None,
+            "a record naming another binary was taken for this one"
         );
     }
 
@@ -187,7 +249,8 @@ mod tests {
             method(
                 None,
                 Some(Path::new("/home/someone/bravebot/target/debug/bravebot")),
-                Some(Path::new("/usr/local/bin/bravebot"))
+                Some(Path::new("/usr/local/bin/bravebot")),
+                None
             ),
             None
         );
@@ -196,14 +259,17 @@ mod tests {
     /// A build from source, which is neither installation, has no command to be given.
     #[test]
     fn an_installation_nothing_recorded_is_left_alone() {
-        assert_eq!(method(None, Some(Path::new("/tmp/bravebot")), None), None);
+        assert_eq!(
+            method(None, Some(Path::new("/tmp/bravebot")), None, None),
+            None
+        );
     }
 
     /// A package manager's directory is what says it installed the binary, and only that package's
     /// directory: another cask's binary, or a copy beside them, is nobody's to upgrade from here.
     #[test]
     fn a_binary_under_a_package_managers_directory_is_that_managers_install() {
-        let under = |path: &str| method(None, Some(Path::new(path)), None);
+        let under = |path: &str| method(None, Some(Path::new(path)), None, None);
         assert_eq!(
             under("/opt/homebrew/Caskroom/bravebot/0.9.0/bravebot-darwin-arm64"),
             Some(Install::Homebrew)
@@ -237,7 +303,7 @@ mod tests {
     fn a_package_manager_directory_wins_over_a_script_record() {
         let path = Path::new("/opt/homebrew/Caskroom/bravebot/0.9.0/bravebot-darwin-arm64");
         assert_eq!(
-            method(None, Some(path), Some(path)),
+            method(None, Some(path), Some(path), Some(path)),
             Some(Install::Homebrew)
         );
     }
@@ -257,6 +323,10 @@ mod tests {
             Install::Script.update_command()
         );
         assert_eq!(
+            Install::PowerShell.update_command(),
+            "irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex"
+        );
+        assert_eq!(
             Install::Homebrew.update_command(),
             "brew upgrade --cask bravebot"
         );
@@ -268,6 +338,11 @@ mod tests {
             !Install::Script.update_command().contains("npm install"),
             "{}",
             Install::Script.update_command()
+        );
+        assert!(
+            !Install::PowerShell.update_command().contains("install.sh"),
+            "a Windows copy was sent a line it cannot run: {}",
+            Install::PowerShell.update_command()
         );
     }
 }

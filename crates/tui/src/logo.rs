@@ -547,6 +547,52 @@ mod tests {
         }
     }
 
+    /// SANDBOX-10: under a sandbox mode other than `workspace-write` the opening screen names the
+    /// mode beside the level, and `off` says programs run unconfined. Every other test of the screen
+    /// passes `workspace-write`, so a screen that dropped the mode word, or showed `read-only` as
+    /// `strict`, would pass them all.
+    #[test]
+    fn the_opening_screen_names_a_sandbox_mode_other_than_workspace_write() {
+        use bravebot_sandbox::SandboxMode;
+        let drawn = |mode| {
+            lines(
+                "kernel-enforced",
+                mode,
+                false,
+                "premium available",
+                WIDE,
+                24,
+            )
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+        };
+        let ordinary = drawn(SandboxMode::WorkspaceWrite);
+        assert!(
+            ordinary.contains("confinement available: kernel-enforced")
+                && !ordinary.contains("sandbox"),
+            "{ordinary}"
+        );
+        let strict = drawn(SandboxMode::Strict);
+        assert!(
+            strict.contains("confinement available: kernel-enforced, sandbox strict"),
+            "{strict}"
+        );
+        let read_only = drawn(SandboxMode::ReadOnly);
+        assert!(
+            read_only.contains("confinement available: kernel-enforced, sandbox read-only"),
+            "{read_only}"
+        );
+        let off = drawn(SandboxMode::Off);
+        assert!(
+            off.contains(
+                "confinement available: kernel-enforced, sandbox off: programs run unconfined"
+            ),
+            "{off}"
+        );
+    }
+
     /// A pane too narrow for the mark still has to say what the platform offers, since dropping
     /// the mark must not take the tier and the confinement with it.
     #[test]

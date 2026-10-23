@@ -29,7 +29,13 @@ governs:
   - crates/tui/src/list_picker.rs
   - crates/tui/src/model_prompt.rs
   - ui/src/renderer/components/Transcript.tsx
+  - ui/src/renderer/components/ThinkingTail.tsx
+  - ui/src/renderer/thinking.ts
+  - ui/src/renderer/apply.ts
+  - ui/src/renderer/live.ts
+  - crates/ui-bridge/src/turn.rs
   - ui/scripts/ux-state.test.mjs
+  - ui/scripts/marking.test.mjs
 documented-by: docs/website/docs/using/transcript.md
 ---
 
@@ -206,6 +212,7 @@ tells a reader whether something is quarantined, and a note drawn in the wrong o
 outside a block.
 
 `verified-by: bravebot_tui::render::a_system_note_is_not_drawn_in_the_ink_that_marks_untrusted_content`
+`verified-by: bravebot_tui::theme::the_note_ink_is_shared_with_no_other_ink_of_the_brave_palette`
 
 <a id="VIEW-9"></a>
 ### VIEW-9: under `brave`, an ink that carries meaning is mixed, not chosen by the terminal
@@ -413,6 +420,7 @@ where the wrong half is the one its author never sees.
 
 `verified-by: bravebot_tui::theme::a_colour_given_for_each_background_takes_the_arm_the_terminal_asked_for`
 `verified-by: bravebot_tui::theme::an_arm_of_a_pair_resolves_through_defs_and_none`
+`verified-by: bravebot_tui::theme::a_pair_arm_of_none_leaves_the_terminals_background_showing`
 `verified-by: bravebot_tui::theme::a_pair_missing_an_arm_is_not_a_theme`
 `verified-by: bravebot_tui::theme::a_theme_says_whether_any_of_its_inks_came_from_the_sensed_background`
 
@@ -447,7 +455,8 @@ Where a reply opens with a reasoning block and closes it before answering, the b
 drawn, arriving or arrived, and what reaches the transcript is what follows it. Only a block the
 reply opens with counts: a reply that mentions the tags further down keeps every word. A block
 opened and never closed is drawn whole once the reply is finished, and drawn as nothing while it
-is still being written, as is a part-written opening.
+is still being written, as is a part-written opening. The thinking a service sends in a channel of
+its own is not the answer either, and is drawn only as [VIEW-33](#VIEW-33) says.
 
 **Why.** A model with a channel of its own for its working keeps it out of the reply, and this
 never arises. A model without one writes the same words into the reply instead, where they land
@@ -498,6 +507,7 @@ the notes do, so the last of them is still held apart from whatever is said next
 
 `verified-by: bravebot_tui::render::a_note_is_not_drawn_as_a_detail_of_the_line_above_it`
 `verified-by: bravebot_tui::render::a_run_of_notes_is_not_spaced_apart`
+`verified-by: bravebot_tui::render::a_note_starts_in_the_column_a_replys_text_starts_in`
 
 
 <a id="VIEW-20"></a>
@@ -1010,8 +1020,78 @@ from naming a program to start, as [GIT-1](tools/read-git.md#GIT-1) does for the
 `verified-by: bravebot_session::sessions::a_checkout_with_no_configuration_has_no_origin`
 `verified-by: bravebot_session::sessions::a_configuration_past_the_limit_is_not_read`
 
+
+<a id="VIEW-33"></a>
+### VIEW-33: `/thinking` shows the model's thinking as it arrives, for the screen only
+
+`/thinking` turns on drawing the thinking a service sends as it goes
+([BACKEND-46](backends.md#BACKEND-46), [BACKEND-59](backends.md#BACKEND-59)), and typed again turns
+it off. It is off when a session opens, is a setting of that session alone, and says in the
+transcript which way it went. It is carried out as typed, while a turn runs as well. While it is on,
+the end of what the model has thought in the round now being written is drawn at the tail, above the
+reply taking shape ([VIEW-6](#VIEW-6)): under a heading of its own, dimmed and in italics, the last
+eight lines of it, as plain text and never as markdown. A control character in it is drawn as its
+visible picture, as [VIEW-4](#VIEW-4) does for any text. It goes where the reply's tail goes, when
+the round's words arrive, the round ends, the turn ends or is stopped, or the request is sent again,
+and a delegate's thinking is not drawn. Only the last 4,096 bytes of it are kept, so a model that
+thinks for minutes costs the screen what a short think does. A service that sends no thinking, or a
+session with the toggle off, draws nothing.
+
+It is no part of the conversation: it is not written to the session record, an export or a resume,
+and no later request carries it, so the request and the model's answer are the same with the toggle
+on as off. Turning it on mid-round shows what has come so far.
+
+**Why.** A long round shows a token count and a spinner and nothing of what the model is working on.
+Claude Code, Codex, OpenCode and Gemini CLI each let a person show the reasoning, and each keeps it
+off the default screen, since most rounds do not need it.
+
+The thinking is model output, so in a session that has observed untrusted content it is untrusted
+bytes released for a screen through the gate that releases the reply taking shape, on the same
+footing. The driver carries it to the interface and does not branch on it; the side that draws decides
+what to show, and it decides only by the toggle and the byte count, never by what the text says.
+
+`verified-by: bravebot_tui::state::thinking_is_held_shown_on_request_and_ends_with_the_round`
+`verified-by: bravebot_tui::state::a_delegates_thinking_is_not_the_turns`
+`verified-by: bravebot_tui::render::the_models_thinking_is_drawn_only_when_asked_for_and_inert`
+`verified-by: bravebot_tui::app::the_thinking_command_toggles_what_is_drawn_and_runs_mid_turn`
+`verified-by: bravebot_agent::turn::the_thinking_of_a_round_reaches_the_reporter_and_is_in_no_request_or_record`
+
+<a id="VIEW-34"></a>
+### VIEW-34: the desktop window shows the model's thinking on request, on the terms of VIEW-33
+
+The bridge sends the thinking a service hands over as it goes ([BACKEND-46](backends.md#BACKEND-46)) as
+`thinking` events, each holding the words that arrived since the last, in order and as they arrived.
+A frame with none is not sent, and a delegate's thinking is not sent. The window holds the end of what
+the round now being written has thought, the last 4,096 characters of it, whether or not it is shown,
+apart from the transcript, and drops it when the round's words arrive, a call starts, the next round
+opens, or the turn ends, fails or is stopped. It is off when a session opens and is that session's
+alone. A button in the working row turns it on and off: it is offered once the session has been sent
+any thinking, and is there for the rest of the session. While it is on, the last eight lines of what
+is held are drawn under the working row, never taller than eight rows, under a head of its own,
+dimmed and in italics, as text and never as markdown or markup.
+
+It is no part of the conversation: it is not an entry of the transcript, an export or a resumed
+session, and no later request carries it. A service that sends no thinking, or a session with the
+toggle off, draws nothing, and a session that has not been sent any has no button.
+
+**Why.** [VIEW-33](#VIEW-33) gives the terminal a way to see what a long round is working on. Without
+an event to carry it, the window shows only a token count and a spinner for the same long round.
+
+The thinking is model output released for a screen, on the footing of the reply taking shape. The
+renderer draws it as a text child under a head the model's words cannot spell, as
+[LAYER-5](layering.md#LAYER-5) requires of released content, and decides what to show only by the
+toggle and the line count, never by what the text says. The kept length is counted in characters
+where the terminal counts bytes, since the window holds a string, and a cut through the middle of a
+character gives up that character.
+
+`verified-by: bravebot_ui_bridge::reporting::the_models_thinking_is_reported_in_order_and_a_delegates_and_an_empty_one_are_not`
+`verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs drives the window's own event reducer with the bridge's events: the thinking is held apart from the transcript's entries, only its last 4,096 characters are kept and a cut through a character gives it up, a new round, a words event, a call, a new turn, a finished turn, a failed or stopped turn and a plan run starting, finishing or failing each clear it, the choice to show it outlives the round it was made in, and the button is offered from the first thinking sent and stays through every round's end; ui/scripts/marking.test.mjs renders the working row through react-dom and asserts that the last eight lines are drawn under one head, that markup in them is drawn as the characters it is and makes no element, attribute or request, that nothing is drawn with the toggle off or with nothing thought, and that the button is absent for a session sent no thinking and present for one that was, between rounds as well; make check-ui runs both)`
+
 ## Known costs
 
+- **The desktop window is sent the thinking whether or not it is shown.** Holding it is what lets
+  turning it on mid-round show what has come so far, as the terminal does, and the cost is an event
+  across the pipe for each frame that carries some, however long the model thinks.
 - **The trust question asked when the interface opens is not noticed.** The terminal has not reported
   being left when it is drawn, and the person who started the program is looking at it, so
   [VIEW-31](#VIEW-31) writes nothing for it under any `notificationCondition`. A question put to a

@@ -12,7 +12,6 @@ use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[allow(dead_code)]
 #[path = "../test-support/pipelines.rs"]
 mod pipelines;
 
@@ -34,7 +33,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-exec-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-exec-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -264,7 +264,9 @@ fn a_stage_runs_in_the_directory_it_was_given() {
     .expect("pwd runs");
     // The scratch path may be reached through a symlink, so the tail is what is compared.
     assert!(
-        ran.stdout.trim().ends_with("bravebot-exec-cwd"),
+        ran.stdout
+            .trim()
+            .ends_with(&format!("bravebot-exec-{}-cwd", std::process::id())),
         "ran somewhere else: {}",
         ran.stdout.trim()
     );

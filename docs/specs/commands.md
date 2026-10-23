@@ -333,7 +333,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/files`; `/caffeinate`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/files`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -341,7 +341,8 @@ box edits in or what a later start reads (`/theme`, `/config` and `/language`), 
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
-were typed. A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
+were typed. `/loop` waits behind a waiting `/after` as well, since that takes the slot a loop takes.
+A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/sandbox`, `/model`, `/effort`, `/advisor` or `/style`, is carried out as it is
 typed unless a line waiting ahead of it could change what it acts on, and otherwise waits behind
 that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
@@ -361,8 +362,49 @@ session, and the three hold one another back, since the level a model reads depe
 command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`, `/reach`, `/branch`, `/add-dir`,
 `/cd` and `/mcp` read none of it and change none of it, nor does a waiting `/rename`, `/note`,
 `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox`, so behind any of those the three are
-carried out as they are typed. Every other waiting line holds `/rename`, `/note`, `/forget-trust`,
-`/style` and `/sandbox` back, whether it is a command, a prompt or a command line. A
+carried out as they are typed. `/rename` and `/note` act on the name and the notes the record holds. A
+note is stamped with the turn count it is typed at, and a rename gives up every rewind point and is
+undone by the commands that put one back, so a line that begins a turn changes what they act on:
+every prompt, every command that sends a request or begins a turn, `/clear`, `/undo`, `/rewind`,
+`/hunks`, `/cd`, `/compact`, `/handoff`, `/branch`, `/resume`, `/bg` and `/exit` hold them back, and
+they name it. A command line adds to the conversation and saves the record with the notes and the name
+it already holds, and `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`,
+`/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` write neither, so behind any of those, and
+behind a waiting `/note` for `/rename` and a waiting `/rename` for `/note`, they are carried out as
+they are typed. A `/note` typed behind a waiting `!make` is written at once and stamped with the turn
+the running turn is. `/style` acts on the pick that every turn reads when it is built and on the
+person's own style files its name is looked up among, which a program cannot write. A file is read
+only where its path does not land in the reach the workspace holds: the root, the directories added,
+the checkouts the session kept and the paths programs were let reach. A prompt, every command that
+begins a turn, and `/clear`, `/cd`, `/add-dir`, `/reach`, `/branch`, `/handoff`, `/resume`, `/bg`
+and `/exit` hold it back, since each moves or ends that reach or leaves for another session, and it
+names the line. A command line and `/compact`, `/btw`, `/recap`, `/memory`, `/undo`, `/rewind`,
+`/hunks`, `/mcp`, `/after`, `/rename`, `/note`, `/forget-trust`, `/issue`, `/pr`, `/sandbox`,
+`/model`, `/effort` and `/advisor` do not, so behind any of those it is carried out as it is typed:
+`/undo`, `/rewind` and `/hunks` put back files the workspace resolves and move no reach, `/mcp`
+starts or ends a server confined so that it cannot write under `~/.bravebot`, and `/after` arms a
+prompt that goes out when its delay is up and sends nothing now, so a style typed after it is the
+one the turn it sends is built with. The project's own style names are the list held when the line
+was typed and the turn reads the pick under its own trust map, so a rewind that changes the map or
+the files under the root does not change which names `/style` takes. `/forget-trust` acts on the answer kept about the working directory
+and the git worktree around it ([TRUST-24](trust-map.md#TRUST-24)). A prompt and a command line can
+run a program that makes the `.git` entry that moves which root is around the directory, a line that
+starts a session here reads the answer, and one that moves the directory or leaves the session
+changes what is withdrawn, so all of those hold it back, as do `/branch`, which replaces the
+session's record and its reach and has not been read against the answer, and `/mcp`, `/undo`,
+`/rewind` and `/hunks`, which have not been shown unable to make or remove the `.git` entry. A rewind
+removes what a file tool wrote, which may be a `.git` entry written into an added directory that
+holds the working directory, and a server `/mcp` starts may write the directory its declaration
+names. Behind
+`/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/after`, `/rename`, `/note`, `/style`,
+`/issue`, `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed:
+`/after` arms a prompt that goes out when its delay is up and runs nothing now, so the turn it sends
+runs under the answer as `/forget-trust` left it whichever of the two is carried out first.
+`/add-dir` and `/reach` start no program and move neither the working directory nor the root. The first
+opens or closes a directory and a rule in the session's own trust map, and the second writes the
+reach record or the workspace's list of paths programs may reach, and neither writes a file the
+answer is kept in or makes a `.git` entry, so `/forget-trust` withdraws the same answers before them
+as after them. A
 command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
@@ -528,8 +570,16 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_no_request_is_set_when_typed`
 `verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_a_request_waits_behind_it`
 `verified-by: bravebot_tui::app::a_choice_names_the_first_waiting_line_that_could_change_it`
-`verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_the_record_and_the_choice`
-`verified-by: bravebot_tui::app::a_name_a_note_a_style_or_a_forgotten_answer_waits_behind_a_prompt_and_a_command_line`
+`verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`
+`verified-by: bravebot_tui::app::a_style_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_style_typed_behind_a_line_that_could_change_it_waits_behind_it`
+`verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_could_change_it_waits_behind_it`
+`verified-by: bravebot_tui::app::opening_or_closing_a_directory_does_not_change_what_forgetting_trust_withdraws`
+`verified-by: bravebot_agent::reach::a_reach_leaves_the_answer_kept_about_the_directory_as_it_was`
+`verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_leaves_the_record_alone_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_could_change_the_record_waits_behind_it`
+`verified-by: bravebot_session::sessions::a_save_for_a_command_line_keeps_the_name_and_the_notes_given_before_it`
 `verified-by: bravebot_tui::app::a_theme_or_config_typed_behind_a_waiting_line_is_carried_out_when_typed`
 `verified-by: bravebot_tui::app::a_language_typed_behind_a_waiting_line_is_carried_out_when_typed`
 `verified-by: bravebot_tui::render::a_command_waiting_behind_a_line_names_that_line_on_its_mark`
@@ -1319,6 +1369,34 @@ word into a dispatch that decides something.
 `verified-by: bravebot_agent::mcp::arguments_are_pairs_and_a_quoted_value_may_hold_spaces`
 `verified-by: bravebot_agent::mcp::a_quoted_value_unescapes_a_quote_and_a_backslash_and_nothing_else`
 `verified-by: bravebot_agent::mcp::words_that_are_not_arguments_are_refused_naming_the_word`
+
+<a id="CMD-27"></a>
+### CMD-27: `/mode <skill>` keeps a skill applied to every turn, and `/mode off` leaves it
+
+`/mode` alone says which skill is the session's mode, or that there is none, and lists the names it
+could take. `/mode <skill>` takes one by its whole name, among the skills a turn starting now would
+resolve, read the way the box offers them ([CMD-9](#CMD-9)): through the trust map and the rules, so
+a skill from a project nobody vouched for is not named, offered or taken. A name that matches none,
+a prefix, another case and a name with a space after it, keeps the mode that was there and says so.
+`/mode off` leaves the mode. The name is stored in the session's record ([SKILL-21](skills.md#SKILL-21))
+and shown in the border of the box while the mode stands, so a person who has forgotten it is told by
+the place they type in.
+
+The command's word is written in this program like every other ([CMD-7](#CMD-7)): no skill becomes a
+command, and a skill called `mode` is not offered as a row. A command typed in full is offered first, so Enter on
+`/mode` runs it although `/model` shares its letters. Only a line a person typed sets or clears
+a mode. A mid-turn `/mode` waits for the turn to end, which is the kind CMD-8 gives every command it
+does not name: the turn in flight was built without the change.
+
+**Why.** The same words the skill rows carry are the ones a person is choosing between, so a
+mode needs no second list. Taking only a name the driver enumerated keeps the mode a choice among
+sources already trusted for skills, and not a way to name a file.
+
+`verified-by: bravebot_tui::app::the_mode_command_puts_a_skill_in_force_by_its_whole_name_and_off_leaves_it`
+`verified-by: bravebot_tui::app::the_mode_command_takes_a_name_or_nothing`
+`verified-by: bravebot_tui::app::enter_on_mode_typed_in_full_runs_mode_and_not_model`
+`verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`
+`verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
 
 ## Known costs
 

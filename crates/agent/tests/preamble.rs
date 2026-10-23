@@ -2,6 +2,10 @@
 //!
 //! No test here touches `HOME`. The home root is an argument, which is what keeps the rest of the
 //! suite from depending on whatever the developer happens to have installed.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_agent::preamble;
 use bravebot_agent::skills::Catalogue;
@@ -20,7 +24,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-preamble-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-preamble-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -180,6 +185,54 @@ fn an_added_directory_contributes_no_standing_instructions() {
         "an added directory's AGENTS.md became a standing instruction: {}",
         preamble.text
     );
+}
+
+/// The test above leaves the added directory untrusted, so the trust gate would keep its files out
+/// whatever the code read. With the person's vouching for it in place, only the set of directories
+/// instructions are read from can keep it out, which is what the project's own tree being the one
+/// source means.
+#[test]
+fn an_added_directory_the_person_vouched_for_still_contributes_no_standing_instructions() {
+    let scratch = Scratch::new("added-vouched");
+    let project = scratch.directory("project");
+    let other = scratch.directory("other");
+    std::fs::write(project.join("AGENTS.md"), "PROJECT-CONVENTION").unwrap();
+    std::fs::write(other.join("AGENTS.md"), "ADDED-AGENTS").unwrap();
+    std::fs::write(other.join("CLAUDE.md"), "ADDED-CLAUDE").unwrap();
+    std::fs::create_dir_all(other.join(".claude")).unwrap();
+    std::fs::write(other.join(".claude/CLAUDE.md"), "ADDED-DOT-CLAUDE").unwrap();
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(other.to_str().expect("path is utf-8"))
+        .expect("add the directory");
+    let vouched = other.canonicalize().expect("the directory resolves");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &[".", vouched.to_str().expect("path is utf-8")]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    assert!(
+        preamble.text.contains("PROJECT-CONVENTION"),
+        "the project's own file was not read, so this test shows nothing: {}",
+        preamble.text
+    );
+    for added in ["ADDED-AGENTS", "ADDED-CLAUDE", "ADDED-DOT-CLAUDE"] {
+        assert!(
+            !preamble.text.contains(added),
+            "{added} from a directory opened alongside the project became a standing instruction: {}",
+            preamble.text
+        );
+    }
 }
 
 /// Writing an AGENTS.md mid-session works, and so does having the agent write one. Reading the

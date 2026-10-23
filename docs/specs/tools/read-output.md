@@ -168,6 +168,7 @@ it, and paging hands over the part it names without running anything again.
 `verified-by: bravebot_agent::turn::an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
+`verified-by: bravebot_agent::turn::a_page_of_output_the_planner_may_read_is_no_release_and_keeps_the_slots_label`
 
 <a id="OUTPUT-5"></a>
 ### OUTPUT-5: a pattern searches output the planner may read, and is refused on output it may not

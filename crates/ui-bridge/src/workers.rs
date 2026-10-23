@@ -43,6 +43,45 @@ impl Workers {
         });
     }
 
+    /// Run `work` on a new thread once every worker started before this call has ended, counting it as
+    /// a worker from now until `work` has returned and dropped everything it held.
+    ///
+    /// For what has to follow the last of the session's work and be part of its closing, such as
+    /// the hook that ends it. A thread started with [`Self::spawn`] would run beside a turn that
+    /// has been told to stop and is still ending, and would find the session before that turn had
+    /// finished with it. No worker is started after a close, so the count only falls from here.
+    pub fn spawn_after_the_rest(self: &Arc<Self>, work: impl FnOnce() + Send + 'static) {
+        let running = self.start();
+        let workers = Arc::clone(self);
+        std::thread::spawn(move || {
+            // Declared first so that it drops last, after `work` and what it captured.
+            let _running = running;
+            workers.wait_until_only_one_remains();
+            work();
+        });
+    }
+
+    /// Wait until the only worker counted is the caller's own.
+    fn wait_until_only_one_remains(&self) {
+        let mut live = self.counted();
+        while *live > 1 {
+            live = self
+                .ended
+                .wait(live)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    /// Wait up to `limit`, all told, for every one of `all` to end, and say whether they had.
+    pub fn all_end_within(all: &[Arc<Workers>], limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        all.iter().all(|workers| {
+            deadline
+                .checked_duration_since(Instant::now())
+                .is_some_and(|left| workers.wait_idle(left))
+        })
+    }
+
     /// The count. A thread that panicked while holding the lock cannot have left a half-made
     /// count, since the lock is held only to add or subtract one, so the count is used as it is.
     fn counted(&self) -> std::sync::MutexGuard<'_, usize> {
@@ -160,6 +199,33 @@ mod tests {
         );
         release.send(()).unwrap();
         assert!(workers.wait_idle(PATIENCE));
+    }
+
+    /// A worker spawned to follow the rest runs only once the others have ended, and is itself
+    /// counted while it waits. One that ran beside them would act on a session whose turn had not
+    /// finished with it, and one that was not counted would let a close report the session ended
+    /// with the follower still to run.
+    #[test]
+    fn a_worker_that_follows_the_rest_runs_after_them_and_is_counted_while_it_waits() {
+        let workers = Arc::new(Workers::default());
+        let (release, held) = mpsc::channel::<()>();
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let first = Arc::clone(&order);
+        workers.spawn(move || {
+            let _ = held.recv_timeout(PATIENCE);
+            first.lock().unwrap().push("the turn");
+        });
+        let last = Arc::clone(&order);
+        workers.spawn_after_the_rest(move || last.lock().unwrap().push("the end"));
+
+        assert!(
+            order.lock().unwrap().is_empty(),
+            "the follower ran while the first worker was still running"
+        );
+        release.send(()).unwrap();
+        assert!(workers.wait_idle(PATIENCE));
+
+        assert_eq!(*order.lock().unwrap(), ["the turn", "the end"]);
     }
 
     /// Two workers, as a turn followed by a run would be: idle only when both have ended.

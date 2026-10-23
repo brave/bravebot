@@ -19,7 +19,7 @@ that is merely carried.
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
-| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | **yes, every time** |
+| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | **yes, every time** |
 | [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
@@ -87,6 +87,17 @@ Reads a text file from the workspace and returns its lines.
 | `path_ref` | a reference to a file whose name the planner was not shown, e.g. `ref:2` |
 | `offset` | 1-based line to start at |
 | `limit` | maximum lines to return, capped so one read cannot fill the conversation |
+| `output_of` | in a `.ipynb` notebook, the number of a code cell, from 1 as a read shows them, to get that cell's saved outputs as a reference instead of the cells |
+
+A `.ipynb` notebook that the agent may read comes back as its cells instead of its JSON: a
+`[N] kind` line, numbered from 1, then the cell's source. Saved outputs are never shown, only how many
+cells hold them, because an output is text a program or a web page produced. A notebook you have not
+vouched for is a reference like any other file.
+
+`output_of` asks for one cell's saved outputs. They come back as a reference, even in a notebook you
+vouched for, and a processor reads them. A stream, an error and a result's plain text are kept, a
+picture or other data is replaced by a line giving its type and size, and the result is cut at
+20,000 characters.
 
 Long files come back one page at a time, at most 500 lines and 100,000 characters, with each line
 shortened to 2,000 characters. A page of long lines ends at the last whole line that fits under the
@@ -608,6 +619,9 @@ prefers this to rewriting a whole body.
 | `new_text` | what goes in its place |
 | `replace_all` | replace every occurrence instead of requiring exactly one |
 | `edits` | instead of `old_text` and `new_text`: several pairs of them for this one file |
+| `cell` | in a `.ipynb` notebook, the number of the cell to change, from 1 as a read shows them, with `new_text` as its whole source; 0 with `insert_after` puts a cell first |
+| `cell_action` | `replace` (the default), `insert_after` or `delete` |
+| `cell_type` | the kind of cell `insert_after` makes, `code` (the default) or `markdown` |
 
 `edits` is applied in order, each pair to the text the one before it left, and all or nothing: if
 one pair fails, the agent is told which and the file is not changed. You are asked once, about one
@@ -634,6 +648,15 @@ looks for and in what it puts there, so the file keeps one terminator throughout
 An edit requires a **trusted** file, because locating a passage to replace is a decision and a
 decision may be taken only from trusted content. To change a file the agent may not read, the route
 is `spawn_processor` plus `write_file`.
+
+### Notebook cells
+
+A `.ipynb` file reads as its cells (see `read_file`), and `cell` changes one by its number instead of
+by a passage. `cell` is refused beside `old_text`, `edits` or `replace_all`, on a file that is not a
+notebook, and for a number the notebook has no cell for. The notebook is written back in the layout
+Jupyter writes, with every other cell, its metadata and the format version kept, and you approve the
+diff. Replacing a code cell drops that cell's saved outputs and execution count, since they describe
+source that is gone, and the diff shows them going.
 
 ## `apply_checkout`
 
@@ -851,7 +874,10 @@ which is naming a host rather than answering a question about one page. See
 
 **A redirect may not leave the approved host.** Every hop goes through the same gate, and a hop
 elsewhere is refused unless a rule allows that host too, since the end of a redirect chain is
-somewhere nobody was shown. That check applies only while a fetch is in flight: reaching the model
+somewhere nobody was shown. Before it is reported as refused, you are asked about the host the
+redirect named, drawn as a redirect from the host you approved. A yes sends that one fetch again
+with that host allowed for it alone and remembers nothing, and a no gives the refusal. Bypass mode
+does not answer it, and a `deny` rule refuses without asking. That check applies only while a fetch is in flight: reaching the model
 endpoint is this program operating rather than something a turn asked for, so a rule about a website
 cannot stop bravebot talking to its own backend.
 
@@ -1103,6 +1129,11 @@ Puts up to four questions to you and waits. More than four is refused whole rath
 Questions are put one at a time. You may choose an option, answer in your own words, or skip. A
 skipped question is an answer to work with rather than a reason to ask again. An answer is remembered
 for the session, question by question.
+
+In the terminal, a series of more than one ends in a review that lists each question beside your
+answer. Nothing has been sent until you press Enter there. Left goes back a question, a number
+reopens that question from the review, and either brings back what you had answered. A single
+question has no review.
 
 With [`askIdleSeconds`](../customize/configuration.md#askidleseconds) set, the terminal closes a question
 that sits that long with no key pressed, and every question behind it. The planner is told that no

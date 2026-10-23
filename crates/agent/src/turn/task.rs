@@ -40,6 +40,21 @@ pub struct SystemPrompts {
     pub appending: Option<String>,
 }
 
+/// What the person who started a run said it may spend before it stops (TURN-14, CLI-38).
+///
+/// Counts the driver keeps itself, rounds made and tokens the backends reported, so reaching one
+/// depends on no reply and no tool result. `None` is no limit of the person's, which leaves the run
+/// to [`Task::rounds`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RunLimits {
+    /// The most rounds of tool calls the run may make. A planner that asks for another round after
+    /// that many ends the run, and the round it asked for is not run.
+    pub rounds: Option<usize>,
+    /// The most tokens the run may have spent when it is about to send a request. A request already
+    /// sent is paid for whatever it came to, so the total passes this by the round that reached it.
+    pub tokens: Option<u64>,
+}
+
 /// What a turn is asked to do.
 #[derive(Debug, Clone)]
 pub struct Task {
@@ -91,6 +106,13 @@ pub struct Task {
     /// not: the turn fetches it and holds it as a reference, untrusted and private, so the planner
     /// is shown a handle and never the text (MCP-11).
     pub mcp_prompt: Option<crate::mcp::PromptRequest>,
+    /// Whether the lines a running turn takes were sent on a channel the person vouched for with a
+    /// flag they typed, rather than typed at a keyboard (CLI-36).
+    ///
+    /// `false` for every caller but a one-shot run reading `--input-format lines` with
+    /// `--trust-input-lines`. It changes what the audit trail says an interjection was and nothing
+    /// else: the line is the person's words either way, and may not route either way.
+    pub vouched_channel: bool,
     /// Images the user pasted, carried with the prompt they were pasted into.
     ///
     /// Trusted for the reason [`Task::prompt`] is, and by the same act: the user copied something
@@ -211,6 +233,13 @@ pub struct Task {
     /// fine. So the interface passes `None`, and an unattended run passes
     /// [`MAX_TOOL_ROUNDS`], where nothing else can end a loop.
     pub rounds: Option<usize>,
+    /// What the person who started this run said it may spend, which ends the run where
+    /// [`Task::rounds`] takes its tools away (TURN-14).
+    ///
+    /// Empty unless a caller says otherwise, and only a caller with a flag to read them from does.
+    /// A delegate carries none: its bounds are its definition's, and what it spends reaches the
+    /// run's total when it is collected.
+    pub limits: RunLimits,
     /// The session's spend limit, which the turn asks about before a request that would go past it
     /// (TURN-8). Empty unless a caller with a person in front of it sets one, for the reason
     /// `rounds` is the caller's: only that caller can put the question.
@@ -290,6 +319,10 @@ pub struct Task {
     /// The built-in style `/style` chose, which stands in for the opening where `--system-prompt`
     /// did not (CLI-19). A person's own words win over it. Not given to a delegate.
     pub style: Option<crate::styles::Style>,
+    /// The name of the skill `/mode` made the session's mode, whose body each turn reads again and
+    /// puts in its system instructions (SKILL-21). Only a name: the body comes from the catalogue
+    /// the turn resolved, through the gate any skill goes through. Not given to a delegate.
+    pub skill_mode: Option<String>,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -476,6 +509,7 @@ impl Task {
             images: Vec::new(),
             piped: None,
             mcp_prompt: None,
+            vouched_channel: false,
             home: None,
             profile: None,
             cache: None,
@@ -505,6 +539,7 @@ impl Task {
             // and a default cannot know whether anybody is, so the default is the one that is
             // wrong in the cheaper direction.
             rounds: Some(MAX_TOOL_ROUNDS),
+            limits: RunLimits::default(),
             spend_limit: crate::spend_limit::SpendLimit::default(),
             spent_before: 0,
             stop: None,
@@ -529,6 +564,7 @@ impl Task {
             attribution: bravebot_config::Attribution::default(),
             system_prompts: SystemPrompts::default(),
             style: None,
+            skill_mode: None,
             delegate: None,
             addressing: None,
             model_outranks_a_definition: false,
@@ -617,6 +653,13 @@ impl Task {
     /// Run a prompt of an MCP server the session reached, which the turn fetches before it plans.
     pub fn with_mcp_prompt(mut self, request: Option<crate::mcp::PromptRequest>) -> Self {
         self.mcp_prompt = request;
+        self
+    }
+
+    /// Say that the lines handed to a running turn come from a channel the person vouched for
+    /// (CLI-36), so the trail records them as that.
+    pub fn with_vouched_channel(mut self) -> Self {
+        self.vouched_channel = true;
         self
     }
 
@@ -738,6 +781,12 @@ impl Task {
         self
     }
 
+    /// End the run where the person who started it said it may not go on. See [`Task::limits`].
+    pub fn with_run_limits(mut self, limits: RunLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
     /// Hold the turn to the session's spend limit, given what the session had spent before it began.
     ///
     /// See [`Task::spend_limit`].
@@ -842,6 +891,12 @@ impl Task {
     /// Open the system prompt with this style's words, unless `--system-prompt` named its own.
     pub fn with_style(mut self, style: Option<crate::styles::Style>) -> Self {
         self.style = style;
+        self
+    }
+
+    /// Keep the skill of this name applied to the turn, as the person's `/mode` pick (SKILL-21).
+    pub fn with_skill_mode(mut self, name: Option<String>) -> Self {
+        self.skill_mode = name;
         self
     }
 

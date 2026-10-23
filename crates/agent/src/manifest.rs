@@ -524,7 +524,10 @@ fn numbered(index: usize, step: &Step) -> String {
 /// It is finished before the second begins, and the second's routing comes from the plan the
 /// first produced, which is what "the routing lock happens before anything is fetched" means
 /// when written as code.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the run's collaborators, which run_recording takes with the trust map lent instead of owned"
+)]
 pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -547,7 +550,10 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
 /// stopped: `dropping.md` DROP-2 has a dropped file trusted for the rest of the session, and
 /// [`crate::attached::read`] writes that rule back on failure for the same reason. Every ordinary
 /// ending also leaves the current file decisions, including downgrades from completed writes.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the run's collaborators and a lent trust map, which run_accounted receives with the accounting added"
+)]
 pub fn run_recording<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -594,7 +600,10 @@ impl Accounting {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the run's collaborators and trust map, plus the accounting that run_recording owns and publishes"
+)]
 fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -784,7 +793,10 @@ impl Attempt {
 }
 
 /// Phase 1, in two calls, then phases 2 and 3.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the planning calls' collaborators, plus the attempt and accounting that run_accounted owns across the run"
+)]
 fn plan<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -987,7 +999,10 @@ fn plan<S: Sink, R: Reporter>(
 /// `read_trusted_content`, which hands over the bytes because they are trusted and refuses
 /// outright otherwise. Everything a caller does with the result is a decision taken from this
 /// text, which is why it may not be read any other way.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a planning call's collaborators, model choice, round, system prompt and history, passed by plan for each call"
+)]
 fn ask<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1054,7 +1069,10 @@ fn ask<S: Sink, R: Reporter>(
 /// No model call decides anything here. The only one made at all is a transform's, and what it
 /// produces goes straight into the slot the plan named, at the label taint gave that slot before
 /// the call was made.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the driver's collaborators, the frozen plan and the run state, with run_accounted as its one caller"
+)]
 fn execute<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1366,7 +1384,10 @@ fn slot_to_fill(step: &Step) -> Result<SlotId, String> {
 }
 
 /// Run one step. Errors are fatal to the run and say why.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, slots, chat and run state one step needs, passed by execute for each step of the plan"
+)]
 fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -1694,7 +1715,10 @@ fn locked_filter<S: Sink>(
 /// The same shape a turn's write has, and for the same reasons: the person sees the exact path
 /// and the exact body before any endorsement exists, and the endorsement is minted for what they
 /// saw. What differs is where the path came from, which here is the routing lock.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, workspace, slots, confirmer and mode one write needs, with the step and its index"
+)]
 fn write<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,

@@ -38,15 +38,16 @@ DECIDES = ("Makefile", "contrib/affected-checks.py")
 DECIDES_UNDER = (".github/workflows/",)
 
 # Outside crates/, and read by a test all the same.
-READ_BY_RUST = (
-    "docs/specs/layering.md", "docs/specs/credential-protection.md", "docs/specs/sandboxing.md",
-    "CHANGELOG.md",
-)
+READ_BY_RUST = ("CHANGELOG.md",)
+
+# Read by a test, and by the build of the agent crate, which carries each spec's clause headings.
+READ_BY_RUST_UNDER = ("docs/specs/",)
 
 # Outside crates/, run by the installer tests themselves rather than read as data: a change to
 # one is a change to what those tests exercise, whatever else reads it.
 READ_BY_INSTALLER_TESTS = {
     "install.sh": frozenset({"rust"}),
+    "install.ps1": frozenset({"rust"}),
     "npm/scripts/stage-platform-package.js": frozenset({"npm", "rust"}),
 }
 
@@ -114,6 +115,8 @@ def classify(path, desktop):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
         return frozenset({"npm"})
+    if path == "contrib/check-lint-increase.py":
+        return frozenset({"rust"})
     if path == "Dockerfile.cross":
         return frozenset({"build"})
     parts = path.split("/")
@@ -126,7 +129,7 @@ def classify(path, desktop):
         elif parts[2:] == ["build.rs"]:
             found.add("build")
         return frozenset(found)
-    if path in READ_BY_RUST:
+    if path in READ_BY_RUST or path.startswith(READ_BY_RUST_UNDER):
         return frozenset({"rust"})
     if path in READ_BY_INSTALLER_TESTS:
         return READ_BY_INSTALLER_TESTS[path]
@@ -315,7 +318,8 @@ CASES = (
     ("docs/specs/credential-protection.md", {"rust"}),
     ("docs/specs/sandboxing.md", {"rust"}),
     ("CHANGELOG.md", {"rust"}),
-    ("docs/specs/routing.md", NOTHING),
+    ("docs/specs/routing.md", {"rust"}),
+    ("docs/specs/tools/read-file.md", {"rust"}),
     ("docs/website/docs/intro.md", {"docs"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
     ("docs/website/pnpm-lock.yaml", {"docs", "npm"}),
@@ -340,10 +344,12 @@ CASES = (
     ("mobile/pnpm-lock.yaml", {"mobile", "npm"}),
     ("mobile/pnpm-workspace.yaml", {"mobile", "npm"}),
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),
+    ("contrib/check-lint-increase.py", {"rust"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/stage-platform-package.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
+    ("install.ps1", {"rust"}),
     ("package-lock.json", {"npm"}),
     ("pnpm-lock.yaml", {"npm"}),
     ("pnpm-workspace.yaml", {"npm"}),
@@ -443,11 +449,11 @@ def selftest():
         env, run, write = fixture_git(root)
         run("init", "-q", "-b", "main")
         write("crates/tui/src/moved.rs", "fn moved() {}\n")
-        write("docs/specs/routing.md", "old\n")
+        write("docs/development/checks.md", "old\n")
         run("add", ".")
         run("commit", "-q", "-m", "base")
         run("checkout", "-q", "-b", "prose")
-        write("docs/specs/routing.md", "new\n")
+        write("docs/development/checks.md", "new\n")
         run("commit", "-q", "-am", "prose only")
         run("checkout", "-q", "-b", "move", "main")
         run("mv", "crates/tui/src/moved.rs", "docs/moved.rs")
@@ -486,10 +492,10 @@ def selftest():
         unmerged = pull_request_paths(root, pull_request)
         checks.append(("a checkout that is not a merge answers nothing", unmerged is None, unmerged))
 
-        write("docs/specs/routing.md", "edited, not committed\n")
+        write("docs/development/checks.md", "edited, not committed\n")
         write("ui/new.ts", "untracked\n")
         got = branch_paths(root, "main", env=env)
-        wanted = ["docs/specs/routing.md", "ui/new.ts"]
+        wanted = ["docs/development/checks.md", "ui/new.ts"]
         checks.append(("a branch is its commits, its edits and its new files, not the base's",
                        got == wanted, got))
 

@@ -99,6 +99,7 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_session::store::only_the_two_panel_words_are_a_choice`
 `verified-by: bravebot_session::store::only_a_positive_whole_number_is_a_panel_width`
 `verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
+`verified-by: bravebot_tui::persist::a_press_that_closes_the_panel_is_read_back_next_session`
 
 <a id="PANEL-6"></a>
 ### PANEL-6: the panel takes its columns from the transcript, and only where the rest still fits
@@ -137,6 +138,7 @@ border.
 `verified-by: bravebot_tui::panel::the_width_is_clamped_at_both_ends`
 `verified-by: bravebot_tui::panel::a_narrowed_terminal_reclamps_without_forgetting_the_choice`
 `verified-by: bravebot_tui::panel::a_drag_from_the_border_never_selects_or_copies`
+`verified-by: bravebot_tui::panel::the_hint_line_runs_under_the_panel_to_the_right_edge`
 `verified-by: bravebot_tui::panel::the_resize_pointer_is_over_the_border_column_and_nowhere_else`
 `verified-by: bravebot_tui::panel::a_drag_holds_the_resize_pointer_and_its_end_follows_the_border`
 `verified-by: bravebot_tui::panel::a_panel_closed_under_the_pointer_gives_the_resize_pointer_back`

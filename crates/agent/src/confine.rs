@@ -2561,6 +2561,60 @@ pub fn held_to_the_session_network(
     hosts: Option<&Hosts>,
     capabilities: &bravebot_sandbox::policy::Capabilities,
 ) -> Result<(SandboxPolicy, Vec<(String, String)>), String> {
+    held_under_the_session_network(
+        policy,
+        program,
+        network,
+        hosts,
+        capabilities,
+        &|policy, list| {
+            let proxy = crate::host_proxy::proxy_for(list)
+                .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))?;
+            let held = policy.allow_network_egress_only_to(proxy.addr().port());
+            #[cfg(target_os = "linux")]
+            let held = match proxy.socket_path() {
+                Some(socket) => held.with_egress_through(socket),
+                None => held,
+            };
+            Ok((held, proxy.environment()))
+        },
+    )
+}
+
+/// The policy [`held_to_the_session_network`] would give a server, for a caller that must start no
+/// proxy: where a host list holds the server to one, the policy is limited to a port that is not
+/// any proxy's, which is all a view of it reads. Every refusal is the one a launch would make.
+pub fn foreseen_under_the_session_network(
+    policy: SandboxPolicy,
+    program: &Path,
+    network: Network,
+    hosts: Option<&Hosts>,
+    capabilities: &bravebot_sandbox::policy::Capabilities,
+) -> Result<SandboxPolicy, String> {
+    held_under_the_session_network(
+        policy,
+        program,
+        network,
+        hosts,
+        capabilities,
+        &|policy, _| Ok((policy.allow_network_egress_only_to(0), Vec::new())),
+    )
+    .map(|(held, _)| held)
+}
+
+/// A server's policy under the session network, and the variables that point it at the proxy.
+type Held = Result<(SandboxPolicy, Vec<(String, String)>), String>;
+
+/// The decision [`held_to_the_session_network`] makes, with the way a host list is applied left to
+/// `limit`, so that a launch and a view of one cannot decide differently.
+fn held_under_the_session_network(
+    policy: SandboxPolicy,
+    program: &Path,
+    network: Network,
+    hosts: Option<&Hosts>,
+    capabilities: &bravebot_sandbox::policy::Capabilities,
+    limit: &dyn Fn(SandboxPolicy, &bravebot_sandbox::hosts::HostList) -> Held,
+) -> Held {
     if network.is_closed() {
         let closed = policy.without_network_egress();
         return match cannot_close_the_network(&closed, capabilities) {
@@ -2584,17 +2638,10 @@ pub fn held_to_the_session_network(
         false,
         &toolchains,
     )?;
-    let proxy = crate::host_proxy::proxy_for(&list)
-        .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))?;
-    let held = policy.allow_network_egress_only_to(proxy.addr().port());
-    #[cfg(target_os = "linux")]
-    let held = match proxy.socket_path() {
-        Some(socket) => held.with_egress_through(socket),
-        None => held,
-    };
+    let (held, environment) = limit(policy, &list)?;
     match cannot_hold_to_the_proxy(&held, capabilities) {
         Some(detail) => Err(detail),
-        None => Ok((held, proxy.environment())),
+        None => Ok((held, environment)),
     }
 }
 
@@ -4290,6 +4337,7 @@ mod tests {
             for held_back in [
                 format!("{HOME}/.bravebot/gateway-keys.json"),
                 format!("{HOME}/.bravebot/leo-premium.json"),
+                format!("{HOME}/.bravebot/chatgpt-account.json"),
                 format!("{HOME}/.bravebot/mcp.json"),
                 format!("{HOME}/.bravebot-browser/secret"),
                 format!("{HOME}/.ssh/id_ed25519"),

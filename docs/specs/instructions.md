@@ -115,6 +115,8 @@ relative paths mean and what the session is keyed on, and having one answer to "
 this" is what keeps that unambiguous.
 
 `verified-by: bravebot_agent::preamble::an_added_directory_contributes_no_standing_instructions`
+`verified-by: bravebot_agent::preamble::an_added_directory_the_person_vouched_for_still_contributes_no_standing_instructions`
+`verified-by: bravebot_agent::skills::a_directory_opened_beside_the_project_adds_no_skills_even_where_it_is_vouched_for`
 
 ## What wins
 

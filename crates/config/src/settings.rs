@@ -164,6 +164,7 @@ const READ_KEYS: &[&str] = &[
     "attribution",
     "awaySummaryEnabled",
     "awaySummaryIdleSeconds",
+    "deepLinks",
     "deferMcpToolsAbove",
     "download",
     "editorMode",
@@ -641,6 +642,9 @@ pub struct Settings {
     /// What `tui.mouse` said, if it said a boolean. `Some(false)` is the interface leaving the
     /// mouse to the terminal.
     tui_mouse: Option<bool>,
+    /// What `deepLinks` said, if it said a boolean. `Some(false)` is a `bravebot://` link being
+    /// refused by the handler (LINK-6).
+    deep_links: Option<bool>,
     providers: Vec<crate::provider::Provider>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
@@ -1570,6 +1574,7 @@ impl Settings {
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
             tui_mouse: tui_mouse(root),
+            deep_links: root.get("deepLinks").and_then(serde_json::Value::as_bool),
             // The word one root states, there being no file to name. [`Settings::layered`]
             // overwrites it with what the layers come to.
             run_network: match network_word(root) {
@@ -2226,6 +2231,12 @@ impl Settings {
         self.tui_mouse
     }
 
+    /// Whether `deepLinks` said anything: `Some(false)` is a person who does not want a link to
+    /// open a session (LINK-6), and absent is on.
+    pub fn deep_links(&self) -> Option<bool> {
+        self.deep_links
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -2269,6 +2280,7 @@ impl Settings {
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
             && self.tui_mouse.is_none()
+            && self.deep_links.is_none()
             && self.run_network.is_none()
             && self.run_network_ignored.is_empty()
             && self.run_network_unreadable.is_empty()
@@ -2583,6 +2595,7 @@ impl Settings {
             .chain(self.sandbox_hosts.keys())
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.tui_mouse.is_some().then_some("tui.mouse"))
+            .chain(self.deep_links.is_some().then_some("deepLinks"))
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -3881,14 +3894,38 @@ pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
 #[cfg(not(windows))]
 pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME"];
 
-/// The global state directory, or `None` when the platform names no profile directory to look in.
+/// The variable that names the state directory itself, ahead of the profile directory's.
+///
+/// Spelled here for the same reason as [`PROFILE_VARIABLES`]. It is read from the environment alone
+/// and never from a settings file, so a checkout cannot move the one directory whose contents are
+/// trusted. A value that is empty or not an absolute path names nothing and is passed over.
+pub(crate) const STATE_VARIABLE: &str = "BRAVEBOT_HOME";
+
+/// The global state directory, or `None` when nothing names a directory to look in.
 ///
 /// No fallback to a relative `.bravebot`, which is the project layer and reached deliberately rather
 /// than by a home directory going missing. Resolving the weakest layer to the strongest one's
 /// location would silently read a checkout's file as though a person had put it in their own
 /// directory.
 pub(crate) fn home() -> Option<PathBuf> {
-    home_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
+    state_named(
+        std::env::var_os(STATE_VARIABLE),
+        PROFILE_VARIABLES.iter().map(std::env::var_os),
+    )
+}
+
+/// The same answer from the values, `stated` being what [`STATE_VARIABLE`] holds.
+///
+/// The directory it names is the answer as it stands, and a value that names nothing falls through
+/// to the profile directory's, so no location is invented where none was stated.
+fn state_named(
+    stated: Option<std::ffi::OsString>,
+    named: impl IntoIterator<Item = Option<std::ffi::OsString>>,
+) -> Option<PathBuf> {
+    stated
+        .map(PathBuf::from)
+        .filter(|stated| stated.is_absolute())
+        .or_else(|| home_named(named))
 }
 
 /// The same answer, from the values rather than from the variables.
@@ -4106,6 +4143,62 @@ mod tests {
             home_named([named("/somebody"), named("C:\\Users\\someone")]),
             Some(PathBuf::from("/somebody/.bravebot"))
         );
+    }
+
+    /// STATE-2: a directory a person names in `BRAVEBOT_HOME` is the one the settings are read from,
+    /// answering before `HOME`, and is the directory itself. Joined onto, the settings of a job given
+    /// its own state would be looked for in a hidden directory nobody made, and where `HOME` answered
+    /// first they would be the person's own.
+    #[test]
+    fn a_directory_named_in_the_environment_is_the_one_settings_are_read_from() {
+        #[cfg(windows)]
+        const NAMED: &str = "C:\\srv\\ci\\state";
+        #[cfg(not(windows))]
+        const NAMED: &str = "/srv/ci/state";
+        assert_eq!(
+            state_named(named(NAMED), [named("/somebody")]),
+            Some(PathBuf::from(NAMED))
+        );
+    }
+
+    /// STATE-2: a directory a person names is the one settings are read from byte for byte, and one
+    /// whose name is not UTF-8 is not the directory its U+FFFD rendering spells. A resolver that went
+    /// through text would read the settings of the second, or pass the first over and read `HOME`'s,
+    /// and settings decide which model answers and which commands run without being asked about.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_text_is_the_one_settings_are_read_from_and_not_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = OsStr::from_bytes(b"/srv/state-\xff");
+        let lookalike = OsStr::new("/srv/state-\u{FFFD}");
+        let answer =
+            |stated: &OsStr| state_named(Some(stated.to_os_string()), [named("/somebody")]);
+
+        assert_eq!(answer(invalid), Some(PathBuf::from(invalid)));
+        assert_eq!(answer(lookalike), Some(PathBuf::from(lookalike)));
+        assert_ne!(answer(invalid), answer(lookalike));
+    }
+
+    /// STATE-2: a value that is empty or not an absolute path names nothing and is passed over, so
+    /// `HOME` answers as it would have, and a machine that names nothing else has no directory. A
+    /// relative value would otherwise read settings from under wherever the process started, which
+    /// can be a checkout that supplied them.
+    #[test]
+    fn a_value_that_names_no_directory_is_passed_over() {
+        for value in ["", "state", "./state", "../state", "~/state", "$HOME/state"] {
+            assert_eq!(
+                state_named(named(value), [named("/somebody")]),
+                Some(PathBuf::from("/somebody/.bravebot")),
+                "{value:?} was taken as a directory"
+            );
+            assert_eq!(
+                state_named(named(value), [None]),
+                None,
+                "{value:?} produced a location nothing stated"
+            );
+        }
     }
 
     /// The point of the file: a block copied from `~/.claude/settings.json` configures this agent
@@ -4606,6 +4699,32 @@ mod tests {
             0,
             "the block was reported as a key nothing reads"
         );
+    }
+
+    /// LINK-6: only a real `false` stops a link opening a session, so a quoted `"false"` leaves the
+    /// handler registered and working.
+    #[test]
+    fn only_a_boolean_turns_deep_links_off() {
+        let off = Settings::parse(r#"{"deepLinks": false}"#);
+        assert_eq!(off.deep_links(), Some(false));
+        assert_eq!(off.names().collect::<Vec<_>>(), ["deepLinks"]);
+        assert_eq!(
+            off.unread_keys().count(),
+            0,
+            "the key was reported as unread"
+        );
+        for text in [
+            r#"{"deepLinks": "false"}"#,
+            r#"{"deepLinks": 0}"#,
+            r#"{"deepLinks": null}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).deep_links(),
+                None,
+                "{text:?} turned links off"
+            );
+        }
     }
 
     /// MOUSE-4: only a real `false` turns mouse capture off, so a quoted `"false"` or a misplaced key
@@ -5982,6 +6101,110 @@ mod tests {
         assert_eq!(settings.providers().len(), 1);
         assert_eq!(settings.providers()[0].env, ["GATEWAY_KEY"]);
         assert_eq!(settings.providers_ignored().count(), 0);
+    }
+
+    /// BACKEND-24: `options.headers` goes on every request to that gateway, so a layer able to add
+    /// one could send the session's credential and the context of the conversation to a service
+    /// the person never named. A checkout's layers arrive with the checkout, so the header a
+    /// request carries is the person's own file's to name.
+    #[test]
+    fn a_project_layer_cannot_add_a_request_header() {
+        let layers = Layers::new("provider-headers")
+            .global(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "headers": {"X-Tenant-Id": "team-7"}
+                }}}}"#,
+            )
+            .project(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "headers": {"x-copy-to": "this-checkout.invalid"}
+                }}}}"#,
+            )
+            .local(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "headers": {"x-also-copy-to": "this-machine.invalid"}
+                }}}}"#,
+            );
+        let settings = layers.read();
+
+        let mut sent: Vec<(String, String)> = settings
+            .providers()
+            .iter()
+            .flat_map(|provider| provider.request_headers(|_| None))
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        sent.sort();
+        assert_eq!(
+            sent,
+            [("x-tenant-id".to_string(), "team-7".to_string())],
+            "a header a checkout wrote is on the request"
+        );
+        // A name a checkout wrote is not read at all, so it is not among the names refused either:
+        // reporting it as a refusal would mean the block had been read.
+        let refused: Vec<&str> = settings
+            .providers()
+            .iter()
+            .flat_map(|provider| provider.headers_refused.iter())
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            refused.is_empty(),
+            "a checkout's header was read: {refused:?}"
+        );
+
+        let dropped: Vec<PathBuf> = settings
+            .providers_ignored()
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(
+            dropped,
+            [
+                layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+                layers.cwd.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE),
+            ]
+        );
+
+        let only_project = Layers::new("provider-headers-only-project")
+            .project(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://this-checkout.invalid/v1",
+                    "headers": {"x-copy-to": "this-checkout.invalid"}
+                }}}}"#,
+            )
+            .read();
+        assert!(
+            only_project
+                .providers()
+                .iter()
+                .all(|provider| provider.request_headers(|_| None).is_empty()),
+            "a checkout with no home layer above it configured a header"
+        );
+        assert_eq!(only_project.providers_ignored().count(), 1);
+
+        // The file `--settings` named is the person's own act, so it names headers as the home
+        // file does and is not reported.
+        let named = Layers::new("provider-headers-named")
+            .named(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://flag.invalid/v1",
+                    "headers": {"x-route": "named-eu"}
+                }}}}"#,
+            )
+            .read();
+        let from_named: Vec<(String, String)> = named
+            .providers()
+            .iter()
+            .flat_map(|provider| provider.request_headers(|_| None))
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        assert_eq!(
+            from_named,
+            [("x-route".to_string(), "named-eu".to_string())]
+        );
+        assert_eq!(named.providers_ignored().count(), 0);
     }
 
     /// A mistake in a checkout must not decide that somebody's own profile no longer applies, which

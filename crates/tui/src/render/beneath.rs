@@ -400,7 +400,7 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The twelve the file can move
+/// list names the key that answers rather than the key that used to. The thirteen the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
@@ -439,6 +439,7 @@ pub(super) fn shortcuts(
             "earlier prompts: this session or all",
         ),
         (bindings.undo_name(), "undo the last edit"),
+        (bindings.enhance_name(), "make the line more specific"),
     ];
     // Where the session can be suspended, which is every platform but Windows (INPUT-47).
     #[cfg(unix)]

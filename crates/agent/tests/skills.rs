@@ -18,7 +18,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-skills-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-skills-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -1130,6 +1131,43 @@ fn a_home_skill_inside_a_directory_opened_beside_the_project_is_not_offered() {
     );
     let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
     assert_eq!(told, [ONE_HOME_SKILL_REACHED], "the person was not told");
+}
+
+/// A directory opened beside the project adds no skills, whatever it holds and even where the person
+/// vouched for it. Left untrusted, the trust gate would keep its skills out whatever was read, so
+/// the directory is vouched for here and only the set of project roots can keep it out.
+#[test]
+fn a_directory_opened_beside_the_project_adds_no_skills_even_where_it_is_vouched_for() {
+    let scratch = Scratch::new("skills-in-an-opened-directory");
+    let project = scratch.workspace();
+    let other = scratch.path.join("other");
+    write_skill(
+        &project.join(".bravebot"),
+        "own",
+        "own",
+        "the project's",
+        "own",
+    );
+    for root in [".bravebot", ".claude", ".agents"] {
+        write_skill(&other.join(root), "added", "added", "INJECTED", "body");
+    }
+    let mut workspace = Workspace::new(&project).expect("workspace");
+    workspace
+        .add_directory(other.to_str().expect("a scratch path is text"))
+        .expect("open the directory");
+    let vouched = other.canonicalize().expect("the directory resolves");
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &[".", vouched.to_str().expect("path is text")]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert_eq!(
+        from_disk(&catalogue),
+        ["own"],
+        "a skill from a directory opened alongside the project was offered"
+    );
 }
 
 /// Most specific wins, as it does in the trust map. A project that ships its own version of a

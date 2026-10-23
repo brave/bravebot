@@ -262,10 +262,82 @@ fn after_a_ceiling_stop(
     )
 }
 
+/// Which of the limits a person gave a run ended it, and what the run had done by then (TURN-14).
+///
+/// Numbers the driver counted and nothing a reply or a tool result said, so a caller may put them
+/// in a sentence or a result object without reading content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitReached {
+    /// The planner asked for a round of tool calls past the most the run may make. The round it
+    /// asked for was not run.
+    Rounds {
+        /// The limit, which is also how many rounds were made.
+        most: usize,
+    },
+    /// The run had spent as many tokens as it may when it was about to send another request, which
+    /// was not sent.
+    Tokens {
+        /// The limit.
+        most: u64,
+        /// Tokens the run had spent, which is at least `most`.
+        spent: u64,
+        /// Rounds of tool calls made before the run stopped.
+        rounds: usize,
+    },
+}
+
+impl LimitReached {
+    /// Rounds of tool calls the run made before it stopped.
+    pub fn rounds(&self) -> usize {
+        match *self {
+            Self::Rounds { most } => most,
+            Self::Tokens { rounds, .. } => rounds,
+        }
+    }
+}
+
+impl fmt::Display for LimitReached {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Rounds { most } => write!(f, "{}", t!(run_limit_rounds, most = most)),
+            Self::Tokens { most, spent, .. } => {
+                write!(f, "{}", t!(run_limit_tokens, spent = spent, most = most))
+            }
+        }
+    }
+}
+
+/// The limit on tokens a person gave the run, where the run has spent it (TURN-14).
+fn token_limit_reached(task: &Task, state: &State<'_>) -> Option<LimitReached> {
+    let most = task.limits.tokens?;
+    (state.account.tokens >= most).then_some(LimitReached::Tokens {
+        most,
+        spent: state.account.tokens,
+        rounds: state.steps,
+    })
+}
+
+/// End the run at a limit its person gave it, with a line in the trail saying which and how far
+/// the run had got (TURN-14).
+fn stopped_at<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    round: usize,
+    reached: LimitReached,
+) -> TurnError {
+    let (counts, made, limit) = match reached {
+        LimitReached::Rounds { most } => ("rounds", round as u64, most as u64),
+        LimitReached::Tokens { most, spent, .. } => ("tokens", spent, most),
+    };
+    policy.record_run_limit(round, counts, made, limit);
+    TurnError::LimitReached(reached)
+}
+
 #[derive(Debug)]
 pub enum TurnError {
     /// The user asked for the turn to stop.
     Cancelled { attempts: Option<u32> },
+    /// The run reached a limit its person gave it, and stopped before going past it (TURN-14).
+    LimitReached(LimitReached),
     /// Routing could not be precommitted.
     Precommit(String),
     /// A file operation failed or was refused.
@@ -290,6 +362,7 @@ impl fmt::Display for TurnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cancelled { .. } => write!(f, "cancelled"),
+            Self::LimitReached(reached) => write!(f, "{reached}"),
             Self::Precommit(detail) => write!(f, "{detail}"),
             Self::Workspace(e) => write!(f, "{e}"),
             Self::Chat(e) => write!(f, "{e}"),
@@ -308,6 +381,9 @@ impl TurnError {
             Self::Cancelled { attempts } => Ending::Stopped {
                 attempts: *attempts,
             },
+            // The person's own limit, so a stop and not a failure of anything. No request was
+            // handed to egress after it was reached.
+            Self::LimitReached(_) => Ending::Stopped { attempts: Some(0) },
             Self::Chat(error) => Ending::Failed(error.diagnosis()),
             Self::Workspace(_) => Ending::Failed(Diagnosis::of(Category::Workspace)),
             // A precommit that would not hold and a plan that would not run are both this program
@@ -315,6 +391,15 @@ impl TurnError {
             Self::Precommit(_) | Self::Manifest { .. } => {
                 Ending::Failed(Diagnosis::of(Category::Internal))
             }
+        }
+    }
+
+    /// The limit that ended the run, where one did.
+    pub fn limit_reached(&self) -> Option<&LimitReached> {
+        match self {
+            Self::LimitReached(reached) => Some(reached),
+            Self::Manifest { cause, .. } => cause.limit_reached(),
+            _ => None,
         }
     }
 
@@ -690,7 +775,10 @@ pub struct CompletedTurn {
 /// session, so a set that ended with the turn would have the next message ask the same person
 /// about the same language and pay for a second index. `None` says this caller keeps no set
 /// between turns, and the turn then owns one of its own.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "cli, tui and ui-bridge each hold the config, egress, collaborators, trust maps and servers separately"
+)]
 pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     config: &Config,
     egress: &Egress,
@@ -744,7 +832,10 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
 ///
 /// It refuses a task that is not a delegate's, because a caller reaching here with an ordinary
 /// turn would get one whose bound and prompt came from nowhere in particular.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "delegate.rs, the one caller, passes the turn's collaborators and one parent-owned out-parameter per result"
+)]
 pub(crate) fn delegated(
     config: &Config,
     egress: &Egress,
@@ -831,7 +922,10 @@ pub(crate) fn delegated(
 /// that failed, a stop and a conversation with nothing to cut fire none (HOOK-2). What one says
 /// went wrong reaches `reporter` as it does for a turn's hooks (HOOK-7). A caller passing `None`
 /// asks for none to be fired.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the model call's config, egress, reporter, sink, trust and cancel are held separately by each caller"
+)]
 pub fn compact<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -872,7 +966,7 @@ pub fn compact<S: Sink, R: Reporter>(
     // nothing about the compaction it was told of (HOOK-6, HOOK-7).
     if let (Ok(Some(_)), Some(hooked)) = (&done, hooked) {
         fire_hooks(
-            &hooks_in_force(hooked.home),
+            &crate::hooks::in_force(hooked.home),
             bravebot_config::hooks::Moment::Compacted,
             None,
             hooked.workspace,
@@ -912,7 +1006,10 @@ pub struct CheckoutApplied {
 /// path gives them, which is carried with them and not read, so a file a program in the checkout
 /// wrote untrusted is untrusted once it is in the working directory. Each file is put to the
 /// person through `confirmer` whatever the trust map would have said.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the tui, the one caller, passes the checkout id and paths with the workspace, task, confirmer and trust"
+)]
 pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
     config: &Config,
     egress: &Egress,
@@ -1011,7 +1108,10 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
 /// the answer may be written down.
 ///
 /// `cancel` is the person's stop, and it reaches the request as it does a summary's.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "aside takes the same model-call collaborators as compact, plus the question and a watching callback"
+)]
 pub fn aside<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1059,7 +1159,10 @@ pub fn aside<S: Sink, R: Reporter>(
 /// verdict at all, since acting on one is a branch.
 ///
 /// `cancel` is the person's stop, and it reaches the request as it does a summary's.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "goal takes the model-call collaborators compact does, plus the check the person's condition made"
+)]
 pub fn goal<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1104,7 +1207,10 @@ pub fn goal<S: Sink, R: Reporter>(
 /// else (CMD-23).
 ///
 /// `cancel` is the person's stop, and it reaches the request as it does a summary's.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the source and format come from the person's command, beside the workspace and model-call collaborators"
+)]
 pub fn commit_message<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1437,6 +1543,38 @@ fn admit_named_skill<S: Sink>(
     }
 }
 
+/// The words of the skill `/mode` keeps applied, as the gate shows them, or `None` where it does not.
+///
+/// Shown through [`Policy::present`] with the label the skill was read with, as one a person named
+/// is ([`admit_named_skill`]), but returned for the system prompt instead of being added to the
+/// conversation, since a mode is in force every turn and a message of its own would be repeated in
+/// the history each time. A skill the gate would hold back is no mode for that turn.
+fn admit_mode_skill<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    skill: &crate::skills::Skill,
+) -> Result<Option<(String, String)>, TurnError> {
+    conversation.observed(policy.context_label());
+    let body = tools::opened_skill(policy, skill);
+    let slot = conversation.next_reference();
+    let presented = policy
+        .present(
+            "load_skill",
+            slot,
+            &skill.origin,
+            &body,
+            conversation.quarantine(),
+        )
+        .map_err(|d| TurnError::Precommit(d.to_string()))?;
+    Ok(match presented {
+        Presentation::Visible(text) => {
+            policy.admit_skill_mode(&skill.name, text.chars().count());
+            Some((skill.name.clone(), text.to_string()))
+        }
+        Presentation::Quarantined(_) => None,
+    })
+}
+
 /// Whose words a presented result holds, for the view of the request: what the kernel let through
 /// is named by what it is, and what it held back by the reference the planner was given in its place.
 fn provenance_of(presented: &Presentation, what: &'static str) -> Provenance {
@@ -1626,7 +1764,10 @@ fn take_interjections<S: Sink, C: Confirmer, R: Reporter>(
         // the routing this turn precommitted is untouched, so a line typed mid-turn reaches the
         // planner as words and every effect it asks for is gated exactly as one asked for by the
         // opening prompt would be.
-        policy.admit_interjection(said.chars().count());
+        match task.vouched_channel {
+            true => policy.admit_vouched_line(said.chars().count()),
+            false => policy.admit_interjection(said.chars().count()),
+        }
         reporter.interjected(said.clone());
         conversation.push_from(Message::user(said), Provenance::Typed);
     }
@@ -1752,7 +1893,10 @@ fn take_session_messages<S: Sink, R: Reporter>(
 /// Nothing here reads a report. It is labelled by the context that produced it and presented
 /// through the same gate as any other result, so a delegate whose own context met something
 /// untrusted hands its parent a reference rather than words.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the delegates, policy, conversation and the turn's wait, spend, notice and workspace tallies are separate state"
+)]
 fn collect_delegates<S: Sink, R: Reporter>(
     delegates: &mut Vec<Working<'_>>,
     policy: &mut Policy<'_, S>,
@@ -2243,16 +2387,6 @@ fn reads_that_run_together(
     if together < 2 { 0 } else { together }
 }
 
-/// The hooks in force for a person whose own directory is `home`.
-///
-/// Not read at all in a safe session, which is what leaves no hook to fire.
-fn hooks_in_force(home: Option<&std::path::Path>) -> bravebot_config::hooks::Hooks {
-    match bravebot_core::safe::engaged() {
-        true => bravebot_config::hooks::Hooks::default(),
-        false => bravebot_config::hooks::Hooks::load(home),
-    }
-}
-
 /// Run the hooks a person attached to `moment`, and answer with what went wrong where something
 /// did.
 ///
@@ -2279,7 +2413,7 @@ fn fire_hooks<R: Reporter + ?Sized>(
             moment,
             tool,
             workspace.root(),
-            crate::hooks::LIMIT,
+            crate::hooks::default_limit(moment),
             watch,
         )
     })
@@ -2307,7 +2441,7 @@ fn fire_checkout_made<R: Reporter + ?Sized>(
                 checkout: checkout.path(),
                 working_directory: checkout.working_directory(),
             },
-            crate::hooks::LIMIT,
+            crate::hooks::default_limit(moment),
             watch,
         )
     })
@@ -2361,7 +2495,7 @@ fn say_prompt_notices<R: Reporter + ?Sized>(
 }
 
 /// What went wrong, in a sentence each, for the hooks that did not run and end well.
-fn trouble_sentences(fired_all: Vec<crate::hooks::Fired>) -> Vec<String> {
+pub(crate) fn trouble_sentences(fired_all: Vec<crate::hooks::Fired>) -> Vec<String> {
     let mut said = Vec::new();
     for fired in fired_all {
         let Some(trouble) = fired.trouble else {
@@ -2423,7 +2557,10 @@ struct Handback<'a> {
 /// moment this returns, however it returned. A turn that was cancelled, or that failed on its
 /// first request, is a turn that is over, and a hook attached to that is most often the one
 /// telling somebody who walked away.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resume and delegated both pass the turn's collaborators plus the decisions and handback they differ in"
+)]
 fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
     config: &Config,
     egress: &Egress,
@@ -2450,7 +2587,9 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
     // to explain to whoever edited it mid-session.
-    let hooks = hooks_in_force(task.home.as_deref());
+    //
+    // Not read at all in a safe session, which is what leaves no hook to fire.
+    let hooks = crate::hooks::in_force(task.home.as_deref());
 
     // The turn moments belong to the turn a person asked for. A delegate is a run inside this one,
     // started by a call the person did not make, so firing "the turn began" for each of them would
@@ -2710,7 +2849,10 @@ struct Spawned<'scope> {
     waits: crate::timing::DelegateWait,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "run_inner passes the turn's inputs, collaborators and three out-parameters that the turn writes as it goes"
+)]
 fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
     inputs: Inputs<'_>,
     conversation: &mut Conversation,
@@ -2987,6 +3129,23 @@ where
         true => catalogue.named_in(&task.prompt),
         false => Vec::new(),
     };
+    // The skill `/mode` keeps applied, read again here so a skill whose file moved, or whose project
+    // the map no longer vouches for, is not applied on the strength of an earlier turn. Taken from
+    // the set the driver enumerated by its whole name and shown through the gate any skill's body
+    // goes through, so what reaches the system prompt is what `load_skill` would have returned
+    // (SKILL-21). Before the definition's `skills` line narrows the set, as a skill the person
+    // names is.
+    let mut skill_mode = None;
+    if let (None, Some(name)) = (&task.delegate, task.skill_mode.as_deref()) {
+        if let Some(skill) = catalogue.get(name).cloned() {
+            skill_mode = admit_mode_skill(policy, conversation, &skill)?;
+        }
+        if skill_mode.is_none() {
+            notices.push(crate::skills::Notice::from_message(
+                t!(agent_skill_mode_not_used, skill = name).to_string(),
+            ));
+        }
+    }
     let catalogue = match named {
         Some(named) => catalogue.only(named),
         None => catalogue,
@@ -3139,6 +3298,9 @@ where
         &delegates,
         addressed.as_ref(),
         style.as_ref(),
+        skill_mode
+            .as_ref()
+            .map(|(name, words)| (name.as_str(), words.as_str())),
         &preamble,
         started_in,
         memory,
@@ -4003,6 +4165,13 @@ where
             }
         }
 
+        // The person's own limit on the run, which ends it where the session limit above asks
+        // (TURN-14). Nobody is asked: a run that has one has nobody to ask, and raising a limit
+        // the person set is theirs to do by running it again.
+        if let Some(reached) = token_limit_reached(task, state) {
+            return Err(stopped_at(policy, state.steps, reached));
+        }
+
         round_steps::compact_if_due(
             config,
             egress,
@@ -4027,6 +4196,12 @@ where
                 Some(_) => None,
             },
         )?;
+
+        // Again, because the summary a compaction asks for spends tokens of its own, and the
+        // request that follows it is the one this limit is meant to hold back (TURN-14).
+        if let Some(reached) = token_limit_reached(task, state) {
+            return Err(stopped_at(policy, state.steps, reached));
+        }
 
         // Said before the request goes out, so the longest silence in a turn is explained
         // while it happens rather than accounted for afterwards.
@@ -4092,6 +4267,9 @@ where
                 // asking would be a question about untrusted text, and the interface is the side
                 // allowed to ask that one.
                 reporter.streaming(progress.written.declassify(&as_written).to_string());
+                // The model's thinking, through the same gate and to the same screen, and kept out
+                // of the reply: it is no part of `written`, so nothing recorded or sent on holds it.
+                reporter.thinking(progress.thinking.declassify(&as_written).to_string());
                 // Through the same gate, for the same screen, and as a word from a
                 // fixed table rather than as the model spelt it. Whether there is a call
                 // is a fact about which events arrived, not about what they said. Sent
@@ -4278,6 +4456,19 @@ where
             break completion;
         }
 
+        // The planner asked for a round past the most the person allowed. Stopped before that
+        // round runs, so nothing it would have done has happened (TURN-14). A run that answered
+        // after its last allowed round never gets here, since it asked for no further round.
+        if let Some(most) = task.limits.rounds
+            && state.steps >= most
+        {
+            return Err(stopped_at(
+                policy,
+                state.steps,
+                LimitReached::Rounds { most },
+            ));
+        }
+
         state.steps += 1;
 
         round_steps::limit_the_tools(
@@ -4426,6 +4617,8 @@ where
                     crate::repeated_call::Held::Refuse => Some(tools::refused_without_running(
                         policy,
                         reporter,
+                        state.mcp.as_ref().map(|(offer, _)| offer),
+                        &*conversation.quarantine(),
                         call,
                         crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
                     )),
@@ -5413,6 +5606,39 @@ mod tests {
                     if detail.contains("named by the user")
             )),
             "the trail records a skill as supplied that never reached the planner"
+        );
+    }
+
+    /// SKILL-21. A skill the gate would present as a reference is no mode for the turn: nothing of
+    /// its words is returned for the system prompt, and the trail does not record it as kept in
+    /// force, since a turn that went on would run under instructions the person believes apply.
+    #[test]
+    fn a_skill_mode_the_gate_quarantines_is_not_returned_and_not_recorded() {
+        let skill = crate::skills::Skill::untrusted_for_a_test("ship-it", "RELEASE-STEPS-BODY");
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "keep a mode");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .unwrap();
+        let mut conversation = Conversation::new();
+
+        let admitted = admit_mode_skill(&mut policy, &mut conversation, &skill)
+            .expect("a quarantined mode is not a failed turn");
+
+        assert_eq!(admitted, None, "words the gate held back were applied");
+        drop(policy);
+        assert!(
+            !sink.events().iter().any(|e| matches!(
+                e,
+                bravebot_core::event::Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("kept in force")
+            )),
+            "the trail records a mode that was never applied"
         );
     }
 
@@ -7612,6 +7838,99 @@ mod tests {
             said.contains("a shorter answer") && !said.contains("smaller parts"),
             "{said}"
         );
+    }
+
+    /// VIEW-33: the thinking a service streams is carried to the reporter and kept out of the
+    /// conversation.
+    mod thinking {
+        use super::ceiling::said;
+        use super::*;
+        use crate::backend::scripted;
+
+        const FIRST: &str = "THE-MODEL-WEIGHS-THE-FILE ";
+        const SECOND: &str = "AND-DECIDES-TO-READ-IT";
+
+        /// Two rounds, the first calling a tool, each preceded by thinking from the service. The
+        /// reporter is handed every piece in order, which is what a screen draws from. None of it
+        /// is in a request, in the session record, in the reply or in the words drawn as the reply
+        /// took shape, so the second request and the answer are the ones a service that sent no
+        /// thinking would have produced.
+        ///
+        /// The regressions it rejects: the driver not forwarding `Progress::thinking`, which leaves
+        /// `thought` empty, and the driver appending it to the words of the reply, which puts it in
+        /// the second request and the record.
+        #[test]
+        fn the_thinking_of_a_round_reaches_the_reporter_and_is_in_no_request_or_record() {
+            let scratch = crate::testutil::scratch_dir("thinking-reaches-the-reporter-only");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            std::fs::write(scratch.join("a.txt"), "body\n").unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let config = Config::from_lookup(|key| match key {
+                "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+                "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+                _ => None,
+            })
+            .unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let mut conversation = Conversation::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            scripted::script(vec![
+                said("", &[("read_file", r#"{"path":"a.txt"}"#)], None),
+                said("done", &[], None),
+            ]);
+            scripted::thinking_before_each_reply(&[FIRST, SECOND]);
+            let outcome = resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &Task::new("read a.txt"),
+                &mut conversation,
+                &mut crate::confirm::ApproveWrites,
+                &mut reporter,
+                &mut sink,
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            )
+            .outcome;
+            let requests = scripted::asked();
+            scripted::clear();
+
+            let outcome = outcome.expect("a turn whose model thought runs to its answer");
+            assert_eq!(
+                reporter.thought,
+                [FIRST, SECOND, FIRST, SECOND],
+                "the reporter was not handed the thinking of each round, in order"
+            );
+            assert_eq!(
+                requests.len(),
+                2,
+                "the turn did not go on to the request after the tool call: {requests:?}"
+            );
+            assert_eq!(outcome.reply_for_display(), "done");
+            let held = [
+                ("a request", requests.concat()),
+                (
+                    "the session record",
+                    serde_json::to_string(&conversation.snapshot()).unwrap(),
+                ),
+                ("the reply", outcome.reply_for_display().to_string()),
+                ("the reply as it was drawn", reporter.streamed.concat()),
+            ];
+            for (place, text) in held {
+                for piece in [FIRST, SECOND] {
+                    assert!(
+                        !text.contains(piece),
+                        "{place} holds the model's thinking {piece:?}: {text}"
+                    );
+                }
+            }
+        }
     }
 
     /// TURN-10: the reads of one round run beside each other.

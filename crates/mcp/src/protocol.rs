@@ -559,6 +559,35 @@ pub(crate) fn declares_prompts(initialized: &Value) -> bool {
         .is_some_and(Value::is_object)
 }
 
+/// The method a server notifies with when the tools it lists have changed.
+const TOOLS_LIST_CHANGED: &str = "notifications/tools/list_changed";
+
+/// Whether an `initialize` result says the server notifies when its tools change, which is
+/// `capabilities.tools.listChanged` set to `true`. MCP-12.
+pub(crate) fn declares_tools_list_changed(initialized: &Value) -> bool {
+    initialized
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("tools"))
+        .and_then(|tools| tools.get("listChanged"))
+        .is_some_and(|changed| changed == &Value::Bool(true))
+}
+
+/// Whether a line a server wrote is its notice that its tools changed: a message with the method
+/// and no id. The notice carries nothing else that is read, so what the server put in its
+/// parameters decides nothing. MCP-12.
+pub(crate) fn is_tools_list_changed(line: &str) -> bool {
+    #[derive(Deserialize)]
+    struct Message {
+        #[serde(default)]
+        id: Option<Value>,
+        #[serde(default)]
+        method: Option<String>,
+    }
+    serde_json::from_str::<Message>(line).is_ok_and(|message| {
+        message.id.is_none() && message.method.as_deref() == Some(TOOLS_LIST_CHANGED)
+    })
+}
+
 impl PromptList {
     /// What the server offered, as the one text a person is shown in a menu.
     ///
@@ -1484,5 +1513,47 @@ mod tests {
         );
         let (_, offered, refused) = list.drawn();
         assert_eq!((offered, refused), (2, 0));
+    }
+
+    /// Whether a notice is waited for rests on the handshake's own declaration, and only `true`
+    /// is one.
+    #[test]
+    fn a_server_declares_tool_list_changes_in_its_handshake() {
+        assert!(declares_tools_list_changed(
+            &serde_json::json!({"capabilities": {"tools": {"listChanged": true}}})
+        ));
+        for not_declared in [
+            serde_json::json!({"capabilities": {"tools": {}}}),
+            serde_json::json!({"capabilities": {"tools": {"listChanged": false}}}),
+            serde_json::json!({"capabilities": {"tools": {"listChanged": "true"}}}),
+            serde_json::json!({"capabilities": {"prompts": {"listChanged": true}}}),
+            serde_json::json!({}),
+        ] {
+            assert!(
+                !declares_tools_list_changed(&not_declared),
+                "{not_declared}"
+            );
+        }
+    }
+
+    /// The notice is the method with no id. The same method with an id is a request for this
+    /// client to answer, and a reply or another notification is not it.
+    #[test]
+    fn only_a_message_with_the_method_and_no_id_is_the_notice() {
+        assert!(is_tools_list_changed(
+            r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}"#
+        ));
+        assert!(is_tools_list_changed(
+            r#"{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{"x":1}}"#
+        ));
+        for other in [
+            r#"{"jsonrpc":"2.0","id":3,"method":"notifications/tools/list_changed"}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/prompts/list_changed"}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/progress"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"result":{"tools":[]}}"#,
+            "notifications/tools/list_changed",
+        ] {
+            assert!(!is_tools_list_changed(other), "{other}");
+        }
     }
 }

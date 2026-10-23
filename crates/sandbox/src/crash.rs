@@ -69,7 +69,10 @@ pub fn disable_core_dumps() -> CoreDumps {
 /// says nothing about whether the kernel agreed.
 #[cfg(unix)]
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "`libc::getrlimit` fills a local `rlimit` that outlives the call, so the FFI call is sound"
+)]
 fn core_dump_limits() -> Option<(libc::rlim_t, libc::rlim_t)> {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
@@ -83,7 +86,10 @@ fn core_dump_limits() -> Option<(libc::rlim_t, libc::rlim_t)> {
 /// Whether the kernel accepted `limit` as this process's core dump limit.
 #[cfg(unix)]
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "`libc::setrlimit` only reads the borrowed `rlimit` for the length of the call, so the FFI call is sound"
+)]
 fn set_core_dump_limit(limit: &libc::rlimit) -> bool {
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let written = unsafe { libc::setrlimit(libc::RLIMIT_CORE, limit) };
