@@ -57,6 +57,31 @@ something skipped: the parser is hand written against the subset of Fluent in
 report every catalog complete forever. `--selftest` checks the parse and the verdict against inputs
 whose answer is known, and reads no catalog; `make check-locales` runs it first, for the same reason.
 
+## check-lint-increase.py
+
+Fails a change that adds sites of a clippy lint the tree has hundreds of.
+
+`make check` runs clippy with `-D warnings`, so a lint is on only where the tree has no site of it.
+Others, such as `let_underscore_must_use`, `string_slice` and the numeric casts, report hundreds of
+sites in the existing code, and turning one on would need every site fixed or marked in the same
+change. This runs clippy over the libraries and binaries at the merge base and at the checkout, and
+fails when a lint reports more sites in a crate than it did at the base. Nothing is recorded in the
+tree, so no list falls behind the code. Both runs use one toolchain on one host, so a clippy release
+that finds more sites, and code that only another platform compiles, change both counts alike.
+
+A site that is right is marked where it is with `#[expect(clippy::lint, reason = "...")]`, which
+clippy does not report. A lint that reaches zero belongs in `[workspace.lints.clippy]`, which then
+refuses the first new site on its own.
+
+```sh
+make check-lint-increase          # or contrib/check-lint-increase.py
+```
+
+`make check` runs it after clippy, and CI runs it on pull requests. It compiles the workspace twice,
+about twenty seconds each with the dependencies built, and skips a change that touches nothing under
+`crates/` or the manifests. `--base REF` compares with another commit, and `BASE_SHA` sets it
+for CI. `--selftest` checks the verdict on known inputs and runs clippy on none of them.
+
 ## check-versions.py
 
 Holds every file that states this repository's version to the one in the workspace manifest.

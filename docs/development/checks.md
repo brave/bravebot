@@ -28,6 +28,12 @@ not. A lint is added to the table once the tree has none of it. A test target th
 unit tests unwrap), because `allow-unwrap-in-tests` in `clippy.toml` exempts a `#[test]` function and
 a `#[cfg(test)]` module and not a helper in `tests/` or under `cfg(all(test, unix))`.
 
+Lints the tree has hundreds of sites of are held to the base instead: `make check-lint-increase`
+runs clippy over the libraries and binaries at the merge base and at the branch, and fails when a lint
+reports more sites in a crate than it did. Mark a site that is right with
+`#[expect(clippy::lint, reason = "...")]`. `make check` runs it after clippy, CI runs it on pull
+requests, and [contrib/README.md](../../contrib/README.md#check-lint-increasepy) lists the lints.
+
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
 [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
 with `bravebot_sandbox::programs::start`, which takes a `Resolved`, the variables the program

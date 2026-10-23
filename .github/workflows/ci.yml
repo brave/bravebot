@@ -88,6 +88,17 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      # The lints the tree has hundreds of sites of cannot be denied yet. This holds each to the
+      # number the base has, per crate, by running clippy at both. The base commit is the pull
+      # request's own, fetched because the checkout is the merge commit alone.
+      - name: No new sites of the lints held to the base
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          make check-lint-increase
+
       # nextest runs the test binaries side by side, where `cargo test` runs them one after another
       # and waits on each one's slowest test. Each test is a process of its own, so the locks a test
       # file holds around the environment or a fork have nothing left to share.
