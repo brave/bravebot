@@ -2838,6 +2838,7 @@ mod tests {
             url: "https://ai-chat.example/v1".to_string(),
             status: 401,
             retry_after: None,
+            body: None,
         };
         assert!(!BackendError::from(ChatError::Egress(refused_credential)).is_unreachable());
         assert!(!BackendError::from(ChatError::NoContent).is_unreachable());
@@ -2961,6 +2962,7 @@ mod tests {
             url: "https://bedrock-runtime.example/model/invoke".into(),
             status: 403,
             retry_after: None,
+            body: None,
         }));
         let why = refused.diagnosis();
         assert_eq!(why.category, Category::Unauthorized, "{why:?}");
@@ -2988,6 +2990,7 @@ mod tests {
                 url: "https://service.example/v1/chat/completions".into(),
                 status,
                 retry_after: None,
+                body: None,
             }))
             .diagnosis()
         };
@@ -3007,6 +3010,7 @@ mod tests {
                 url: "https://service.example/v1/chat/completions".into(),
                 status,
                 retry_after,
+                body: None,
             }))
             .diagnosis()
             .retry_after
@@ -3110,6 +3114,7 @@ mod tests {
             url: "https://service.example/v1".to_string(),
             status,
             retry_after: None,
+            body: None,
         };
         for refused in [400, 422] {
             assert!(

@@ -9,6 +9,7 @@ use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::{Event, RecordingSink};
 use bravebot_core::label::Label;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+use bravebot_core::value::Labelled;
 use bravebot_net::{Egress, EgressError, Request, Timeouts};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -349,6 +350,461 @@ fn a_non_success_status_is_an_error() {
         .fetch(&mut policy, Request::get(&base), Label::untrusted_public())
         .expect_err("404 is an error");
     assert!(error.to_string().contains("404"), "unexpected: {error}");
+}
+
+/// A policy that lets a request fetch, for a test that asks nothing else of it.
+fn fetching(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+    Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        sink,
+    )
+    .expect("policy begins")
+}
+
+/// The bytes of a refusal's body, read the way a caller that has decided to compare them would.
+fn start_of(policy: &mut Policy<'_, RecordingSink>, body: Labelled<Vec<u8>>) -> Vec<u8> {
+    policy
+        .decode_transport("test", Label::untrusted_public())
+        .decode(body)
+        .0
+}
+
+/// A refusal as a service sends it: a status line, any further headers, and a JSON body.
+fn refusal(status: &str, headers: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// The failure of a request that was refused, which these tests expect and read.
+fn refused(
+    egress: &Egress,
+    policy: &mut Policy<'_, RecordingSink>,
+    request: Request,
+) -> EgressError {
+    egress
+        .fetch(policy, request, Label::untrusted_public())
+        .expect_err("a non-success status is a failure")
+}
+
+/// NET-12: a request that asks for a refusal's body is handed all of it, labelled as its call says,
+/// with the status and the wait the server asked for, and a request that does not ask is told the
+/// status alone. A client that ignored the request would hand nobody a body, and one that always
+/// kept it would hand every caller a body it never asked for.
+#[test]
+fn a_request_that_asks_is_handed_a_refusals_body_and_one_that_does_not_is_told_the_status_alone() {
+    let body = r#"{"error":{"code":"a_code"}}"#;
+    let reply = refusal("429 Too Many Requests", "Retry-After: 7\r\n", body);
+    let base = serve(vec![reply.clone(), reply]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = fetching(&mut sink);
+
+    let asked = refused(
+        &egress,
+        &mut policy,
+        Request::get(&base).reading_a_refusal(),
+    );
+    let EgressError::Status {
+        status,
+        retry_after,
+        body: Some(handed),
+        ..
+    } = asked
+    else {
+        panic!("a request that asked was not handed the body: {asked:?}");
+    };
+    assert_eq!(status, 429);
+    assert_eq!(retry_after, Some(Duration::from_secs(7)));
+    assert_eq!(handed.label(), Label::untrusted_public());
+    assert_eq!(start_of(&mut policy, handed), body.as_bytes());
+
+    let unasked = refused(&egress, &mut policy, Request::get(&base));
+    assert!(
+        matches!(
+            unasked,
+            EgressError::Status {
+                status: 429,
+                retry_after: Some(_),
+                body: None,
+                ..
+            }
+        ),
+        "a request that did not ask was handed a body: {unasked:?}"
+    );
+}
+
+/// NET-12: a streamed request is handed the body as a buffered one is, since the failure is
+/// decided before either reads a success's body.
+#[test]
+fn a_streamed_request_that_asks_is_handed_a_refusals_body() {
+    let base = serve(vec![refusal("401 Unauthorized", "", r#"{"error":{}}"#)]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = fetching(&mut sink);
+
+    let error = egress
+        .fetch_streaming(
+            &mut policy,
+            Request::get(&base).reading_a_refusal(),
+            Label::untrusted_public(),
+            None,
+        )
+        .map(|_| ())
+        .expect_err("a 401 is a failure");
+
+    assert!(
+        matches!(
+            error,
+            EgressError::Status {
+                status: 401,
+                body: Some(_),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// NET-12: a body of exactly the cap is handed over whole, and one byte more is not handed over at
+/// all. A body cut at the cap would be read as if it were whole, and a cap that refused its own
+/// length would hide a body that fits.
+#[test]
+fn a_refusals_body_is_handed_over_whole_up_to_the_cap_and_not_at_all_past_it() {
+    let at_the_cap = "a".repeat(bravebot_net::REFUSAL_BODY_BYTES);
+    let past_it = "a".repeat(bravebot_net::REFUSAL_BODY_BYTES + 1);
+    let base = serve(vec![
+        refusal("401 Unauthorized", "", &at_the_cap),
+        refusal("401 Unauthorized", "", &past_it),
+    ]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = fetching(&mut sink);
+
+    let whole = refused(
+        &egress,
+        &mut policy,
+        Request::get(&base).reading_a_refusal(),
+    );
+    let EgressError::Status {
+        body: Some(handed), ..
+    } = whole
+    else {
+        panic!("a body of exactly the cap was not handed over: {whole:?}");
+    };
+    assert_eq!(start_of(&mut policy, handed), at_the_cap.as_bytes());
+
+    let long = refused(
+        &egress,
+        &mut policy,
+        Request::get(&base).reading_a_refusal(),
+    );
+    assert!(
+        matches!(
+            long,
+            EgressError::Status {
+                status: 401,
+                body: None,
+                ..
+            }
+        ),
+        "a body past the cap was handed over: {long:?}"
+    );
+}
+
+/// NET-12: asking for refusals changes nothing for a success, whose body is read as it always is.
+#[test]
+fn a_success_is_not_changed_by_asking_for_a_refusals_body() {
+    let base = serve(vec![ok_response("hello from the server")]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = fetching(&mut sink);
+
+    let response = egress
+        .fetch(
+            &mut policy,
+            Request::get(&base).reading_a_refusal(),
+            Label::untrusted_public(),
+        )
+        .expect("a 200 is a reply");
+
+    assert_eq!(response.status, 200);
+    assert!(!response.truncated);
+    assert_eq!(
+        start_of(&mut policy, response.body),
+        b"hello from the server"
+    );
+}
+
+/// NET-12: a refusal whose body stops partway is the status alone. A client that took the part that
+/// arrived would hand its caller a body cut wherever the connection broke, to be read as if it were
+/// whole.
+#[test]
+fn a_refusal_whose_body_stops_partway_is_the_status_alone() {
+    let base = serve(vec![
+        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 1000\r\nConnection: close\r\n\r\n{\"error\":"
+            .to_string(),
+    ]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = fetching(&mut sink);
+
+    let error = refused(
+        &egress,
+        &mut policy,
+        Request::get(&base).reading_a_refusal(),
+    );
+
+    assert!(
+        matches!(
+            error,
+            EgressError::Status {
+                status: 401,
+                body: None,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+/// NET-12 and NET-5: a refusal whose body goes quiet is given up on at the gap bound, as any body
+/// is, and is the status alone. A read of it that had no bound would hold the request for as long
+/// as the server cared to say nothing.
+#[test]
+fn a_refusal_whose_body_goes_quiet_is_the_status_alone_after_the_gap_bound() {
+    let base = serve_stalled_reply("401 Unauthorized", Duration::ZERO, || {});
+    let egress = Egress::with_timeouts(Timeouts {
+        idle: Duration::from_millis(300),
+        reply: Duration::from_secs(30),
+        ..Timeouts::default()
+    });
+    let mut sink = RecordingSink::new();
+    let mut policy = fetching(&mut sink);
+    let started = std::time::Instant::now();
+
+    let error = refused(
+        &egress,
+        &mut policy,
+        Request::get(&base).reading_a_refusal(),
+    );
+
+    assert!(
+        matches!(
+            error,
+            EgressError::Status {
+                status: 401,
+                body: None,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the wait for a quiet refusal ran {:?}",
+        started.elapsed()
+    );
+}
+
+/// NET-12: a caller that stops the request while a refusal's body is still awaited is answered at
+/// once, though the body's own bound is minutes away. A read that ran after the stop was last
+/// looked for would hold the turn, and the renewal that follows a refused token, until the server
+/// finished or the gap bound passed.
+#[test]
+fn a_stop_while_a_refusals_body_is_awaited_is_acted_on() {
+    let base = serve_stalled_reply("401 Unauthorized", Duration::ZERO, || {});
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = fetching(&mut sink);
+    let stop = Cancel::new();
+    let presses = stop.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(300));
+        presses.cancel();
+    });
+    let started = std::time::Instant::now();
+
+    let outcome = egress.fetch_streaming(
+        &mut policy,
+        Request::get(&base).reading_a_refusal(),
+        Label::untrusted_public(),
+        Some(&stop),
+    );
+
+    assert!(
+        matches!(outcome, Err(EgressError::Stopped { .. })),
+        "{:?}",
+        outcome.map(|_| ())
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the stop was acted on after {:?}",
+        started.elapsed()
+    );
+}
+
+/// NET-12 and DIAG-7: a refusal whose body fails while it is read is written to the diagnostic log
+/// as the body failing, beside the status that is the failure, and a body that failed after the
+/// request was stopped is not written, since a stop is not a failure. A read that said nothing
+/// would leave the log showing a status for a request whose listed code was never seen.
+#[test]
+fn a_refusal_whose_body_fails_while_it_is_read_is_written_to_the_diagnostic_log() {
+    let timeouts = Timeouts {
+        idle: Duration::from_millis(300),
+        reply: Duration::from_secs(30),
+        ..Timeouts::default()
+    };
+
+    let base = serve_stalled_reply("401 Unauthorized", Duration::ZERO, || {});
+    let egress = Egress::with_timeouts(timeouts);
+    let log = logged(|| {
+        let mut sink = RecordingSink::new();
+        let mut policy = fetching(&mut sink);
+        let error = refused(
+            &egress,
+            &mut policy,
+            Request::get(&base).reading_a_refusal(),
+        );
+        assert!(matches!(error, EgressError::Status { .. }), "{error:?}");
+    });
+    let lines = about(&log, &base);
+    assert_eq!(lines.len(), 2, "{log:?}");
+    let failed_read = lines
+        .iter()
+        .find(|line| line.contains("kind=transport"))
+        .unwrap_or_else(|| panic!("the body failing was not written: {lines:?}"));
+    assert!(failed_read.contains("status=401"), "{failed_read}");
+    assert!(
+        number_after(failed_read, "elapsed_ms") >= 250,
+        "the request had waited for the quiet that ended it: {failed_read}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("kind=status")),
+        "the status that is the failure was not written: {lines:?}"
+    );
+    for line in &lines {
+        assert!(
+            !line.contains("beginning of an answer"),
+            "what the server sent reached the log: {line}"
+        );
+    }
+
+    let base = serve_stalled_reply("401 Unauthorized", Duration::ZERO, || {});
+    let egress = Egress::with_timeouts(timeouts);
+    let log = logged(|| {
+        let mut sink = RecordingSink::new();
+        let mut policy = fetching(&mut sink);
+        let stop = Cancel::new();
+        let presses = stop.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            presses.cancel();
+        });
+        let outcome = egress.fetch_streaming(
+            &mut policy,
+            Request::get(&base).reading_a_refusal(),
+            Label::untrusted_public(),
+            Some(&stop),
+        );
+        assert!(matches!(outcome, Err(EgressError::Stopped { .. })));
+        // Past the gap, which is when the abandoned read ends in the failure that must not be written.
+        thread::sleep(Duration::from_millis(900));
+    });
+    assert!(
+        about(&log, &base).is_empty(),
+        "a stopped request was written: {log:?}"
+    );
+}
+
+/// NET-12 and NET-2: a refusal after a redirect is reported against the URL that was asked for, as a
+/// status is, and carries no body: the body is the answer of a host a server named, which the caller
+/// did not ask. Nothing is read from that host's body either, so a body that stalls there holds the
+/// failure no longer than the status does and writes nothing about the host it led to. A client that
+/// handed the body over would let a server's redirect speak for the host the caller asked.
+#[test]
+fn a_refusal_after_a_redirect_carries_no_body_and_names_the_url_that_was_asked_for() {
+    let stalled = serve_stalled_reply("401 Unauthorized", Duration::ZERO, || {});
+    let base = serve(vec![
+        redirect_to(&format!("{stalled}/SENTINEL-REDIRECT-BYTES")),
+        refusal("404 Not Found", "", r#"{"error":{}}"#),
+    ]);
+    let egress = Egress::with_timeouts(Timeouts {
+        idle: Duration::from_secs(5),
+        reply: Duration::from_secs(30),
+        ..Timeouts::default()
+    });
+    let asked = format!("{base}/start");
+    let started = std::time::Instant::now();
+
+    let log = logged(|| {
+        let mut sink = RecordingSink::new();
+        let mut policy = fetching(&mut sink);
+        let error = refused(
+            &egress,
+            &mut policy,
+            Request::get(&asked).reading_a_refusal(),
+        );
+
+        let EgressError::Status {
+            url, status, body, ..
+        } = &error
+        else {
+            panic!("{error:?}");
+        };
+        assert_eq!((url.as_str(), *status), (asked.as_str(), 401));
+        assert!(body.is_none(), "a body the redirect led to was handed over");
+        assert!(
+            !error.to_string().contains("SENTINEL-REDIRECT-BYTES"),
+            "the redirect the server chose reached the failure's text: {error}"
+        );
+    });
+
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "the body of the redirect's host was waited on for {:?}",
+        started.elapsed()
+    );
+    assert!(
+        about(&log, &stalled).is_empty(),
+        "the redirect's host reached the log: {log:?}"
+    );
+}
+
+/// NET-12: a request that waits on its reply without bound is handed no refusal body, since a stop
+/// would leave the read blocked with no bound to end it. The status is the failure.
+#[test]
+fn a_request_that_waits_without_bound_is_not_handed_a_refusals_body() {
+    let base = serve(vec![refusal("401 Unauthorized", "", r#"{"error":{}}"#)]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = fetching(&mut sink);
+    let stop = Cancel::new();
+
+    let outcome = egress.fetch_streaming(
+        &mut policy,
+        Request::get(&base)
+            .patient_on_this_machine()
+            .reading_a_refusal(),
+        Label::untrusted_public(),
+        Some(&stop),
+    );
+
+    assert!(
+        matches!(
+            outcome,
+            Err(EgressError::Status {
+                status: 401,
+                body: None,
+                ..
+            })
+        ),
+        "{:?}",
+        outcome.map(|_| ())
+    );
 }
 
 /// A non-http scheme must be rejected before any connection is attempted, so the
@@ -814,6 +1270,16 @@ fn serve_stalled_body() -> String {
 /// body's own wait. The hook is how a test acts at a moment the client is known to be reading,
 /// which nothing on the client's side says.
 fn serve_stalled_body_then(delay: Duration, when_quiet: impl FnOnce() + Send + 'static) -> String {
+    serve_stalled_reply("200 OK", delay, when_quiet)
+}
+
+/// The same under a status line of the caller's, so a refusal can stall as a success does.
+fn serve_stalled_reply(
+    status: &str,
+    delay: Duration,
+    when_quiet: impl FnOnce() + Send + 'static,
+) -> String {
+    let status = status.to_string();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("addr").port();
 
@@ -829,7 +1295,9 @@ fn serve_stalled_body_then(delay: Duration, when_quiet: impl FnOnce() + Send + '
         }
 
         thread::sleep(delay);
-        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 100\r\nConnection: close\r\n\r\n";
+        let head = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nContent-Length: 100\r\nConnection: close\r\n\r\n"
+        );
         let _ = stream.write_all(head.as_bytes());
         let _ = stream.write_all(b"the beginning of an answer");
         let _ = stream.flush();

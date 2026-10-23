@@ -6684,6 +6684,7 @@ mod tests {
                     url: "https://example.invalid/".into(),
                     status,
                     retry_after: None,
+                    body: None,
                 }))
                 .counted(3, None, None),
             )

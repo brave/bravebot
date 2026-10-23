@@ -34309,6 +34309,7 @@ mod tests {
                     url: "https://example.test/PRIVATE_PATH?key=PRIVATE_QUERY".into(),
                     status: 503,
                     retry_after: None,
+                    body: None,
                 }),
             )),
         };

@@ -35,7 +35,7 @@ guards:
       - crates/mcp/src/lib.rs: 1
       - crates/mcp/src/protocol.rs: 3
       - crates/mcp/src/stdio.rs: 3
-      - crates/net/src/lib.rs: 2
+      - crates/net/src/lib.rs: 4
   - symbol: Labelled::declassify
     every-spelling: yes
     sites:
@@ -190,7 +190,7 @@ guards:
       - crates/core/src/policy.rs: 2
       - crates/mcp/src/http.rs: 1
       - crates/net/src/lib.rs: 1
-      - crates/net/tests/egress.rs: 2
+      - crates/net/tests/egress.rs: 3
       - crates/tui/src/update.rs: 1
 documented-by: docs/website/docs/how-it-works.md
 ---
