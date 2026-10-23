@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # Already in the tree for the credential protocol; here it encodes the clipboard escape
 # sequence, which is base64 by specification.

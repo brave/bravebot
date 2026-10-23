@@ -3,6 +3,10 @@
 //! Driven through the bridge against a scripted planner, because the clause is about a planner
 //! that loops back across turns: the session that holds the memo, the turn that reads it and the
 //! request the planner is sent next have to agree before the person is spared the question.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;

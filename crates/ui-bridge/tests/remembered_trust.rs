@@ -7,6 +7,10 @@
 //! test in-process would be reading and writing the developer's.
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_agent::trusted::{Identity, Store};
 use serde_json::{Value, json};

@@ -3,6 +3,10 @@
 //! These run against a real `~/.bravebot`, redirected by `HOME`, because the point of the feature is
 //! what is on the filesystem afterwards: a record that a later process can find, and an audit a
 //! person can read.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use bravebot_agent::Conversation;
 use bravebot_agent::Workspace;

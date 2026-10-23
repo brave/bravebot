@@ -12,6 +12,13 @@
 //! call's capability label, which for a connector is untrusted and private, and never read here.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        reason = "a test that unwraps fails at the line that did"
+    )
+)]
 
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::Capability;

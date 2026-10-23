@@ -1,4 +1,8 @@
 //! Tests for the label-aware file tools, exercised against a real temporary directory.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 mod repository;
 

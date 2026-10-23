@@ -10,6 +10,10 @@
 
 #![cfg(unix)]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 #[allow(dead_code)]
 #[path = "../../tui/src/undo_endpoint.rs"]

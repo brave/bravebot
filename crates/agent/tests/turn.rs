@@ -5,6 +5,10 @@
 //! contents try to redirect the turn cannot do so.
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 mod repository;
 
