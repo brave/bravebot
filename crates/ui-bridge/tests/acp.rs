@@ -10,7 +10,6 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
-#[allow(dead_code)]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
 #[path = "../../session/test-support/profile.rs"]

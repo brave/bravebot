@@ -181,7 +181,10 @@ pub fn compose<S: Sink>(
 ///
 /// `appended` is what `--append-system-prompt` named (INSTR-10). It is the last standing source,
 /// after the project's file, and it is in `text`, which is what a delegate reads.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, the two workspaces and each preamble input are held separately by compose and by the turn"
+)]
 pub fn compose_in<S: Sink>(
     policy: &mut Policy<'_, S>,
     sources: &Workspace,

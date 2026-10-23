@@ -5,7 +5,10 @@
 //! Not a test of anything: every assertion that matters lives in turn.rs and exec.rs. This exists
 //! to print what the planner is and is not shown, which is the part worth seeing.
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "turns.rs is shared by several test binaries, and demo uses only run_with_trust"
+)]
 #[path = "../test-support/turns.rs"]
 mod turns;
 

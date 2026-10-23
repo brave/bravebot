@@ -626,7 +626,10 @@ impl Session {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are what `settle` holds for one server plus the list it took out, and it has one caller"
+    )]
     fn settle_one<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -799,7 +802,6 @@ impl Session {
     /// person says it is where the server now is: only then is it read as a url, held to the
     /// managed layer, and reached. The handshake there comes before the declaration is rewritten,
     /// so a destination that does not answer is not written down.
-    #[allow(clippy::too_many_arguments)]
     fn moved<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -1449,7 +1451,10 @@ pub(crate) enum Called {
 /// the person said at an earlier call to stop asking for it in this project; a call carrying the
 /// person's private data asks whatever was said (PERM-9). The arguments reach the server only past
 /// the endorsement the answer minted.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the policy, offer, egress, confirmer, reporter and the alias, tool and arguments of a call"
+)]
 pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     offer: &Offer,

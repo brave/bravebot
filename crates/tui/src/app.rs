@@ -1491,7 +1491,10 @@ struct Switch {
 }
 
 /// Run the interface until the user leaves.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are what the cli settled before the interface starts, passed once by its single caller"
+)]
 pub fn run(
     config: &mut Config,
     workspace: &Workspace,
@@ -1905,7 +1908,10 @@ fn save_compacted(
 /// Says what happened either way. A rewind that reported nothing would leave somebody who asked
 /// for three turns back and had two believing the tree in front of them is three turns older
 /// than it is.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the session, conversation, trust, programs, record, workspace, servers and step count"
+)]
 fn rewind(
     session: &mut Session,
     conversation: &mut Conversation,
@@ -2017,7 +2023,10 @@ fn rewind(
 /// ended would trust a half-written file again on a resume, so the record is written again when
 /// the map changed. Nothing is appended to the audit when no gate was passed, and nothing is saved
 /// where there is no record to keep, as with closing a directory.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the session state `/hunks` reads and writes, and the argument the person typed"
+)]
 fn carry_out_hunks(
     session: &mut Session,
     conversation: &Conversation,
@@ -2318,7 +2327,10 @@ fn adopt_settings(
 ///
 /// `Err` is a session that ended before it began: the person left at one of the questions, or the
 /// definition it was started under was refused.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "`event_loop` forwards the arguments it was given, and `begin_session` has that one caller"
+)]
 fn begin_session(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
@@ -2623,7 +2635,10 @@ fn start_the_session(
 /// terminal, and a generic backend's error type carries no bounds to convert from.
 ///
 /// Returns the session left behind, where there is one to pick up again.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "`run` forwards the arguments it was given and the switch, and `event_loop` has that one caller"
+)]
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
@@ -3944,7 +3959,10 @@ fn handle_after_clear(
 /// recorded name that matches nothing is said in the transcript, with the definition named and
 /// that the narrowing is gone, and the session goes on without it and without recording it: the
 /// turns from here are not the definition's, so a later resume must not claim they were.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a separate field of the event loop's state, borrowed mutably or not independently, so one parameter struct would borrow them all mutably"
+)]
 fn settle_under(
     session: &mut Session,
     config: &mut Config,
@@ -4574,7 +4592,10 @@ fn compact_animated(
 /// Apart from [`compact_animated`] so that what the terminal hands the agent, the state directory
 /// the hooks are read from and the workspace they run in, is somewhere a test can call without a
 /// terminal.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are what the worker thread owns or borrows, so a test can call it without a terminal"
+)]
 fn summarise_on_a_worker(
     config: &Config,
     conversation: Conversation,
@@ -4681,7 +4702,10 @@ fn compact_ended(
 /// A question that could not be answered leaves a line in the transcript rather than a row with
 /// nothing in it. The gates it did pass are still returned, since they decided about a request
 /// that really went out.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the terminal, session and trust are exclusive borrows of the event loop's own state, which a bundle would have to hold together"
+)]
 fn aside_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -4742,7 +4766,10 @@ enum Writing<'a> {
 /// row beside the transcript, and a brief or an enhancement goes into the box. A stop key walks
 /// away from the request and comes back as [`Unanswered::Stopped`] (INPUT-4). `writing` says what
 /// the request is for where it is not a question or a recap.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the terminal, session and trust are exclusive borrows of the event loop's own state, which a bundle would have to hold together"
+)]
 fn ask_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -5193,7 +5220,10 @@ fn aside_reported(session: &mut Session, message: crate::remote_confirm::ToMain)
 /// or was stopped ([`crate::manifest_run::join`]). A grant a step was given for a program belongs to
 /// the run and travels into the run's own record; folding it into the session would leave the
 /// conversation holding a yes that was given about a plan it never saw.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the terminal, session and trust are exclusive borrows of the event loop's own state, which a bundle would have to hold together"
+)]
 fn manifest_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -5731,7 +5761,10 @@ struct RetainedTurn {
 ///
 /// Write approvals come back over a channel because only this thread owns the terminal. The
 /// worker blocks until an answer arrives, which is what a write must wait for anyway.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the terminal and each piece of session state a turn takes and hands back"
+)]
 fn run_turn_animated(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
@@ -6998,7 +7031,10 @@ fn complete_turn(
 }
 
 /// Fold a finished turn into the session.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the session, the outcome and the pieces of state the turn handed back, each its own type"
+)]
 fn fold_outcome(
     session: &mut Session,
     outcome: Result<turn::Outcome, turn::TurnError>,

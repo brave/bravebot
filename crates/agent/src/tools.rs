@@ -5436,7 +5436,10 @@ fn edit_pairs(arguments: &Value) -> Result<Vec<EditPair>, &'static str> {
 ///
 /// `recording` reaches no further than the scan below: an edit's findings are written to the same
 /// record a whole-file write's are.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is borrowed from the turn's tools or the dispatch and owned by a different holder, so no struct exists to bundle them"
+)]
 fn edit_file<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -6633,7 +6636,10 @@ fn released_reason<S: Sink>(
 /// value if they agree. The half of `read_output` that comes after the reference is accepted and
 /// any check has spoken, returning the text, how many lines it holds and who released it, or the
 /// result to hand back instead.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy and confirmer are `&mut` borrows of the turn while the rest is read-only state of one read, so bundling them would split one borrow across two values"
+)]
 fn release_output<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     slots: &SlotStore,
@@ -7898,7 +7904,10 @@ fn run_call<S: Sink>(
 /// line remembered or its scopes and key kept where the person asked for that, and a refusal comes
 /// back as the result of the call. No labelled value is built or released here: the plan, the
 /// reference's name and the confinement are the driver's own structure.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the plan and its scopes are the driver's own structure and `policy` and `confirmer` are exclusive borrows, so none of them can share a bundle without the borrows aliasing"
+)]
 fn ask_about_the_run<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &Tools<'_>,
@@ -9513,7 +9522,10 @@ fn download_url<S: Sink, C: Confirmer>(
 /// it said about a call that failed: both go to the planner quarantined and are marked on the
 /// screen. The sentences this process writes name the tool by the alias the person gave the
 /// server and the word they read on its list, and nothing the server answered.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "every argument is forwarded to `mcp::call`, which takes the same list, and the dispatch holds each apart"
+)]
 fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     offer: &crate::mcp::Offer,

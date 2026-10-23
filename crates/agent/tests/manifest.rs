@@ -5,7 +5,10 @@
 //! are the ones that matter, and each asserts the negative directly, that no extra request went
 //! out and no file appeared, rather than asserting that a reply looked sensible.
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "`turns.rs` is shared by several test binaries, and this one calls only its `run`"
+)]
 #[path = "../test-support/turns.rs"]
 mod turns;
 
@@ -178,7 +181,6 @@ macro_rules! skipping_permissions {
     };
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run(
     config: &Config,
     workspace: &Workspace,

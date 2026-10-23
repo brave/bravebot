@@ -12,11 +12,13 @@
 
 mod repository;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "aliases.rs is shared with the workspace tests, which use least_pairs and two_files; turn does not"
+)]
 #[path = "../test-support/aliases.rs"]
 mod aliases;
 
-#[allow(dead_code)]
 #[path = "../test-support/turns.rs"]
 mod turns;
 
@@ -25840,7 +25842,10 @@ fn scoped_run<C: bravebot_agent::Confirmer + Send>(
 }
 
 /// [`scoped_run`] in a session that may record a line past itself, under `state`.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "scoped_run's arguments plus the state directory, which scoped_run passes as None"
+)]
 fn scoped_run_remembering<C: bravebot_agent::Confirmer + Send>(
     name: &str,
     arguments: serde_json::Value,
@@ -25865,7 +25870,10 @@ fn scoped_run_remembering<C: bravebot_agent::Confirmer + Send>(
 }
 
 /// [`scoped_run_remembering`] after each of `before`, which the planner calls first.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "scoped_run_remembering's arguments plus the calls made first, which it passes as none"
+)]
 fn scoped_run_after<C: bravebot_agent::Confirmer + Send>(
     name: &str,
     before: &[serde_json::Value],
@@ -26711,7 +26719,10 @@ struct TwoRuns {
 
 /// A turn whose planner makes `first` and then `second`, each writing its own marker outside every
 /// directory the session holds, which the profile refuses and a line with none does not.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the turn settings a test varies plus the two calls, all forwarded to runs"
+)]
 fn two_runs<C: bravebot_agent::Confirmer + Send>(
     name: &str,
     first: serde_json::Value,
@@ -26736,7 +26747,10 @@ fn two_runs<C: bravebot_agent::Confirmer + Send>(
 /// [`two_runs`] after a line that exits non-zero with the sandbox on, which is what a request for
 /// no sandbox is accepted after (SANDBOX-29). The confirmer sees that line first, then `first`,
 /// then `second`.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "two_runs' arguments, forwarded to runs after a failing line is put ahead of the two calls"
+)]
 fn two_runs_after_a_failed_line<C: bravebot_agent::Confirmer + Send>(
     name: &str,
     first: serde_json::Value,
@@ -26758,7 +26772,6 @@ fn two_runs_after_a_failed_line<C: bravebot_agent::Confirmer + Send>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn runs<C: bravebot_agent::Confirmer + Send>(
     name: &str,
     calls: Vec<serde_json::Value>,
@@ -29805,7 +29818,10 @@ fn vet_a_picture(
 
 /// [`vet_a_picture`] with the call that mints `ref:1` and the trust map chosen by the caller, so
 /// the reference can be one nothing has read yet.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "vet_a_picture's arguments plus the minting call and trust map that its callers choose"
+)]
 fn vet_a_picture_after(
     name: &str,
     file: (&str, Vec<u8>),
@@ -67035,7 +67051,10 @@ impl PathPlaces {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the turn settings a test varies plus its calls, forwarded to path_turn_in with two more"
+)]
 fn path_turn<C: bravebot_agent::Confirmer + Send>(
     name: &str,
     places: &PathPlaces,
@@ -67062,7 +67081,10 @@ fn path_turn<C: bravebot_agent::Confirmer + Send>(
 
 /// [`path_turn`], with `prepare` given the project's directory before the turn starts, for a test
 /// whose request names a place inside it or above it.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "path_turn's arguments plus whether reads are kept inside and a prepare step, which path_turn defaults"
+)]
 fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
     name: &str,
     places: &PathPlaces,

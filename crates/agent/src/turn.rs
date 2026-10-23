@@ -775,7 +775,10 @@ pub struct CompletedTurn {
 /// session, so a set that ended with the turn would have the next message ask the same person
 /// about the same language and pay for a second index. `None` says this caller keeps no set
 /// between turns, and the turn then owns one of its own.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "cli, tui and ui-bridge each hold the config, egress, collaborators, trust maps and servers separately"
+)]
 pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     config: &Config,
     egress: &Egress,
@@ -829,7 +832,10 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
 ///
 /// It refuses a task that is not a delegate's, because a caller reaching here with an ordinary
 /// turn would get one whose bound and prompt came from nowhere in particular.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "delegate.rs, the one caller, passes the turn's collaborators and one parent-owned out-parameter per result"
+)]
 pub(crate) fn delegated(
     config: &Config,
     egress: &Egress,
@@ -916,7 +922,10 @@ pub(crate) fn delegated(
 /// that failed, a stop and a conversation with nothing to cut fire none (HOOK-2). What one says
 /// went wrong reaches `reporter` as it does for a turn's hooks (HOOK-7). A caller passing `None`
 /// asks for none to be fired.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the model call's config, egress, reporter, sink, trust and cancel are held separately by each caller"
+)]
 pub fn compact<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -997,7 +1006,10 @@ pub struct CheckoutApplied {
 /// path gives them, which is carried with them and not read, so a file a program in the checkout
 /// wrote untrusted is untrusted once it is in the working directory. Each file is put to the
 /// person through `confirmer` whatever the trust map would have said.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the tui, the one caller, passes the checkout id and paths with the workspace, task, confirmer and trust"
+)]
 pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
     config: &Config,
     egress: &Egress,
@@ -1096,7 +1108,10 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
 /// the answer may be written down.
 ///
 /// `cancel` is the person's stop, and it reaches the request as it does a summary's.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "aside takes the same model-call collaborators as compact, plus the question and a watching callback"
+)]
 pub fn aside<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1144,7 +1159,10 @@ pub fn aside<S: Sink, R: Reporter>(
 /// verdict at all, since acting on one is a branch.
 ///
 /// `cancel` is the person's stop, and it reaches the request as it does a summary's.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "goal takes the model-call collaborators compact does, plus the check the person's condition made"
+)]
 pub fn goal<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1189,7 +1207,10 @@ pub fn goal<S: Sink, R: Reporter>(
 /// else (CMD-23).
 ///
 /// `cancel` is the person's stop, and it reaches the request as it does a summary's.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the source and format come from the person's command, beside the workspace and model-call collaborators"
+)]
 pub fn commit_message<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -1872,7 +1893,10 @@ fn take_session_messages<S: Sink, R: Reporter>(
 /// Nothing here reads a report. It is labelled by the context that produced it and presented
 /// through the same gate as any other result, so a delegate whose own context met something
 /// untrusted hands its parent a reference rather than words.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the delegates, policy, conversation and the turn's wait, spend, notice and workspace tallies are separate state"
+)]
 fn collect_delegates<S: Sink, R: Reporter>(
     delegates: &mut Vec<Working<'_>>,
     policy: &mut Policy<'_, S>,
@@ -2533,7 +2557,10 @@ struct Handback<'a> {
 /// moment this returns, however it returned. A turn that was cancelled, or that failed on its
 /// first request, is a turn that is over, and a hook attached to that is most often the one
 /// telling somebody who walked away.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resume and delegated both pass the turn's collaborators plus the decisions and handback they differ in"
+)]
 fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
     config: &Config,
     egress: &Egress,
@@ -2822,7 +2849,10 @@ struct Spawned<'scope> {
     waits: crate::timing::DelegateWait,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "run_inner passes the turn's inputs, collaborators and three out-parameters that the turn writes as it goes"
+)]
 fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter + ?Sized + Send>(
     inputs: Inputs<'_>,
     conversation: &mut Conversation,

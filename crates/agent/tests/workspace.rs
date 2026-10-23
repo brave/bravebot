@@ -6,7 +6,10 @@
 
 mod repository;
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "test-support/aliases.rs is shared with turn.rs, and this file never asks Consumer::DenyRule"
+)]
 #[path = "../test-support/aliases.rs"]
 mod aliases;
 

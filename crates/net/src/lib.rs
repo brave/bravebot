@@ -812,7 +812,10 @@ impl Egress {
     /// A body that fails while it is read is reported from here too, by the reader this hands back,
     /// so a request that got past the status is written to the diagnostic log however its body is
     /// then read.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the status, content type and boxed body reader return together, and both callers destructure the tuple"
+    )]
     fn fetch_checked<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -852,7 +855,10 @@ impl Egress {
     }
 
     /// The redirect loop itself: send, revalidate, follow, and hand back the body reader unread.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the same status, content type and body reader tuple, destructured by fetch_checked, its one caller"
+    )]
     fn follow<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,

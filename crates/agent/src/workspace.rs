@@ -3909,7 +3909,10 @@ impl Workspace {
     /// The lines come from the file the walk already read, so they carry the label the matches do
     /// and nothing is opened or decided for them. They are not matches: they count toward neither
     /// the match cap nor the offset, and a cap of their own bounds how many are returned.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "grep's arguments plus the context line count, which grep passes as 0"
+    )]
     pub fn grep_around<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -3939,7 +3942,10 @@ impl Workspace {
     /// on them. The file cap and the time cap apply as they do to lines. The match cap, the offset
     /// and context do not: no line is returned, so a count totals every match the walk read, and a
     /// walk that stopped short says so through `unvisited` and `timed_out` as a lower bound.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "grep_around's arguments plus the output shape, which grep_around passes as lines"
+    )]
     pub fn grep_shaped<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,

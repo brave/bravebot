@@ -6,7 +6,10 @@
 //! a tool answers is quarantined like any other content from off this machine. Each is asserted on
 //! the bytes that went out, to the model or to the server, rather than on a label.
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "turns.rs is shared by several test binaries, and mcp uses only run and run_cancellable"
+)]
 #[path = "../test-support/turns.rs"]
 mod turns;
 
