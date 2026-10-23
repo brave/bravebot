@@ -367,7 +367,7 @@ goes.
 Your permission rules do not come with you. The new directory's rules are read, and anything its
 checkout proposes is put to you in the box a session opening there would show, so a rule you granted
 for the directory you left answers nothing here. See
-[Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
+[Permission rules](../security/permission-rules.md).
 
 Nor do your answers about reading a file that holds what looks like a credential. Each is kept under
 the file's name from the directory you left, which here can name another file, so such a file is asked
@@ -835,7 +835,7 @@ and `--resume` brings none back.
 
 ## `/plan [task]`
 
-Sets [plan mode](../security/permissions.md#answering-in-advance-modes), as the mode key does when it
+Sets [plan mode](../security/permission-modes.md), as the mode key does when it
 reaches planning. With a task it also starts a turn on that task, which runs in plan mode.
 
 ```
@@ -867,7 +867,7 @@ declined plan leaves the workspace.
 run you stopped is not written down, because there is nothing in it to read. The run is recorded as its
 own record and the session records its name, so the session still resumes as a conversation.
 
-In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
+In [plan mode](../security/permission-modes.md) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
 [Plan first, then execute](../using/manifest-mode.md) for the `--mode manifest` form.
 

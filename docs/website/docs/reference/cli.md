@@ -176,7 +176,7 @@ unknown name even with `--dangerously-skip-permissions`. `--tools` offers no MCP
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
 question, including the ones that decide trust. See
-[modes](../security/permissions.md#answering-in-advance-modes) for what it costs.
+[modes](../security/permission-modes.md) for what it costs.
 
 ### `--accept-edits`
 
@@ -210,7 +210,7 @@ still whoever is reading the output. With either end piped or redirected there i
 the run stops before its first step unless `--dangerously-skip-permissions` was given. A plan that
 failed to build is printed on stderr even without `--trace`, and never shares stdout with the reply.
 
-This is a different axis from the [permission mode](../security/permissions.md#answering-in-advance-modes):
+This is a different axis from the [permission mode](../security/permission-modes.md):
 `--mode` decides when control flow is settled, the other decides who answers a prompt, and the two
 compose. See [Plan first, then execute](../using/manifest-mode.md) for the rest.
 
@@ -1075,7 +1075,7 @@ When no rule matches, it says so and the ordinary approval gates decide. An `all
 checkout's settings is not in force until you grant it at the question a session asks, so it is
 never reported as the rule that decides: a line says it would allow the call and is not in force.
 It starts nothing and changes nothing. It checks the rules only, not the
-[permission modes](../security/permissions.md), and a command line that names no call exits 2.
+[permission modes](../security/permission-modes.md), and a command line that names no call exits 2.
 
 ## `stats`
 

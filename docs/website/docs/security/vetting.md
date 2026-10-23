@@ -109,7 +109,7 @@ a check over the preview would report on the part an injection attempt has the l
 check reads what the answer covers.
 
 All three, because otherwise the quickest way past a check is to ask for the prompt that does not run
-one. The one exemption is [bypassing mode](permissions.md), which draws no prompt at all: there a check
+one. The one exemption is [bypassing mode](permission-modes.md#bypassing), which draws no prompt at all: there a check
 would be a model call whose word nobody reads, so the verdict is filled in as inconclusive, which claims
 nothing. That holds when the run asked for no screening. With `--vet` the check is made on the two
 prompts that release one slot, because its word is what answers.

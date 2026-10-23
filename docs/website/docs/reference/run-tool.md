@@ -397,8 +397,8 @@ Without those a planner reads one quarantined result as proof that programs are 
 running them, which is not what happened: the label is about who answered for the command.
 Who answers `read_output` is said once, in the tool's own description, which is rebuilt for each
 request from the current mode and screening, so a mode change mid-turn shows on the next request.
-[Bypassing with no screening](../security/permissions.md#bypassing) tells the planner that the output
-comes back as text it can read, since nobody is shown it. Screening ([`--vet`](../security/permissions.md#bypassing))
+[Bypassing with no screening](../security/permission-modes.md#bypassing) tells the planner that the output
+comes back as text it can read, since nobody is shown it. Screening ([`--vet`](../security/permission-modes.md#bypassing))
 changes it in any mode: a check's word answers first, so the planner is told the output comes back as
 text it can read or that it was kept back. Otherwise the planner is told you see the output and decide.
 The description names neither the mode nor the check. A run's result carries only the reference, the
@@ -427,7 +427,7 @@ printed, and the whole of it stays available as a reference, which
 ## Reading the output in the same result
 
 `read: true` asks for what the line printed in the result that ran it. When you
-[bypass permissions](../security/permissions.md#bypassing) and have not asked for screening,
+[bypass permissions](../security/permission-modes.md#bypassing) and have not asked for screening,
 `read_output` is always answered yes and nobody is shown anything, so the answer is given at once: the
 output comes back as text the planner may read, with the same label and the same entry in the audit
 trail that `read_output` would have written, and the reference it was kept under beside it. That saves

@@ -1492,7 +1492,7 @@ knows it may ask for, and a delegate runs under whatever the session that starte
 The same three lists Claude Code keeps, with the same spellings, so a block copied out of
 `~/.claude/settings.json` works unedited. What a rule is allowed to decide, and the reason it may
 never trust a command's output, is on
-[Approvals and permissions](../security/permissions.md#rules-you-write-down-in-advance).
+[Permission rules](../security/permission-rules.md).
 
 An entry in `deny`, `ask` or `allow` can also be an object, which is the same rule with a note on
 why it exists:
@@ -1622,7 +1622,7 @@ relative name means a path under the workspace. See
 `defaultMode` is parsed so that a file carrying it is not rejected, and **acted on by nothing**: if
 you wrote `acceptEdits` you get the prompts you would have got without it. The modes it names do
 exist. Shift-Tab and `--dangerously-skip-permissions` are what choose one. See
-[modes](../security/permissions.md#answering-in-advance-modes).
+[modes](../security/permission-modes.md).
 
 **An unreadable rule is dropped, named, and takes nothing with it.** A line that is not a rule, names
 no family, or has an anchor that cannot be resolved is reported by `doctor` and in the session where
