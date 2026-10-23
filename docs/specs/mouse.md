@@ -185,3 +185,18 @@ put there ([PANEL-11](info-panel.md#PANEL-11)).
 `verified-by: bravebot_tui::app::a_click_on_the_model_row_over_the_scroller_opens_no_picker`
 `verified-by: bravebot_tui::app::a_click_on_the_model_row_under_a_standing_definition_is_refused_as_the_command_is`
 `verified-by: bravebot_tui::panel::only_the_drawn_model_and_effort_rows_are_click_targets`
+
+<a id="MOUSE-12"></a>
+### MOUSE-12: a click on the panel's context reading asks what `/context` asks
+
+In the info panel, a left click that sweeps nothing on the row that reads how full the context is
+says what `/context` says. As for [MOUSE-11](#MOUSE-11), the press and the release are on one cell
+and the press is a single click, so a drag, a double click and a triple click are selections, and a
+click over the scroller or a history search asks for nothing. The heading and the rows below the
+reading are not targets, nor is a reading cut for want of room. The command stays the way to do it
+without a mouse, and what the click says is the session's own reading, with nothing a tool returned
+in it ([PANEL-11](info-panel.md#PANEL-11)).
+
+`verified-by: bravebot_tui::app::a_click_on_the_panels_context_reading_reports_the_context`
+`verified-by: bravebot_tui::app::a_drag_over_the_context_reading_or_a_click_in_the_scroller_reports_nothing`
+`verified-by: bravebot_tui::panel::only_the_context_reading_is_a_context_click_target`
