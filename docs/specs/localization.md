@@ -7,7 +7,9 @@ governs:
   - crates/i18n/src/*.rs
   - crates/i18n/locales/*.ftl
   - crates/agent/tests/audience.rs
-documented-by: docs/website/docs/customize/configuration.md
+documented-by:
+  - docs/website/docs/customize/configuration.md
+  - docs/website/docs/customize/language.md
 ---
 
 ## Scope

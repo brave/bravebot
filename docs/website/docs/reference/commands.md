@@ -332,7 +332,7 @@ carried out at once.
 
 The choice is written to `~/.bravebot/language`, so it applies in every directory. A session that records
 nothing, an incognito one for example, says the choice was not saved and keeps none. See
-[Choosing a language](../customize/configuration.md#choosing-a-language) for the order the sources are
+[Choosing a language](../customize/language.md) for the order the sources are
 read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
 
 ## `/add-dir <path>`
