@@ -1601,13 +1601,31 @@ impl Config {
     /// the account has never heard of the id this crate files its models under.
     pub fn chatgpt_model<'name>(&self, model: &'name str) -> Option<&'name str> {
         let (id, wire) = model.split_once('/')?;
-        (id == provider::CHATGPT_ID
-            && !wire.is_empty()
-            && !self
-                .providers
-                .iter()
-                .any(|provider| provider.id == provider::CHATGPT_ID))
-        .then_some(wire)
+        (id == provider::CHATGPT_ID && !wire.is_empty() && self.offers_chatgpt_account())
+            .then_some(wire)
+    }
+
+    /// Whether the model a turn runs on is one of the ChatGPT account's: `model` where it names
+    /// one, and otherwise the configured default.
+    ///
+    /// What decides whether the account's listing is worth asking for outside a picker. A turn on
+    /// any other model needs nothing from it, and asking would send a stored sign-in's token to
+    /// the serving host for a session that never uses the account.
+    pub fn runs_on_chatgpt_account(&self, model: Option<&str>) -> bool {
+        self.chatgpt_model(model.unwrap_or(&self.default_model))
+            .is_some()
+    }
+
+    /// Whether the ChatGPT account may be reached at all, which it may not where a `provider`
+    /// entry has its id ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+    ///
+    /// One name cannot select two services, so the entry keeps it: its models go to its gateway,
+    /// and none is the account's, in a request or in a picker.
+    pub fn offers_chatgpt_account(&self) -> bool {
+        !self
+            .providers
+            .iter()
+            .any(|provider| provider.id == provider::CHATGPT_ID)
     }
 
     /// The AWS account that serves `model`, from the tier variables or from a `provider` block.
@@ -3017,6 +3035,13 @@ mod tests {
     #[test]
     fn only_the_qualified_name_selects_the_chatgpt_account_and_only_the_rest_of_it_is_sent() {
         let config = with_a_gateway("{}");
+        assert!(config.offers_chatgpt_account());
+        assert!(config.runs_on_chatgpt_account(Some("chatgpt/gpt-5")));
+        assert!(!config.runs_on_chatgpt_account(Some("gpt-5")));
+        assert!(
+            !config.runs_on_chatgpt_account(None),
+            "the default is Brave's"
+        );
         assert_eq!(config.chatgpt_model("chatgpt/gpt-5"), Some("gpt-5"));
         assert_eq!(config.chatgpt_model("chatgpt/org/model"), Some("org/model"));
         for name in [
@@ -3050,6 +3075,8 @@ mod tests {
         let mut config = Config::from_lookup(complete_env).expect("configured");
         config.providers = settings.providers().to_vec();
 
+        assert!(!config.offers_chatgpt_account());
+        assert!(!config.runs_on_chatgpt_account(Some("chatgpt/gpt-5")));
         assert_eq!(config.chatgpt_model("chatgpt/gpt-5"), None);
         let (provider, wire) = config.provider_for("chatgpt/gpt-5").expect("the gateway");
         assert_eq!(provider.base_url, "https://gateway.example.invalid/v1");

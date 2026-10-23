@@ -7872,6 +7872,35 @@ mod tests {
         );
     }
 
+    /// CHATGPT-9: the account's rows are met in the order a fetched gateway roster is, the model in
+    /// force first and the rest by name, and a listing that could not be had, or an account nobody
+    /// signed in to, adds none.
+    #[test]
+    fn the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none() {
+        use bravebot_agent::chatgpt::AccountModels;
+        let rows = || {
+            vec![
+                listed("chatgpt/gpt-a", None),
+                listed("chatgpt/gpt-b", None),
+                listed("chatgpt/gpt-c", None),
+            ]
+        };
+
+        let keys = |rows: Vec<bravebot_aichat::models::Model>| -> Vec<String> {
+            rows.into_iter().map(|row| row.key).collect()
+        };
+        assert_eq!(
+            keys(account_rows(
+                AccountModels::Offered(rows()),
+                "chatgpt/gpt-c"
+            )),
+            ["chatgpt/gpt-c", "chatgpt/gpt-a", "chatgpt/gpt-b"]
+        );
+        assert!(account_rows(AccountModels::Unreadable, "chatgpt/gpt-c").is_empty());
+        assert!(account_rows(AccountModels::Absent, "chatgpt/gpt-c").is_empty());
+        assert!(account_rows(AccountModels::Offered(Vec::new()), "chatgpt/gpt-c").is_empty());
+    }
+
     /// A gateway's models need no network to know, so a Brave listing that could not be fetched must
     /// not withdraw them: that is the position somebody offline is most likely to be in.
     #[test]
@@ -8437,6 +8466,103 @@ mod tests {
             bravebot_config::DEFAULT_CONTEXT_BUDGET
         );
         assert!(config.budget_is_guessed());
+    }
+
+    /// The listing the account's tests script: one model with a window a budget can be told apart
+    /// from the default by.
+    fn the_accounts_listing() -> Vec<bravebot_aichat::models::Model> {
+        vec![listed("chatgpt/gpt-5.5", Some(65_536))]
+    }
+
+    /// CHATGPT-9: a session or a turn on a model that is not the account's sends the stored token
+    /// nowhere. Each caller that wants the row of the model in force reaches the account only
+    /// through `list_models`, so each is run on a model of another service and the account is
+    /// asked about nothing: the lookup a session makes at its start, the one a run makes, the one a
+    /// turn addressed to a definition makes, and the structured-output check. A caller that asked
+    /// for every model would send the token at each of them.
+    #[test]
+    fn a_caller_on_a_model_that_is_not_the_accounts_never_asks_the_account() {
+        use models::scripted_account::{asked, offer};
+        let mut config = a_config_with_a_named_roster();
+        assert_eq!(config.default_model, "opus-arn");
+        offer(the_accounts_listing());
+
+        let mut session = Session::new("none");
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert_eq!(asked(), 0, "the lookup at session start asked");
+
+        adopt_listing_for_model(&mut config, "opus-arn");
+        assert_eq!(asked(), 0, "a run's lookup asked");
+
+        config_for_turn(&config, Some("opus-arn"));
+        assert_eq!(asked(), 0, "a turn addressed to a definition asked");
+
+        reads_structured_output(&config, "opus-arn");
+        assert_eq!(asked(), 0, "the structured-output check asked");
+
+        reads_structured_output(&config, "chatgpt");
+        assert_eq!(
+            asked(),
+            0,
+            "a name that only starts like the account's asked"
+        );
+    }
+
+    /// CHATGPT-9: a caller on one of the account's own models asks the account for its row, and the
+    /// window the listing states is the budget, which the default would otherwise stand in for.
+    /// Each caller is run on a fresh configuration so the budget it ends with is its own.
+    #[test]
+    fn a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists() {
+        use models::scripted_account::{asked, offer};
+        offer(the_accounts_listing());
+
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+        session.choose_model("chatgpt/gpt-5.5".to_string(), &config);
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert_eq!(asked(), 1, "the lookup at session start did not ask");
+        assert_eq!(config.context_budget, 65_536);
+
+        offer(the_accounts_listing());
+        let mut config = a_config_with_a_named_roster();
+        adopt_listing_for_model(&mut config, "chatgpt/gpt-5.5");
+        assert_eq!(asked(), 1, "a run's lookup did not ask");
+        assert_eq!(config.context_budget, 65_536);
+
+        offer(the_accounts_listing());
+        let config = a_config_with_a_named_roster();
+        let turn = config_for_turn(&config, Some("chatgpt/gpt-5.5"));
+        assert_eq!(asked(), 1, "a turn addressed to a definition did not ask");
+        assert_eq!(turn.context_budget, 65_536);
+
+        offer(the_accounts_listing());
+        assert!(reads_structured_output(&config, "chatgpt/gpt-5.5"));
+        assert_eq!(asked(), 1, "the structured-output check did not ask");
+    }
+
+    /// CHATGPT-9: the picker asks the account whatever model is in force, and offers what it lists
+    /// beside the rows already there. Run on a model of another service: a picker that asked only
+    /// for the account's own models would never show them to the person who has yet to choose one.
+    #[test]
+    fn the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers() {
+        use models::scripted_account::{asked, offer};
+        let config = a_config_with_a_named_roster();
+        assert_eq!(config.default_model, "opus-arn");
+        offer(the_accounts_listing());
+
+        let mut session = Session::new("none");
+        open_model_picker(&mut session, &config);
+
+        assert_eq!(asked(), 1, "the picker did not ask");
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        let keys: Vec<&str> = picker.matching().iter().map(|m| m.key.as_str()).collect();
+        assert!(keys.contains(&"chatgpt/gpt-5.5"), "{keys:?}");
+        assert!(
+            keys.contains(&"opus-arn"),
+            "a row already there was taken away: {keys:?}"
+        );
     }
 
     #[test]

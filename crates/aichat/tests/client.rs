@@ -7247,6 +7247,158 @@ fn a_redirect_in_answer_to_an_account_request_is_a_failure_and_goes_nowhere() {
     );
 }
 
+/// The service a test stands in for the serving host: the account's id and protocol at a server of
+/// its own.
+fn chatgpt_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    let text = format!(
+        r#"{{"provider": {{"chatgpt": {{"name": "ChatGPT", "npm": "@ai-sdk/openai",
+            "options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+const ACCOUNT_LISTING: &str = r#"{"models":[
+    {"slug":"gpt-a","display_name":"GPT A","visibility":"list","supported_in_api":true,
+     "context_window":272000,"input_modalities":["text","image"]},
+    {"slug":"gpt-hidden","visibility":"hide","supported_in_api":true}]}"#;
+
+/// CHATGPT-9: the listing is `GET /models` at the serving host with the access token as a bearer.
+/// The account-scoped route a gateway has is not asked, since this host is not a gateway, and
+/// neither a gateway's key nor the session headers of a turn go with it.
+#[test]
+fn the_accounts_listing_is_asked_for_at_the_serving_host_with_the_token_and_nothing_else() {
+    let (endpoint, received) = serve(ACCOUNT_LISTING);
+    let provider = chatgpt_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let models = bravebot_aichat::models::list_from_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    )
+    .expect("the listing was read");
+
+    let sent = received.recv().expect("the host was asked");
+    assert_eq!(sent.request_line, "GET /v1/models HTTP/1.1");
+    assert_eq!(
+        sent.header("authorization"),
+        Some(format!("Bearer {}", ACCOUNT_TOKENS[0]).as_str())
+    );
+    assert_eq!(sent.header("x-api-key"), None);
+    assert_eq!(sent.header("session-id"), None);
+    assert_eq!(sent.header("brave-product"), None);
+    let keys: Vec<&str> = models.iter().map(|m| m.key.as_str()).collect();
+    assert_eq!(keys, ["chatgpt/gpt-a"]);
+    assert_eq!(models[0].conversation_tokens, Some(272_000));
+    assert_eq!(
+        models[0].advertised.input_modalities,
+        ["text".to_string(), "image".to_string()]
+    );
+}
+
+/// CHATGPT-2 and CHATGPT-9: a redirect in answer to the listing is a failure and nothing is sent
+/// to the host it names, which is the host the token would otherwise follow the request to.
+#[test]
+fn a_redirect_in_answer_to_the_accounts_listing_is_a_failure_and_goes_nowhere() {
+    let (elsewhere, landed) = serve(ACCOUNT_LISTING);
+    let (endpoint, received) = serve_redirect(format!("{elsewhere}/v1/models"));
+    let provider = chatgpt_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let error = bravebot_aichat::models::list_from_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    )
+    .expect_err("a redirect is not a listing");
+
+    assert!(
+        matches!(
+            &error,
+            ChatError::Egress(bravebot_net::EgressError::Status { status: 307, .. })
+        ),
+        "{error:?}"
+    );
+    received.recv().expect("the host was asked");
+    assert!(
+        landed.recv_timeout(Duration::from_millis(300)).is_err(),
+        "the redirect was followed"
+    );
+}
+
+/// CHATGPT-9: a body that is not an object holding `models` is a listing that cannot be read,
+/// whatever else it is: a gateway's envelope is not this service's, and nothing is guessed from it.
+/// A refusal is a failure too. An empty `models` is a listing, and offers nothing.
+#[test]
+fn a_reply_that_is_not_the_accounts_listing_cannot_be_read_and_an_empty_one_can() {
+    let egress = Egress::new();
+    for body in [
+        r#"{"data":[{"id":"gpt-a"}]}"#,
+        "not json",
+        r#"[{"slug":"gpt-a"}]"#,
+    ] {
+        let (endpoint, _received) = serve(body);
+        let provider = chatgpt_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let outcome = bravebot_aichat::models::list_from_account(
+            &mut policy,
+            &provider,
+            ACCOUNT_TOKENS[0],
+            &egress,
+        );
+        assert!(
+            matches!(outcome, Err(ChatError::Decode { .. })),
+            "{body}: {outcome:?}"
+        );
+    }
+
+    let (endpoint, _received) = serve_attempts(vec![Attempt::Status(401)]);
+    let provider = chatgpt_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let outcome = bravebot_aichat::models::list_from_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    );
+    assert!(
+        matches!(
+            outcome,
+            Err(ChatError::Egress(bravebot_net::EgressError::Status {
+                status: 401,
+                ..
+            }))
+        ),
+        "{outcome:?}"
+    );
+
+    let (endpoint, _received) = serve(r#"{"models":[]}"#);
+    let provider = chatgpt_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let models = bravebot_aichat::models::list_from_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    )
+    .expect("an empty listing is a listing");
+    assert!(models.is_empty());
+}
+
 /// CHATGPT-10: the service takes no body over about a mebibyte uncompressed, so a larger one is
 /// not sent, spends no token and is reported as too large, which a turn answers by shortening the
 /// conversation. A body below the limit is sent.
