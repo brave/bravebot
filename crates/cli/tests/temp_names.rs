@@ -13,22 +13,19 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-/// What makes a name the run's own, found anywhere in the statement that builds the path.
-const UNIQUE: [&str; 14] = [
+/// What makes a name the run's own, found in the code of the statement that builds the path. Each
+/// is a call or a type, not a word: a binding called `pid_dir` or a literal such as `"rapid"`
+/// holds a bare `pid` or `rand` and names nothing of the run.
+const UNIQUE: [&str; 9] = [
     "::id()",
-    "pid",
-    "nanos",
-    "SystemTime",
-    "Instant",
-    "stamp",
-    "counter",
-    "COUNTER",
-    "Atomic",
-    "unique",
-    "rand",
-    "tempfile",
-    "run_id",
     "fetch_add",
+    "SystemTime::now",
+    "Instant::now",
+    "as_nanos",
+    "subsec_nanos",
+    "tempfile::",
+    "TempDir",
+    "Atomic",
 ];
 
 /// The comment that marks a name that has to be the same each run, with the reason after it.
@@ -132,6 +129,9 @@ fn a_name_is_shared_when_nothing_in_it_belongs_to_the_run() {
         r#"let p = std::env::temp_dir().join("bravebot-thing");"#,
         r#"let p = std::env::temp_dir().join(format!("bravebot-thing-{name}"));"#,
         "let p = std::env::temp_dir()\n    .join(format!(\"bravebot-{name}\"))\n    .join(\"sub\");",
+        r#"let p = std::env::temp_dir().join("bravebot-rapid");"#,
+        r#"let pid_dir = std::env::temp_dir().join("bravebot-x");"#,
+        r#"let p = std::env::temp_dir().join("bravebot-stamp-counter-unique");"#,
     ];
     for source in shared {
         assert_eq!(fixed_names(source), [1], "{source}");
@@ -144,7 +144,7 @@ fn a_name_is_the_runs_own_when_it_holds_an_id_a_counter_or_a_timestamp() {
         r#"let p = std::env::temp_dir().join(format!("bravebot-{}", std::process::id()));"#,
         r#"let p = std::env::temp_dir().join(format!("bravebot-{name}-{}", std::process::id()));"#,
         r#"let p = std::env::temp_dir().join(format!("bravebot-{}", NEXT.fetch_add(1, Ordering::Relaxed)));"#,
-        r#"let p = std::env::temp_dir().join(format!("bravebot-{stamp}"));"#,
+        r#"let p = std::env::temp_dir().join(format!("bravebot-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));"#,
         "let p = std::env::temp_dir().join(format!(\n    \"bravebot-{}\",\n    std::process::id()\n));",
     ];
     for source in own {
