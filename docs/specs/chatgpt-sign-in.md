@@ -104,6 +104,7 @@ already takes this road: it says the command to type and does not start the work
 `verified-by: bravebot_cli::auth::every_way_is_listed_and_only_a_held_one_says_what_it_holds`
 `verified-by: bravebot_cli::auth::a_way_is_picked_by_its_number_or_its_name`
 `verified-by: bravebot_aichat::client::an_account_with_no_sign_in_sends_nothing`
+`verified-by: bravebot_cli::running::a_turn_on_a_chatgpt_model_with_no_sign_in_ends_naming_the_command_and_stores_nothing`
 
 <a id="CHATGPT-2"></a>
 ### CHATGPT-2: a token reaches only the hosts compiled in for it
