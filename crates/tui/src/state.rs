@@ -8770,6 +8770,54 @@ mod tests {
         assert_eq!(entry.prompt, "one\ntwo\nthree\n");
     }
 
+    /// DROP-8, INPUT-10: a turn already running cannot be handed a picture, so a prompt sent into it
+    /// with one pasted reaches the planner as the sentence saying a picture was pasted and cannot be
+    /// shown, with the reason. The marker alone would stand for nothing the planner can use, and a
+    /// file's name, which the planner can go and read, would be the wrong stand-in for a picture.
+    /// The queued line keeps the marker, because that is what was on the person's screen.
+    #[test]
+    fn a_picture_pasted_into_a_line_sent_mid_turn_reaches_the_planner_as_a_sentence() {
+        let mut s = session();
+        s.type_char('x');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for c in "look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        assert!(s.queue(), "the prompt was not queued");
+
+        assert_eq!(
+            reaching.take().as_deref(),
+            Some(
+                "look at ([Image #1] was pasted here, but it cannot be shown to you: a picture \
+                 cannot join a turn already running. Ask for it again if you need to see it.)"
+            )
+        );
+        assert_eq!(s.queued[0].prompt, "look at [Image #1]");
+    }
+
+    /// INPUT-10: a folded paste in a line sent mid-turn reaches the running turn as the words that
+    /// were pasted. Sent as the marker, the planner would be given `[Pasted text #1 +3 lines]` in
+    /// place of everything the person pasted.
+    #[test]
+    fn a_folded_paste_in_a_line_sent_mid_turn_reaches_the_planner_as_its_words() {
+        let mut s = session();
+        s.type_char('x');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for c in "what is ".chars() {
+            s.type_char(c);
+        }
+        s.paste_text("one\ntwo\nthree\n");
+        assert!(s.queue(), "the prompt was not queued");
+
+        assert_eq!(
+            reaching.take().as_deref(),
+            Some("what is one\ntwo\nthree\n")
+        );
+    }
+
     /// A prompt coming back for editing comes back as it was typed. Returned as its words, the
     /// stack trace somebody folded away fills the box they are about to edit.
     #[test]

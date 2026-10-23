@@ -212,6 +212,7 @@ tells a reader whether something is quarantined, and a note drawn in the wrong o
 outside a block.
 
 `verified-by: bravebot_tui::render::a_system_note_is_not_drawn_in_the_ink_that_marks_untrusted_content`
+`verified-by: bravebot_tui::theme::the_note_ink_is_shared_with_no_other_ink_of_the_brave_palette`
 
 <a id="VIEW-9"></a>
 ### VIEW-9: under `brave`, an ink that carries meaning is mixed, not chosen by the terminal
@@ -419,6 +420,7 @@ where the wrong half is the one its author never sees.
 
 `verified-by: bravebot_tui::theme::a_colour_given_for_each_background_takes_the_arm_the_terminal_asked_for`
 `verified-by: bravebot_tui::theme::an_arm_of_a_pair_resolves_through_defs_and_none`
+`verified-by: bravebot_tui::theme::a_pair_arm_of_none_leaves_the_terminals_background_showing`
 `verified-by: bravebot_tui::theme::a_pair_missing_an_arm_is_not_a_theme`
 `verified-by: bravebot_tui::theme::a_theme_says_whether_any_of_its_inks_came_from_the_sensed_background`
 
