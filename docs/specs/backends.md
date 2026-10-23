@@ -3042,6 +3042,108 @@ credential into wherever the output goes.
 `verified-by: bravebot_cli::doctor::a_refused_header_is_reported_with_its_name_and_reason_and_never_its_value`
 `verified-by: bravebot_cli::running::doctor_names_a_refused_header_without_its_value`
 
+<a id="BACKEND-61"></a>
+### BACKEND-61: a service that takes the Responses protocol is sent a request in it and read in it, and nothing is asked to be kept
+
+A request is made in the Responses protocol where the service is the ChatGPT account of
+[CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10), and where a `provider` entry, or a model under one, names
+`@ai-sdk/openai` in `npm`, as opencode names the SDK that speaks it. Every other service is spoken to in
+chat completions, and an entry naming no SDK stays one. The ChatGPT account is always spoken
+to in this protocol, and no request is made to its host in another. A model's own `npm` outranks its
+entry's, so one entry may offer models in both protocols. The SDK an entry names decides over its id: an
+`anthropic` entry that names `@ai-sdk/openai` is reached in this protocol, and states an endpoint of its own,
+as one naming `@ai-sdk/openai-compatible` does ([BACKEND-17](#BACKEND-17)), since the address compiled in is
+the one the Messages API is spoken at. The request goes to the endpoint's
+`/responses` route, names the model by the part of the name after the id ([BACKEND-18](#BACKEND-18)), and
+carries the key as [BACKEND-16](#BACKEND-16) says, as a bearer token in `authorization`. The roster is asked
+for as [BACKEND-19](#BACKEND-19) says, at the route that service lists on.
+
+The body is built from the conversation as these fields:
+
+- `instructions` is the system prompt, and is absent where there is none.
+- `input` is the turns in order. A turn's words are a `message` item with its role and `input_text` parts,
+  or `output_text` parts for the model's own, and a picture is an `input_image` part holding a data URI. A
+  call the model made is a `function_call` item with the `call_id`, the `name` and the arguments as a
+  string, and its result is a `function_call_output` item with the same `call_id` and the result as text.
+  Calls and results are paired, ordered and cleaned of what the service would refuse by the walk of the
+  conversation that [BACKEND-57](#BACKEND-57) names, so a result with no call is dropped there and not here,
+  and arguments that are not a JSON object cross as `{}`.
+- `tools` is each tool as one object with `type` `function`, a `name`, a `description` and `parameters`,
+  and `tool_choice` is `auto` where any is offered.
+- `stream` is `true` on every request, and the reply is read as server-sent events whatever the caller
+  asked for, since a service in this protocol may refuse one asked for whole.
+- `store` is `false` on every request. Nothing is asked to be kept, so the conversation is held by the
+  session and by nothing at the service, and `previous_response_id` is never sent.
+- `reasoning` is `effort`, the level's word, and `summary`, `auto`, where a level was given and the roster
+  says the model reads it ([BACKEND-22](#BACKEND-22)). Where no level was given the object is absent and the
+  service applies its own default ([BACKEND-20](#BACKEND-20)), so no summary is asked for and a model that
+  sends none draws none for `/thinking`.
+- `max_output_tokens` is the ceiling of [BACKEND-41](#BACKEND-41).
+- No `temperature`, `top_p` or other sampling field is added by this program. On an entry, a model's own
+  `options` reach the body as [BACKEND-15](#BACKEND-15) says and carry the fields a person chose to send,
+  and none of them replaces a field built above: `stream`, `store` and the `input` are the turn's.
+  The ChatGPT account carries no `options` ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
+
+The reply's events are read as they arrive. Words come from the text deltas of an output item. A call
+comes from a `function_call` item, whose arguments arrive in pieces as the model writes them, so the count
+of [BACKEND-45](#BACKEND-45) moves with them. The reply is assembled from the items the stream completes,
+and never from the `output` list of its final event, which is empty on the ChatGPT host. A call is handed to
+the caller only in a reply that finished, so a call is never run for a reply that is asked for again. The model's
+reasoning arrives as a summary and is handed to the caller as it arrives, for a screen to draw on request
+([VIEW-33](terminal-transcript.md#VIEW-33)) and for nothing else, as [BACKEND-59](#BACKEND-59) hands on a
+chat-completions model's. An event this does not know is ignored, and one it knows in a shape it cannot read
+is unreadable and not ignored. A stream ends in one of three events. `response.completed` is a reply.
+`response.incomplete` is a reply the service stopped, for the ceiling or for another reason, and is kept for
+what it said and never for what it asked ([BACKEND-42](#BACKEND-42)), not asked for again. `response.failed`
+is a failure named from a list this build holds and never by what the service wrote, and asked for again
+only where a second attempt could get past it, as [BACKEND-57](#BACKEND-57) does for a failure reported
+part way through. A stream that stops before any of them is a reply that did not finish and is asked for
+again, as many times as the entry's retries allow ([BACKEND-55](#BACKEND-55)) and no more.
+
+A reasoning item a reply carried is not sent back. The conversation keeps a model's words and calls, so a
+later request carries none of its earlier reasoning, which the service accepts. The request does not ask
+for the encrypted form of it.
+
+Usage is read from the final event. `input_tokens` is the whole prompt, with the part the service answered
+from its cache in `input_tokens_details.cached_tokens` counted inside it and the part this request wrote
+in `cache_write_tokens`, as [BACKEND-31](#BACKEND-31) asks of every service. `output_tokens` is the reply, with
+`output_tokens_details.reasoning_tokens` counted inside it. A figure the service did not state is zero.
+
+A refusal arrives as a status and a body, and the body's text, which the service wrote, reaches no person,
+no diagnostic and no record. On the ChatGPT host that body is an object with one field, `detail`. A model
+the account cannot use and a field the service does not take are refused with a 400, which is not asked for
+again. The retries an entry states and the wait a service asks for with a rate limit apply as
+[BACKEND-54](#BACKEND-54) and [BACKEND-55](#BACKEND-55) say.
+
+**Not observed.** The ChatGPT host has been seen to take a text turn, a function call and its result, a
+reasoning turn with a summary, and the refusals above; what is stated about a picture, the model's own words
+as `output_text`, `response.incomplete`, `response.failed`, a refused access token, and the whole prompt
+counting its cached part inside `input_tokens` is the protocol's own shape and has not been seen there
+([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). Nothing has been
+observed of an entry that names `@ai-sdk/openai` on another service.
+
+**Not built:** all of it. The Responses protocol is not carried by `bravebot-aichat`, `npm` is read only to
+tell an OpenAI-compatible gateway from Anthropic's ([BACKEND-17](#BACKEND-17)), and nothing sends a request
+to the ChatGPT host, with the session headers and the zstd body of
+[CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10). When it is built, [BACKEND-21](#BACKEND-21) gains the row `reasoning.effort`, inside
+`reasoning`, [BACKEND-31](#BACKEND-31) gains these usage fields, [BACKEND-17](#BACKEND-17) and
+[BACKEND-13](#BACKEND-13) gain the SDK that selects this protocol, and [IMPORT-3](import.md#IMPORT-3) stops
+leaving an `openai` entry that names `@ai-sdk/openai`.
+
+**Why.** The service decides the protocol, so the same body serves the ChatGPT account and a gateway that
+takes it, and a second encoding for either is a second place for one to drift. `store` is `false` because a
+request that asks a service to keep a conversation puts the conversation somewhere this program cannot delete
+it from, and because the session already holds all of it. The stream is always asked for because the host that
+serves the subscription refuses a request that is not, and a reply read as events is read the same way whoever
+asked. The reply is assembled from items because a final event with an empty list is a reply with nothing in
+it to any reader that trusts it. A reasoning item is left out because the one a reply carries is an opaque
+value that only the service reads, a conversation of rounds would send it again every round, and the
+service answers the same request without it. This program adds no sampling field because it has no value to choose,
+and the ChatGPT host refuses `temperature`, so a field added for every service would fail on the one this
+clause was written for.
+
+`verified-by: none`
+
 ## Known costs
 
 - **Each change of mode costs a full prefix write.** BACKEND-27 and BACKEND-32 mark a cache prefix
@@ -3526,3 +3628,13 @@ credential into wherever the output goes.
 - **The ceiling an Anthropic request carries is not read from the listing.** The listing states each
   model's maximum, and a request states 32,000 unless somebody stated another (BACKEND-41), so a
   model that allows more is held to the figure and one that allows less is asked once with it first.
+
+- **A reasoning item is not sent back in the Responses protocol.** A model that reasons before a tool call
+  starts the next round without that reasoning, and what it does with the loss is the model's behaviour,
+  measured only by the quality of its answers, which nothing here measures. The service accepts the request
+  without the item and with it, so this is a choice and not a refusal, and it is the one
+  [BACKEND-57](#BACKEND-57) makes for thinking blocks.
+
+- **A model's protocol is the entry's or the model's, never the listing's.** A service whose listing does not
+  say which protocol a model takes is offered under the protocol its entry names, so a model that takes only
+  the other one is refused at the first request. Only the ChatGPT account states its protocol itself.
