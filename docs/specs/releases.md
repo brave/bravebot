@@ -21,7 +21,9 @@ governs:
   - contrib/release-preflight.py
   - contrib/package-manifests.py
   - contrib/check-pnpm-lockfiles.py
-documented-by: docs/website/docs/quickstart.md
+documented-by:
+  - docs/website/docs/quickstart.md
+  - docs/website/docs/install.md
 ---
 
 ## Scope

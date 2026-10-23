@@ -9,7 +9,9 @@ governs:
   - npm/bin/bravebot.js
   - install.sh
   - install.ps1
-documented-by: docs/website/docs/quickstart.md
+documented-by:
+  - docs/website/docs/quickstart.md
+  - docs/website/docs/install.md
 ---
 
 ## Scope
