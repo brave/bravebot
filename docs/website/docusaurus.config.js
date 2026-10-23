@@ -19,6 +19,7 @@ const config = {
   favicon: 'img/favicon.png',
   organizationName: 'brave',
   projectName: 'bravebot',
+  customFields: {repository},
 
   presets: [
     [
@@ -80,7 +81,7 @@ const config = {
           {
             title: 'Docs',
             items: [
-              {label: 'Overview', to: '/'},
+              {label: 'Overview', to: '/overview'},
               {label: 'Quickstart', to: '/quickstart'},
               {label: 'CLI reference', to: '/reference/cli'},
             ],
