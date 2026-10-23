@@ -34,3 +34,23 @@ tool answers with are interface to a model, and rewording them in another langua
 the agent does. `crates/agent/tests/audience.rs` fails if a catalog lookup appears in one of those
 modules. [specs/localization.md](../specs/localization.md) is the spec, and its known costs list what
 is deliberately left in English.
+
+## Checking a translation
+
+```sh
+make write-untranslated
+make check-locales
+cargo test -p bravebot-i18n
+```
+
+`make check-locales` holds the catalogs to the record of gaps. `cargo test -p bravebot-i18n` builds
+the catalogs, and the build refuses an argument the reference does not pass, a plural the reference
+does not state, and a plural in a language with no rule written down in `plural.rs`.
+
+Outside that crate, only `crates/cli/tests/running.rs` reads a message from the French catalog: the
+configuration error, `erreur de configuration`. A change to that message also runs
+`cargo test -p bravebot-cli --test running`.
+
+`make check-affected` selects the Rust and desktop app jobs for a catalog, so it runs every Rust
+test suite and builds and drives the desktop app. Run the commands above instead, and in the pull
+request list the Rust workspace tests and the desktop checks as not run locally.

@@ -83,6 +83,11 @@ If you use `check-all-local`, leave the platform checks to CI and say they were 
 locally. You can also run an individual target, such as `make check-reviewdog`, or check
 formatting with `cargo fmt --all -- --check`.
 
+`make check-affected` selects every job a changed path could reach, so it can run far more than a
+narrow change needs. Where a page here names narrower checks for a kind of change, run those and say
+in the pull request that the rest was left to CI.
+[localization.md](localization.md#checking-a-translation) does this for a change to the catalogs.
+
 If the checkout has no backend credentials, use
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make check-all-local` (or `check-all`) to allow
 the Rust build.
