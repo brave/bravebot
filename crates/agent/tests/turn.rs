@@ -49977,9 +49977,11 @@ fn a_finished_jobs_wake_up_labels_its_standard_error() {
 fn job_output_labels_standard_error() {
     let scratch = Scratch::new("background-job-output-stderr");
     let script = scratch.path.join("both");
+    // Standard error a second after standard output. A look that output ends returns at the first
+    // pipe to deliver, so it hands over one stream or both depending on which reader ran first.
     std::fs::write(
         &script,
-        "#!/bin/sh\necho OUT-MARKER-PLUGH\necho ERR-MARKER-XYZZY >&2\nsleep 1\n",
+        "#!/bin/sh\necho OUT-MARKER-PLUGH\nsleep 1\necho ERR-MARKER-XYZZY >&2\nsleep 1\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -49989,9 +49991,13 @@ fn job_output_labels_standard_error() {
     }
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
+    // Waits for the exit, so the one answer holds what both pipes printed.
     let (endpoint, received) = serve_sequence(vec![
         tool_request("run", r#"{"command":"./both","background":true}"#),
-        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":30,"until_exit":true}"#,
+        ),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
