@@ -528,9 +528,10 @@ endpoint the block does state is where its requests go regardless. Where neither
 configures no service.
 
 The set of known names is compiled in: `openrouter`, reached at `https://openrouter.ai/api/v1`,
-`openai`, reached at `https://api.openai.com/v1`, and `anthropic`, reached at
-`https://api.anthropic.com/v1` in the protocol [BACKEND-57](#BACKEND-57) states. Nothing is fetched to
-resolve one, and no service is asked what its own endpoint is.
+`openai`, reached at `https://api.openai.com/v1`, `anthropic`, reached at
+`https://api.anthropic.com/v1` in the protocol [BACKEND-57](#BACKEND-57) states, and `xai`, reached
+at `https://api.x.ai/v1`. Nothing is fetched to resolve one, and no service is asked what its own
+endpoint is.
 
 A known name supplies an endpoint and nothing else. An `openai` entry is otherwise reached as any
 other gateway is, with its key as a bearer token in `authorization`, and names where that key lives as
@@ -574,6 +575,7 @@ what keeps a known name usable against a proxy or a private deployment.
 `verified-by: bravebot_config::provider::what_decides_the_protocol_of_an_entry_is_its_id_and_the_sdk_it_names`
 `verified-by: bravebot_config::provider::a_provider_without_a_base_url_is_not_offered`
 `verified-by: bravebot_config::provider::an_entry_naming_the_openai_sdk_is_reached_through_the_responses_api`
+`verified-by: bravebot_config::provider::an_xai_entry_is_reached_at_xais_host_like_any_other_gateway`
 
 <a id="BACKEND-18"></a>
 ### BACKEND-18: a model name may say which gateway is meant, and only the rest of it is sent

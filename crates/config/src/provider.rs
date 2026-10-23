@@ -59,6 +59,7 @@ const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
         "https://api.anthropic.com/v1",
         "ANTHROPIC_API_KEY",
     ),
+    ("xai", "https://api.x.ai/v1", "XAI_API_KEY"),
 ];
 
 /// The id naming OpenAI, which is reached at the endpoint compiled in for it.
@@ -2008,6 +2009,33 @@ mod tests {
         assert!(!provider.takes_extra_content());
 
         let exported = |name: &str| (name == "OPENAI_API_KEY").then(|| "a-key".to_string());
+        assert_eq!(token(&provider.credential(exported)), Some("a-key"));
+    }
+
+    /// xAI is a gateway like any other once its host is known, the same way `openai` is: the key
+    /// goes in `authorization`, nothing is compiled in to offer, and no tool call carries anything
+    /// back that this program keeps. The point of the entry is that a block naming only `xai` and
+    /// a credential, with no `baseURL`, is complete here as it is in the tool this shape is
+    /// borrowed from.
+    #[test]
+    fn an_xai_entry_is_reached_at_xais_host_like_any_other_gateway() {
+        let provider = one(r#"{"provider": {"xai": {"env": ["XAI_API_KEY"]}}}"#);
+        assert_eq!(provider.base_url, "https://api.x.ai/v1");
+        assert_eq!(
+            provider.chat_completions_url(),
+            "https://api.x.ai/v1/chat/completions"
+        );
+        assert_eq!(provider.models_url(), "https://api.x.ai/v1/models");
+        assert_eq!(provider.host(), "api.x.ai");
+        assert_eq!(provider.protocol(), Protocol::ChatCompletions);
+        assert_eq!(
+            provider.credential_header("a-key"),
+            ("authorization", "Bearer a-key".to_string())
+        );
+        assert_eq!(provider.compiled_roster(), None);
+        assert!(!provider.takes_extra_content());
+
+        let exported = |name: &str| (name == "XAI_API_KEY").then(|| "a-key".to_string());
         assert_eq!(token(&provider.credential(exported)), Some("a-key"));
     }
 
