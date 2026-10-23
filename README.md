@@ -17,6 +17,11 @@ OpenCode. Brave has always shipped user agents, and this one is the user's agent
 - No lock-in: Brave Leo, Anthropic, OpenAI, Google Vertex AI, AWS Bedrock, OpenRouter and other
   OpenAI-compatible gateways, and local models in Ollama, LM Studio and llama-server, with settings
   on your own machine.
+- Easy to switch to: it reads `AGENTS.md` (or `CLAUDE.md` where there is none) and skills in
+  `.claude/skills`, offers on first run to copy the model service Claude Code or opencode already
+  reaches, and imports Claude Code sessions with `bravebot sessions import claude-code`.
+- Where you work: the terminal, an editor that speaks the Agent Client Protocol such as Zed
+  (`bravebot-acp`), and scripts and pipes (`bravebot -p`).
 - The power of a shell without the risk: command lines are compiled into the trust model rather than handed to one.
 
 ## Getting started
