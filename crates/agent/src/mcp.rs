@@ -1435,6 +1435,31 @@ impl Offer {
     }
 }
 
+/// An offer for a test that only needs [`Offer::find`] to answer, built without reaching a
+/// server. Each entry is the wire name a call is made under, the alias `find` answers with and
+/// the tool's own word; the three are not derived from one another here, so a test can tell a
+/// lookup that used the offer apart from one that fell back to parsing the wire name itself.
+#[cfg(test)]
+pub(crate) fn offer_for_test(entries: &[(&str, &str, &str)]) -> Offer {
+    Offer {
+        session: Session::new(Vec::new(), PathBuf::new(), None, false, Managed::default()),
+        tools: entries
+            .iter()
+            .map(|(wire, alias, tool)| Offered {
+                wire: wire.to_string(),
+                alias: alias.to_string(),
+                drawn: Drawn {
+                    name: tool.to_string(),
+                    description: None,
+                    arguments: Vec::new(),
+                },
+            })
+            .collect(),
+        deferred: false,
+        loaded: Vec::new(),
+    }
+}
+
 /// How a call to a server's tool ended, before it is told to the planner.
 pub(crate) enum Called {
     /// The server answered, with content nobody vouched for.

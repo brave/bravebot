@@ -4617,6 +4617,8 @@ where
                     crate::repeated_call::Held::Refuse => Some(tools::refused_without_running(
                         policy,
                         reporter,
+                        state.mcp.as_ref().map(|(offer, _)| offer),
+                        &*conversation.quarantine(),
                         call,
                         crate::repeated_call::refusal(&call.function.name, state.repeats.count()),
                     )),

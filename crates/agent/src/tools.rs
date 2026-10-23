@@ -2475,6 +2475,8 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
 pub fn refused_without_running<S: Sink, R: Reporter>(
     policy: &mut Policy<'_, S>,
     reporter: &mut R,
+    mcp: Option<&crate::mcp::Offer>,
+    slots: &SlotStore,
     call: &ToolCall,
     text: String,
 ) -> Output {
@@ -2483,14 +2485,27 @@ pub fn refused_without_running<S: Sink, R: Reporter>(
     let produced = Produced::problem(text);
     // The reason the planner gave is drawn on both lines, as `dispatch` draws it: a call that is
     // held is still one the person watching reads, and arguments that are not JSON have none.
-    let why = why_of(policy, &name, &call.arguments().unwrap_or(Value::Null));
+    let arguments = call.arguments().unwrap_or(Value::Null);
+    let why = why_of(policy, &name, &arguments);
+    // The target is drawn the same way `dispatch_with` draws it, so a call held for being a
+    // repeat is shown with what it was about rather than nothing.
+    let server_tool = mcp.and_then(|offer| {
+        offer
+            .find(&name)
+            .map(|(alias, tool)| (offer, alias.to_string(), tool.to_string()))
+    });
+    let server = server_tool
+        .as_ref()
+        .map(|(_, alias, tool)| format!("{alias}:{tool}"))
+        .or_else(|| name.strip_prefix("mcp__").map(server_named));
+    let target = target_of(policy, &name, server.as_deref(), slots, &arguments);
     reporter.tool_started(
-        Activity::running(verb, "")
+        Activity::running(verb, target.clone())
             .of_tool(&name)
             .saying_why(why.clone()),
     );
     reporter.tool_finished(
-        Activity::running(verb, "")
+        Activity::running(verb, target)
             .of_tool(&name)
             .saying_why(why)
             .failed(produced.note.clone()),
@@ -13068,9 +13083,9 @@ mod tests {
     }
 
     /// A call held for being a repeat is drawn on both its lines with the reason the planner gave,
-    /// as `dispatch` draws every other call (TOOL-5). A held call announced with no reason, or
-    /// one drawn only on its first line, leaves the refusal with nothing of what the call was for;
-    /// a call whose arguments are not JSON, or that gave none, is drawn with an empty reason.
+    /// as `dispatch` draws every other call (TOOL-5), and with the target `dispatch` would draw for
+    /// the same call: a held call hard-coded to an empty target leaves the person watching with
+    /// nothing of what the call was about.
     #[test]
     fn a_held_call_is_drawn_with_the_reason_the_planner_gave() {
         use bravebot_core::capability::CapabilitySet;
@@ -13095,21 +13110,109 @@ mod tests {
                 &mut sink,
             )
             .expect("policy");
-            refused_without_running(&mut policy, &mut reporter, &call, "held".to_string());
+            let slots = SlotStore::new();
+            refused_without_running(
+                &mut policy,
+                &mut reporter,
+                None,
+                &slots,
+                &call,
+                "held".to_string(),
+            );
             let why = |rows: &[Activity]| rows.iter().map(|a| a.why.clone()).collect::<Vec<_>>();
-            (why(&reporter.started), why(&reporter.finished))
+            let target =
+                |rows: &[Activity]| rows.iter().map(|a| a.target.clone()).collect::<Vec<_>>();
+            (
+                why(&reporter.started),
+                why(&reporter.finished),
+                target(&reporter.started),
+                target(&reporter.finished),
+            )
         };
 
         assert_eq!(
             drawn(r#"{"path":"a.txt","why":"to find the sentinel"}"#),
             (
                 vec!["to find the sentinel".to_string()],
-                vec!["to find the sentinel".to_string()]
+                vec!["to find the sentinel".to_string()],
+                vec!["a.txt".to_string()],
+                vec!["a.txt".to_string()],
             )
         );
-        let none = (vec![String::new()], vec![String::new()]);
-        assert_eq!(drawn(r#"{"path":"a.txt"}"#), none);
-        assert_eq!(drawn("not json"), none);
+        assert_eq!(
+            drawn(r#"{"path":"a.txt"}"#),
+            (
+                vec![String::new()],
+                vec![String::new()],
+                vec!["a.txt".to_string()],
+                vec!["a.txt".to_string()],
+            )
+        );
+        assert_eq!(
+            drawn("not json"),
+            (
+                vec![String::new()],
+                vec![String::new()],
+                vec![String::new()],
+                vec![String::new()],
+            )
+        );
+    }
+
+    /// A held repeat of a call to a server's tool is drawn with the same target `dispatch_with`
+    /// would draw for it (TOOL-5): the alias and the tool the live offer answers for where one is
+    /// held, and the alias and the word parsed off the wire name's own `mcp__` prefix where none
+    /// is. The offer in each case names a different alias than the wire name itself would parse
+    /// to, so a target drawn from the wrong source is told apart from one drawn from the right one.
+    #[test]
+    fn a_held_call_to_a_servers_tool_is_drawn_with_its_target() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let drawn = |name: &str, mcp: Option<&crate::mcp::Offer>| {
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "c1",
+                "type": "function",
+                "function": { "name": name, "arguments": r#"{"city":"Lyon"}"# },
+            }))
+            .unwrap();
+            let mut sink = RecordingSink::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "ask the weather");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::none(),
+                &mut sink,
+            )
+            .expect("policy");
+            let slots = SlotStore::new();
+            refused_without_running(
+                &mut policy,
+                &mut reporter,
+                mcp,
+                &slots,
+                &call,
+                "held".to_string(),
+            );
+            reporter.started[0].target.clone()
+        };
+
+        let offer = crate::mcp::offer_for_test(&[(
+            "mcp__weather__get_forecast",
+            "the-offers-alias",
+            "the-offers-tool",
+        )]);
+        assert_eq!(
+            drawn("mcp__weather__get_forecast", Some(&offer)),
+            r#"the-offers-alias:the-offers-tool {"city":"Lyon"}"#
+        );
+        assert_eq!(
+            drawn("mcp__weather__get_forecast", None),
+            r#"weather:get_forecast {"city":"Lyon"}"#
+        );
     }
 
     /// Every kind above the bottom of the tree is offered the way to delegate, with the kinds this
