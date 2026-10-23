@@ -62,8 +62,8 @@ That puts `bravebot.exe` in `%LOCALAPPDATA%\Programs\bravebot`, takes `INSTALL_D
 else, and adds the directory to your user `PATH` unless `BRAVEBOT_NO_MODIFY_PATH` is set.
 
 Either way, run `bravebot` in a repository afterwards. The installers verify the release
-checksum and the signature on the binary (see "Check a download by hand" in the
-[quickstart](docs/website/docs/quickstart.md)), and a session started on an old version says so and gives the line that updates it. See
+checksum and the signature on the binary (see "Check a download by hand" on the
+[install page](docs/website/docs/install.md#check-a-download-by-hand)), and a session started on an old version says so and gives the line that updates it. See
 [docs/getting-started.md](docs/getting-started.md) for installing, running, and what it asks you.
 
 The documentation site at
