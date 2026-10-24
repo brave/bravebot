@@ -8093,11 +8093,12 @@ fn a_rate_limit_that_names_no_listed_code_is_asked_for_again() {
 }
 
 /// CHATGPT-8: a listed code the service reports on the stream, after it has accepted the request, in
-/// a `response.failed` event or in an `error` event, is the same refusal and is told in the same
-/// sentence, with one request sent. A client that left it to the generic report would end the turn
-/// with "the service stopped the reply".
+/// a `response.failed` event or in an `error` event, is the same refusal and ends the turn as the
+/// same failure of the account, with one request sent and no status or wait, since the reply was
+/// answered 200. A client that left it to the generic report would end the turn with "the service
+/// stopped the reply".
 #[test]
-fn a_listed_code_reported_on_the_stream_ends_the_turn_in_the_same_sentence() {
+fn a_listed_code_reported_on_the_stream_ends_the_turn_as_the_same_refusal() {
     let egress = Egress::new();
     for (code, refusal) in listed_codes() {
         // Answered 200 before the event came, so it carries no status and asked for no wait.

@@ -14,8 +14,19 @@ governs:
   - crates/ui-bridge/src/models.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/account_words.rs
+  - crates/ui-bridge/src/turn.rs
+  - crates/agent/src/report.rs
+  - crates/agent/src/turn/round_steps.rs
   - crates/session/src/sessions.rs
   - ui/src/renderer/failure.ts
+  - ui/src/renderer/apply.ts
+  - ui/src/renderer/transcript.ts
+  - ui/src/renderer/components/ErrorCard.tsx
+  - ui/src/renderer/components/FailureSentence.tsx
+  - ui/src/renderer/components/ModelPicker.tsx
+  - ui/src/renderer/components/ModelWarnings.tsx
+  - ui/src/renderer/components/Transcript.tsx
+  - ui/src/shared/protocol.ts
   - crates/cli/src/chatgpt.rs
   - crates/skus/src/chatgpt/mod.rs
   - crates/skus/src/chatgpt/account.rs
@@ -312,10 +323,16 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    does.
 2. What the agent receives from it is a token, in the secret type that
    [credential-protection.md](credential-protection.md) describes, a value from the closed set of
-   [CHATGPT-8](#CHATGPT-8), which for a refusal that names the account holds the status of the reply and
-   the wait it asked for as numbers, the wait bounded as any other is, and whether the file took a
-   renewal, which is the result of a write on this machine. No string taken from a reply is part of any
-   of them. The driver copies the numbers into the line a person reads and decides nothing from them.
+   [CHATGPT-8](#CHATGPT-8), and whether the file took a renewal, which is the result of a write on this
+   machine. The value is chosen where the failure arises: by the step that failed, by the client
+   comparing a refusal's code with the closed list, or, for a renewal, by the sign-in crate classing the
+   authorization server's status (`class_of`, in `bravebot-skus`). The agent maps the value to a category by
+   matching on it and reads no status for that. A refusal that names the account also carries the status of
+   its reply and the wait it asked for, as numbers, the wait bounded as any other is. They are carried for
+   a front end to display. The one comparison on the status is `AccountFailure::wait`, in `bravebot-aichat`,
+   which keeps a wait only for a refusal that came as a 429. No branch of the driver reads either number
+   beyond whether there is one, and the rounding of a wait to minutes for the line a person reads. No
+   string taken from a reply is part of any of them.
 3. The ID token is verified once, at the sign-in, before anything is stored, and no claim of it is
    stored, sent or displayed. A code exchange whose reply holds no `id_token`, or one that is not a
    string, ends the sign-in as a token that did not verify, so no sign-in is stored unverified. A token
@@ -706,7 +723,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
 `verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`
 `verified-by: bravebot_aichat::client::a_rate_limit_that_names_no_listed_code_is_asked_for_again`
-`verified-by: bravebot_aichat::client::a_listed_code_reported_on_the_stream_ends_the_turn_in_the_same_sentence`
+`verified-by: bravebot_aichat::client::a_listed_code_reported_on_the_stream_ends_the_turn_as_the_same_refusal`
 `verified-by: bravebot_aichat::client::a_gateways_reply_naming_a_listed_code_is_not_the_account_being_refused`
 `verified-by: bravebot_aichat::responses::protocol::the_listed_codes_are_the_seven_the_clause_names_and_the_usage_limit_is_told_apart`
 `verified-by: bravebot_aichat::responses::protocol::only_a_refusals_error_code_that_is_a_listed_code_says_something_of_the_account`
@@ -784,11 +801,12 @@ written when the picker opens, so before it draws, at rest or mid-turn. The wind
 message of its own, one sentence in sentence case that says what happened and what to do, sent with the
 command it names so the picker draws that command as code, and the terminal's note is lower case and names
 `/model`, which the window has no use for. A gateway whose listing could not be read is said in the same
-place and the same way by both pickers ([BACKEND-19](backends.md#BACKEND-19)). Where the compiled list is offered both say that it is built in
-and may name a model the account cannot reach. A listing refused with a code of
+place by both pickers, the terminal's note adding the way to name one of its models and the window's warning
+saying to try again ([BACKEND-19](backends.md#BACKEND-19)). Where the compiled list is offered both say that
+it is built in and may name a model the account cannot reach. A listing refused with a code of
 [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in a sentence of that code's own, which does not send
-the person to sign in again. A person who never signed in is
-told nothing, and a listing that was read, empty or not, is not a failure.
+the person to sign in again. A person who never signed in is told nothing, and a listing that was read,
+empty or not, is not a failure.
 
 A listing the service refuses for its token with a 401 is asked for again once with a replacement, as a
 turn's request is, and a second refusal ends it and leaves the compiled list, since the token could not be

@@ -630,12 +630,12 @@ Where a gateway block names its models, those are what is offered and nothing is
 network. Where it names none, the gateway itself is asked, and what it answers is offered. A Google
 Vertex service has no listing to ask, and is offered the list [BACKEND-49](#BACKEND-49) compiles in
 instead. A listing that cannot be read contributes nothing and takes nothing away from the rest of
-the roster, and the picker says which gateway's could not be read, by the name its block gives it and
-with the way to name one of its models as `--model <id>/<model>`. The terminal says it in a note before
-the picker draws, in the catalog's words, and the desktop in a warning. A gateway whose block names a
-credential nothing holds is not asked, and the picker does not say it could not be read, since `doctor`
-says the credential is missing. A gateway whose block names its models is not asked and is not
-mentioned.
+the roster, and the picker says which gateway's could not be read, by the name its block gives it. The
+terminal says it in a note before the picker draws, in the catalog's words, and adds the way to name one of
+its models as `--model <id>/<model>`. The desktop says it in a warning that names the gateway and says to
+try again, and gives no command line, since a window has none. A gateway whose block names a credential
+nothing holds is not asked, and the picker does not say it could not be read, since `doctor` says the
+credential is missing. A gateway whose block names its models is not asked and is not mentioned.
 
 What the credential in use may reach is asked for ahead of what the service offers generally, and the
 wider roster answers only where the narrower question does not. A block naming no credential has no
