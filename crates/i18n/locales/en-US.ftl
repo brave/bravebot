@@ -421,6 +421,10 @@ onboarding-import-many =
 # where somebody following that route lands, and what they have to do is name one of their own.
 onboarding-name-a-configured-model =
     A service is configured, but the model in force is one of Brave's: name one of your own with the `model` key in ~/.bravebot/settings.json, or with --model on a one-shot run. `bravebot doctor` lists what each configured service offers.
+# Said instead of the routes where a ChatGPT sign-in is stored and the model in force is one of
+# Brave's. The sign-in is the service that is configured, so what is left is naming one of its
+# models, which chatgpt-use-by-name says on the line after.
+onboarding-chatgpt-signed-in = A ChatGPT sign-in is stored, but the model in force is one of Brave's.
 onboarding-pick-one = Configure one of these, then run bravebot again:
 onboarding-bedrock =
     AWS Bedrock, through your own account: put a `provider` block named `amazon-bedrock` in ~/.bravebot/settings.json, with its region and the models to offer.

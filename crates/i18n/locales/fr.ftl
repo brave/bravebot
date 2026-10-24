@@ -393,6 +393,7 @@ onboarding-import-many =
     { $sources } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
+onboarding-chatgpt-signed-in = Une connexion ChatGPT est enregistrée, mais le modèle en vigueur est l'un de ceux de Brave.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
 onboarding-bedrock =
     AWS Bedrock, via votre propre compte : ajoutez un bloc `provider` nommé `amazon-bedrock` dans ~/.bravebot/settings.json, avec sa région et les modèles à proposer.

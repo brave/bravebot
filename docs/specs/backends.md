@@ -1911,6 +1911,20 @@ its shape from lands: those blocks name their models and name no default, so the
 one the build baked in. What is said there is the key that names one of the configured service's
 models, and the routes are left out.
 
+**A stored ChatGPT sign-in is such a service.** It is a fourth way to configure one, beside a Bedrock
+block, a gateway block and a stored Leo batch, and is read only where none of those has answered. A
+Bedrock or gateway block that is configured keeps the line above whatever else is stored: the file is not
+read, so a person who set up an AWS account or a gateway and also signed in to ChatGPT is told to name a
+model with the `model` key, and that line is not replaced by one about the account. A start whose model
+in force is Brave's own and that finds a sign-in stored and nothing else configured is told that a
+ChatGPT sign-in is stored, and to pick one of the account's models in `/model` or to name one as
+`--model chatgpt/<model>`, in the words the sign-in command ends with, which
+[What is built](chatgpt-sign-in.md#what-is-built) says. It is not shown the routes, and no import is
+offered, since a service is configured. A sign-in file that cannot be read configures nothing and is
+said first, with the remedy of [CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11), above the routes. `doctor`
+says it once, in its own line for the sign-in. A model that a configured service serves does not read
+the file.
+
 The refusal is the configuration ending of [CLI-6](cli.md#CLI-6) rather than a status of its own.
 Where a subscription is stored and could not be read, what the store said about it is said first.
 A machine with nowhere to keep credentials has none stored rather than a batch it could not read.
@@ -1970,6 +1984,13 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::model::the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_leo_last`
 `verified-by: bravebot_cli::model::a_configured_service_is_told_to_name_a_model_and_is_not_offered_the_routes`
 `verified-by: bravebot_cli::running::a_first_run_names_the_chatgpt_sign_in_in_the_language_it_is_read_in`
+`verified-by: bravebot_agent::backend::a_stored_chatgpt_sign_in_is_a_service_configured_and_an_unreadable_one_is_not`
+`verified-by: bravebot_agent::backend::a_configured_bedrock_or_gateway_block_keeps_its_line_whatever_a_sign_in_holds`
+`verified-by: bravebot_cli::running::a_stored_chatgpt_sign_in_beside_a_configured_gateway_leaves_the_line_that_names_the_model_key`
+`verified-by: bravebot_agent::chatgpt::a_stored_account_is_told_apart_from_an_absent_one_and_from_one_that_cannot_be_read`
+`verified-by: bravebot_cli::model::a_stored_chatgpt_sign_in_is_told_to_name_one_of_the_accounts_models_and_not_offered_the_routes`
+`verified-by: bravebot_cli::running::a_stored_chatgpt_sign_in_is_a_service_configured_for_the_first_run`
+`verified-by: bravebot_cli::running::doctor_treats_a_stored_chatgpt_sign_in_as_a_service_configured`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
 
 <a id="BACKEND-40"></a>

@@ -6,6 +6,7 @@ use crate::model::{how_to_configure_a_model, managed_refusal, model_for_this_run
 use crate::workspace::{confinement_name, current_workspace, unattended_trust_with};
 use crate::{auth, import, mcp, progress, sandbox_refusal};
 use bravebot_agent::Workspace;
+use bravebot_agent::chatgpt::AccountFile;
 use bravebot_config::{Config, Managed, env_var};
 use bravebot_i18n::t;
 use bravebot_net::Transport;
@@ -879,14 +880,22 @@ fn report_serving(config: &Config, ending: &mut Ending) {
         bravebot_agent::backend::Serving::NothingConfigured {
             subscription,
             a_service_is_configured,
+            chatgpt,
         } => {
             *ending = ends_on(*ending, Ending::Configuration);
+            // A sign-in file that cannot be read has its own line above, with the remedy, so the
+            // how-to does not say it a second time.
+            let chatgpt = match chatgpt {
+                AccountFile::Unreadable => AccountFile::NotStored,
+                other => other,
+            };
             println!();
             println!(
                 "{}",
                 how_to_configure_a_model(
                     subscription.as_deref(),
                     a_service_is_configured,
+                    chatgpt,
                     &import::looked(a_service_is_configured),
                 )
             );

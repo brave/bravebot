@@ -635,7 +635,16 @@ pub enum Serving {
         /// models and name no default, so the model in force stays the one this build baked in,
         /// which Brave's endpoint answers. Worth telling apart, because what that person has to do
         /// is name one of their own models rather than set a service up.
+        ///
+        /// A stored ChatGPT sign-in is such a service
+        /// ([BACKEND-39](../../../docs/specs/backends.md#BACKEND-39)).
         a_service_is_configured: bool,
+        /// What the ChatGPT sign-in file holds, which decides what the person is told: a sign-in
+        /// that is stored is the service configured, and one that cannot be read is said so.
+        ///
+        /// Not read where a Bedrock or gateway block is configured, and then `NotStored`, so a
+        /// stored sign-in is the whole of the service configured only where nothing else is.
+        chatgpt: crate::chatgpt::AccountFile,
     },
     /// The machine-level layer does not let this machine request the model (BACKEND-48).
     ///
@@ -658,9 +667,22 @@ pub enum Serving {
 /// [`Backend::spends_a_subscription`]'s question, asked here for the same reason
 /// [`crate::turn::discover_subscription`] asks it.
 ///
-/// The store is read only where nothing before it has answered, since it is a file in somebody's
-/// home directory and a read that cannot change the answer is a read for nothing.
+/// The store and the ChatGPT sign-in file are read only where nothing before them has answered, since
+/// each is a file in somebody's home directory and a read that cannot change the answer is a read
+/// for nothing.
 pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
+    serving_with(config, egress, model, crate::chatgpt::account_file)
+}
+
+/// [`serving`] with the sign-in file read by `chatgpt`, so a test is not answered by the file of
+/// whoever runs it. Called only where nothing before it has answered and no Bedrock or gateway
+/// block is configured, as the store is.
+fn serving_with(
+    config: &Config,
+    egress: &Egress,
+    model: &str,
+    chatgpt: impl FnOnce() -> crate::chatgpt::AccountFile,
+) -> Serving {
     // First, because it is the one answer no configuration changes: a model the machine-level layer
     // refuses is refused whichever service would have answered for it, and asking which service that
     // is would report a working Bedrock account for a request that is never sent (BACKEND-48).
@@ -693,12 +715,24 @@ pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
         return Serving::Configured;
     }
 
+    // A sign-in that is stored is a service configured for the models it names, and the model in
+    // force is not one of them. It is read only where no Bedrock or gateway block is configured:
+    // somebody who has one is told to name a model with the `model` key, and a sign-in beside it
+    // must not take that line from them. One that cannot be read configures nothing and is said.
+    let configured_elsewhere = config.bedrock.is_some() || !config.providers.is_empty();
+    let chatgpt = if configured_elsewhere {
+        crate::chatgpt::AccountFile::NotStored
+    } else {
+        chatgpt()
+    };
     Serving::NothingConfigured {
         subscription: stored
             .as_ref()
             .and_then(|found| found.complaint())
             .map(str::to_string),
-        a_service_is_configured: config.bedrock.is_some() || !config.providers.is_empty(),
+        a_service_is_configured: configured_elsewhere
+            || chatgpt == crate::chatgpt::AccountFile::Stored,
+        chatgpt,
     }
 }
 
@@ -1421,6 +1455,7 @@ fn gateway_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chatgpt::AccountFile;
     use bravebot_aichat::responses::protocol::Refusal;
     use bravebot_config::DEFAULT_MODEL;
     use bravebot_config::env_var;
@@ -1597,12 +1632,107 @@ mod tests {
     fn braves_endpoint_with_nothing_beside_it_has_no_service_configured() {
         let egress = Egress::new();
         assert_eq!(
-            serving(&braves_endpoint_without_premium(), &egress, DEFAULT_MODEL),
+            serving_with(
+                &braves_endpoint_without_premium(),
+                &egress,
+                DEFAULT_MODEL,
+                || AccountFile::NotStored
+            ),
             Serving::NothingConfigured {
                 subscription: None,
                 a_service_is_configured: false,
+                chatgpt: AccountFile::NotStored,
             }
         );
+    }
+
+    /// BACKEND-39: a stored ChatGPT sign-in is a service configured, so a person who has just signed
+    /// in and still has Brave's model in force is told to name a model and not shown the routes
+    /// again. A file that cannot be read configures nothing and is said, and the sign-in is read
+    /// only where nothing before it has answered.
+    #[test]
+    fn a_stored_chatgpt_sign_in_is_a_service_configured_and_an_unreadable_one_is_not() {
+        let egress = Egress::new();
+        let config = braves_endpoint_without_premium();
+        for (found, configured) in [
+            (AccountFile::Stored, true),
+            (AccountFile::NotStored, false),
+            (AccountFile::Unreadable, false),
+        ] {
+            assert_eq!(
+                serving_with(&config, &egress, DEFAULT_MODEL, || found),
+                Serving::NothingConfigured {
+                    subscription: None,
+                    a_service_is_configured: configured,
+                    chatgpt: found,
+                },
+                "{found:?}"
+            );
+        }
+
+        // A model a configured service serves never asks about the file.
+        assert_eq!(
+            serving_with(
+                &braves_endpoint_with_a_gateway(),
+                &egress,
+                "z-ai/glm-4.6",
+                || panic!("the sign-in file was read for a model a gateway serves")
+            ),
+            Serving::Configured
+        );
+    }
+
+    /// BACKEND-39: a Bedrock or gateway block that is configured while Brave's own model is in force
+    /// keeps the line that names the `model` key, whatever else is stored, so the sign-in file is
+    /// not read and nothing it holds can replace that line. Reading it for them would tell a person
+    /// who set up an AWS account or a gateway and also signed in to ChatGPT to pick a model of the
+    /// account, and say nothing of the service they configured.
+    #[test]
+    fn a_configured_bedrock_or_gateway_block_keeps_its_line_whatever_a_sign_in_holds() {
+        let egress = Egress::new();
+        let tier_variables = Config::from_lookup(|key| {
+            match key {
+                env_var::SIGNING_KEY => Some("test-signing-key"),
+                env_var::KEY_ID => Some("test-key-id"),
+                env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.com"),
+                env_var::USE_BEDROCK => Some("1"),
+                env_var::AWS_REGION => Some("us-west-2"),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn"),
+                env_var::AWS_PROFILE => Some("a-profile-no-machine-has"),
+                _ => None,
+            }
+            .map(str::to_string)
+        })
+        .expect("configured");
+        assert!(tier_variables.bedrock.is_some());
+        let mut an_aws_block = braves_endpoint_without_premium();
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        an_aws_block.providers = bravebot_config::provider::Provider::all(&root);
+        for (config, configured) in [
+            (braves_endpoint_with_a_gateway(), "a gateway block"),
+            (tier_variables, "the Bedrock tier variables"),
+            (an_aws_block, "an AWS block"),
+        ] {
+            assert_eq!(
+                serving_with(&config, &egress, DEFAULT_MODEL, || panic!(
+                    "the sign-in file was read beside {configured}"
+                )),
+                Serving::NothingConfigured {
+                    subscription: None,
+                    a_service_is_configured: true,
+                    chatgpt: AccountFile::NotStored,
+                },
+                "{configured}"
+            );
+        }
     }
 
     /// A model a configured service serves has a service, whatever the aichat fields hold. The
@@ -1631,10 +1761,16 @@ mod tests {
     fn a_service_configured_while_the_model_is_braves_own_has_none_for_that_model() {
         let egress = Egress::new();
         assert_eq!(
-            serving(&braves_endpoint_with_a_gateway(), &egress, DEFAULT_MODEL),
+            serving_with(
+                &braves_endpoint_with_a_gateway(),
+                &egress,
+                DEFAULT_MODEL,
+                || AccountFile::NotStored
+            ),
             Serving::NothingConfigured {
                 subscription: None,
                 a_service_is_configured: true,
+                chatgpt: AccountFile::NotStored,
             }
         );
     }
@@ -1771,6 +1907,7 @@ mod tests {
         let refused = |subscription: Option<&str>| Serving::NothingConfigured {
             subscription: subscription.map(str::to_string),
             a_service_is_configured: true,
+            chatgpt: AccountFile::NotStored,
         };
         assert!(sets_aside(refused(None), || Serving::Configured));
         assert!(!sets_aside(

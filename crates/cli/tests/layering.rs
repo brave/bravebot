@@ -657,11 +657,31 @@ fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
     }
 }
 
+/// Whether `text` names the ChatGPT flow's `sign_in`.
+///
+/// Read as text, so it holds what a file has to write to reach the function and nothing about what
+/// it resolves to: the module path and the function in one file, the module's path ahead of the
+/// call whatever the crate is called (`use bravebot_skus as skus;` leaves `skus::chatgpt::sign_in(`
+/// with no `bravebot_skus::chatgpt` in it), a glob or a group imported from the module under that
+/// alias, and the module renamed. What it does not see is `sign_in` reached through a re-export in
+/// another crate, which no crate has, and a file that builds the call from a name it computes.
+/// `needs_sign_in` and the other functions of the same spelling in other modules are not the flow, so
+/// a file naming `sign_in` alone is not a caller.
+fn names_the_chatgpt_sign_in(text: &str) -> bool {
+    (text.contains("bravebot_skus::chatgpt") && text.contains("sign_in"))
+        || text.contains("chatgpt::sign_in")
+        || (text.contains("chatgpt::*") && text.contains("sign_in("))
+        || (text.contains("chatgpt::{") && text.contains("sign_in"))
+        || (text.contains("chatgpt as ") && text.contains("sign_in("))
+}
+
 /// CHATGPT-1 says only a command a person types signs in. The flow is `bravebot_skus::chatgpt`'s
 /// `sign_in`, which opens a browser, holds a port and ends with a credential on disk, so a tool, a
 /// hook, a slash command or a background host that called it would start that on content's say. The
 /// one caller is the command's own file, and a file that names the module and `sign_in` together is
-/// a second.
+/// a second, as is one that names the module and calls `sign_in` through the crate's alias. A file
+/// that only reads the sign-in file, as the agent's does to tell a first run what is configured,
+/// names neither.
 #[test]
 fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
     let crates = workspace().join("crates");
@@ -675,7 +695,7 @@ fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
         for file in rust_files(&source) {
             scanned += 1;
             let text = std::fs::read_to_string(&file).expect("a source file");
-            if text.contains("bravebot_skus::chatgpt") && text.contains("sign_in") {
+            if names_the_chatgpt_sign_in(&text) {
                 callers.push(
                     file.strip_prefix(workspace())
                         .expect("a path under the workspace")
@@ -691,6 +711,34 @@ fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
         "{scanned} source files, so this test would pass by scanning almost nothing"
     );
     assert_eq!(callers, ["crates/cli/src/chatgpt.rs"]);
+}
+
+/// The scan above reads the way a file names the flow, so the ways it can be named are held here:
+/// each form that starts the sign-in is found, and the read of the sign-in file is not.
+#[test]
+fn the_scan_for_the_chatgpt_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_file() {
+    for starts in [
+        "bravebot_skus::chatgpt::sign_in(&hosts)",
+        "use bravebot_skus::chatgpt;\nchatgpt::sign_in(&hosts)",
+        "use bravebot_skus as skus;\nskus::chatgpt::sign_in(&hosts)",
+        "use bravebot_skus::chatgpt::sign_in as start;\nstart(&hosts)",
+        "use bravebot_skus::chatgpt::*;\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::*;\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::{Hosts, sign_in};\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::chatgpt as flow;\nflow::sign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::sign_in as start;\nstart(&hosts)",
+    ] {
+        assert!(names_the_chatgpt_sign_in(starts), "{starts}");
+    }
+    for reads in [
+        "use bravebot_skus::chatgpt::Account;\nAccount::load()",
+        "use bravebot_skus as skus;\nskus::chatgpt::Account::load()",
+        "fn needs_sign_in(model: &str) -> bool { false }",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::{Account, Hosts};\nAccount::load()",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::*;\nlet _ = Account::load();",
+    ] {
+        assert!(!names_the_chatgpt_sign_in(reads), "{reads}");
+    }
 }
 
 /// The features that exist so a test can point a flow at a server of its own

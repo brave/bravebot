@@ -129,6 +129,7 @@ desktop window or a background run has nowhere to show the URL. A session with n
 already takes this road: it says the command to type and does not start the work.
 
 `verified-by: bravebot_cli::layering::the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else`
+`verified-by: bravebot_cli::layering::the_scan_for_the_chatgpt_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_file`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 `verified-by: bravebot_cli::auth::every_way_is_listed_and_only_a_held_one_says_what_it_holds`
 `verified-by: bravebot_cli::auth::a_way_is_picked_by_its_number_or_its_name`

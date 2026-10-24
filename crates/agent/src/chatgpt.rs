@@ -270,6 +270,34 @@ impl AccountStored for StoredSignIn {
     }
 }
 
+/// What the file that keeps the ChatGPT sign-in holds, as far as telling a person what to configure
+/// needs it ([BACKEND-39](../../../docs/specs/backends.md#BACKEND-39)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountFile {
+    /// Nothing is stored, or this machine has nowhere to keep a sign-in.
+    NotStored,
+    /// A sign-in is stored and the file can be read. Its tokens are not looked at.
+    Stored,
+    /// The file exists and cannot be used, so it configures nothing and the person is told why.
+    Unreadable,
+}
+
+/// The sign-in file as it is on this machine. It is read and nothing is renewed or asked of the
+/// service, so it starts nothing.
+pub(crate) fn account_file() -> AccountFile {
+    file_of(&Account::load())
+}
+
+fn file_of(loaded: &Result<Option<Account>, bravebot_skus::chatgpt::AccountError>) -> AccountFile {
+    match loaded {
+        Ok(Some(_)) => AccountFile::Stored,
+        Ok(None) | Err(bravebot_skus::chatgpt::AccountError::Nowhere { .. }) => {
+            AccountFile::NotStored
+        }
+        Err(_) => AccountFile::Unreadable,
+    }
+}
+
 /// What the ChatGPT account offers a picker
 /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
 #[derive(Debug, PartialEq, Eq)]
@@ -537,6 +565,40 @@ mod tests {
         for (step, expected) in table {
             let shown = step.to_string();
             assert_eq!(failure_of(&step), expected, "{shown}");
+        }
+    }
+
+    /// BACKEND-39: a sign-in that is stored is the one state that configures a service. A machine
+    /// with none, and one with nowhere to keep it, configure nothing and are told nothing, and a
+    /// file that cannot be used configures nothing and is told apart from an absent one so that it
+    /// is said. A read that took an unreadable file for a stored sign-in would send the person to
+    /// name a model that no turn can reach, and one that took it for an absent one would not say
+    /// why a sign-in they made is not used.
+    #[test]
+    fn a_stored_account_is_told_apart_from_an_absent_one_and_from_one_that_cannot_be_read() {
+        let stored = Account {
+            access_token: bravebot_skus::Secret::new("placeholder-access-token"),
+            refresh_token: bravebot_skus::Secret::new("placeholder-refresh-token"),
+            expires_at: 1,
+            client_id: "client".to_string(),
+            host_id: "urn:uuid:host".to_string(),
+        };
+        assert_eq!(file_of(&Ok(Some(stored))), AccountFile::Stored);
+        assert_eq!(file_of(&Ok(None)), AccountFile::NotStored);
+        assert_eq!(
+            file_of(&Err(AccountError::Nowhere {
+                detail: "a path".to_string()
+            })),
+            AccountFile::NotStored
+        );
+        for unusable in [
+            AccountError::Unusable {
+                detail: "a path".to_string(),
+            },
+            AccountError::Malformed(bravebot_skus::chatgpt::Defect::MissingField),
+        ] {
+            let shown = unusable.to_string();
+            assert_eq!(file_of(&Err(unusable)), AccountFile::Unreadable, "{shown}");
         }
     }
 

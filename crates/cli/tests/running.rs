@@ -316,6 +316,166 @@ fn a_first_run_names_the_chatgpt_sign_in_in_the_language_it_is_read_in() {
     );
 }
 
+/// Somebody whose ChatGPT sign-in is stored and whose model in force is still Brave's own is
+/// one key from working, as one who wrote a gateway block is. The first run says to pick one of the
+/// account's models in the words the sign-in command ends with, and does not show the routes they
+/// have just followed, and with Claude Code set up on the machine it does not name an import either,
+/// since a service is configured. A stored sign-in that cannot be read is said first and is no
+/// service, so the routes stay. Nothing stored shows them, which the first-run tests above pin.
+#[test]
+fn a_stored_chatgpt_sign_in_is_a_service_configured_for_the_first_run() {
+    let stored = Scratch::new("cli-running-no-service-chatgpt-stored")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127));
+    let output = bravebot(&stored.path, NOTHING_CONFIGURED, &["-p", "say something"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("A ChatGPT sign-in is stored")
+            && stderr.contains("Pick one of the account's models in /model")
+            && stderr.contains("bravebot --model chatgpt/<model>"),
+        "the refusal did not say how to use the sign-in: {stderr}"
+    );
+    for offered in [
+        "amazon-bedrock",
+        "OpenRouter",
+        "bravebot auth login",
+        "bravebot auth login import",
+        "Claude Code",
+    ] {
+        assert!(
+            !stderr.contains(offered),
+            "somebody who signed in was offered {offered}: {stderr}"
+        );
+    }
+    assert!(!stored.settings().exists(), "a one-shot run wrote settings");
+
+    let unreadable = Scratch::new("cli-running-no-service-chatgpt-unreadable").with_state(
+        "chatgpt-account.json",
+        r#"{"access_token": "placeholder-chatgpt-access-token" oops"#,
+    );
+    let output = bravebot(
+        &unreadable.path,
+        NOTHING_CONFIGURED,
+        &["-p", "say something"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("the stored ChatGPT sign-in is unusable")
+            && stderr.contains("bravebot auth logout chatgpt"),
+        "the unreadable file was not said: {stderr}"
+    );
+    assert!(
+        stderr.contains("amazon-bedrock") && !stderr.contains("A ChatGPT sign-in is stored"),
+        "a sign-in that cannot be read was taken for a service: {stderr}"
+    );
+    assert!(
+        !stderr.contains("placeholder-chatgpt-access-token"),
+        "{stderr}"
+    );
+}
+
+/// A gateway configured while Brave's own model is in force, and a ChatGPT sign-in stored beside
+/// it, is told what somebody with the gateway alone is told: to name a model with the `model` key.
+/// The sign-in file is not read for them, so the line that names the next step for the service
+/// they configured is not replaced by one about the account, and they are shown no routes. The
+/// same holds of `doctor`. A file that cannot be read is not said by the start either, since it
+/// is not read there, and `doctor` has its own line for it.
+#[test]
+fn a_stored_chatgpt_sign_in_beside_a_configured_gateway_leaves_the_line_that_names_the_model_key() {
+    let settings = r#"{
+        "provider": {
+            "openrouter": {
+                "env": ["OPENROUTER_API_KEY"],
+                "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                "models": {"z-ai/glm-4.6": {}}
+            }
+        }
+    }"#;
+    let environment = [NOTHING_CONFIGURED, &[("OPENROUTER_API_KEY", "a-token")]].concat();
+    let stored = Scratch::new("cli-running-gateway-and-chatgpt-stored")
+        .with_settings(settings)
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127));
+
+    let output = bravebot(&stored.path, &environment, &["-p", "say something"]);
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("`model` key"), "{stderr}");
+    for replaced in [
+        "A ChatGPT sign-in is stored",
+        "Pick one of the account's models",
+        "amazon-bedrock",
+        "bravebot auth login leo",
+    ] {
+        assert!(
+            !stderr.contains(replaced),
+            "the line for the gateway was replaced by {replaced}: {stderr}"
+        );
+    }
+
+    let output = bravebot(&stored.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(stdout.contains("`model` key"), "{stdout}");
+    assert!(
+        !stdout.contains("A ChatGPT sign-in is stored"),
+        "the report replaced the line for the gateway: {stdout}"
+    );
+
+    let unreadable = Scratch::new("cli-running-gateway-and-chatgpt-unreadable")
+        .with_settings(settings)
+        .with_state(
+            "chatgpt-account.json",
+            r#"{"access_token": "placeholder-chatgpt-access-token" oops"#,
+        );
+    let output = bravebot(&unreadable.path, &environment, &["-p", "say something"]);
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("`model` key"), "{stderr}");
+    assert!(
+        !stderr.contains("sign-in is unusable"),
+        "a file nothing reads was said: {stderr}"
+    );
+}
+
+/// `doctor` says the same as the first run (CLI-7): a stored sign-in is told to name a model and not
+/// shown the routes, and a file that cannot be read is said once, by its own line, with the routes
+/// after it.
+#[test]
+fn doctor_treats_a_stored_chatgpt_sign_in_as_a_service_configured() {
+    let stored = Scratch::new("cli-running-doctor-no-service-chatgpt-stored")
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127));
+    let output = bravebot(&stored.path, NOTHING_CONFIGURED, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("A ChatGPT sign-in is stored")
+            && stdout.contains("bravebot --model chatgpt/<model>"),
+        "the report did not say how to use the sign-in: {stdout}"
+    );
+    for offered in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+        assert!(
+            !stdout.contains(offered),
+            "the report offered {offered} to somebody who signed in: {stdout}"
+        );
+    }
+
+    let unreadable = Scratch::new("cli-running-doctor-no-service-chatgpt-unreadable").with_state(
+        "chatgpt-account.json",
+        r#"{"access_token": "placeholder-chatgpt-access-token" oops"#,
+    );
+    let output = bravebot(&unreadable.path, NOTHING_CONFIGURED, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        stdout.matches("sign-in is unusable").count(),
+        1,
+        "{stdout}{stderr}"
+    );
+    assert!(stdout.contains("amazon-bedrock"), "{stdout}");
+}
+
 /// And a configured gateway is not refused: it is a service that can answer, so the run goes to
 /// it. The status says which happened, since the gateway here is a port nothing is listening on:
 /// a run that reached it and found nothing there is a run that was not stopped beforehand.
