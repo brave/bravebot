@@ -693,8 +693,15 @@ fn a_refusal_whose_body_fails_while_it_is_read_is_written_to_the_diagnostic_log(
         );
     }
 
+    // The stop is pressed a tenth of a second in. The gap is long enough that a machine that stalls
+    // for a while still sees the stop first: a gap that ended first would end the fetch as a refusal
+    // and fail the assertion below on the kind of error, whatever the code does with a stop.
+    let gap = Duration::from_secs(2);
     let base = serve_stalled_reply("401 Unauthorized", Duration::ZERO, || {});
-    let egress = Egress::with_timeouts(timeouts);
+    let egress = Egress::with_timeouts(Timeouts {
+        idle: gap,
+        ..timeouts
+    });
     let log = logged(|| {
         let mut sink = RecordingSink::new();
         let mut policy = fetching(&mut sink);
@@ -710,9 +717,13 @@ fn a_refusal_whose_body_fails_while_it_is_read_is_written_to_the_diagnostic_log(
             Label::untrusted_public(),
             Some(&stop),
         );
-        assert!(matches!(outcome, Err(EgressError::Stopped { .. })));
+        assert!(
+            matches!(outcome, Err(EgressError::Stopped { .. })),
+            "{:?}",
+            outcome.map(|_| ())
+        );
         // Past the gap, which is when the abandoned read ends in the failure that must not be written.
-        thread::sleep(Duration::from_millis(900));
+        thread::sleep(gap + Duration::from_millis(900));
     });
     assert!(
         about(&log, &base).is_empty(),
