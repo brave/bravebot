@@ -629,8 +629,13 @@ qualified name at all, which is what keeps the other rosters' spellings out of t
 Where a gateway block names its models, those are what is offered and nothing is asked over the
 network. Where it names none, the gateway itself is asked, and what it answers is offered. A Google
 Vertex service has no listing to ask, and is offered the list [BACKEND-49](#BACKEND-49) compiles in
-instead. A listing that cannot be fetched contributes nothing and takes nothing away from the rest of
-the roster.
+instead. A listing that cannot be read contributes nothing and takes nothing away from the rest of
+the roster, and the picker says which gateway's could not be read, by the name its block gives it and
+with the way to name one of its models as `--model <id>/<model>`. The terminal says it in a note before
+the picker draws, in the catalog's words, and the desktop in a warning. A gateway whose block names a
+credential nothing holds is not asked, and the picker does not say it could not be read, since `doctor`
+says the credential is missing. A gateway whose block names its models is not asked and is not
+mentioned.
 
 What the credential in use may reach is asked for ahead of what the service offers generally, and the
 wider roster answers only where the narrower question does not. A block naming no credential has no
@@ -642,6 +647,12 @@ and the rest by name.
 from resolves a roster from a registry, so the commonest block copied in names a credential and
 nothing else. Offering nothing for such a block means a gateway configured exactly as that tool
 configures it appears in a diagnostic and is unusable, which was the state this replaced.
+
+A listing that could not be read is said, where it was once left silent, because a person who sees no
+rows of a gateway they configured cannot tell a gateway that serves none from one that did not answer,
+and the first is not something trying again changes. A missing credential is left to `doctor` and to the
+turn that needs it, which already say it with the variable to set, where a note about a listing would
+send somebody to try again.
 
 Asking only where nothing was named is what keeps the block worth writing. A stated roster costs no
 round trip and works with no network, which is the position somebody offline is in, and it stays the
@@ -704,6 +715,8 @@ the rest. A listing refused in a code that names the account contributes nothing
 `verified-by: bravebot_tui::app::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
 `verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
 `verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
+`verified-by: bravebot_tui::app::the_picker_says_which_gateway_could_not_be_listed_and_says_nothing_of_the_rest`
+`verified-by: bravebot_ui_bridge::models::the_window_says_which_gateway_could_not_be_listed`
 
 <a id="BACKEND-20"></a>
 ### BACKEND-20: how hard to think is carried, never inferred

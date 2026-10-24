@@ -3500,18 +3500,20 @@ fn fetch_models(config: &Config) -> Result<Vec<bravebot_aichat::models::Model>, 
 /// A block naming no credential at all is asked, unauthenticated. That is somebody saying the gateway
 /// wants none, and it is the block a local Ollama is configured with. That block lists no models
 /// either, so not asking leaves it offering nothing.
+///
+/// Why there is no roster is not told in the words of the error that says so, which belong to the
+/// service and to this process and are not for a picker's note: a listing that could not be read is
+/// said to the person, and a credential that is missing is not, since `doctor` says it.
 fn fetch_gateway_models(
     provider: &bravebot_config::provider::Provider,
-) -> Result<Vec<bravebot_aichat::models::Model>, String> {
+) -> Result<Vec<bravebot_aichat::models::Model>, Unlisted> {
     let token = match provider.credential(|name| std::env::var(name).ok()) {
         bravebot_config::provider::Credential::Token(token) => Some(token),
         bravebot_config::provider::Credential::NotNeeded => None,
         bravebot_config::provider::Credential::Absent if provider.compiled_roster().is_some() => {
             None
         }
-        bravebot_config::provider::Credential::Absent => {
-            return Err(format!("no credential for {}", provider.display_name()));
-        }
+        bravebot_config::provider::Credential::Absent => return Err(Unlisted::NoCredential),
     };
 
     let mut sink = Trail::new();
@@ -3534,12 +3536,22 @@ fn fetch_gateway_models(
         ]),
         &mut sink,
     )
-    .map_err(|denial| denial.to_string())
+    .map_err(|_| Unlisted::Unreadable)
     .and_then(|mut policy| {
         let token = token.as_ref().map(bravebot_config::Secret::expose);
         bravebot_aichat::models::list_from_gateway(&mut policy, provider, token, &headers, &egress)
-            .map_err(|error| error.to_string())
+            .map_err(|_| Unlisted::Unreadable)
     })
+}
+
+/// Why a gateway that names no models has none among the rows.
+#[derive(Debug, PartialEq, Eq)]
+enum Unlisted {
+    /// The block names a credential nothing holds, so the gateway was not asked.
+    NoCredential,
+    /// The gateway was asked and its listing could not be read: the request failed, or what answered
+    /// was not a listing.
+    Unreadable,
 }
 
 /// Where a session's opening trust map came from, which is what it says about it.
@@ -8311,6 +8323,78 @@ mod tests {
         );
         assert_eq!(offered(&with("")), ["local/llama3"]);
         assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/v1/models"]);
+    }
+
+    /// BACKEND-19: a gateway that names no models and whose listing could not be read is said in the
+    /// picker, by the name its block gives it, with the way to name one of its models. A gateway
+    /// whose listing was read, one whose key is missing, which `doctor` says, and one that names its
+    /// models and so is not asked, are not mentioned, and each keeps the rows it has. The two ways a
+    /// listing is unreadable are both tried, a service that is not there and one that answers with
+    /// something that is not a listing. The regressions it rejects are a roster that fails silently,
+    /// a sentence for a gateway nobody could have asked, and one gateway's failure taking another's
+    /// rows with it.
+    #[test]
+    fn the_picker_says_which_gateway_could_not_be_listed_and_says_nothing_of_the_rest() {
+        use models::scripted_account::nobody_signed_in;
+        nobody_signed_in();
+        // Held, since a server whose receiver is gone stops answering.
+        let (readable, _asked_of_readable) = a_listing_server(r#"{"data": [{"id": "llama3"}]}"#);
+        let (garbled, _asked_of_garbled) = a_listing_server("this is not a listing");
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{
+                "readable": {{"name": "Readable Gateway", "options": {{"baseURL": "{readable}/v1"}}}},
+                "garbled": {{"name": "Garbled Gateway", "options": {{"baseURL": "{garbled}/v1"}}}},
+                "down": {{"name": "Down Gateway", "options": {{"baseURL": "http://127.0.0.1:1/v1"}}}},
+                "keyless": {{"name": "Keyless Gateway", "env": ["BRAVEBOT_TEST_UNSET_GATEWAY_KEY"],
+                             "options": {{"baseURL": "http://127.0.0.1:1/v1"}}}},
+                "named": {{"name": "Named Gateway", "options": {{"baseURL": "http://127.0.0.1:1/v1"}},
+                           "models": {{"m": {{}}}}}}
+            }}}}"#
+        ))
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 5, "a block configured no gateway");
+
+        let mut session = Session::new("none");
+        open_model_picker(&mut session, &config);
+
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        let rows: Vec<String> = picker.matching().iter().map(|m| m.key.clone()).collect();
+        let mut said: Vec<String> = session.transcript.iter().map(|e| e.text.clone()).collect();
+        said.sort();
+        let mut expected = vec![
+            t!(
+                session_gateway_models_unreadable,
+                gateway = "Down Gateway",
+                id = "down"
+            ),
+            t!(
+                session_gateway_models_unreadable,
+                gateway = "Garbled Gateway",
+                id = "garbled"
+            ),
+        ];
+        expected.sort();
+        assert_eq!(said, expected);
+        for (gateway, id) in [("Down Gateway", "down"), ("Garbled Gateway", "garbled")] {
+            let note = said.iter().find(|note| note.contains(gateway)).unwrap();
+            assert!(
+                note.contains(&format!("--model {id}/<model>")),
+                "no way to name a model of {gateway}: {note}"
+            );
+        }
+        for rows_of in ["readable/llama3", "named/m", "opus-arn"] {
+            assert!(rows.contains(&rows_of.to_string()), "{rows_of}: {rows:?}");
+        }
+        for silent in ["down/", "garbled/", "keyless/"] {
+            assert!(
+                !rows.iter().any(|key| key.starts_with(silent)),
+                "{silent} has rows: {rows:?}"
+            );
+        }
     }
 
     /// BACKEND-5, BACKEND-29: a model an AWS `provider` entry names is offered under a name the

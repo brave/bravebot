@@ -750,7 +750,8 @@ so in a warning beside the other rosters', and the terminal picker says so in a 
 written when the picker opens, so before it draws, at rest or mid-turn. The window's warning is a catalog
 message of its own, one sentence in sentence case that says what happened and what to do, sent with the
 command it names so the picker draws that command as code, and the terminal's note is lower case and names
-`/model`, which the window has no use for. Where the compiled list is offered both say that it is built in
+`/model`, which the window has no use for. A gateway whose listing could not be read is said in the same
+place and the same way by both pickers ([BACKEND-19](backends.md#BACKEND-19)). Where the compiled list is offered both say that it is built in
 and may name a model the account cannot reach. A listing refused with a code of
 [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in a sentence of that code's own, which does not send
 the person to sign in again. A person who never signed in is

@@ -3264,6 +3264,9 @@ session-models-unavailable = could not list models: { $problem }
 session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
 session-chatgpt-models-compiled = could not list the ChatGPT account's models, so /model shows a built-in list that may name a model the account cannot reach; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
 session-chatgpt-models-refused = could not list the ChatGPT account's models: { $refusal }
+# Said when the picker opens and a gateway whose settings name no models could not be asked for its list,
+# so none of its models are offered. A gateway whose key is missing is not asked and is not said here.
+session-gateway-models-unreadable = could not read the list of models from { $gateway }, so none of its models are offered; try again, or name one, as in bravebot --model { $id }/<model>
 session-theme-set = theme { $theme }
 session-no-such-theme = no theme named { $theme }; try /theme for the list
 session-editing-vi = editing the way vi does; esc for commands, i to type

@@ -18,13 +18,15 @@ pub(super) fn list_models(
     roster(config, chosen, config.runs_on_chatgpt_account(chosen)).map(|roster| roster.models)
 }
 
-/// The rows a picker offers, and what a person who signed in to ChatGPT is told where the account's
-/// models are not among them.
+/// The rows a picker offers, and what a person is told where the rows of a service they use are not
+/// among them.
 pub(super) struct PickerRoster {
     pub(super) models: Vec<bravebot_aichat::models::Model>,
-    /// Set where a sign-in is stored and its listing could not be had. A person who never signed in
-    /// is told nothing, and a listing that was read, even an empty one, is not a problem.
-    pub(super) account_problem: Option<String>,
+    /// One sentence for each service whose listing could not be read: a gateway that names no models
+    /// and could not be asked, and the ChatGPT account where a sign-in is stored and its listing
+    /// could not be had. A person who never signed in to ChatGPT is told nothing, and a listing that
+    /// was read, even an empty one, is not a problem.
+    pub(super) problems: Vec<String>,
 }
 
 /// [`list_models`] for the picker, which offers the account's models whatever is in force
@@ -49,6 +51,8 @@ fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<Picker
         .as_ref()
         .map(bedrock_models)
         .unwrap_or_default();
+    // What a person is told where a service they use could not be asked, in the order they were.
+    let mut problems = Vec::new();
 
     // Additive on the same terms. A block that named its models is taken at its word and costs no
     // round trip, which is what keeps a configured gateway working offline. One that named none is
@@ -66,25 +70,39 @@ fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<Picker
         }
         match provider.models.is_empty() {
             false => configured.extend(provider_models(provider)),
-            true => configured.extend(in_reading_order(
-                fetch_gateway_models(provider).unwrap_or_default(),
-                chosen.unwrap_or(&config.default_model),
-            )),
+            true => {
+                let listed = match fetch_gateway_models(provider) {
+                    Ok(listed) => listed,
+                    // Said by `doctor`, and again when a turn is sent without one.
+                    Err(Unlisted::NoCredential) => Vec::new(),
+                    Err(Unlisted::Unreadable) => {
+                        problems.push(t!(
+                            session_gateway_models_unreadable,
+                            gateway = provider.display_name(),
+                            id = provider.id.as_str()
+                        ));
+                        Vec::new()
+                    }
+                };
+                configured.extend(in_reading_order(
+                    listed,
+                    chosen.unwrap_or(&config.default_model),
+                ));
+            }
         }
     }
 
     // Additive like a gateway: a stored ChatGPT sign-in adds its models to the rows and takes none
     // away. Not asked where nothing is signed in, and a listing that cannot be had adds the compiled
     // names and is said, so a person who signed in does not take them for what the account reaches.
-    let mut account_problem = None;
     if account {
         let asked = ask_the_account(config);
-        account_problem = account_problem_said(&asked);
+        problems.extend(account_problem_said(&asked));
         configured.extend(account_rows(asked, chosen.unwrap_or(&config.default_model)));
     }
     let rostered = |models| PickerRoster {
         models: requestable(config, models),
-        account_problem,
+        problems,
     };
 
     // A build from source pointed only at Bedrock has blank Brave credentials, and asking with them
@@ -573,13 +591,10 @@ pub(super) fn choose_model(
     config: &mut Config,
 ) {
     match list_models_for_picker(config, session.model()) {
-        Ok(PickerRoster {
-            models,
-            account_problem,
-        }) => {
-            // Before the picker draws, so the sentence is in the transcript behind it and stays there
+        Ok(PickerRoster { models, problems }) => {
+            // Before the picker draws, so the sentences are in the transcript behind it and stay there
             // once it closes.
-            if let Some(problem) = account_problem {
+            for problem in problems {
                 session.note(problem);
             }
             let chosen = crate::model_prompt::choose(terminal, models, session.model(), |frame| {
@@ -635,11 +650,8 @@ pub(super) fn model_picked(
 /// A refusal or an unreachable endpoint leaves the model as it was and says so, as at rest.
 pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
     match list_models_for_picker(config, session.model()) {
-        Ok(PickerRoster {
-            models,
-            account_problem,
-        }) => {
-            if let Some(problem) = account_problem {
+        Ok(PickerRoster { models, problems }) => {
+            for problem in problems {
                 session.note(problem);
             }
             session.open_picking(crate::picking::Picking::Model(
