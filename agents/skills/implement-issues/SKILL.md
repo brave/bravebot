@@ -219,9 +219,9 @@ git cherry-pick upstream/main..<group-branch>
 On a conflict, edit the region so both sides survive, `git add` the file, and
 `git cherry-pick --continue`; the resolution belongs to the commit it arose in. Catalogs, indexes
 and other files many items append to conflict most. Where both sides cannot survive, keep the side
-that closes more items, record it as a decision, and treat the other item's lost behaviour as
-`impossible` with a follow-up. Run each group's targeted tests again on the combined tree. Mark the
-items `combined`.
+that closes more items, record it as a decision, and give the other item `Part of` with a filed
+follow-up for the behaviour it lost (cause 6 under [What is impossible](#what-is-impossible)). Run
+each group's targeted tests again on the combined tree. Mark the items `combined`.
 
 Group branches and their worktrees stay where they are; only the integration branch is pushed.
 
@@ -379,7 +379,8 @@ An item, or the part of it, is `impossible` only when:
    has, and no test can stand in;
 4. it asks for something the guarantee or a spec clause forbids, since a spec wins over an issue
    and no clause is reworded to fit one;
-5. after reading the issue, its comments and the code, no reading of it is defensible.
+5. after reading the issue, its comments and the code, no reading of it is defensible;
+6. two items ask for behaviour that cannot both hold, so one gives way (step 5).
 
 For each, file the follow-up before the body, describing what remains, why it cannot be done here
 and what would unblock it. The item then has `Part of` where some of it landed, or no closing line
