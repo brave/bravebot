@@ -167,7 +167,7 @@ nothing the compiler is asked about says how much it optimises. A test compiles 
 combination of the settings, and reads the root manifest for the release profile's `panic = "abort"`, which
 the refusal depends on.
 
-Three more tests read the tree for a way the seam could reach a release, and each reads what is named here and
+Four more tests read the tree for a way the seam could reach a release, and each reads what is named here and
 no more.
 
 - One reads every `Cargo.toml` in the repository, the fuzz package's included, and every `.cargo/config*`
@@ -205,14 +205,25 @@ no more.
   `docs/development/fuzzing.md`, which is `rustup`'s, and `<name>` in `Makefile`, which is the AWS CLI's in a
   message. A test holds the lists in this paragraph to the lists the test reads.
 - One reads the source a release build compiles, which is every file under a crate's `src` except test
-  modules, the files only a test module declares, and comments, and pins who may name a host. `Hosts::at` has
-  no caller. `Hosts::compiled_in` has two, the agent's one renewer and the sign-in command.
-  `ResponsesClient::for_account` and `list_from_account` send the access token to whatever `Provider` they
-  are given, so each has one caller, in the agent, and the provider each is given is the one the agent's
-  `account_provider` holds. `Provider::chatgpt_account`, which builds the provider whose address is the
-  serving host, has one caller, in the agent. The functions that take a `Hosts` are those of the sign-in's own
-  module, by name. A second caller of any of these, or another function that takes a `Hosts`, fails the
-  test until this clause says why.
+  modules, the files only a test module declares, and comments, and pins who may name a host and who holds
+  the token. `Hosts::at` has no caller. `Hosts::compiled_in` has two, the agent's one renewer and the sign-in
+  command, and `Renewer::new` has one, in the agent's renewer. `ResponsesClient::for_account` has one caller,
+  in the agent's `backend.rs`, and `list_from_account` has one, in its `chatgpt.rs`. Each sends the access
+  token to whatever `Provider` it is given, so the provider each is given is, by the text of the call, the
+  one the agent's `account_provider` holds. That function is written four times, twice in `backend.rs` (the
+  address of the completion route and the client) and twice in `chatgpt.rs` (its definition and the roster),
+  and `account_models_from`, which asks for the listing, has one caller, the roster, which gives it that
+  provider. `Provider::chatgpt_account`, which builds the provider whose address is the serving host, has one
+  caller, in the agent. The functions that take a `Hosts` are those of the sign-in's own module, by name.
+  The access token is asked for with `.access_token()` once in the account's client and once in the agent's
+  roster, and the one implementation of that call in the sign-in module is the renewer's.
+- One compares the bodies of `Hosts::compiled_in`, `chatgpt_serving_host` and `Provider::chatgpt_account` to
+  their text, so an environment read there that is not behind the gate, or a host that is not one of the four
+  constants, fails. The name of the variable is a literal in the two gated constants and in no other source,
+  build script or command, and the constants are read in the two gated reads and nowhere else.
+
+A second caller of any of these, another reader of the variable, or another function that takes a `Hosts`
+fails a test until this clause says why.
 
 The access token is sent to the serving host and to no other. The refresh token and the code are sent to
 the token endpoint and to no other. The request for the key set carries no credential. A request to any of
@@ -236,18 +247,19 @@ compiled in.
 `verified-by: bravebot_skus::chatgpt::renew::a_redirect_in_answer_to_a_refresh_is_not_followed_and_the_sign_in_is_left_alone`
 `verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
-`verified-by: bravebot_cli::layering::a_test_seam_is_enabled_by_dev_dependencies_alone`
-`verified-by: bravebot_cli::layering::the_seam_reader_finds_a_seam_wherever_a_build_that_ships_reads_it`
-`verified-by: bravebot_cli::layering::a_build_that_aborts_on_a_panic_or_asserts_nothing_refuses_the_seam`
-`verified-by: bravebot_cli::layering::no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_by_name`
-`verified-by: bravebot_cli::layering::the_command_reader_sees_a_seam_and_every_feature_however_a_command_spells_them`
-`verified-by: bravebot_cli::layering::the_command_reader_sees_what_undoes_the_refusal_and_a_profile_of_its_own`
-`verified-by: bravebot_cli::layering::the_command_walk_reads_a_file_whatever_it_is_called_and_leaves_out_what_the_clause_names`
-`verified-by: bravebot_cli::layering::the_clause_names_what_the_command_guard_reads_and_leaves_out`
-`verified-by: bravebot_cli::layering::only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the_seam`
-`verified-by: bravebot_cli::layering::the_caller_scan_reads_code_and_leaves_out_tests_and_comments`
-`verified-by: bravebot_cli::layering::the_call_and_signature_readers_split_where_rust_splits`
-`verified-by: bravebot_cli::layering::a_file_only_a_test_module_declares_is_not_a_release_source`
+`verified-by: bravebot_cli::test_hosts_seam::a_test_seam_is_enabled_by_dev_dependencies_alone`
+`verified-by: bravebot_cli::test_hosts_seam::the_seam_reader_finds_a_seam_wherever_a_build_that_ships_reads_it`
+`verified-by: bravebot_cli::test_hosts_seam::a_build_that_aborts_on_a_panic_or_asserts_nothing_refuses_the_seam`
+`verified-by: bravebot_cli::test_hosts_seam::no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_by_name`
+`verified-by: bravebot_cli::test_hosts_seam::the_command_reader_sees_a_seam_and_every_feature_however_a_command_spells_them`
+`verified-by: bravebot_cli::test_hosts_seam::the_command_reader_sees_what_undoes_the_refusal_and_a_profile_of_its_own`
+`verified-by: bravebot_cli::test_hosts_seam::the_command_walk_reads_a_file_whatever_it_is_called_and_leaves_out_what_the_clause_names`
+`verified-by: bravebot_cli::test_hosts_seam::the_clause_names_what_the_command_guard_reads_and_leaves_out`
+`verified-by: bravebot_cli::test_hosts_seam::the_bodies_that_make_a_host_and_every_reader_of_the_stand_in_variable_and_the_token_are_pinned`
+`verified-by: bravebot_cli::test_hosts_seam::only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the_seam`
+`verified-by: bravebot_cli::test_hosts_seam::the_caller_scan_reads_code_and_leaves_out_tests_and_comments`
+`verified-by: bravebot_cli::test_hosts_seam::the_call_and_signature_readers_split_where_rust_splits`
+`verified-by: bravebot_cli::test_hosts_seam::a_file_only_a_test_module_declares_is_not_a_release_source`
 `verified-by: bravebot_config::provider::the_chatgpt_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own`
 `verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_an_account_request_is_a_failure_and_goes_nowhere`

@@ -24,161 +24,14 @@
 //!
 //! [CHATGPT-10]: ../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10
 
+mod shipped;
+
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-
-fn workspace() -> PathBuf {
-    // CARGO_MANIFEST_DIR is `<workspace>/crates/cli`, so two pops reach the root.
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop();
-    path.pop();
-    path
-}
-
-fn rust_files(directory: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(directory).expect("a source directory") {
-        let path = entry.expect("a directory entry").path();
-        if path.is_dir() {
-            files.extend(rust_files(&path));
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            files.push(path);
-        }
-    }
-    files
-}
-
-/// How far `line` is indented, in bytes.
-fn indent(line: &str) -> usize {
-    line.len() - line.trim_start().len()
-}
-
-/// What a `#[cfg(test)]` attribute took out of a source file.
-struct Hidden {
-    /// The line of the attribute.
-    line: usize,
-    /// The first line of the item it is on, after the attribute's own companions.
-    item: String,
-    /// Every line taken out, the attributes among them.
-    text: String,
-}
-
-/// A source file that ships: the lines that are code, with their numbers, and what was taken out.
-struct Source {
-    /// The path of the file from the workspace root.
-    name: String,
-    /// The lines of code, joined.
-    code: String,
-    /// The number each line of `code` has in the file.
-    numbers: Vec<usize>,
-    hidden: Vec<Hidden>,
-}
-
-/// The code of a source file that ships: the file without its items marked `#[cfg(test)]`, which is
-/// each module of tests and each statement a test build adds, and nothing at all of a file that
-/// holds tests alone. A line of comment is left out as well, since a doc that names a call is not
-/// one.
-///
-/// The item an attribute is on ends where `rustfmt` puts its end, so nothing is counted and a
-/// bracket in a string does not matter. An item that fits on a line, a field or a `use` or a
-/// constant, ends there, at its `;` or its `,`. One that opens a block ends at the line of the same
-/// indentation that closes it, and one that wraps its arguments ends at the line that closes them.
-/// An attribute on a field must not take out the fields and the code after it.
-fn shipped(file: &Path, text: &str) -> Option<Source> {
-    let name = file.file_name()?.to_string_lossy();
-    if name.ends_with("_tests.rs") || name == "tests.rs" {
-        return None;
-    }
-    let mut kept: Vec<(usize, &str)> = Vec::new();
-    let mut hidden = Vec::new();
-    let mut lines = text.lines().enumerate();
-    while let Some((number, line)) = lines.next() {
-        if line.trim() != "#[cfg(test)]" {
-            if !line.trim_start().starts_with("//") {
-                kept.push((number + 1, line));
-            }
-            continue;
-        }
-        let at = indent(line);
-        let mut taken = vec![line];
-        let mut first = None;
-        for (_, item) in lines.by_ref() {
-            taken.push(item);
-            if item.trim_start().starts_with("#[") {
-                continue;
-            }
-            first = Some(item);
-            break;
-        }
-        let Some(first) = first else { break };
-        let one_line = first.trim_end().ends_with([';', ',']);
-        if !one_line {
-            for (_, item) in lines.by_ref() {
-                taken.push(item);
-                let trimmed = item.trim();
-                let closes = indent(item) == at
-                    && (trimmed.starts_with('}')
-                        || trimmed.ends_with(';')
-                        || (trimmed.starts_with([')', ']']) && trimmed.ends_with([',', ';'])));
-                if closes {
-                    break;
-                }
-            }
-        }
-        hidden.push(Hidden {
-            line: number + 1,
-            item: first.trim().to_string(),
-            text: taken.join("\n"),
-        });
-    }
-    let code = kept
-        .iter()
-        .map(|(_, line)| *line)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let numbers = kept.iter().map(|(number, _)| *number).collect();
-    Some(Source {
-        name: String::new(),
-        code,
-        numbers,
-        hidden,
-    })
-}
-
-/// The shipped code of every crate of the workspace.
-fn workspace_code() -> Vec<Source> {
-    let crates = workspace().join("crates");
-    let mut found = Vec::new();
-    for krate in std::fs::read_dir(&crates).expect("the crates directory") {
-        let source = krate.expect("a crate").path().join("src");
-        if !source.is_dir() {
-            continue;
-        }
-        for file in rust_files(&source) {
-            let text = std::fs::read_to_string(&file).expect("a source file");
-            let Some(mut shipped) = shipped(&file, &text) else {
-                continue;
-            };
-            shipped.name = file
-                .strip_prefix(workspace())
-                .expect("a path under the workspace")
-                .to_string_lossy()
-                .replace('\\', "/");
-            found.push(shipped);
-        }
-    }
-    assert!(
-        found.len() > 100,
-        "{} source files, so these tests would pass by scanning almost nothing",
-        found.len()
-    );
-    found
-}
 
 /// Each source file of a crate that begins an account session, with how many times.
 fn begun() -> BTreeMap<String, usize> {
     let mut found = BTreeMap::new();
-    for source in workspace_code() {
+    for source in shipped::sources() {
         let count = source.code.matches("AccountSession::begin").count();
         if count > 0 {
             found.insert(source.name, count);
@@ -350,7 +203,7 @@ fn sites_in(code: &str) -> Vec<(usize, &'static str, Does)> {
 /// and what it does about the session.
 fn built() -> Vec<(String, usize, &'static str, Does)> {
     let mut found = Vec::new();
-    for source in workspace_code() {
+    for source in shipped::sources() {
         for (offset, builds, does) in sites_in(&source.code) {
             let line = source.numbers[source.code[..offset].matches('\n').count()];
             found.push((source.name.clone(), line, builds, does));
@@ -473,7 +326,7 @@ fn opens_a_module(item: &str) -> bool {
 #[test]
 fn a_test_attribute_hides_a_module_of_tests_and_no_task_or_backend_the_code_builds() {
     let mut problems = Vec::new();
-    for source in workspace_code() {
+    for source in shipped::sources() {
         for hidden in &source.hidden {
             let builds = TRACKED
                 .iter()
@@ -569,7 +422,8 @@ let g = Task::new(\"g\").with_model(Some(\"a // b\".into())).in_account_session(
 }
 
 /// A `#[cfg(test)]` on a field, a `use`, a constant or a variant takes out that item and not what
-/// follows, and on a module takes out the module.
+/// follows, and on a module takes out the module, as does `#[cfg(all(test, unix))]`, which gates
+/// the item on a test build as well.
 #[test]
 fn a_test_attribute_takes_out_its_own_item_and_nothing_after_it() {
     let text = "\
@@ -620,9 +474,16 @@ mod tests {
     }
 }
 
+#[cfg(all(test, unix))]
+mod only_on_unix {
+    fn hidden_on_unix() {
+        Task::new(\"hidden\");
+    }
+}
+
 fn last() {}
 ";
-    let source = shipped(Path::new("held.rs"), text).expect("a file that ships");
+    let source = shipped::code_of(text);
     for kept in [
         "after_a_field",
         "Task::new(\"x\")",
@@ -644,10 +505,12 @@ fn last() {}
         "inside",
         "seen",
         "hidden",
+        "hidden_on_unix",
     ] {
         assert!(!source.code.contains(taken), "{taken} was kept");
     }
-    assert_eq!(source.hidden.len(), 7);
+    assert_eq!(source.hidden.len(), 8);
     assert!(opens_a_module(&source.hidden[6].item));
+    assert!(opens_a_module(&source.hidden[7].item));
     assert!(!opens_a_module(&source.hidden[0].item));
 }
