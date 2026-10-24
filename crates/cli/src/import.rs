@@ -118,7 +118,7 @@ enum Start {
 ///
 /// Asked only where there is somebody to answer and somewhere to write: all three streams are
 /// terminals, since the questions go to stderr, the session is not incognito, and no service is
-/// configured, which is the three-route case. Anywhere else the refusal gains a line naming the
+/// configured, which is the case the routes answer. Anywhere else the refusal gains a line naming the
 /// command that asks, and nothing is read from stdin.
 fn at_the_start(a_service_is_configured: bool) -> Start {
     let asks = !a_service_is_configured

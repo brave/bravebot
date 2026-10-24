@@ -389,8 +389,8 @@ background session states its mode on its opening lines and again when `attach` 
 refusal of bypass says that a session nobody watches does not run in a mode that answers every
 question, and names a one-shot run (`-p`) as the way to ask for that. `--dangerously-bypass-approvals-and-sandbox`
 is refused the same way. With no model service configured, `--bg` is refused in the terminal you
-typed it in, with the configuration status and the three routes (Bedrock, an OpenAI-compatible
-gateway, importing Leo), and no background process is started.
+typed it in, with the configuration status and the four routes (Bedrock, an OpenAI-compatible
+gateway, a ChatGPT sign-in, importing Leo), and no background process is started.
 
 | Command | What it does |
 |---|---|

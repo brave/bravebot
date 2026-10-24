@@ -225,7 +225,7 @@ fn a_configuration_error_exits_non_zero() {
 /// service configured to serve a turn, which is what a released binary arrives as. A run that went
 /// ahead would be answered by whatever that endpoint gives it, and read as the agent being poor.
 ///
-/// So the run stops before it asks anything, and says the three ways to configure a service. Each
+/// So the run stops before it asks anything, and says the four ways to configure a service. Each
 /// is asserted by the words somebody has to type or write, not by the sentence around them: a
 /// refusal that named the problem and no route out is the first-use experience this replaced.
 #[test]
@@ -255,12 +255,65 @@ fn a_first_run_with_no_service_configured_says_how_to_configure_one() {
         stdout.is_empty(),
         "the reply stream carried the explanation instead: {stdout}"
     );
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+    for route in [
+        "amazon-bedrock",
+        "OpenRouter",
+        "bravebot auth login chatgpt",
+        "bravebot auth login leo",
+    ] {
         assert!(
             stderr.contains(route),
             "the run refused without saying that {route} is a way to configure one: {stderr}"
         );
     }
+}
+
+/// The route that signs in with a ChatGPT account is said in the language the interface is in, and
+/// the command in it is the one a person types whatever that is. A catalog that carried the route in
+/// English alone would leave a reader of the French one without it.
+#[test]
+fn a_first_run_names_the_chatgpt_sign_in_in_the_language_it_is_read_in() {
+    let scratch = Scratch::new("cli-running-no-service-french");
+    let nothing_configured = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+        (
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+            "https://ai-chat-premium.bsg.brave.com",
+        ),
+    ];
+    let mut in_french = nothing_configured.to_vec();
+    // Applied after the locale the helper sets, so this is the one in force.
+    in_french.push(("BRAVEBOT_LOCALE", "fr"));
+
+    let (_, english) = said(&bravebot(
+        &scratch.path,
+        &nothing_configured,
+        &["-p", "say something"],
+    ));
+    let (_, french) = said(&bravebot(
+        &scratch.path,
+        &in_french,
+        &["-p", "say something"],
+    ));
+
+    assert!(
+        english.contains("A ChatGPT Plus or Pro account"),
+        "the English refusal does not carry the route: {english}"
+    );
+    assert!(
+        french.contains("Un compte ChatGPT Plus ou Pro"),
+        "the French refusal does not carry the route: {french}"
+    );
+    assert!(
+        french.contains("`bravebot auth login chatgpt`"),
+        "the French route does not name the command: {french}"
+    );
+    assert!(
+        !french.contains("A ChatGPT Plus or Pro account"),
+        "the French refusal carries the English route: {french}"
+    );
 }
 
 /// And a configured gateway is not refused: it is a service that can answer, so the run goes to
@@ -2942,10 +2995,12 @@ fn doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn() {
     // And the report still says it, in the section CLI-7 puts it in: a status is what a caller
     // reads and the routes out are what the person in front of the screen reads, so the fix is
     // not the report losing one to gain the other.
-    assert!(
-        stdout.contains("bravebot auth login leo"),
-        "the report stopped saying how to configure a service: {stdout}"
-    );
+    for route in ["bravebot auth login chatgpt", "bravebot auth login leo"] {
+        assert!(
+            stdout.contains(route),
+            "the report stopped saying how to configure a service with {route}: {stdout}"
+        );
+    }
     // The how-to is on stdout, so the identifier of the status has to be said on stderr
     // by something else: a log of the failure is stderr, and has nowhere else to hold it.
     assert!(
@@ -4554,7 +4609,12 @@ fn a_session_in_lines_with_no_service_configured_says_how_to_configure_one() {
 
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+    for route in [
+        "amazon-bedrock",
+        "OpenRouter",
+        "bravebot auth login chatgpt",
+        "bravebot auth login leo",
+    ] {
         assert!(
             transcript.contains(route),
             "the run refused without saying that {route} is a way to configure one: {transcript}"
@@ -4591,7 +4651,12 @@ fn a_background_session_with_no_service_configured_says_how_to_configure_one() {
 
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+    for route in [
+        "amazon-bedrock",
+        "OpenRouter",
+        "bravebot auth login chatgpt",
+        "bravebot auth login leo",
+    ] {
         assert!(
             transcript.contains(route),
             "the start refused without saying that {route} is a way to configure one: {transcript}"

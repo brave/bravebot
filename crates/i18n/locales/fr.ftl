@@ -398,8 +398,10 @@ onboarding-bedrock =
     AWS Bedrock, via votre propre compte : ajoutez un bloc `provider` nommé `amazon-bedrock` dans ~/.bravebot/settings.json, avec sa région et les modèles à proposer.
 onboarding-openrouter =
     OpenRouter, ou toute autre passerelle compatible OpenAI : ajoutez un bloc `provider` à son nom dans ~/.bravebot/settings.json, avec la variable qui contient sa clé d'API et les modèles à proposer.
+onboarding-chatgpt =
+    Un compte ChatGPT Plus ou Pro, si vous en avez un : lancez `bravebot auth login chatgpt` dans un terminal et connectez-vous dans le navigateur qu'il ouvre. Ses modèles sont ensuite proposés dans /model sous la forme chatgpt/<modèle>.
 onboarding-leo =
-    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des deux options ci-dessus.
+    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des trois options ci-dessus.
 onboarding-where-to-read =
     Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 

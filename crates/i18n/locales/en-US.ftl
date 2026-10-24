@@ -426,12 +426,15 @@ onboarding-bedrock =
     AWS Bedrock, through your own account: put a `provider` block named `amazon-bedrock` in ~/.bravebot/settings.json, with its region and the models to offer.
 onboarding-openrouter =
     OpenRouter, or any other OpenAI-compatible gateway: put a `provider` block named for it in ~/.bravebot/settings.json, with the variable that holds its API key and the models to offer.
-# Last of the three, and said to be last, because these models are reached through Brave's AI
+# The ChatGPT route: a person types the command and signs in in the browser it opens.
+onboarding-chatgpt =
+    A ChatGPT Plus or Pro account, if you have one: run `bravebot auth login chatgpt` in a terminal and sign in in the browser it opens. Its models are then offered in /model as chatgpt/<model>.
+# Last of the four, and said to be last, because these models are reached through Brave's AI
 # gateway, which has open problems of its own. It is still the shortest route for somebody who
 # already subscribes, so it is offered rather than left out.
 onboarding-leo =
-    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the two above for now.
-# Said after either, so it reads after the three routes and after the one line alike.
+    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the three above for now.
+# Said after either, so it reads after the routes and after the one line alike.
 onboarding-where-to-read =
     There are worked examples in https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 

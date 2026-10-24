@@ -10,12 +10,13 @@ There is one thing to set up before the first session, and it is which service a
 released binary arrives pointed at Brave's own endpoint, which is not the same as having a service
 configured to do this work: no account was named, no gateway was written down, and no subscription
 was imported. So rather than open a session with nothing set up to answer it, a first run **says
-what to configure and stops**. It names three routes, each by the thing to type or write:
+what to configure and stops**. It names four routes, each by the thing to type or write:
 
 | Route | Where |
 |---|---|
 | your own AWS account | [Reaching a model through AWS Bedrock](#reaching-a-model-through-aws-bedrock) |
 | an OpenAI-compatible gateway, including a local one | [Reaching an OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway) |
+| a ChatGPT Plus or Pro account | [Reaching a model with a ChatGPT account](providers/chatgpt.md) |
 | a Leo Premium subscription you already have | [Leo Premium](premium.md) |
 
 `bravebot doctor` says the same thing and fails while it holds. A run whose model a configured
@@ -26,7 +27,7 @@ opens, so picking one of Brave's models from `/model` mid-session does not raise
 **If you have configured a service and still see this, you are one key from working.** A settings
 block copied out of another tool names its models and names no default, so the model in force is
 still the one the build came with. That case gets one line naming the [`model`](#model) key rather
-than the three routes.
+than the routes.
 
 **If Claude Code or opencode already reaches a service on this machine, or Ollama, LM Studio or
 llama-server is running on it,** the first run offers to copy that setup instead, showing everything

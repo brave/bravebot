@@ -8,7 +8,7 @@ description: What a first run reads from Claude Code and opencode, what it asks 
 
 A first run with nothing configured, in a terminal, reads what Claude Code and opencode set up in your
 home directory, and asks a running Ollama, LM Studio and llama-server what each serves, before it names
-the three routes. Where any of them reaches a service bravebot can use, it shows what it would add to
+the routes. Where any of them reaches a service bravebot can use, it shows what it would add to
 `~/.bravebot/settings.json` and asks:
 
 ```

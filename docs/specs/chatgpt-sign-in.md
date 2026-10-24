@@ -1266,12 +1266,12 @@ These are the places where another spec states something about this service, eac
 
 - **Backends.** [BACKEND-3](backends.md#BACKEND-3) and [BACKEND-18](backends.md#BACKEND-18) gain the
   `chatgpt/` identifier. [BACKEND-9](backends.md#BACKEND-9) gains a note that this service starts no
-  sign-in. [BACKEND-39](backends.md#BACKEND-39) names three ways to configure a service, and a stored
-  ChatGPT sign-in is a fourth. [BACKEND-13](backends.md#BACKEND-13), [BACKEND-17](backends.md#BACKEND-17)
+  sign-in. [BACKEND-39](backends.md#BACKEND-39) names four ways to configure a service, a stored
+  ChatGPT sign-in among them. [BACKEND-13](backends.md#BACKEND-13), [BACKEND-17](backends.md#BACKEND-17)
   and [BACKEND-5](backends.md#BACKEND-5) each gain the case of [CHATGPT-9](#CHATGPT-9): an entry named
-  `chatgpt` that states no endpoint is read for `models`, where today an entry with no endpoint configures
-  no service. [BACKEND-19](backends.md#BACKEND-19) gains this service's listing and its absence. The cases
-  of [CHATGPT-10](#CHATGPT-10) land in [BACKEND-3](backends.md#BACKEND-3) to
+  `chatgpt` that states no endpoint is read for `models`, where an entry of any other name with no endpoint
+  configures no service. [BACKEND-19](backends.md#BACKEND-19) gains this service's listing and its
+  absence. The cases of [CHATGPT-10](#CHATGPT-10) land in [BACKEND-3](backends.md#BACKEND-3) to
   [BACKEND-6](backends.md#BACKEND-6), [BACKEND-20](backends.md#BACKEND-20) to
   [BACKEND-22](backends.md#BACKEND-22), [BACKEND-31](backends.md#BACKEND-31) and
   [BACKEND-52](backends.md#BACKEND-52) with the Responses protocol. [BACKEND-20](backends.md#BACKEND-20)

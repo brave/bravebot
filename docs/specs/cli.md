@@ -366,7 +366,7 @@ request.
 
 The last of the four is where the report and the session have to agree. A configuration naming only
 no model service is one a session refuses to open on ([BACKEND-39](backends.md#BACKEND-39)), and
-the three ways to configure one are what the report says, in the same words. A report calling that machine
+the four ways to configure one are what the report says, in the same words. A report calling that machine
 healthy would be read before anything else by the one person certain to run this command, which is
 whoever was just refused.
 

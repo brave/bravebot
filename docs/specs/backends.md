@@ -1887,11 +1887,13 @@ that path rather than with the person in front of the screen.
 
 Where the model in force would be sent to Brave's own aichat endpoint and no Leo Premium
 subscription is in hand to spend on it, nothing is configured to serve the turn and no work starts.
-A session does not open and a one-shot run asks nothing. What is said instead is the three ways to
+A session does not open and a one-shot run asks nothing. What is said instead is the four ways to
 configure a service that can answer, each naming the thing to type or to write: an AWS account
-through Bedrock, an OpenAI-compatible gateway, and importing a Leo Premium subscription. `doctor`
-says the same and fails, which is [CLI-7](cli.md#CLI-7). `bravebot --bg <prompt>` is refused the same
-way, in the terminal that typed it, before the background process is started.
+through Bedrock, an OpenAI-compatible gateway, signing in with a ChatGPT account
+(`bravebot auth login chatgpt`, [CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)), and importing a Leo
+Premium subscription. `doctor` says the same and fails, which is [CLI-7](cli.md#CLI-7).
+`bravebot --bg <prompt>` is refused the same way, in the terminal that typed it, before the
+background process is started.
 
 The model decides, as it does everywhere here: a model a configured service serves is not this
 case, whatever the aichat fields hold. The model asked about is the one the run will actually
@@ -1904,10 +1906,10 @@ a proxy in front of either, and nobody is handed a configuration pointing at one
 into an endpoint does not change which deployment it names.
 
 **A service configured while the model in force is Brave's own is told apart, and gets one line
-rather than the three.** That is where a settings block copied out of the tool BACKEND-13 borrows
+rather than the routes.** That is where a settings block copied out of the tool BACKEND-13 borrows
 its shape from lands: those blocks name their models and name no default, so the model stays the
 one the build baked in. What is said there is the key that names one of the configured service's
-models, and the three routes are left out.
+models, and the routes are left out.
 
 The refusal is the configuration ending of [CLI-6](cli.md#CLI-6) rather than a status of its own.
 Where a subscription is stored and could not be read, what the store said about it is said first.
@@ -1930,14 +1932,17 @@ Refusing rather than letting the request go, for the reason
 over it: what comes back from a request that was never going to be served carries no sign of why,
 and nothing about a bad session points at where a request went.
 
-Three routes rather than one, and each named by what to type, because a refusal that states the
+Four routes rather than one, and each named by what to type, because a refusal that states the
 problem and no way out of it has moved the work to the person and told them nothing they could not
 already see. Leo Premium is last and says why it is last: those models are reached through Brave's
 AI gateway, which has problems of its own being worked on. It is still the shortest route for
-somebody who already subscribes, which is why it is offered rather than left out.
+somebody who already subscribes, which is why it is offered rather than left out. The ChatGPT
+sign-in comes before it, since it reaches OpenAI's own service and not Brave's gateway, and says the
+command to type because a session never starts that sign-in itself
+([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
 
 Telling the configured case apart is the same argument in the other direction. Somebody there is
-one settings key from working, and three ways to set up a service would be three things to read
+one settings key from working, and four ways to set up a service would be four things to read
 past on the way to the one that applies, the first of which is the thing they already did.
 
 The test is the endpoint rather than a switch somebody sets. A build pointed at a host that is not
@@ -1962,6 +1967,10 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::a_session_in_lines_with_no_service_configured_says_how_to_configure_one`
 `verified-by: bravebot_cli::running::a_session_in_lines_with_a_configured_gateway_opens`
 `verified-by: bravebot_cli::running::a_background_session_with_no_service_configured_says_how_to_configure_one`
+`verified-by: bravebot_cli::model::the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_leo_last`
+`verified-by: bravebot_cli::model::a_configured_service_is_told_to_name_a_model_and_is_not_offered_the_routes`
+`verified-by: bravebot_cli::running::a_first_run_names_the_chatgpt_sign_in_in_the_language_it_is_read_in`
+`verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable
