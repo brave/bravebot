@@ -239,7 +239,7 @@ the row, as Enter does. A press outside the list, on the border, or below the la
 another button, a drag, a release and a wheel turn leave the picker open with the cursor where it
 was, and no mouse event cancels it. Rows are counted from the first row drawn, so a list that has
 scrolled to keep the cursor in view is read as it is drawn. The keys stay the way to do it without
-a mouse. The other pickers and the pickers opened while a turn runs are not covered.
+a mouse. `/theme` is [MOUSE-17](#MOUSE-17); `/model` and the pickers opened while a turn runs are not covered.
 
 `verified-by: bravebot_tui::list_picker::a_press_moves_the_cursor_and_a_second_press_takes_the_row`
 `verified-by: bravebot_tui::list_picker::two_presses_on_different_rows_or_far_apart_take_nothing`
@@ -264,3 +264,17 @@ the way to move it without a mouse.
 `verified-by: bravebot_tui::app::a_click_on_a_marker_puts_the_caret_before_it`
 `verified-by: bravebot_tui::app::a_drag_a_double_click_or_a_click_off_the_text_leaves_the_caret_alone`
 `verified-by: bravebot_tui::app::a_click_in_the_box_does_nothing_where_another_mode_is_in_use`
+
+<a id="MOUSE-17"></a>
+### MOUSE-17: a click on a row of the `/theme` picker previews it, and a second takes it
+
+In the `/theme` picker at rest, a left press on a row of the list puts the cursor on it, with the
+theme under the cursor in force as it is for a key, and a second press on the same cell within the
+double-click interval takes the theme. As for [MOUSE-15](#MOUSE-15), a press outside the list, a
+drag, a release, a wheel turn and a press of another button leave the picker open on the theme it
+had, and no mouse event cancels it. The keys stay the way to do it without a mouse. `/model` and the
+pickers opened while a turn runs are not covered.
+
+`verified-by: bravebot_tui::theme_prompt::a_click_previews_the_row_and_a_second_click_takes_it`
+`verified-by: bravebot_tui::theme_prompt::two_presses_on_a_drawn_row_return_its_theme`
+`verified-by: bravebot_tui::theme_prompt::a_press_outside_the_list_leaves_the_theme_alone`
