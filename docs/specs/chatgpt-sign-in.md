@@ -820,13 +820,14 @@ itself and holds what its own writers produce from it:
   signs in and makes four turns that fail, as a renewal while the token endpoint is busy, a refusal that is
   not of the token, a refusal in a code of the closed list, and a sign-in that has ended, and gives each
   failure to `fold_outcome` and `record_turn` as a finished turn is given. It holds the transcript, its
-  markdown export, the screen as cells and as the bytes written to a terminal, the turns the record keeps with
-  each reason, the note the picker says for a listing that cannot be read and for one refused in a code of the
-  closed list, the error message of each turn, its debug form, how it ended, what it reported and the
-  conversation, every file the session wrote but the sign-in file, and the terminal of the process that made
-  the run. It requires that the record's reason is the failure the transcript shows and that no two of the
-  four turns failed alike. The run is made in a child of the test binary, since the account's hosts and the
-  state directory are read from the environment, this crate forbids `unsafe`, and `fold_outcome` is private.
+  markdown export, the file `/export` writes after each turn, the screen as cells and as the bytes written to
+  a terminal, the turns the record keeps with each reason, the note the picker says for a listing that cannot
+  be read and for one refused in a code of the closed list, the error message of each turn, its debug form,
+  how it ended, what it reported and the conversation, every file the session wrote but the sign-in file, and
+  the terminal of the process that made the run. It requires that the record's reason is the failure the
+  transcript shows and that no two of the four turns failed alike. The run is made in a child of the test
+  binary, since the account's hosts and the state directory are read from the environment, this crate forbids
+  `unsafe`, and `fold_outcome` is private.
 - `bravebot_ui_bridge::chatgpt_secrets::what_the_bridge_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
   signs in in a child of the test binary and then drives `bravebot-rpc`, the binary the desktop starts, over
   its pipe through the same four failures and two `models.list` requests, one for a listing that cannot be
@@ -835,13 +836,13 @@ itself and holds what its own writers produce from it:
   standard error, and the record and trail it wrote. It requires that no two turns failed alike and that the
   record keeps the four.
 
-Every output the clause names is held by one of these, except the file `/export` writes; the connection of the
-ACP adapter and of the local host; what the renderer in `ui/` draws from the events the bridge sends; and the
-debug log of the full-screen terminal client. The renderer is not a crate, so the events are what is held, and
-what the window makes of the `account` name and the sentence in one is pinned by the scripts the
-`by-construction` entry of this clause names. The test of the full-screen client is made in a child of its
-test binary that sets no log level, and the client's crate has no dependency on the crate that writes the log,
-so the debug log of that client is not made to be held, and the files its session wrote are.
+Every output the clause names is held by one of these, except the connection of the ACP adapter and of the
+local host; what the renderer in `ui/` draws from the events the bridge sends; and the debug log of the
+full-screen terminal client. The renderer is not a crate, so the events are what is held, and what the window
+makes of the `account` name and the sentence in one is pinned by the scripts the `by-construction` entry of
+this clause names. The test of the full-screen client is made in a child of its test binary that sets no log
+level, and the client's crate has no dependency on the crate that writes the log, so the debug log of that
+client is not made to be held, and the files its session wrote are.
 
 Two more things are not reached. The loop in `run_turn_animated` that takes what a turn's reporter sends into
 the session needs a terminal, and no test runs it. The test of the terminal client makes its turns with the

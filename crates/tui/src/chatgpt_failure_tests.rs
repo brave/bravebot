@@ -193,11 +193,12 @@ fn hand_over(out: &std::path::Path, name: &str, text: &str) {
 ///
 /// It signs in and takes four turns that fail, and gives each failure to `fold_outcome` as a finished
 /// turn is given. It records the turn and writes the record and its trail as the session does. After
-/// each turn it writes the transcript, the markdown export, the screen, the bytes the screen is
-/// written to a terminal as, the turns the record keeps and what the failed turn holds to a file of
-/// its own, and after the second it opens the picker twice, for a listing that cannot be read and
-/// for one the service refuses in a code that names the account. It also requires that the record's
-/// reason is the failure the transcript shows, and that each of the four turns is a different one.
+/// each turn it writes the transcript, the markdown export, the screen, the bytes the screen is written
+/// to a terminal as, the turns the record keeps, the file `/export` writes and what the failed turn
+/// holds to a file of its own, and after the second it opens the picker twice, for a listing that
+/// cannot be read and for one the service refuses in a code that names the account. It also requires
+/// that the record's reason is the failure the transcript shows, and that each of the four turns is a
+/// different one.
 #[test]
 #[ignore = "run as a child process by the test that holds what it keeps to the values it handled"]
 fn a_child_that_makes_the_run_and_folds_each_failure() {
@@ -361,6 +362,15 @@ fn a_child_that_makes_the_run_and_folds_each_failure() {
         for (name, text) in outputs {
             hand_over(&out, &format!("turn {turn}: {name}"), &text);
         }
+        // `/export` writes the transcript to a file in the working directory, and says where.
+        let exported = format!("export-turn-{turn}.md");
+        session_commands::export_session(&mut session, &stored, workspace.root(), Some(&exported));
+        hand_over(
+            &out,
+            &format!("turn {turn}: the file /export wrote"),
+            &std::fs::read_to_string(work.join(&exported))
+                .unwrap_or_else(|why| panic!("/export wrote no {exported}: {why}")),
+        );
 
         // The picker is opened while the sign-in is stored and the token is good, once when the
         // serving host cannot answer the listing and once when it refuses it in a code that names the
@@ -525,20 +535,21 @@ fn what_the_terminal_client_keeps_and_draws_of_a_failed_turn_holds_none_of_the_v
             )
         })
         .collect();
-    // Four turns, each with its ten outputs, and the picker's three outputs twice.
+    // Four turns, each with its eleven outputs, and the picker's three outputs twice.
     assert_eq!(
         held.len(),
-        4 * 10 + 2 * 3,
+        4 * 11 + 2 * 3,
         "{:?}",
         held.iter().map(|h| &h.0).collect::<Vec<_>>()
     );
     for (path, text) in &held {
         handled.assert_none_in(path, text);
     }
-    // Every file the session wrote but the sign-in itself, which is where the tokens are kept. A
-    // copy of it, or a temporary file beside it, is not it.
+    // Every file the session wrote but the sign-in itself, which is where the tokens are kept, in the
+    // state directory and in the working directory, where `/export` writes. A copy of the sign-in,
+    // or a temporary file beside it, is not it.
     let mut files = 0;
-    for (path, bytes) in files_under(&state) {
+    for (path, bytes) in files_under(&state).into_iter().chain(files_under(&work)) {
         if path
             .file_name()
             .is_some_and(|name| name == "chatgpt-account.json")
@@ -551,8 +562,8 @@ fn what_the_terminal_client_keeps_and_draws_of_a_failed_turn_holds_none_of_the_v
         handled.assert_none_in(&path, &String::from_utf8_lossy(&bytes));
     }
     assert!(
-        files >= 2,
-        "the state directory holds {files} files, so the record and its trail were not searched"
+        files >= 6,
+        "the state and working directories hold {files} files, so the record, its trail and the four exports were not searched"
     );
     handled.assert_none_in("the child's standard output", &said(&child.stdout));
     // Nothing was said on standard error, which holds nothing of the run.
