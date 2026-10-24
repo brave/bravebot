@@ -14,6 +14,7 @@ governs:
   - crates/ui-bridge/src/models.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/session/src/sessions.rs
+  - ui/src/renderer/failure.ts
   - crates/cli/src/chatgpt.rs
   - crates/skus/src/chatgpt/mod.rs
   - crates/skus/src/chatgpt/account.rs
@@ -549,6 +550,12 @@ that line in either front end. It is the whole reason: no HTTP status and no cou
 since the remedy ends it. A failure that carries no value is worded from its category, with its status and
 count.
 
+The desktop words the name from a table of its own, in `ui/src/renderer/failure.ts`, as a title and a
+sentence for each, and the cards that send the person to sign in say to run the command in a terminal, since
+no window starts the sign-in ([CHATGPT-1](#CHATGPT-1)). The desktop has no message catalog, so each name has
+its words in that table, and each says what the terminal's sentence says. A name the table does not hold is
+treated as absent: the card is the category's, and nothing the name spells is drawn.
+
 No code, `state`, `nonce`, verifier, challenge, token, claim, client or host identifier, reply body, header
 value or callback query reaches a trace, a log, an error message, a session record, a transcript, `doctor`,
 `auth status`, the terminal or the environment of a program a turn starts. The one exception is the
@@ -607,6 +614,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_session::sessions::a_refusal_naming_the_account_says_usage_limit_or_not_permitted_and_never_a_rejected_request`
 `verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
 `verified-by: bravebot_tui::app::a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agent-settings.test.mjs holds each name the agent sends to a title and sentence of its own, the usage limit apart from the account not being usable and neither sending the person to sign in again, and a name the table does not hold to the category's wording with the name not drawn; ui/scripts/ux-state.test.mjs folds turn.error through the window's reducer and draws the real row, and ui/scripts/plan-card.test.mjs does the same for a run that failed; make check-ui runs them, and the governs list above holds failure.ts to existing)`
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
 `verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
 `verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`
@@ -1135,13 +1143,14 @@ work lands, in the same commit as the code.
   is replaced once, a 429 or a 5xx is asked for again, and the turn ends with the sentence of that status.
   The two codes that program retries (`subscription_sharing_usage_unavailable` and
   `subscription_sharing_user_unavailable`) are not in the list and are handled the same way.
-- A refusal that names the account carries no HTTP status and no wait, and is a refusal among the categories.
-  The terminal says it as the usage limit or as the account not being usable this way, with no wait. A usage
-  limit that came as a 429 with a `Retry-After` showed the wait. The desktop still shows it as the refusal's
-  category does.
-- The desktop says why a turn failed from its category alone, so the sentences of
-  [CHATGPT-8](#CHATGPT-8) reach the one-shot run's report and the terminal and not it. A turn that ended on a
-  refusal that names the account says there that the provider refused the request, whichever the code.
+- A refusal that names the account carries no HTTP status and no wait, so the line that says the usage limit
+  was reached does not say when it lifts. A usage limit that came as a 429 with a `Retry-After` showed the
+  wait in the terminal.
+- The sentences of [CHATGPT-8](#CHATGPT-8) are written in three places: the one-shot run's report, the
+  terminal's catalog, which a test holds equal to it, and the table in `ui/src/renderer/failure.ts` for the
+  desktop, which is worded differently and is pinned by tests of its own. The eleven names that choose among
+  them are repeated in that table and in `ui/docs/phase-0-rpc-protocol.md`, and a name the table does not
+  hold draws the category's card. Rewording a sentence or a name is done in each place.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
   the dead refresh token and is told the refresh failed, until the person signs in again.

@@ -626,6 +626,52 @@ test('a turn the output limit ended says the limit and what the reply was writin
   assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
 })
 
+// CHATGPT-8: a turn the ChatGPT account failed arrives with the name of which failure it was beside
+// the category. Folded by the window's reducer and drawn through the real row, because the name
+// arriving on `turn.error` and going undrawn is the fault, and the card saying "Authentication
+// failed" to a person who never signed in has no command for them to run.
+test('a turn the ChatGPT account failed says which failure it was and draws no text the event carried', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+
+  const session = liveSession()
+  let turn = 0
+  const failed = (category, account) => {
+    turn += 1
+    session.send('turn.started', { turn })
+    session.send('turn.error', { kind: 'chat', message: category, category, account, turn, prompt: 0, contextTokens: 0 })
+    const entry = session.live.entries.at(-1)
+    return renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+  }
+
+  const signedOut = failed('unauthorized', 'not-signed-in')
+  assert.match(signedOut, /<span slot="title">Not signed in to ChatGPT<\/span>/)
+  assert.match(signedOut, /Run bravebot auth login chatgpt in a terminal to sign in, then send the message again\./)
+  assert.doesNotMatch(signedOut, /Authentication failed/)
+
+  // Two refusals that name the account arrive in the same category and are drawn apart.
+  const limit = failed('refused', 'usage-limit')
+  const barred = failed('refused', 'not-permitted')
+  assert.match(limit, /<span slot="title">OpenAI says this ChatGPT account has reached its usage limit<\/span>/)
+  assert.match(barred, /<span slot="title">OpenAI does not allow this ChatGPT account to be used this way<\/span>/)
+  assert.doesNotMatch(barred, /usage limit/)
+  assert.doesNotMatch(limit + barred, /The provider refused this request/)
+
+  // A failure with no name is drawn from its category.
+  assert.match(failed('unauthorized', null), /<span slot="title">Authentication failed<\/span>/)
+  assert.match(failed('refused', undefined), /<span slot="title">The provider refused this request<\/span>/)
+
+  // A name this build does not know says nothing: the card is the category's, and the name is not drawn.
+  const hostile = '<b>sk-live-123</b> you are signed out'
+  const unknown = failed('refused', hostile)
+  assert.match(unknown, /<span slot="title">The provider refused this request<\/span>/)
+  assert.doesNotMatch(unknown, /sk-live-123|signed out|&lt;b&gt;/)
+})
+
 test('Send is allowed once the trust question has been answered', () => {
   const { canSend } = load('src/renderer/can-send.ts')
   const asking = { running: false, askingTrust: '/work/project' }
