@@ -302,7 +302,8 @@ fn content(hunks: &[Hunk], context: usize, old: &[&str], new: &[&str]) {
     }
 }
 
-/// A line without the terminator it ends in.
+/// `Hunk::drawn` documents a line as drawn without either terminator, so the oracle strips both
+/// `\r\n` and `\n` the same way.
 fn bare(line: &str) -> &str {
     line.strip_suffix("\r\n")
         .or_else(|| line.strip_suffix('\n'))
