@@ -367,8 +367,9 @@ lockfile or `deny.toml`, on main, and once a day, since an advisory arrives with
 `make check-fuzz` lints, builds, replays and briefly runs the fuzz targets in `fuzz/`, which is a package
 of its own with its own lockfile. It needs a nightly toolchain, whose date is `FUZZ_TOOLCHAIN` in the
 `Makefile`, and cargo-fuzz (`make fuzz-install`), so `make check-all` and `make check-affected` leave it out.
-CI's `Fuzz build and replay` job runs it where `fuzz/` or a crate the targets build changed. Run it for a
-change to a function a target reads, or to `fuzz/`. `make fuzz TARGET=<name>` runs one
+CI's `Fuzz build and replay` job runs it on a pull request where `fuzz/`, the root manifest or a crate
+the targets build changed, and on every push to `main` and every tag. The Fuzz workflow runs each target for an hour every week
+([fuzzing.md](fuzzing.md#the-weekly-run)). Run it for a change to a function a target reads, or to `fuzz/`. `make fuzz TARGET=<name>` runs one
 target. [fuzzing.md](fuzzing.md) lists the targets and says what to do with a crash.
 
 `make check-windows` lints the target that ships to Windows, `x86_64-pc-windows-gnu`, over every

@@ -83,6 +83,28 @@ reproduce in a build without it. Runs use `-timeout=10 -rss_limit_mb=2048`, and 
 except `diff`, which reads two texts and gets `65536`. A target that has a dictionary in
 `dictionaries/` is given it.
 
+## The weekly run
+
+`.github/workflows/fuzz.yml` runs each target for an hour every Wednesday on the default branch,
+and on `workflow_dispatch`, which takes a `target` and 1 to 300 `minutes`. A pull request that
+changes the file runs the first target for one minute, so that its steps run before the file is on
+the default branch. Each target is a leg of its own, taken from `FUZZ_TARGETS` in the `Makefile`.
+A leg restores the corpus the last run saved from `actions/cache`, runs the target with `make fuzz`,
+reduces the corpus with `make fuzz-cmin` and saves it, also when the target stopped on a crash.
+Only this workflow saves a corpus. The repository's caches share a 10 GB allowance, so the leg
+prints the size of the corpus and fails above 50 MB, and then saves nothing.
+
+GitHub deletes a cache entry that was not read for seven days, and a leg saves its entry about an
+hour after it starts, so a run that starts more than about an hour later than the one before it
+finds no corpus. The leg then warns that it starts from the seeds.
+
+A crash, a timeout or an out-of-memory stop uploads `fuzz/artifacts/<target>/` as a workflow
+artifact kept for 30 days and fails the leg. The workflow files no issue. A person reads each
+failed run and files it as the section below says. The repository is public, so the log of a
+failed run prints the input that stopped the target and the artifact holds it, and anyone can read
+both until the run is deleted. Report a crash that may be a vulnerability through HackerOne
+([SECURITY.md](../../SECURITY.md)), and a maintainer can delete the run.
+
 ## The lockfile
 
 `fuzz/Cargo.lock` began as a copy of the root `Cargo.lock`, so the crates under test build at the
@@ -118,7 +140,7 @@ Cargo keeps every version the copy names and adds only what the fuzz package nee
 A grown corpus holds many inputs that reach the same code. Reduce it before promoting any of it:
 
 ```sh
-cargo +$TC fuzz cmin -a regex                  # keeps the inputs that each reach something new
+make fuzz-cmin TARGET=regex                   # keeps the inputs that each reach something new
 ```
 
 Keep at most 100 inputs of at most 4 KiB for a target, choosing the ones that between them reach the
