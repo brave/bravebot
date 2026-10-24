@@ -1,0 +1,178 @@
+name: Fuzz
+
+# Each fuzz target runs for an hour on the default branch once a week, from the corpus the last run
+# left. The `Fuzz build and replay` job in ci.yml runs each target for seconds on a pull request,
+# and an hour grows inputs that reach code a short run does not.
+#
+# The weekly run files no issue. A person reads each failed run and decides what to do with it
+# (docs/development/fuzzing.md).
+#
+# A pull request that changes this file runs one target for one minute, so that the steps below run
+# before the file is on the default branch, where a schedule and a dispatch can first reach it.
+on:
+  schedule:
+    - cron: "23 4 * * 3"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: One target, as in make fuzz TARGET=<name>. Empty runs every target.
+        default: ""
+      minutes:
+        description: How long each target runs, from 1 to 300
+        default: "60"
+  pull_request:
+    paths:
+      - .github/workflows/fuzz.yml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The targets are the Makefile's, so adding one there adds a leg here.
+  targets:
+    name: Targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: List the targets
+        id: list
+        env:
+          TARGET: ${{ inputs.target }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          targets="$(make -s fuzz-targets)"
+          if [ -n "$TARGET" ]; then
+            printf '%s\n' "$targets" | grep -qxF -- "$TARGET" || {
+              echo "::error::the target input names no fuzz target. They are: $(echo $targets)"
+              exit 1
+            }
+            targets="$TARGET"
+          elif [ "$EVENT" = pull_request ]; then
+            targets="$(printf '%s\n' "$targets" | head -n 1)"
+          fi
+          echo "list=$(printf '%s\n' "$targets" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  # One leg for each target. The corpus the last run left is restored, the target runs for the
+  # time asked, and the corpus is reduced and saved for the next run, also when the target stopped
+  # on a crash, so that what it grew before then is kept. Only this workflow saves a corpus: the
+  # repository's caches share a 10 GB allowance (see the note in ci.yml), so a corpus past 50 MB
+  # fails the leg and is not saved.
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.list) }}
+    steps:
+      # The checkout otherwise leaves the job token in the repository's git config, where every
+      # process this job starts could read it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The date of the nightly is written once, in the Makefile.
+      - name: Read the fuzz toolchain
+        id: toolchain
+        run: echo "version=$(make -s fuzz-toolchain)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Rust ${{ steps.toolchain.outputs.version }}
+        # Pinned to a full commit SHA; see the note in ci.yml's `check` job.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
+          components: rustfmt, clippy, rust-src
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in ci.yml's `check` job.
+        with:
+          workspaces: fuzz
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-fuzz
+        run: make fuzz-install
+
+      # A key no earlier run has, so that the most recent corpus is the one restored. A target
+      # name has no `/`, so the prefix of one target is not the key of another.
+      - name: Restore the corpus
+        id: corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus/${{ matrix.target }}/${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus/${{ matrix.target }}/
+
+      # GitHub deletes a cache entry that was not read for seven days, and an entry is saved about
+      # an hour after its run starts, so a run that starts an hour late finds none.
+      - name: Say whether a corpus was restored
+        if: ${{ steps.corpus.outputs.cache-matched-key == '' }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: echo "::warning::no corpus was restored for $TARGET, so the run starts from the seeds"
+
+      - name: Run the target
+        id: run
+        env:
+          TARGET: ${{ matrix.target }}
+          MINUTES: ${{ github.event_name == 'pull_request' && '1' || inputs.minutes || '60' }}
+        run: |
+          case "$MINUTES" in
+            [1-9] | [1-9][0-9] | [12][0-9][0-9] | 300) ;;
+            *) echo "::error::minutes is a whole number from 1 to 300"; exit 1 ;;
+          esac
+          make fuzz TARGET="$TARGET" FUZZ_SECONDS="$((MINUTES * 60))"
+
+      # A crash, a timeout and an out-of-memory stop each leave a file here, and none is a reason
+      # to lose it with the runner.
+      - name: Keep what the target stopped on
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-${{ matrix.target }}-artifacts-${{ github.run_attempt }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          retention-days: 30
+          if-no-files-found: warn
+
+      # From here on, whether or not the target stopped on a crash, but not where it never started.
+      - name: Reduce the corpus
+        if: ${{ !cancelled() && steps.run.conclusion != 'skipped' }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: make fuzz-cmin TARGET="$TARGET"
+
+      - name: Check the size of the corpus
+        id: size
+        if: ${{ !cancelled() && steps.run.conclusion != 'skipped' }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          bytes="$(find "fuzz/corpus/$TARGET" -type f -exec cat {} + | wc -c | tr -d ' ')"
+          files="$(find "fuzz/corpus/$TARGET" -type f | wc -l | tr -d ' ')"
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "The corpus for $TARGET is $bytes bytes in $files files, of the 52428800 bytes allowed."
+          echo "The corpus for $TARGET is $bytes bytes in $files files, of the 52428800 bytes allowed." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bytes" -gt 52428800 ]; then
+            echo "::error::the corpus for $TARGET is over 50 MB, which the repository's cache allowance does not have room for"
+            exit 1
+          fi
+
+      # Not past the size limit, and not an empty corpus, which would hide the last one saved.
+      - name: Save the corpus
+        if: ${{ !cancelled() && steps.size.outcome == 'success' && steps.size.outputs.files != '0' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus/${{ matrix.target }}/${{ github.run_id }}-${{ github.run_attempt }}

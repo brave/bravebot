@@ -73,6 +73,8 @@ help:
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-fuzz            Lint, build, replay and briefly run every fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; needs the nightly toolchain and cargo-fuzz"
 	@echo "  make fuzz TARGET=<name>    Run one fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; the targets are $(FUZZ_TARGETS)"
+	@echo "  make fuzz-cmin TARGET=<name>  Reduce fuzz/corpus/<name> to the inputs that each reach something new"
+	@echo "  make fuzz-install          Install cargo-fuzz $(CARGO_FUZZ_VERSION), the version CI runs"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
@@ -338,6 +340,13 @@ check-npm:
 # matches is a recorded reason for a duplicate that is no longer there. --locked for the same
 # reason every other cargo command here takes it: the answer is about the versions Cargo.lock
 # pins, not the ones a resolve on the spot would pick.
+#
+# The fuzz package is a workspace of its own, so the first run does not read its graph, and the
+# second reads it with the same policy. The skip entries describe the root graph: the first run
+# fails on one that matches nothing, and the second does not report them. The one licence exception
+# is for a crate only the fuzz graph has, so the second run fails on an exception that matches
+# nothing and the first does not report it. An exception for a crate only the root graph has would
+# need the flags the other way round.
 CARGO_DENY_VERSION = 0.20.2
 CARGO_DENY_ROOT = $(HOME)/.cache/bravebot-deny
 .PHONY: check-deps
@@ -348,7 +357,9 @@ check-deps:
 		echo "building cargo-deny $(CARGO_DENY_VERSION) into $(CARGO_DENY_ROOT), which takes a few minutes"; \
 		cargo install --quiet --locked cargo-deny@$(CARGO_DENY_VERSION) --root "$(CARGO_DENY_ROOT)"; \
 	}
-	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip --allow license-exception-not-encountered
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --manifest-path fuzz/Cargo.toml --config deny.toml --locked check \
+		--allow unmatched-skip --allow unnecessary-skip --deny license-exception-not-encountered
 
 # The fuzz targets in fuzz/, which is a package of its own with its own workspace and lockfile, so
 # nothing above compiles libFuzzer's C++.
@@ -366,6 +377,8 @@ check-deps:
 # for both. bravebot-config's build script refuses to build without credentials unless told that a
 # binary configured at run time is acceptable, which is all a fuzz target needs.
 FUZZ_TOOLCHAIN = nightly-2026-10-01
+# The cargo-fuzz CI installs, and the one `make fuzz-install` installs for a person.
+CARGO_FUZZ_VERSION = 0.13.2
 FUZZ_TARGETS = regex diff event_stream sse
 FUZZ_SECONDS = 20
 FUZZ_FLAGS = -timeout=10 -rss_limit_mb=2048
@@ -379,6 +392,12 @@ fuzz_dict = $$([ -f fuzz/dictionaries/$(1).dict ] && echo -dict=fuzz/dictionarie
 fuzz-toolchain:
 	@echo $(FUZZ_TOOLCHAIN)
 
+# Built from source into cargo's own bin directory. taiki-e/install-action has no manifest for
+# cargo-fuzz, and its fallback fetches whichever cargo-binstall is current.
+.PHONY: fuzz-install
+fuzz-install:
+	cargo install --locked cargo-fuzz@$(CARGO_FUZZ_VERSION)
+
 .PHONY: fuzz-prerequisites
 fuzz-prerequisites:
 	@command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q '^$(FUZZ_TOOLCHAIN)' || { \
@@ -386,7 +405,7 @@ fuzz-prerequisites:
 		exit 1; \
 	}
 	@cargo fuzz --version >/dev/null 2>&1 || { \
-		echo "fuzz: cargo-fuzz is not installed: cargo install cargo-fuzz --locked" >&2; \
+		echo "fuzz: cargo-fuzz is not installed: make fuzz-install" >&2; \
 		exit 1; \
 	}
 	@[ "$$(cargo fuzz list | sort | tr '\n' ' ')" = "$$(printf '%s\n' $(FUZZ_TARGETS) | sort | tr '\n' ' ')" ] || { \
@@ -394,18 +413,34 @@ fuzz-prerequisites:
 		exit 1; \
 	}
 
-# One target, with the flags CI uses: make fuzz TARGET=regex [FUZZ_SECONDS=60]. New inputs go to
-# fuzz/corpus/<target>, which is not committed; the seeds and the reproducers of fixed crashes are
-# read from their own directories.
-.PHONY: fuzz
-fuzz: fuzz-prerequisites
+# The targets one to a line, which .github/workflows/fuzz.yml makes a leg of each from.
+.PHONY: fuzz-targets
+fuzz-targets:
+	@printf '%s\n' $(FUZZ_TARGETS)
+
+# What `fuzz` and `fuzz-cmin` need of TARGET.
+.PHONY: fuzz-named-target
+fuzz-named-target:
 	@echo "$(FUZZ_TARGETS)" | tr ' ' '\n' | grep -qxF -- '$(TARGET)' || { \
 		echo "fuzz: name a target, as in make fuzz TARGET=regex. They are: $(FUZZ_TARGETS)" >&2; \
 		exit 1; \
 	}
+
+# One target, with the flags CI uses: make fuzz TARGET=regex [FUZZ_SECONDS=60]. New inputs go to
+# fuzz/corpus/<target>, which is not committed; the seeds and the reproducers of fixed crashes are
+# read from their own directories.
+.PHONY: fuzz
+fuzz: fuzz-prerequisites fuzz-named-target
 	@mkdir -p fuzz/corpus/$(TARGET)
 	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $(TARGET) fuzz/corpus/$(TARGET) fuzz/seeds/$(TARGET) fuzz/regressions/$(TARGET) -- \
 		-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$(TARGET)) $(call fuzz_dict,$(TARGET))
+
+# Replaces fuzz/corpus/<target> with the inputs of it that each reach something new, which is what
+# the weekly run saves. cargo-fuzz leaves the corpus as it was and exits 0 where the merge fails.
+.PHONY: fuzz-cmin
+fuzz-cmin: fuzz-prerequisites fuzz-named-target
+	@mkdir -p fuzz/corpus/$(TARGET)
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz cmin -a $(TARGET) fuzz/corpus/$(TARGET) -- -max_len=$(call fuzz_max_len,$(TARGET))
 
 # Formatting, clippy and the unit tests of the code the targets share, a build of every target, a
 # replay of the seeds and the reproducers of fixed crashes with -runs=0, and then each target for
