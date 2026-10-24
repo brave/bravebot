@@ -350,6 +350,27 @@ mod tests {
         );
     }
 
+    /// STATE-4, SESSION-38: a lock with no record goes by its own age, as a trail does, and one a
+    /// process holds stays however old it is, since removing it would let a second process lock a
+    /// new file at the same name.
+    #[test]
+    fn a_lock_with_no_record_goes_by_its_own_age_and_a_held_one_stays() {
+        let state = State::new("retention-locks");
+        let old = state.put("sessions/one/lost.lock", "", 40 * DAY);
+        let held = state.put("sessions/one/running.lock", "", 40 * DAY);
+        let new = state.put("sessions/one/begun.lock", "", 60);
+        let holder = std::fs::File::open(&held).expect("open the lock");
+        holder.try_lock().expect("take the lock");
+
+        let removed = sweep(&state.path, days(30), SystemTime::now(), InUse::default());
+
+        assert_eq!(removed.sessions, 0, "a lock is not a record");
+        assert!(!old.exists(), "a lock nothing holds outlived the period");
+        assert!(held.exists(), "a lock a process holds was removed");
+        assert!(new.exists(), "a lock made a minute ago was removed");
+        drop(holder);
+    }
+
     /// STATE-4, PATH-003: a file whose name is not text is not a session's file, so it is left where
     /// it is at any age, and the recent file named by the lossy rendering of that name is not removed
     /// in its place. A sweep that chose by the rendering, and took a replacement character as part of

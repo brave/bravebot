@@ -38,6 +38,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+/// How long `session.open` waits for what still works for a session this bridge closed, when the
+/// record it was asked for is held or changed (SESSION-38).
+const CLOSED_SESSIONS_WAIT: Duration = Duration::from_secs(2);
+
+/// What opening a stored session came to.
+enum Stored {
+    Opened(Value),
+    /// Another process holds the record, or wrote it after it was read.
+    Refused(bravebot_session::sessions::Held),
+}
+
 /// A session this process has open.
 struct Open {
     project: PathBuf,
@@ -368,7 +379,26 @@ impl Bridge {
         Ok(json!({ "sessions": sessions }))
     }
 
+    /// Open a stored session. A record another process holds, or one written after it was read, is
+    /// refused after a bounded wait for what is still working for sessions this bridge closed: that
+    /// work may be writing the record, and a session opened again as it closed is its person's own
+    /// and not another process's. The record is then read afresh, so nothing in the session comes
+    /// from the older copy (SESSION-38).
     fn open_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        if let Stored::Opened(opened) = self.open_stored(request)? {
+            return Ok(opened);
+        }
+        self.closing.retain(|closing| !closing.is_idle());
+        if !self.closing.is_empty() {
+            crate::workers::Workers::all_end_within(&self.closing, CLOSED_SESSIONS_WAIT);
+        }
+        match self.open_stored(request)? {
+            Stored::Opened(opened) => Ok(opened),
+            Stored::Refused(held) => Err(Failure::bad_request(held.refusal())),
+        }
+    }
+
+    fn open_stored(&mut self, request: &Request) -> Result<Stored, Failure> {
         let directory = PathBuf::from(request.string("directory")?);
         let id = request.string("id")?;
 
@@ -408,7 +438,12 @@ impl Bridge {
             .remembered
             .is_some()
             .then(|| json!({ "known": true, "rules": rules_json(&opening.trust) }));
-        let state = State::resumed(&directory, &record, opening.trust);
+        // Held from here for as long as the session stays open, so a record a terminal holds is
+        // refused in the words the terminal uses (SESSION-38).
+        let state = match State::resumed(&directory, &record, opening.trust) {
+            Ok(state) => state,
+            Err(held) => return Ok(Stored::Refused(held)),
+        };
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(Open::opened(
@@ -441,7 +476,7 @@ impl Bridge {
             opened["trust"] = settled;
         }
         merge(&mut opened, reported);
-        Ok(opened)
+        Ok(Stored::Opened(opened))
     }
 
     /// Settle the permission rules the session opened as `handle` runs under, and return them
@@ -3324,7 +3359,7 @@ mod coverage_tests {
         let key = root.join("deploy/key.pem");
         let mut trust = TrustStore::new(root);
         trust.trust("notes.md");
-        let mut parent_state = State::resumed(root, &record, trust);
+        let mut parent_state = State::resumed(root, &record, trust).expect("the record is free");
         parent_state.answers.programs.trust(command.clone());
         parent_state.answers.asked_about.record(command.clone());
         parent_state.answers.exposed.allow(".env");
@@ -3443,7 +3478,7 @@ mod coverage_tests {
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let parent = bridge.mint(Open::opened(
             root.to_path_buf(),
-            State::resumed(root, &record, TrustStore::new(root)),
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free"),
             true,
             None,
             false,
@@ -3490,7 +3525,8 @@ mod coverage_tests {
             "conversation": bravebot_agent::Conversation::new().snapshot()
         }))
         .unwrap();
-        let mut state = State::resumed(root, &record, TrustStore::new(root));
+        let mut state =
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
         assert!(state.rewind.is_empty());
         save(
             root,

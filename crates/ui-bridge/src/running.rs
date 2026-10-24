@@ -223,16 +223,18 @@ impl State {
     /// is what makes a turn taken here land in the session it was taken in — and what
     /// `bravebot --resume` needs in order to pick the same session back up. The terminal does
     /// the same at `crates/tui/src/app.rs`.
+    ///
+    /// `Err` is a record another process holds, which the window is not given (SESSION-38).
     pub fn resumed(
         project: &Path,
         record: &bravebot_session::sessions::Record,
         trust: TrustStore,
-    ) -> Self {
-        let mut handle = Handle::resuming(project, record, crate::FRONT, crate::agent_build());
+    ) -> Result<Self, bravebot_session::sessions::Held> {
+        let mut handle = Handle::resuming(project, record, crate::FRONT, crate::agent_build())?;
         // The desktop addresses no definition, so the turns it writes are not the definition's and
         // the record must not go on saying they were.
         handle.set_agent(None);
-        Self {
+        Ok(Self {
             conversation: Conversation::restored(record.conversation.clone()),
             answers: Answers::opening(trust, record.trusted_programs(project), Default::default()),
             directories: record.directories.iter().map(PathBuf::from).collect(),
@@ -255,7 +257,7 @@ impl State {
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
             moments: None,
-        }
+        })
     }
 
     /// The state a fork begins with: part of another session's conversation, and an id of its

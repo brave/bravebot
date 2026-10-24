@@ -293,6 +293,16 @@ fn run(
     let resumed = hosted_as
         .as_deref()
         .and_then(|id| bravebot_session::sessions::load(workspace.root(), id));
+    // The record is held from here for as long as the session runs, before anything is asked or
+    // any server is reached: a session started again for a record a terminal holds is refused,
+    // since two processes would write one record (SESSION-38).
+    let mut kept = match hosted_as.as_deref() {
+        Some(id) => match Kept::opening(workspace.root(), id, resumed.as_ref()) {
+            Ok(kept) => Some(kept),
+            Err(held) => return fail(Ending::Failed, held.refusal()),
+        },
+        None => None,
+    };
     // A session started again, and the index of its workspace, are what the sweep of what has
     // outlived the retention period must leave whatever their age (STATE-4).
     bravebot_session::retention::at_startup(
@@ -428,6 +438,11 @@ fn run(
     // one or the configured one, and this is the only place either can be looked up.
     //
     let under = agent.as_ref().map(|definition| definition.name.clone());
+    // What this session's turns are addressed to, not what the record it resumed was under: a
+    // session that does not work under that definition must not claim it.
+    if let Some(kept) = kept.as_mut() {
+        kept.work_under(under.as_deref());
+    }
     // The definition's model where it names one, since that is the one every turn will ask for.
     let named = agent
         .as_ref()
@@ -513,9 +528,7 @@ fn run(
             },
             (),
         ),
-        kept: hosted_as
-            .as_deref()
-            .map(|id| Kept::opening(workspace.root(), id, resumed.as_ref(), under.as_deref())),
+        kept,
         mcp: reached.session(),
         beside: beside_turns,
         inbox,
@@ -739,16 +752,16 @@ struct Kept {
 }
 
 impl Kept {
+    /// `Err` where another process holds the record being resumed (SESSION-38).
     fn opening(
         root: &std::path::Path,
         id: &str,
         resumed: Option<&bravebot_session::sessions::Record>,
-        under: Option<&str>,
-    ) -> Self {
+    ) -> Result<Self, bravebot_session::sessions::Held> {
         use bravebot_session::sessions::{Front, Handle};
-        let mut kept = match resumed {
+        Ok(match resumed {
             Some(record) => Self {
-                handle: Handle::resuming(root, record, Front::Terminal, bravebot_stamp::BUILD),
+                handle: Handle::resuming(root, record, Front::Terminal, bravebot_stamp::BUILD)?,
                 turns: record.turns,
                 tokens: record.tokens,
                 split: record.split,
@@ -770,11 +783,13 @@ impl Kept {
                 timing: std::collections::BTreeMap::new(),
                 model: None,
             },
-        };
-        // What this session's turns are addressed to, not what the record it resumed was under:
-        // a session that does not work under that definition must not claim it.
-        kept.handle.set_agent(under.map(str::to_string));
-        kept
+        })
+    }
+
+    /// Say which definition this session's turns are addressed to, which is not the one the record
+    /// it resumed was under unless the session works under that one too.
+    fn work_under(&mut self, definition: Option<&str>) {
+        self.handle.set_agent(definition.map(str::to_string));
     }
 
     fn after_a_turn(
@@ -1725,7 +1740,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-scratch")
             .join(format!("plain-failed-{}", std::process::id()));
-        let mut kept = Kept::opening(&root, "id", None, None);
+        let mut kept = Kept::opening(&root, "id", None).expect("a new session holds nothing");
         let spent = bravebot_agent::Spent {
             tokens: 107,
             output_tokens: 40,
@@ -2502,11 +2517,14 @@ mod tests {
             .expect("a record");
         let root = std::path::Path::new("/tmp/x");
 
-        let unnamed = Kept::opening(root, "1-2", Some(&record), None);
+        let mut unnamed = Kept::opening(root, "1-2", Some(&record)).expect("nothing holds it");
+        unnamed.work_under(None);
         assert_eq!(unnamed.handle.agent(), None);
-        let named = Kept::opening(root, "1-2", Some(&record), Some("another"));
+        let mut named = Kept::opening(root, "1-2", Some(&record)).expect("nothing holds it");
+        named.work_under(Some("another"));
         assert_eq!(named.handle.agent(), Some("another"));
-        let fresh = Kept::opening(root, "3-4", None, Some("another"));
+        let mut fresh = Kept::opening(root, "3-4", None).expect("a new session holds nothing");
+        fresh.work_under(Some("another"));
         assert_eq!(fresh.handle.agent(), Some("another"));
     }
 

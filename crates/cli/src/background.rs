@@ -428,6 +428,21 @@ fn running(typed: &str, wake: Wake<'_>) -> Result<(Roster, Seen, bool), ExitCode
     match roster.find(typed) {
         Ok(seen) if seen.live => Ok((roster, seen, false)),
         Ok(seen) if matches!(seen.state(), State::Stopped | State::Interrupted) => {
+            // A terminal that resumed the record while the session was stopped still holds it, and
+            // a process started now would write it as well (SESSION-38). Said before anything is
+            // started, and whether or not this is a terminal.
+            if bravebot_session::sessions::is_open_elsewhere(
+                std::path::Path::new(&seen.job.directory),
+                &seen.job.id,
+            ) {
+                return Err(fail(
+                    Ending::Failed,
+                    bravebot_session::sessions::Held::Open {
+                        id: seen.job.id.clone(),
+                    }
+                    .refusal(),
+                ));
+            }
             let name = shown(&seen.job.name);
             let interrupted = seen.state() == State::Interrupted;
             if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {

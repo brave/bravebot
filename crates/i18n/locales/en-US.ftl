@@ -3070,6 +3070,7 @@ session-resume-already-here = that is the session already open
 session-resume-no-such = no session with that id in this directory
 # Left in the transcript when /resume names a session a running background session holds.
 session-resume-held-by-background = that session is held by a running background session, so it cannot be resumed here
+session-resume-held-by-another-process = that session is open in another terminal or window, so it cannot be resumed here
 # Left in the transcript when a prompt named a session with @session:<id> and part of it was added.
 session-mention-added = added { $chars } characters of session { $id } to the message
 session-mention-added-cut = added the newest { $chars } characters of session { $id } to the message, and left out older turns
@@ -4269,6 +4270,8 @@ bg-restart-needs-a-terminal = { $name } is stopped, and only a terminal can star
 bg-interrupted-needs-a-terminal = { $name } was interrupted, and only a terminal can start it again.
 bg-interrupted-not-repeated = { $name } was interrupted in the middle of a turn. Starting it again does not repeat that turn.
 resume-held-by-background = { $name } is held by a running background session. Join it with: bravebot attach { $id }
+resume-held-by-another-process = { $id } is open in another terminal or window, so it cannot be resumed here. Copy it with: bravebot --fork { $id }
+resume-changed-while-opening = { $id } was written by another process while it was being opened. Resume it again.
 
 # `bravebot doctor --sandbox-check`: git, gh, make, cargo and the other everyday programs, run the way a
 # session runs them. A row is a workflow; a row that failed says where, what to do, and where the

@@ -429,12 +429,15 @@ the session chosen; a record from before maps were kept has none, and is asked a
 A continuing caller keeps the current map after success, returned error or cancellation, after
 joining the turn's children. This includes grants made while loading context before a later load
 fails and downgrades recorded by effects. The caller adopts that map before saving or starting
-another turn; a pre-turn copy cannot replace it.
+another turn; a pre-turn copy cannot replace it. A record is written by one process at a time
+([SESSION-38](sessions.md#SESSION-38)), so the map one process recorded is not replaced by a copy
+another process made before it.
 
 `verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_excludes_replacement_from_the_next_request`
 `verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
 `verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
 `verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
+`verified-by: bravebot_session::sessions::a_second_resume_cannot_erase_the_distrust_the_first_recorded`
 
 A kept yes is the yes and nothing else the session held. The session it settles starts from the rule
 a yes writes and from no other: a path an earlier session's writes marked untrusted, a directory it
