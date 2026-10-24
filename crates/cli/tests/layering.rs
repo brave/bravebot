@@ -562,6 +562,179 @@ fn a_crate_that_draws_nothing_reaches_no_terminal_library() {
 const REACHES_OUT: [&str; 4] = ["fs", "io", "process", "env"];
 const PRINTS: [&str; 5] = ["println!", "print!", "eprintln!", "eprint!", "dbg!"];
 
+/// A source file as a release build reads it: the test modules left out, and the comments.
+///
+/// A test module is `#[cfg(test)]` and then `mod`, with attributes such as `#[path]` between. One
+/// with a body is closed by rustfmt at column 0, so the first bare brace ends it. One declared as
+/// `mod name;` is the line alone, and the code after it is read. A line comment is skipped whole,
+/// since the crates say in prose what they do not do.
+fn production_code(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut code = String::new();
+    let mut at = 0;
+    while at < lines.len() {
+        let line = lines[at];
+        if is_test_gate(line) {
+            let mut declared = at + 1;
+            while lines
+                .get(declared)
+                .is_some_and(|next| next.trim_start().starts_with("#["))
+            {
+                declared += 1;
+            }
+            if let Some(module) = lines
+                .get(declared)
+                .filter(|next| module_name(next).is_some())
+            {
+                if module.trim_end().ends_with(';') {
+                    at = declared + 1;
+                    continue;
+                }
+                if !module.starts_with(char::is_whitespace) {
+                    at = declared + 1;
+                    if !module.trim_end().ends_with('}') {
+                        while at < lines.len() && lines[at] != "}" {
+                            at += 1;
+                        }
+                        at += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+        if !line.trim().starts_with("//") {
+            code.push_str(line);
+            code.push('\n');
+        }
+        at += 1;
+    }
+    code
+}
+
+/// Whether a line gates the item after it on a test build: `#[cfg(test)]`, or `#[cfg(all(test, ...))]`
+/// as `#[cfg(all(test, unix))]` does for a test that needs a Unix.
+fn is_test_gate(line: &str) -> bool {
+    let line = line.trim();
+    line == "#[cfg(test)]" || line.starts_with("#[cfg(all(test,")
+}
+
+/// The name a line declares as a module, `mod name;` or `mod name {`, with any visibility before
+/// it.
+fn module_name(line: &str) -> Option<&str> {
+    let mut rest = line.trim();
+    for visibility in ["pub(crate) ", "pub(super) ", "pub "] {
+        if let Some(after) = rest.strip_prefix(visibility) {
+            rest = after;
+            break;
+        }
+    }
+    rest.strip_prefix("mod ")?
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()
+        .filter(|name| !name.is_empty())
+}
+
+/// The modules a source file gates with a test configuration and declares without a body, as the
+/// `#[path]` it gives, if any, and the name.
+fn declared_test_modules(source: &str) -> Vec<(Option<String>, String)> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut found = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        if !is_test_gate(line) {
+            continue;
+        }
+        let mut path = None;
+        let mut next = at + 1;
+        while let Some(attribute) = lines
+            .get(next)
+            .map(|attribute| attribute.trim())
+            .filter(|attribute| attribute.starts_with("#["))
+        {
+            if let Some(value) = attribute
+                .strip_prefix("#[path = \"")
+                .and_then(|value| value.strip_suffix("\"]"))
+            {
+                path = Some(value.to_string());
+            }
+            next += 1;
+        }
+        if let Some(declared) = lines.get(next).filter(|l| l.trim_end().ends_with(';'))
+            && let Some(name) = module_name(declared)
+        {
+            found.push((path, name.to_string()));
+        }
+    }
+    found
+}
+
+/// The files the compiler reads a module declared in `declaring` from: the `#[path]` when there is
+/// one, and otherwise `name.rs` and `name/mod.rs` beside it, or inside the directory named for it
+/// when `declaring` is not the root of a crate or a `mod.rs`.
+fn module_files(declaring: &std::path::Path, path: Option<&str>, name: &str) -> Vec<PathBuf> {
+    let directory = declaring.parent().expect("a source file has a directory");
+    if let Some(path) = path {
+        return vec![directory.join(path)];
+    }
+    let stem = declaring
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    let base = if matches!(stem, "lib" | "main" | "mod") {
+        directory.to_path_buf()
+    } else {
+        directory.join(stem)
+    };
+    vec![
+        base.join(format!("{name}.rs")),
+        base.join(name).join("mod.rs"),
+    ]
+}
+
+/// Every file under a crate's `src` that a release build compiles, with the code it contributes. A
+/// file that only a test module declares is a test and is left out with the files under its
+/// directory, and the test modules and comments of the others are left out of their text.
+fn release_sources() -> Vec<(PathBuf, String)> {
+    let mut texts = Vec::new();
+    for krate in std::fs::read_dir(workspace().join("crates")).expect("the crates directory") {
+        let source = krate.expect("a crate").path().join("src");
+        if !source.is_dir() {
+            continue;
+        }
+        for file in rust_files(&source) {
+            let text = std::fs::read_to_string(&file).expect("a source file");
+            texts.push((file, text));
+        }
+    }
+    let mut test_files = Vec::new();
+    let mut test_directories = Vec::new();
+    for (file, text) in &texts {
+        for (path, name) in declared_test_modules(text) {
+            for candidate in module_files(file, path.as_deref(), &name) {
+                if !candidate.is_file() {
+                    continue;
+                }
+                if candidate.file_name().is_some_and(|name| name == "mod.rs") {
+                    test_directories
+                        .push(candidate.parent().map(PathBuf::from).unwrap_or_default());
+                } else {
+                    test_directories.push(candidate.with_extension(""));
+                }
+                test_files.push(candidate);
+            }
+        }
+    }
+    texts
+        .into_iter()
+        .filter(|(file, _)| {
+            !test_files.contains(file)
+                && !test_directories
+                    .iter()
+                    .any(|directory| file.starts_with(directory))
+        })
+        .map(|(file, text)| (file, production_code(&text)))
+        .collect()
+}
+
 /// The `std::` paths and print macros a source file's non-test code uses that a crate promising
 /// "no I/O" and "nothing prints" may not, one description per use.
 ///
@@ -569,29 +742,7 @@ const PRINTS: [&str; 5] = ["println!", "print!", "eprintln!", "eprint!", "dbg!"]
 /// `use std::{\n    fs,\n}` are read as the paths they are, so grouping the import is not a way past
 /// it. Comments are skipped, because the crates say in prose what they do not do.
 fn reaching_out(source: &str) -> Vec<String> {
-    let mut code = String::new();
-    let mut lines = source.lines().peekable();
-    while let Some(line) = lines.next() {
-        let trimmed = line.trim();
-        if trimmed == "#[cfg(test)]"
-            && lines
-                .peek()
-                .is_some_and(|next| next.starts_with("mod ") || next.starts_with("pub mod "))
-        {
-            // rustfmt closes a module at column 0, so the first bare brace ends it.
-            for inner in lines.by_ref() {
-                if inner == "}" {
-                    break;
-                }
-            }
-            continue;
-        }
-        if !trimmed.starts_with("//") {
-            code.push_str(line);
-            code.push('\n');
-        }
-    }
-
+    let code = production_code(source);
     let mut found = Vec::new();
     for print in PRINTS {
         if code.contains(print) {
@@ -675,41 +826,34 @@ fn names_the_chatgpt_sign_in(text: &str) -> bool {
         || (text.contains("chatgpt as ") && text.contains("sign_in("))
 }
 
+/// A path as the repository names it: relative to the workspace and with `/` between components.
+fn relative(path: &std::path::Path) -> String {
+    path.strip_prefix(workspace())
+        .expect("a path under the workspace")
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 /// CHATGPT-1 says only a command a person types signs in. The flow is `bravebot_skus::chatgpt`'s
 /// `sign_in`, which opens a browser, holds a port and ends with a credential on disk, so a tool, a
 /// hook, a slash command or a background host that called it would start that on content's say. The
 /// one caller is the command's own file, and a file that names the module and `sign_in` together is
-/// a second, as is one that names the module and calls `sign_in` through the crate's alias. A file
-/// that only reads the sign-in file, as the agent's does to tell a first run what is configured,
-/// names neither.
+/// a second, as is one that names the module and calls `sign_in` through the crate's alias. A file a
+/// test module declares is a test, and is not read. A file that only reads the sign-in file, as the
+/// agent's does to tell a first run what is configured, names neither.
 #[test]
 fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
-    let crates = workspace().join("crates");
-    let mut callers = Vec::new();
-    let mut scanned = 0;
-    for krate in std::fs::read_dir(&crates).expect("the crates directory") {
-        let source = krate.expect("a crate").path().join("src");
-        if !source.is_dir() {
-            continue;
-        }
-        for file in rust_files(&source) {
-            scanned += 1;
-            let text = std::fs::read_to_string(&file).expect("a source file");
-            if names_the_chatgpt_sign_in(&text) {
-                callers.push(
-                    file.strip_prefix(workspace())
-                        .expect("a path under the workspace")
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                );
-            }
-        }
-    }
-
+    let sources = release_sources();
     assert!(
-        scanned > 100,
-        "{scanned} source files, so this test would pass by scanning almost nothing"
+        sources.len() > 100,
+        "{} source files, so this test would pass by scanning almost nothing",
+        sources.len()
     );
+    let callers: Vec<String> = sources
+        .iter()
+        .filter(|(_, code)| names_the_chatgpt_sign_in(code))
+        .map(|(file, _)| relative(file))
+        .collect();
     assert_eq!(callers, ["crates/cli/src/chatgpt.rs"]);
 }
 
@@ -746,15 +890,16 @@ fn the_scan_for_the_chatgpt_sign_in_finds_each_way_to_name_it_and_not_a_read_of_
 /// that names where a token goes, so no build that ships may have it.
 const TEST_SEAMS: [&str; 1] = ["test-hosts"];
 
-/// Each line of `manifest` that names a test seam anywhere but in a table of dev-dependencies or in
-/// the seam's own declaration, `<seam> = []`, under `[features]`.
+/// What a Cargo file says about the test seams: the lines that name one anywhere but in a table of
+/// dev-dependencies or the seam's own declaration, `<seam> = []` under `[features]`, and the lines
+/// that name one in a table of dev-dependencies.
 ///
-/// A seam a crate's `[dependencies]`, its build dependencies, the workspace's catalogue or a feature
-/// of any crate enables, `default` included, is on in the build that ships, where cargo builds a
-/// crate's dev-dependencies only for its tests. A declaration that enables something else would turn
-/// that on with it.
-fn seam_outside_tests(manifest: &str) -> Vec<String> {
-    let mut found = Vec::new();
+/// A seam a crate's `[dependencies]`, its build dependencies, the workspace's catalogue, a feature of
+/// any crate (`default` included) or a Cargo configuration file enables is on in the build that ships,
+/// where cargo builds a crate's dev-dependencies only for its tests. A declaration that enables
+/// something else would turn that on with it.
+fn seam_mentions(manifest: &str) -> (Vec<String>, Vec<String>) {
+    let (mut outside, mut inside) = (Vec::new(), Vec::new());
     let mut table: Vec<String> = Vec::new();
     for line in manifest.lines() {
         let line = line.trim();
@@ -783,44 +928,125 @@ fn seam_outside_tests(manifest: &str) -> Vec<String> {
             && line
                 .split_once('=')
                 .is_some_and(|(key, value)| key.trim() == *seam && value.trim() == "[]");
-        if !for_tests && !declared {
-            found.push(line.to_string());
+        if for_tests {
+            inside.push(line.to_string());
+        } else if !declared {
+            outside.push(line.to_string());
         }
     }
+    (outside, inside)
+}
+
+/// Directories no walk of the repository goes into: built output, installed packages, git's own
+/// files, a sibling checkout kept under `.worktrees` and a bytecode cache.
+const NOT_WALKED: [&str; 5] = [
+    "target",
+    "node_modules",
+    ".git",
+    ".worktrees",
+    "__pycache__",
+];
+
+/// Every file under `directory` that `keep` accepts, by path, depth first.
+fn files_where(
+    directory: &std::path::Path,
+    keep: &impl Fn(&std::path::Path) -> bool,
+) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        if path.is_dir() {
+            if !NOT_WALKED.iter().any(|skipped| name == *skipped) {
+                found.extend(files_where(&path, keep));
+            }
+        } else if keep(&path) {
+            found.push(path);
+        }
+    }
+    found.sort();
     found
 }
+
+/// Every manifest in the repository, and every Cargo configuration file, whichever workspace it
+/// belongs to: the fuzz package is a workspace of its own and the root's member list does not name
+/// it.
+fn cargo_files() -> Vec<(String, String)> {
+    files_where(&workspace(), &|path| {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let in_cargo_directory = path
+            .parent()
+            .and_then(std::path::Path::file_name)
+            .is_some_and(|directory| directory == ".cargo");
+        name == "Cargo.toml" || (in_cargo_directory && name.starts_with("config"))
+    })
+    .into_iter()
+    .map(|path| {
+        let text = std::fs::read_to_string(&path).expect("a Cargo file");
+        (relative(&path), text)
+    })
+    .collect()
+}
+
+/// The manifests whose `[dev-dependencies]` turn a seam on, which are the crates whose tests run a
+/// flow against a stand-in: the command's, for the built binary, and the two front ends', for what
+/// each writes of a failed turn. A crate added to this list is a decision about who may name a host
+/// in a test.
+const ENABLE_A_SEAM_FOR_TESTS: [&str; 3] = [
+    "crates/cli/Cargo.toml",
+    "crates/tui/Cargo.toml",
+    "crates/ui-bridge/Cargo.toml",
+];
 
 /// CHATGPT-2: a test seam is turned on by dev-dependencies and by nothing a release build reads.
 /// Cargo builds a crate's dev-dependencies, and the features they ask for, only for that crate's
 /// tests, so a seam enabled there is in the binary `cargo test` runs and in no binary a release
 /// builds. A manifest that enabled it under `[dependencies]`, in `default` or in another feature
-/// would put a variable that chooses where a token goes into the shipped binary. The seams are
-/// declared and enabled somewhere, so the test is not satisfied by a tree that dropped them.
+/// would put a variable that chooses where a token goes into the shipped binary. Every `Cargo.toml`
+/// in the repository is read, the fuzz package's included, and so is every Cargo configuration file,
+/// which could pass the feature as a flag. The seams are declared and enabled somewhere, so the test
+/// is not satisfied by a tree that dropped them.
 #[test]
 fn a_test_seam_is_enabled_by_dev_dependencies_alone() {
-    let workspace = workspace();
-    let root = std::fs::read_to_string(workspace.join("Cargo.toml")).expect("the root manifest");
-    let mut manifests = vec![("Cargo.toml".to_string(), root.clone())];
-    for member in members(&root) {
-        let path = format!("{member}/Cargo.toml");
-        let manifest =
-            std::fs::read_to_string(workspace.join(&path)).expect("a workspace member's manifest");
-        manifests.push((path, manifest));
-    }
+    let files = cargo_files();
+    let names: Vec<&str> = files.iter().map(|(path, _)| path.as_str()).collect();
+    assert!(
+        files.len() > 20
+            && names.contains(&"Cargo.toml")
+            && names.contains(&"fuzz/Cargo.toml")
+            && names.contains(&"crates/skus/Cargo.toml"),
+        "{names:?}, so this test would pass by reading almost nothing"
+    );
 
     let mut outside: Vec<(String, String)> = Vec::new();
-    for (path, manifest) in &manifests {
-        for line in seam_outside_tests(manifest) {
+    let mut enabling: Vec<&str> = Vec::new();
+    for (path, manifest) in &files {
+        let (named_outside, named_inside) = seam_mentions(manifest);
+        for line in named_outside {
             outside.push((path.clone(), line));
+        }
+        if !named_inside.is_empty() {
+            enabling.push(path);
         }
     }
     assert!(
         outside.is_empty(),
         "a test seam is named where a build that ships would read it: {outside:?}"
     );
+    assert_eq!(
+        enabling, ENABLE_A_SEAM_FOR_TESTS,
+        "the crates whose tests turn a seam on are the ones that run a flow against a stand-in, \
+         and a crate added to them is a decision about who may name a host in a test"
+    );
 
     for seam in TEST_SEAMS {
-        let mut declaring: Vec<&str> = manifests
+        let mut declaring: Vec<&str> = files
             .iter()
             .filter(|(_, manifest)| {
                 manifest
@@ -834,12 +1060,6 @@ fn a_test_seam_is_enabled_by_dev_dependencies_alone() {
             declaring,
             ["crates/config/Cargo.toml", "crates/skus/Cargo.toml"],
             "{seam}"
-        );
-        assert!(
-            manifests
-                .iter()
-                .any(|(_, manifest)| manifest.contains(&format!("features = [\"{seam}\"]"))),
-            "nothing enables {seam}, so the tests that need it run against the compiled-in hosts"
         );
     }
 }
@@ -872,8 +1092,9 @@ bravebot-skus = { path = \"../skus\", features = [\"test-hosts\"] }
 [target.'cfg(unix)'.dev-dependencies.bravebot-config]
 features = [\"test-hosts\"]
 ";
+    let (outside, inside) = seam_mentions(manifest);
     assert_eq!(
-        seam_outside_tests(manifest),
+        outside,
         [
             "bravebot-skus = { path = \"crates/skus\", features = [\"test-hosts\"] }",
             "default = [\"test-hosts\"]",
@@ -884,9 +1105,718 @@ features = [\"test-hosts\"]
         ]
     );
     assert_eq!(
-        seam_outside_tests("[features]\ntest-hosts = [\"bravebot-net/proxy\"]\n"),
+        inside,
+        [
+            "bravebot-skus = { path = \"../skus\", features = [\"test-hosts\"] }",
+            "features = [\"test-hosts\"]",
+        ]
+    );
+    assert_eq!(
+        seam_mentions("[features]\ntest-hosts = [\"bravebot-net/proxy\"]\n").0,
         ["test-hosts = [\"bravebot-net/proxy\"]"]
     );
+    // A Cargo configuration file has no dependency tables, so a flag in one is a use.
+    assert_eq!(
+        seam_mentions("[build]\nrustflags = [\"--cfg\", \"feature=\\\"test-hosts\\\"\"]\n")
+            .0
+            .len(),
+        1
+    );
+    assert_eq!(
+        seam_mentions("[alias]\nb = \"build --features bravebot-skus/test-hosts\"\n")
+            .0
+            .len(),
+        1
+    );
+}
+
+/// The files that run a build, or tell a person which command builds a release, and the
+/// directories that hold more of them. A script whose name says it tests another script is left
+/// out: it holds the fixtures of the commands it checks, and runs none of them. `.githooks` and
+/// `.github` are directories of their own, and `docs/specs` is not read, because the clause that
+/// states this guard has to say the words it looks for.
+const COMMAND_FILES: [&str; 12] = [
+    "Makefile",
+    "Dockerfile.cross",
+    "install.sh",
+    "install.ps1",
+    "package.json",
+    "README.md",
+    "deny.toml",
+    "extension/README.md",
+    "ui/package.json",
+    "mobile/package.json",
+    "mobile/README.md",
+    "packages/package.json",
+];
+const COMMAND_DIRECTORIES: [&str; 13] = [
+    ".github",
+    ".githooks",
+    "ui/scripts",
+    "ui/docs",
+    "mobile/scripts",
+    "npm/scripts",
+    "npm/bin",
+    "packages/scripts",
+    "scripts",
+    "contrib",
+    "agents",
+    "docs/development",
+    "fuzz",
+];
+
+/// The commands in the text of a file, one per logical line: a line that ends in a backslash goes on
+/// with the next, as a shell and a Makefile read it.
+fn logical_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut joined = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        match trimmed.strip_suffix('\\') {
+            Some(continued) => {
+                joined.push_str(continued.trim_end());
+                joined.push(' ');
+            }
+            None => {
+                joined.push_str(trimmed);
+                lines.push(std::mem::take(&mut joined));
+            }
+        }
+    }
+    if !joined.is_empty() {
+        lines.push(joined);
+    }
+    lines
+}
+
+/// Whether a logical line passes a test seam to a build: it names the seam and a way of enabling a
+/// feature. The word alone is English, and a line that says "a test-hosts file" is not it.
+fn passes_a_test_seam(line: &str) -> bool {
+    TEST_SEAMS.iter().any(|seam| {
+        line.contains(seam)
+            && [
+                "--features",
+                "--feature",
+                "--cfg",
+                " -F",
+                "features =",
+                "features=",
+                &format!("/{seam}"),
+            ]
+            .iter()
+            .any(|way| line.contains(way))
+    })
+}
+
+/// What a file's commands do with features, as the logical lines that pass a seam and the ones that
+/// ask for every feature, `--all-features` or cargo-deny's `all-features = true`, which enables each
+/// seam for every crate the build selects.
+fn feature_commands(text: &str) -> (Vec<String>, Vec<String>) {
+    let (mut naming, mut all) = (Vec::new(), Vec::new());
+    for line in logical_lines(text) {
+        if passes_a_test_seam(&line) {
+            naming.push(line.clone());
+        }
+        if line.contains("all-features") {
+            all.push(line);
+        }
+    }
+    (naming, all)
+}
+
+/// The commands that may ask for every feature, each by the file, the text that names it, how many
+/// times that text occurs in the file, and why it ships nothing. A command added to a build or a
+/// release is not in this list and is refused, so a new use is added here by name, with the reason.
+const MAY_ASK_FOR_ALL_FEATURES: [(&str, &str, usize, &str); 12] = [
+    (
+        "Makefile",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        2,
+        "a lint run",
+    ),
+    (
+        "Makefile",
+        "cargo clippy --target x86_64-pc-windows-gnu --all-targets --all-features --locked",
+        1,
+        "a lint run",
+    ),
+    (
+        ".github/workflows/ci.yml",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        2,
+        "a lint run",
+    ),
+    (
+        ".github/workflows/ci.yml",
+        "cargo clippy --target x86_64-pc-windows-gnu --all-targets --all-features --locked",
+        1,
+        "a lint run",
+    ),
+    (
+        ".githooks/pre-commit",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        1,
+        "a lint run",
+    ),
+    (
+        "contrib/check-lint-increase.py",
+        "\"cargo\", \"clippy\", \"--workspace\", \"--lib\", \"--bins\", \"--all-features\"",
+        1,
+        "a lint run",
+    ),
+    (
+        "agents/pr_worktree.py",
+        "\"cargo\", \"clippy\", *flags, \"--all-targets\", \"--all-features\"",
+        1,
+        "a lint run",
+    ),
+    (
+        "agents/skills/maintenance/maintenance.py",
+        "\"cargo\", \"clippy\", \"--workspace\", \"--lib\", \"--bins\", \"--all-features\"",
+        1,
+        "a lint run",
+    ),
+    (
+        "ui/docs/testing.md",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        2,
+        "a lint run, described",
+    ),
+    (
+        "ui/docs/development.md",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        1,
+        "a lint run, described",
+    ),
+    (
+        "ui/docs/v0.9.0-implementation.md",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        1,
+        "a lint run, described",
+    ),
+    (
+        "deny.toml",
+        "all-features = true",
+        1,
+        "cargo-deny reads the dependency graph with every feature on and compiles nothing",
+    ),
+];
+
+/// A release is made by `make` targets that run `cargo build --release` and `cargo zigbuild
+/// --release`, and CHATGPT-2 lets no flag turn on a feature that names a host. A manifest cannot
+/// say what a build command passes, so this reads the commands: the Makefile, the Dockerfile of the
+/// cross-build, the workflows and the git hooks, the scripts the desktop app and the packages are
+/// built with, the tools under `contrib` and `agents`, the fuzz package, and the documents that give
+/// build and release commands. None may pass a seam, and `all-features`, which would enable each, is
+/// asked for only by the runs [`MAY_ASK_FOR_ALL_FEATURES`] names.
+#[test]
+fn no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_by_name() {
+    let root = workspace();
+    let runs_no_build = |path: &std::path::Path| {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        name.contains("selftest") || name.contains(".test.") || name.contains("-test.")
+    };
+    let mut files: Vec<PathBuf> = COMMAND_FILES
+        .iter()
+        .map(|file| root.join(file))
+        .filter(|path| path.is_file())
+        .collect();
+    for directory in COMMAND_DIRECTORIES {
+        files.extend(files_where(&root.join(directory), &|path| {
+            !runs_no_build(path)
+                && path.extension().is_none_or(|extension| {
+                    [
+                        "yml", "yaml", "sh", "ps1", "py", "mjs", "js", "ts", "json", "md", "mk",
+                        "toml",
+                    ]
+                    .iter()
+                    .any(|kept| extension == *kept)
+                })
+        }));
+    }
+    let texts: Vec<(String, String)> = files
+        .iter()
+        .map(|path| {
+            (
+                relative(path),
+                std::fs::read_to_string(path).unwrap_or_default(),
+            )
+        })
+        .collect();
+
+    // The files that build a release are among those read, and hold the commands that do.
+    let paths: Vec<&str> = texts.iter().map(|(path, _)| path.as_str()).collect();
+    for needed in [
+        "Makefile",
+        "Dockerfile.cross",
+        "deny.toml",
+        ".github/workflows/ci.yml",
+        ".githooks/pre-commit",
+        "ui/scripts/build-bridge.sh",
+        "docs/development/releasing.md",
+    ] {
+        assert!(paths.contains(&needed), "{needed} was not read: {paths:?}");
+    }
+    let has = |file: &str, command: &str| {
+        texts
+            .iter()
+            .filter(|(path, _)| path == file)
+            .any(|(_, text)| {
+                logical_lines(text)
+                    .iter()
+                    .any(|line| line.contains(command))
+            })
+    };
+    assert!(
+        has("Makefile", "cargo build --release --locked")
+            && has("Dockerfile.cross", "cargo zigbuild --release --locked"),
+        "the commands that build a release were not found, so this test would pass by reading none"
+    );
+
+    let mut all_features: Vec<(String, String)> = Vec::new();
+    for (path, text) in &texts {
+        let (naming, all) = feature_commands(text);
+        assert!(
+            naming.is_empty(),
+            "{path} passes a test seam to a build, which would put a way to name a host into \
+             whatever the command builds: {naming:?}"
+        );
+        all_features.extend(all.into_iter().map(|line| (path.clone(), line)));
+    }
+    let mut allowed = 0;
+    for (file, needle, times, why) in MAY_ASK_FOR_ALL_FEATURES {
+        allowed += times;
+        let found = all_features
+            .iter()
+            .filter(|(path, line)| path == file && line.contains(needle))
+            .count();
+        assert_eq!(
+            found, times,
+            "{file}: `{needle}` ({why}) was expected {times} times and found {found}"
+        );
+    }
+    assert_eq!(
+        all_features.len(),
+        allowed,
+        "a command asks for every feature that is not named in MAY_ASK_FOR_ALL_FEATURES, and that \
+         enables each test seam for every crate the build selects: {all_features:#?}"
+    );
+}
+
+/// The command reader has to see each way a build can be given a seam, has to join a command that
+/// goes on over lines, and has to pass over the word where it is only English, or the test above
+/// passes on a command it cannot read.
+#[test]
+fn the_command_reader_sees_a_seam_passed_over_a_continuation_and_not_the_word() {
+    for (command, spelling) in [
+        (
+            "cargo build --release --features bravebot-skus/test-hosts",
+            "a feature of a crate",
+        ),
+        (
+            "cargo zigbuild --release --target x --features test-hosts",
+            "a feature of the package",
+        ),
+        (
+            "cargo build --release -p bravebot-config -F test-hosts",
+            "the short flag",
+        ),
+        (
+            "RUSTFLAGS='--cfg feature=\"test-hosts\"' cargo build --release",
+            "a cfg of the feature",
+        ),
+        (
+            "cargo build --release \\\n    -p bravebot-cli \\\n    --features=bravebot-skus/test-hosts",
+            "a command over three lines",
+        ),
+        (
+            "cargo\", \"build\", \"--features\", \"bravebot-skus/test-hosts\"",
+            "a list of arguments",
+        ),
+    ] {
+        let (naming, _) = feature_commands(command);
+        assert_eq!(naming.len(), 1, "{spelling} was not seen: {command}");
+    }
+    for prose in [
+        "a test-hosts file that is only mentioned",
+        "the test-hosts words in a sentence",
+        "cargo build --release --locked",
+    ] {
+        let (naming, all) = feature_commands(prose);
+        assert!(naming.is_empty() && all.is_empty(), "{prose}");
+    }
+    let (_, all) = feature_commands("cargo build --release \\\n  --workspace \\\n  --all-features");
+    assert_eq!(
+        all,
+        ["cargo build --release --workspace --all-features"],
+        "a command over three lines was not joined"
+    );
+    let (_, all) = feature_commands("[graph]\nall-features = true\n");
+    assert_eq!(
+        all,
+        ["all-features = true"],
+        "cargo-deny's setting was not seen"
+    );
+}
+
+/// Where `needle` appears in the source a release build compiles, by file relative to the
+/// workspace and how many times, for every file under a crate's `src`.
+fn release_callers(needle: &str) -> Vec<(String, usize)> {
+    let mut found: Vec<(String, usize)> = release_sources()
+        .into_iter()
+        .filter_map(|(file, code)| {
+            let count = code.matches(needle).count();
+            (count > 0).then(|| (relative(&file), count))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// The text of each argument of each call that starts at `needle` in `code`, split at the commas
+/// that are not inside a bracket.
+fn call_arguments(code: &str, needle: &str) -> Vec<Vec<String>> {
+    let mut calls = Vec::new();
+    for (at, _) in code.match_indices(needle) {
+        let mut depth = 1;
+        let mut arguments = vec![String::new()];
+        for character in code[at + needle.len()..].chars() {
+            match character {
+                '(' | '[' | '{' | '<' => depth += 1,
+                ')' | ']' | '}' | '>' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            match (character, depth) {
+                (',', 1) => arguments.push(String::new()),
+                (other, _) => arguments.last_mut().expect("an argument").push(other),
+            }
+        }
+        calls.push(
+            arguments
+                .into_iter()
+                .map(|argument| argument.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|argument| !argument.is_empty())
+                .collect(),
+        );
+    }
+    calls
+}
+
+/// [`call_arguments`] over the source a release build compiles.
+fn release_call_arguments(needle: &str) -> Vec<Vec<String>> {
+    release_sources()
+        .into_iter()
+        .flat_map(|(_, code)| call_arguments(&code, needle))
+        .collect()
+}
+
+/// The functions in `code` that take `word` as the type of a parameter, by name: the name after
+/// `fn` whose parenthesised parameter list holds `word` as a whole identifier.
+fn functions_taking(code: &str, word: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (at, _) in code.match_indices("fn ") {
+        let before = code[..at].chars().next_back();
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        let rest = &code[at + "fn ".len()..];
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        let Some(open) = rest.find('(') else {
+            continue;
+        };
+        let mut depth = 0;
+        let mut parameters = String::new();
+        for character in rest[open..].chars() {
+            match character {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            parameters.push(character);
+            if depth == 0 {
+                break;
+            }
+        }
+        let holds = parameters
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .any(|identifier| identifier == word);
+        if holds && !name.is_empty() {
+            found.push(name);
+        }
+    }
+    found
+}
+
+/// CHATGPT-2 says a release build sends the account's tokens only to the hosts compiled in. What
+/// makes that so is who may name a host, and that is pinned here as the callers of what can. `Hosts`
+/// is the sign-in's destinations: the compiled-in ones are made by one constructor, a stand-in's by
+/// `Hosts::at`, which exists only with the seam, and the functions that take a `Hosts` are those of
+/// the sign-in's own module. The account's serving host is the base address of a `Provider`, which
+/// `Provider::chatgpt_account` builds from a constant, and `ResponsesClient::for_account` and
+/// `list_from_account` send the access token to whatever provider they are given, so each has one
+/// caller, and the argument at that call is the account's provider, which one function of the agent
+/// holds. A second caller of any of these, or a function that takes a `Hosts` that is not named
+/// here, is a second place that can say where a token goes, and this fails until the clause says why.
+#[test]
+fn only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the_seam() {
+    let chatgpt_agent = "crates/agent/src/chatgpt.rs".to_string();
+    let backend = "crates/agent/src/backend.rs".to_string();
+    let chatgpt_command = "crates/cli/src/chatgpt.rs".to_string();
+    // What is called, and the files and counts allowed to call it.
+    let allowed: [(&str, Vec<(String, usize)>); 8] = [
+        // The constructor that is not a constant exists with the seam, and nothing a release
+        // compiles calls it.
+        ("Hosts::at(", vec![]),
+        // The compiled-in hosts are asked for by the renewer's source and by the command.
+        (
+            "Hosts::compiled_in",
+            vec![(chatgpt_agent.clone(), 1), (chatgpt_command.clone(), 1)],
+        ),
+        // The one renewer of the process.
+        ("Renewer::new(", vec![(chatgpt_agent.clone(), 1)]),
+        // The account's own client and its listing, the two calls that send the access token.
+        ("ResponsesClient::for_account(", vec![(backend.clone(), 1)]),
+        ("list_from_account(", vec![(chatgpt_agent.clone(), 1)]),
+        ("account_models_from(", vec![(chatgpt_agent.clone(), 1)]),
+        // The account's provider is held by one function, which the agent calls where it needs the
+        // account's address: the definition, the roster, the client and the address of the
+        // listing's route.
+        (
+            "account_provider()",
+            vec![(backend.clone(), 2), (chatgpt_agent.clone(), 2)],
+        ),
+        // Where the provider is built: the agent's one holder, and no front end.
+        (
+            "Provider::chatgpt_account",
+            vec![(chatgpt_agent.clone(), 1)],
+        ),
+    ];
+    for (needle, expected) in allowed {
+        assert_eq!(
+            release_callers(needle),
+            expected,
+            "`{needle}` has a caller that CHATGPT-2 does not name. A release build sends the \
+             account's tokens to the hosts it names, so a new place that names or reads one is a \
+             change to that clause"
+        );
+    }
+
+    // The provider each of the two calls that send the token is given is the account's.
+    let clients = release_call_arguments("ResponsesClient::for_account(");
+    assert_eq!(clients.len(), 1);
+    assert_eq!(
+        clients[0].get(1).map(String::as_str),
+        Some("crate::chatgpt::account_provider()"),
+        "{clients:?}"
+    );
+    let listings = release_call_arguments("list_from_account(");
+    assert_eq!(listings.len(), 1);
+    assert_eq!(listings[0].get(1).map(String::as_str), Some("provider"));
+    let rosters = release_call_arguments("account_models_from(");
+    assert_eq!(rosters.len(), 1);
+    assert_eq!(
+        rosters[0].get(2).map(String::as_str),
+        Some("account_provider()"),
+        "the roster of the account is asked of a provider that is not the account's: {rosters:?}"
+    );
+
+    // The functions that take the sign-in's destinations are the sign-in's own.
+    let mut taking: Vec<(String, String)> = release_sources()
+        .into_iter()
+        .filter(|(file, code)| {
+            relative(file).starts_with("crates/skus/src/chatgpt/")
+                || code.contains("bravebot_skus::chatgpt")
+        })
+        .flat_map(|(file, code)| {
+            let file = relative(&file);
+            functions_taking(&code, "Hosts")
+                .into_iter()
+                .map(move |name| (file.clone(), name))
+        })
+        .collect();
+    taking.sort();
+    let skus =
+        |file: &str, name: &str| (format!("crates/skus/src/chatgpt/{file}"), name.to_string());
+    assert_eq!(
+        taking,
+        [
+            skus("authorize.rs", "url"),
+            skus("exchange.rs", "exchange"),
+            skus("exchange.rs", "refresh"),
+            skus("id_token.rs", "key_set"),
+            skus("id_token.rs", "verify"),
+            skus("mod.rs", "run"),
+            skus("mod.rs", "sign_in"),
+            skus("renew.rs", "at"),
+            skus("renew.rs", "new"),
+        ],
+        "a function takes the sign-in's destinations that CHATGPT-2 does not name"
+    );
+}
+
+/// The scan that pins the callers has to see a call in code and has to pass over one in a test
+/// module or a comment, or the test above passes on a source it cannot read.
+#[test]
+fn the_caller_scan_reads_code_and_leaves_out_tests_and_comments() {
+    let source = "\
+// Hosts::at(x) is only said here
+fn live() { Hosts::at(base); }
+#[cfg(test)]
+mod tests {
+    fn in_a_test() { Hosts::at(base); Hosts::at(base); }
+}
+fn after() { for_account(h); }
+";
+    let code = production_code(source);
+    assert_eq!(code.matches("Hosts::at(").count(), 1, "{code}");
+    assert_eq!(code.matches("for_account(").count(), 1, "{code}");
+    assert!(!code.contains("only said here"), "{code}");
+
+    // A module declared without a body is the declaration alone. The code after it is read, which
+    // the scan did not do when it took the declaration for the start of a body.
+    for declaration in [
+        "#[cfg(test)]\nmod tests;",
+        "#[cfg(test)]\npub(crate) mod tests;",
+        "#[cfg(test)]\n#[path = \"tests_of_it.rs\"]\nmod tests;",
+        "#[cfg(test)]\nmod tests {}",
+        "#[cfg(all(test, unix))]\n#[path = \"tests_of_it.rs\"]\nmod tests;",
+    ] {
+        let code = production_code(&format!(
+            "{declaration}\nfn live() {{ Hosts::at(base); }}\n"
+        ));
+        assert_eq!(
+            code.matches("Hosts::at(").count(),
+            1,
+            "{declaration}: {code}"
+        );
+        assert!(!code.contains("mod tests"), "{declaration}: {code}");
+    }
+    // A gate on something that is not a module leaves the item and its attributes in.
+    let code = production_code(
+        "#[cfg(test)]\n#[allow(dead_code)]\nfn only_a_test() { Hosts::at(base); }\n",
+    );
+    assert_eq!(code.matches("Hosts::at(").count(), 1, "{code}");
+}
+
+/// The reader of a call's arguments and of the functions that take a type splits where Rust does,
+/// so a nested call or a generic is not taken for two arguments or a parameter.
+#[test]
+fn the_call_and_signature_readers_split_where_rust_splits() {
+    let code = "\
+fn make() {
+    ResponsesClient::for_account(egress, crate::chatgpt::account_provider(), model.into(), sign_in, Map::<A, B>::new());
+}
+";
+    let calls = call_arguments(code, "ResponsesClient::for_account(");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].len(), 5, "{calls:?}");
+    assert_eq!(calls[0][1], "crate::chatgpt::account_provider()");
+
+    let signatures = "\
+pub fn sign_in(hosts: &Hosts, transport: T) {}
+fn run<S>(a: S, hosts: Hosts) -> u8 {}
+fn hosts_of(a: &HostsOfSomethingElse) {}
+pub(super) fn quiet(a: u8) {}
+fn nested(callback: impl Fn(&Hosts)) {}
+";
+    assert_eq!(
+        functions_taking(signatures, "Hosts"),
+        ["sign_in", "run", "nested"]
+    );
+}
+
+/// A file only a test module declares is a test, and the scan of what a release compiles has to
+/// leave it out or a test that names the seam is taken for a caller of it.
+#[test]
+fn a_file_only_a_test_module_declares_is_not_a_release_source() {
+    let source = "\
+mod live;
+#[cfg(test)]
+mod plain;
+#[cfg(test)]
+#[path = \"elsewhere_tests.rs\"]
+pub(crate) mod renamed;
+    #[cfg(test)]
+    mod nested;
+#[cfg(test)]
+mod inline {
+}
+#[cfg(all(test, unix))]
+mod unix_only;
+#[cfg(not(test))]
+mod other;
+";
+    assert_eq!(
+        declared_test_modules(source),
+        [
+            (None, "plain".to_string()),
+            (
+                Some("elsewhere_tests.rs".to_string()),
+                "renamed".to_string()
+            ),
+            (None, "nested".to_string()),
+            (None, "unix_only".to_string()),
+        ]
+    );
+    let at = std::path::Path::new("crates/x/src");
+    assert_eq!(
+        module_files(&at.join("lib.rs"), None, "plain"),
+        [at.join("plain.rs"), at.join("plain/mod.rs")]
+    );
+    assert_eq!(
+        module_files(&at.join("app.rs"), None, "plain"),
+        [at.join("app/plain.rs"), at.join("app/plain/mod.rs")]
+    );
+    assert_eq!(
+        module_files(&at.join("app.rs"), Some("elsewhere_tests.rs"), "renamed"),
+        [at.join("elsewhere_tests.rs")]
+    );
+
+    let files: Vec<String> = release_sources()
+        .iter()
+        .map(|(file, _)| relative(file))
+        .collect();
+    // A file a test module declares, which this test reads from the tree: any that exists is left
+    // out, and one that is declared by a test module and found among the sources is a fault.
+    for (file, text) in std::fs::read_dir(workspace().join("crates"))
+        .expect("the crates directory")
+        .flatten()
+        .map(|krate| krate.path().join("src"))
+        .filter(|source| source.is_dir())
+        .flat_map(|source| rust_files(&source))
+        .map(|file| {
+            let text = std::fs::read_to_string(&file).expect("a source file");
+            (file, text)
+        })
+    {
+        for (path, name) in declared_test_modules(&text) {
+            for candidate in module_files(&file, path.as_deref(), &name) {
+                if candidate.is_file() {
+                    assert!(
+                        !files.contains(&relative(&candidate)),
+                        "{} is declared by a test module and was taken for a source a release \
+                         compiles",
+                        relative(&candidate)
+                    );
+                }
+            }
+        }
+    }
+    for release in ["crates/cli/src/chatgpt.rs", "crates/agent/src/chatgpt.rs"] {
+        assert!(
+            files.iter().any(|file| file == release),
+            "{release} was left out, so the scan reads less than a release compiles"
+        );
+    }
 }
 
 /// The scan that holds the kernel to no I/O has to see each way of reaching out, or the test

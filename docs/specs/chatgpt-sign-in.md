@@ -154,9 +154,35 @@ them, and none of them is looked up from anything fetched, as the backends spec 
 name. A test points the flow at a server of its own through a seam that exists only in a debug build with
 the `test-hosts` feature of `bravebot-skus` and of `bravebot-config`, under which the variable
 `BRAVEBOT_TEST_CHATGPT_STAND_IN` names one server that stands in for the four destinations. Only the
-`[dev-dependencies]` of `bravebot-cli` enable it, so the binary `cargo test` builds for that crate's tests
-has it and a release build does not. A build without the feature holds no code that reads the variable, and
-a release build with it, by `--all-features` or by a manifest, does not compile.
+`[dev-dependencies]` of `bravebot-cli`, `bravebot-tui` and `bravebot-ui-bridge` enable it, so the binaries
+`cargo test` builds for those crates' tests have it and a release build does not. A build without the
+feature holds no code that reads the variable, and a release build with it, by `--all-features` or by a
+manifest, does not compile.
+
+Three tests guard the seam, and each reads what is named here and no more.
+
+- One reads every `Cargo.toml` in the repository outside `target` and `node_modules`, the fuzz package's
+  included, and every `.cargo/config*` file. It fails if the feature is named anywhere but its declaration in
+  `bravebot-skus` and `bravebot-config` and the `[dev-dependencies]` of the three crates above.
+- One reads the commands that build: `Makefile`, `Dockerfile.cross`, `deny.toml`, `install.sh`,
+  `install.ps1`, the `README.md` and `package.json` files at the root and in the packages that build, and the
+  scripts, workflows, hooks, manifests and documents under `.github`, `.githooks`, `ui/scripts`, `ui/docs`,
+  `mobile/scripts`, `npm/scripts`, `npm/bin`, `packages/scripts`, `contrib`, `agents`, `docs/development`
+  and `fuzz`. It joins a command that goes on over several lines. It fails if a command passes the feature, or
+  asks for every feature (`--all-features`, or `all-features = true` in `deny.toml`) and is not one of the
+  twelve the test names with their file and how often each occurs: the `cargo clippy` runs, which compile and
+  ship nothing, the descriptions of them in `ui/docs`, and the setting of `deny.toml`, which reads the
+  dependency graph and compiles nothing. It reads no source file, nothing under `docs/specs`, no script whose
+  name marks it as a test of another, and no command a person types elsewhere.
+- One reads the source a release build compiles, which is every file under a crate's `src` except test
+  modules, the files only a test module declares, and comments, and pins who may name a host. `Hosts::at` has
+  no caller. `Hosts::compiled_in` has two, the agent's one renewer and the sign-in command.
+  `ResponsesClient::for_account` and `list_from_account` send the access token to whatever `Provider` they
+  are given, so each has one caller, in the agent, and the provider each is given is the one the agent's
+  `account_provider` holds. `Provider::chatgpt_account`, which builds the provider whose address is the
+  serving host, has one caller, in the agent. The functions that take a `Hosts` are those of the sign-in's own
+  module, by name. A second caller of any of these, or another function that takes a `Hosts`, fails the
+  test until this clause says why.
 
 The access token is sent to the serving host and to no other. The refresh token and the code are sent to
 the token endpoint and to no other. The request for the key set carries no credential. A request to any of
@@ -182,6 +208,12 @@ compiled in.
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_cli::layering::a_test_seam_is_enabled_by_dev_dependencies_alone`
 `verified-by: bravebot_cli::layering::the_seam_reader_finds_a_seam_wherever_a_build_that_ships_reads_it`
+`verified-by: bravebot_cli::layering::no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_by_name`
+`verified-by: bravebot_cli::layering::the_command_reader_sees_a_seam_passed_over_a_continuation_and_not_the_word`
+`verified-by: bravebot_cli::layering::only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the_seam`
+`verified-by: bravebot_cli::layering::the_caller_scan_reads_code_and_leaves_out_tests_and_comments`
+`verified-by: bravebot_cli::layering::the_call_and_signature_readers_split_where_rust_splits`
+`verified-by: bravebot_cli::layering::a_file_only_a_test_module_declares_is_not_a_release_source`
 `verified-by: bravebot_config::provider::the_chatgpt_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own`
 `verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_an_account_request_is_a_failure_and_goes_nowhere`
