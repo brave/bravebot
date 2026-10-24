@@ -146,16 +146,20 @@ keep in step with the first.
 <a id="CRASH-6"></a>
 ### CRASH-6: a report is sent by a later launch, in the background, and few are kept
 
-A launch that is reporting looks for waiting reports and sends them oldest first from a thread
-nothing waits for. A one-shot command that ends first leaves them for the next launch. At most
-five wait, the oldest being deleted as a sixth is written, and the one just written is never the
+A launch that is reporting sends the waiting reports, oldest first, from a thread nothing waits
+for, once it has run for three seconds. A command that ends sooner starts no request and leaves
+them for the next launch. At most five wait, the oldest being deleted as a sixth is written, and the one just written is never the
 one deleted. A report older than two weeks is deleted unsent. Only a file named the way this
 program names one is a report: anything else in the directory is neither sent nor deleted, and a
 link is not followed. A file longer than 32 KiB is deleted unread. With nothing waiting no request
 is made.
 
 **Why.** Sending from the process that is starting costs the person nothing they can see, which
-is [UPDATE-1](updates.md#UPDATE-1)'s argument for the update check. A crash on every launch would
+is [UPDATE-1](updates.md#UPDATE-1)'s argument for the update check. A request to the service takes
+longer than `--version`, `doctor` or `completion` takes to finish, so one started at once is cut
+off partway through its handshake, and a command a shell prompt runs would reach for the network
+every time. Waiting means those commands make no request and a session, which runs longer, does.
+A crash on every launch would
 otherwise fill the disk and send the same failure repeatedly, and a report of a build somebody has
 replaced is told to the service after anyone could act on it.
 
@@ -170,6 +174,7 @@ replaced is told to the service after anyone could act on it.
 `verified-by: bravebot_backtrace::send::a_stale_report_is_dropped_without_a_request`
 `verified-by: bravebot_backtrace::send::a_file_past_the_size_bound_is_removed_and_not_sent`
 `verified-by: bravebot_backtrace::send::with_nothing_waiting_no_request_is_made`
+`verified-by: bravebot_backtrace::grace::a_launch_that_ends_within_the_first_seconds_makes_no_request`
 `verified-by: bravebot_backtrace::launch::a_launch_sends_what_an_earlier_one_left_and_leaves_its_own_for_the_next`
 `verified-by: by-construction (the sending thread's handle is dropped where it is spawned, so nothing can wait on it)`
 
@@ -283,6 +288,9 @@ that the project's count of distinct `guid`s is a count of reports.
   it, which is how a developer builds with it, a program the planner runs inherits it
   ([RUN-12](tools/run.md#RUN-12) lists the two credentials that are withheld). The token can add
   reports to one project and read nothing.
+
+- **A command that runs for under three seconds sends nothing.** A person who only runs such
+  commands never sends a waiting report. A session sends it.
 
 - **A report is retried until it is five deep or two weeks old.** Two launches that find the same
   report may both send it, and the service drops the second by its `uuid`.

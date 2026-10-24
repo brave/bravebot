@@ -14,6 +14,7 @@ use bravebot_net::{Egress, EgressError, Request};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::store;
 
@@ -32,13 +33,22 @@ enum Fate {
     Later,
 }
 
-/// Send what waits, on a thread this does not wait for.
+/// How long a launch runs before it sends anything.
 ///
-/// The handle is dropped. A one-shot command that ends first leaves the reports where they are for
-/// the next launch, and the service drops a second copy of one it already holds, so a report that
-/// arrived just before the process ended and was not deleted costs nothing.
+/// A request to the service takes longer than a command like `--version`, `doctor` or `completion`
+/// does to finish, so one started at once is cut off partway through its handshake and delivers
+/// nothing. Waiting means those commands start no request at all, and a session, which runs for
+/// longer, sends.
+pub(crate) const GRACE: Duration = Duration::from_secs(3);
+
+/// Send what waits once [`GRACE`] has passed, on a thread this does not wait for.
+///
+/// The handle is dropped. A command that ends first leaves the reports where they are for the next
+/// launch, and the service drops a second copy of one it already holds, so a report that arrived
+/// just before the process ended and was not deleted costs nothing.
 pub(crate) fn in_background(state: PathBuf, endpoint: String) {
     std::thread::spawn(move || {
+        std::thread::sleep(GRACE);
         deliver(&state, &endpoint, store::now_millis());
     });
 }
