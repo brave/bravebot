@@ -123,13 +123,15 @@ passes on this tree today and would have passed on the tree that shipped the fro
 
 ## check-deny-reasons.py
 
-Fails an exception in `deny.toml` that has no `reason`.
+Fails an exception in `deny.toml` that has no `reason`, and a licence exception that has no comment.
 
 cargo-deny makes `reason` optional on an advisory to ignore, a duplicate to skip and a crate to ban,
 and accepts a bare string in place of the table. An ignored advisory is one the binary ships with
 anyway, so an entry with no reason gives a reviewer nothing to agree to. It reads `[advisories]
-ignore` and `[bans]` `skip`, `skip-tree` and `deny`. Whether a reason is good is still a review
-question (DEP-001).
+ignore` and `[bans]` `skip`, `skip-tree` and `deny`. cargo-deny rejects a `reason` on a licence
+exception, so for `[licenses]` `exceptions` it reads a comment on the entry's line or the line above
+it, or above its `[[licenses.exceptions]]` header where the entry is a table of its own. Whether a
+reason is good is still a review question (DEP-001).
 
 ```sh
 make check-deps           # runs it before building cargo-deny

@@ -340,6 +340,13 @@ check-npm:
 # matches is a recorded reason for a duplicate that is no longer there. --locked for the same
 # reason every other cargo command here takes it: the answer is about the versions Cargo.lock
 # pins, not the ones a resolve on the spot would pick.
+#
+# The fuzz package is a workspace of its own, so the first run does not read its graph, and the
+# second reads it with the same policy. The skip entries describe the root graph: the first run
+# fails on one that matches nothing, and the second does not report them. The one licence exception
+# is for a crate only the fuzz graph has, so the second run fails on an exception that matches
+# nothing and the first does not report it. An exception for a crate only the root graph has would
+# need the flags the other way round.
 CARGO_DENY_VERSION = 0.20.2
 CARGO_DENY_ROOT = $(HOME)/.cache/bravebot-deny
 .PHONY: check-deps
@@ -350,7 +357,9 @@ check-deps:
 		echo "building cargo-deny $(CARGO_DENY_VERSION) into $(CARGO_DENY_ROOT), which takes a few minutes"; \
 		cargo install --quiet --locked cargo-deny@$(CARGO_DENY_VERSION) --root "$(CARGO_DENY_ROOT)"; \
 	}
-	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip --allow license-exception-not-encountered
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --manifest-path fuzz/Cargo.toml --config deny.toml --locked check \
+		--allow unmatched-skip --allow unnecessary-skip --deny license-exception-not-encountered
 
 # The fuzz targets in fuzz/, which is a package of its own with its own workspace and lockfile, so
 # nothing above compiles libFuzzer's C++.
