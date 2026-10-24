@@ -446,6 +446,33 @@ mod tests {
         }
     }
 
+    /// A redirect in answer to a refresh is a failure and is not followed, since the request carries
+    /// the refresh token and a followed redirect would send it to a host nobody compiled in. It ends
+    /// nothing: the file keeps the access token and the refresh token that were presented. A renewer
+    /// whose client followed redirects would pass the exchange's test, which builds its own client.
+    #[test]
+    fn a_redirect_in_answer_to_a_refresh_is_not_followed_and_the_sign_in_is_left_alone() {
+        let elsewhere = serve(vec![reply("never-sent", Some("never-sent"), 3600)]);
+
+        let (outcome, asked, path) = run(
+            "redirect",
+            Some(&stored("old", "r0", -5)),
+            vec![Reply::redirect(&format!("{}/token", elsewhere.base))],
+            Renewer::access_token,
+        );
+
+        let reached = elsewhere.finish();
+        assert!(reached.is_empty(), "the redirect was followed: {reached:?}");
+        assert_eq!(asked.len(), 1);
+        assert!(
+            matches!(outcome, Err(TokenError::Refresh(Class::Refused))),
+            "{outcome:?}"
+        );
+        let file = on_disk(&path);
+        assert_eq!(file.access_token.expose(), "old");
+        assert_eq!(file.refresh_token.expose(), "r0");
+    }
+
     /// Where the refresh fails and the access token has not yet passed its expiry, the request is
     /// sent with it: it was within the margin, not dead. One past its expiry is never sent.
     #[test]
