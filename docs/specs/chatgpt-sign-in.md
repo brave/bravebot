@@ -381,17 +381,20 @@ Three conditions keep the argument true, and a change that breaks one is a chang
 3. The ID token is verified once, at the sign-in, before anything is stored, and no claim of it is
    stored, sent or displayed. A code exchange whose reply holds no `id_token`, or one that is not a
    string, ends the sign-in as a token that did not verify, so no sign-in is stored unverified. A token
-   longer than 16 KiB is refused before it is decoded. Its header names RS256 and nothing that has to be
-   understood: `none`, an HMAC and every other algorithm are refused, and so is a header with `crit`. The
-   key is the only key of the set with the header's `kid`, and it is an RSA key a signature may be checked
-   with: `kty` is `RSA`, `use`, `alg` and `key_ops`, where present, say `sig`, `RS256` and `verify`, the
-   modulus is 2048 bits or more and the exponent is 65537 or more. A set that holds two keys under one `kid`
-   has none that is the key.
+   longer than 16 KiB is refused before it is decoded. Each of its three parts is base64url with no padding
+   and no bit after the last byte that is not zero, and a part spelled otherwise is refused. Its header is an
+   object that names `RS256`, spelled so, and a `kid` that is a string, and nothing that has to be understood:
+   `none`, an HMAC and every other algorithm are refused, and so is a header with `crit`. No other field of
+   the header is read, so a `jku`, `x5u`, `jwk` or `x5c` names no key. The key is the only key of the set with
+   the header's `kid`, and it is an RSA key a signature may be checked with: `kty` is `RSA`, `use`, `alg` and
+   `key_ops`, where present, say `sig`, `RS256` and `verify`, the modulus is 2048 bits or more and the
+   exponent is 65537 or more. A set that holds two keys under one `kid` has none that is the key.
    The key set is fetched from the host compiled in for it ([CHATGPT-2](#CHATGPT-2)) with no credential,
    following no redirect, and a reply over 64 KiB is refused. The signature is checked with RS256 against
-   that key's modulus and exponent, and then the issuer (the constant `https://auth.openai.com`), the
-   audience (a string equal to the client of the sign-in, or a list holding it), the expiry (later than
-   the clock), the nonce (the one sent, compared in constant time) and the subject (a string that is not
+   that key's modulus and exponent, and is as long as the modulus. The payload is read after that, is an
+   object, and its issuer (the constant `https://auth.openai.com`), audience (a string equal to the client of
+   the sign-in, or a list holding a string equal to it), expiry (a whole number of seconds later than the
+   clock), nonce (the one sent, compared in constant time) and subject (a string that is not
    empty) are compared. No other claim is read. The decoded header and claims are cleared when they are
    dropped. The access token's expiry is read from the `expires_in` field of the reply, not from the
    token, and is compared with the clock. Claims such as an organisation's name are text somebody else
@@ -415,7 +418,18 @@ whether the token verified, and what leaves the crate is that answer and no clai
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
 `verified-by: bravebot_skus::chatgpt::id_token::only_an_rsa_key_for_rs256_signatures_named_by_the_kid_is_used`
+`verified-by: bravebot_skus::chatgpt::id_token::a_token_the_key_set_signs_for_this_sign_in_verifies_with_one_request`
+`verified-by: bravebot_skus::chatgpt::id_token::a_header_that_names_no_key_or_not_rs256_or_is_not_an_object_is_refused_before_the_key_set`
+`verified-by: bravebot_skus::chatgpt::id_token::a_key_the_header_names_or_carries_is_never_the_key_the_signature_is_checked_with`
+`verified-by: bravebot_skus::chatgpt::id_token::an_expiry_that_is_missing_not_a_whole_number_or_not_after_now_is_refused`
+`verified-by: bravebot_skus::chatgpt::id_token::an_audience_that_is_not_the_client_or_a_list_holding_it_is_refused`
+`verified-by: bravebot_skus::chatgpt::id_token::an_issuer_a_subject_and_a_nonce_that_are_not_strings_or_not_the_expected_ones_are_refused`
+`verified-by: bravebot_skus::chatgpt::id_token::a_token_spelled_with_padding_the_standard_alphabet_or_stray_bits_is_refused_in_every_part`
+`verified-by: bravebot_skus::chatgpt::id_token::a_payload_that_is_signed_and_is_not_an_object_of_claims_is_refused`
+`verified-by: bravebot_skus::chatgpt::id_token::a_token_keyed_with_the_public_key_as_an_hmac_secret_is_refused`
+`verified-by: bravebot_skus::chatgpt::id_token::a_signature_of_another_length_than_the_modulus_is_refused`
 `verified-by: bravebot_skus::chatgpt::id_token::a_key_of_fewer_than_2048_bits_or_with_a_small_exponent_is_refused_whatever_its_signature_is`
+`verified-by: bravebot_skus::chatgpt::id_token::a_decoded_part_is_overwritten_where_it_lies`
 `verified-by: bravebot_skus::chatgpt::encoding::base64url_reads_back_what_it_writes_and_nothing_else`
 
 <a id="CHATGPT-6"></a>
