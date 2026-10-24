@@ -242,6 +242,7 @@ dependencies = [
  "bravebot-skus",
  "bravebot-stamp",
  "bravebot-tui",
+ "ruzstd",
  "serde_json",
 ]
 

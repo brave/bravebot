@@ -35,4 +35,8 @@ bravebot-tui = { path = "../tui" }
 # the tests that run the built binary against one. Enabled here and nowhere else.
 bravebot-config = { path = "../config", features = ["test-hosts"] }
 bravebot-skus = { path = "../skus", features = ["test-hosts"] }
+# Reads the zstd frame a request to the ChatGPT account is sent as, so a test that runs the built
+# binary against a stand-in can see the level the body asks for. Already in the lockfile for the client
+# that writes the frames.
+ruzstd.workspace = true
 serde_json.workspace = true
