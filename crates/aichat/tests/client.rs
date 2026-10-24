@@ -7434,6 +7434,54 @@ fn the_accounts_listing_is_asked_for_at_the_serving_host_with_the_token_and_noth
     );
 }
 
+/// BACKEND-22 and CHATGPT-9: a listing says a model reads no effort level only with a list that has
+/// nothing in it. A row that states the field as text, a number, null or an object has not said the
+/// model takes none, so the level goes out to be judged at the far end, as for a row that does not
+/// mention the field. A reader that took anything but a list for "none" would withhold a level the
+/// model reads.
+#[test]
+fn an_account_row_whose_levels_are_not_a_list_is_not_one_that_says_it_takes_none() {
+    let listing = r#"{"models":[
+        {"slug":"as-text","visibility":"list","supported_in_api":true,
+         "supported_reasoning_levels":"high"},
+        {"slug":"as-number","visibility":"list","supported_in_api":true,
+         "supported_reasoning_levels":3},
+        {"slug":"as-null","visibility":"list","supported_in_api":true,
+         "supported_reasoning_levels":null},
+        {"slug":"as-object","visibility":"list","supported_in_api":true,
+         "supported_reasoning_levels":{"effort":"high"}},
+        {"slug":"empty-list","visibility":"list","supported_in_api":true,
+         "supported_reasoning_levels":[]}]}"#;
+    let (endpoint, _received) = serve(listing);
+    let provider = chatgpt_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let models = bravebot_aichat::models::list_from_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    )
+    .expect("the listing was read");
+
+    let reads: Vec<(&str, bool)> = models
+        .iter()
+        .map(|model| (model.key.as_str(), model.reads_effort))
+        .collect();
+    assert_eq!(
+        reads,
+        [
+            ("chatgpt/as-text", true),
+            ("chatgpt/as-number", true),
+            ("chatgpt/as-null", true),
+            ("chatgpt/as-object", true),
+            ("chatgpt/empty-list", false),
+        ]
+    );
+}
+
 /// CHATGPT-2 and CHATGPT-9: a redirect in answer to the listing is a failure and nothing is sent
 /// to the host it names, which is the host the token would otherwise follow the request to.
 #[test]
@@ -7465,6 +7513,135 @@ fn a_redirect_in_answer_to_the_accounts_listing_is_a_failure_and_goes_nowhere() 
         landed.recv_timeout(Duration::from_millis(300)).is_err(),
         "the redirect was followed"
     );
+}
+
+/// CHATGPT-10 and BACKEND-21: the level a turn was given is the account's `reasoning.effort`, with
+/// the summary asked for, and a turn given none sends no `reasoning` object, so the service applies
+/// its own default. A client that sent the level in the chat-completions field, or one that supplied
+/// a level nobody chose, fails one half of this.
+#[test]
+fn an_account_request_carries_the_level_it_was_given_as_reasoning_effort_and_none_it_was_not() {
+    let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+
+    let asked = account_request("hello").with_effort(Some(Effort::High));
+    account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &asked)
+        .expect("the reply was read");
+    account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &account_request("hello"))
+        .expect("the reply was read");
+
+    let body_of = |sent: &Captured| -> serde_json::Value {
+        serde_json::from_slice(&decoded_account_body(sent)).expect("the decoded body is JSON")
+    };
+    let with_level = body_of(&received.recv().expect("the first request arrived"));
+    let without = body_of(&received.recv().expect("the second request arrived"));
+    assert_eq!(with_level["reasoning"]["effort"], "high");
+    assert_eq!(with_level["reasoning"]["summary"], "auto");
+    assert!(with_level.get("reasoning_effort").is_none(), "{with_level}");
+    assert!(without.get("reasoning").is_none(), "{without}");
+    assert!(without.get("reasoning_effort").is_none(), "{without}");
+}
+
+/// BACKEND-52: a call another service attached a member to is sent as the call alone, in the
+/// Responses protocol's item for it, to the ChatGPT account and to an entry that names
+/// `@ai-sdk/openai` alike. A conversation can change service between two turns, and neither host is
+/// the service that wrote the member.
+#[test]
+fn a_member_another_service_attached_to_a_call_is_not_sent_in_the_responses_protocol() {
+    for through_the_account in [true, false] {
+        let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+        let provider = responses_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut sign_in = StoredSignIn::default();
+
+        let call = bravebot_aichat::protocol::ToolCallRequest {
+            id: "call_1".into(),
+            kind: "function".into(),
+            function: bravebot_aichat::protocol::ToolCallRequestFunction {
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+            extra_content: Some(
+                serde_json::json!({"google": {"thought_signature": "opaque-signature"}}),
+            ),
+        };
+        let request = ChatRequest::new(
+            "a-responses-gateway/a-model",
+            vec![
+                Message::user("go"),
+                Message::assistant_calling("", vec![call]),
+                Message::tool_result("call_1", "contents"),
+            ],
+        )
+        .with_tools(reading_tool());
+        if through_the_account {
+            account_client(&egress, &provider, &mut sign_in).complete(&mut policy, &request)
+        } else {
+            responses_client(&egress, &provider, "a-model").complete(&mut policy, &request)
+        }
+        .expect("the reply was read");
+
+        // The account's body is a frame, and a gateway's is the JSON as built.
+        let sent = received.recv().expect("the request arrived");
+        let plain = if through_the_account {
+            decoded_account_body(&sent)
+        } else {
+            sent.raw.clone()
+        };
+        let text = String::from_utf8(plain.clone()).expect("the body is text");
+        assert!(
+            !text.contains("opaque-signature"),
+            "account={through_the_account}: {text}"
+        );
+        assert!(
+            !text.contains("extra_content"),
+            "account={through_the_account}: {text}"
+        );
+        let body: serde_json::Value = serde_json::from_slice(&plain).expect("the body is JSON");
+        let items = body["input"].as_array().expect("the conversation");
+        let call = items
+            .iter()
+            .find(|item| item["type"] == "function_call")
+            .expect("the call stays");
+        assert_eq!(call["call_id"], "call_1");
+        assert_eq!(call["name"], "read_file");
+    }
+}
+
+/// BACKEND-31 and CHATGPT-10: the account's reply is the items its events carry and its figures are
+/// the final event's, whatever that event's own `output` list says, which is empty on its host. The
+/// part of the prompt answered from the cache and the part written to it are read from
+/// `input_tokens_details`, counted inside the prompt. A reply built from the final event's list
+/// would be empty, and figures read from a chat-completions field would be zero.
+#[test]
+fn an_account_reply_is_read_from_its_events_and_its_cost_from_the_final_one() {
+    let (endpoint, _) = serve_stream(text_reply(&["hello", " there"]));
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let proof = policy.authorise_display_release("the reply as the model writes it");
+    let mut sign_in = StoredSignIn::default();
+
+    let completion = account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &account_request("hi"))
+        .expect("the reply was read");
+
+    assert_eq!(completion.content.label(), Label::untrusted_public());
+    assert_eq!(revealed(&proof, completion.content), "hello there");
+    assert_eq!(completion.usage.prompt_tokens, 23);
+    assert_eq!(completion.usage.completion_tokens, 5);
+    assert_eq!(completion.usage.cached.read_tokens, 4);
+    assert_eq!(completion.usage.cached.written_tokens, 2);
+    assert_eq!(completion.context_tokens, 23);
 }
 
 /// CHATGPT-9: a body that is not an object holding `models` is a listing that cannot be read,
