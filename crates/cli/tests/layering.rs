@@ -1130,6 +1130,174 @@ features = [\"test-hosts\"]
     );
 }
 
+/// The attribute and the `compile_error!` under it that refuse a test seam, as a crate's `lib.rs`
+/// writes them: from the `#[cfg(` line above the macro to the line that ends it.
+fn seam_refusal(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let refusal = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("compile_error!("))
+        .expect("a compile_error! that refuses the seam");
+    let attribute = (0..refusal)
+        .rev()
+        .find(|at| lines[*at].starts_with("#[cfg("))
+        .expect("a cfg above the compile_error!");
+    let end = (refusal..lines.len())
+        .find(|at| lines[*at].trim_end().ends_with(");"))
+        .expect("the end of the compile_error!");
+    lines[attribute..=end].join("\n")
+}
+
+/// Whether the compiler refuses `refusal` under `flags`, with the feature on or off: it is built as a
+/// crate of its own, so only the attribute's own condition decides. Returns what the compiler said
+/// where it did, and `None` where the crate compiled.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the test runs the compiler the tree is built with, to see what the attribute does under flags a test cannot set on itself"
+)]
+fn refused_under(refusal: &str, flags: &[&str], feature_on: bool) -> Option<String> {
+    let directory = workspace().join("target/test-scratch/chatgpt-seam-refusal");
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    let source = directory.join("refusal.rs");
+    std::fs::write(&source, format!("{refusal}\nfn main() {{}}\n")).expect("the refusal");
+    let mut command =
+        std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
+    command
+        .args([
+            "--edition",
+            "2024",
+            "--crate-type",
+            "bin",
+            "--emit=metadata",
+        ])
+        .arg("--out-dir")
+        .arg(&directory)
+        .args(flags);
+    if feature_on {
+        command.args(["--cfg", "feature=\"test-hosts\""]);
+    }
+    let output = command
+        .arg(&source)
+        .output()
+        .expect("the compiler runs: it is the one that builds this test");
+    (!output.status.success()).then(|| String::from_utf8_lossy(&output.stderr).into_owned())
+}
+
+/// CHATGPT-2: a release build refuses the seam. Rust has no `cfg` for the release profile, so the
+/// refusal reads the two settings that profile has and a test build does not: debug assertions off,
+/// and a panic that aborts. A build with debug assertions on and a panic that aborts is the release
+/// profile given `debug-assertions = true`, and a build with them off that unwinds is
+/// `cargo test --release`; the first is refused by the abort and the second by the assertions. The
+/// attribute is compiled under each combination, with the feature on and off, and the root manifest's
+/// release profile is read for the setting the abort rests on.
+#[test]
+fn a_build_that_aborts_on_a_panic_or_asserts_nothing_refuses_the_seam() {
+    let read = |path: &str| std::fs::read_to_string(workspace().join(path)).expect("a source");
+    let refusal = seam_refusal(&read("crates/skus/src/lib.rs"));
+    assert_eq!(
+        refusal,
+        seam_refusal(&read("crates/config/src/lib.rs")),
+        "the two crates that hold the seam refuse it under different conditions"
+    );
+
+    let cases: [(&str, &[&str], bool, bool); 7] = [
+        (
+            "a test or dev build",
+            &["-C", "debug-assertions=on"],
+            true,
+            false,
+        ),
+        (
+            "a dev build whose dependencies are optimised",
+            &["-C", "debug-assertions=on", "-C", "opt-level=2"],
+            true,
+            false,
+        ),
+        (
+            "the release profile",
+            &[
+                "-C",
+                "debug-assertions=off",
+                "-C",
+                "panic=abort",
+                "-C",
+                "opt-level=3",
+            ],
+            true,
+            true,
+        ),
+        (
+            "the release profile with debug assertions turned on",
+            &[
+                "-C",
+                "debug-assertions=on",
+                "-C",
+                "panic=abort",
+                "-C",
+                "opt-level=3",
+            ],
+            true,
+            true,
+        ),
+        (
+            "a build with debug assertions on and a panic that aborts",
+            &["-C", "debug-assertions=on", "-C", "panic=abort"],
+            true,
+            true,
+        ),
+        (
+            "tests built with the release profile",
+            &["-C", "debug-assertions=off", "-C", "opt-level=3"],
+            true,
+            true,
+        ),
+        (
+            "a release build without the feature",
+            &["-C", "debug-assertions=off", "-C", "panic=abort"],
+            false,
+            false,
+        ),
+    ];
+    for (build, flags, feature_on, refused) in cases {
+        let said = refused_under(&refusal, flags, feature_on);
+        assert_eq!(
+            said.is_some(),
+            refused,
+            "{build}: expected the seam to be {}, and the compiler said {said:?}",
+            if refused { "refused" } else { "accepted" }
+        );
+        if let Some(said) = said {
+            assert!(
+                said.contains("the test-hosts feature is for tests"),
+                "{build}: the compiler refused for another reason: {said}"
+            );
+        }
+    }
+
+    // The abort the refusal reads as the release profile is the manifest's.
+    let manifest = read("Cargo.toml");
+    let mut in_release = false;
+    let mut release: Vec<&str> = Vec::new();
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_release = line == "[profile.release]";
+        } else if in_release && !line.is_empty() && !line.starts_with('#') {
+            release.push(line);
+        }
+    }
+    assert!(
+        release.contains(&"panic = \"abort\""),
+        "the release profile does not abort on a panic, which is how the test-hosts refusal tells \
+         it from a test build: {release:?}"
+    );
+    assert!(
+        !release
+            .iter()
+            .any(|line| line.starts_with("debug-assertions")),
+        "the release profile states debug assertions: {release:?}"
+    );
+}
+
 /// The files that run a build, or tell a person which command builds a release, and the
 /// directories that hold more of them. A script whose name says it tests another script is left
 /// out: it holds the fixtures of the commands it checks, and runs none of them. `.githooks` and

@@ -151,15 +151,24 @@ Four destinations are used, each a constant in the source:
 
 A page, a reply, a model, a settings file at any layer, an environment variable and a redirect name none of
 them, and none of them is looked up from anything fetched, as the backends spec holds for a gateway's known
-name. A test points the flow at a server of its own through a seam that exists only in a debug build with
-the `test-hosts` feature of `bravebot-skus` and of `bravebot-config`, under which the variable
-`BRAVEBOT_TEST_CHATGPT_STAND_IN` names one server that stands in for the four destinations. Only the
-`[dev-dependencies]` of `bravebot-cli`, `bravebot-tui` and `bravebot-ui-bridge` enable it, so the binaries
-`cargo test` builds for those crates' tests have it and a release build does not. A build without the
-feature holds no code that reads the variable, and a release build with it, by `--all-features` or by a
-manifest, does not compile.
+name. A test points the flow at a server of its own through a seam that exists only in a build with the
+`test-hosts` feature of `bravebot-skus` and of `bravebot-config`, debug assertions on and a panic that
+unwinds, under which the variable `BRAVEBOT_TEST_CHATGPT_STAND_IN` names one server that stands in for the four
+destinations. Only the `[dev-dependencies]` of `bravebot-cli`, `bravebot-tui` and `bravebot-ui-bridge` enable
+it, so the binaries `cargo test` builds for those crates' tests have it and a release build does not. A build
+without the feature holds no code that reads the variable. A build with it that has debug assertions off, or
+aborts on a panic, does not compile, by `--all-features` or by a manifest.
 
-Three tests guard the seam, and each reads what is named here and no more.
+Rust has no condition for the release profile, so the refusal is the two settings that profile has and a test
+build does not. The release profile has debug assertions off and aborts on a panic, so a release given
+`debug-assertions = true` is refused by the abort, and `cargo test --release` is refused by the missing
+assertions. An optimised build with assertions on that unwinds is a test build and is not refused, since
+nothing the compiler is asked about says how much it optimises. A test compiles the refusal under each
+combination of the settings, and reads the root manifest for the release profile's `panic = "abort"`, which
+the refusal depends on.
+
+Three more tests read the tree for a way the seam could reach a release, and each reads what is named here and
+no more.
 
 - One reads every `Cargo.toml` in the repository outside `target` and `node_modules`, the fuzz package's
   included, and every `.cargo/config*` file. It fails if the feature is named anywhere but its declaration in
@@ -208,6 +217,7 @@ compiled in.
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_cli::layering::a_test_seam_is_enabled_by_dev_dependencies_alone`
 `verified-by: bravebot_cli::layering::the_seam_reader_finds_a_seam_wherever_a_build_that_ships_reads_it`
+`verified-by: bravebot_cli::layering::a_build_that_aborts_on_a_panic_or_asserts_nothing_refuses_the_seam`
 `verified-by: bravebot_cli::layering::no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_by_name`
 `verified-by: bravebot_cli::layering::the_command_reader_sees_a_seam_passed_over_a_continuation_and_not_the_word`
 `verified-by: bravebot_cli::layering::only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the_seam`
