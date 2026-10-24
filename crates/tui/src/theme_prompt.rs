@@ -138,7 +138,21 @@ pub fn choose<B: Backend>(
     terminal: &mut Terminal<B>,
     themes: Vec<Theme>,
     current: &str,
+    behind: impl FnMut(&mut Frame),
+) -> Option<Theme> {
+    run(terminal, themes, current, behind, || {
+        input::read().map(|event| (event, std::time::Instant::now()))
+    })
+}
+
+/// [`choose`] with its events taken from `next`, each with the time it arrived, so that a test can
+/// press the cells where a row was drawn.
+fn run<B: Backend>(
+    terminal: &mut Terminal<B>,
+    themes: Vec<Theme>,
+    current: &str,
     mut behind: impl FnMut(&mut Frame),
+    mut next: impl FnMut() -> std::io::Result<(TermEvent, std::time::Instant)>,
 ) -> Option<Theme> {
     let mut picker = opened(themes, current);
     let panel = panel();
@@ -158,12 +172,11 @@ pub fn choose<B: Backend>(
             return None;
         }
 
-        let Ok(event) = input::read() else {
+        let Ok((event, now)) = next() else {
             picker.restore();
             return None;
         };
         if let TermEvent::Mouse(mouse) = event {
-            let now = std::time::Instant::now();
             match click(&mut picker, list, mouse, &mut last, now) {
                 Outcome::Select => return picker.chosen().cloned(),
                 Outcome::Continue | Outcome::Cancel => continue,
@@ -416,6 +429,60 @@ mod tests {
             now,
         );
         assert_eq!(outcome, Outcome::Select);
+        assert_eq!(theme::name(), named, "taking the row dropped the preview");
+        theme::apply_brave();
+    }
+
+    /// The cell a name starts at when the picker is drawn on an 80x24 terminal, read from the cells
+    /// drawn and not from [`list_picker::regions`], so a press aimed there lands where a person
+    /// sees the row.
+    fn drawn_at(name: &str) -> (u16, u16) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        let picker = Picker::new(offered(), theme::BRAVE);
+        terminal
+            .draw(|frame| draw(frame, &picker))
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer();
+        for row in 0..buffer.area.height {
+            let line: String = (0..buffer.area.width)
+                .map(|column| buffer[(column, row)].symbol())
+                .collect();
+            if let Some(byte) = line.find(name) {
+                return (line[..byte].chars().count() as u16, row);
+            }
+        }
+        panic!("{name} was not drawn");
+    }
+
+    /// MOUSE-17. Rejects: `choose` reading a press against a rectangle other than the one the list
+    /// was drawn in, passing over mouse events, or answering something other than the theme the
+    /// second press took: two presses on the cells where a row is drawn return that row's theme.
+    #[test]
+    fn two_presses_on_a_drawn_row_return_its_theme() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let named = offered()[2].name.clone();
+        let (column, row) = drawn_at(&named);
+        let (now, mut presses) = (
+            std::time::Instant::now(),
+            [left_press(row, column); 2].into_iter(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+
+        let taken = run(
+            &mut terminal,
+            offered(),
+            theme::BRAVE,
+            |_| {},
+            || {
+                presses
+                    .next()
+                    .map(|press| (TermEvent::Mouse(press), now))
+                    .ok_or_else(|| std::io::ErrorKind::UnexpectedEof.into())
+            },
+        );
+
+        assert_eq!(taken.map(|theme| theme.name), Some(named.clone()));
         assert_eq!(theme::name(), named, "taking the row dropped the preview");
         theme::apply_brave();
     }

@@ -276,4 +276,5 @@ had, and no mouse event cancels it. The keys stay the way to do it without a mou
 pickers opened while a turn runs are not covered.
 
 `verified-by: bravebot_tui::theme_prompt::a_click_previews_the_row_and_a_second_click_takes_it`
+`verified-by: bravebot_tui::theme_prompt::two_presses_on_a_drawn_row_return_its_theme`
 `verified-by: bravebot_tui::theme_prompt::a_press_outside_the_list_leaves_the_theme_alone`
