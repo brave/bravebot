@@ -125,7 +125,12 @@ Four destinations are used, each a constant in the source:
 
 A page, a reply, a model, a settings file at any layer, an environment variable and a redirect name none of
 them, and none of them is looked up from anything fetched, as the backends spec holds for a gateway's known
-name. A test points the flow at a server of its own through a seam that exists only in test builds.
+name. A test points the flow at a server of its own through a seam that exists only in a debug build with
+the `test-hosts` feature of `bravebot-skus` and of `bravebot-config`, under which the variable
+`BRAVEBOT_TEST_CHATGPT_STAND_IN` names one server that stands in for the four destinations. Only the
+`[dev-dependencies]` of `bravebot-cli` enable it, so the binary `cargo test` builds for that crate's tests
+has it and a release build does not. A build without the feature holds no code that reads the variable, and
+a release build with it, by `--all-features` or by a manifest, does not compile.
 
 The access token is sent to the serving host and to no other. The refresh token and the code are sent to
 the token endpoint and to no other. The request for the key set carries no credential. A request to any of
@@ -135,10 +140,6 @@ and the tokens of this account are never sent to a gateway.
 
 A model of this service is answered with the stored sign-in and with nothing else. `OPENAI_API_KEY`, a
 gateway key and any other variable are not looked for.
-
-**Not built:** a seam that points a turn, a picker or the command run as a program at a server of a test's
-own. The one test builds have, `Hosts::at`, is private to `bravebot-skus` and reaches the sign-in and the
-renewal there and nothing a turn sends to the serving host.
 
 **Why.** A settings file may name a destination, which is right where the credential is one the person
 typed for that destination. A checkout's settings file naming where an account's refresh token goes would
@@ -152,6 +153,8 @@ compiled in.
 `verified-by: bravebot_skus::chatgpt::a_redirect_in_answer_to_the_exchange_is_not_followed`
 `verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
+`verified-by: bravebot_cli::layering::a_test_seam_is_enabled_by_dev_dependencies_alone`
+`verified-by: bravebot_cli::layering::the_seam_reader_finds_a_seam_wherever_a_build_that_ships_reads_it`
 `verified-by: bravebot_config::provider::the_chatgpt_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own`
 `verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_an_account_request_is_a_failure_and_goes_nowhere`
@@ -859,10 +862,10 @@ The requests a turn sends are made by the Responses client of `bravebot-aichat` 
 `crates/agent/src/chatgpt.rs` is that source: one renewer for the process, which keeps a renewal the file could
 not take for the rest of it, and the note of that, which the turn says once.
 
-- **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-3](#CHATGPT-3), [CHATGPT-4](#CHATGPT-4),
-  [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7), [CHATGPT-11](#CHATGPT-11),
+- **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2), [CHATGPT-3](#CHATGPT-3),
+  [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7), [CHATGPT-11](#CHATGPT-11),
   [CHATGPT-12](#CHATGPT-12) and [CHATGPT-13](#CHATGPT-13).
-- **Built in part,** each naming what is not: [CHATGPT-2](#CHATGPT-2), [CHATGPT-8](#CHATGPT-8),
+- **Built in part,** each naming what is not: [CHATGPT-8](#CHATGPT-8),
   [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and [CHATGPT-14](#CHATGPT-14).
 - **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); and the
   zstd body of [CHATGPT-10](#CHATGPT-10).
@@ -1083,6 +1086,11 @@ work lands, in the same commit as the code.
   that named another issuer, would refuse every sign-in until a release changes the check. The expiry is
   compared with the clock with no allowance, so a clock running ahead of the server's by more than the
   token's lifetime refuses the sign-in.
+- The binary `cargo test -p bravebot-cli` builds, and one `cargo build --all-targets` builds, is a debug
+  build with the `test-hosts` feature, so in it `BRAVEBOT_TEST_CHATGPT_STAND_IN` sends the sign-in and its
+  tokens where it says. A person who runs that binary from `target/debug` as their own carries the seam.
+  `cargo test --workspace` gives the feature to every workspace binary it builds, and `cargo test --release`
+  and `cargo build --release --all-targets` stop at the guard that refuses a release build with it.
 - Whether a third-party program may use a subscription this way is not this spec's to settle
   ([Decisions left open](#decisions-left-open)). The design assumes a person is allowed to, and an answer of
   no ends it.

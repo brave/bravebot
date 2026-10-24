@@ -8,6 +8,11 @@
 
 #![forbid(unsafe_code)]
 
+// The seam that points the ChatGPT account's requests at a stand-in exists for tests, and a release
+// build that turned it on would let a variable choose where an access token goes.
+#[cfg(all(feature = "test-hosts", not(debug_assertions)))]
+compile_error!("the test-hosts feature is for tests and is refused in a release build");
+
 use bravebot_sandbox::swap::LockedText;
 use std::env;
 use std::fmt;

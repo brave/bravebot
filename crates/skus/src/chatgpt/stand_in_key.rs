@@ -9,7 +9,7 @@ use super::encoding::base64url;
 use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair, RsaPublicKeyComponents};
 
 /// The `kid` the key set names the key by, and a token's header names it with.
-pub(crate) const KID: &str = "stand-in-key";
+pub const KID: &str = "stand-in-key";
 
 /// A throwaway 2048-bit RSA key, PKCS#8 DER. Not a credential of anything.
 const THROWAWAY_PKCS8: &[u8] = &[
@@ -92,18 +92,22 @@ const THROWAWAY_PKCS8: &[u8] = &[
     0x7e,
 ];
 
+#[expect(
+    clippy::expect_used,
+    reason = "a fixed key made for the tests, which stop where it cannot be read"
+)]
 fn key_pair() -> RsaKeyPair {
     RsaKeyPair::from_pkcs8(THROWAWAY_PKCS8).expect("the throwaway key")
 }
 
 /// The modulus and the exponent of the key, big-endian.
-pub(crate) fn public() -> (Vec<u8>, Vec<u8>) {
+pub fn public() -> (Vec<u8>, Vec<u8>) {
     let components = RsaPublicKeyComponents::<Vec<u8>>::from(key_pair().public());
     (components.n, components.e)
 }
 
 /// The key set the stand-in serves: the one key, as an RSA signing key for RS256.
-pub(crate) fn key_set() -> String {
+pub fn key_set() -> String {
     let (n, e) = public();
     serde_json::json!({
         "keys": [{
@@ -119,7 +123,11 @@ pub(crate) fn key_set() -> String {
 }
 
 /// A token of `header` and `claims`, signed with the key in RS256 whatever the header says.
-pub(crate) fn signed(header: &serde_json::Value, claims: &serde_json::Value) -> String {
+#[expect(
+    clippy::expect_used,
+    reason = "a signature of the fixed key, which a test stops without"
+)]
+pub fn signed(header: &serde_json::Value, claims: &serde_json::Value) -> String {
     let input = format!(
         "{}.{}",
         base64url(header.to_string().as_bytes()),
@@ -138,6 +146,6 @@ pub(crate) fn signed(header: &serde_json::Value, claims: &serde_json::Value) -> 
 }
 
 /// The header of a token the stand-in signs: RS256 under [`KID`].
-pub(crate) fn header() -> serde_json::Value {
+pub fn header() -> serde_json::Value {
     serde_json::json!({ "alg": "RS256", "kid": KID, "typ": "JWT" })
 }

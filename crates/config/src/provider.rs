@@ -81,6 +81,26 @@ pub const CHATGPT_ID: &str = "chatgpt";
 /// another, so the account's access token goes to this host and no other.
 const CHATGPT_SERVING_HOST: &str = "https://api.openai.com/v1";
 
+/// The variable that names a stand-in for the serving host, at `<base>/v1`, in a build with the
+/// `test-hosts` feature. It is the one `bravebot_skus::chatgpt::STAND_IN` reads, so one stand-in
+/// answers the sign-in and the requests. A build without the feature holds no code that reads it, and
+/// a release build with it does not compile.
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+pub const CHATGPT_STAND_IN: &str = "BRAVEBOT_TEST_CHATGPT_STAND_IN";
+
+/// Where the account's requests go: [`CHATGPT_SERVING_HOST`], or in a build with the `test-hosts`
+/// feature, a stand-in [`CHATGPT_STAND_IN`] names.
+fn chatgpt_serving_host() -> String {
+    #[cfg(all(feature = "test-hosts", debug_assertions))]
+    if let Some(base) = std::env::var(CHATGPT_STAND_IN)
+        .ok()
+        .filter(|base| !base.is_empty())
+    {
+        return format!("{base}/v1");
+    }
+    CHATGPT_SERVING_HOST.to_string()
+}
+
 /// The id naming Anthropic, which is reached at the endpoint compiled in for it, in the Messages
 /// protocol rather than the chat completions one: see [`Provider::protocol`].
 pub(crate) const ANTHROPIC_ID: &str = "anthropic";
@@ -435,7 +455,7 @@ impl Provider {
         let entry = serde_json::json!({
             "name": "ChatGPT",
             "npm": RESPONSES_SDK,
-            "options": {"baseURL": CHATGPT_SERVING_HOST},
+            "options": {"baseURL": chatgpt_serving_host()},
         });
         let serde_json::Value::Object(entry) = entry else {
             unreachable!("a JSON object literal");

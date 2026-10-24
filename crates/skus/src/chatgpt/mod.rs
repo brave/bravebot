@@ -21,7 +21,8 @@
 //!
 //! The listener binds `127.0.0.1` only, on a port the operating system chooses. The hosts are
 //! constants ([`Hosts::compiled_in`]), and a test points the flow at a server of its own through a
-//! constructor that exists only in test builds.
+//! constructor that exists only in test builds, and in a build with the `test-hosts` feature,
+//! through [`STAND_IN`]. A release build refuses that feature.
 
 mod account;
 mod authorize;
@@ -32,8 +33,8 @@ mod listener;
 mod renew;
 #[cfg(test)]
 mod stand_in;
-#[cfg(test)]
-mod stand_in_key;
+#[cfg(any(test, feature = "test-hosts"))]
+pub mod stand_in_key;
 
 pub use account::{Account, AccountError, Defect, path};
 pub use listener::Pages;
@@ -51,10 +52,21 @@ pub struct Hosts {
     keys: String,
 }
 
+/// The variable that names a stand-in for every destination, in a build with the `test-hosts`
+/// feature. A build without it holds no code that reads the variable, and a release build with it
+/// does not compile, so no variable can name a destination in anything that ships
+/// ([CHATGPT-2](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-2)).
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+pub const STAND_IN: &str = "BRAVEBOT_TEST_CHATGPT_STAND_IN";
+
 impl Hosts {
     /// The authorization page the browser is opened at, the token endpoint that takes the code, and
     /// the key set the ID token is verified against.
     pub fn compiled_in() -> Self {
+        #[cfg(all(feature = "test-hosts", debug_assertions))]
+        if let Some(base) = std::env::var(STAND_IN).ok().filter(|base| !base.is_empty()) {
+            return Self::at(&base);
+        }
         Self {
             authorize: "https://auth.openai.com/api/accounts/authorize".to_string(),
             token: "https://auth.openai.com/api/accounts/oauth/token".to_string(),
@@ -64,8 +76,8 @@ impl Hosts {
 
     /// Every destination under `base`, a server a test runs. Not in a release build, so no flag, no
     /// variable and no file can send a token anywhere but the hosts above.
-    #[cfg(test)]
-    pub(crate) fn at(base: &str) -> Self {
+    #[cfg(any(test, feature = "test-hosts"))]
+    pub fn at(base: &str) -> Self {
         Self {
             authorize: format!("{base}/authorize"),
             token: format!("{base}/token"),
