@@ -31,7 +31,7 @@ than the three routes.
 **If Claude Code or opencode already reaches a service on this machine, or Ollama, LM Studio or
 llama-server is running on it,** the first run offers to copy that setup instead, showing everything
 it would write before it asks. See
-[Importing from Claude Code, opencode or a local model server](#importing-from-claude-code-opencode-or-a-local-model-server).
+[Importing from Claude Code, opencode or a local model server](importing.md).
 
 Once a service is configured, the rest of this page is what else you can set. What will actually be
 used is reported by:
@@ -81,7 +81,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/agents/<name>.md` | [delegate definitions](agents.md) available in every project |
 | `~/.bravebot/rules/<name>.md` | [rules](instructions.md) for every project, in force every turn or once a file their `paths` match is touched |
 | `~/.bravebot/sessions/<directory>/` | session records and audit trails, removed after [`retentionDays`](#retentiondays) |
-| `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace, removed after [`retentionDays`](#retentiondays) ([`lsp`](../reference/tools.md#the-index-is-cached-and-it-is-not-small)) |
+| `~/.bravebot/lsp/<workspace>/` | a language server's index, one per workspace, removed after [`retentionDays`](#retentiondays) ([`lsp`](../reference/lsp-tool.md#the-index-is-cached-and-it-is-not-small)) |
 | `~/.bravebot/findings/<workspace>.jsonl` | the credentials a turn's own writes were found to hold, one per workspace, removed after [`retentionDays`](#retentiondays) |
 | `~/.bravebot/granted/<directory>.jsonl` | the permission rules a checkout proposed that you granted, one file per directory ([`permissions`](#permissions)) |
 | `~/.bravebot/trusted/<directory>.jsonl` | the yes to the startup question, one file per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
@@ -91,7 +91,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/effort` | the effort level chosen with `/effort` |
 | `~/.bravebot/theme` | the theme chosen with `/theme` |
 | `~/.bravebot/editor-mode` | the editing style chosen with `/config` |
-| `~/.bravebot/language` | the interface language chosen with `/language` ([below](#choosing-a-language)) |
+| `~/.bravebot/language` | the interface language chosen with `/language` ([details](language.md)) |
 | `~/.bravebot/panel` | whether the [info panel](../using/sessions.md#telling-sessions-apart) was left open |
 | `~/.bravebot/themes/<name>.json` | themes you wrote yourself |
 | `~/.bravebot/settings.json` | long-lived settings (see [below](#settingsjson)) |
@@ -184,218 +184,25 @@ program a `run` starts reading, or leave the variable unset.
 
 ## Choosing a model
 
-```
-/model
-```
-
-opens a picker on the model currently in use, as a panel in the middle of the screen. The list comes
-from the endpoint rather than from a set compiled in, so it is whatever the backend actually offers
-today. Google Vertex AI is the exception, having no listing to ask (see [Reaching an
-OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway)). The choice is written to
-`~/.bravebot/model`, so it outlives the session that made it and applies in every directory, except
-where the file `--settings` names has a [`model`](#model) key. A checkout's own settings cannot name a
-model. A one-shot run reads the same record, so a script uses the model you picked
-unless [`--model`](../reference/cli.md#--model-name) names another. A model your AWS account named
-for a tier is written as that tier's word, `opus`, `sonnet` or `haiku`, so the record names whatever
-the tier variable names when the ARN is replaced.
-
-**Type to narrow the list rather than arrowing through it.** A search matches the name shown, the name
-a request would carry and the service that answers, ignoring case and anywhere in any of them, and
-every word you type has to match something. The cursor stays on the model it was on while the list
-narrows, and falls to the first match once that model no longer matches. A search matching nothing
-says so, and there is nothing to select while it does.
-
-Rows are **grouped under the service that answers them**, one heading per service, and the heading of
-the section you are scrolling through is held on the top line.
-
-`automatic-bravebot` lets the server triage per request, and is what an unrecognised name is reset
-to. It is always offered, so it is the one choice that cannot fail to work. The model requested is not
-necessarily the model used: some entries are weighted ensembles that resolve per request, and the
-automatic entry itself picks per request.
-
-**The roster is curated for Brave Bot.** Requests to Brave's endpoint carry a header naming this
-product, and the endpoint answers with the models chosen for it rather than the full Leo list. Leo's
-roster is chosen for a chat assistant and a good fraction of it cannot call tools at all, which would
-make an agent that can read and write nothing. A gateway is sent no such header, since what a
-third-party service gets is the shape it documents.
-
-If you wrote `automatic` anywhere, it still works. That is Leo's triage entry and names a different
-routing policy, so it is rewritten to `automatic-bravebot` before a request carries it, whether it
-came from a settings file, an exported variable or a choice recorded by an older version. The
-rewrite is one-way: `automatic` cannot be requested, and Leo's routing is not something the picker
-offers.
-
-The list is drawn for a person, and the names in it never reach a model. What you picked becomes the
-`model` routing field of later requests.
-
-With an AWS account or a gateway configured the picker offers those models alongside this list rather
-than instead of it, each under its own heading. See
-[Reaching a model through AWS Bedrock](#reaching-a-model-through-aws-bedrock) and
-[Reaching an OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway).
+`/model` opens a picker on the model in use and writes the choice to `~/.bravebot/model`. See [Choosing a model](model.md).
 
 ## Choosing how hard to think
 
-```
-/effort
-```
-
-opens a picker of five levels, cheapest first (`low`, `medium`, `high`, `xhigh` and `max`), above a
-row for asking for no level at all. `/effort high` takes one without opening the panel. The choice is
-written to `~/.bravebot/effort`, so it outlives the session and applies in every directory whose own
-settings name no [`effort`](#effort), and `/status` reports it beside the model.
-
-**Nothing infers a level.** Until you choose one the request carries no such field at all and each
-service applies its own default. Taking the row for no level removes the record rather than writing an
-empty one, which puts you back where you were before you ever chose. A word bravebot does not define
-changes nothing and says so.
-
-The picker is not the only route: the [`effort`](#effort) key names a level in a settings file, which
-is how a project asks for one and how an unattended machine has one at all, and
-[`--effort`](../reference/cli.md#--effort-level) names one for a single one-shot run.
-
-**A level goes only where the roster says it is read.** Reasoning is two parameters rather than one on
-a gateway, so a model can reason and still not read a level sent this way. Where the listing describing
-your model says it reads none, no level is sent and `/status` says so. The choice is kept either way
-and applies again the moment you pick a model that reads one. A model no listing described is not a
-model stated to read nothing: a name from your settings file, a roster reporting no parameters, and a
-listing that could not be fetched all leave the level to go out and be judged at the far end. A row
-that does advertise the parameter says it reads one without saying which words it accepts, so a model
-may reject or silently round a level it does not know.
-
-**Where nothing describes the model, the answer arrives as a refusal.** Neither AWS Bedrock nor a
-settings block that names its own models says which parameters a model takes, so a level goes out to
-be judged. A model that refuses the field is asked again without it and is sent no level for the rest
-of the session, and the interface reports it as reading none rather than going on showing your level
-as in force. What one model refuses says nothing about another, on Bedrock or on the same gateway. A
-request refused with the level already gone settles nothing and is not remembered.
-
-A level you wrote into a model's own [`options`](providers/openai-compatible.md#what-a-models-options-can-and-cannot-do) is not
-given up this way. That field is carried into the request as it stands, so it fills the level again
-after the one you chose in the interface has been withdrawn, and a service that does not take it
-refuses the request as it would refuse any other option it does not know.
-
-:::caution
-**The Brave endpoint accepts the level and discards it.** A nonsense value is answered exactly as a
-real one is, and a model that reports a reasoning-token count reports the same count whatever level
-was asked for. A level chosen against a Brave-served model is carried, sent and dropped, while the
-interface goes on reporting it as in force. Bedrock and gateways are unaffected.
-:::
+`/effort` opens a picker of five levels, and writes the choice to `~/.bravebot/effort`. See [Choosing how hard to think](effort.md).
 
 ## Choosing a theme
 
-```
-/theme
-```
-
-opens a picker that live-previews over your own transcript; `/theme <name>` applies one directly. The
-choice is written to `~/.bravebot/theme`, so it outlives the session that made it and applies in every
-directory, exactly as the model choice does. A name that matches no theme, and an empty or corrupt
-file, is no choice at all and falls back to `brave`. A choice saved under the earlier name `system`
-still finds `brave` rather than being silently lost.
-
-A theme of your own is a JSON file under `~/.bravebot/themes/`, named for the theme: `nord.json` is
-the theme `nord`. `brave.json` and `system.json` are refused, both names reaching the built-in theme.
-Each key is one role, and any you leave out inherits from `brave`:
-
-```json
-{
-  "defs": { "ink": "#cdd6f4", "shell": "#1e1e2e" },
-  "background": "shell",
-  "text": "ink",
-  "muted": "#6c7086",
-  "ok": "#a6e3a1",
-  "fail": "#f38ba8",
-  "running": "#f9e2af",
-  "accent": "#cba6f7",
-  "note": "#fab387",
-  "primary": "#89b4fa"
-}
-```
-
-A value is a `#rrggbb` colour, a name from `defs`, or `none` to leave that role to your terminal's own
-default. A `defs` entry that names another `defs` entry is refused rather than chased, so a palette
-cannot loop. A file that will not parse is left out of the list rather than stopping the session.
-
-An ink may also be a **pair**, one colour for each terminal background:
-
-```json
-{ "muted": { "dark": "#6c7086", "light": "#8c8fa1" } }
-```
-
-The arm matching the background sensed at startup is the one used. A pair composes with `defs` and
-with `none` exactly as a lone value does. A pair missing an arm is refused and the file holding it is
-not a theme, because filling the missing arm in would let a typo paint half a palette. Write a pair
-where a scheme was published for a light terminal and a dark one: that is one theme, not two. A theme
-that gives at least one pair says so under the picker's list.
-
-:::note
-Themes are read from `~/.bravebot/themes` and from nowhere else. A `.bravebot/themes` directory inside
-a project is **not** consulted. A repository you have just cloned must not be able to decide how your
-interface is painted.
-:::
-
-See [Reading the transcript](../using/transcript.md#themes) for what each role paints.
+`/theme` opens a picker that live-previews over your own transcript, and writes the choice to `~/.bravebot/theme`. See [Choosing a theme](theme.md).
 
 ## Choosing a language
 
-Brave Bot reads the interface in your language where a translation for it has shipped, and in English
-otherwise. It takes the first of these that names a language:
-
-1. `BRAVEBOT_LOCALE`, in the environment.
-2. The choice saved with [`/language`](../reference/commands.md#language-tag--auto).
-3. The `language` key of `~/.bravebot/settings.json`.
-4. `LC_ALL`, `LC_MESSAGES` and `LANG`, in that order.
-
-So on a machine already set up for French there is nothing to do, and a program started from a launcher,
-which has no shell profile to edit, can be given a language in the settings file.
-
-```sh
-bravebot                          # whatever your settings and shell say
-BRAVEBOT_LOCALE=fr bravebot       # this once
-export BRAVEBOT_LOCALE=fr         # from now on, in this shell
-```
-
-```json
-{ "language": "fr" }
-```
-
-`language` is a locale tag, or `auto` to leave the question to the next source. It is read from your own
-`~/.bravebot/settings.json` and from nowhere else, before the command line is read. A project's
-`.bravebot/settings.json`, `.bravebot/settings.local.json` and a file `--settings` names cannot set it,
-and `bravebot doctor` names one that tried. The interface is in one language for a whole session, so a
-change takes effect at the next start. It applies to the terminal client. The desktop window is in
-English only.
-
-`/language fr` saves a choice without editing a file, in `~/.bravebot/language`, and `/language auto`
-removes it. A saved choice answers over the settings file, since it is the later act.
-`BRAVEBOT_LOCALE` answers over both, so one launch can name its own language.
-
-A request widens rather than failing: `fr-CA` and `fr-BE` are answered by the French catalog where
-they have none of their own, and a language nothing has shipped for reads in English. `bravebot doctor`
-names a `language` key that no catalog answers. `LC_ALL=C` asks for no translation at all, where nothing
-above it in the list names a language. English and French are what ship today. What a shell appends to say which
-encoding or modifier it wants is not part of the name.
-
-Widening is per message, not per language, so a single message a translation has not reached yet reads
-in English inside an otherwise translated screen. A message that **counts** something is pluralised by
-the rules of the language it was written in, which for one falling back is English's, rather than
-having English's rule applied to French text.
+The interface is read in your language where a translation has shipped, and in English otherwise. See [Choosing a language](language.md).
 
 ### What stays in English
 
-- **The names of the slash commands**, so `/model` is `/model` everywhere.
-- **The letters a question is answered with**, `y` and `n`. These are both the key drawn and the key
-  matched, so a French reader is told to press `y` for *oui*.
-- **The audit trail.** It is fixed columns of gate and capability names that are identifiers, read
-  against the specs that use those same names.
-- **The words on the working indicator**, unless a language supplies its own list.
-
-Digit grouping and currency forms are not localized either. A catalog says only what separates a
-whole number from its fraction.
-
-**Nothing the model is sent changes with your language.** Tool descriptions, the preamble and the
-sentence a refused tool answers with all stay as they are, because the words in them are load-bearing
-on what the planner does. Switching language changes what you read and never what the agent does.
+The names of the slash commands, the letters `y` and `n`, the audit trail and, unless a language
+supplies its own list, the words on the working indicator. See
+[What stays in English](language.md#what-stays-in-english).
 
 ## Environment variables
 
@@ -415,7 +222,7 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 | `BRAVEBOT_OUTPUT_BUDGET` | how far one reply may run before the service cuts it off ([below](#how-long-a-reply-may-run)) |
 | `BRAVEBOT_LOCALE` | the language the interface is read in |
 | `BRAVEBOT_HOME` | the directory bravebot keeps its state in, in place of `~/.bravebot` ([below](#moving-the-state-directory)) |
-| `BRAVEBOT_SUBPROCESS_ENV_SCRUB` | `0` hands a program bravebot starts its own credentials ([`run.scrubEnv`](#runscrubenv)) |
+| `BRAVEBOT_SUBPROCESS_ENV_SCRUB` | `0` hands a program bravebot starts its own credentials ([`run.scrubEnv`](../security/sandbox.md#runscrubenv)) |
 
 Six more name an AWS account rather than this build. See
 [Reaching a model through AWS Bedrock](#reaching-a-model-through-aws-bedrock).
@@ -436,7 +243,7 @@ so it has to be set in the environment.
 **Thirteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
 spelling: seven of the ten above, plus the six AWS ones. The three exceptions are `BRAVEBOT_LOCALE`,
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB` and `BRAVEBOT_HOME`, which are read from the environment alone. Exporting a name wins over
-the file, except where an [administrator pinned it](#pinned-by-an-administrator), and except for
+the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
 Six network names can go there as well: `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`, `HTTPS_PROXY`,
@@ -469,7 +276,7 @@ Long-lived configuration can go in a file instead of your shell profile:
 | `.bravebot/settings.local.json` | that directory, on this machine only |
 
 [`--settings <path>`](../reference/cli.md) reads a **fourth** above those three, for one run.
-A file [an administrator pinned](#pinned-by-an-administrator) answers above all of them, and above the
+A file [an administrator pinned](managed-settings.md) answers above all of them, and above the
 environment too.
 
 A later file overrides an earlier one **a name at a time** rather than wholesale, so a file that sets
@@ -533,17 +340,17 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
 | `promptCacheTtl` | how long a gateway or an AWS account keeps a cached prompt, `5m` or `1h` ([below](#promptcachettl)) |
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
-| `language` | the language the interface is in: a locale tag such as `fr`, or `auto`. Read from your own file only ([below](#choosing-a-language)) |
+| `language` | the language the interface is in: a locale tag such as `fr`, or `auto`. Read from your own file only ([details](language.md)) |
 | `style` | the output style a session starts in: `concise`, `explanatory`, `proactive` or a file in `~/.bravebot/styles`. Read from your own file and the file `--settings` names only, and it cannot name a project's style from `.bravebot/styles` (pick that with `/style`) |
 | `limit` | the most tokens or Leo Premium credits a session may spend before it asks ([below](#limit)) |
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
 | `provider` | an OpenAI-compatible gateway, with any extra request headers it carries ([below](#reaching-an-openai-compatible-gateway)), or an AWS account ([below](providers/bedrock.md#naming-more-than-three-models)) |
-| `run.scrubEnv` | further variables to keep from a program the agent runs ([below](#runscrubenv)) |
-| `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([below](#runnetwork)) |
-| `sandbox.network.allowedHosts`, `deniedHosts`, `onUnlisted` | the hosts a program the agent runs may reach ([below](#sandboxnetwork)) |
-| `sandbox.filesystem.allowRead`, `denyRead`, `allowWrite`, `denyWrite` | lists of paths that move what a program the agent runs reads and writes ([below](#sandboxfilesystem)) |
+| `run.scrubEnv` | further variables to keep from a program the agent runs ([details](../security/sandbox.md#runscrubenv)) |
+| `run.network` | `open` (the default) or `closed`: whether a program the agent runs keeps the network ([details](../security/sandbox.md#runnetwork)) |
+| `sandbox.network.allowedHosts`, `deniedHosts`, `onUnlisted` | the hosts a program the agent runs may reach ([details](../security/sandbox.md#sandboxnetwork)) |
+| `sandbox.filesystem.allowRead`, `denyRead`, `allowWrite`, `denyWrite` | lists of paths that move what a program the agent runs reads and writes ([details](../security/sandbox.md#sandboxfilesystem)) |
 | `git.identities` | the ssh key a `git` command offers first for one owner's repositories ([below](#gitidentities)) |
 | `run.maxOutput` | how much of what a command printed the agent reads ([below](#runmaxoutput)) |
 | `download.maxBytes` | the most one `download_url` call may save to a file ([below](#downloadmaxbytes)) |
@@ -878,7 +685,7 @@ interactive interface gets one at all: `bravebot -p` and `bravebot --plain` read
 interface does. A record is stored once per person, so without this two checkouts cannot ask for
 different levels.
 
-Everything under [Choosing how hard to think](#choosing-how-hard-to-think) still applies, including
+Everything under [Choosing how hard to think](effort.md) still applies, including
 the two cases worth knowing: the models that read no level, and the Brave endpoint, which accepts one
 and discards it. Taking the row for no level in the picker removes the record rather than writing an
 empty one, so your own file's level answers again in the next session; unset it there if you want
@@ -1185,188 +992,23 @@ application does not, so this page and the README are where it is said for that.
 
 ### `run.scrubEnv`
 
-```json
-{ "run": { "scrubEnv": ["MY_TOKEN", "OTHER_SECRET"] } }
-```
-
-Variables to withhold from a program the agent runs, on top of bravebot's own credentials, which are
-withheld with no configuration at all. Those credentials are the signing key and its key id, and every
-variable a [provider block](providers/openai-compatible.md) names in its `env` as the place a gateway's token is read from,
-so a gateway token held in `OPENROUTER_API_KEY` or in a name of your own is withheld without being
-listed here. A variable no provider block names is yours and stays. A block you add mid-session
-withholds its variable from the next program started. See [`run`](../reference/run-tool.md#what-a-program-is-handed).
-
-A hook and a language server are withheld these names too. A line you typed yourself at the `!`
-prompt is not: it keeps your whole environment, because it is meant to behave as your own terminal
-does.
-
-**Your list is not read for a program bravebot starts for itself.** The `aws` CLI the Bedrock
-backend runs to resolve a credential is withheld bravebot's own credentials and nothing else, since
-a name here answers what the commands *you* ask for may see, and `AWS_PROFILE` in it would stop that
-CLI resolving the credential it is being run for.
-
-**Names only.** A list of names can only ever take something away; a list of values here would put a
-credential in front of every command the agent starts. The list is read when the process starts, so
-editing it describes your next session.
-
-**An entry may be a pattern.** `*` stands for any run of characters and `?` for exactly one, matched
-against the whole of a variable name and ignoring case, so `AWS_*` withholds `AWS_PROFILE` and
-`aws_region` and leaves `PATH` and `MY_AWS_KEY`. `*` and `?` are the whole of the syntax. A pattern
-matching nothing withholds nothing; an exact name is withheld whether you have that variable set or
-not. `bravebot doctor` lists each pattern with one variable it matched on this machine, names only,
-so you can see whether it caught what you meant. An exact name is not listed.
-
-```json
-{ "run": { "scrubEnv": ["AWS_*", "*_TOKEN", "MY_SECRET"] } }
-```
-
-Nothing is withheld by a pattern you did not write. bravebot adds none of its own, because a rule
-matching variable names cannot tell `run aws s3 ls` from an exfiltration.
-
-`BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` turns the withholding off entirely. Only that exact spelling does
-it: `false`, `no` and `off` change nothing, because a credential reaching every subprocess is not a
-thing to switch off by near-miss.
+Variables to withhold from a program the agent runs. See [Sandbox settings](../security/sandbox.md#runscrubenv).
 
 ### `run.network`
 
-```json
-{ "run": { "network": "closed" } }
-```
-
-`open` is the default: every program the agent runs keeps the network. `closed` takes it from every
-program except those that carry a reason to have it: a package manager that fetches (`cargo`, `npm`,
-`pip`, `go`, `mvn`, `gradle`), a `git` or `gh` command that talks to a remote, `curl`, `ssh`, and
-a command that was lent a credential (remote, cloud, cluster or container). A program the agent could have written itself, under a directory it may write to, gets nothing by being named `curl`. Those directories include the toolchain caches and every path you let programs write. `cat`, `grep`, `make`, `python3` and a test
-run get none, so what they read cannot be sent anywhere.
-
-`--run-network closed` sets it for one run, and a machine-level file can pin it, which no other
-layer overrides. A project's own settings can close the network and cannot open it. On Linux a
-program with no network runs in a network namespace of its own, which needs a kernel that lets an
-unprivileged user make one. Ubuntu 24.04 restricts that by default and many containers block it.
-Where it is unavailable, a program that would lose the network is not started and the result says
-so, and `bravebot doctor` says why. The opening screen,
-`/status` and `bravebot doctor` say when it is closed and which layer closed it.
-
-The desktop app reads the setting once, when it starts, from your own file, the file `--settings` names
-when it exists, the settings file of the directory it was started in and the machine-level pin. A project opened in a window afterwards, or a
-settings file chosen there, does not change it.
+`open` (the default) or `closed`: whether a program the agent runs keeps the network. See [Sandbox settings](../security/sandbox.md#runnetwork).
 
 ### `sandbox.network`
 
-```json
-{
-  "sandbox": {
-    "network": {
-      "allowedHosts": ["registry.npmjs.org", "*.github.io"],
-      "deniedHosts": ["evil.example"],
-      "onUnlisted": "refuse"
-    }
-  }
-}
-```
-
-Holds the programs the agent runs to a list of hosts while the network stays open for everything
-else. `allowedHosts` names the hosts a program may reach, with GitHub added for a `git` or `gh`
-command that talks to a remote and a toolchain's own registry added for `cargo`, `npm`, `pip` and
-`go`. `deniedHosts` refuses hosts whatever else allows them. `onUnlisted` is `refuse` or `ask`: a host
-no list names is refused, or put to you. With `ask`, the program is refused at once and the hosts it
-was refused are put to you after that run has stopped, up to eight at a time, one per row. A yes adds
-them to the allowed set until the session ends and writes nothing to disk, so you run the line again;
-a no is kept for the session and the host is not asked about again. The terminal, the plain CLI, the
-desktop app and an [editor](../using/editors.md) all ask, and an editor's approval is labelled as
-lasting the session. A host on `deniedHosts`, one
-refused for its port or as not public, and anything a delegate's line asked for are never put to you,
-and bypass mode and a session nobody is at refuse as `refuse` does. `/clear`, `/branch` and `/resume`
-begin a session that asks about those hosts again. A stage with the network points its proxy settings at a local proxy that applies the list, and
-on macOS and Linux it may connect only to that proxy, so a program that ignores the proxy settings
-is still held to the list. On Linux that needs the same kernel support as `run.network`, and a stage
-is refused, naming this setting, where the kernel lacks it. On Windows a stage is refused while a list
-is set, naming this setting. A `run` that asks for `loopback` is then given the right to listen only. A list that is set,
-even an empty one, is a list, and an
-empty `allowedHosts` refuses every host. See [the sandbox](../security/security.md) for what the list
-can and cannot hold back.
-
-`deniedHosts` and `onUnlisted: refuse` only take reach away, so any file may write them. `allowedHosts`
-and `onUnlisted: ask` give it back, so they are read from your own file and a `--settings` file
-outside the project; a project or local file's are ignored and named by `bravebot doctor`. A value
-that is not a list of strings, or an `onUnlisted` that is neither word, is reported and read as absent.
-
-A machine-level file pins what it writes. Its `allowedHosts` is the whole allowed set and nothing you
-wrote is added to it, its `deniedHosts` is added to yours, and its `onUnlisted` is the answer whatever
-you said. A pinned `allowedHosts` also drops your `onUnlisted: ask` unless the file sets `onUnlisted`
-itself. A pinned value that cannot be read pins nothing, and `bravebot doctor` names it.
+The hosts a program the agent runs may reach. See [Sandbox settings](../security/sandbox.md#sandboxnetwork).
 
 ### `sandbox.filesystem`
 
-```json
-{
-  "sandbox": {
-    "filesystem": {
-      "allowWrite": ["~/notes"],
-      "denyRead": ["~/.config/gh", "**/*.env"],
-      "denyWrite": [".env"],
-      "allowRead": ["~/.aws"]
-    }
-  }
-}
-```
-
-Four lists of paths for the programs the agent runs. `allowRead` lets them read a place that is
-refused by default, such as `~/.aws`. `denyRead` refuses them a place they could read. `allowWrite`
-lets them write and read a place. `denyWrite` takes write access away under a path, one inside a
-directory the session was opened on included. Each list is empty unless you write it.
-
-A path is absolute, starts with `~/`, or is relative to the directory the session was opened on. A
-`..` that climbs out of it is refused. `*` and `?` work in `allowRead` and `denyRead`, so
-`**/*.env` refuses every file ending in `.env` under the directory; the listing is made when a
-command starts, so a file made afterwards is not in it. A link is judged by where it leads.
-
-The narrower path wins: `allowWrite` on `~/a` and `denyWrite` on `~/a/b` writes `~/a/c` and not
-`~/a/b/x`. Where both name the same path the refusal wins, and it wins over what a command is given
-for itself, so a refusal of `~/.config/gh` stands against `gh`. Nothing adds reach to `~/.ssh` or
-`~/.bravebot` or to anything inside either, except that an `allowRead` entry may name
-`~/.bravebot/sessions` or a path inside it, which programs already read and never write. The home directory, `/` and a directory above the
-home are refused as write paths. On Windows an `allowRead` or `allowWrite` entry that is a directory
-holding a credential location beneath it, such as the home directory, a directory above it or
-`~/.config`, is refused; a wildcard entry drops those matches and keeps the rest. Linux and macOS
-are unchanged.
-
-Your own file and a `--settings` file outside the project may write all four. A project or local file
-may write `denyRead` and `denyWrite` and not the other two, so a repository you clone cannot widen
-what its own commands reach; `bravebot doctor` names the file that tried. A machine-level file can pin
-any list: a pinned `allowRead` or `allowWrite` replaces yours, and a pinned refusal is one nothing
-you wrote lifts. `--sandbox-allow-read`, `--sandbox-deny-read`, `--sandbox-allow-write` and
-`--sandbox-deny-write` add to the lists for one run.
-
-An entry that cannot be applied is not in force. A refused `denyRead` or `denyWrite` stops the
-commands it would have held back, with a message naming it, rather than letting them through. On
-Linux a directory holding a path you refused writes to cannot have new entries made directly in it,
-and on Windows a command the refusal would reach is not started, since neither can narrow a write
-grant.
-
-The desktop app shows the lists in the conversation's permissions view, each entry with the file
-that wrote it, and says in the notice above the conversation when an entry is not in force. It does
-not edit them: change the settings file, and the next conversation reads it.
+Lists of paths that move what a program the agent runs reads and writes. See [Sandbox settings](../security/sandbox.md#sandboxfilesystem).
 
 ### `sandbox.holdBackTemporaryDirectory`
 
-```json
-{ "sandbox": { "holdBackTemporaryDirectory": true } }
-```
-
-Programs the agent runs can write the system temporary directory in every mode that confines. With
-this set to `true` no stage writes it, so nothing a stage leaves there can be read or run by a later
-program. The directory can still be read. The scratch directory and your own `allowWrite` entries are
-separate and stay writable. Under `--sandbox off` the directory is refused too, although those
-stages otherwise write anything your account can.
-
-A program that makes a scratch file there is refused, such as a shell heredoc, `mktemp` or a
-compiler's intermediate files, and the planner is told so in the `run` description. A `denyWrite`
-entry naming the directory refuses it as well, and is the way to hold back one path inside it.
-
-The key is read from your own file and a `--settings` file outside the project, as `sandbox.mode`
-is. A project or local file that sets it is not obeyed and `bravebot doctor` reports the key as
-unread. Any value but `true` asks for nothing.
+With `true`, no program the agent runs writes the system temporary directory. See [Sandbox settings](../security/sandbox.md#sandboxholdbacktemporarydirectory).
 
 ### `git.identities`
 
@@ -1520,7 +1162,7 @@ knows it may ask for, and a delegate runs under whatever the session that starte
 The same three lists Claude Code keeps, with the same spellings, so a block copied out of
 `~/.claude/settings.json` works unedited. What a rule is allowed to decide, and the reason it may
 never trust a command's output, is on
-[Approvals and permissions](../security/permissions.md#rules-you-write-down-in-advance).
+[Permission rules](../security/permission-rules.md).
 
 An entry in `deny`, `ask` or `allow` can also be an object, which is the same rule with a note on
 why it exists:
@@ -1650,7 +1292,7 @@ relative name means a path under the workspace. See
 `defaultMode` is parsed so that a file carrying it is not rejected, and **acted on by nothing**: if
 you wrote `acceptEdits` you get the prompts you would have got without it. The modes it names do
 exist. Shift-Tab and `--dangerously-skip-permissions` are what choose one. See
-[modes](../security/permissions.md#answering-in-advance-modes).
+[modes](../security/permission-modes.md).
 
 **An unreadable rule is dropped, named, and takes nothing with it.** A line that is not a rule, names
 no family, or has an anchor that cannot be resolved is reported by `doctor` and in the session where
@@ -1673,7 +1315,7 @@ is not a boolean is absence, so `"true"` as a string, a `1` or a `null` refuses 
 by `doctor` rather than obeyed.
 
 **Both are read from every file, and the strictest answer wins.** Your own file, a checkout's, the
-machine-local one, a `--settings` file and [the one an administrator pinned](#pinned-by-an-administrator)
+machine-local one, a `--settings` file and [the one an administrator pinned](managed-settings.md)
 may each ask for either, and a file that asks gets it: the usual rule that the closest file wins does
 not apply, because neither key can grant anything, so there is nothing for a file read later to lift.
 Writing `false` therefore does not switch off what another file asked for. This is why they are not
@@ -1785,231 +1427,15 @@ A choice you record for yourself while working outranks this file, and a flag ou
 
 ## Pinned by an administrator
 
-One file answers **above the process environment**, and therefore above every other source:
-
-| Platform | Path |
-|---|---|
-| Linux | `/etc/bravebot/managed.json` |
-| macOS | `/Library/Application Support/bravebot/managed.json` |
-| Windows | `C:\ProgramData\bravebot\managed.json` |
-
-The path is a literal, and no variable names it. `%ProgramData%` and the rest are stated in the
-environment of the person this layer binds, so reading one would let them choose which file answers for
-them.
-
-This inverts the rule that the environment wins, deliberately. That rule exists so a released binary
-can be pointed at a local backend without rebuilding it, and a pin an exported variable outranked
-would pin nothing. An organisation requiring that inference traffic reach an approved endpoint, or
-refusing to have models reached through somebody's personal cloud account, would otherwise have no way
-to say so.
-
-**Only these names may be pinned**, being the ones that decide where a request goes:
-`BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
-`AWS_PROFILE`, the three `ANTHROPIC_DEFAULT_*_MODEL` tiers, and the `provider` block. Every other name
-in the file decides nothing, the signing key and key id included, save the two pairs of lists and the
-two refusals: `"mcp": { "allow": [...], "deny": [...] }` name the
-[MCP servers](mcp-servers.md#refused-by-an-administrator)
-a session on the machine may start and may not, by host or by command. The file can keep a server
-from starting and never add one. A name it does not pin resolves exactly as it would with no such
-file.
-
-`"models": { "allow": [...], "deny": [...] }` name the models a machine may request and may not, read
-on the same footing:
-
-```json
-{
-  "env": { "BRAVEBOT_USE_BEDROCK": "1", "AWS_PROFILE": "the-org-account" },
-  "models": {
-    "allow": [
-      "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/approved-opus",
-      "arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/approved-sonnet"
-    ]
-  }
-}
-```
-
-Pinning the account without this says where the traffic goes and not what it spends: every other model
-name still reaches the pinned account and is billed to it. A name here is the model as a request
-carries it, an inference-profile ARN or a gateway slug such as `z-ai/glm-4.6`, compared exactly, and a
-tier word is checked as the model that tier names. A gateway model has two spellings, such as
-`openrouter/z-ai/glm-4.6` and the `z-ai/glm-4.6` the gateway is sent, and an entry naming either one
-answers for the model however it was asked for. Without an `allow` list every model not denied is
-requested as before; with one, a model no entry names is refused, and `"allow": []` refuses every
-model. A deny entry wins over an allow entry naming the same model.
-
-This can only refuse. There is nowhere in the file to hold a roster, so an entry permits a name some
-service already offers rather than adding one, and the file cannot say which model is the default.
-`/model` lists only what the machine may request. A model you had picked that the lists refuse is
-ignored, your `~/.bravebot/model` is left as it is, and the session opens on the configured model and
-says so; where that model is refused too the start is refused and names the file. An `AGENTS.md`
-definition naming a refused model is refused when it is read, when the planner starts it as a delegate
-and when you address it. A skill naming a refused model leaves the turn on the session's model and
-says which file refused it.
-
-`"permissions": { "readsStayInWorkspace": true, "bypassUnreachable": true }` are read here on the same
-reasoning: each can only take capability away, never add any, so keeping the file tools inside the
-working directory or putting the mode that asks about nothing out of reach is something two parties can
-have a legitimate say in. Neither is pinned in the sense the variables are. A name in the list above is
-answered by this file and nothing else is consulted for it; these two take the strictest answer any
-file gave, so somebody may ask for either where this file did not, and no file of theirs can lift it
-where it did.
-
-`"permissions": { "deny": [...], "ask": [...] }` are rules, written as they are in any settings file, and
-they are added to the rules every other file wrote. A deny rule here refuses on every session on the
-machine in every mode, and nothing in a checkout or in a person's own file removes it:
-
-```json
-{
-  "permissions": {
-    "deny": ["Read(.env)", "Bash(git push *)"],
-    "ask": ["WebFetch"]
-  }
-}
-```
-
-A refusal names this file. A line that is not a rule is reported by `doctor` and in the session, and the
-rest of the list still applies. `allow` is never read from here, because a grant is the person's own.
-
-A layer that can pin a preference is a layer somebody uses to pin one. What two parties have a
-legitimate say in is where a request goes, whose account pays for it, and what a session on the machine
-may reach; which theme is on and which keys do what are neither.
-
-**No credential is read from this file.** A gateway entry's `apiKey` is dropped and the entry's host,
-models and variable names are honoured without it. Everyone on the machine can read this file, so a
-token in it is a token handed to every account rather than one held by its owner. The service says what
-is missing on the first request. A `headers` block is kept, because a header is how this layer names a
-tenant or a route. Writing a value as `{env:NAME}` keeps it out of a file every account can read.
-
-**The `provider` block is pinned whole** rather than a name at a time, because pinning an endpoint
-pins nothing while anybody may add a destination beside it. A block that is present and empty says
-there are no gateways. A file without the block, or one spelling it as anything but a block, leaves the
-gateways a person configured in force: taking every gateway on the machine away on the strength of a
-stray `null` is the one reading nobody would intend.
-
-Refusing every account but the organisation's therefore takes **both** halves, the switch pinned off
-and the `provider` block pinned, since a gateway entry can name an AWS account too.
-
-The authority here is the filesystem's rather than this program's. Nothing checks who owns the file or
-what its permissions are: somebody who can write that path can replace the binary. It fails softly like
-any other layer, so a file that is missing, over 64 KB or unparseable pins nothing, and a blank or
-non-string value pins nothing under that name.
+A file an administrator writes answers above the process environment and every other source. See [Settings pinned by an administrator](managed-settings.md).
 
 <a id="importing-from-claude-code-opencode-or-ollama"></a>
 
 ## Importing from Claude Code, opencode or a local model server
 
-A first run with nothing configured, in a terminal, reads what Claude Code and opencode set up in your
-home directory, and asks a running Ollama, LM Studio and llama-server what each serves, before it names
-the three routes. Where any of them reaches a service bravebot can use, it shows what it would add to
-`~/.bravebot/settings.json` and asks:
-
-```
-Claude Code configures a model service bravebot can use, in /home/you/.claude/settings.json.
-Importing it adds these to /home/you/.bravebot/settings.json:
-  env.BRAVEBOT_USE_BEDROCK: "1"
-  env.AWS_REGION: "us-west-2"
-  env.ANTHROPIC_DEFAULT_SONNET_MODEL: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-  model: "sonnet"
-Import this from Claude Code? [y/N]
-```
-
-Only a yes writes. Anything else, or the end of input, declines, and the start is refused as before. A
-decline is not remembered, so the next start asks again. After a write the settings are read back from
-disk, and the session opens on them. Where the model the session would use reads its key from a
-variable you have not exported, the start names the variable and stops; an unset variable on any other
-imported gateway is named and the session opens anyway. A settings file that changed while you were
-answering is not written over.
-
-**What is read.** Claude Code's `settings.json` in `$CLAUDE_CONFIG_DIR` (by default `~/.claude`), and
-`CLAUDE_CODE_USE_BEDROCK` if you export it. opencode's `opencode.json` and `opencode.jsonc` in
-`$XDG_CONFIG_HOME/opencode` (by default `~/.config/opencode`), the file `OPENCODE_CONFIG` names, and
-its `auth.json` in `$XDG_DATA_HOME/opencode`. A checkout's `.claude/`, `opencode.json` and
-`.opencode/` are never opened: they hold whatever the repository's author wrote, and would otherwise
-decide where your key is sent.
-
-**A running Ollama.** Ollama is asked what it has pulled at the address `OLLAMA_HOST` names, read as
-Ollama reads it, or at `http://localhost:11434` where it is unset. Only an address on this machine is
-asked; one on another machine is named as left, and nothing is sent to it. A server that answers is
-offered as [the block on the gateway page](providers/openai-compatible.md#a-local-ollama-or-another-gateway-that-wants-no-key), with the newest
-model that can call tools as `model`:
-
-```
-Ollama is running at http://localhost:11434, serving models bravebot can use.
-Importing it adds these to /home/you/.bravebot/settings.json:
-  model: "ollama/qwen3-coder-oc:latest"
-  provider.ollama, reached at http://localhost:11434/v1: {"name":"Ollama (local)","options":{"baseURL":"http://localhost:11434/v1"}}
-Import this from Ollama? [y/N]
-```
-
-A model that reports it cannot call tools is never the one written, since every turn calls them; an
-Ollama with none that can is named as left. Nothing answering, or an answer that is not Ollama's
-listing, says nothing. The request waits a few seconds at most. Where your settings file already has
-an entry for a server on the same port, under any name, Ollama is not offered again.
-
-A second request asks which models are loaded. For the model shown, the question gives the context
-window the server loaded it with. Where that is below the 131,072 tokens bravebot otherwise budgets
-against, the question says the server drops the earliest turns beyond it and names
-`OLLAMA_CONTEXT_LENGTH`, and the entry written carries the figure as `contextWindow`, so a
-conversation is kept within it. A model that is not loaded has no line.
-
-**A running LM Studio or llama-server.** Each is asked once, the way Ollama is, on this machine only,
-with no key, and says nothing where it does not answer. A server that answers is offered as a block
-of the same shape as Ollama's, under the id `lmstudio` or `llama-server`.
-
-- LM Studio is asked for its model list at `http://127.0.0.1:1234`. It reads no variable for where it
-  listens, so a server on another port is named in `BRAVEBOT_LM_STUDIO_HOST`, written as `OLLAMA_HOST`
-  is. Only a language model trained for tool use is offered, and the one written is the first that
-  LM Studio has loaded, or the first it lists where none is loaded. The context length it has the
-  model loaded with is shown, and written as `contextWindow` where it is below 131,072 tokens.
-- llama-server is asked at the port `LLAMA_ARG_PORT` names, which is the variable llama-server itself
-  reads, on the address `LLAMA_ARG_HOST` names. With no port named, bravebot asks at `9931`, the port
-  llama-server defaults to, and at `8080`, the one earlier releases and its container image use.
-  It reports no capabilities and no loaded context, so neither is checked or shown.
-
-```
-LM Studio is running at http://127.0.0.1:1234, serving models bravebot can use.
-Importing it adds these to /home/you/.bravebot/settings.json:
-  model: "lmstudio/qwen/qwen3-coder-30b"
-  provider.lmstudio, reached at http://127.0.0.1:1234/v1: {"name":"LM Studio (local)","options":{"baseURL":"http://127.0.0.1:1234/v1"}}
-Import this from LM Studio? [y/N]
-```
-
-A server that asks for a key is not offered, because the request carries none. Where more than one
-of Ollama, LM Studio and llama-server answers, each is asked about in that order, and one at a port an
-earlier answer already wrote is not offered again.
-
-**What can be imported.** A Claude Code Bedrock setup, under bravebot's own names, when a region is
-named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
-bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. An `openai` entry that names
-no SDK, or an `auth.json` key for `openai`, imports; one naming `@ai-sdk/openai` is left as another
-SDK's. The `ANTHROPIC_API_KEY` in Claude Code's settings file imports as an `anthropic` entry,
-unless a Claude Code `ANTHROPIC_BASE_URL` is stated beside it. opencode's
-`disabled_providers` and `enabled_providers` are honoured, and a name already set in your settings file,
-or pinned by an administrator, is left as it is. A model opencode's `amazon-bedrock` entry lists that
-one of your Bedrock tiers already names, such as the Claude Code import's
-`ANTHROPIC_DEFAULT_OPUS_MODEL`, is not added to the entry again.
-
-**Keys.** A source that names a variable has only the name written, and opencode's `{env:VAR}` becomes
-`"env": ["VAR"]`. A key the source holds itself is asked about on its own question, which names the host
-it would be sent to and says it is kept in plain text; the key is never shown. Declining writes the
-entry reading the variable opencode reads for it, such as `OPENROUTER_API_KEY`, and says to export it.
-A `{file:path}` key is not followed, and neither is a substitution inside a longer value, such as
-`Bearer {env:TOKEN}`: that entry is named as left.
-
-**What is never imported**: commands, permissions, hooks and MCP servers. What was found and cannot be
-used, such as an Anthropic bearer token or a Vertex AI setup, is named with the reason before the routes,
-and its value is never shown.
-
-A run that cannot ask (`-p`, `--json`, a pipe or a redirect, `doctor`) imports nothing, and its
-refusal names the command that asks:
-
-```sh
-bravebot import-providers
-```
-
-That command asks the same questions at any time, whether or not a service is configured. It refuses
-without a terminal and in an incognito session. An incognito session asks none of the servers either,
-since it has nothing to write.
+[Importing from Claude Code, opencode or a local model server](importing.md) says what a first run
+reads from Claude Code and opencode, what it asks a running Ollama, LM Studio and llama-server, and
+what it writes once you say yes. `bravebot import-providers` asks the same questions at any time.
 
 ## Reaching a model through AWS Bedrock
 
@@ -2028,7 +1454,7 @@ from `opencode.json` works unedited, and a local Ollama needs no key.
 has the fields, the credential, the headers, which models are offered, and how to name one.
 
 OpenAI is reached with an API key by a block keyed `openai` naming `OPENAI_API_KEY` in `env`, and
-needs no `baseURL`. [OpenAI](providers/openai-compatible.md#openai) has the details, including which
+needs no `baseURL`. [OpenAI](providers/openai.md) has the details, including which
 models `/model` offers.
 
 Claude is reached with an Anthropic API key by a block keyed `anthropic` naming `ANTHROPIC_API_KEY` in
@@ -2043,7 +1469,7 @@ offers a short list of Gemini models built into bravebot, and a block that lists
 those instead. A Vertex model, on the built-in list or off it, is named with the service's id in
 front, as `--model google-vertex/google/gemini-3-flash-preview` or the same value in the
 [`model`](#model) key.
-[Google Vertex AI](providers/openai-compatible.md#google-vertex-ai) has the fields.
+[Google Vertex AI](providers/google-vertex.md) has the fields.
 
 ## Context budget
 

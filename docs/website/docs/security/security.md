@@ -121,7 +121,7 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   gateway keys, the Leo Premium token and the MCP server list are, which no
   `allowRead` entry, scope or `/reach` grant lifts, except that a program reads, and never writes,
   the session records in `~/.bravebot/sessions`) and can write only the directories the session
-  was opened on, its scratch directory, the system temporary directory (unless you [hold it back](../customize/configuration.md#sandboxholdbacktemporarydirectory)) and the toolchain caches. A
+  was opened on, its scratch directory, the system temporary directory (unless you [hold it back](sandbox.md#sandboxholdbacktemporarydirectory)) and the toolchain caches. A
   command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` the
   agent socket, never a private key. The files a tool reads by name to do its job, such as the `gh`
   login, `~/.npmrc` and `~/.netrc`, are readable. So are the shell startup files, `~/.gitconfig`,

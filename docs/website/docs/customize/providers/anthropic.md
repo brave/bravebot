@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 1
 title: Anthropic
 description: Reach Claude with an Anthropic API key through its Messages API, and what the block, the roster, the reply ceiling and prompt caching do.
 ---
@@ -67,7 +67,7 @@ models you use:
 
 ## What a request carries
 
-**Effort.** The level chosen with [`/effort`](../configuration.md#choosing-how-hard-to-think), or the
+**Effort.** The level chosen with [`/effort`](../effort.md), or the
 `effort` setting, is sent in `output_config`. It is not sent to a model whose listing says it reads
 none, and a model the listing does not describe, including every model of a block that lists `models`,
 is sent it and judged by Anthropic's answer: one that refuses it is not sent it again and is shown as

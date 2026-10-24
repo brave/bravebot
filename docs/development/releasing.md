@@ -117,7 +117,8 @@ Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-
 `install.sh`, `install.ps1` and the platform package script hold each to that: the Developer ID team
 `KL8N8XSYF4` on macOS, the signer `Brave Software, Inc.` on Windows. A change of certificate or team
 has to be made in `install.sh`, `install.ps1` and `npm/scripts/stage-platform-package.js` before the
-first release signed by the new one is published, or installs and publishes of it are refused. The commands for checking a download by hand are in the quickstart.
+first release signed by the new one is published, or installs and publishes of it are refused. The commands for checking a download by hand are on the
+[install page](../website/docs/install.md#check-a-download-by-hand).
 
 ## The desktop application
 

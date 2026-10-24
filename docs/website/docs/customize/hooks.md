@@ -206,7 +206,7 @@ next tool call happens, through a channel no gate can see.
 
 **The cost, stated plainly: a secret scanner that blocks a write is not a hook, and cannot be one.**
 A rule about what to refuse is written as a rule, in
-[permissions](../security/permissions.md), where the decision comes from something you wrote rather
+[permissions](../security/permission-rules.md), where the decision comes from something you wrote rather
 than from something a program read.
 
 ## How long a hook may run

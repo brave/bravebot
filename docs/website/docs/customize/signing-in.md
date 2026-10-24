@@ -28,7 +28,7 @@ Each way is the command it was before, run for you:
 |---|---|---|
 | `leo` | `bravebot import-leo-creds [channel]` | [Leo Premium](premium.md) |
 | `bedrock` | the AWS sign-in a session makes on its first turn | [AWS Bedrock](providers/bedrock.md) |
-| `import` | `bravebot import-providers` | [Importing](configuration.md#importing-from-claude-code-opencode-or-a-local-model-server) |
+| `import` | `bravebot import-providers` | [Importing](importing.md) |
 | `gateway` | nothing before it: the key used to go in a variable or a settings file | [below](#gateway) |
 
 A script names the way, so nothing is asked: `bravebot auth login leo nightly`,

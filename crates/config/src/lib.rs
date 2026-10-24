@@ -1051,6 +1051,14 @@ pub struct Config {
     /// Additive on the same terms as [`Config::bedrock`]: the models named here are offered beside
     /// the other rosters, and the model a person picks is what decides where a request goes.
     pub providers: Vec<provider::Provider>,
+    /// The models the ChatGPT account is offered as, where a `provider` entry named `chatgpt` states
+    /// no endpoint and names some ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+    ///
+    /// Not a gateway, which is why it is not in [`Config::providers`]: that list decides which
+    /// service answers a name, and an entry with no endpoint answers nothing. Empty where no entry
+    /// names models, which is the account's listing being asked instead, and where a machine-level
+    /// `provider` block replaces the person's, whether or not it holds the id.
+    pub chatgpt_models: Vec<provider::AccountModel>,
     /// Which models the machine-level layer lets this machine request (BACKEND-48).
     ///
     /// Resolved onto the configuration rather than read where it is needed, because that layer is a
@@ -1363,6 +1371,13 @@ impl Config {
         // any of the places that may name a model, and each is checked against the same pair
         // (BACKEND-48).
         config.models = managed.models().clone();
+        // The entry is part of the `provider` block, so a machine-level block replaces it with the
+        // gateways, as it replaces them. That is also what keeps the field empty where a gateway
+        // holds the id: a person's entry that names models states no endpoint, so only the
+        // machine-level block can hold the id beside it, and the account is not offered then.
+        if managed.gateways().is_none() {
+            config.chatgpt_models = settings.chatgpt_models().to_vec();
+        }
         config.advisor_model = settings.advisor_model().map(str::to_string);
         config.defer_mcp_tools_above = settings.defer_mcp_tools_above();
         config.max_running_delegates = settings.max_running_delegates();
@@ -1488,6 +1503,8 @@ impl Config {
         Ok(Self {
             bedrock,
             providers,
+            // Nothing said here either: [`Config::from_env_and_settings`] reads it from the settings.
+            chatgpt_models: Vec::new(),
             // Nothing said here, there being no managed layer to read through a bare lookup.
             // [`Config::from_env_and_settings`] is the one caller that has one.
             models: managed::Models::default(),
@@ -3097,6 +3114,78 @@ mod tests {
         let (provider, wire) = config.provider_for("chatgpt/gpt-5").expect("the gateway");
         assert_eq!(provider.base_url, "https://gateway.example.invalid/v1");
         assert_eq!(wire, "gpt-5");
+    }
+
+    /// CHATGPT-9: the models an entry with the account's id names, where it states no endpoint,
+    /// reach the configuration with the window each states, and the entry is not a gateway. The
+    /// account stays reachable, a name qualified by the id still selects it, and no gateway answers
+    /// for a name that carries the id.
+    #[test]
+    fn the_models_a_chatgpt_entry_names_reach_the_configuration_and_the_account_stays_reachable() {
+        let settings = Settings::parse(
+            r#"{"provider": {"chatgpt": {"models": {
+                "gpt-5": {"limit": {"context": 400000, "output": 128000}},
+                "gpt-5-mini": {}
+            }}}}"#,
+        );
+        let config = resolved(&settings, |_| None, complete_env).expect("configured");
+
+        assert_eq!(
+            config.chatgpt_models,
+            [
+                provider::AccountModel {
+                    id: "gpt-5".to_string(),
+                    context_window: Some(400_000),
+                },
+                provider::AccountModel {
+                    id: "gpt-5-mini".to_string(),
+                    context_window: None,
+                },
+            ]
+        );
+        assert!(config.providers.is_empty(), "the entry became a gateway");
+        assert!(config.offers_chatgpt_account());
+        assert_eq!(config.chatgpt_model("chatgpt/gpt-5"), Some("gpt-5"));
+        assert!(config.provider_for("chatgpt/gpt-5").is_none());
+    }
+
+    /// CHATGPT-9: a gateway that holds the id leaves no model of the account to offer, so the models
+    /// the person's entry names are not carried. Only a machine-level layer can hold the id beside
+    /// them, and a reader of the field must not find a roster for an account that is not offered.
+    #[test]
+    fn the_models_a_chatgpt_entry_names_are_not_carried_where_a_gateway_holds_the_id() {
+        let settings = Settings::parse(r#"{"provider": {"chatgpt": {"models": {"gpt-5": {}}}}}"#);
+        let managed = managed::scratch(
+            "resolve-chatgpt-gateway-holds-the-id",
+            r#"{"provider": {"chatgpt": {
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"gpt-5": {}}
+            }}}"#,
+        );
+        let config =
+            resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+
+        assert!(!config.offers_chatgpt_account());
+        assert!(config.chatgpt_models.is_empty());
+        assert_eq!(
+            config.providers.len(),
+            1,
+            "the machine-level gateway stands"
+        );
+    }
+
+    /// CHATGPT-9: the entry is part of the `provider` block, which a machine-level block replaces
+    /// whole, an empty one included. The person's list is not read then, and the account is still
+    /// offered with the models its listing gives.
+    #[test]
+    fn a_machine_level_provider_block_replaces_the_models_a_chatgpt_entry_names() {
+        let settings = Settings::parse(r#"{"provider": {"chatgpt": {"models": {"gpt-5": {}}}}}"#);
+        let managed = managed::scratch("resolve-chatgpt-entry-replaced", r#"{"provider": {}}"#);
+        let config =
+            resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+
+        assert!(config.offers_chatgpt_account());
+        assert!(config.chatgpt_models.is_empty());
     }
 
     /// The exception: with no Brave credentials, `automatic` names a backend that cannot be reached at

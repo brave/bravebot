@@ -40,7 +40,9 @@ guards:
     sites:
       - crates/sandbox/src/programs.rs: 11
       - crates/tui/src/clipboard.rs: 4
-documented-by: docs/website/docs/security/security.md
+documented-by:
+  - docs/website/docs/security/security.md
+  - docs/website/docs/security/sandbox.md
 ---
 
 ## Scope

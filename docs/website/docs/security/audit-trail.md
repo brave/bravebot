@@ -172,7 +172,7 @@ BLOCK   approval: weather:get_forecast: the call was not approved, so the server
 
 ## The hosts a run's programs asked for are recorded
 
-When the sandbox holds a run to [a list of hosts](../customize/configuration.md#sandboxnetwork), the
+When the sandbox holds a run to [a list of hosts](sandbox.md#sandboxnetwork), the
 trail records, once the foreground `run` has stopped, what the list decided for each host its programs
 asked for under `hosts`: the host, `allowed` or `refused`, the entry that decided it or `not listed`,
 `port not carried` or `not public`, and the stages that were served. Repeats are counted. A program

@@ -184,7 +184,7 @@ outlives the session and applies in every directory, except one whose own settin
 `~/.bravebot/settings.json` does not.
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
-them. See [Configuration](../customize/configuration.md#choosing-a-model).
+them. See [Choosing a model](../customize/model.md).
 
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.
@@ -201,7 +201,7 @@ cursor and Escape restores the one that was in force when the picker opened.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory.
 Themes of your own are JSON files under `~/.bravebot/themes/`, and nothing in a workspace is read. See
-[Choosing a theme](../customize/configuration.md#choosing-a-theme) and
+[Choosing a theme](../customize/theme.md) and
 [Themes](../using/transcript.md#themes).
 
 ## `/advisor [model | off]`
@@ -300,7 +300,7 @@ except one whose own settings name an [`effort`](../customize/configuration.md#e
 outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
 is recorded. Picking the row for none removes the record, so from the next session your own file's
 level answers again. See
-[Choosing how hard to think](../customize/configuration.md#choosing-how-hard-to-think), which is also
+[Choosing how hard to think](../customize/effort.md), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.
 
@@ -332,7 +332,7 @@ carried out at once.
 
 The choice is written to `~/.bravebot/language`, so it applies in every directory. A session that records
 nothing, an incognito one for example, says the choice was not saved and keeps none. See
-[Choosing a language](../customize/configuration.md#choosing-a-language) for the order the sources are
+[Choosing a language](../customize/language.md) for the order the sources are
 read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
 
 ## `/add-dir <path>`
@@ -367,7 +367,7 @@ goes.
 Your permission rules do not come with you. The new directory's rules are read, and anything its
 checkout proposes is put to you in the box a session opening there would show, so a rule you granted
 for the directory you left answers nothing here. See
-[Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
+[Permission rules](../security/permission-rules.md).
 
 Nor do your answers about reading a file that holds what looks like a credential. Each is kept under
 the file's name from the directory you left, which here can name another file, so such a file is asked
@@ -835,7 +835,7 @@ and `--resume` brings none back.
 
 ## `/plan [task]`
 
-Sets [plan mode](../security/permissions.md#answering-in-advance-modes), as the mode key does when it
+Sets [plan mode](../security/permission-modes.md), as the mode key does when it
 reaches planning. With a task it also starts a turn on that task, which runs in plan mode.
 
 ```
@@ -867,7 +867,7 @@ declined plan leaves the workspace.
 run you stopped is not written down, because there is nothing in it to read. The run is recorded as its
 own record and the session records its name, so the session still resumes as a conversation.
 
-In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
+In [plan mode](../security/permission-modes.md) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
 [Plan first, then execute](../using/manifest-mode.md) for the `--mode manifest` form.
 
