@@ -397,8 +397,10 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    clock), nonce (the one sent, compared in constant time) and subject (a string that is not
    empty) are compared. No other claim is read. The decoded header and claims are cleared when they are
    dropped. The access token's expiry is read from the `expires_in` field of the reply, not from the
-   token, and is compared with the clock. Claims such as an organisation's name are text somebody else
-   chose.
+   token, and is compared with the clock. A clock set before 1970 reads as no time, and every expiry is
+   later than none, so the clock is read before the listener starts and again where the reply arrives, and
+   one that reads before 1970 at either ends the sign-in with nothing stored. Claims such as an
+   organisation's name are text somebody else chose.
 
 No exception is added to [labels.md](labels.md). The counts it pins for `Labelled::new` and
 `Policy::decode_transport` move by the one place a refusal's body is read and the one that hands it back,
@@ -431,6 +433,9 @@ whether the token verified, and what leaves the crate is that answer and no clai
 `verified-by: bravebot_skus::chatgpt::id_token::a_key_of_fewer_than_2048_bits_or_with_a_small_exponent_is_refused_whatever_its_signature_is`
 `verified-by: bravebot_skus::chatgpt::id_token::a_decoded_part_is_overwritten_where_it_lies`
 `verified-by: bravebot_skus::chatgpt::encoding::base64url_reads_back_what_it_writes_and_nothing_else`
+`verified-by: bravebot_skus::chatgpt::encoding::a_clock_before_1970_reads_as_no_time_and_the_epoch_and_after_as_the_seconds_since`
+`verified-by: bravebot_skus::chatgpt::a_clock_set_before_1970_ends_the_sign_in_before_anything_is_opened_or_asked`
+`verified-by: bravebot_skus::chatgpt::a_clock_that_cannot_be_read_where_the_reply_arrives_ends_the_sign_in_with_nothing_stored`
 
 <a id="CHATGPT-6"></a>
 ### CHATGPT-6: the tokens are one file the account owns
@@ -620,7 +625,8 @@ failure. The rest are these, each saying which it is:
   fallback would be refused the same way.
 - **The command stopped,** and says so: the listener could not start, the browser returned no code or no
   usable client, the reply held no ID token or one that did not verify, the key set could not be fetched (in
-  the category of that request), the time bound passed, a `provider` entry named `chatgpt` is a
+  the category of that request), the time bound passed, the clock is set before 1970
+  ([CHATGPT-5](#CHATGPT-5)), a `provider` entry named `chatgpt` is a
   gateway ([CHATGPT-9](#CHATGPT-9)). The entry's name in that sentence is the constant `chatgpt`. A reply
   that does not grant the scope `chatgpt.tokens.use.direct` ends the command in the same way, and the
   sentence says to sign in again and allow the program to use the subscription's tokens, or to use an API key
@@ -1408,7 +1414,10 @@ These are the places where another spec states something about this service, eac
   ([CHATGPT-5](#CHATGPT-5)), so a sign-in with no route to that host fails, and the verifier is code that
   parses a token somebody else made.
 - A sign-in ends at OpenAI and this program learns of it at the next refresh, which is the first turn that
-  needs one. A turn can also be refused once for a token that a clock running behind made look valid.
+  needs one. A turn can also be refused once for a token that a clock running behind made look valid. A
+  clock set before 1970 reads as 1970 where a renewal compares an expiry, so every token looks valid and the
+  first request the service refuses replaces it; the sign-in itself refuses such a clock
+  ([CHATGPT-5](#CHATGPT-5)).
 - A process that rotated the refresh token and could not write the file holds the only good copy in
   memory. If another process finds the file's refresh token dead and removes it, and the first exits before
   its write succeeds, the sign-in is gone and the person signs in again.

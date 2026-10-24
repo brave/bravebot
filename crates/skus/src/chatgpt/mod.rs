@@ -166,6 +166,8 @@ pub enum SignInError {
     KeySet(Class),
     /// The reply held no ID token, or one that did not verify.
     IdToken,
+    /// The clock is set before 1970, so no expiry can be compared with it. Nothing was stored.
+    Clock,
     /// The sign-in could not be stored.
     Store(AccountError),
 }
@@ -183,6 +185,7 @@ impl std::fmt::Display for SignInError {
             Self::NoUseScope => f.write_str("scope not granted"),
             Self::KeySet(class) => write!(f, "key set {class}"),
             Self::IdToken => f.write_str("id token"),
+            Self::Clock => f.write_str("clock"),
             Self::Store(failure) => write!(f, "store {failure}"),
         }
     }
@@ -214,17 +217,33 @@ pub fn sign_in(
     announce: impl FnOnce(&Announcement<'_>),
 ) -> Result<SignedIn, SignInError> {
     let destination = path().map_err(SignInError::Store)?;
-    run(hosts, transport, limits, pages, &destination, announce)
+    run(
+        hosts,
+        transport,
+        limits,
+        pages,
+        &destination,
+        encoding::clock,
+        announce,
+    )
 }
 
+/// The sign-in, with `clock` as the seconds since 1970 or `None` where it reads before that.
+///
+/// The ID token's expiry and the access token's are compared with the clock, and a clock that reads
+/// no time would put every expiry after it. So the clock is read before anything is opened or bound,
+/// and again where the reply arrives, which is the instant the expiries are compared at, and a
+/// reading of `None` at either ends the sign-in with nothing stored.
 fn run(
     hosts: &Hosts,
     transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
     limits: &Limits,
     pages: &Pages<'_>,
     destination: &Path,
+    clock: impl Fn() -> Option<u64>,
     announce: impl FnOnce(&Announcement<'_>),
 ) -> Result<SignedIn, SignInError> {
+    clock().ok_or(SignInError::Clock)?;
     // A file that cannot be read is signed in over, so the remedy the command names for it works.
     let stored = account::load_at(destination).ok().flatten();
     let request = authorize::Request::new(
@@ -268,23 +287,18 @@ fn run(
     }
     // A reply with no ID token is not signed in unverified.
     let id_token = tokens.id_token.as_ref().ok_or(SignInError::IdToken)?;
-    id_token::verify(
-        &agent,
-        hosts,
-        id_token,
-        &client,
-        request.nonce(),
-        encoding::now(),
-    )
-    .map_err(|failed| match failed {
-        id_token::Failed::KeySet(class) => SignInError::KeySet(class),
-        id_token::Failed::Token => SignInError::IdToken,
+    let now = clock().ok_or(SignInError::Clock)?;
+    id_token::verify(&agent, hosts, id_token, &client, request.nonce(), now).map_err(|failed| {
+        match failed {
+            id_token::Failed::KeySet(class) => SignInError::KeySet(class),
+            id_token::Failed::Token => SignInError::IdToken,
+        }
     })?;
 
     let signed_in = Account {
         access_token: tokens.access,
         refresh_token: tokens.refresh,
-        expires_at: encoding::now().saturating_add(tokens.lifetime),
+        expires_at: now.saturating_add(tokens.lifetime),
         client_id: client,
         host_id: request.host_id().to_string(),
     };
@@ -407,6 +421,18 @@ mod tests {
         returns: Returns<'_>,
         limits: &Limits,
     ) -> Outcome {
+        signed_in_by(encoding::clock, hosts, path, replies, returns, limits)
+    }
+
+    /// [`signed_in_at`], reading the time from `clock`.
+    fn signed_in_by(
+        clock: impl Fn() -> Option<u64>,
+        hosts: impl FnOnce(&str) -> Hosts,
+        path: &std::path::Path,
+        replies: impl FnOnce(&str) -> Vec<Reply>,
+        returns: Returns<'_>,
+        limits: &Limits,
+    ) -> Outcome {
         let server = serve(vec![]);
         let mut announced = None;
         let result = run(
@@ -415,6 +441,7 @@ mod tests {
             limits,
             &PAGES,
             path,
+            clock,
             |announcement| {
                 announced = Some((announcement.url.to_string(), announcement.port));
                 server.then(replies(named(&parameters(announcement.url), "nonce")));
@@ -722,6 +749,7 @@ mod tests {
             &brief(),
             &PAGES,
             &path,
+            encoding::clock,
             |announcement| {
                 let state = named(&parameters(announcement.url), "state").to_string();
                 let port = announcement.port;
@@ -1106,6 +1134,62 @@ mod tests {
         assert!(!path.exists());
     }
 
+    /// A clock set before 1970 reads as no time, and every expiry is after it. The sign-in ends
+    /// before it opens a browser, binds a port or asks for anything, and stores nothing: one that went
+    /// on would take an ID token that expired long ago for one that has not.
+    #[test]
+    fn a_clock_set_before_1970_ends_the_sign_in_before_anything_is_opened_or_asked() {
+        let path = scratch("clock-at-the-start");
+        let mut announced = false;
+        let server = serve(vec![]);
+        let result = run(
+            &Hosts::at(&server.base),
+            transport(),
+            &brief(),
+            &PAGES,
+            &path,
+            || None,
+            |_| announced = true,
+        );
+
+        assert!(
+            matches!(result, Err(SignInError::Clock)),
+            "{result:?}, so the sign-in went on with a clock that reads no time"
+        );
+        assert!(!announced, "a browser was asked for");
+        assert!(!path.exists(), "an account was stored");
+        assert!(
+            server.finish().is_empty(),
+            "the server was asked for something"
+        );
+    }
+
+    /// The expiries are compared at the instant the reply arrives, so the clock is read again there,
+    /// and a clock that cannot be read then ends the sign-in after the code is spent and before the
+    /// key set is asked for or anything is stored.
+    #[test]
+    fn a_clock_that_cannot_be_read_where_the_reply_arrives_ends_the_sign_in_with_nothing_stored() {
+        let path = scratch("clock-at-the-reply");
+        let readings = std::cell::Cell::new(0);
+        let (result, announced, asked) = signed_in_by(
+            || {
+                readings.set(readings.get() + 1);
+                (readings.get() == 1).then(encoding::now)
+            },
+            Hosts::at,
+            &path,
+            granted,
+            Returns::With("code=the-code&client_id=issued-client"),
+            &brief(),
+        );
+
+        assert!(matches!(result, Err(SignInError::Clock)), "{result:?}");
+        assert!(announced.is_some(), "the browser was not asked for");
+        assert_eq!(readings.get(), 2);
+        assert_eq!(asked.len(), 1, "only the exchange was asked: {asked:?}");
+        assert!(!path.exists(), "an account was stored");
+    }
+
     /// No sentence of an error holds a value any step handled: the state, the code, a token or the
     /// path of a request. Each is fixed for the step and its class.
     #[test]
@@ -1118,6 +1202,7 @@ mod tests {
             SignInError::ClientChanged,
             SignInError::NoUseScope,
             SignInError::IdToken,
+            SignInError::Clock,
             SignInError::KeySet(Class::Refused),
             SignInError::KeySet(Class::Incomplete),
             SignInError::Exchange(Class::Refused),

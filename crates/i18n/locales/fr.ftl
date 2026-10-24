@@ -1073,6 +1073,8 @@ chatgpt-failed-no-use-scope =
     la connexion n'a pas permis à bravebot d'utiliser les jetons de l'abonnement, donc rien n'a été enregistré ; lancez bravebot auth login chatgpt et autorisez-le, ou utilisez une clé d'API avec la passerelle openai
 chatgpt-failed-id-token =
     le jeton d'identité renvoyé par le serveur d'autorisation n'a pas pu être vérifié, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login chatgpt pour réessayer
+chatgpt-failed-clock =
+    l'horloge de cet ordinateur est réglée avant 1970, donc la connexion ne peut pas savoir quand le jeton d'identité expire et rien n'a été enregistré ; réglez l'horloge, puis lancez bravebot auth login chatgpt pour réessayer
 chatgpt-failed-key-set = les clés qui vérifient la connexion n'ont pas pu être obtenues : { $reason } ; rien n'a été enregistré
 chatgpt-failed-exchange = la connexion n'a pas pu aboutir : { $reason } ; rien n'a été enregistré
 chatgpt-class-refused = le serveur d'autorisation a refusé la requête

@@ -313,6 +313,7 @@ fn said_of_sign_in(stopped: &SignInError) -> String {
         SignInError::NoUseScope => t!(chatgpt_failed_no_use_scope).into(),
         SignInError::KeySet(failed) => t!(chatgpt_failed_key_set, reason = class(failed)),
         SignInError::IdToken => t!(chatgpt_failed_id_token).into(),
+        SignInError::Clock => t!(chatgpt_failed_clock).into(),
         SignInError::Store(failure) => said_of_account(failure),
     }
 }
@@ -719,6 +720,7 @@ mod tests {
             SignInError::IdToken,
             SignInError::KeySet(Class::Refused),
             SignInError::KeySet(Class::Transport),
+            SignInError::Clock,
         ]
         .iter()
         .map(said_of_sign_in)
@@ -754,6 +756,16 @@ mod tests {
             sentences[13].contains("could not be reached"),
             "{}",
             sentences[13]
+        );
+        assert!(
+            sentences[14].contains("clock") && sentences[14].contains("1970"),
+            "{}",
+            sentences[14]
+        );
+        assert!(
+            sentences[14].contains("bravebot auth login chatgpt"),
+            "{}",
+            sentences[14]
         );
     }
 
