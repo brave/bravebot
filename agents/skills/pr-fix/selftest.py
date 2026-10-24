@@ -1211,6 +1211,95 @@ def test_open_reads_the_branch_from_the_issue_worktree_when_it_is_not_given():
         assert create[create.index("--head") + 1] == "someone:fix-thing", create
 
 
+def with_callout(*words):
+    """GOOD_BODY with the dependency callout of the implement-issues skill naming one commit per word."""
+    callout = "\n".join([
+        "> [!WARNING]",
+        f"> **The commit hook was bypassed for {len(words)} dependency change(s).** `git commit --no-verify` was",
+        "> used once for each commit below, because the hook refuses a staged dependency file.",
+        ">",
+        *[f"> - `{word}` Raise a crate: `Cargo.toml` changes `y 1.0 to 2.0`." for word in words],
+        "",
+    ])
+    return GOOD_BODY.replace("User impact:", callout + "\nUser impact:")
+
+
+def commit_file(tree, name):
+    path = tree / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("x\n")
+    git("add", name, cwd=tree)
+    git("commit", "-q", "-m", f"change {name}", cwd=tree)
+    return git("rev-parse", "HEAD", cwd=tree)
+
+
+def test_the_callout_must_name_each_commit_that_touched_a_dependency_file():
+    first, second = "a1" * 20, "b2" * 20
+    assert pr_fix.dependency_problem(GOOD_BODY, []) is None, "no dependency commit needs no callout"
+    assert pr_fix.dependency_problem(with_callout(first, second), [first, second]) is None
+    assert pr_fix.dependency_problem(with_callout(first[:7], second[:12]), [first, second]) is None, "a hash may be short"
+
+    refused = {
+        "no callout": (GOOD_BODY, [first]),
+        "one of two": (with_callout(first[:7]), [first, second]),
+        "a hash outside the callout": (GOOD_BODY.replace("Fixed.", f"Fixed. See {first[:7]}."), [first]),
+        "a quote that is not the warning": (GOOD_BODY.replace("Fixed.", f"> {first[:7]} was reviewed."), [first]),
+        "a quote after the callout ends": (
+            GOOD_BODY.replace("User impact:", f"> [!WARNING]\n> A note.\n\n> {first[:7]}\n\nUser impact:"), [first]
+        ),
+        "a hash too short to name one": (with_callout(first[:6]), [first]),
+    }
+    for name, (body, hashes) in refused.items():
+        assert pr_fix.dependency_problem(body, hashes), name
+    unnamed = pr_fix.dependency_problem(with_callout(first[:7]), [first, second])
+    assert second[:10] in unnamed and first[:10] not in unnamed, "the message names only the commit left out"
+
+
+def test_a_commit_that_touches_a_manifest_or_a_lockfile_at_any_depth_is_a_dependency_commit():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        _, patched = gh_calls(lambda args: "[]")
+        with patched:
+            quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes)
+        tree = clone / ".worktrees" / "issue-5"
+        named = ["Cargo.toml", "crates/x/Cargo.toml", "Cargo.lock", "ui/package.json", "ui/pnpm-lock.yaml", "deny.toml"]
+        others = ["b.txt", "docs/cargo-notes.md", "crates/x/src/lib.rs"]
+        dependency = [commit_file(tree, name) for name in named]
+        for name in others:
+            commit_file(tree, name)
+        assert pr_fix.dependency_commits(tree, "upstream/main") == dependency[::-1]
+
+
+def test_open_refuses_a_body_whose_callout_leaves_out_a_dependency_commit_before_it_pushes_or_opens():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        seen, patched = gh_calls(
+            lambda args: "[]" if args[1] == "pr" and args[2] == "list" else "https://github.com/brave/bravebot/pull/30\n"
+        )
+        with patched:
+            quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes)
+            tree = clone / ".worktrees" / "issue-5"
+            dependency = commit_file(tree, "crates/x/Cargo.toml")
+            commit_file(tree, "b.txt")
+            body = root / "body.md"
+            args = (5, "fix-thing", "Fix the thing", body, clone, remotes)
+
+            for text in (GOOD_BODY, with_callout("0" * 7)):
+                body.write_text(text)
+                code, out = quietly(pr_fix.open_pull, *args)
+                assert code == 1 and dependency[:10] in out and "callout" in out, out
+            assert not any(call[1:3] == ("pr", "create") for call in seen), "nothing is opened"
+            assert not pr_fix.succeeds("rev-parse", "--verify", "--quiet", "refs/heads/fix-thing", cwd=root / "fork.git"), "nothing is pushed"
+
+            body.write_text(with_callout(dependency[:7]))
+            code, out = quietly(pr_fix.open_pull, *args)
+            assert code == 0 and "pull/30" in out, out
+
+
 def test_the_issue_steps_take_one_issue_and_only_open_takes_a_title_and_a_body():
     with in_a_git_directory():
         for argv, said in (

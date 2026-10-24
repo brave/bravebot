@@ -105,8 +105,9 @@ dependency and its version (old and new where it is changed), and the four state
 what it buys, what existing code would cost, what it brings, and its licence and upkeep. It is
 never a `## Decisions to confirm` entry, never inside a `<details>` block, and never left to the
 test plan. The same text is posted as a comment on the pull request once it is open, because
-editing a body notifies nobody. [Dependency changes](SKILL.md#dependency-changes-and-hook-bypasses)
-says when the bypass is allowed and how the list is checked.
+editing a body notifies nobody. `... open` refuses a body whose callout does not name each such
+commit by its hash. [Dependency changes](SKILL.md#dependency-changes-and-hook-bypasses) says when
+the bypass is allowed and how the list is checked.
 
 ## User impact
 

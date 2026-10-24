@@ -24,7 +24,9 @@
     pr-fix.py open <issue> --title T --body-file F [--branch B]
                                         push the issue's branch to origin and open the pull request;
                                         the branch is the one in the issue's worktree, and --branch
-                                        names it when it was reused from another worktree
+                                        names it when it was reused from another worktree; it refuses
+                                        a body whose `> [!WARNING]` callout leaves out a commit that
+                                        touched a dependency file
 
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
 act on: the line ranges of each conflict, the log of each failing job, the text of each open review
@@ -68,6 +70,8 @@ LOGIN = re.compile(r"[A-Za-z0-9-]+")
 EM_DASH = "\u2014"
 BODY_HEADINGS = ("## The problem", "## Reproduce", "## The fix", "## Test plan")
 CI_LINE = "- [ ] CI passes cleanly"
+# The files a dependency change touches, as the implement-issues skill lists them for its callout.
+DEPENDENCY_FILES = ("*Cargo.toml", "Cargo.lock", "*package.json", "*pnpm-lock.yaml", "deny.toml")
 
 
 def _load_shared():
@@ -596,6 +600,37 @@ def body_problem(body, number, author=None):
     return None
 
 
+def callout_lines(body):
+    """The lines of the body's first `> [!WARNING]` block, which is where each dependency commit is named."""
+    lines = body.splitlines()
+    starts = [at for at, one in enumerate(lines) if one.startswith("> [!WARNING]")]
+    if not starts:
+        return []
+    block = []
+    for one in lines[starts[0] :]:
+        if not one.startswith(">"):
+            break
+        block.append(one)
+    return block
+
+
+def dependency_commits(tree, onto):
+    """The full hashes of the commits on the branch that touch a dependency file."""
+    return git("log", "--format=%H", f"{onto}..HEAD", "--", *DEPENDENCY_FILES, cwd=tree).split()
+
+
+def dependency_problem(body, hashes):
+    """Why the callout leaves out a commit that touched a dependency file, else None."""
+    named = re.findall(r"\b[0-9a-f]{7,40}\b", "\n".join(callout_lines(body)))
+    missing = [one[:10] for one in hashes if not any(one.startswith(word) for word in named)]
+    if not missing:
+        return None
+    return (
+        f"{', '.join(missing)} touch a dependency file and the body's `> [!WARNING]` callout does not name "
+        f"each one; the implement-issues skill's Dependency changes section says what it holds"
+    )
+
+
 def origin_repo(remotes):
     for repo, (remote, _) in remotes.items():
         if remote == "origin":
@@ -649,7 +684,8 @@ def open_pull(number, branch, title, body_file, here, remotes):
     if not title.strip() or EM_DASH in title:
         die("the title is empty or has an em-dash")
     author = run("gh", "api", "user", "--jq", ".login", check=False).stdout.strip()
-    problem = body_problem(Path(body_file).read_text(encoding="utf-8"), number, author)
+    text = Path(body_file).read_text(encoding="utf-8")
+    problem = body_problem(text, number, author) or dependency_problem(text, dependency_commits(tree, onto))
     if problem:
         die(problem)
     args = ["push", "origin", f"HEAD:refs/heads/{branch}"]

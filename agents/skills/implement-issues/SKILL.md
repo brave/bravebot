@@ -366,8 +366,8 @@ commit (step 6, item 9), draft an issue and file it with the
 first, so its number exists when the body is written. Then re-run `pr-fix.py issue <n>` for every
 item still `combined`: if a pull request now names one, drop it from this one and report it.
 
-Check [Dependency changes](#dependency-changes-and-hook-bypasses), item 6, so that the callout
-lists every commit that touched a dependency file.
+Run [Dependency changes](#dependency-changes-and-hook-bypasses), item 6, so that the callout
+lists every commit that touched a dependency file. `... open` refuses a body that leaves one out.
 
 Write the body to a file outside the worktree, in the shape of [pr-body.md](pr-body.md), and the
 title as one sentence naming what changes for a person, with no prefix, issue number or em-dash.
@@ -455,12 +455,15 @@ lockfile. It is work, not a cause to block a row.
 
    It is not a `## Decisions to confirm` entry, and it is not inside a `<details>` block. The final
    report states it first.
-6. **Check the list is whole.** Before the body is written, run
-   `git log --format='%h %s' <base>..HEAD -- '*Cargo.toml' Cargo.lock '*package.json' '*pnpm-lock.yaml' deny.toml`,
-   and add any other manifest the change touched. It names every commit that touches a dependency
-   file, and each is in the callout with its justification. A commit that touches one and is not
-   listed, or a listed commit that was made without the bypass, is fixed before the pull request
-   opens.
+6. **Check the list is whole.** `... open` runs
+   `git log --format=%H <base>..HEAD -- '*Cargo.toml' Cargo.lock '*package.json' '*pnpm-lock.yaml' deny.toml`
+   and refuses a body whose callout does not name each commit it prints, by at least seven
+   characters of its hash. Run the same command with `--format='%h %s'` before the body is written,
+   and add any other manifest the change touched, since `open` does not know of one. A listed commit
+   that was made without the bypass is fixed before the pull request opens. Git keeps no record of
+   `--no-verify`, so nothing checks that a commit touching no dependency file was made without it.
+   Item 3 forbids it, and the gates of step 6 read the tip, so a bypassed commit that leaves the tree
+   failing them is still caught.
 
 ## Decisions to confirm
 
