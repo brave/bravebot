@@ -31,6 +31,8 @@ struct Captured {
     request_line: String,
     headers: Vec<(String, String)>,
     body: String,
+    /// The body as the bytes that arrived, for a request whose body is not text.
+    raw: Vec<u8>,
 }
 
 impl Captured {
@@ -84,6 +86,7 @@ fn serve(response_body: &str) -> (String, mpsc::Receiver<Captured>) {
             request_line: request_line.trim().to_string(),
             headers,
             body: String::from_utf8_lossy(&body).to_string(),
+            raw: body,
         });
 
         let response = format!(
@@ -144,6 +147,7 @@ fn serve_stream(frames: Vec<String>) -> (String, mpsc::Receiver<Captured>) {
                 request_line: request_line.trim().to_string(),
                 headers,
                 body: String::from_utf8_lossy(&body).to_string(),
+                raw: body,
             });
 
             // No content-length: the stream ends when the connection closes, as a real one does.
@@ -358,6 +362,7 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                 request_line: request_line.trim().to_string(),
                 headers,
                 body: String::from_utf8_lossy(&body).to_string(),
+                raw: body,
             });
 
             match attempt {
@@ -5118,6 +5123,7 @@ fn serve_redirect(location: String) -> (String, mpsc::Receiver<Captured>) {
                 request_line: request_line.trim().to_string(),
                 headers,
                 body: String::from_utf8_lossy(&body).to_string(),
+                raw: body,
             });
             let _ = stream.write_all(
                 format!(
@@ -7001,11 +7007,87 @@ fn account_request(words: &str) -> ChatRequest {
     ChatRequest::new("chatgpt/a-model", vec![Message::user(words)])
 }
 
-/// CHATGPT-10: a request carries the access token as a bearer and the three session headers, each
-/// holding the session's identifier and none holding the token. A gateway's headers and key are not
-/// the account's, so neither travels to it.
+/// The words a generator draws, one of `alphabet` for each character, so the same length gives the
+/// same text on every run.
+fn drawn_from(alphabet: &[&str], len: usize) -> String {
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let mut text = String::with_capacity(len + 16);
+    while text.len() < len {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        text.push_str(alphabet[(state % alphabet.len() as u64) as usize]);
+    }
+    text
+}
+
+/// Text that encodes to a small part of its length, as prose and source do: sixteen words, each
+/// followed by a space.
+fn compressible_text(len: usize) -> String {
+    drawn_from(
+        &[
+            "the ", "request ", "body ", "file ", "line ", "read ", "write ", "tool ", "result ",
+            "turn ", "model ", "reply ", "stream ", "token ", "path ", "call ",
+        ],
+        len,
+    )
+}
+
+/// Text with no pattern to find: each character is one of the 64 that base64 uses, drawn at random,
+/// which no encoder takes below three quarters of its length.
+fn incompressible_text(len: usize) -> String {
+    const BASE64: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let characters: Vec<&str> = (0..BASE64.len()).map(|at| &BASE64[at..=at]).collect();
+    drawn_from(&characters, len)
+}
+
+/// The body the service reads from an account request: the zstd frame the request carried, decoded.
+fn decoded_account_body(sent: &Captured) -> Vec<u8> {
+    let mut decoder =
+        ruzstd::decoding::StreamingDecoder::new(&sent.raw[..]).expect("the body is a zstd frame");
+    let mut plain = Vec::new();
+    decoder.read_to_end(&mut plain).expect("the frame decodes");
+    plain
+}
+
+/// The checksum the frame holds, which is there where the encoder writes one. The streaming decoder
+/// above does not compare it.
+fn frame_checksum(sent: &Captured) -> Option<u32> {
+    use ruzstd::decoding::{BlockDecodingStrategy, FrameDecoder};
+    let mut source = &sent.raw[..];
+    let mut decoder = FrameDecoder::new();
+    decoder
+        .reset(&mut source)
+        .expect("the body is a zstd frame");
+    decoder
+        .decode_blocks(&mut source, BlockDecodingStrategy::All)
+        .expect("the frame decodes");
+    decoder.get_checksum_from_data()
+}
+
+/// The body a request is built as, which a gateway is sent as it is, so it is what an account's
+/// body has to decode to.
+fn built_body(request: &ChatRequest) -> Vec<u8> {
+    let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    responses_client(&egress, &provider, "a-model")
+        .complete(&mut policy, request)
+        .expect("the gateway answered");
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(sent.header("content-encoding"), None);
+    sent.raw
+}
+
+/// CHATGPT-10: a request carries the access token as a bearer, the three session headers, each
+/// holding the session's identifier and none holding the token, and the encoding of its body, and
+/// no other header of its own. A gateway's headers and key are not the account's, so neither
+/// travels to it.
 #[test]
-fn an_account_request_carries_the_token_and_three_session_headers_and_nothing_a_gateway_would() {
+fn an_account_request_carries_the_token_the_three_session_headers_and_the_zstd_encoding_and_nothing_a_gateway_would()
+ {
     let (endpoint, received) = serve_stream(text_reply(&["ok"]));
     let provider = responses_at(&endpoint);
     let egress = Egress::new();
@@ -7030,11 +7112,39 @@ fn an_account_request_carries_the_token_and_three_session_headers_and_nothing_a_
     for name in ["session-id", "thread-id", "x-client-request-id"] {
         assert_eq!(sent.header(name), Some(ACCOUNT_SESSION), "{name}");
     }
+    assert_eq!(sent.header("content-encoding"), Some("zstd"));
     assert_eq!(sent.header("x-gateway-header"), None);
     assert_eq!(sent.header("x-api-key"), None);
-    assert!(!sent.body.contains(ACCOUNT_TOKENS[0]), "{}", sent.body);
-    assert!(!sent.body.contains(ACCOUNT_SESSION), "{}", sent.body);
-    let body = json_of(&sent);
+    // The whole list, so a header added to a request to this host is a failure here. The rest is
+    // what any request carries.
+    let mut names: Vec<String> = sent
+        .headers
+        .iter()
+        .map(|(name, _)| name.to_ascii_lowercase())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "accept",
+            "authorization",
+            "content-encoding",
+            "content-length",
+            "content-type",
+            "host",
+            "session-id",
+            "thread-id",
+            "user-agent",
+            "x-client-request-id"
+        ],
+        "{:?}",
+        sent.headers
+    );
+    let plain = decoded_account_body(&sent);
+    let text = String::from_utf8(plain.clone()).expect("the decoded body is text");
+    assert!(!text.contains(ACCOUNT_TOKENS[0]), "{text}");
+    assert!(!text.contains(ACCOUNT_SESSION), "{text}");
+    let body: serde_json::Value = serde_json::from_slice(&plain).expect("the decoded body is JSON");
     assert_eq!(body["model"], "a-model");
     assert_eq!(body["stream"], true);
     assert_eq!(body["store"], false);
@@ -7409,22 +7519,60 @@ fn a_reply_that_is_not_the_accounts_listing_cannot_be_read_and_an_empty_one_can(
     assert!(models.is_empty());
 }
 
-/// CHATGPT-10: the service takes no body over about a mebibyte uncompressed, so a larger one is
-/// not sent, spends no token and is reported as too large, which a turn answers by shortening the
-/// conversation. A body below the limit is sent.
+/// CHATGPT-10: the body is sent as the zstd frame it is encoded to, and the limit is on that frame.
+/// A conversation whose body is over a mebibyte as it is built and under it once encoded is sent,
+/// with one request and one token asked for, and decodes to the bytes a gateway is sent for the same
+/// conversation. A limit applied to the body as it is built refuses it, and a frame that did not
+/// decode to what was built changes the conversation the service answers.
 #[test]
-fn a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token() {
-    let egress = Egress::new();
+fn a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_built() {
+    let words = compressible_text(2 << 20);
+    let built = built_body(&account_request(&words));
+    assert!(
+        built.len() > 1 << 20,
+        "{} bytes are not over the limit",
+        built.len()
+    );
 
     let (endpoint, received) = serve_stream(text_reply(&["ok"]));
     let provider = responses_at(&endpoint);
+    let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut policy = open_policy(&mut sink);
     let mut sign_in = StoredSignIn::default();
-    account_client(&egress, &provider, &mut sign_in)
-        .complete(&mut policy, &account_request(&"a".repeat(1_000_000)))
-        .expect("a body below the limit is sent");
-    assert!(received.recv().unwrap().body.len() > 1_000_000);
+    let mut client = account_client(&egress, &provider, &mut sign_in);
+    client
+        .complete(&mut policy, &account_request(&words))
+        .expect("a body that encodes under the limit is sent");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(sent.header("content-encoding"), Some("zstd"));
+    assert!(
+        sent.raw.len() <= 1 << 20 && sent.raw.len() < built.len(),
+        "{} bytes were sent for a body of {}",
+        sent.raw.len(),
+        built.len()
+    );
+    assert!(
+        frame_checksum(&sent).is_some(),
+        "the frame carries no checksum, so a decoder that checks one has nothing to check"
+    );
+    assert!(
+        decoded_account_body(&sent) == built,
+        "the frame does not decode to the body that was built"
+    );
+    assert_eq!(client.attempts(), 1);
+    assert_eq!(sign_in.asked, 1);
+    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+}
+
+/// CHATGPT-10: a body still over the limit once encoded is not sent, spends no token and is reported
+/// as too large, which a turn answers by shortening the conversation. Text with no pattern to find
+/// is over a mebibyte as it is built and as it is encoded, and encoding does not stand in for a
+/// shorter conversation. An implementation with no check sends it.
+#[test]
+fn a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token() {
+    let egress = Egress::new();
 
     let (endpoint, received) = serve_stream(text_reply(&["never asked for"]));
     let provider = responses_at(&endpoint);
@@ -7433,7 +7581,10 @@ fn a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token(
     let mut sign_in = StoredSignIn::default();
     let mut client = account_client(&egress, &provider, &mut sign_in);
     let error = client
-        .complete(&mut policy, &account_request(&"a".repeat(1_100_000)))
+        .complete(
+            &mut policy,
+            &account_request(&incompressible_text(1_700_000)),
+        )
         .expect_err("too large to send");
     assert!(
         matches!(error, ChatError::BodyTooLarge { limit } if limit == 1 << 20),
@@ -7445,6 +7596,61 @@ fn a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token(
         "a token was asked for a request that was not sent"
     );
     assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
+}
+
+/// CHATGPT-10: every body to the account is encoded, whatever its size, so there is one way a body
+/// is sent and no size at which the encoding stops. Each decodes to what a gateway is sent for the
+/// same conversation. An encoding applied from some size up leaves a short body plain, with the header
+/// absent or present, and a plain body under the header is not a frame.
+#[test]
+fn an_account_body_is_encoded_whatever_its_size() {
+    let egress = Egress::new();
+    for length in [2, 300, 60_000, 700_000, 2 << 20] {
+        let words = compressible_text(length);
+        let built = built_body(&account_request(&words));
+
+        let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+        let provider = responses_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut sign_in = StoredSignIn::default();
+        account_client(&egress, &provider, &mut sign_in)
+            .complete(&mut policy, &account_request(&words))
+            .expect("the body was sent");
+
+        let sent = received.recv().expect("the request arrived");
+        assert_eq!(
+            sent.header("content-encoding"),
+            Some("zstd"),
+            "{length} characters"
+        );
+        assert!(
+            decoded_account_body(&sent) == built,
+            "a body of {length} characters did not decode to what was built"
+        );
+    }
+}
+
+/// CHATGPT-10: only a request to the account is encoded. A gateway takes the JSON as it is built,
+/// with no `content-encoding`, since nothing says it decodes one.
+#[test]
+fn a_gateways_body_is_plain_json_with_no_content_encoding() {
+    let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    responses_client(&egress, &provider, "a-model")
+        .complete(&mut policy, &account_request(&compressible_text(3 << 20)))
+        .expect("the reply was read");
+
+    let sent = received.recv().expect("the request arrived");
+    assert_eq!(sent.header("content-encoding"), None);
+    assert!(sent.raw.len() > 3 << 20, "{} bytes", sent.raw.len());
+    let body = json_of(&sent);
+    assert_eq!(body["model"], "a-model");
+    assert_eq!(body["stream"], true);
 }
 
 /// A gateway entry is not the account: a 401 from it is its key being refused and no token is

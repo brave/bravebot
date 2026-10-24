@@ -211,7 +211,12 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
     }
     let mut body = vec![0u8; length];
     let _ = reader.read_exact(&mut body);
-    let form = form(&String::from_utf8_lossy(&body));
+    // Only the token endpoint takes a form. A request to the serving host carries a zstd frame.
+    let form = if path == "/token" {
+        form(&String::from_utf8_lossy(&body))
+    } else {
+        Vec::new()
+    };
 
     let mut state = state.lock().expect("the state");
     state.sessions.extend(session);

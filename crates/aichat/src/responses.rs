@@ -46,9 +46,20 @@ fn worth_asking_again(allowed: u32, attempt: u32, error: &ChatError) -> bool {
             && matches!(error, ChatError::Reported { failure } if failure.is_transient()))
 }
 
-/// The largest body sent to a ChatGPT account's serving host, which takes none larger uncompressed
-/// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+/// The largest body sent to a ChatGPT account's serving host, measured on the zstd frame the body is
+/// sent as ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+///
+/// The program the account's request is read from says the host rejects an uncompressed body over
+/// about this size. Whether it limits the frame, and where, has not been observed.
 const ACCOUNT_BODY_LIMIT: usize = 1 << 20;
+
+/// `body` as one zstd frame, the form the account's serving host takes a body in.
+///
+/// Level `Fastest`, the one level `ruzstd` implements, with the frame's checksum. The frame goes to
+/// egress as it is, and the caller takes its length and nothing else from it.
+fn zstd_frame(body: &[u8]) -> Vec<u8> {
+    ruzstd::encoding::compress_to_vec(body, ruzstd::encoding::CompressionLevel::Fastest)
+}
 
 /// What a request to a ChatGPT account's serving host carries beyond a gateway's, and the token it
 /// is sent with.
@@ -124,8 +135,9 @@ impl<'a> ResponsesClient<'a> {
     /// time ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
     ///
     /// Each request carries the token and the three session headers with `session` as the value of
-    /// each, refuses a redirect, and is not sent where its body is larger than the service takes.
-    /// A token the host refuses is replaced once and the request sent again.
+    /// each, sends its body as a zstd frame, refuses a redirect, and is not sent where that frame is
+    /// larger than the service takes. A token the host refuses is replaced once and the request sent
+    /// again.
     pub fn for_account(
         egress: &'a Egress,
         provider: &'a Provider,
@@ -283,6 +295,24 @@ impl<'a> ResponsesClient<'a> {
         serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))
     }
 
+    /// The body of one request as it is sent: as it was encoded for a gateway, and for the account
+    /// as the zstd frame that host decodes ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Every account body is a frame, whatever its size. The limit is on the frame, so a body that
+    /// is over it as it was built and under it encoded is sent, and one still over it is not.
+    fn on_the_wire(&self, encoded: Vec<u8>) -> Result<Vec<u8>, ChatError> {
+        if self.account.is_none() {
+            return Ok(encoded);
+        }
+        let frame = zstd_frame(&encoded);
+        if frame.len() > ACCOUNT_BODY_LIMIT {
+            return Err(ChatError::BodyTooLarge {
+                limit: ACCOUNT_BODY_LIMIT,
+            });
+        }
+        Ok(frame)
+    }
+
     /// The request for one attempt, addressed and authenticated.
     fn build(&self, body: Vec<u8>, token: Option<&Secret>) -> Request {
         let mut http = Request::post(self.provider.completion_url(), body)
@@ -304,6 +334,8 @@ impl<'a> ResponsesClient<'a> {
             for name in ["session-id", "thread-id", "x-client-request-id"] {
                 http = http.header(name, account.session.as_str());
             }
+            // The body is the frame `on_the_wire` made, and this is the one header that says so.
+            http = http.header("content-encoding", "zstd");
             http = http.refusing_redirects().reading_a_refusal();
         } else {
             // After the credential, and never over it: a name this request already set is refused
@@ -511,14 +543,9 @@ impl<'a> ResponsesClient<'a> {
             return Err(ChatError::Cancelled);
         }
 
-        let body = self.encode(request)?;
         // Before a token is asked for, which can mean a renewal: a body that is not going to be sent
         // spends nothing.
-        if self.account.is_some() && body.len() > ACCOUNT_BODY_LIMIT {
-            return Err(ChatError::BodyTooLarge {
-                limit: ACCOUNT_BODY_LIMIT,
-            });
-        }
+        let body = self.on_the_wire(self.encode(request)?)?;
         let token = match self.account.as_mut() {
             Some(account) => {
                 let token = account.access.access_token().map_err(ChatError::Account)?;

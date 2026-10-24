@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/backend.rs
   - crates/agent/src/chatgpt.rs
   - crates/aichat/src/lib.rs
+  - crates/aichat/src/responses.rs
   - crates/aichat/src/models.rs
   - crates/tui/src/app/models.rs
   - crates/ui-bridge/src/models.rs
@@ -158,7 +159,7 @@ compiled in.
 `verified-by: bravebot_config::provider::the_chatgpt_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own`
 `verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_an_account_request_is_a_failure_and_goes_nowhere`
-`verified-by: bravebot_aichat::client::an_account_request_carries_the_token_and_three_session_headers_and_nothing_a_gateway_would`
+`verified-by: bravebot_aichat::client::an_account_request_carries_the_token_the_three_session_headers_and_the_zstd_encoding_and_nothing_a_gateway_would`
 
 <a id="CHATGPT-3"></a>
 ### CHATGPT-3: the values the request depends on are generated here, for one sign-in
@@ -719,33 +720,47 @@ events, a tool call and its result, usage and cache figures and the effort level
 this service adds no protocol of its own. The effort level maps to the service's reasoning field, and no
 request to this host is made in another protocol.
 
-The access token is sent as a bearer token in `authorization`. The request carries three more headers,
-`session-id`, `thread-id` and `x-client-request-id`, each holding the identifier of the session that makes
-the request, which this program generated. The service derives its prompt-cache affinity from `session-id`.
-The body is compressed with zstd and sent with `content-encoding: zstd`, since the service rejects an
-uncompressed body over about 1 MiB and decodes zstd. Compaction of a conversation for this service is by
-summary ([compaction.md](compaction.md)), as it is for every service, and the service offers no native
-compaction to use instead. The effort level of a session is fixed when the session starts. Nothing else a reply, a model or a settings file says is
+The access token is sent as a bearer token in `authorization`. The request carries four more headers.
+`session-id`, `thread-id` and `x-client-request-id` each hold the identifier of the session that makes
+the request, which this program generated, and the service derives its prompt-cache affinity from
+`session-id`. The fourth is `content-encoding: zstd`: the body is the JSON of [BACKEND-61](backends.md#BACKEND-61)
+compressed with zstd into one frame, whatever its size, since the service rejects an uncompressed body over
+about 1 MiB and decodes zstd. The frame is what is sent: the length the request states and every check on
+the body's size are the frame's. A frame over 1 MiB is not sent: the turn is told the body is too large,
+spends no token on it, and shortens the conversation as it does where a service refuses the body. A body
+over 1 MiB as it is built and under it as a frame is sent. The limit is the one the program this is read
+from states for an uncompressed body, and whether it applies to the frame or to what the frame decodes to
+has not been observed. This program adds a `content-encoding` to the request of no other service. Compaction of a
+conversation for this service is by summary ([compaction.md](compaction.md)), as it is for every service,
+and the service offers no native compaction to use instead. The effort level of a session is fixed when the session starts. Nothing else a reply, a model or a settings file says is
 added to a request to this host: a gateway's options are carried into its requests, and this service takes
 none. The sign-in stores no identifier of the account and no header value is taken from a reply.
 
-**Not built:** the zstd body. The body is sent as it is built, and one over 1 MiB is not sent: the turn is told
-the body is too large, spends no token on it, and shortens the conversation as it does where a service
-refuses the body. The limit is the one the
-program this is read from states and has not been observed. No encoder is in the tree, and adding one is a
-decision about a dependency ([Decisions left open](#decisions-left-open)). The identifier is one per process
-and not one per session, since the agent holds no session, so a second session in a process presents the
-first's. The effort level is not held fixed for the session.
+**Not built:** the identifier is one per process and not one per session, since the agent holds no
+session, so a second session in a process presents the first's. The effort level is not held fixed for the
+session.
 
 **Why.** The service decides the protocol, and a protocol written for one service is a second copy of the
 work for the next. A header a settings file could add would be a way to put a value, or another credential,
-on a request this clause promises carries only the token and the session's identifiers. Headers built only
+on a request this clause promises carries only the token, the session's identifiers and the encoding.
+Headers built only
 from constants and from values this program generated cannot carry a line break or a length a reply chose.
 A body the service refuses for its size would fail a long conversation at the point a person has the most
-to lose, so the encoding is not left to a setting.
+to lose, so the encoding is not left to a setting, and it is applied to every body so that no size is sent
+in a form the others are not. The program this is read from compresses every body of this service, with no
+size above which it starts, and sends a body to another service as it is unless a person asked for an
+encoding. The encoder is `ruzstd`, which is Rust with no build script and no native code, where the `zstd`
+crate would compile the C library into each target this program is built for. libzstd decodes the frames
+`ruzstd` writes, through its command line tool at 1.5.7, Node 24's `zlib` and Python 3.15's
+`compression.zstd`, for bodies from empty to 8 MiB and for ones that do not compress, and no other decoder
+has been tried. The encoder writes one level, roughly zstd level 1, with the frame's checksum and no content
+size in the header.
 
-`verified-by: bravebot_aichat::client::an_account_request_carries_the_token_and_three_session_headers_and_nothing_a_gateway_would`
+`verified-by: bravebot_aichat::client::an_account_request_carries_the_token_the_three_session_headers_and_the_zstd_encoding_and_nothing_a_gateway_would`
+`verified-by: bravebot_aichat::client::a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_built`
 `verified-by: bravebot_aichat::client::a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token`
+`verified-by: bravebot_aichat::client::an_account_body_is_encoded_whatever_its_size`
+`verified-by: bravebot_aichat::client::a_gateways_body_is_plain_json_with_no_content_encoding`
 `verified-by: bravebot_aichat::client::a_gateways_refused_key_is_not_reported_as_the_chatgpt_sign_in_failing`
 `verified-by: bravebot_agent::backend::a_body_not_sent_for_its_size_is_a_refusal_of_the_body_and_no_failure_of_the_sign_in`
 `verified-by: bravebot_agent::chatgpt::the_session_identifier_is_one_random_value_for_the_process`
@@ -868,15 +883,15 @@ brings.
 
 The requests a turn sends are made by the Responses client of `bravebot-aichat` given a token source, and
 `crates/agent/src/chatgpt.rs` is that source: one renewer for the process, which keeps a renewal the file could
-not take for the rest of it, and the note of that, which the turn says once.
+not take for the rest of it, and the note of that, which the turn says once. The same client encodes the body
+of a request to the account with `ruzstd` ([CHATGPT-10](#CHATGPT-10)).
 
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2), [CHATGPT-3](#CHATGPT-3),
   [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7),
   [CHATGPT-8](#CHATGPT-8), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12),
   [CHATGPT-13](#CHATGPT-13) and [CHATGPT-14](#CHATGPT-14).
 - **Built in part,** each naming what is not: [CHATGPT-9](#CHATGPT-9) and [CHATGPT-10](#CHATGPT-10).
-- **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); and the
-  zstd body of [CHATGPT-10](#CHATGPT-10).
+- **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134).
 
 A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
 `chatgpt` entry names, or where it names none, the models the serving host's listing offers. Once the sign-in
@@ -891,9 +906,6 @@ These are a person's to decide, and no test can settle them.
   presents no other program's identifier. Whether ChatGPT's terms allow a third-party program to use a
   subscription this way, and whether OpenAI's registration accepts this program, has to be decided before
   this ships. If it does not, this should not land as written.
-- **Compressing the body.** [CHATGPT-10](#CHATGPT-10) sends zstd. The tree holds no encoder, and adding
-  one is a decision about a dependency in the same way. The request is sent uncompressed until it is decided,
-  and a conversation whose body passes 1 MiB is shortened, where the service would take it compressed.
 - **The compiled list.** [CHATGPT-9](#CHATGPT-9) offers one where the listing cannot be read. Its contents
   are a constant a release changes. The alternative is to offer nothing in that case and say to name the
   models in the `chatgpt` entry.
@@ -961,8 +973,12 @@ real ChatGPT account on this program's own build:
   key set.
 - The ID token's issuer. The sign-in compares it with the constant `https://auth.openai.com`, which is not
   observed from the service: a real token that names another refuses every sign-in.
-- What the three session headers do for prompt-cache affinity, the zstd body, and that there is no native
-  compaction and no change of effort in a session.
+- What the three session headers do for prompt-cache affinity, and that there is no native compaction and no
+  change of effort in a session.
+- That the service decodes a zstd body, which the program this is read from sends for every request to it.
+  The frames this program writes differ from the ones that program's `zlib` writes in having a checksum and
+  no content size, at a lower level. That the service takes such a frame, the size at which it rejects a
+  body, and whether that size is of the frame or of what it decodes to, are not observed.
 - The error codes that end the use of a subscription: `subscription_sharing_usage_limit_exceeded`,
   `subscription_sharing_user_not_eligible`, `subscription_sharing_unsupported_capability`,
   `subscription_sharing_route_not_supported`, `subscription_sharing_invalid_user`,
@@ -1003,7 +1019,7 @@ work lands, in the same commit as the code.
   [BACKEND-22](backends.md#BACKEND-22), [BACKEND-31](backends.md#BACKEND-31) and
   [BACKEND-52](backends.md#BACKEND-52) with the Responses protocol. [BACKEND-20](backends.md#BACKEND-20)
   also gains the case that the effort level of a session is fixed when it starts, and the aichat client
-  gains a zstd body encoding.
+  gains a zstd body encoding, which [BACKEND-61](backends.md#BACKEND-61) states.
 - **The command line.** [CLI-18](cli.md#CLI-18) lists five ways and states `logout chatgpt`.
   [CLI-23](cli.md#CLI-23) takes `chatgpt` as a way.
 - **Incognito.** [INCOG-7](incognito.md#INCOG-7) refuses the sign-in, and
@@ -1064,8 +1080,16 @@ work lands, in the same commit as the code.
 - A person whose gateway entry already has the id `chatgpt` renames it to sign in.
 - A reply that names another model than the one asked for is not reported as a substitution for the account,
   since whether the host answers under the name asked or under a dated one is not observed.
-- A turn on the account sends its body uncompressed and refuses one over 1 MiB, so a long conversation is
-  shortened sooner than the service would need, and the limit has not been observed.
+- The body is encoded at the one level `ruzstd` writes, which makes frames about 1.4 times the size of
+  libzstd's default level on request-shaped JSON (0.40 of the input against 0.27 to 0.29, measured on bodies
+  built from this repository's files), and a frame over 1 MiB is not sent. It matches a repeat only within
+  128 KiB, so a conversation that holds the same large text twice, far apart, gains nothing from the second
+  copy. A long conversation is shortened sooner than it would be by the program this is read from, and the
+  limit has not been observed.
+- The frame has a checksum and no content size, where the frames Node's `zlib` writes, which the program this
+  is read from calls, have a content size and no checksum. A service that needs the size before it reads the
+  frame refuses every body. The change that follows is the `zstd` crate, which writes the size, at the cost
+  of compiling its C library for each target.
 - Where the listing cannot be read no picker lists the account's models, so a person types `chatgpt/<name>`,
   and a name the account cannot reach is refused at the first request.
 - A picker asks the serving host for the listing each time it opens, and the sign-in command asks it when the

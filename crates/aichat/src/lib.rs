@@ -72,7 +72,7 @@ pub enum ChatError {
     ///
     /// Fails the request rather than falling back: see [`AichatClient::route`].
     Subscription(String),
-    /// The body is larger than the service takes, so it was not sent
+    /// The body, as the form it is sent in, is larger than the service takes, so it was not sent
     /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
     ///
     /// Sent nowhere and no token spent on it. A caller that can shorten the conversation does, as
@@ -146,8 +146,8 @@ impl fmt::Display for ChatError {
             }
             Self::BodyTooLarge { limit } => write!(
                 f,
-                "the request body is larger than the {limit} bytes the service takes, so it was not \
-                 sent. Shorten the conversation"
+                "the request body is larger than the {limit} bytes the service takes, even compressed, \
+                 so it was not sent. Shorten the conversation"
             ),
             Self::Account(failure) => write!(f, "{failure}"),
             Self::Subscription(detail) => write!(
