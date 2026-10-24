@@ -73,6 +73,7 @@ help:
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-fuzz            Lint, build, replay and briefly run every fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; needs the nightly toolchain and cargo-fuzz"
 	@echo "  make fuzz TARGET=<name>    Run one fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; the targets are $(FUZZ_TARGETS)"
+	@echo "  make fuzz-install          Install cargo-fuzz $(CARGO_FUZZ_VERSION), the version CI runs"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
@@ -366,6 +367,8 @@ check-deps:
 # for both. bravebot-config's build script refuses to build without credentials unless told that a
 # binary configured at run time is acceptable, which is all a fuzz target needs.
 FUZZ_TOOLCHAIN = nightly-2026-10-01
+# The cargo-fuzz CI installs, and the one `make fuzz-install` installs for a person.
+CARGO_FUZZ_VERSION = 0.13.2
 FUZZ_TARGETS = regex diff event_stream sse
 FUZZ_SECONDS = 20
 FUZZ_FLAGS = -timeout=10 -rss_limit_mb=2048
@@ -379,6 +382,12 @@ fuzz_dict = $$([ -f fuzz/dictionaries/$(1).dict ] && echo -dict=fuzz/dictionarie
 fuzz-toolchain:
 	@echo $(FUZZ_TOOLCHAIN)
 
+# Built from source into cargo's own bin directory. taiki-e/install-action has no manifest for
+# cargo-fuzz, and its fallback fetches whichever cargo-binstall is current.
+.PHONY: fuzz-install
+fuzz-install:
+	cargo install --locked cargo-fuzz@$(CARGO_FUZZ_VERSION)
+
 .PHONY: fuzz-prerequisites
 fuzz-prerequisites:
 	@command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q '^$(FUZZ_TOOLCHAIN)' || { \
@@ -386,7 +395,7 @@ fuzz-prerequisites:
 		exit 1; \
 	}
 	@cargo fuzz --version >/dev/null 2>&1 || { \
-		echo "fuzz: cargo-fuzz is not installed: cargo install cargo-fuzz --locked" >&2; \
+		echo "fuzz: cargo-fuzz is not installed: make fuzz-install" >&2; \
 		exit 1; \
 	}
 	@[ "$$(cargo fuzz list | sort | tr '\n' ' ')" = "$$(printf '%s\n' $(FUZZ_TARGETS) | sort | tr '\n' ' ')" ] || { \
