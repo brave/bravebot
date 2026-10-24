@@ -170,9 +170,10 @@ the refusal depends on.
 Three more tests read the tree for a way the seam could reach a release, and each reads what is named here and
 no more.
 
-- One reads every `Cargo.toml` in the repository outside `target` and `node_modules`, the fuzz package's
-  included, and every `.cargo/config*` file. It fails if the feature is named anywhere but its declaration in
-  `bravebot-skus` and `bravebot-config` and the `[dev-dependencies]` of the three crates above.
+- One reads every `Cargo.toml` in the repository, the fuzz package's included, and every `.cargo/config*`
+  file, and walks none of `target`, `node_modules`, `.git`, `.worktrees` and `__pycache__`. It fails if the
+  feature is named anywhere but its declaration in `bravebot-skus` and `bravebot-config` and the
+  `[dev-dependencies]` of the three crates above.
 - One reads the commands that build: `Makefile`, `Dockerfile.cross`, `deny.toml`, `install.sh`,
   `install.ps1`, the `README.md` and `package.json` files at the root and in the packages that build, and the
   scripts, workflows, hooks, manifests and documents under `.github`, `.githooks`, `ui/scripts`, `ui/docs`,
