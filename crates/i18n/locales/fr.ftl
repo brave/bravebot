@@ -1064,6 +1064,9 @@ chatgpt-failed-client-changed =
     le navigateur a renvoyé un autre client que celui qui est enregistré, donc la connexion s'est arrêtée et rien n'a été modifié ; lancez bravebot auth logout chatgpt, puis reconnectez-vous
 chatgpt-failed-no-use-scope =
     la connexion n'a pas permis à bravebot d'utiliser les jetons de l'abonnement, donc rien n'a été enregistré ; lancez bravebot auth login chatgpt et autorisez-le, ou utilisez une clé d'API avec la passerelle openai
+chatgpt-failed-id-token =
+    le jeton d'identité renvoyé par le serveur d'autorisation n'a pas pu être vérifié, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login chatgpt pour réessayer
+chatgpt-failed-key-set = les clés qui vérifient la connexion n'ont pas pu être obtenues : { $reason } ; rien n'a été enregistré
 chatgpt-failed-exchange = la connexion n'a pas pu aboutir : { $reason } ; rien n'a été enregistré
 chatgpt-class-refused = le serveur d'autorisation a refusé la requête
 chatgpt-class-rate-limited = le serveur d'autorisation limite les requêtes ; réessayez plus tard

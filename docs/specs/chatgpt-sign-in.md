@@ -17,6 +17,7 @@ governs:
   - crates/skus/src/chatgpt/authorize.rs
   - crates/skus/src/chatgpt/encoding.rs
   - crates/skus/src/chatgpt/exchange.rs
+  - crates/skus/src/chatgpt/id_token.rs
   - crates/skus/src/chatgpt/listener.rs
   - crates/skus/src/chatgpt/renew.rs
 documented-by:
@@ -135,9 +136,9 @@ and the tokens of this account are never sent to a gateway.
 A model of this service is answered with the stored sign-in and with nothing else. `OPENAI_API_KEY`, a
 gateway key and any other variable are not looked for.
 
-**Not built:** the key set. The sign-in sends to the authorization page and the token endpoint, and a turn, the
-pickers and the sign-in command once it has stored the sign-in send requests to the serving host: the models,
-and the listing of [CHATGPT-9](#CHATGPT-9).
+**Not built:** a seam that points a turn, a picker or the command run as a program at a server of a test's
+own. The one test builds have, `Hosts::at`, is private to `bravebot-skus` and reaches the sign-in and the
+renewal there and nothing a turn sends to the serving host.
 
 **Why.** A settings file may name a destination, which is right where the credential is one the person
 typed for that destination. A checkout's settings file naming where an account's refresh token goes would
@@ -150,6 +151,7 @@ compiled in.
 `verified-by: bravebot_skus::chatgpt::authorize::a_first_sign_in_asks_for_a_client_and_carries_the_parameters_listed_and_no_other`
 `verified-by: bravebot_skus::chatgpt::a_redirect_in_answer_to_the_exchange_is_not_followed`
 `verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
+`verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_config::provider::the_chatgpt_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own`
 `verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_an_account_request_is_a_failure_and_goes_nowhere`
@@ -234,7 +236,7 @@ one address the listener is bound to. A page that repeated the query would put a
 and a log of it would keep a `code` and a `state` for as long as the log. Reading only the three named
 parameters keeps a callback, which is bytes a browser sent, down to a `code` to hand on, a `state` to
 compare and a client identifier that is checked for its shape and then verified by the exchange, and by the ID
-token once that is verified ([CHATGPT-5](#CHATGPT-5)).
+token, which has to name it as its audience ([CHATGPT-5](#CHATGPT-5)).
 
 `verified-by: bravebot_skus::chatgpt::listener::the_listener_is_bound_to_the_loopback_address_only`
 `verified-by: bravebot_skus::chatgpt::listener::the_callback_with_the_state_is_served_and_answered_with_a_page_that_repeats_nothing`
@@ -266,8 +268,9 @@ message to the planner. That is the argument [premium-credentials.md](premium-cr
 is checked here against [reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md), shape by
 shape:
 
-- **A branch on untrusted bytes.** The comparisons are the `state` against the value generated here, and a
-  reply's status and the fields the next step needs. They decide this program's own sign-in. What crosses
+- **A branch on untrusted bytes.** The comparisons are the `state` against the value generated here, a
+  reply's status and the fields the next step needs, and the ID token's header, signature and five claims
+  against the key set and the values this sign-in sent. They decide this program's own sign-in. What crosses
   into the driver is a token and a category, which is the class of a reply's status, as the failure
   categories of the backends spec are for the reply of any other service. A refused refresh adds one value,
   that the refresh token is no longer valid, chosen by comparing one field of the error body with `invalid_grant`
@@ -293,13 +296,23 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    [credential-protection.md](credential-protection.md) describes, a value from the closed set of
    [CHATGPT-8](#CHATGPT-8), and whether the file took a renewal, which is the result of a write on this
    machine. No string taken from a reply is part of any of them.
-3. The ID token is verified once, at the sign-in, and no claim of it is stored, sent or displayed. This
-   is not built: the reply's `id_token` is dropped unread, since the verification needs a signature
-   verifier this crate does not hold ([Decisions left open](#decisions-left-open)). Its
-   signature is checked against the key set with RS256 only, and its issuer, audience (the client of the
-   sign-in), expiry, nonce (the one sent) and subject (present and not empty) are compared. No other claim
-   is read. The access token's expiry is read from the `expires_in` field of the reply, not from the token,
-   and is compared with the clock. Claims such as an organisation's name are text somebody else chose.
+3. The ID token is verified once, at the sign-in, before anything is stored, and no claim of it is
+   stored, sent or displayed. A code exchange whose reply holds no `id_token`, or one that is not a
+   string, ends the sign-in as a token that did not verify, so no sign-in is stored unverified. A token
+   longer than 16 KiB is refused before it is decoded. Its header names RS256 and nothing that has to be
+   understood: `none`, an HMAC and every other algorithm are refused, and so is a header with `crit`. The
+   key is the only key of the set with the header's `kid`, and it is an RSA key a signature may be checked
+   with: `kty` is `RSA`, and `use`, `alg` and `key_ops`, where present, say `sig`, `RS256` and `verify`.
+   A set that holds two keys under one `kid` has none that is the key.
+   The key set is fetched from the host compiled in for it ([CHATGPT-2](#CHATGPT-2)) with no credential,
+   following no redirect, and a reply over 64 KiB is refused. The signature is checked with RS256 against
+   that key's modulus and exponent, and then the issuer (the constant `https://auth.openai.com`), the
+   audience (a string equal to the client of the sign-in, or a list holding it), the expiry (later than
+   the clock), the nonce (the one sent, compared in constant time) and the subject (a string that is not
+   empty) are compared. No other claim is read. The decoded header and claims are cleared when they are
+   dropped. The access token's expiry is read from the `expires_in` field of the reply, not from the
+   token, and is compared with the clock. Claims such as an organisation's name are text somebody else
+   chose.
 
 No exception is added to [labels.md](labels.md). The counts it pins for `Labelled::new` and
 `Policy::decode_transport` move by the one place a refusal's body is read and the one that hands it back,
@@ -311,9 +324,15 @@ program on the machine, or a page in the browser. Nothing they could write reach
 only things read from the callback are a value compared with one generated here, and a `code` and a client
 identifier handed to the authorization server, which accepts the pair only if it issued the `code` to that
 client for this verifier. A reply from that server is the other place, and what leaves the crate from it is a
-token that is never read, or a category computed from a status.
+token that is never read, or a category computed from a status. The ID token and the key set are read for
+whether the token verified, and what leaves the crate is that answer and no claim.
 
-`verified-by: none`
+`verified-by: bravebot_skus::chatgpt::an_id_token_that_does_not_verify_stops_the_sign_in_and_stores_nothing`
+`verified-by: bravebot_skus::chatgpt::an_id_token_whose_audience_lists_the_client_among_others_signs_in`
+`verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
+`verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
+`verified-by: bravebot_skus::chatgpt::id_token::only_an_rsa_key_for_rs256_signatures_named_by_the_kid_is_used`
+`verified-by: bravebot_skus::chatgpt::encoding::base64url_reads_back_what_it_writes_and_nothing_else`
 
 <a id="CHATGPT-6"></a>
 ### CHATGPT-6: the tokens are one file the account owns
@@ -494,7 +513,8 @@ failure. The rest are these, each saying which it is:
   categories, which no fallback model is used for: the account answers for every model it serves, so the
   fallback would be refused the same way.
 - **The command stopped,** and says so: the listener could not start, the browser returned no code or no
-  usable client, the ID token did not verify, the time bound passed, a `provider` entry named `chatgpt` is a
+  usable client, the reply held no ID token or one that did not verify, the key set could not be fetched (in
+  the category of that request), the time bound passed, a `provider` entry named `chatgpt` is a
   gateway ([CHATGPT-9](#CHATGPT-9)). The entry's name in that sentence is the constant `chatgpt`. A reply
   that does not grant the scope `chatgpt.tokens.use.direct` ends the command in the same way, and the
   sentence says to sign in again and allow the program to use the subscription's tokens, or to use an API key
@@ -530,6 +550,8 @@ signing in again would not supply is not offered. A usage limit named by a code 
 nothing a second request or a wait of this program's does changes it.
 
 `verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
+`verified-by: bravebot_skus::chatgpt::an_id_token_that_does_not_verify_stops_the_sign_in_and_stores_nothing`
+`verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_failed_exchange_is_classed_by_its_status_and_quotes_nothing`
 `verified-by: bravebot_skus::chatgpt::a_reply_that_does_not_allow_the_use_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_browser_that_never_returns_ends_the_sign_in_at_the_bound`
@@ -828,22 +850,22 @@ renewal takes no mode and writes the file whatever the caller is doing.
 ## What is built
 
 The sign-in is the `chatgpt` module of `bravebot-skus` and the command is `crates/cli/src/chatgpt.rs`.
-[LAYER-1](layering.md#LAYER-1)'s row for `bravebot-skus` covers the module, which needs no dependency the
-crate does not hold and depends on no crate of this workspace, so [CHATGPT-5](#CHATGPT-5)'s first condition
-holds by reading its manifest.
+[LAYER-1](layering.md#LAYER-1)'s row for `bravebot-skus` covers the module, which depends on no crate of this
+workspace, so [CHATGPT-5](#CHATGPT-5)'s first condition holds by reading its manifest. The signature of the ID
+token is checked with `ring`, the library `rustls` already brings, at the version and with the features it
+brings.
 
 The requests a turn sends are made by the Responses client of `bravebot-aichat` given a token source, and
 `crates/agent/src/chatgpt.rs` is that source: one renewer for the process, which keeps a renewal the file could
 not take for the rest of it, and the note of that, which the turn says once.
 
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-3](#CHATGPT-3), [CHATGPT-4](#CHATGPT-4),
-  [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7), [CHATGPT-11](#CHATGPT-11),
+  [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7), [CHATGPT-11](#CHATGPT-11),
   [CHATGPT-12](#CHATGPT-12) and [CHATGPT-13](#CHATGPT-13).
 - **Built in part,** each naming what is not: [CHATGPT-2](#CHATGPT-2), [CHATGPT-8](#CHATGPT-8),
   [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and [CHATGPT-14](#CHATGPT-14).
-- **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); the
-  zstd body of [CHATGPT-10](#CHATGPT-10); and the verification of the ID token of
-  [CHATGPT-5](#CHATGPT-5).
+- **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); and the
+  zstd body of [CHATGPT-10](#CHATGPT-10).
 
 A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
 `chatgpt` entry names, or where it names none, the models the serving host's listing offers. Once the sign-in
@@ -858,14 +880,6 @@ These are a person's to decide, and no test can settle them.
   presents no other program's identifier. Whether ChatGPT's terms allow a third-party program to use a
   subscription this way, and whether OpenAI's registration accepts this program, has to be decided before
   this ships. If it does not, this should not land as written.
-- **Verifying the ID token.** [CHATGPT-5](#CHATGPT-5) verifies it with RS256 against OpenAI's key set, as
-  the program this is read from does. That needs a signature verifier and a request for the key set. Whether
-  the tree already holds a verifier that serves, or one is added, is a decision about a dependency
-  ([DEP-001](../best-practices/dependencies.md#DEP-001)). The alternative is to read no ID token, which
-  drops the `nonce` and the audience check and leaves the code exchange and PKCE to tie the sign-in to this
-  process. The command is built on that alternative until this is decided: the `nonce` is sent and not
-  checked, and the reply's `id_token` is dropped unread. The tree holds no RS256 verifier, so the other
-  choice adds a dependency.
 - **Compressing the body.** [CHATGPT-10](#CHATGPT-10) sends zstd. The tree holds no encoder, and adding
   one is a decision about a dependency in the same way. The request is sent uncompressed until it is decided,
   and a conversation whose body passes 1 MiB is shortened, where the service would take it compressed.
@@ -931,8 +945,11 @@ real ChatGPT account on this program's own build:
 - The key set on `auth.openai.com`, with its path in [CHATGPT-2](#CHATGPT-2).
 - That the authorization server accepts a redirect to `http://127.0.0.1:<port>/auth/callback` for any port.
   A port the operating system chose is accepted and no other is confirmed.
-- The `id_token` field of the code exchange's reply, which the command drops unread.
-- The ID token's algorithm, issuer, audience, required claims and the nonce match.
+- The `id_token` field of the code exchange's reply, which the sign-in requires and verifies.
+- The ID token's algorithm, audience, required claims and the nonce match, and the `kid` and key types of the
+  key set.
+- The ID token's issuer. The sign-in compares it with the constant `https://auth.openai.com`, which is not
+  observed from the service: a real token that names another refuses every sign-in.
 - What the three session headers do for prompt-cache affinity, the zstd body, and that there is no native
   compaction and no change of effort in a session.
 - The error codes that end the use of a subscription: `subscription_sharing_usage_limit_exceeded`,
@@ -1062,8 +1079,10 @@ work lands, in the same commit as the code.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
   the dead refresh token and is told the refresh failed, until the person signs in again.
-- The ID token is not verified, so the `nonce` and the audience are not checked
-  ([Decisions left open](#decisions-left-open)).
+- A code exchange whose reply holds no ID token ends the sign-in, so a server that stopped sending one, or
+  that named another issuer, would refuse every sign-in until a release changes the check. The expiry is
+  compared with the clock with no allowance, so a clock running ahead of the server's by more than the
+  token's lifetime refuses the sign-in.
 - Whether a third-party program may use a subscription this way is not this spec's to settle
   ([Decisions left open](#decisions-left-open)). The design assumes a person is allowed to, and an answer of
   no ends it.

@@ -292,23 +292,23 @@ pub(crate) fn logout() -> ExitCode {
 /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)): the variants hold none, and a
 /// path and what the operating system said are all a store failure adds.
 fn said_of_sign_in(stopped: &SignInError) -> String {
+    let class = |class: &Class| match class {
+        Class::Refused => t!(chatgpt_class_refused),
+        Class::RateLimited => t!(chatgpt_class_rate_limited),
+        Class::Unavailable => t!(chatgpt_class_unavailable),
+        Class::Incomplete => t!(chatgpt_class_incomplete),
+        Class::Transport => t!(chatgpt_class_transport),
+    };
     match stopped {
         SignInError::Listener => t!(chatgpt_failed_listener).into(),
         SignInError::TimedOut => t!(chatgpt_failed_timed_out).into(),
         SignInError::NoCode => t!(chatgpt_failed_no_code).into(),
         SignInError::NoClient => t!(chatgpt_failed_no_client).into(),
         SignInError::ClientChanged => t!(chatgpt_failed_client_changed).into(),
-        SignInError::Exchange(class) => t!(
-            chatgpt_failed_exchange,
-            reason = match class {
-                Class::Refused => t!(chatgpt_class_refused),
-                Class::RateLimited => t!(chatgpt_class_rate_limited),
-                Class::Unavailable => t!(chatgpt_class_unavailable),
-                Class::Incomplete => t!(chatgpt_class_incomplete),
-                Class::Transport => t!(chatgpt_class_transport),
-            }
-        ),
+        SignInError::Exchange(failed) => t!(chatgpt_failed_exchange, reason = class(failed)),
         SignInError::NoUseScope => t!(chatgpt_failed_no_use_scope).into(),
+        SignInError::KeySet(failed) => t!(chatgpt_failed_key_set, reason = class(failed)),
+        SignInError::IdToken => t!(chatgpt_failed_id_token).into(),
         SignInError::Store(failure) => said_of_account(failure),
     }
 }
@@ -689,6 +689,9 @@ mod tests {
             SignInError::Exchange(Class::Unavailable),
             SignInError::Exchange(Class::Incomplete),
             SignInError::Exchange(Class::Transport),
+            SignInError::IdToken,
+            SignInError::KeySet(Class::Refused),
+            SignInError::KeySet(Class::Transport),
         ]
         .iter()
         .map(said_of_sign_in)
@@ -715,6 +718,16 @@ mod tests {
         assert!(sentences[6].contains("refused"), "{}", sentences[6]);
         assert!(sentences[7].contains("limiting"), "{}", sentences[7]);
         assert!(sentences[8].contains("unavailable"), "{}", sentences[8]);
+        assert!(
+            sentences[11].contains("bravebot auth login chatgpt"),
+            "{}",
+            sentences[11]
+        );
+        assert!(
+            sentences[13].contains("could not be reached"),
+            "{}",
+            sentences[13]
+        );
     }
 
     /// CHATGPT-8: a failure to store is worded with the path and what the system said, made safe to

@@ -1239,6 +1239,9 @@ chatgpt-failed-client-changed =
     the browser returned a different client from the one stored, so the sign-in stopped and nothing was changed; run bravebot auth logout chatgpt and sign in again
 chatgpt-failed-no-use-scope =
     the sign-in did not allow bravebot to use the subscription's tokens, so nothing was stored; run bravebot auth login chatgpt and allow it, or use an API key with the openai gateway
+chatgpt-failed-id-token =
+    the ID token the authorization server returned did not verify, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-key-set = the keys that verify the sign-in could not be fetched: { $reason }; nothing was stored
 chatgpt-failed-exchange = the sign-in could not be completed: { $reason }; nothing was stored
 chatgpt-class-refused = the authorization server refused the request
 chatgpt-class-rate-limited = the authorization server is limiting requests; try again later

@@ -1,8 +1,8 @@
 //! The small encodings the sign-in is written in, spelled here rather than taken from a crate.
 //!
-//! This crate depends on no other crate here and adds none: base64 for the PKCE values, percent
-//! encoding for a URL and a form, a comparison that does not stop at the first different byte,
-//! and a date for the one line that says when a token expires.
+//! This crate depends on no other crate here and adds none for these: base64 for the PKCE values
+//! and the parts of an ID token, percent encoding for a URL and a form, a comparison that does not
+//! stop at the first different byte, and a date for the one line that says when a token expires.
 
 /// Base64 with the URL-safe alphabet and no padding, which is what PKCE and the `state` are
 /// written in.
@@ -24,6 +24,44 @@ pub(crate) fn base64url(bytes: &[u8]) -> String {
     }
 
     out
+}
+
+/// The bytes [`base64url`] text stands for, or `None` where it is not text that function writes: a
+/// character outside the alphabet, padding, a length no number of bytes encodes to, or bits after
+/// the last byte that are not zero.
+///
+/// Strict because a token is read with it, and two spellings of one token would be two tokens a
+/// signature covers one of.
+pub(crate) fn base64url_decode(text: &str) -> Option<Vec<u8>> {
+    fn value(character: u8) -> Option<u32> {
+        match character {
+            b'A'..=b'Z' => Some(u32::from(character - b'A')),
+            b'a'..=b'z' => Some(u32::from(character - b'a') + 26),
+            b'0'..=b'9' => Some(u32::from(character - b'0') + 52),
+            b'-' => Some(62),
+            b'_' => Some(63),
+            _ => None,
+        }
+    }
+
+    let characters = text.as_bytes();
+    if characters.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(characters.len() / 4 * 3 + 2);
+    for chunk in characters.chunks(4) {
+        let mut quad = 0u32;
+        for (at, &character) in chunk.iter().enumerate() {
+            quad |= value(character)? << (18 - 6 * at);
+        }
+        // A chunk of n characters holds n - 1 bytes, and the bits after them were zero when written.
+        let bytes = chunk.len() - 1;
+        if quad & (0x00ff_ffff >> (8 * bytes)) != 0 {
+            return None;
+        }
+        out.extend_from_slice(&quad.to_be_bytes()[1..=bytes]);
+    }
+    Some(out)
 }
 
 /// 32 bytes from the operating system's random source, encoded as [`base64url`].
@@ -151,6 +189,35 @@ mod tests {
             (&[0xfb, 0xff, 0xfe][..], "-__-"),
         ] {
             assert_eq!(base64url(bytes), expected, "{bytes:?}");
+        }
+    }
+
+    /// What is encoded decodes back, and text no encoding writes is refused: padding, a character of
+    /// the standard alphabet, a length no number of bytes makes, and bits after the last byte that
+    /// are not zero, which would let two spellings stand for one token.
+    #[test]
+    fn base64url_reads_back_what_it_writes_and_nothing_else() {
+        for bytes in [
+            &b""[..],
+            b"f",
+            b"fo",
+            b"foo",
+            b"foob",
+            b"fooba",
+            b"foobar",
+            &[0xfb, 0xff, 0xfe][..],
+            &[0u8; 33][..],
+        ] {
+            assert_eq!(
+                base64url_decode(&base64url(bytes)).as_deref(),
+                Some(bytes),
+                "{bytes:?}"
+            );
+        }
+        for text in [
+            "Zg==", "Zm9v+", "Zm9/", "Z", "Zm9vY", "Zh", "Zm9", "Zm 9v", "Zm.v",
+        ] {
+            assert_eq!(base64url_decode(text), None, "{text}");
         }
     }
 

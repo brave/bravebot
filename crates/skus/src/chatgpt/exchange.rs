@@ -2,10 +2,11 @@
 //! the PKCE verifier, and the refresh, which presents the refresh token.
 //!
 //! The reply is bytes this program did not write. What is taken from it is two tokens that are never
-//! read, a number of seconds, and whether the scope that allows this use was granted. The one field
-//! of an error body that is read is the code, compared with the one value that says a refresh token
-//! is no longer valid. The rest of the body, including the ID token and every error text, is dropped
-//! in this module ([CHATGPT-5](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-5)).
+//! read, the ID token of a code exchange, which [`super::id_token`] verifies and nothing stores, a
+//! number of seconds, and whether the scope that allows this use was granted. The one field of an
+//! error body that is read is the code, compared with the one value that says a refresh token is no
+//! longer valid. The rest of the body, including every error text, is dropped in this module
+//! ([CHATGPT-5](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-5)).
 
 use super::authorize::{RESOURCE, USE_SCOPE};
 use super::encoding::percent_encode;
@@ -25,6 +26,8 @@ const DEFAULT_LIFETIME: u64 = 3600;
 pub(super) struct Tokens {
     pub(super) access: Secret,
     pub(super) refresh: Secret,
+    /// The ID token, where the reply holds one, to be verified and dropped.
+    pub(super) id_token: Option<Secret>,
     /// Seconds the access token lasts from the moment of the reply.
     pub(super) lifetime: u64,
     /// Whether the scope that allows this program to use the subscription's tokens was granted.
@@ -98,6 +101,7 @@ pub(super) fn exchange(
     Ok(Tokens {
         access: granted.access,
         refresh: granted.refresh.ok_or(Class::Incomplete)?,
+        id_token: granted.id_token,
         lifetime: granted.lifetime,
         allows_use: granted.allows_use,
     })
@@ -200,7 +204,7 @@ fn granted(mut response: ureq::http::Response<ureq::Body>) -> Result<Granted, Cl
 /// The class of a status that is not a success.
 ///
 /// A redirect is `Refused`, since none is followed.
-fn class_of(status: u16) -> Class {
+pub(super) fn class_of(status: u16) -> Class {
     match status {
         429 => Class::RateLimited,
         500..=599 => Class::Unavailable,
@@ -213,6 +217,8 @@ fn class_of(status: u16) -> Class {
 struct Granted {
     access: Secret,
     refresh: Option<Secret>,
+    /// Read for the code exchange only. A refresh's is dropped with the reply.
+    id_token: Option<Secret>,
     lifetime: u64,
     allows_use: bool,
 }
@@ -236,6 +242,8 @@ fn parse(text: &str) -> Result<Granted, Class> {
         None | Some(serde_json::Value::Null) => None,
         Some(_) => Some(token("refresh_token")?),
     };
+    // Absent, or not a usable string, is no ID token, which the sign-in refuses.
+    let id_token = token("id_token").ok();
 
     let lifetime = match value.get("expires_in") {
         None | Some(serde_json::Value::Null) => DEFAULT_LIFETIME,
@@ -249,6 +257,7 @@ fn parse(text: &str) -> Result<Granted, Class> {
     Ok(Granted {
         access,
         refresh,
+        id_token,
         lifetime,
         allows_use,
     })
