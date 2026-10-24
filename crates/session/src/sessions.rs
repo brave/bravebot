@@ -1892,15 +1892,12 @@ pub struct Handle {
 pub enum Held {
     /// Another process holds the record, so this one must not write it as well.
     Open {
-        /// The session's id, which is what `--fork` is given to copy it instead.
+        /// What `--fork` is given to copy the session instead.
         id: String,
     },
     /// Another process wrote the record after this one read it, so what this one read is out of
     /// date. The process that wrote it has ended, since the lock was free.
-    Changed {
-        /// The session's id.
-        id: String,
-    },
+    Changed { id: String },
 }
 
 impl Held {

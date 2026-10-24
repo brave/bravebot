@@ -1707,6 +1707,7 @@ from fetched bytes ([TRUST-4](trust-map.md#TRUST-4)), after which the file reads
 `verified-by: bravebot_session::sessions::deleting_a_session_removes_its_lock_unless_a_process_holds_it`
 `verified-by: bravebot_session::retention::a_lock_with_no_record_goes_by_its_own_age_and_a_held_one_stays`
 `verified-by: bravebot_tui::resume::a_session_another_process_holds_cannot_be_picked`
+`verified-by: bravebot_tui::resume::a_session_another_process_holds_cannot_be_picked_from_a_pull_requests_list`
 `verified-by: bravebot_tui::app::a_resume_of_a_record_another_process_holds_restores_nothing`
 `verified-by: bravebot_ui_bridge::attaching::a_record_another_window_holds_is_not_opened`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_another_process_holds`

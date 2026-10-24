@@ -13275,6 +13275,33 @@ fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
         listed.contains("stopped"),
         "a process was started for a record a terminal holds: {listed}"
     );
+
+    // The process `attach` would have started refuses for itself, since the lock is what both
+    // would write under.
+    let job = home.0.join(format!(".bravebot/jobs/{SESSION_ID}"));
+    std::fs::write(job.join("first-prompt"), "").expect("nothing to start with");
+    let _ = std::fs::remove_file(job.join("attach.sock"));
+    let host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args(["__bg-host", SESSION_ID])
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("the host runs");
+    assert!(!host.status.success(), "a host started on a held record");
+    let refusal = String::from_utf8_lossy(&host.stderr);
+    assert!(
+        refusal.contains("is open in another terminal or window"),
+        "{refusal}"
+    );
     assert!(
         gateway.asked.try_recv().is_err(),
         "a refused task reached the gateway"

@@ -1200,6 +1200,31 @@ mod tests {
         assert!(note.contains("bravebot --fork 2222222222"), "{note}");
     }
 
+    /// SESSION-38: the list `--from-pr` opens refuses a record another process holds, as the plain
+    /// list does.
+    #[test]
+    fn a_session_another_process_holds_cannot_be_picked_from_a_pull_requests_list() {
+        fn holds_it(_project: &Path, id: &str) -> bool {
+            id == "2222222222"
+        }
+        let mut held = summary("2222222222", "held", 100);
+        held.pull_request = Some("https://github.com/brave/bravebot/pull/12".to_string());
+        let mut picker = Picker::new(vec![held], "/work")
+            .reading(Path::new("/work"))
+            .with_open(holds_it)
+            .from_pull_request("12");
+        assert_eq!(
+            picker.matching().len(),
+            1,
+            "the list did not offer the session"
+        );
+        let Outcome::Refused(note) = handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE)
+        else {
+            panic!("a record another process holds was picked from a pull request's list");
+        };
+        assert!(note.contains("bravebot --fork 2222222222"), "{note}");
+    }
+
     #[test]
     fn a_manifest_run_is_marked_in_the_list() {
         assert!(describe(&manifest_summary("1", "t", 100)).contains("manifest"));
