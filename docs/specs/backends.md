@@ -721,11 +721,21 @@ A level is not content. It comes from a person picking off a list they read, on 
 model name beside it arrives on, and a word that names no level is no choice at all rather than a
 choice of something.
 
+**A ChatGPT account is sent one level for a whole session.** The level in force when a session begins is
+the one the account is sent for all of it ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)): a request that
+asks for a level carries that one, whatever was chosen afterwards, and a request that asks for none
+carries none. What is chosen applies to the account from the next session, and to every other service at
+once. A model of the account that refuses a request carrying the level is the exception, as
+[BACKEND-22](#BACKEND-22) has it for any model: that refusal outranks the level the session began with, and
+no later request carries a level to that model.
+
 `verified-by: bravebot_aichat::protocol::a_request_nobody_asked_a_level_of_mentions_no_effort`
 `verified-by: bravebot_aichat::protocol::a_word_naming_no_level_is_not_a_choice`
 `verified-by: bravebot_aichat::protocol::a_level_is_named_whatever_case_it_was_written_in`
 `verified-by: bravebot_bedrock::protocol::a_request_nobody_asked_a_level_of_carries_no_output_config`
 `verified-by: bravebot_agent::turn::without_a_chosen_effort_no_level_is_requested`
+`verified-by: bravebot_aichat::client::a_session_held_to_the_level_it_began_with_sends_that_level_whatever_a_request_asks_for`
+`verified-by: bravebot_tui::app::a_chatgpt_session_keeps_the_level_it_began_with_and_says_so_when_another_is_chosen`
 
 
 <a id="BACKEND-21"></a>
@@ -3186,10 +3196,8 @@ observed of an entry that names `@ai-sdk/openai` on another service.
 and Gemini clients: the request, the events, calls and their results, usage, the level, the three endings
 of a stream, and the refusals, reached at the entry's `/responses` route with its key as a bearer token.
 
-**Not built:** an `npm` on a model, so the SDK an entry names decides for every model it lists; the ChatGPT
-account's effort level, which [CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10) states per session and the
-request path does not yet hold fixed for one; a run's `--output-schema`, which the request does not
-carry; a document attachment, which is dropped
+**Not built:** an `npm` on a model, so the SDK an entry names decides for every model it lists; a run's
+`--output-schema`, which the request does not carry; a document attachment, which is dropped
 ([#3121](https://github.com/brave/bravebot/issues/3121)); a refusal the model writes as a
 content part of a reply that completes, which is read as no content
 ([#3120](https://github.com/brave/bravebot/issues/3120)); and [IMPORT-3](import.md#IMPORT-3) still leaves

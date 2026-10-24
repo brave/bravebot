@@ -475,7 +475,8 @@ does not read:
   moment it is picked, since the next request is the one that has to fit.
 - **`/theme` and `/effort`.** A theme changes only how the screen is drawn. A turn is sent with the
   level in force when it begins and does not read it again, so a level set mid-turn is the next
-  turn's.
+  turn's. A ChatGPT account is sent the level its session began with, so a level set there applies
+  from the next session ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
 - **`/language`.** It saves the language the interface is read in from the next start, and the
   catalog is chosen once, so nothing the turn holds or the screen draws changes
   ([LOCALE-8](localization.md#LOCALE-8)).

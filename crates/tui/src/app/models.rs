@@ -322,6 +322,7 @@ pub(super) fn provider_models(
 /// is what it was before this existed, and a session that is merely offline should not open with a
 /// complaint about a request nobody asked for.
 pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
+    note_whether_the_model_in_force_is_the_accounts(session, config);
     let Ok(models) = list_models(config, session.model()) else {
         return;
     };
@@ -345,6 +346,19 @@ pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut
         session.model(),
         &config.default_model,
     ));
+}
+
+/// Record whether the model in force, the pick or else the configured default, is one of the ChatGPT
+/// account's, which decides whether the level a turn sends is the one chosen or the one the session
+/// began with (CHATGPT-10).
+///
+/// Whatever a listing says, and before one is asked for: it is the configuration that names which
+/// service answers a model.
+pub(super) fn note_whether_the_model_in_force_is_the_accounts(
+    session: &mut Session,
+    config: &Config,
+) {
+    session.note_model_is_account(config.runs_on_chatgpt_account(session.model()));
 }
 
 /// Take on a level the service refused while a turn was running.
@@ -605,9 +619,13 @@ pub(super) fn model_picked(
         None => t!(session_using_model, model = &chosen.display_name),
     });
     session.note_model_reads_effort(chosen.reads_effort);
+    session.note_model_is_account(config.chatgpt_model(&chosen.key).is_some());
     if !chosen.reads_effort && session.effort().is_some() {
         session.note(t!(session_effort_not_read));
     }
+    // A model the session moves to is sent the level the session began with where it is the
+    // account's, which the person is told where it is not the one they chose.
+    say_if_kept_for_account(session);
     session.choose_model(chosen.key, config);
 }
 

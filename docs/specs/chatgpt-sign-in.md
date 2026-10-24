@@ -24,6 +24,15 @@ governs:
   - crates/skus/src/chatgpt/id_token.rs
   - crates/skus/src/chatgpt/listener.rs
   - crates/skus/src/chatgpt/renew.rs
+  - crates/skus/src/lib.rs
+  - crates/config/src/lib.rs
+  - crates/agent/src/turn/task.rs
+  - crates/agent/src/outcome.rs
+  - crates/agent/src/turn.rs
+  - crates/aichat/src/responses/protocol.rs
+  - crates/tui/src/status.rs
+  - crates/tui/src/panel.rs
+  - crates/tui/src/state/settings.rs
 documented-by:
   - none (gap: a page on signing in with a ChatGPT account, owed until the design is built)
 ---
@@ -41,11 +50,11 @@ Reaching OpenAI with a pay-per-token API key is a different route, the `openai` 
 [backends.md](backends.md) describes. It needs none of this and this needs none of it.
 
 The command is built: `auth login chatgpt` signs in and stores the tokens, `auth logout chatgpt` forgets
-them, and `auth status` and the list of ways report them. [What is built](#what-is-built) says which parts of
-which clauses that is. [What the exchange has to record](#what-the-exchange-has-to-record) lists what a sign-in made with a real account has observed and what it has not. A clause reads
-`verified-by: none` until the work it describes lands, and a clause built in part says which part is not. The
-points where the unbuilt work changes a built spec are named in
-[What this changes elsewhere](#what-this-changes-elsewhere), and those specs are edited when it lands.
+them, and `auth status` and the list of ways report them. [What is built](#what-is-built) says where the code
+is and that every clause is built whole. [What the exchange has to record](#what-the-exchange-has-to-record)
+lists what a sign-in made with a real account has observed and what it has not. The points where this spec
+changes another spec are named in [What this changes elsewhere](#what-this-changes-elsewhere), and each of
+those specs holds the change.
 
 The hosts, parameters, field names and headers the clauses state are read from opencode's source
 (`packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`), which is another program's code.
@@ -54,8 +63,7 @@ lists them beside what no source states. Whether OpenAI's terms allow a program 
 way, and whether OpenAI registers a client for this program, are
 [decisions left open](#decisions-left-open). The command is built on the values as stated, and a release
 that carries it waits on the first of those decisions. A request with the sign-in is sent in the Responses
-protocol of [BACKEND-61](backends.md#BACKEND-61), and [What is built](#what-is-built) says what of
-[CHATGPT-10](#CHATGPT-10) is not.
+protocol of [BACKEND-61](backends.md#BACKEND-61), as [CHATGPT-10](#CHATGPT-10) states.
 
 The flow carries no workspace content and no model output. The rule that untrusted content never
 reaches the driver or the planner is [AGENTS.md](../../agents/AGENTS.md), and
@@ -796,12 +804,31 @@ of its own. A session resumed from a record begins a new one, since nothing of i
 copy shares the prefix the service has cached and the original is not asked anything more. A request made
 in no session carries an identifier of its own.
 
-The effort level of a session is fixed when the session starts. Nothing else a reply, a model or a settings
-file says is added to a request to this host: a gateway's options are carried into its requests, and this
-service takes none. The sign-in stores no identifier of the account and no header value is taken from a
-reply.
+The effort level of a session is fixed when the session begins, except for a model that refuses a level,
+which the next paragraph states. Until a model refuses it, the account is sent the level in force at the start
+in every request of the session that asks for one, whatever level is chosen afterwards, by `/effort`, by a
+skill's file or in any other way, because the service keeps the prompt cache of a session only while its
+level stays the same. A request that asks for none, as a summary, a goal check and a commit message do,
+carries none, and a session that began with none sends none. A delegate begins at the level of the turn that
+spawned it, or its definition's. The desktop offers no way to choose a level, so its sessions begin at none.
 
-**Not built:** the effort level is not held fixed for the session.
+A model of the account that refuses a body carrying a level and takes the same body without it reads none
+([BACKEND-22](backends.md#BACKEND-22)), and that refusal outranks the level a session began with. The model is
+sent no level from then on, by every session of the process, and the terminal and a session in lines say so in
+that clause's sentence. The level a session began with is not held against the refusal, since a model that
+does not take a level would refuse every request of it.
+
+The terminal keeps the level chosen: it is the level of the next session, which `/clear` begins, and of
+every model but the account's. A level chosen on a model of the account that is not the one the session
+began with, and a model of the account picked while the chosen level is not the session's, are said in a
+sentence that names both levels. A skill's file that asks for a level where the account answers is said to
+change nothing, in the notice every front end gets for a skill. The info panel names the level sent, and
+`/status` names it and says which level was chosen where that is another. The sentences are in the message
+catalog, in English and in French.
+
+Nothing else a reply, a model or a settings file says is added to a request to this host: a gateway's
+options are carried into its requests, and this service takes none. The sign-in stores no identifier of the
+account and no header value is taken from a reply.
 
 **Why.** The service decides the protocol, and a protocol written for one service is a second copy of the
 work for the next. A header a settings file could add would be a way to put a value, or another credential,
@@ -821,7 +848,11 @@ size in the header.
 The service derives its cache affinity from the identifier, which is why two sessions do not share one and a
 session does not change it. A record that held the identifier would tie the record on this machine to the
 requests the service logged for the account, so a session resumed from one begins a new identifier, and a
-cache the service still holds for the earlier requests is not found ([Known costs](#known-costs)).
+cache the service still holds for the earlier requests is not found ([Known costs](#known-costs)). A level
+that changed in the middle of a session would be a request the service holds no cache for, so it is held as
+the identifier is, except for a model that refuses a level and would refuse every request of the session.
+The sentences say which level is sent, since a level shown as in force that is not the one
+sent would mislead a person about what the session costs.
 
 `verified-by: bravebot_aichat::client::an_account_request_carries_the_token_the_three_session_headers_and_the_zstd_encoding_and_nothing_a_gateway_would`
 `verified-by: bravebot_aichat::client::a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_built`
@@ -861,6 +892,24 @@ cache the service still holds for the earlier requests is not found ([Known cost
 `verified-by: bravebot_cli::account_sessions::a_comment_or_a_string_that_names_a_session_does_not_name_it`
 `verified-by: bravebot_cli::account_sessions::a_test_attribute_takes_out_its_own_item_and_nothing_after_it`
 `verified-by: bravebot_cli::account_sessions::a_session_of_the_account_is_begun_only_where_a_session_begins`
+`verified-by: bravebot_aichat::client::a_session_held_to_the_level_it_began_with_sends_that_level_whatever_a_request_asks_for`
+`verified-by: bravebot_aichat::client::a_refusal_is_not_put_down_to_a_level_that_was_never_sent`
+`verified-by: bravebot_aichat::client::a_model_of_the_account_that_refuses_the_level_is_sent_none_from_then_on`
+`verified-by: bravebot_agent::backend::a_request_to_the_account_is_held_to_the_level_the_session_began_with`
+`verified-by: bravebot_agent::turn::a_session_begins_at_the_level_it_was_given_and_a_task_given_none_begins_at_its_own`
+`verified-by: bravebot_agent::turn::a_delegate_begins_at_the_level_it_was_given`
+`verified-by: bravebot_agent::turn::a_skill_asking_for_a_level_changes_nothing_where_the_account_answers`
+`verified-by: bravebot_agent::turn::a_model_of_the_account_that_refuses_the_level_is_reported_as_reading_none`
+`verified-by: bravebot_cli::chatgpt_session::a_one_shot_run_asks_for_the_level_it_was_started_with_and_a_check_of_its_goal_for_none`
+`verified-by: bravebot_cli::chatgpt_session::a_session_in_lines_asks_for_the_level_chosen_in_every_prompt`
+`verified-by: bravebot_tui::app::a_chatgpt_session_keeps_the_level_it_began_with_and_says_so_when_another_is_chosen`
+`verified-by: bravebot_tui::app::picking_a_chatgpt_model_says_which_level_it_is_sent_where_that_is_not_the_one_chosen`
+`verified-by: bravebot_tui::app::the_model_in_force_is_the_accounts_by_the_pick_or_else_by_the_default`
+`verified-by: bravebot_tui::app::a_level_the_account_refused_stops_being_sent_and_is_said`
+`verified-by: bravebot_tui::status::on_the_account_the_effort_names_the_level_sent_and_the_one_chosen_where_they_differ`
+`verified-by: bravebot_tui::app::the_status_of_a_chatgpt_session_names_the_level_it_sends`
+`verified-by: bravebot_tui::panel::the_effort_row_of_a_chatgpt_session_is_the_level_it_was_begun_at`
+`verified-by: bravebot_agent::chatgpt_effort_in_french::the_sentences_about_a_level_a_chatgpt_session_keeps_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_agent::chatgpt::the_account_is_one_provider_at_the_serving_host`
 
 <a id="CHATGPT-11"></a>
@@ -981,15 +1030,15 @@ brings.
 The requests a turn sends are made by the Responses client of `bravebot-aichat` given a token source, and
 `crates/agent/src/chatgpt.rs` is that source: one renewer for the process, which keeps a renewal the file could
 not take for the rest of it, and the note of that, which the turn says once. The same client encodes the body
-of a request to the account with `ruzstd` ([CHATGPT-10](#CHATGPT-10)). The identifier a session carries is an
-`AccountSession` in the same file, which whatever holds a session begins and hands to each turn and each side
-request it makes.
+of a request to the account with `ruzstd` ([CHATGPT-10](#CHATGPT-10)). The identifier and the level a session
+carries are an `AccountSession` in the same file, which whatever holds a session begins and hands to each
+turn and each side request it makes.
 
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2), [CHATGPT-3](#CHATGPT-3),
   [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7),
-  [CHATGPT-8](#CHATGPT-8), [CHATGPT-9](#CHATGPT-9), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12),
-  [CHATGPT-13](#CHATGPT-13) and [CHATGPT-14](#CHATGPT-14).
-- **Built in part,** naming what is not: [CHATGPT-10](#CHATGPT-10).
+  [CHATGPT-8](#CHATGPT-8), [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10),
+  [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12), [CHATGPT-13](#CHATGPT-13) and
+  [CHATGPT-14](#CHATGPT-14).
 
 A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
 `chatgpt` entry names, or where it names none, the models the serving host's listing offers, or where the
@@ -999,7 +1048,8 @@ to name one, that the account reaches no model, or that the listing could not be
 
 ## Decisions left open
 
-These are a person's to decide, and no test can settle them.
+These are a person's to decide, and no test can settle them. The front matter's `status` stays `proposed`
+while the first of them is open, although every clause is built.
 
 - **Whether OpenAI's terms allow this.** The sign-in registers a client of its own, named `bravebot`, and
   presents no other program's identifier. Whether ChatGPT's terms allow a third-party program to use a
@@ -1106,8 +1156,7 @@ real ChatGPT account on this program's own build:
 
 ## What this changes elsewhere
 
-These are the places a built spec says something this spec would need to extend, each decided when the
-work lands, in the same commit as the code.
+These are the places where another spec states something about this service, each written in that spec.
 
 - **Backends.** [BACKEND-3](backends.md#BACKEND-3) and [BACKEND-18](backends.md#BACKEND-18) gain the
   `chatgpt/` identifier. [BACKEND-9](backends.md#BACKEND-9) gains a note that this service starts no
@@ -1120,8 +1169,9 @@ work lands, in the same commit as the code.
   [BACKEND-6](backends.md#BACKEND-6), [BACKEND-20](backends.md#BACKEND-20) to
   [BACKEND-22](backends.md#BACKEND-22), [BACKEND-31](backends.md#BACKEND-31) and
   [BACKEND-52](backends.md#BACKEND-52) with the Responses protocol. [BACKEND-20](backends.md#BACKEND-20)
-  also gains the case that the effort level of a session is fixed when it starts, and the aichat client
-  gains a zstd body encoding, which [BACKEND-61](backends.md#BACKEND-61) states.
+  also gains the case that the effort level of a session is fixed when it starts, except for a model that
+  refuses a level ([BACKEND-22](backends.md#BACKEND-22)), and the aichat client gains a zstd body encoding,
+  which [BACKEND-61](backends.md#BACKEND-61) states.
 - **The command line.** [CLI-18](cli.md#CLI-18) lists five ways and states `logout chatgpt`.
   [CLI-23](cli.md#CLI-23) takes `chatgpt` as a way.
 - **Incognito.** [INCOG-7](incognito.md#INCOG-7) refuses the sign-in, and
@@ -1203,6 +1253,19 @@ work lands, in the same commit as the code.
   since the renewal that finds it removes the file. The next turn on a `chatgpt/` model says so.
 - A session resumed from a record, and a fork begun from one, carry an identifier of their own, so the first
   request after either does not find a cache the service still holds for the earlier session's requests.
+- A model of the account that refuses the level ends it for that model for the rest of the process, so a
+  session that began at a level is sent none by that model, and so is every session after it. A body
+  refused for another reason that does not recur is taken for a refusal of the level when it is taken
+  without it.
+- A session sends the account two levels. The rounds of its turns, and the planning calls of a manifest run,
+  carry the level it began with, and a summary, a question beside the work, a goal check, a commit message,
+  a processor, a vetting and an advisor ask for none, so the service applies its own default to them. Whether
+  the service keeps the cache of a session across requests that differ in level has not been observed.
+- A level chosen in a session on a model of the account applies from the next session, so a person who
+  wants another level for the account begins one with `/clear` or by starting again. A session that began
+  on a model that reads no level was begun at the level chosen all the same, and the account is sent it.
+- A skill's file that asks for a level changes nothing where the account answers, in every front end, and
+  the desktop is told so in the notice a skill gets although it offers no way to choose a level.
 - The codes that say the account has reached its usage limit or may not be used this way, and the fields of a
   refusal and of a failed event that hold them, are read from another program's source and have not been seen
   from this service. A refusal that says it in another code or another field is handled as its status: a 401

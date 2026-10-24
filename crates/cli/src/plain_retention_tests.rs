@@ -41,7 +41,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         in_force: config.default_model.clone(),
         reads_effort: false,
         effort: None,
-        account: bravebot_agent::chatgpt::AccountSession::begin(),
+        account: bravebot_agent::chatgpt::AccountSession::begin_with(None),
         complained: None,
         home: None,
         profile: None,

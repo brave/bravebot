@@ -202,7 +202,8 @@ fn a_session_of_the_account_is_begun_only_where_a_session_begins() {
         // A plain or background session, where it is assembled.
         ("crates/cli/src/plain.rs", 1),
         // The terminal's session, when it opens and when `/clear` or a handoff begins another.
-        ("crates/tui/src/state.rs", 2),
+        ("crates/tui/src/state.rs", 1),
+        ("crates/tui/src/state/settings.rs", 1),
         // The desktop's session when it is opened, resumed from a record and forked.
         ("crates/ui-bridge/src/running.rs", 3),
     ]

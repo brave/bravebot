@@ -18,7 +18,7 @@ pub mod protocol;
 
 use crate::anthropic::protocol::Failure;
 use crate::anthropic::what_was_written;
-use crate::protocol::{ChatRequest, SseDecoder, ToolCall, Usage};
+use crate::protocol::{ChatRequest, Effort, SseDecoder, ToolCall, Usage};
 use crate::{
     ATTEMPTS, AccountAccess, BACKOFF, CHUNKS_AHEAD, ChatError, Completion, CutOff, OpenCall,
     Progress, Refusals, WAKE, learned_key, log_retry, pause_before_retry, refuses_the_body,
@@ -67,6 +67,9 @@ struct AccountRequests<'a> {
     access: &'a mut dyn AccountAccess,
     /// The identifier of the session, which is the value of each of the three session headers.
     session: String,
+    /// The level the session began with, where it is held to it: sent in place of the one a request
+    /// asks for, and only to a request that asks for one. `None` leaves each request its own.
+    level: Option<Option<Effort>>,
     /// The token the last attempt was sent with, which is what a refusal of it replaces.
     sent: Option<Secret>,
     /// Whether this call has already replaced a token the host refused. A second refusal ends it.
@@ -149,10 +152,40 @@ impl<'a> ResponsesClient<'a> {
         client.account = Some(AccountRequests {
             access,
             session: session.into(),
+            level: None,
             sent: None,
             replaced: false,
         });
         client
+    }
+
+    /// Hold the requests of this account client to the level its session began with, which is
+    /// `level` where the session began with one and `None` where it began with none
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// A request that asks for a level then carries `level` in its place, so a level chosen later in
+    /// the session, or asked for by a skill, changes nothing that is sent: the service keeps the
+    /// prompt cache of a session only while its level stays the same. A request that asks for none,
+    /// as a summary does, carries none. Without this call every request carries the level it asks
+    /// for. A model that refuses the level is sent none whatever it was held to, as
+    /// [BACKEND-22](../../../docs/specs/backends.md#BACKEND-22) has it for any model. Ignored by a
+    /// client that is not an account's.
+    pub fn holding_the_level(mut self, level: Option<Effort>) -> Self {
+        if let Some(account) = self.account.as_mut() {
+            account.level = Some(level);
+        }
+        self
+    }
+
+    /// The level `request` is sent with.
+    ///
+    /// What it asks for, except where an account client is held to the level its session began with
+    /// ([`ResponsesClient::holding_the_level`]).
+    pub fn level_for(&self, request: &ChatRequest) -> Option<Effort> {
+        match self.account.as_ref().and_then(|account| account.level) {
+            Some(held) => request.effort.and(held),
+            None => request.effort,
+        }
     }
 
     /// Requests handed to egress in the last call, including capability probes.
@@ -248,7 +281,7 @@ impl<'a> ResponsesClient<'a> {
     /// Only where the request carried one: a request without a level was not refused for it, and
     /// giving it up there would record a refusal nobody saw.
     fn worth_dropping_effort(&self, request: &ChatRequest, error: &ChatError) -> bool {
-        self.effort && request.effort.is_some() && refuses_the_body(error)
+        self.effort && self.level_for(request).is_some() && refuses_the_body(error)
     }
 
     /// The ceiling somebody stated for this model, exported or in its block.
@@ -265,7 +298,7 @@ impl<'a> ResponsesClient<'a> {
             &self.model,
             &request.messages,
             request.tools.as_deref(),
-            request.effort.filter(|_| self.effort),
+            self.level_for(request).filter(|_| self.effort),
             self.stated_ceiling(),
         )
     }

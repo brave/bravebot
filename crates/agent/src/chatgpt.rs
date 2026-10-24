@@ -12,6 +12,7 @@
 
 use crate::report::Reporter;
 pub use bravebot_aichat::models::Model;
+use bravebot_aichat::protocol::Effort;
 pub use bravebot_aichat::responses::protocol::Refusal;
 use bravebot_aichat::{AccountAccess, AccountFailure, ChatError, RenewalFailure};
 use bravebot_config::provider::Provider;
@@ -162,7 +163,8 @@ pub(crate) mod stand_in {
 
 /// What one session carries into the requests it makes to the ChatGPT account
 /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)): the identifier those requests
-/// carry as their session, thread and client request identifiers.
+/// carry as their session, thread and client request identifiers, and the effort level the session
+/// began with.
 ///
 /// Made when a session begins and held by whatever holds the session, so every request the session
 /// makes carries the same identifier, and a second session of the same process carries another. The
@@ -171,6 +173,13 @@ pub(crate) mod stand_in {
 /// each other's cache. A delegate, a background session, a resumed session and a fork each begin
 /// their own: nothing here is stored in a session's record.
 ///
+/// The effort level is the one in force when the session began, and it is the one the account is
+/// sent for the rest of it, whatever level is chosen afterwards: the service keeps the cache of a
+/// session only while its level stays the same. What the person chose is kept apart and applies to
+/// the sessions begun after it, and to every service but this one. A model that refuses a level
+/// outranks it: the client sends that model none from then on, for every session of the process
+/// ([BACKEND-22](../../../docs/specs/backends.md#BACKEND-22)).
+///
 /// Cloning gives another handle on the same session.
 #[derive(Debug, Clone)]
 pub struct AccountSession(std::sync::Arc<Begun>);
@@ -178,18 +187,33 @@ pub struct AccountSession(std::sync::Arc<Begun>);
 #[derive(Debug)]
 struct Begun {
     identifier: String,
+    effort: Option<Effort>,
 }
 
 impl AccountSession {
-    /// A new session.
+    /// A new session that began asking for no effort level, which is what a front end that offers no
+    /// choice of one begins.
+    pub fn begin() -> Self {
+        Self::begin_with(None)
+    }
+
+    /// A new session that began with `effort` in force, where one was.
     ///
     /// The identifier is generated here and from the operating system's random source, so it holds
     /// nothing a reply, a model or a settings file chose and nothing about the person, the account,
     /// the project or what was asked.
-    pub fn begin() -> Self {
+    pub fn begin_with(effort: Option<Effort>) -> Self {
         Self(std::sync::Arc::new(Begun {
             identifier: bravebot_skus::new_request_id(),
+            effort,
         }))
+    }
+
+    /// The effort level the session began with, which is the level the account is sent for all of
+    /// it, except by a model that has refused a level and is sent none
+    /// ([BACKEND-22](../../../docs/specs/backends.md#BACKEND-22)).
+    pub fn effort(&self) -> Option<Effort> {
+        self.0.effort
     }
 
     /// The identifier the session's requests carry.

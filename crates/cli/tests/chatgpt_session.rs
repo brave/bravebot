@@ -1,12 +1,12 @@
 //! CHATGPT-10 through the built binary, against a stand-in for the serving host: the identifier
-//! each request to the account carries as its session, thread and client request identifier.
+//! each request to the account carries as its session, thread and client request identifier, and
+//! the effort level its body asks for.
 //!
 //! The binary reaches the stand-in through the `test-hosts` seam of `bravebot-skus` and
-//! `bravebot-config`, which this crate's dev-dependencies turn on ([CHATGPT-2]). The stand-in reads
-//! no body: a request to the account is a zstd frame, and what is checked is what the request says
-//! about itself in its headers. It answers by the order sessions first appear in, so the first
-//! identifier it sees is the run's own and the next is a delegate's, which starts only after the
-//! run's first reply asked for it.
+//! `bravebot-config`, which this crate's dev-dependencies turn on ([CHATGPT-2]). A request to the
+//! account is a zstd frame, which the stand-in decodes for the level and reads nothing else of. It
+//! answers by the order sessions first appear in, so the first identifier it sees is the run's own
+//! and the next is a delegate's, which starts only after the run's first reply asked for it.
 //!
 //! These tests run on Linux and macOS, as `chatgpt_account.rs` does, since the home directory the
 //! binary reads is set by `HOME`.
@@ -21,6 +21,9 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
+
+#[path = "../../aichat/test-support/account_body.rs"]
+mod account_body;
 
 /// The variable the seam reads, taken from the crate so that this file does not compile where the
 /// seam is off.
@@ -83,13 +86,16 @@ enum Reply {
     Call(&'static str, &'static str),
 }
 
-/// What the three headers of one request held, and whether the request carried the token.
+/// What the three headers of one request held, whether the request carried the token, and the
+/// level its body asked for.
 #[derive(Debug, Clone, PartialEq)]
 struct Asked {
     session: Option<String>,
     thread: Option<String>,
     client_request: Option<String>,
     bearer: Option<String>,
+    /// `reasoning.effort` of the body, or `None` where the body has no such field.
+    level: Option<String>,
 }
 
 #[derive(Default)]
@@ -174,6 +180,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
         thread: None,
         client_request: None,
         bearer: None,
+        level: None,
     };
     let mut length = 0usize;
     loop {
@@ -198,6 +205,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
     let _ = reader.read_exact(&mut body);
 
     let (status, kind, reply) = if path == "/v1/responses" {
+        asked.level = account_body::level_in(&body);
         let mut state = state.lock().expect("the state");
         let session = asked.session.clone().unwrap_or_default();
         let position = match state.sessions.iter().position(|(seen, _)| *seen == session) {
@@ -456,4 +464,66 @@ fn a_session_in_lines_carries_one_identifier_through_every_prompt() {
     let asked = stand_in.asked();
     assert_eq!(asked.len(), 2, "{asked:?}\n{terminal}");
     assert_eq!(identifier(&asked[0]), identifier(&asked[1]));
+}
+
+/// A one-shot run asks the account for the level it was started with, in every round, and a check of
+/// its goal, which asks for none, carries none. The regressions it rejects are a run that is sent no
+/// level because its session began without one, and a check that is sent the run's level although
+/// it asked for none, which is what a client does that puts the session's level on every request
+/// and not only on one that asks for a level.
+#[test]
+fn a_one_shot_run_asks_for_the_level_it_was_started_with_and_a_check_of_its_goal_for_none() {
+    let home = Scratch::new("cli-chatgpt-session-level");
+    let stand_in = StandIn::new(vec![vec![
+        Reply::Text("it is made"),
+        Reply::Text("MET\nthe exchange says it is made"),
+    ]]);
+
+    let output = bravebot(
+        &home,
+        &stand_in,
+        &[
+            "-p",
+            "make it so",
+            "--goal",
+            "it is made",
+            "--effort",
+            "low",
+            "--model",
+            MODEL,
+            "--trust-workspace",
+        ],
+    );
+
+    assert!(output.status.success(), "{}", said(&output));
+    let levels: Vec<Option<String>> = stand_in
+        .asked()
+        .into_iter()
+        .map(|asked| asked.level)
+        .collect();
+    assert_eq!(levels, [Some("low".to_string()), None]);
+}
+
+/// A session in lines, which is also what a background session runs, asks the account for the level
+/// the person last chose in every prompt it takes. The regression it rejects is a session begun with
+/// no level, which would send the account nothing whatever was chosen.
+#[test]
+fn a_session_in_lines_asks_for_the_level_chosen_in_every_prompt() {
+    let home = Scratch::new("cli-chatgpt-session-lines-level");
+    // The model and the level the person last chose, which a session in lines opens on.
+    std::fs::write(home.path.join(".bravebot/model"), format!("{MODEL}\n")).expect("a saved pick");
+    std::fs::write(home.path.join(".bravebot/effort"), "medium\n").expect("a saved level");
+    let stand_in = StandIn::new(vec![]);
+
+    let terminal = in_lines(&home, &stand_in, &["first", "second"]);
+
+    let asked = stand_in.asked();
+    assert_eq!(asked.len(), 2, "{asked:?}\n{terminal}");
+    assert_eq!(
+        asked
+            .iter()
+            .map(|asked| asked.level.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("medium"), Some("medium")]
+    );
 }

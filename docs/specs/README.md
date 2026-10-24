@@ -47,7 +47,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [scroller.md](scroller.md) | `SCROLL` | 10 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
 | [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
-| [chatgpt-sign-in.md](chatgpt-sign-in.md) | `CHATGPT` | 14 | signing in to OpenAI with a ChatGPT account through a browser, and offering the account's models in the picker (proposed, built apart from the per-session identifier and the fixed effort level of CHATGPT-10) |
+| [chatgpt-sign-in.md](chatgpt-sign-in.md) | `CHATGPT` | 14 | signing in to OpenAI with a ChatGPT account through a browser, and offering the account's models in the picker (proposed, built; what a sign-in with a real account has still to confirm is listed in the spec) |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 32 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 12 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 20 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |

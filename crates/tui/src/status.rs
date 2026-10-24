@@ -117,6 +117,12 @@ pub struct Facts<'a> {
     pub effort: Option<bravebot_aichat::protocol::Effort>,
     /// Whether the model in force reads that level, as its roster row stated.
     pub model_reads_effort: bool,
+    /// The level the session began with, where the model in force is one of the ChatGPT account's:
+    /// the account is sent that level for the whole session whatever is chosen afterwards, unless
+    /// the model refuses a level, so it is what a request carries
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)). `None` for every other
+    /// model, and `Some(None)` for a session that began with none.
+    pub account_effort: Option<Option<bravebot_aichat::protocol::Effort>>,
     /// What the server reported using on the last turn, or `None` before one has run.
     ///
     /// Observed rather than configured, which is the whole point: the endpoint answers a model name
@@ -690,7 +696,19 @@ fn choice_lines(facts: &Facts<'_>) -> Vec<Line> {
 
     // Beside the model, because the two together are what a turn costs: the same question asked of
     // the same model bills differently at either end of this range.
+    let word = |level: Option<bravebot_aichat::protocol::Effort>| match level {
+        Some(level) => level.as_str().to_string(),
+        None => t!(effort_unset).to_string(),
+    };
     lines.push(match (facts.effort, facts.model_reads_effort) {
+        // A model of the account is sent the level its session began with, which is the level a
+        // request carries and so the one named, with the level chosen since beside it. Where the
+        // two are the same the line is the ordinary one.
+        (chosen, true) if facts.account_effort.is_some_and(|began| began != chosen) => {
+            let began = facts.account_effort.flatten();
+            Line::new(t!(status_effort), word(began))
+                .with_note(t!(status_effort_kept_for_account, chosen = word(chosen)))
+        }
         // A level the model will not read is still the level somebody chose, so it is named rather
         // than hidden. What changes is the note: reporting it as in force would be this panel
         // telling them a request carries something it does not.
@@ -1435,6 +1453,7 @@ mod tests {
             agent_by_setting: false,
             effort: None,
             model_reads_effort: true,
+            account_effort: None,
             // Nothing observed, which is what a session looks like before its first turn. Tests
             // about the tier and the served model set these themselves.
             served_model: None,
@@ -3278,6 +3297,59 @@ mod tests {
         let shown = rendered(&report(&chosen));
         assert!(shown.contains("xhigh"), "{shown}");
         assert!(shown.contains("chosen with /effort"), "{shown}");
+    }
+
+    /// CHATGPT-10: on a model of the account the line names the level a request carries, which is the
+    /// one the session began with, and says which level was chosen since, where the two differ. The
+    /// regressions it rejects are the chosen level shown as the one in force, a note for a session
+    /// whose levels agree, and the same line for a model that is not the account's.
+    #[test]
+    fn on_the_account_the_effort_names_the_level_sent_and_the_one_chosen_where_they_differ() {
+        use bravebot_aichat::protocol::Effort;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+
+        let mut differs = facts(&config, &trust);
+        differs.effort = Some(Effort::High);
+        differs.account_effort = Some(Some(Effort::Low));
+        let shown = rendered(&report(&differs));
+        assert!(
+            shown.contains("low") && shown.contains("the level this ChatGPT session began with"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("high was chosen with /effort and applies from the next session"),
+            "{shown}"
+        );
+
+        let mut began_with_none = facts(&config, &trust);
+        began_with_none.effort = Some(Effort::High);
+        began_with_none.account_effort = Some(None);
+        let shown = rendered(&report(&began_with_none));
+        assert!(shown.contains("default"), "{shown}");
+        assert!(shown.contains("high was chosen with /effort"), "{shown}");
+
+        let mut agrees = facts(&config, &trust);
+        agrees.effort = Some(Effort::Low);
+        agrees.account_effort = Some(Some(Effort::Low));
+        let shown = rendered(&report(&agrees));
+        assert!(shown.contains("chosen with /effort"), "{shown}");
+        assert!(!shown.contains("began with"), "{shown}");
+
+        let mut elsewhere = facts(&config, &trust);
+        elsewhere.effort = Some(Effort::High);
+        let shown = rendered(&report(&elsewhere));
+        assert!(
+            shown.contains("high") && !shown.contains("began with"),
+            "{shown}"
+        );
+
+        let mut unread = facts(&config, &trust);
+        unread.effort = Some(Effort::High);
+        unread.account_effort = Some(Some(Effort::Low));
+        unread.model_reads_effort = false;
+        let shown = rendered(&report(&unread));
+        assert!(shown.contains("this model reads none"), "{shown}");
     }
 
     /// A level the model will not read is still named, since it is what somebody chose, but the

@@ -52,6 +52,8 @@ pub(crate) fn moved_aside_and_replaced(path: &Path, put_there: impl FnOnce(&Path
 pub(crate) enum Answer {
     /// A streamed reply of the Responses protocol holding these words.
     Words(&'static str),
+    /// A status and nothing else.
+    Status(u16),
 }
 
 /// A server standing in for the ChatGPT account's serving host: it answers each connection with the
@@ -125,6 +127,9 @@ pub(crate) fn serving_host(answers: Vec<Answer>) -> Host {
                 kept.push(headers);
             }
             let reply = match answer {
+                Answer::Status(status) => format!(
+                    "HTTP/1.1 {status} Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
                 Answer::Words(words) => format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
                     words_as_a_stream(words)

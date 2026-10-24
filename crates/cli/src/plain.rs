@@ -505,7 +505,9 @@ fn run(
         agent,
         reads_effort,
         effort,
-        account: bravebot_agent::chatgpt::AccountSession::begin(),
+        // At the level the session opened with, which is the one the ChatGPT account is sent for all
+        // of it. This mode has no command that changes the level, so the two never differ here.
+        account: bravebot_agent::chatgpt::AccountSession::begin_with(effort),
         complained: None,
         home,
         profile,
@@ -685,9 +687,10 @@ struct Running<'a> {
     /// What this session carries into its requests to the ChatGPT account: the identifier they carry
     /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
     ///
-    /// Begun where the session is assembled and given to every turn it takes, so a background
-    /// session's turns are one session to the account, and another background session or a one-shot
-    /// run is another. A session resumed from a record begins its own: the record keeps none.
+    /// Begun where the session is assembled, at the level it opened with, and given to every turn it
+    /// takes, so a background session's turns are one session to the account, and another background
+    /// session or a one-shot run is another. A session resumed from a record begins its own: the
+    /// record keeps none.
     account: bravebot_agent::chatgpt::AccountSession,
     /// The last substitution said, so the same complaint is not repeated every turn.
     ///

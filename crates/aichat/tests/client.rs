@@ -25,6 +25,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+#[path = "../test-support/account_body.rs"]
+mod account_body;
+
 /// What the server received, so tests can assert on the request rather than only the
 /// response.
 struct Captured {
@@ -7043,11 +7046,7 @@ fn incompressible_text(len: usize) -> String {
 
 /// The body the service reads from an account request: the zstd frame the request carried, decoded.
 fn decoded_account_body(sent: &Captured) -> Vec<u8> {
-    let mut decoder =
-        ruzstd::decoding::StreamingDecoder::new(&sent.raw[..]).expect("the body is a zstd frame");
-    let mut plain = Vec::new();
-    decoder.read_to_end(&mut plain).expect("the frame decodes");
-    plain
+    account_body::decoded(&sent.raw)
 }
 
 /// The checksum the frame holds, which is there where the encoder writes one. The streaming decoder
@@ -7651,6 +7650,133 @@ fn a_gateways_body_is_plain_json_with_no_content_encoding() {
     let body = json_of(&sent);
     assert_eq!(body["model"], "a-model");
     assert_eq!(body["stream"], true);
+}
+
+/// CHATGPT-10: the level of a session is fixed when it begins. A request that asks for a level is
+/// sent the one the session began with, so a level chosen later or asked for by a skill is not what
+/// the account sees, and one that asks for none, as a summary does, carries none. A session that
+/// began with none sends none. The regressions it rejects are a request sent with the level it
+/// asked for, one given the session's level though it asked for none, and a session that began with
+/// none sending the level a request asked for.
+#[test]
+fn a_session_held_to_the_level_it_began_with_sends_that_level_whatever_a_request_asks_for() {
+    let egress = Egress::new();
+    for (began, asked, sent) in [
+        (Some(Effort::Low), Some(Effort::High), Some("low")),
+        (Some(Effort::Low), Some(Effort::Low), Some("low")),
+        (Some(Effort::Medium), None, None),
+        (None, Some(Effort::High), None),
+    ] {
+        let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+        let provider = responses_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut sign_in = StoredSignIn::default();
+
+        account_client(&egress, &provider, &mut sign_in)
+            .holding_the_level(began)
+            .complete(&mut policy, &account_request("hello").with_effort(asked))
+            .expect("the reply was read");
+
+        assert_eq!(
+            account_body::level_in(&received.recv().expect("the request arrived").raw).as_deref(),
+            sent,
+            "began at {began:?}, asked for {asked:?}"
+        );
+    }
+
+    // Held to nothing, a request carries what it asks for, as a gateway's does.
+    let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+    let provider = responses_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+    account_client(&egress, &provider, &mut sign_in)
+        .complete(
+            &mut policy,
+            &account_request("hello").with_effort(Some(Effort::High)),
+        )
+        .expect("the reply was read");
+    assert_eq!(
+        account_body::level_in(&received.recv().expect("the request arrived").raw).as_deref(),
+        Some("high")
+    );
+}
+
+/// CHATGPT-10: a request refused on its contents is sent again without the level only where it
+/// carried one. A session that began with none sent none, so a refusal is not put down to a level
+/// and the request is not sent a second time to find out.
+#[test]
+fn a_refusal_is_not_put_down_to_a_level_that_was_never_sent() {
+    let (endpoint, received) = serve_attempts(vec![Attempt::Refused(
+        400,
+        r#"{"detail":"no"}"#.to_string(),
+    )]);
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+    let mut client = account_client(&egress, &provider, &mut sign_in).holding_the_level(None);
+
+    let error = client
+        .complete(
+            &mut policy,
+            &account_request("hello").with_effort(Some(Effort::High)),
+        )
+        .expect_err("the request was refused");
+
+    assert!(
+        matches!(
+            error,
+            ChatError::Egress(bravebot_net::EgressError::Status { status: 400, .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(client.attempts(), 1, "the request was sent again");
+    received.recv().expect("the request arrived");
+}
+
+/// CHATGPT-10: a model of the account that refuses a body carrying the level, and takes the same
+/// body without it, reads none. The request is sent again without the level, and no later request to
+/// that model carries one, whatever level its session began with, as BACKEND-22 has it for any
+/// model. The regressions it rejects are a held level sent again after the model refused it, and a
+/// refusal that is not remembered, which would send it to be refused at every request.
+#[test]
+fn a_model_of_the_account_that_refuses_the_level_is_sent_none_from_then_on() {
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Refused(400, r#"{"detail":"no"}"#.to_string()),
+        Attempt::Frames(text_reply(&["one"])),
+        Attempt::Frames(text_reply(&["two"])),
+    ]);
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    assert!(bravebot_aichat::reads_effort(
+        &provider.completion_url(),
+        "a-model"
+    ));
+
+    for _ in 0..2 {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut sign_in = StoredSignIn::default();
+        account_client(&egress, &provider, &mut sign_in)
+            .holding_the_level(Some(Effort::Low))
+            .complete(
+                &mut policy,
+                &account_request("hello").with_effort(Some(Effort::High)),
+            )
+            .expect("the reply was read");
+    }
+
+    let levels: Vec<Option<String>> = (0..3)
+        .map(|_| account_body::level_in(&received.recv().expect("a request arrived").raw))
+        .collect();
+    assert_eq!(levels, [Some("low".to_string()), None, None]);
+    assert!(
+        !bravebot_aichat::reads_effort(&provider.completion_url(), "a-model"),
+        "the model was still reported as reading a level"
+    );
 }
 
 /// A gateway entry is not the account: a 401 from it is its key being refused and no token is

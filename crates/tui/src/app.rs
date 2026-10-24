@@ -157,6 +157,7 @@ fn status_report(
         agent_by_setting: session.standing_is_by_setting(),
         effort: session.effort(),
         model_reads_effort: session.model_reads_effort(),
+        account_effort: session.account_level(),
         served_model: session.served_model(),
         substituted_model: session.substituted_model(),
         premium: session.premium(),
@@ -2315,6 +2316,8 @@ fn adopt_settings(
         session.name_effort(level);
         say_if_unread(session);
     }
+    // After the level is settled, which is the level the ChatGPT account is sent for the session.
+    session.begin_account_session();
     session.adopt_limit(settings);
     // Settled here too, and once, for the reason the mode is read once per turn: what decides
     // whether somebody is asked must not change under a prompt already on the screen. The command
@@ -7799,6 +7802,124 @@ mod tests {
         assert!(
             said.iter().all(|text| !text.contains("openrouter")),
             "{said:?}"
+        );
+    }
+
+    /// CHATGPT-10: the model in force is the account's where the pick is one of its models, and
+    /// where nothing was picked and the configured default is one. The regressions it rejects are a
+    /// pick that is read as the default and a default that is not read at all.
+    #[test]
+    fn the_model_in_force_is_the_accounts_by_the_pick_or_else_by_the_default() {
+        let mut config = a_config_offering_three_tiers();
+        let mut session = Session::new("none");
+
+        note_whether_the_model_in_force_is_the_accounts(&mut session, &config);
+        assert!(!session.model_is_account());
+
+        config.default_model = "chatgpt/a-model".to_string();
+        note_whether_the_model_in_force_is_the_accounts(&mut session, &config);
+        assert!(session.model_is_account(), "the default was not read");
+
+        session.name_model("gpt-5.5".to_string());
+        note_whether_the_model_in_force_is_the_accounts(&mut session, &config);
+        assert!(
+            !session.model_is_account(),
+            "the default outranked the pick"
+        );
+
+        session.name_model("chatgpt/another-model".to_string());
+        config.default_model = "gpt-5.5".to_string();
+        note_whether_the_model_in_force_is_the_accounts(&mut session, &config);
+        assert!(session.model_is_account(), "the pick was not read");
+    }
+
+    /// CHATGPT-10: `/status` reads the session as it stands: on a model of the account it names the
+    /// level sent and the one chosen, and on any other it names the one chosen. The regression it
+    /// rejects is a report built from the choice alone, which would show the level in force as the
+    /// one the account is not sent.
+    #[test]
+    fn the_status_of_a_chatgpt_session_names_the_level_it_sends() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-status-account");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let config = a_config_offering_three_tiers();
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+        session.begin_account_session();
+        session.choose_effort(Some(Effort::High));
+        let shown = |session: &Session| {
+            status_report(session, &stored, &workspace, None, &config, None)
+                .lines
+                .into_iter()
+                .filter(|line| line.label == t!(status_effort))
+                .map(|line| format!("{} {}", line.value, line.note))
+                .collect::<String>()
+        };
+
+        session.note_model_is_account(true);
+        let on_the_account = shown(&session);
+        assert!(
+            on_the_account.starts_with("low ")
+                && on_the_account.contains("high was chosen with /effort"),
+            "{on_the_account}"
+        );
+
+        session.note_model_is_account(false);
+        let elsewhere = shown(&session);
+        assert!(
+            elsewhere.starts_with("high ") && elsewhere.contains("chosen with /effort"),
+            "{elsewhere}"
+        );
+    }
+
+    /// CHATGPT-10: moving to a model of the account, in a session whose chosen level is not the one it
+    /// began with, is sent the one it began with and says so, and moving away is sent the choice. The
+    /// regressions it rejects are an account model sent the chosen level, a switch that says nothing
+    /// of it, and the choice forgotten for the models that are not the account's.
+    #[test]
+    fn picking_a_chatgpt_model_says_which_level_it_is_sent_where_that_is_not_the_one_chosen() {
+        use bravebot_aichat::protocol::Effort;
+        let mut config = a_config_offering_three_tiers();
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+        session.begin_account_session();
+        session.choose_effort(Some(Effort::High));
+        let mut account = provider_models(&gateway(r#"{"a-model": {}}"#)).remove(0);
+        account.key = "chatgpt/a-model".to_string();
+        account.provider = Some("ChatGPT".to_string());
+        let mut other = account.clone();
+        other.key = "openrouter/a-model".to_string();
+
+        model_picked(&mut session, &mut config, account);
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            said.iter()
+                .any(|text| text.contains("keeps the effort level it began with, low")),
+            "{said:?}"
+        );
+        assert_eq!(session.effort_in_force(), Some(Effort::Low));
+
+        let before = session.transcript.len();
+        model_picked(&mut session, &mut config, other);
+        assert_eq!(
+            session.effort_in_force(),
+            Some(Effort::High),
+            "the choice was not sent to a model that is not the account's"
+        );
+        assert!(
+            session.transcript[before..]
+                .iter()
+                .all(|entry| !entry.text.contains("began with")),
+            "said of a model that is not the account's"
         );
     }
 
@@ -17564,6 +17685,81 @@ mod tests {
         );
     }
 
+    /// CHATGPT-10: the account is sent the level a session began with, whatever is chosen after, and
+    /// the person is told. The choice is kept for the next session and for every other model. The
+    /// regressions it rejects are a chosen level that reaches the account, a choice that is not kept,
+    /// a note said for a model that is not the account's or for a level the session began with, and
+    /// a cleared session that goes on with the level of the one before.
+    #[test]
+    fn a_chatgpt_session_keeps_the_level_it_began_with_and_says_so_when_another_is_chosen() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = Session::new("none");
+        adopt_settings(
+            &mut session,
+            &bravebot_config::Settings::default(),
+            Some(Effort::Low),
+        );
+        session.note_model_is_account(true);
+        assert_eq!(session.effort_in_force(), Some(Effort::Low));
+
+        set_effort(&mut session, "high");
+        assert_eq!(session.effort(), Some(Effort::High), "the choice was lost");
+        assert_eq!(
+            session.effort_in_force(),
+            Some(Effort::Low),
+            "the account was sent the level chosen since the session began"
+        );
+        assert_eq!(
+            last_note(&session),
+            t!(
+                session_effort_kept_for_account,
+                began = "low",
+                chosen = "high"
+            )
+            .to_string()
+        );
+        // What `/status` reads of it: the level sent, which is not the one chosen.
+        assert_eq!(session.account_level(), Some(Some(Effort::Low)));
+
+        // Giving the level up is a change too, and the account keeps the one it was begun with.
+        effort_picked(&mut session, None);
+        assert_eq!(session.effort_in_force(), Some(Effort::Low));
+        assert!(
+            last_note(&session).contains("began with, low, so default applies"),
+            "{}",
+            last_note(&session)
+        );
+
+        // The level it began with is no change, so nothing is said of one.
+        set_effort(&mut session, "low");
+        assert!(
+            !last_note(&session).contains("began with"),
+            "{}",
+            last_note(&session)
+        );
+
+        // Every other model is sent the choice, and a new conversation begins at it.
+        set_effort(&mut session, "high");
+        session.note_model_is_account(false);
+        assert_eq!(session.effort_in_force(), Some(Effort::High));
+        assert_eq!(
+            session.account_level(),
+            None,
+            "a level of the account's was reported for another model"
+        );
+        let before = session.transcript.len();
+        set_effort(&mut session, "medium");
+        assert!(
+            session.transcript[before..]
+                .iter()
+                .all(|entry| !entry.text.contains("began with")),
+            "said of a model that is not the account's"
+        );
+        session.note_model_is_account(true);
+        session.clear();
+        assert_eq!(session.effort_in_force(), Some(Effort::Medium));
+    }
+
     /// The turn holds the session's own handle, so a limit typed while it runs reaches its next
     /// request, and the figure the person gives at the question is the session's afterwards. It
     /// also carries what the session had spent, which the limit is read against.
@@ -18107,6 +18303,43 @@ mod tests {
             1,
             "a condition that holds for the rest of the session was said again"
         );
+    }
+
+    /// CHATGPT-10: the account is sent the level a session began with, and a model of it that refuses
+    /// that level is sent none from then on, which the person is told in the sentence every model
+    /// that refuses a level gets. What was chosen and what the session began with are both kept: the
+    /// first is the next session's, and the second is what a model that reads a level is sent. The
+    /// regressions it rejects are a refused level that goes on being offered to the account, one
+    /// taken away without a word, and a level chosen afterwards that is said to be kept by a session
+    /// that is sent none.
+    #[test]
+    fn a_level_the_account_refused_stops_being_sent_and_is_said() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = Session::new("none");
+        adopt_settings(
+            &mut session,
+            &bravebot_config::Settings::default(),
+            Some(Effort::Low),
+        );
+        session.note_model_is_account(true);
+        assert_eq!(session.effort_in_force(), Some(Effort::Low));
+
+        note_a_refused_level(&mut session, true);
+
+        assert_eq!(
+            session.effort_in_force(),
+            None,
+            "a level the account refused was still offered to its next request"
+        );
+        assert_eq!(session.effort(), Some(Effort::Low));
+        assert_eq!(session.account_session().effort(), Some(Effort::Low));
+        assert_eq!(last_note(&session), t!(session_effort_not_read).to_string());
+
+        // A level chosen after that is said to be read by none, and not to be the one a session
+        // keeps, since nothing is sent for it to differ from.
+        set_effort(&mut session, "high");
+        assert_eq!(session.effort(), Some(Effort::High));
+        assert_eq!(last_note(&session), t!(session_effort_not_read).to_string());
     }
 
     /// A turn that learned nothing is not the roster taking back what it said. The listing states

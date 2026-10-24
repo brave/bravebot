@@ -1352,6 +1352,40 @@ mod tests {
         assert!(unread.contains(&"claude-sonnet".to_string()), "{unread:#?}");
     }
 
+    /// CHATGPT-10: on a model of the ChatGPT account the effort row is the level the account is
+    /// sent, which is the one the session began with, and the level chosen since is drawn on no row.
+    ///
+    /// Rejects: the chosen level drawn as the one in force, which would tell the person a request
+    /// carries a level it does not, and the row drawn from the session's choice by a panel that
+    /// asks the choice itself and not the level in force.
+    #[test]
+    fn the_effort_row_of_a_chatgpt_session_is_the_level_it_was_begun_at() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = Session::new("none");
+        session.choose_effort(Some(Effort::Low));
+        session.begin_account_session();
+        session.choose_effort(Some(Effort::High));
+        session.note_model_is_account(true);
+
+        let drawn = texts(&lines(&session, WIDTH, 30));
+
+        assert!(
+            drawn.contains(&t!(panel_effort, level = "low").to_string()),
+            "the level the session began at was not drawn: {drawn:#?}"
+        );
+        assert!(
+            !drawn.contains(&t!(panel_effort, level = "high").to_string()),
+            "the level chosen since was drawn as the one in force: {drawn:#?}"
+        );
+
+        session.note_model_is_account(false);
+        let elsewhere = texts(&lines(&session, WIDTH, 30));
+        assert!(
+            elsewhere.contains(&t!(panel_effort, level = "high").to_string()),
+            "a model that is not the account's was not drawn at the level chosen: {elsewhere:#?}"
+        );
+    }
+
     /// PANEL-9. A tier set to an inference-profile ARN is drawn by the name the `/model` picker
     /// gave it.
     ///

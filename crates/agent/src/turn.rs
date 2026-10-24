@@ -1339,12 +1339,25 @@ fn adopt(
     if let Some(level) = runs_as.effort
         && *effort != Some(level)
     {
-        said.push(t!(
-            skill_asks_an_effort,
-            skill = skill,
-            effort = level.as_str()
-        ));
-        *effort = Some(level);
+        // Of the model the rounds will be asked of, which the lines above may just have moved. The
+        // ChatGPT account is sent the level its session began with for all of it, or none where a
+        // model has refused a level, so a skill's level changes nothing there, and saying it would be
+        // asking for what is not going to happen (CHATGPT-10).
+        let asked_of = turn_model.as_deref().unwrap_or(&config.default_model);
+        if config.chatgpt_model(asked_of).is_some() {
+            said.push(t!(
+                skill_effort_kept_for_account,
+                skill = skill,
+                effort = level.as_str()
+            ));
+        } else {
+            said.push(t!(
+                skill_asks_an_effort,
+                skill = skill,
+                effort = level.as_str()
+            ));
+            *effort = Some(level);
+        }
     }
 
     said
@@ -6813,6 +6826,74 @@ mod tests {
             );
         }
 
+        /// A session begins at a level, and a task that is told none begins one at the level it asks
+        /// for, which is what a one-shot run and a delegate are. One that was told keeps its own,
+        /// whatever the task asks afterwards. The regressions it rejects are a session begun with no
+        /// level whatever the task asks, and a task that ignores the session it was given.
+        #[test]
+        fn a_session_begins_at_the_level_it_was_given_and_a_task_given_none_begins_at_its_own() {
+            assert_eq!(
+                Task::new("a")
+                    .with_effort(Some(Effort::High))
+                    .account_session()
+                    .effort(),
+                Some(Effort::High)
+            );
+            assert_eq!(Task::new("b").account_session().effort(), None);
+            let given = Task::new("c")
+                .with_effort(Some(Effort::High))
+                .in_account_session(AccountSession::begin_with(Some(Effort::Low)));
+            assert_eq!(given.account_session().effort(), Some(Effort::Low));
+        }
+
+        /// A skill's file may ask for a level for the rest of a turn. The account is sent the level
+        /// its session began with, so there the turn goes on as it was and the sentence says so, and
+        /// saying that the turn is at the level the skill asked for would be wrong. The regressions
+        /// it rejects are a level that moves on the account, the ordinary sentence said there, a skill
+        /// that moves the turn onto the account and the level in the same breath, and the same
+        /// refusal for a model that is not the account's.
+        #[test]
+        fn a_skill_asking_for_a_level_changes_nothing_where_the_account_answers() {
+            let config = configured(None);
+            let asks = crate::skills::RunsAs {
+                model: None,
+                effort: Some(Effort::High),
+            };
+
+            let mut model = Some(ACCOUNT_MODEL.to_string());
+            let mut effort = Some(Effort::Low);
+            let said = adopt(&mut model, &mut effort, &config, "tidy", &asks, None);
+            assert_eq!(effort, Some(Effort::Low));
+            assert_eq!(
+                said,
+                [t!(
+                    skill_effort_kept_for_account,
+                    skill = "tidy",
+                    effort = "high"
+                )
+                .to_string()]
+            );
+
+            let mut model = None;
+            let mut effort = Some(Effort::Low);
+            let said = adopt(&mut model, &mut effort, &config, "tidy", &asks, None);
+            assert_eq!(effort, Some(Effort::High));
+            assert_eq!(
+                said,
+                [t!(skill_asks_an_effort, skill = "tidy", effort = "high").to_string()]
+            );
+
+            let both = crate::skills::RunsAs {
+                model: Some(ACCOUNT_MODEL.to_string()),
+                effort: Some(Effort::High),
+            };
+            let mut model = None;
+            let mut effort = Some(Effort::Low);
+            adopt(&mut model, &mut effort, &config, "tidy", &both, None);
+            assert_eq!(model.as_deref(), Some(ACCOUNT_MODEL));
+            assert_eq!(effort, Some(Effort::Low));
+        }
+
         /// One turn of `task`, on the account, with the stand-in host installed on this thread.
         fn take_a_turn_at_the_host(name: &str, task: Task) {
             let scratch = crate::testutil::scratch_dir(name);
@@ -6871,6 +6952,37 @@ mod tests {
             for name in ["session-id", "thread-id", "x-client-request-id"] {
                 assert_eq!(host.header(name), expected, "{name}");
             }
+        }
+
+        /// A model of the account that refuses a body carrying a level, and takes the same body
+        /// without it, is a model that reads none. The client sends the request again without the
+        /// level and the process remembers, so no later request to that model carries one, and the
+        /// backend reports it as the terminal and a session in lines ask it to, which is how the
+        /// person is told. The regressions it rejects are a refusal that is not read as the level's
+        /// and a memory that does not reach the question the interfaces ask.
+        #[test]
+        fn a_model_of_the_account_that_refuses_the_level_is_reported_as_reading_none() {
+            use crate::testutil::{Answer, serving_host};
+            let host = serving_host(vec![Answer::Status(400), Answer::Words("ok")]);
+            let _at = crate::chatgpt::stand_in::at(&host.endpoint);
+            let config = configured(None);
+            assert!(
+                !crate::backend::refused_a_level(&config, ACCOUNT_MODEL),
+                "refused before it was asked"
+            );
+
+            take_a_turn_at_the_host(
+                "account-session-refused-level",
+                Task::new("a")
+                    .with_effort(Some(Effort::High))
+                    .in_account_session(AccountSession::begin_with(Some(Effort::Low))),
+            );
+
+            assert_eq!(host.header("session-id").len(), 2, "sent again once");
+            assert!(
+                crate::backend::refused_a_level(&config, ACCOUNT_MODEL),
+                "the refusal was not remembered against the account's model"
+            );
         }
 
         fn an_exchange() -> Conversation {
@@ -7141,8 +7253,12 @@ mod tests {
             assert_eq!(carried, vec![carried_by(&session); 2]);
         }
 
-        /// Two delegates, each of two rounds, on the account: the identifier each request carried.
-        fn two_delegates(name: &str) -> Vec<Option<String>> {
+        /// Two delegates, each of two rounds, spawned by a turn that asked for `effort`, on the
+        /// account: the identifier and the level each request would have been held to.
+        fn two_delegates(
+            name: &str,
+            effort: Option<Effort>,
+        ) -> (Vec<Option<String>>, Vec<Option<Option<Effort>>>) {
             let scratch = crate::testutil::scratch_dir(name);
             let _ = std::fs::remove_dir_all(&scratch);
             std::fs::create_dir_all(&scratch).unwrap();
@@ -7165,7 +7281,7 @@ mod tests {
                     None,
                     None,
                     Some(ACCOUNT_MODEL),
-                    None,
+                    effort,
                     crate::PermissionMode::Ask,
                     false,
                     &bravebot_config::Attribution::default(),
@@ -7184,7 +7300,7 @@ mod tests {
                 );
                 ended.delegated.expect("the delegate answered");
             }
-            let carried = scripted::sessions();
+            let carried = (scripted::sessions(), scripted::levels());
             scripted::clear();
             carried
         }
@@ -7194,7 +7310,7 @@ mod tests {
         /// (here, a process-wide one) and one that begins a session for each round.
         #[test]
         fn a_delegate_is_a_session_of_its_own_and_carries_one_identifier_throughout() {
-            let carried = two_delegates("account-session-delegates");
+            let (carried, _) = two_delegates("account-session-delegates", None);
 
             let [first, second, third, fourth] = carried.as_slice() else {
                 panic!("two requests for each of two delegates: {carried:?}");
@@ -7203,6 +7319,19 @@ mod tests {
             assert_eq!(first, second);
             assert_eq!(third, fourth);
             assert_ne!(first, third);
+        }
+
+        /// A delegate begins at the level it was given, which is the spawning turn's where its
+        /// definition names none, and keeps it. The regressions it rejects are a delegate begun with no
+        /// level, which would send its account nothing whatever its turn asked, and one that takes the
+        /// level of a later request.
+        #[test]
+        fn a_delegate_begins_at_the_level_it_was_given() {
+            let (_, asked) = two_delegates("account-session-delegate-level", Some(Effort::Low));
+            assert_eq!(asked, vec![Some(Some(Effort::Low)); 4]);
+
+            let (_, unasked) = two_delegates("account-session-delegate-none", None);
+            assert_eq!(unasked, vec![Some(None); 4]);
         }
 
         /// What the kernel settles about a delegate before it exists, for a reader.

@@ -335,6 +335,8 @@ pub(crate) mod scripted {
         static ASKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static THOUGHT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static SESSIONS: RefCell<Vec<Option<String>>> = const { RefCell::new(Vec::new()) };
+        static LEVELS: RefCell<Vec<Option<Option<bravebot_aichat::protocol::Effort>>>> =
+            const { RefCell::new(Vec::new()) };
     }
 
     /// Answer the next requests on this thread with `replies`, and forget what was asked before.
@@ -343,6 +345,7 @@ pub(crate) mod scripted {
         ASKED.with(|asked| asked.borrow_mut().clear());
         THOUGHT.with(|thought| thought.borrow_mut().clear());
         SESSIONS.with(|sessions| sessions.borrow_mut().clear());
+        LEVELS.with(|levels| levels.borrow_mut().clear());
     }
 
     /// Report `pieces` as the thinking a service streamed, one report each, ahead of every scripted
@@ -362,6 +365,13 @@ pub(crate) mod scripted {
     /// belonged to no session.
     pub(crate) fn sessions() -> Vec<Option<String>> {
         SESSIONS.with(|sessions| sessions.borrow().clone())
+    }
+
+    /// The effort level each request a scripted reply answered would have been held to, in order.
+    /// `None` where the backend was not the account or the request belonged to no session, and
+    /// `Some(None)` where the session began with no level.
+    pub(crate) fn levels() -> Vec<Option<Option<bravebot_aichat::protocol::Effort>>> {
+        LEVELS.with(|levels| levels.borrow().clone())
     }
 
     /// Stop answering from a script, so a test that fails part way leaves nothing for the next
@@ -390,7 +400,7 @@ pub(crate) mod scripted {
     /// go and send.
     pub(super) fn next(
         request: &ChatRequest,
-        session: Option<String>,
+        session: Option<(String, Option<bravebot_aichat::protocol::Effort>)>,
     ) -> Option<Result<Completion, BackendError>> {
         REPLIES.with(|scripted| {
             let mut scripted = scripted.borrow_mut();
@@ -398,7 +408,12 @@ pub(crate) mod scripted {
             let reply = replies
                 .pop_front()
                 .unwrap_or_else(|| panic!("asked once more than the script answers"));
-            SESSIONS.with(|sessions| sessions.borrow_mut().push(session));
+            let (identifier, level) = match session {
+                Some((identifier, level)) => (Some(identifier), Some(level)),
+                None => (None, None),
+            };
+            SESSIONS.with(|sessions| sessions.borrow_mut().push(identifier));
+            LEVELS.with(|levels| levels.borrow_mut().push(level));
             ASKED.with(|asked| {
                 asked
                     .borrow_mut()
@@ -1130,7 +1145,7 @@ impl<'a> Backend<'a> {
                 Self::Account {
                     session: Some(session),
                     ..
-                } => Some(session.identifier().to_string()),
+                } => Some((session.identifier().to_string(), session.effort())),
                 _ => None,
             },
         ) {
@@ -1220,7 +1235,9 @@ fn bedrock_client<'a>(
 /// A client for the ChatGPT account, asking `sign_in` for a token before each request.
 ///
 /// The service, its protocol and its headers are constants, and the session identifier is the one of
-/// `session`, or one of its own where the request belongs to none. Nothing a settings file, a
+/// `session`, or one of its own where the request belongs to none. A request that asks for an effort
+/// level is sent the level `session` began with, where it belongs to one
+/// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)). Nothing a settings file, a
 /// variable or a gateway block says reaches it, so no key but the sign-in's is ever the account's.
 fn account_client<'a>(
     wire_model: &str,
@@ -1234,13 +1251,17 @@ fn account_client<'a>(
             .identifier()
             .to_string(),
     };
-    GatewayClient::Responses(ResponsesClient::for_account(
+    let client = ResponsesClient::for_account(
         egress,
         crate::chatgpt::account_provider(),
         wire_model,
         sign_in,
         identifier,
-    ))
+    );
+    GatewayClient::Responses(match session {
+        Some(session) => client.holding_the_level(session.effort()),
+        None => client,
+    })
 }
 
 /// A client pointed at `provider`, with its token resolved, in the protocol the provider speaks.
@@ -2084,6 +2105,39 @@ mod tests {
         assert_ne!(sentences[0], sentences[1]);
         assert!(sentences[0].contains("usage limit"), "{}", sentences[0]);
         assert!(!sentences[1].contains("usage limit"), "{}", sentences[1]);
+    }
+
+    /// CHATGPT-10: a request to the account that asks for a level is sent the one its session began
+    /// with, whatever it asks for, and one sent in no session is sent what it asks for. The
+    /// regressions it rejects are a client not told the session's level, and one told it by a
+    /// session that has none.
+    #[test]
+    fn a_request_to_the_account_is_held_to_the_level_the_session_began_with() {
+        use bravebot_aichat::protocol::Effort;
+        let egress = Egress::new();
+        let mut sign_in = crate::chatgpt::StoredSignIn;
+        let asks = ChatRequest::new("m", Vec::new()).with_effort(Some(Effort::High));
+        let mut sent = |session: Option<&crate::chatgpt::AccountSession>| {
+            let GatewayClient::Responses(client) =
+                account_client("m", &egress, &mut sign_in, session)
+            else {
+                panic!("the account is spoken to in the Responses protocol");
+            };
+            client.level_for(&asks)
+        };
+
+        assert_eq!(
+            sent(Some(&crate::chatgpt::AccountSession::begin_with(Some(
+                Effort::Low
+            )))),
+            Some(Effort::Low)
+        );
+        assert_eq!(
+            sent(Some(&crate::chatgpt::AccountSession::begin())),
+            None,
+            "a session that began with no level was sent the one a request asked for"
+        );
+        assert_eq!(sent(None), Some(Effort::High));
     }
 
     /// CHATGPT-8 and BACKEND-53: a refusal that names the account is a refusal among the failure

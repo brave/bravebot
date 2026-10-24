@@ -2387,6 +2387,9 @@ status-effort = Effort
 status-effort-chosen = chosen with /effort
 status-effort-default = whatever the service does on its own
 status-effort-not-read = chosen with /effort, but this model reads none
+# The level shown is the one a ChatGPT session began with, which that account is sent for the whole
+# session. The level chosen since is a level word or the word for the default.
+status-effort-kept-for-account = the level this ChatGPT session began with; { $chosen } was chosen with /effort and applies from the next session
 status-theme = Theme
 status-theme-chosen = chosen with /theme
 status-served = Answered by
@@ -3269,6 +3272,9 @@ session-effort-set = thinking at { $effort }
 session-effort-unset = thinking as the service decides
 session-no-such-effort = no effort level named { $effort }; try /effort for the list
 session-effort-not-read = this model reads no effort level, so requests carry none
+# Said where the level chosen is not the one a session on a ChatGPT model began with, because that
+# account is sent one level for a whole session. Both are level words or the word for the default.
+session-effort-kept-for-account = a ChatGPT session keeps the effort level it began with, { $began }, so { $chosen } applies from the next session, which /clear begins
 session-language-in-use = the interface is in { $language }; catalogs: { $available }; /language <tag> saves a choice for the next start and /language auto drops it
 session-language-saved = saved choice: { $language }
 session-language-set = the interface will be in { $language } from the next start, unless BRAVEBOT_LOCALE is set, which answers first
@@ -4076,6 +4082,9 @@ turn-named-skill-not-shown = { $skill } was named but could not be shown to the 
 # they did not make.
 skill-asks-a-model = { $skill } asks the rest of this turn of { $model }
 skill-asks-an-effort = { $skill } asks the rest of this turn at { $effort } effort
+# The same skill on a ChatGPT model, whose account is sent the level the session began with for all
+# of it, so the turn goes on as it was. The skill and the level are its file's own words.
+skill-effort-kept-for-account = { $skill } asks the rest of this turn at { $effort } effort, but a ChatGPT session keeps the level it began with, so this turn does not change
 # The skill loads and the turn goes on as it was, rather than stopping: a skill is not the thing the
 # person asked for, so a model they cannot reach is a line of its file that does nothing.
 skill-model-needs-sign-in = { $skill } asks for { $model }, which needs a sign-in first, so its rounds keep this session's model
