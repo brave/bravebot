@@ -52,6 +52,19 @@ impl Scratch {
         }
     }
 
+    /// A home whose path is short enough for a socket inside it, which a background session listens
+    /// on. `name` is told apart from another test's by the process.
+    fn short(name: &str) -> Self {
+        let path = PathBuf::from(format!("/tmp/bbcg-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        for directory in [".bravebot", "work", "no-programs"] {
+            std::fs::create_dir_all(path.join(directory)).expect("create the short home");
+        }
+        Self {
+            path: path.canonicalize().expect("canonical short home"),
+        }
+    }
+
     fn account(&self) -> PathBuf {
         self.path.join(".bravebot/chatgpt-account.json")
     }
@@ -336,18 +349,19 @@ impl Typed {
 }
 
 /// CHATGPT-8: no value the sign-in handled reaches an output of a run that signs in, refreshes and
-/// fails. The run signs in (the code exchange, the key set and the ID token), its listing is refused
-/// for the first token and renews it, and turns are made in text, as JSON and as a JSON stream: five
-/// that are answered, three refused in a code that names the account, one whose refresh is refused as
-/// no longer valid, which ends the sign-in, and two after it. Two of the answered turns start a program, one through `run` and one an MCP server a
-/// person declared. Every reply that refuses
-/// repeats every value the stand-in has seen. Then each output is searched for each value: what the
-/// sign-in showed in its terminal, which holds the authorization URL once, what each run and `auth
-/// status` and `doctor` wrote to their streams, under `--trace` for a turn and `--log-level debug` for
-/// each, the debug log each run left, taken as it ended, every file the runs left in the home (the
-/// trail, the logs, the session records and their audit files), and the environment of each program a
-/// turn started, which a hook, `run` and the server write there. A run that left no session record, no trail or no log is not one that
-/// was searched, so each of them is required, and the count of each is exact.
+/// fails. The run signs in (the code exchange, the key set and the ID token), its listing is
+/// refused for the first token and renews it, and turns are made in text, as JSON and as a JSON
+/// stream: five that are answered, three refused in a code that names the account, one whose
+/// refresh is refused as no longer valid, which ends the sign-in, and two after it. Two of the
+/// answered turns start a program, one through `run` and one an MCP server a person declared. Every
+/// reply that refuses repeats every value the stand-in has seen. Then each output is searched for
+/// each value: what the sign-in showed in its terminal, which holds the authorization URL once,
+/// what each run and `auth status` and `doctor` wrote to their streams, under `--trace` for a turn
+/// and `--log-level debug` for each, the debug log each run left, taken as it ended, every file the
+/// runs left in the home (the trail, the logs, the session records and their audit files), and the
+/// environment of each program a turn started, which a hook, `run` and the server write there. A
+/// run that left no session record, no trail or no log is not one that was searched, so each of
+/// them is required, and the count of each is exact.
 ///
 /// What the other outputs are held by is stated with CHATGPT-8: the terminal client's transcript, its
 /// screen and its record by `bravebot_tui::chatgpt_failure_tests`, and what the desktop bridge sends and
@@ -1023,8 +1037,10 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_s
     }
 }
 
-/// CHATGPT-8: no value a sign-in handled reaches the terminal of the session in lines. The run signs in, and a person then types four prompts in
-/// `bravebot --plain`, each of which fails: the service refuses the request, refuses it in a code that
+/// CHATGPT-8: no value a sign-in handled reaches the terminal of the session in lines, or the
+/// environment of a language server it starts. The run signs in, and a person then types a prompt
+/// in `bravebot --plain` whose reply asks for a language server, which they allow, and four prompts
+/// that each fail: the service refuses the request, refuses it in a code that
 /// names the account, turns the token away while the token endpoint is busy, and turns it away while
 /// the token endpoint says the refresh token is no longer valid. Every refusal repeats every value
 /// the stand-in has seen. The terminal and every file the session left are searched for them, and
@@ -1043,10 +1059,28 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface() {
         serde_json::json!({"model": MODEL}).to_string(),
     )
     .expect("settings that name the account's model");
+    // A language server a person declared, which the model's first reply asks for and the person
+    // allows. It writes the environment it was given where the files of the home are searched.
+    std::fs::write(home.path.join("work/a.zz"), "pub struct Held;\n").expect("a file to ask about");
+    std::fs::write(
+        home.path.join(".bravebot/lsp.json"),
+        serde_json::json!({"servers": {"zzls": {
+            "command": "/bin/sh",
+            "args": ["-c", r#"/usr/bin/env > "$HOME/lsp-env.txt""#],
+            "extensions": {"zz": "zed"},
+        }}})
+        .to_string(),
+    )
+    .expect("the declaration");
     {
         let mut state = stand_in.state();
         state.refreshing.extend([Refresh::Busy, Refresh::Ended]);
         state.serving.extend([
+            Serving::Calls(
+                "lsp",
+                r#"{"operation": "goToDefinition", "path": "a.zz", "line": 1, "character": 12}"#,
+            ),
+            Serving::Answers,
             Serving::Refuses(400),
             Serving::RefusesWithCode(429, USAGE_LIMIT),
             Serving::RefusesTheToken,
@@ -1060,10 +1094,18 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface() {
     });
     session.type_line("y");
     session.wait_for("the first prompt", |shown| Typed::prompts(shown) >= 1);
+    session.type_line("look it up");
+    session.wait_for("the question about the language server", |shown| {
+        shown.contains("start a language server? [y/N]")
+    });
+    session.type_line("y");
+    session.wait_for("the prompt after the lookup", |shown| {
+        Typed::prompts(shown) > 1
+    });
     for turn in 1..=4 {
         session.type_line("say something");
         session.wait_for(&format!("the prompt after turn {turn}"), |shown| {
-            Typed::prompts(shown) > turn
+            Typed::prompts(shown) > turn + 1
         });
     }
     let shown = session.finish();
@@ -1086,6 +1128,9 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface() {
     );
 
     let files = files_under(&home.path);
+    let dump = std::fs::read_to_string(home.path.join("lsp-env.txt"))
+        .expect("the language server wrote the environment it was given");
+    assert!(dump.contains("HOME=") && dump.contains("PATH="), "{dump}");
     // The sign-in and the session each ran with the debug log and each left one, and the session's
     // is among the files held below. It recorded the requests of the turns.
     assert_logs(&files, 2, "the sign-in and the session");
@@ -1101,6 +1146,220 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface() {
     assert!(found.is_empty(), "{found:#?}");
     assert!(
         files.len() >= 4,
+        "{} files, so this would pass by reading almost nothing",
+        files.len()
+    );
+}
+
+/// The identifier a background session is started under.
+const SESSION_ID: &str = "3f2a9c1e-7b44-4d0e-9a51-0c6d2b8e4f10";
+
+/// A background host, killed and reaped when the test ends however it ends, so a failed wait or a
+/// panic does not leave it running.
+#[cfg(unix)]
+struct Host {
+    child: Child,
+}
+
+#[cfg(unix)]
+impl Host {
+    /// Wait for the host to end by itself and return how it ended, or fail saying it did not.
+    fn ended(&mut self) -> std::process::ExitStatus {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some(status) = self.child.try_wait().expect("a status") {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the host did not end once stopped"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Host {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Read what a terminal attached to a background session is shown until `ready` says it has enough,
+/// adding it to `shown`, or fail saying what it was waiting for.
+#[cfg(unix)]
+fn shown_until(
+    terminal: &mut std::os::unix::net::UnixStream,
+    shown: &mut String,
+    what: &str,
+    ready: impl Fn(&str) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut chunk = [0u8; 1024];
+    while !ready(shown) {
+        assert!(
+            Instant::now() < deadline,
+            "the session never showed {what}: {shown}"
+        );
+        match terminal.read(&mut chunk) {
+            Ok(0) => panic!("the session ended before it showed {what}: {shown}"),
+            Ok(read) => shown.push_str(&String::from_utf8_lossy(&chunk[..read])),
+            Err(_) => {}
+        }
+    }
+}
+
+/// CHATGPT-8: no value a sign-in handled reaches the terminal attached to a background session, the
+/// record the session keeps, the entry in the roster, or what its process wrote. The run signs in,
+/// and a background session is started on a prompt that is answered, a terminal attaches to it, and
+/// four prompts typed there each fail in the ways the line interface's do. The record is of the turn
+/// that was answered, and a turn that failed adds nothing to it. Every refusal repeats
+/// every value the stand-in has seen.
+#[cfg(unix)]
+#[test]
+fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_record_of_a_background_session() {
+    use std::os::unix::net::UnixStream;
+
+    let home = Scratch::short("host");
+    let stand_in = StandIn::new(vec![(REFRESH_ONE, ACCESS_TWO, REFRESH_TWO)]);
+    let (terminal, _, signed_in) = sign_in(&home, &stand_in);
+    assert!(signed_in, "the sign-in failed: {terminal}");
+    std::fs::write(
+        home.path.join(".bravebot/settings.json"),
+        serde_json::json!({"model": MODEL}).to_string(),
+    )
+    .expect("settings that name the account's model");
+    let job = home.path.join(format!(".bravebot/jobs/{SESSION_ID}"));
+    std::fs::create_dir_all(&job).expect("the entry's directory");
+    std::fs::write(job.join("first-prompt"), "say something").expect("the first prompt");
+    {
+        let mut state = stand_in.state();
+        state.refreshing.extend([Refresh::Busy, Refresh::Ended]);
+        state.serving.extend([
+            Serving::Answers,
+            Serving::Refuses(400),
+            Serving::RefusesWithCode(429, USAGE_LIMIT),
+            Serving::RefusesTheToken,
+            Serving::RefusesTheToken,
+        ]);
+    }
+
+    let said_by_the_process = |name: &str| {
+        std::fs::File::create(home.path.join(name)).expect("a file for what the process says")
+    };
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot"));
+    environment(&mut command, &home, &stand_in);
+    let mut host = Host {
+        child: command
+            .args(["--log-level", "debug", "__bg-host", SESSION_ID])
+            .stdin(Stdio::null())
+            .stdout(said_by_the_process("host-standard-output.txt"))
+            .stderr(said_by_the_process("host-standard-error.txt"))
+            .spawn()
+            .expect("the host starts"),
+    };
+    let socket = job.join("attach.sock");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !socket.exists() {
+        assert!(Instant::now() < deadline, "the host never listened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let token = std::fs::read_to_string(socket.with_file_name("attach.token"))
+        .expect("the host keeps a secret beside its socket");
+    let mut attached = UnixStream::connect(&socket).expect("attach");
+    attached
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("a timeout");
+    writeln!(attached, "{}\nattach", token.trim()).expect("attach");
+
+    let mut shown = String::new();
+    shown_until(
+        &mut attached,
+        &mut shown,
+        "the question about trust",
+        |shown| shown.contains("trust this directory?"),
+    );
+    writeln!(attached, "y").expect("the answer");
+    let requests = || {
+        stand_in
+            .asked()
+            .iter()
+            .filter(|asked| asked.path == "/v1/responses")
+            .count()
+    };
+    // The first prompt was the file's, and then four are typed, each when the session waits for one.
+    for turn in 1..=5 {
+        shown_until(
+            &mut attached,
+            &mut shown,
+            &format!("the prompt after turn {turn}"),
+            |shown| requests() >= turn && shown.ends_with("> "),
+        );
+        if turn < 5 {
+            writeln!(attached, "say something").expect("a prompt");
+        }
+    }
+    drop(attached);
+    let stopped = bravebot(&home, &stand_in, &["sessions", "stop", "3f2a9c1e"]);
+    assert!(stopped.status.success(), "{}", said(&stopped));
+    // `sessions stop` ends the host with the terminate signal. Any other signal or a failing exit is
+    // a host that crashed.
+    let ended = host.ended();
+    assert!(
+        ended.success() || std::os::unix::process::ExitStatusExt::signal(&ended) == Some(15),
+        "the host ended with {ended}"
+    );
+
+    assert_eq!(
+        stand_in.presented(),
+        [REFRESH_ONE, REFRESH_TWO, REFRESH_TWO],
+        "the refreshes the run made"
+    );
+    {
+        let state = stand_in.state();
+        assert!(
+            state.serving.is_empty() && state.refreshing.is_empty(),
+            "the run did not use every scripted answer"
+        );
+    }
+    assert!(
+        !home.account().exists(),
+        "the sign-in that ended was not removed"
+    );
+
+    let files = files_under(&home.path);
+    let records: Vec<_> = files
+        .iter()
+        .filter(|(path, _)| {
+            let path = path.display().to_string();
+            path.contains("/sessions/") && path.ends_with(".json")
+        })
+        .collect();
+    assert_eq!(records.len(), 1, "the session kept no record of its turns");
+    let kept: serde_json::Value = serde_json::from_slice(&records[0].1).expect("the record");
+    // The record is of the turn that was answered. A turn that failed adds nothing to it, as it adds
+    // nothing to the record of a one-shot run.
+    assert_eq!(kept["turns"], 1, "{kept}");
+    // The host writes nothing to its standard output or standard error here. Both files are among
+    // `files`, so what it began to write would be searched for the values.
+    // The sign-in and the host each ran with the debug log and left one. `sessions stop` asks the
+    // stand-in nothing and leaves none.
+    assert_logs(&files, 2, "the sign-in and the host");
+
+    let handled = stand_in.handled();
+    handled.assert_distinct();
+    handled.assert_none_in("the terminal attached to the session", &shown);
+    let mut found = Vec::new();
+    for (path, bytes) in &files {
+        for name in handled.found_in(&String::from_utf8_lossy(bytes)) {
+            found.push(format!("{} holds {name}", path.display()));
+        }
+    }
+    assert!(found.is_empty(), "{found:#?}");
+    assert!(
+        files.len() >= 8,
         "{} files, so this would pass by reading almost nothing",
         files.len()
     );

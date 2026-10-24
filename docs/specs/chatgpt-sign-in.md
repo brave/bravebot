@@ -805,9 +805,17 @@ itself and holds what its own writers produce from it:
   copy of the authorization URL, and every file each left. Each leaves none, since a sign-in that stops
   stores nothing and writes no log, and the test fails where one leaves a file so that the file is searched.
 - `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface`
-  runs `bravebot --log-level debug --plain` in a terminal and types four prompts that fail in four ways. It
-  holds the terminal and every file left, and requires a log for the sign-in and one for the session. A
-  session in lines keeps no record of its turns outside a background host.
+  runs `bravebot --log-level debug --plain` in a terminal. The model's first reply asks for a language server
+  that a person declared, which the person allows, and the server writes the environment it was given to a
+  file. Four prompts then fail in four ways. It holds the terminal and every file left, and requires a log for
+  the sign-in and one for the session. A session in lines keeps no record of its turns outside a background
+  host.
+- `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_record_of_a_background_session`
+  runs the background host, `bravebot --log-level debug __bg-host`, with a first prompt in its job directory,
+  attaches to its socket with the token the host keeps beside it, and types four more prompts that fail in
+  four ways. It holds what the attached terminal is shown, the files the host's standard output and standard
+  error were sent to and every file left, requires that the host kept one session record, of the one turn that
+  was answered, and requires a log for the sign-in and one for the host. It runs on Linux and macOS.
 - `bravebot_tui::chatgpt_failure_tests::what_the_terminal_client_keeps_and_draws_of_a_failed_turn_holds_none_of_the_values_of_the_run`
   signs in and makes four turns that fail, as a renewal while the token endpoint is busy, a refusal that is
   not of the token, a refusal in a code of the closed list, and a sign-in that has ended, and gives each
@@ -827,14 +835,13 @@ itself and holds what its own writers produce from it:
   standard error, and the record and trail it wrote. It requires that no two turns failed alike and that the
   record keeps the four.
 
-Every output the clause names is held by one of these, except the environment of a language server, and a
-background host's terminal and record; the file `/export` writes; the connection of the ACP adapter and of the
-local host; what the renderer in `ui/` draws from the events the bridge sends; and the debug log of the
-full-screen terminal client. The renderer is not a crate, so the events are what is held, and what the window
-makes of the `account` name and the sentence in one is pinned by the scripts the `by-construction` entry of
-this clause names. The test of the full-screen client is made in a child of its test binary that sets no log
-level, and the client's crate has no dependency on the crate that writes the log, so the debug log of that
-client is not made to be held, and the files its session wrote are.
+Every output the clause names is held by one of these, except the file `/export` writes; the connection of the
+ACP adapter and of the local host; what the renderer in `ui/` draws from the events the bridge sends; and the
+debug log of the full-screen terminal client. The renderer is not a crate, so the events are what is held, and
+what the window makes of the `account` name and the sentence in one is pinned by the scripts the
+`by-construction` entry of this clause names. The test of the full-screen client is made in a child of its
+test binary that sets no log level, and the client's crate has no dependency on the crate that writes the log,
+so the debug log of that client is not made to be held, and the files its session wrote are.
 
 Two more things are not reached. The loop in `run_turn_animated` that takes what a turn's reporter sends into
 the session needs a terminal, and no test runs it. The test of the terminal client makes its turns with the
@@ -860,6 +867,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface`
+`verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_record_of_a_background_session`
 `verified-by: bravebot_tui::chatgpt_failure_tests::what_the_terminal_client_keeps_and_draws_of_a_failed_turn_holds_none_of_the_values_of_the_run`
 `verified-by: bravebot_ui_bridge::chatgpt_secrets::what_the_bridge_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
 `verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
