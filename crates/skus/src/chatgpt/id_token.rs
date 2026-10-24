@@ -176,7 +176,20 @@ fn key(keys: &serde_json::Value, kid: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     }
     let n = base64url_decode(&text(key, "n")?)?;
     let e = base64url_decode(&text(key, "e")?)?;
-    Some((n, e))
+    // The modulus has to be 2048 bits or more, which the signature check's parameters require of it,
+    // and the exponent 65537 or more, which they do not: they take 3.
+    exponent_is_large_enough(&e).then_some((n, e))
+}
+
+/// Whether a public exponent, big-endian, is 65537 or more, the least FIPS 186-5 allows.
+fn exponent_is_large_enough(exponent: &[u8]) -> bool {
+    let at = exponent.iter().take_while(|byte| **byte == 0).count();
+    let significant = &exponent[at..];
+    match significant.len() {
+        0..=2 => false,
+        3 => significant >= [1u8, 0, 1].as_slice(),
+        _ => true,
+    }
 }
 
 /// Whether the five claims the sign-in compares hold. No other claim is read.
@@ -202,7 +215,9 @@ fn claims_hold(claims: &serde_json::Value, client: &str, nonce: &Secret, now: u6
 
 #[cfg(test)]
 mod tests {
+    use super::super::stand_in::{Reply, serve};
     use super::*;
+    use serde_json::{Value, json};
 
     fn set_of(keys: &[serde_json::Value]) -> serde_json::Value {
         serde_json::json!({ "keys": keys })
@@ -256,5 +271,80 @@ mod tests {
         assert!(key(&set_of(&[verifying]), "this").is_some());
 
         assert_eq!(key(&set_of(&[rsa("this"), rsa("this")]), "this"), None);
+    }
+
+    // The test below hands `verify` a token and a key set and reads what it said. The key set is
+    // served by the stand-in, which counts the requests it took.
+
+    const CLIENT: &str = "issued-client";
+    const NONCE: &str = "the-nonce-of-this-sign-in";
+    const NOW: u64 = 1_800_000_000;
+
+    /// What checking `token` at `now` against the key set `keys` came to, and how many requests the
+    /// server of the key set took.
+    fn checked_at(token: &str, keys: &str, now: u64) -> (Result<(), Failed>, usize) {
+        let server = serve(vec![Reply::json(200, keys)]);
+        let agent = super::super::exchange::agent(ureq::Agent::config_builder());
+        let result = verify(
+            &agent,
+            &Hosts::at(&server.base),
+            &Secret::new(token),
+            CLIENT,
+            &Secret::new(NONCE),
+            now,
+        );
+        (result, server.finish().len())
+    }
+
+    /// The key a signature is checked with has a modulus of 2048 bits or more and an exponent of
+    /// 65537 or more. A key of 1024 bits and one with the exponent 3 each signed a token whose
+    /// claims are this sign-in's, and both are refused. The signatures were made with
+    /// `openssl dgst -sha256 -sign` and verify with `openssl dgst -sha256 -verify`, so what is
+    /// refused is the key. The signature check's own parameters refuse the short modulus and take the
+    /// exponent 3, which is why the exponent is a rule of its own here.
+    #[test]
+    fn a_key_of_fewer_than_2048_bits_or_with_a_small_exponent_is_refused_whatever_its_signature_is()
+    {
+        struct Weak {
+            kid: &'static str,
+            n: &'static str,
+            e: &'static str,
+            header: &'static str,
+            payload: &'static str,
+            signature: &'static str,
+        }
+        let weak = [
+            Weak {
+                kid: "weak-short",
+                n: "wdFXnBc9Z203gWA5Dvm1Lp8lKsHdaiZwwP2rtzq_17N6mk3af9u6fSClmQrIKa233qCHaSWBF2aVn8Q5AAO3aeuL3NTCCZAZQjrcU16alNXoL2OFVTwre6sc6SawwBNE4cXWgod2pA0U6h8spDU8FwoV1gEWMACCt1vemtDyWwU",
+                e: "AQAB",
+                header: "eyJhbGciOiJSUzI1NiIsImtpZCI6IndlYWstc2hvcnQiLCJ0eXAiOiJKV1QifQ",
+                payload: "eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Imlzc3VlZC1jbGllbnQiLCJleHAiOjQxMDI0NDQ4MDAsIm5vbmNlIjoidGhlLW5vbmNlLW9mLXRoaXMtc2lnbi1pbiIsInN1YiI6ImEtc3ViamVjdCJ9",
+                signature: "qX91Vb_uA_e4-NFvwb3TrSpmys0rIiQ0Oklot77ZyO-XO5RyP3JleX4wy2QaNHaAl9fLVk47oxMCLg6DdMA8mu6zV4bMj3a9Oh0UllWJIA8sr3kkr9dEhgtpbOg9bWf_HzHw0NemjcqTnf4oQ60p-6AqWOGhnekHs-euH3CK7lE",
+            },
+            Weak {
+                kid: "weak-exponent",
+                n: "n9PxNzi56heewMEYehDZlp885hDgq6Y9PaWf_jTxO2ZVh5WiBEiSIvbfNnKDPzxfQs9lSxjHMTI9sQMKFI6fSVXU_POzIV0RpmGW1YD7Pbnisn2nqU0pb8H6ErrtfSl6_t8fB7vgGatLTr-NHFeO3qkyaiYOM_RhdKCuM3FpfdCEThGgye5oL38f_AYY5qCdS_ZIjqgGsvdaWO3lzOinFrvs1IrFcwg4rccsn0BdPL1ZUYZN9CK1MUvov2s6-g4BZC8d_A7o7w7zztW2QWi7Y5OR38rlGUykg1Ty9ZDZOadNxzf1tBT0-9AaGwMMLh8Vnw5hdtfGK38jsdCkuOy3EQ",
+                e: "Aw",
+                header: "eyJhbGciOiJSUzI1NiIsImtpZCI6IndlYWstZXhwb25lbnQiLCJ0eXAiOiJKV1QifQ",
+                payload: "eyJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImF1ZCI6Imlzc3VlZC1jbGllbnQiLCJleHAiOjQxMDI0NDQ4MDAsIm5vbmNlIjoidGhlLW5vbmNlLW9mLXRoaXMtc2lnbi1pbiIsInN1YiI6ImEtc3ViamVjdCJ9",
+                signature: "L8d5U7rI-ey6xHo2omOd5v9yOqCUC2dOGSrmKHAubTHEfFT7sL2w3BPeZIkSS-NxPV_T5AB0g_AZZDcI3uuHp-5WdGVcFmKsfuBUAKwrG2TXoy5tlc_C7gUU3EdBLdLass5V9Fnz15HM_5Bx4twnyD6ubLzj3UexEoxWMhWCO55ip8hSK5cZc5Cn69Vd-7xJwaciMTSgn2mMPH8VFuARHMPdbxN_v5PmfCXH83-fXbEtxd1cuAk03-IMDmbCn4eTb3EMitgEttoqB26ni0O9LJ6axFwgelrR-2qAXI1-M6yXovVsYyoNxsp2BK2PrMJyAH74hg7EWKrzHDecpW08Jw",
+            },
+        ];
+        for key in weak {
+            let keys = json!({"keys": [{
+                "kty": "RSA", "kid": key.kid, "use": "sig", "alg": "RS256", "n": key.n, "e": key.e,
+            }]})
+            .to_string();
+            let token = format!("{}.{}.{}", key.header, key.payload, key.signature);
+            // The claims in the token are this sign-in's, so a key the check accepted would verify it.
+            let decoded = base64url_decode(key.payload).expect("a payload");
+            let said: Value = serde_json::from_slice(&decoded).expect("claims");
+            assert_eq!(said["nonce"], NONCE);
+            assert_eq!(said["aud"], CLIENT);
+            let (result, asked) = checked_at(&token, &keys, NOW);
+            assert_eq!(result, Err(Failed::Token), "{}", key.kid);
+            assert_eq!(asked, 1, "{}", key.kid);
+        }
     }
 }

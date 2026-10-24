@@ -384,8 +384,9 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    longer than 16 KiB is refused before it is decoded. Its header names RS256 and nothing that has to be
    understood: `none`, an HMAC and every other algorithm are refused, and so is a header with `crit`. The
    key is the only key of the set with the header's `kid`, and it is an RSA key a signature may be checked
-   with: `kty` is `RSA`, and `use`, `alg` and `key_ops`, where present, say `sig`, `RS256` and `verify`.
-   A set that holds two keys under one `kid` has none that is the key.
+   with: `kty` is `RSA`, `use`, `alg` and `key_ops`, where present, say `sig`, `RS256` and `verify`, the
+   modulus is 2048 bits or more and the exponent is 65537 or more. A set that holds two keys under one `kid`
+   has none that is the key.
    The key set is fetched from the host compiled in for it ([CHATGPT-2](#CHATGPT-2)) with no credential,
    following no redirect, and a reply over 64 KiB is refused. The signature is checked with RS256 against
    that key's modulus and exponent, and then the issuer (the constant `https://auth.openai.com`), the
@@ -414,6 +415,7 @@ whether the token verified, and what leaves the crate is that answer and no clai
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
 `verified-by: bravebot_skus::chatgpt::id_token::only_an_rsa_key_for_rs256_signatures_named_by_the_kid_is_used`
+`verified-by: bravebot_skus::chatgpt::id_token::a_key_of_fewer_than_2048_bits_or_with_a_small_exponent_is_refused_whatever_its_signature_is`
 `verified-by: bravebot_skus::chatgpt::encoding::base64url_reads_back_what_it_writes_and_nothing_else`
 
 <a id="CHATGPT-6"></a>
