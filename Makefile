@@ -73,6 +73,7 @@ help:
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
 	@echo "  make check-fuzz            Lint, build, replay and briefly run every fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; needs the nightly toolchain and cargo-fuzz"
 	@echo "  make fuzz TARGET=<name>    Run one fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; the targets are $(FUZZ_TARGETS)"
+	@echo "  make fuzz-cmin TARGET=<name>  Reduce fuzz/corpus/<name> to the inputs that each reach something new"
 	@echo "  make fuzz-install          Install cargo-fuzz $(CARGO_FUZZ_VERSION), the version CI runs"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
@@ -403,18 +404,34 @@ fuzz-prerequisites:
 		exit 1; \
 	}
 
-# One target, with the flags CI uses: make fuzz TARGET=regex [FUZZ_SECONDS=60]. New inputs go to
-# fuzz/corpus/<target>, which is not committed; the seeds and the reproducers of fixed crashes are
-# read from their own directories.
-.PHONY: fuzz
-fuzz: fuzz-prerequisites
+# The targets one to a line, which .github/workflows/fuzz.yml makes a leg of each from.
+.PHONY: fuzz-targets
+fuzz-targets:
+	@printf '%s\n' $(FUZZ_TARGETS)
+
+# What `fuzz` and `fuzz-cmin` need of TARGET.
+.PHONY: fuzz-named-target
+fuzz-named-target:
 	@echo "$(FUZZ_TARGETS)" | tr ' ' '\n' | grep -qxF -- '$(TARGET)' || { \
 		echo "fuzz: name a target, as in make fuzz TARGET=regex. They are: $(FUZZ_TARGETS)" >&2; \
 		exit 1; \
 	}
+
+# One target, with the flags CI uses: make fuzz TARGET=regex [FUZZ_SECONDS=60]. New inputs go to
+# fuzz/corpus/<target>, which is not committed; the seeds and the reproducers of fixed crashes are
+# read from their own directories.
+.PHONY: fuzz
+fuzz: fuzz-prerequisites fuzz-named-target
 	@mkdir -p fuzz/corpus/$(TARGET)
 	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $(TARGET) fuzz/corpus/$(TARGET) fuzz/seeds/$(TARGET) fuzz/regressions/$(TARGET) -- \
 		-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$(TARGET)) $(call fuzz_dict,$(TARGET))
+
+# Replaces fuzz/corpus/<target> with the inputs of it that each reach something new, which is what
+# the weekly run saves. cargo-fuzz leaves the corpus as it was and exits 0 where the merge fails.
+.PHONY: fuzz-cmin
+fuzz-cmin: fuzz-prerequisites fuzz-named-target
+	@mkdir -p fuzz/corpus/$(TARGET)
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz cmin -a $(TARGET) fuzz/corpus/$(TARGET) -- -max_len=$(call fuzz_max_len,$(TARGET))
 
 # Formatting, clippy and the unit tests of the code the targets share, a build of every target, a
 # replay of the seeds and the reproducers of fixed crashes with -runs=0, and then each target for
