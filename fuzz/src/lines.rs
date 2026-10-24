@@ -6,6 +6,8 @@
 //! a few words, and deriving the second text from the first by edits, makes them share most of
 //! theirs.
 
+#![forbid(unsafe_code)]
+
 use arbitrary::Arbitrary;
 
 const WORDS: [&str; 12] = [
