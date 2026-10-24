@@ -700,18 +700,36 @@ No code, `state`, `nonce`, verifier, challenge, token, claim, client or host ide
 value or callback query reaches a trace, a log, an error message, a session record, a transcript, `doctor`,
 `auth status`, the terminal or the environment of a program a turn starts. The one exception is the
 authorization URL, which carries the `state`, the `nonce`, the challenge and the identifiers, is written to
-the terminal once by [CHATGPT-13](#CHATGPT-13) and goes nowhere else. A test holds every secret the process held, in a run that signs in, refreshes and fails,
-against each of those outputs, as the trail's test does for the credentials the agent holds, and leaves out
-that one line.
+the terminal once by [CHATGPT-13](#CHATGPT-13) and goes nowhere else.
 
-The test runs the built binary against a stand-in through the seam of [CHATGPT-2](#CHATGPT-2): the sign-in in
-a terminal, `auth status`, `doctor`, a turn that renews a refused token and is answered, and a turn whose
-refresh is refused as no longer valid, every refusal repeating every value the stand-in has seen. It searches
-each command's streams under `--trace` and the debug log, every file left in the home, and the environment a
-hook started by each turn writes there. The desktop window is not one of them: what the bridge says of a
-failed listing is pinned by
-`bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`.
-The test runs on Linux and macOS, where `script` gives the sign-in a terminal, and not on Windows.
+A test holds every value the run handled against each of those outputs, as the trail's test does for the
+credentials the agent holds, and leaves out that one line. The values are the code, the `state`, the `nonce`,
+the challenge, the verifier, both pairs of tokens, the ID token and each of its three dot-separated parts, the
+client and host identifiers, the identifier the process made for its session, and the text of each refusal: the
+stand-in repeats every value it has seen in the body of every refusal it makes. Each output is required to be
+there and to hold something, so a run that wrote none of them does not pass. Each test below makes the run
+itself and holds what its own writers produce from it:
+
+- `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
+  runs the built binary against the stand-in through the seam of [CHATGPT-2](#CHATGPT-2): the sign-in in a
+  terminal, `auth status` and `doctor` while signed in and once the sign-in has ended, and three print-mode
+  turns, one answered, one refused in a code of the closed list at the status that otherwise has the token
+  replaced, and one whose refresh is refused as no longer valid. It holds the sign-in's terminal less the
+  authorization URL, each command's standard output and standard error under `--trace` and the debug log,
+  which is where the trace and the error message are, every file left in the home, the session record and
+  trail the answered turn left, and the environment a hook started by each turn writes. It requires one record,
+  one trail and a log for each run, and that the refusal in a listed code asked for no new token. A print-mode
+  turn that fails records nothing, so the record of a failed turn is held where one is written.
+- `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops`
+  runs the sign-in in a terminal three times, against a stand-in that refuses the code, issues an ID token
+  that names another sign-in's nonce, and cannot serve the key set. It holds the terminal of each, less one
+  copy of the authorization URL, and every file each left. Each leaves none, since a sign-in that stops
+  stores nothing and writes no log, and the test fails where one leaves a file so that the file is searched.
+- `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface`
+  types four prompts that fail in four ways into `bravebot --plain` in a terminal, and holds the terminal and
+  every file left. A session in lines keeps no record of its turns outside a background host.
+
+The tests run on Linux and macOS, where `script` gives the command a terminal, and not on Windows.
 
 **Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
 to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
@@ -723,6 +741,8 @@ signing in again would not supply is not offered. A usage limit named by a code 
 nothing a second request or a wait of this program's does changes it.
 
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
+`verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops`
+`verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface`
 `verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
 `verified-by: bravebot_skus::chatgpt::an_id_token_that_does_not_verify_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`

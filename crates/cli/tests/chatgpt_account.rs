@@ -1,12 +1,13 @@
-//! CHATGPT-8 and CHATGPT-14 through the built binary, against a stand-in for OpenAI's authorization
-//! server and serving host.
+//! CHATGPT-8 and CHATGPT-14 through the built binary, against the stand-in of
+//! `crates/agent/test-support/chatgpt_stand_in.rs`, a stand-in for OpenAI's authorization server and
+//! serving host.
 //!
 //! The binary reaches the stand-in through the `test-hosts` seam of `bravebot-skus` and
 //! `bravebot-config`, which this crate's dev-dependencies turn on, so the binary `cargo test` builds
-//! has it and no release does ([CHATGPT-2]). The constants below are read from those crates, so this
-//! file does not compile where the seam is off, and each test checks that the stand-in answered
-//! (the first by the key set and the listing, the second by the renewal), so a seam that is off
-//! fails it.
+//! has it and no release does ([CHATGPT-2]). The stand-in's module reads the variable from those
+//! crates, so this file does not compile where the seam is off, and each test checks that the
+//! stand-in answered (the first by the key set and the listing, the second by the renewal), so a seam
+//! that is off fails it.
 //!
 //! The sign-in needs stderr to be a terminal, so it runs under `script`, whose arguments differ
 //! between the two systems this file runs on. Windows has no `script`, and these tests do not run
@@ -17,52 +18,20 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
-use bravebot_skus::chatgpt::stand_in_key::{header, key_set, signed};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, ChildStdin, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The variable both seams read. Taken from the crates rather than written here, so a build where
-/// either seam is off does not compile this file.
-const STAND_IN: &str = bravebot_skus::chatgpt::STAND_IN;
-const _: () = assert!(const_eq(
-    STAND_IN,
-    bravebot_config::provider::CHATGPT_STAND_IN
-));
+#[path = "../../agent/test-support/chatgpt_stand_in.rs"]
+mod chatgpt_stand_in;
 
-const fn const_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut at = 0;
-    while at < a.len() {
-        if a[at] != b[at] {
-            return false;
-        }
-        at += 1;
-    }
-    true
-}
-
-/// A distinct placeholder for each value the run handles that this test chooses. The values the
-/// binary generates (the state, the nonce, the verifier, the challenge and the host identifier) are
-/// read from the authorization URL and the exchange.
-const CODE: &str = "PLACEHOLDER-CODE-c0de";
-const CLIENT: &str = "placeholder-client-c11e";
-const ACCESS_ONE: &str = "PLACEHOLDER-ACCESS-ONE-a1a1";
-const REFRESH_ONE: &str = "PLACEHOLDER-REFRESH-ONE-r1r1";
-const ACCESS_TWO: &str = "PLACEHOLDER-ACCESS-TWO-a2a2";
-const REFRESH_TWO: &str = "PLACEHOLDER-REFRESH-TWO-r2r2";
-const SUBJECT: &str = "PLACEHOLDER-SUBJECT-5b5b";
-const EMAIL: &str = "placeholder-person@example.invalid";
-/// In every body the stand-in refuses with, so a sentence that quoted a body is found even where it
-/// quoted no secret.
-const ECHO: &str = "PLACEHOLDER-REPLY-BODY-ec40";
-const MODEL: &str = "chatgpt/gpt-placeholder";
+use chatgpt_stand_in::{
+    ACCESS_TWO, Asked, CLIENT, CODE, Fault, MODEL, REFRESH_ONE, REFRESH_TWO, Refresh, STAND_IN,
+    Serving, StandIn, files_under, form, now, url_encoded,
+};
 
 /// A directory a run takes as its home, removed when the test ends.
 struct Scratch {
@@ -92,258 +61,6 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
-}
-
-/// One request the stand-in took.
-#[derive(Debug, Clone)]
-struct Asked {
-    method: String,
-    path: String,
-    bearer: Option<String>,
-    form: Vec<(String, String)>,
-}
-
-/// What the stand-in knows and answers with.
-#[derive(Default)]
-struct State {
-    /// The nonce of the sign-in, read from the URL by the test, which the ID token names.
-    nonce: Option<String>,
-    /// Each refresh token the token endpoint takes, and the access and refresh tokens it gives for
-    /// it. One that is not listed is refused as no longer valid.
-    renewals: Vec<(&'static str, &'static str, &'static str)>,
-    /// Every request to the serving host is refused with a 401.
-    refusing: bool,
-    /// The ID token it issued.
-    id_token: Option<String>,
-    /// The `session-id` of each request that carried one, which every process makes for itself.
-    sessions: Vec<String>,
-    asked: Vec<Asked>,
-}
-
-/// A stand-in for OpenAI at `base`: the token endpoint, the key set and the serving host under
-/// `/v1`.
-struct StandIn {
-    base: String,
-    state: Arc<Mutex<State>>,
-}
-
-impl StandIn {
-    fn new(renewals: Vec<(&'static str, &'static str, &'static str)>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let base = format!("http://{}", listener.local_addr().expect("an address"));
-        let state = Arc::new(Mutex::new(State {
-            renewals,
-            ..State::default()
-        }));
-        std::thread::spawn({
-            let state = Arc::clone(&state);
-            move || {
-                while let Ok((stream, _)) = listener.accept() {
-                    let state = Arc::clone(&state);
-                    std::thread::spawn(move || serve(stream, &state));
-                }
-            }
-        });
-        Self { base, state }
-    }
-
-    fn asked(&self) -> Vec<Asked> {
-        self.state.lock().expect("the state").asked.clone()
-    }
-}
-
-/// The values the stand-in has seen or made, which a refusal's body repeats.
-fn echoed(state: &State) -> String {
-    let mut values = vec![
-        ECHO.to_string(),
-        CODE.to_string(),
-        CLIENT.to_string(),
-        ACCESS_ONE.to_string(),
-        REFRESH_ONE.to_string(),
-        ACCESS_TWO.to_string(),
-        REFRESH_TWO.to_string(),
-    ];
-    values.extend(state.nonce.clone());
-    values.extend(state.id_token.clone());
-    values.extend(state.sessions.clone());
-    for asked in &state.asked {
-        values.extend(asked.form.iter().map(|(_, value)| value.clone()));
-    }
-    values.join(" ")
-}
-
-fn refusal(state: &State, status: u16) -> (u16, &'static str, String) {
-    let words = echoed(state);
-    let body = serde_json::json!({
-        "error": {"code": "placeholder_refusal", "message": words},
-        "error_description": words,
-        "detail": words,
-    });
-    (status, "application/json", body.to_string())
-}
-
-/// Answer one request.
-fn serve(stream: TcpStream, state: &Mutex<State>) {
-    let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-    let mut line = String::new();
-    let _ = reader.read_line(&mut line);
-    let mut words = line.split_whitespace();
-    let method = words.next().unwrap_or_default().to_string();
-    let path = words.next().unwrap_or_default().to_string();
-    let (mut length, mut bearer, mut session) = (0usize, None, None);
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
-            break;
-        }
-        if let Some((name, value)) = header.split_once(':') {
-            let (name, value) = (name.trim(), value.trim());
-            if name.eq_ignore_ascii_case("content-length") {
-                length = value.parse().unwrap_or(0);
-            }
-            if name.eq_ignore_ascii_case("authorization") {
-                bearer = value.strip_prefix("Bearer ").map(str::to_string);
-            }
-            if name.eq_ignore_ascii_case("session-id") {
-                session = Some(value.to_string());
-            }
-        }
-    }
-    let mut body = vec![0u8; length];
-    let _ = reader.read_exact(&mut body);
-    // Only the token endpoint takes a form. A request to the serving host carries a zstd frame.
-    let form = if path == "/token" {
-        form(&String::from_utf8_lossy(&body))
-    } else {
-        Vec::new()
-    };
-
-    let mut state = state.lock().expect("the state");
-    state.sessions.extend(session);
-    state.asked.push(Asked {
-        method: method.clone(),
-        path: path.clone(),
-        bearer: bearer.clone(),
-        form: form.clone(),
-    });
-    let named = |name: &str| {
-        form.iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.clone())
-    };
-    let (status, kind, reply) = match (method.as_str(), path.as_str()) {
-        ("GET", "/jwks") => (200, "application/json", key_set()),
-        ("POST", "/token") if named("grant_type").as_deref() == Some("authorization_code") => {
-            let id_token = signed(
-                &header(),
-                &serde_json::json!({
-                    "iss": "https://auth.openai.com",
-                    "aud": CLIENT,
-                    "exp": now() + 3600,
-                    "nonce": state.nonce.clone().unwrap_or_default(),
-                    "sub": SUBJECT,
-                    "email": EMAIL,
-                }),
-            );
-            state.id_token = Some(id_token.clone());
-            let reply = serde_json::json!({
-                "access_token": ACCESS_ONE,
-                "refresh_token": REFRESH_ONE,
-                "id_token": id_token,
-                "expires_in": 3600,
-                "scope": "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct",
-            });
-            (200, "application/json", reply.to_string())
-        }
-        ("POST", "/token") => {
-            let presented = named("refresh_token").unwrap_or_default();
-            let renewal = state
-                .renewals
-                .iter()
-                .find(|(refresh, _, _)| *refresh == presented)
-                .copied();
-            match renewal {
-                Some((_, access, refresh)) => (
-                    200,
-                    "application/json",
-                    serde_json::json!({
-                        "access_token": access,
-                        "refresh_token": refresh,
-                        "expires_in": 3600,
-                    })
-                    .to_string(),
-                ),
-                None => {
-                    let words = echoed(&state);
-                    let body = serde_json::json!({
-                        "error": "invalid_grant",
-                        "error_description": words,
-                    });
-                    (400, "application/json", body.to_string())
-                }
-            }
-        }
-        _ if state.refusing || bearer.as_deref() == Some(ACCESS_ONE) => refusal(&state, 401),
-        ("GET", "/v1/models") => refusal(&state, 500),
-        ("POST", "/v1/responses") => {
-            let events = [
-                serde_json::json!({"type": "response.output_text.delta", "delta": "all done"}),
-                serde_json::json!({"type": "response.completed",
-                    "response": {"model": "gpt-placeholder", "output": []}}),
-            ];
-            let body: String = events
-                .iter()
-                .map(|event| format!("data: {event}\n\n"))
-                .collect();
-            (200, "text/event-stream", body)
-        }
-        _ => refusal(&state, 404),
-    };
-    drop(state);
-    let mut stream = stream;
-    let _ = stream.write_all(
-        format!(
-            "HTTP/1.1 {status} \r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
-            reply.len()
-        )
-        .as_bytes(),
-    );
-    let _ = stream.flush();
-}
-
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("a clock after 1970")
-        .as_secs()
-}
-
-/// A form or a query, decoded.
-fn form(text: &str) -> Vec<(String, String)> {
-    text.split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .map(|(name, value)| (name.to_string(), decoded(value)))
-        .collect()
-}
-
-fn decoded(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::new();
-    let mut at = 0;
-    while at < bytes.len() {
-        match (bytes[at], bytes.get(at + 1..at + 3)) {
-            (b'%', Some(pair)) => {
-                let digits = std::str::from_utf8(pair).expect("ascii");
-                out.push(u8::from_str_radix(digits, 16).expect("two hexadecimal digits"));
-                at += 3;
-            }
-            (byte, _) => {
-                out.push(byte);
-                at += 1;
-            }
-        }
-    }
-    String::from_utf8(out).expect("text")
 }
 
 /// The environment every run here gets: nothing inherited, the home, the stand-in, Brave's endpoint
@@ -453,7 +170,7 @@ fn sign_in(home: &Scratch, stand_in: &StandIn) -> (String, String, bool) {
             .map(|(_, value)| value.clone())
             .unwrap_or_else(|| panic!("no {name} in {url}"))
     };
-    stand_in.state.lock().expect("the state").nonce = Some(value("nonce"));
+    stand_in.state().url = Some(url.clone());
     let port: u16 = value("redirect_uri")
         .trim_start_matches("http://127.0.0.1:")
         .trim_end_matches("/auth/callback")
@@ -491,59 +208,132 @@ fn sign_in(home: &Scratch, stand_in: &StandIn) -> (String, String, bool) {
     (terminal, url, status.success())
 }
 
-fn url_encoded(text: &str) -> String {
-    text.bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                (byte as char).to_string()
-            }
-            _ => format!("%{byte:02X}"),
-        })
-        .collect()
+/// `bravebot --plain` in a terminal, which a person types lines to: the session in lines, which takes
+/// nothing from the terminal but the lines. It runs under `script` as the sign-in does, and what it
+/// shows is read as it arrives, so a line is typed after the program has asked for it.
+struct Typed {
+    child: Child,
+    typing: ChildStdin,
+    shown: Arc<Mutex<Vec<u8>>>,
+    reading: std::thread::JoinHandle<()>,
 }
 
-/// Every file under `directory`, with its bytes.
-fn files_under(directory: &Path) -> Vec<(PathBuf, Vec<u8>)> {
-    let mut found = Vec::new();
-    let mut waiting = vec![directory.to_path_buf()];
-    while let Some(next) = waiting.pop() {
-        let Ok(entries) = std::fs::read_dir(&next) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            match entry.file_type() {
-                Ok(kind) if kind.is_dir() => waiting.push(path),
-                Ok(kind) if kind.is_file() => {
-                    if let Ok(bytes) = std::fs::read(&path) {
-                        found.push((path, bytes));
+impl Typed {
+    fn start(home: &Scratch, stand_in: &StandIn) -> Self {
+        let program = env!("CARGO_BIN_EXE_bravebot");
+        let mut command = Command::new("/usr/bin/script");
+        #[cfg(target_os = "macos")]
+        command.args(["-q", "/dev/null", program, "--plain"]);
+        #[cfg(target_os = "linux")]
+        command.args(["-qec", &format!("'{program}' --plain"), "/dev/null"]);
+        environment(&mut command, home, stand_in);
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("script runs the built binary in a terminal");
+        let shown = Arc::new(Mutex::new(Vec::new()));
+        let reading = std::thread::spawn({
+            let shown = Arc::clone(&shown);
+            let mut out = child.stdout.take().expect("the terminal");
+            move || {
+                let mut buffer = [0u8; 4096];
+                while let Ok(read) = out.read(&mut buffer) {
+                    if read == 0 {
+                        break;
                     }
+                    shown
+                        .lock()
+                        .expect("shown")
+                        .extend_from_slice(&buffer[..read]);
                 }
-                _ => {}
             }
+        });
+        let typing = child.stdin.take().expect("the terminal takes lines");
+        Self {
+            child,
+            typing,
+            shown,
+            reading,
         }
     }
-    found
+
+    fn shown(&self) -> String {
+        String::from_utf8_lossy(&self.shown.lock().expect("shown")).into_owned()
+    }
+
+    /// Wait until what the terminal shows satisfies `ready`, or fail saying what it was waiting for.
+    fn wait_for(&mut self, what: &str, ready: impl Fn(&str) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !ready(&self.shown()) {
+            if Instant::now() > deadline || self.child.try_wait().expect("a status").is_some() {
+                let _ = self.child.kill();
+                panic!("the terminal never showed {what}: {}", self.shown());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn type_line(&mut self, text: &str) {
+        self.typing
+            .write_all(format!("{text}\n").as_bytes())
+            .expect("a line is typed");
+        self.typing.flush().expect("a line is sent");
+    }
+
+    /// The prompts the terminal has shown: lines that begin with the marker the session writes
+    /// where it waits for a line, which a line typed there is echoed after.
+    fn prompts(shown: &str) -> usize {
+        shown.lines().filter(|line| line.starts_with("> ")).count()
+    }
+
+    /// End the input, wait for the session to end, and return everything the terminal showed.
+    fn finish(mut self) -> String {
+        // The end of the input, which ends the session.
+        self.typing.write_all(&[4]).expect("the end of the input");
+        self.typing.flush().expect("sent");
+        drop(self.typing);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = self.child.try_wait().expect("a status") {
+                break status;
+            }
+            if Instant::now() > deadline {
+                let _ = self.child.kill();
+                panic!(
+                    "the session did not end: {}",
+                    String::from_utf8_lossy(&self.shown.lock().expect("shown"))
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        self.reading.join().expect("the terminal was read");
+        let shown = String::from_utf8_lossy(&self.shown.lock().expect("shown")).into_owned();
+        assert!(status.success(), "the session ended with {status}: {shown}");
+        shown
+    }
 }
 
-fn holds(haystack: &[u8], needle: &str) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle.as_bytes())
-}
+/// The `error.code` of the closed list of CHATGPT-8 that says the account has reached its usage limit.
+const USAGE_LIMIT: &str = "subscription_sharing_usage_limit_exceeded";
 
 /// CHATGPT-8: no value the sign-in handled reaches an output of a run that signs in, refreshes and
 /// fails. The run signs in (the code exchange, the key set and the ID token), its listing is refused
-/// for the first token and renews it, a turn is answered, and a second turn is refused, its refresh
-/// is refused as no longer valid and the sign-in ends. Every reply that refuses repeats every value
-/// the stand-in has seen. Then each output is searched for each value: what the sign-in showed in
-/// its terminal (less the authorization URL, the one line CHATGPT-13 lets through), what each run
-/// and `auth status` and `doctor` wrote to their streams under `--trace` and the debug log, every
-/// file the runs left in the home (the trail, the logs, the session records and transcripts), and
-/// the environment of the program each turn started, which a hook writes there.
+/// for the first token and renews it, a turn is answered, a turn is refused in a code that names the
+/// account, and a last turn is refused, its refresh is refused as no longer valid and the sign-in
+/// ends. Every reply that refuses repeats every value the stand-in has seen. Then each output is
+/// searched for each value: what the sign-in showed in its terminal (less the authorization URL, the
+/// one line CHATGPT-13 lets through), what each run and `auth status` and `doctor` wrote to their
+/// streams under `--trace` and the debug log, every file the runs left in the home (the trail, the
+/// logs, the session records and their audit files), and the environment of the program each turn
+/// started, which a hook writes there. A run that left no session record, no trail or no log is not
+/// one that was searched, so each of them is required.
 ///
-/// The desktop window is an output this cannot reach: the bridge's account failures are pinned by
-/// `bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`.
+/// What the other outputs are held by is stated with CHATGPT-8: the terminal client's transcript, its
+/// screen and its record by `bravebot_tui::chatgpt_failure_tests`, and what the desktop bridge sends and
+/// keeps by `crates/ui-bridge/tests/chatgpt_secrets.rs`, each of which makes the run itself, as this
+/// does, and holds what its own writers produce.
 #[test]
 fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails() {
     let home = Scratch::new("cli-chatgpt-account-outputs");
@@ -561,19 +351,13 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
     )
     .expect("the hooks");
 
-    let (terminal, url, signed_in) = sign_in(&home, &stand_in);
+    let (terminal, _, signed_in) = sign_in(&home, &stand_in);
     assert!(signed_in, "the sign-in failed: {terminal}");
-    let exchange = stand_in
-        .asked()
-        .into_iter()
-        .find(|asked| asked.path == "/token")
-        .expect("the code was exchanged");
-    let verifier = exchange
-        .form
-        .iter()
-        .find(|(name, _)| name == "code_verifier")
-        .map(|(_, value)| value.clone())
-        .expect("a verifier");
+    assert!(
+        stand_in.asked().iter().any(|asked| asked.path == "/token"
+            && asked.form.iter().any(|(name, _)| name == "code_verifier")),
+        "the code was not exchanged"
+    );
     assert!(
         stand_in
             .asked()
@@ -589,10 +373,7 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         "the listing was not asked of the stand-in, so the serving host's seam is off"
     );
 
-    let mut outputs = vec![(
-        "the sign-in's terminal".to_string(),
-        terminal.replacen(&url, "", 1).into_bytes(),
-    )];
+    let mut outputs = vec![("the sign-in's terminal".to_string(), terminal.into_bytes())];
     let mut run = |name: &str, arguments: &[&str]| {
         let output = bravebot(&home, &stand_in, arguments);
         outputs.push((name.to_string(), said(&output).into_bytes()));
@@ -619,7 +400,21 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         "the turn was not answered: {}",
         said(&answered)
     );
-    stand_in.state.lock().expect("the state").refusing = true;
+    // The account has reached its usage limit: a refusal in a listed code, whatever its status, and
+    // here the status that otherwise has the token replaced. It replaces none, so no refresh is
+    // asked for.
+    stand_in
+        .state()
+        .serving
+        .push_back(Serving::RefusesWithCode(401, USAGE_LIMIT));
+    let limited = run("the turn that is refused in a listed code", &turn);
+    assert!(!limited.status.success(), "{}", said(&limited));
+    assert_eq!(
+        stand_in.presented(),
+        [REFRESH_ONE],
+        "a refusal in a listed code asked for a new token"
+    );
+    stand_in.state().refusing = true;
     let failed = run("the turn that fails", &turn);
     assert!(!failed.status.success(), "{}", said(&failed));
     assert!(
@@ -634,76 +429,56 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         "the ended sign-in was not removed"
     );
 
-    let presented: Vec<String> = stand_in
-        .asked()
-        .iter()
-        .filter_map(|asked| {
-            asked
-                .form
-                .iter()
-                .find(|(name, _)| name == "refresh_token")
-                .map(|(_, value)| value.clone())
-        })
-        .collect();
-    assert_eq!(presented, [REFRESH_ONE, REFRESH_TWO], "the refreshes made");
+    assert_eq!(
+        stand_in.presented(),
+        [REFRESH_ONE, REFRESH_TWO],
+        "the refreshes made"
+    );
     assert!(
         std::fs::read_to_string(&started).is_ok_and(|text| text.contains("HOME=")),
         "no program a turn started wrote its environment"
     );
 
-    for (path, bytes) in files_under(&home.path) {
-        outputs.push((path.display().to_string(), bytes));
-    }
-    let state = stand_in.state.lock().expect("the state");
-    let query = form(url.split_once('?').expect("a query").1);
-    let generated = ["state", "nonce", "code_challenge", "ext_agent_host_id"].map(|name| {
-        query
+    // What the run left in the home: the record of the turn that was answered, which is the one a
+    // one-shot run records, its audit file, and a debug log for each run. A turn that fails is not
+    // recorded by a one-shot run, so the records of failed turns are held by the front ends that
+    // write them.
+    let files = files_under(&home.path);
+    let named = |part: &str, ending: &str| {
+        files
             .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.clone())
-            .unwrap_or_else(|| panic!("no {name} in {url}"))
-    });
-    let mut needles: Vec<String> = [
-        CODE,
-        CLIENT,
-        ACCESS_ONE,
-        REFRESH_ONE,
-        ACCESS_TWO,
-        REFRESH_TWO,
-        SUBJECT,
-        EMAIL,
-        ECHO,
-    ]
-    .map(str::to_string)
-    .to_vec();
-    needles.extend(generated);
-    needles.push(verifier);
-    let id_token = state.id_token.clone().expect("an ID token was issued");
-    // The three parts of the token as well as the whole, so an output that wrote only the claims, which
-    // hold the subject and the email, is found.
-    needles.extend(id_token.split('.').map(str::to_string));
-    needles.push(id_token);
+            .filter(|(path, bytes)| {
+                let path = path.display().to_string();
+                path.contains(part) && path.ends_with(ending) && !bytes.is_empty()
+            })
+            .count()
+    };
+    let left: Vec<&PathBuf> = files.iter().map(|(path, _)| path).collect();
+    assert_eq!(
+        named("/sessions/", ".json"),
+        1,
+        "the answered turn did not leave one session record: {left:?}"
+    );
+    assert_eq!(
+        named("/sessions/", ".audit.jsonl"),
+        1,
+        "the answered turn did not leave its trail: {left:?}"
+    );
+    assert!(named("/logs/", ".log") >= 4, "the debug logs: {left:?}");
+
+    let handled = stand_in.handled();
+    handled.assert_distinct();
     assert!(
-        !state.sessions.is_empty(),
+        handled
+            .values()
+            .iter()
+            .any(|(name, _)| name.starts_with("a session identifier")),
         "no request of the serving host carried a session identifier, so none was searched for"
     );
-    needles.extend(state.sessions.clone());
-    drop(state);
-
-    let mut found = Vec::new();
-    for (output, bytes) in &outputs {
-        for needle in &needles {
-            if holds(bytes, needle) {
-                found.push(format!("{output} holds {needle}"));
-            }
-        }
+    // The sign-in's terminal holds the authorization URL once. No other output holds it.
+    for (name, bytes) in &outputs {
+        handled.assert_none_in_but_the_address(name, &String::from_utf8_lossy(bytes));
     }
-    assert!(found.is_empty(), "{found:#?}");
-    assert!(
-        outputs.len() > 10,
-        "{} outputs, so this would pass by reading almost nothing",
-        outputs.len()
-    );
     // The outputs the spec names are there to be searched: the trace of each turn, and a debug log.
     for (name, output) in &outputs {
         if name.starts_with("the turn") {
@@ -713,11 +488,156 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
             );
         }
     }
+    let mut found = Vec::new();
+    for (path, bytes) in &files {
+        for name in handled.found_in(&String::from_utf8_lossy(bytes)) {
+            found.push(format!("{} holds {name}", path.display()));
+        }
+    }
+    assert!(found.is_empty(), "{found:#?}");
     assert!(
-        outputs
-            .iter()
-            .any(|(name, bytes)| name.contains("/logs/") && holds(bytes, "net.fetch")),
+        outputs.len() >= 8 && files.len() >= 8,
+        "{} outputs and {} files, so this would pass by reading almost nothing",
+        outputs.len(),
+        files.len()
+    );
+    assert!(
+        files.iter().any(
+            |(path, bytes)| path.display().to_string().contains("/logs/")
+                && chatgpt_stand_in::holds(bytes, "net.fetch")
+        ),
         "no log recorded a request of a run, so none was searched"
+    );
+}
+
+/// CHATGPT-8: no value a sign-in that stops handled reaches the terminal it stopped on or a file it
+/// left. Each run is a sign-in in a terminal that the stand-in makes fail, in a body that repeats
+/// every value it has seen: it refuses the code, it issues an ID token that names another sign-in's
+/// nonce, or it cannot serve the key set. The sign-in stops, stores nothing, and its terminal and
+/// the files it left in the home hold none of the code, the verifier, the state, the nonce, the
+/// challenge, the identifiers, the tokens or the text of the reply, but for the one authorization URL.
+#[test]
+fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops() {
+    for (fault, reached) in [
+        (Fault::ExchangeRefused, "/token"),
+        (Fault::IdTokenOfAnotherSignIn, "/jwks"),
+        (Fault::KeySetUnavailable, "/jwks"),
+    ] {
+        let name = format!("{fault:?}");
+        let home = Scratch::new(&format!("cli-chatgpt-sign-in-stops-{name}"));
+        let stand_in = StandIn::new(vec![]);
+        stand_in.state().fault = fault;
+
+        let (terminal, _, signed_in) = sign_in(&home, &stand_in);
+
+        assert!(!signed_in, "{name}: the sign-in completed: {terminal}");
+        assert!(!home.account().exists(), "{name}: a sign-in was stored");
+        assert!(
+            stand_in.asked().iter().any(|asked| asked.path == reached),
+            "{name}: the stand-in was not asked for {reached}, so the sign-in did not stop where it was meant to"
+        );
+        let handled = stand_in.handled();
+        handled.assert_distinct();
+        handled.assert_none_in_but_one_copy_of_the_address(
+            &format!("{name}: the terminal of the sign-in that stopped"),
+            &terminal,
+        );
+        // A sign-in that stops leaves no file in the home: it stores nothing and writes no log, and
+        // says why in the terminal. This fails where it leaves one, which the scan below then has
+        // to read for the values.
+        let files = files_under(&home.path);
+        assert!(
+            files.is_empty(),
+            "{name}: a sign-in that stopped left files, which are to be searched: {:?}",
+            files.iter().map(|(path, _)| path).collect::<Vec<_>>()
+        );
+        let mut found = Vec::new();
+        for (path, bytes) in &files {
+            for held in handled.found_in(&String::from_utf8_lossy(bytes)) {
+                found.push(format!("{} holds {held}", path.display()));
+            }
+        }
+        assert!(found.is_empty(), "{name}: {found:#?}");
+    }
+}
+
+/// CHATGPT-8: no value a sign-in handled reaches the terminal of the session in lines or the record it
+/// keeps of a turn that failed. The run signs in, and a person then types four prompts in
+/// `bravebot --plain`, each of which fails: the service refuses the request, refuses it in a code that
+/// names the account, turns the token away while the token endpoint is busy, and turns it away while
+/// the token endpoint says the refresh token is no longer valid. Every refusal repeats every value
+/// the stand-in has seen. The terminal and every file the session left are searched for them, and
+/// the terminal is required to have shown a prompt after each of the four turns, so each of them
+/// ended in the line that said why. A session in lines keeps no record of its turns outside a
+/// background host, so the terminal is the output of it that is held.
+#[test]
+fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface() {
+    let home = Scratch::new("cli-chatgpt-account-line-interface");
+    let stand_in = StandIn::new(vec![(REFRESH_ONE, ACCESS_TWO, REFRESH_TWO)]);
+    let (terminal, _, signed_in) = sign_in(&home, &stand_in);
+    assert!(signed_in, "the sign-in failed: {terminal}");
+    std::fs::write(
+        home.path.join(".bravebot/settings.json"),
+        serde_json::json!({"model": MODEL}).to_string(),
+    )
+    .expect("settings that name the account's model");
+    {
+        let mut state = stand_in.state();
+        state.refreshing.extend([Refresh::Busy, Refresh::Ended]);
+        state.serving.extend([
+            Serving::Refuses(400),
+            Serving::RefusesWithCode(429, USAGE_LIMIT),
+            Serving::RefusesTheToken,
+            Serving::RefusesTheToken,
+        ]);
+    }
+
+    let mut session = Typed::start(&home, &stand_in);
+    session.wait_for("the question about trusting the directory", |shown| {
+        shown.contains("[y/N]")
+    });
+    session.type_line("y");
+    session.wait_for("the first prompt", |shown| Typed::prompts(shown) >= 1);
+    for turn in 1..=4 {
+        session.type_line("say something");
+        session.wait_for(&format!("the prompt after turn {turn}"), |shown| {
+            Typed::prompts(shown) > turn
+        });
+    }
+    let shown = session.finish();
+
+    assert_eq!(
+        stand_in.presented(),
+        [REFRESH_ONE, REFRESH_TWO, REFRESH_TWO],
+        "the refreshes the run made"
+    );
+    {
+        let state = stand_in.state();
+        assert!(
+            state.serving.is_empty() && state.refreshing.is_empty(),
+            "the run did not use every scripted answer"
+        );
+    }
+    assert!(
+        !home.account().exists(),
+        "the sign-in that ended was not removed"
+    );
+
+    let files = files_under(&home.path);
+    let handled = stand_in.handled();
+    handled.assert_distinct();
+    handled.assert_none_in("the terminal of the session in lines", &shown);
+    let mut found = Vec::new();
+    for (path, bytes) in &files {
+        for name in handled.found_in(&String::from_utf8_lossy(bytes)) {
+            found.push(format!("{} holds {name}", path.display()));
+        }
+    }
+    assert!(found.is_empty(), "{found:#?}");
+    assert!(
+        files.len() >= 4,
+        "{} files, so this would pass by reading almost nothing",
+        files.len()
     );
 }
 
