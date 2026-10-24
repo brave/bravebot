@@ -49,6 +49,11 @@ unicode-width = { workspace = true }
 rustix = { workspace = true, features = ["event", "fs", "process"] }
 
 [dev-dependencies]
+# The tests of what the interface keeps and draws of a failed ChatGPT turn sign in to a stand-in and
+# run the turns against it. The seams are on for a build of this crate's tests alone, and a release
+# build refuses them (CHATGPT-2).
+bravebot-config = { path = "../config", features = ["test-hosts"] }
 bravebot-mcp = { path = "../mcp" }
+bravebot-skus = { path = "../skus", features = ["test-hosts"] }
 bravebot-ui-bridge = { path = "../ui-bridge" }
 tempfile = { workspace = true }
