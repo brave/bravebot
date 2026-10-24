@@ -567,14 +567,16 @@ open session handle. Provider IDs remain qualified (for example,
 handle's previous choice, or uses the configured default for a fresh handle.
 The UI remembers explicit choices by durable session ID and resends them on reopening.
 
-`models.list` takes no parameters and returns `{ models, defaultModel, warnings }`.
+`models.list` takes no parameters and returns `{ models, defaultModel, warnings, warningCommands }`.
 Each model contains `id`, `name`, `provider`, `premium`, and nullable `contextWindow`.
 It also includes `capabilities`, an array of reported capability identifiers: `text`,
 `vision`, `image-output`, `audio-input`, `audio-output`, `video`, `files`, `tools`,
 `reasoning`, and `structured-output`. An empty array means no supported capabilities
 were reported to the UI, rather than proof that the model lacks them.
 Discovery uses configured backends; partial failures return warnings alongside available
-models and the configured default. `session.new` and `session.open` include `model`
+models and the configured default. Each warning is one sentence, and `warningCommands` holds, in the same
+order, the words of it that are a command to run, or `null` where it names none, so a client draws them as
+code without reading the sentence for them. `session.new` and `session.open` include `model`
 with the configured default, or `null` when configuration is unavailable.
 
 ```json
@@ -980,7 +982,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `manifest.request` | `{ request, task, steps }` | run a frozen plan; one line per step |
 | `manifest.started` | `{ run, mode }` | a manifest run began; `run` counts runs in this open session |
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
-| `manifest.error` | `{ run, kind, message, category, attempts, status, account, accountMessage, stopped, declined, problem, attempt, record, notices }` | a run stopped |
+| `manifest.error` | `{ run, kind, message, category, attempts, status, account, accountMessage, accountCommand, stopped, declined, problem, attempt, record, notices }` | a run stopped |
 | `exposure.request` | `{ request, path, shownPath, credentials, summary }` | let the planner read a file holding a credential |
 | `mcp.starting` | `{ servers }` | a session's first turn is starting the MCP servers its settings request |
 | `mcp-server.request` | `{ request, alias, transport, command, url, program, variables, reads, directory, digest, requestedBy, changed, fetching }` | use an MCP server (SERVERS-4) |
@@ -1153,7 +1155,7 @@ a client that reloads on receipt sees the same thing on disk.
 ```json
 { "event": "turn.error", "session": "s1", "data": {
   "turn": 5, "kind": "cancelled"|"precommit"|"workspace"|"chat", "message": "…",
-  "category": "too-long", "account": null, "accountMessage": null,
+  "category": "too-long", "account": null, "accountMessage": null, "accountCommand": null,
   "cutOff": { "ceiling": 32000, "call": { "tool": "write_file" }, "thought": false },
   "notices": ["hook turn-finished: /usr/bin/fmt could not be started"],
   "prompt": 4, "id": "saved-session-id-or-null" } }
@@ -1166,11 +1168,13 @@ prompt is in the conversation and is still a place a fork can be cut at.
 not come from the account. It is one of `not-signed-in`, `ended`, `token-refused`, `unusable`,
 `usage-limit`, `not-permitted`, `renewal-refused`, `renewal-rate-limited`, `renewal-unavailable`,
 `renewal-incomplete` and `renewal-transport`, and the `category` beside it is still the class the
-failure belongs to. `accountMessage` is the terminal's sentence for that failure, capitalised, and
-`null` where `account` is. A client draws it as sent and does not word the failure from the name. It
-holds no text from a reply. For `usage-limit` and `not-permitted`, `status` is the status of the reply that
-refused, and `null` where the refusal came in an event of the stream; a wait the refusal asked for at a
-429 is in `accountMessage`.
+failure belongs to. `accountMessage` is the bridge's sentence for that failure, and `null` where `account`
+is: one sentence in sentence case that says what happened and what to do. `accountCommand` is the words of it
+that are a command to run, as they stand in the sentence, and `null` where it names none. A client draws
+the sentence as text with the command in a code element, and does not word the failure from the name or
+read the sentence for the command. Neither holds text from a reply. For `usage-limit` and `not-permitted`,
+`status` is the status of the reply that refused, and `null` where the refusal came in an event of the
+stream; a wait the usage limit asked for at a 429 is in `accountMessage`.
 
 `cutOff` is set where a reply stopped at the output ceiling is what failed, and `null`
 otherwise. That is `category: "too-long"`, or `"internal"` where the stop was in a plan's
@@ -1457,8 +1461,8 @@ Still open:
   The desktop category `model-unconfigured` identifies a selected Brave model without
   Brave configuration when another gateway or Bedrock service is configured; select
   a model from that service instead of replacing its credential.
-  Error events include stable `category`, optional `status` and `attempts`, `account` and `accountMessage` for a failure
-  of a ChatGPT account, and `cutOff` for a turn the output ceiling ended; raw backend
+  Error events include stable `category`, optional `status` and `attempts`, `account`, `accountMessage` and
+  `accountCommand` for a failure of a ChatGPT account, and `cutOff` for a turn the output ceiling ended; raw backend
   diagnostic text is not sent as a turn error.
 - `hooks.inspect` reports the hooks file as the agent reads it: `path`, its `text` (null for a
   file this could not read at all), the `hooks` it declares as `{ on, tool, run, timeout, firesForNothing }`,
@@ -1507,8 +1511,8 @@ Still open:
 - `manifest.request` carries `request`, `task` and `steps`. `manifest.reply` carries the
   session, request and explicit decision. An approval covers that plan and does not approve its
   writes, which arrive as `confirm.request` when their steps are reached.
-- `manifest.error` reports the cause of the failure in `kind`, `category`, `account` and `accountMessage`, which are
-  those of `turn.error`. `declined` says
+- `manifest.error` reports the cause of the failure in `kind`, `category`, `account`, `accountMessage` and
+  `accountCommand`, which are those of `turn.error`. `declined` says
   the plan was put to the person and not approved. `stopped` says the person stopped the run.
   `problem` is the agent's own sentence, and is null for a model service failure.
   `attempt` holds `goal`, `proposed`, `plan` and `steps`, whatever the run got as far as making.

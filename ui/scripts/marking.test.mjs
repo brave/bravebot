@@ -579,6 +579,141 @@ test('a failure card reads the category and never the wording of the detail', ()
   assert.match(draw({ detail: 'unauthorized: the credential was rejected (401)' }), /unauthorized: the credential was rejected \(401\)/)
 })
 
+/**
+ * A failure of the ChatGPT account says the bridge's sentence in place of the words for its
+ * category, as the design skill's microcopy has an error say it: what happened and what to do, in
+ * one sentence, in sentence case, with a command in a code element and no backticks in a paragraph.
+ *
+ * The sentence is text the bridge wrote and the command arrives beside it, so what is checked is the
+ * drawing: the words the command names are code, nothing in either is read as markup, a command the
+ * sentence does not hold is not made up, and a failure with no sentence is described by its
+ * category as before.
+ */
+test('a failure of the ChatGPT account says its sentence with the command drawn as code', () => {
+  const { ErrorCard } = load('src/renderer/components/ErrorCard.tsx')
+  const draw = (props) => renderToStaticMarkup(React.createElement(ErrorCard, props))
+  const command = 'bravebot auth login chatgpt'
+  const sentence = `The ChatGPT sign-in has ended, so run ${command} in a terminal to sign in again.`
+
+  const drawn = draw({ category: 'unauthorized', accountMessage: sentence, accountCommand: command, detail: 'chat: unauthorized' })
+  // The title is the account's, and the description is the sentence, as one paragraph.
+  assert.match(drawn, /<span slot="title">The ChatGPT account could not be used<\/span>/, drawn)
+  assert.match(
+    drawn,
+    /<p>The ChatGPT sign-in has ended, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<\/p>/,
+    drawn,
+  )
+  // The category's own advice names a place the account has no credential, so it is not said beside.
+  assert.doesNotMatch(drawn, /Agent settings/, drawn)
+  assert.doesNotMatch(drawn, /`/, drawn)
+  assert.equal((drawn.match(/<code>/g) ?? []).length, 1, drawn)
+
+  // A sentence that names no command is a plain paragraph, and a command it does not hold is not
+  // drawn as if it were there.
+  const plain = 'The ChatGPT sign-in could not be renewed because OpenAI is limiting requests, so try again later.'
+  for (const props of [{ accountMessage: plain, accountCommand: null }, { accountMessage: plain }, { accountMessage: plain, accountCommand: command }]) {
+    const drawnPlain = draw({ category: 'rate-limited', detail: 'chat: rate-limited', ...props })
+    assert.match(drawnPlain, new RegExp(`<p>${plain.replace(/\./g, '\\.')}</p>`), drawnPlain)
+    assert.doesNotMatch(drawnPlain, /<code>/, drawnPlain)
+  }
+
+  // Both are text. Markup in either is drawn as the characters it is made of.
+  const hostile = draw({
+    category: 'unauthorized',
+    accountMessage: 'Run <img src=x onerror=1> now with <b>x</b>.',
+    accountCommand: '<b>x</b>',
+    detail: '',
+  })
+  assert.doesNotMatch(hostile, /<img|<b>/, hostile)
+  assert.match(hostile, /&lt;img src=x onerror=1&gt;/, hostile)
+  assert.match(hostile, /<code>&lt;b&gt;x&lt;\/b&gt;<\/code>/, hostile)
+
+  // With no sentence the category describes the failure, whatever else arrived.
+  const described = draw({ category: 'unauthorized', accountMessage: null, accountCommand: command, detail: 'chat: unauthorized' })
+  assert.match(described, /Check the model service credentials in Agent settings/, described)
+  assert.doesNotMatch(described, /<code>/, described)
+})
+
+// The same sentence on the card of a run that stopped, which draws the bridge's sentence in place of
+// the category's words wherever it wrote one.
+test('a run that failed on the ChatGPT account says the same sentence with the command as code', () => {
+  const { Row } = load('src/renderer/components/Transcript.tsx')
+  const command = 'bravebot auth login chatgpt'
+  const ended = (overrides) => t.planEnded({
+    run: 1, kind: 'chat', message: 'unauthorized', category: 'unauthorized', stopped: false, declined: false,
+    problem: null, accountMessage: null, accountCommand: null, attempt: null, record: null, ...overrides,
+  })
+  const draw = (entry) => renderToStaticMarkup(
+    React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }),
+  )
+
+  const drawn = draw(ended({ accountMessage: `You are not signed in to ChatGPT, so run ${command} in a terminal to sign in.`, accountCommand: command }))
+  assert.match(drawn, /<p class="plan-detail">You are not signed in to ChatGPT, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in\.<\/p>/, drawn)
+  assert.doesNotMatch(drawn, /`/, drawn)
+
+  const service = draw(ended({ kind: 'chat', category: 'transport', message: 'transport' }))
+  assert.match(service, /The model service could not be reached/, service)
+  assert.doesNotMatch(service, /<code>/, service)
+})
+
+/**
+ * The picker's warnings are the bridge's sentences, one for each service whose models could not be
+ * listed. A warning that names a command has it beside the sentence, in the same order, and it is
+ * drawn as code: the picker does not read the sentence to find it, a warning with none is a plain
+ * paragraph in the picker's status type, and nothing in either is read as markup.
+ */
+test('a picker warning draws the command it names as code and the rest as text', () => {
+  const { ModelWarnings } = load('src/renderer/components/ModelWarnings.tsx')
+  const command = 'bravebot auth login chatgpt'
+  const draw = (props) => renderToStaticMarkup(React.createElement(ModelWarnings, props))
+  const named = `Could not load models from ChatGPT, so try again, or run ${command} in a terminal to sign in again.`
+  const unnamed = 'Could not load models from Down Gateway. Try again.'
+
+  const drawn = draw({ warnings: [named, unnamed], commands: [command, null] })
+  assert.match(
+    drawn,
+    /<p class="model-status">Could not load models from ChatGPT, so try again, or run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<\/p>/,
+    drawn,
+  )
+  assert.match(drawn, /<p class="model-status">Could not load models from Down Gateway\. Try again\.<\/p>/, drawn)
+  assert.equal((drawn.match(/<code>/g) ?? []).length, 1, drawn)
+  assert.doesNotMatch(drawn, /`/, drawn)
+
+  // A bridge that sends no commands, and a command the sentence does not hold, draw plain paragraphs.
+  for (const commands of [undefined, [], [null, null], ['bravebot something else', null]]) {
+    assert.doesNotMatch(draw({ warnings: [named, unnamed], commands }), /<code>/, String(commands))
+  }
+  assert.equal(draw({ warnings: [] }), '')
+
+  const hostile = draw({ warnings: ['Run <b>x</b> now.'], commands: ['<b>x</b>'] })
+  assert.doesNotMatch(hostile, /<b>/, hostile)
+  assert.match(hostile, /<code>&lt;b&gt;x&lt;\/b&gt;<\/code>/, hostile)
+})
+
+/**
+ * The code in a failure's sentence is set in the code type role.
+ *
+ * A bare `<code>` takes the browser's own monospace, a different face and size from the window's other
+ * code, so each surface that draws one gives it `--type-code`, as the cards that already draw inline
+ * code do. The stylesheets are read as text, since the cascade is the browser's to resolve: what is
+ * held is that a rule for the code in each surface's paragraphs names the token and not another font.
+ */
+test('the code in a failure card and a picker warning is set in the code type role', () => {
+  const rule = (file, selector) => {
+    const css = readFileSync(join('src/renderer/styles', file), 'utf8')
+    const at = css.indexOf(`${selector} {`)
+    assert.ok(at >= 0, `${file} has no rule for ${selector}`)
+    return css.slice(at, css.indexOf('}', at))
+  }
+  for (const [file, selector] of [
+    ['cards.css', '.error-card p code'],
+    ['transcript.css', '.plan-ended .plan-detail code'],
+    ['menus.css', '.model-status code'],
+  ]) {
+    assert.match(rule(file, selector), /font:\s*var\(--type-code\)/, `${selector} is not in the code type role`)
+  }
+})
+
 // Undo can leave an undecided child beneath a refused parent. Show the separate write contract.
 test('undecided path exceptions are not shown as refusals or grants', () => {
   const { PathPermissions } = load('src/renderer/components/Permissions.tsx')

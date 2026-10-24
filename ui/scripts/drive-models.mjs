@@ -6,6 +6,12 @@ import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { COMPOSER_INPUT } from './drive-support.mjs'
 
+// What `models.list` says of a service whose models could not be listed: a sentence, and the command
+// it names beside it, which the picker draws as code (CHATGPT-9).
+const WARNING_COMMAND = 'bravebot auth login chatgpt'
+const WARNING = `Could not load models from ChatGPT, so try again, or run ${WARNING_COMMAND} in a terminal to sign in again.`
+const MINIMUM = { width: 900, height: 560 }
+
 const profile = mkdtempSync(join(tmpdir(), 'bravebot-model-picker-'))
 const app = await electron.launch({ args: ['.', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000 })
 try {
@@ -14,7 +20,7 @@ try {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   mkdirSync('/tmp/bravebot-model-picker-project', { recursive: true })
-  await app.evaluate(({ ipcMain, BrowserWindow, dialog }) => {
+  await app.evaluate(({ ipcMain, BrowserWindow, dialog }, warning) => {
     const defaultModel = 'openrouter/anthropic/claude-haiku-4.5'
     const directory = '/tmp/bravebot-model-picker-project'
     const rows = ['A', 'B'].map((id) => ({ id, directory, title: `Conversation ${id}`,
@@ -27,14 +33,14 @@ try {
       if (method === 'models.list') {
         if (globalThis.modelTest.fail) return { error: { code: 'offline', message: 'Model listing is offline.' } }
         if (globalThis.modelTest.loading) await new Promise((resolve) => setTimeout(resolve, 500))
-        return { ok: { defaultModel, warnings: [], models: [
+        return { ok: { defaultModel, warnings: [warning.sentence], warningCommands: [warning.command], models: [
           { id: defaultModel, name: 'Claude Haiku 4.5', provider: 'OpenRouter', premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools'] },
           { id: 'openrouter/anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'OpenRouter', premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools', 'reasoning'] },
           { id: 'brave-model', name: 'Brave model', provider: 'Brave', premium: false, contextWindow: 24000 },
         ] } }
       }
       if (method === 'session.list') return { ok: { sessions: rows } }
-      if (method === 'session.new') return { ok: { session: 's-new', directory, branch: null, model: defaultModel } }
+      if (method === 'session.new') return { ok: { session: 's-new', directory, shownDirectory: directory, branch: null, model: defaultModel } }
       if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: defaultModel,
         record: { ...rows.find((row) => row.id === params.id), started: 1, turns: 0, tokens: 0, build: 'fixture' },
         said: [], todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0,
@@ -49,7 +55,7 @@ try {
     globalThis.finishModelTurn = () => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', {
       event: 'turn.done', session: 's-new', data: { id: 'A', turn: 1, reply: 'Done', archived: 0 },
     })
-  })
+  }, { sentence: WARNING, command: WARNING_COMMAND })
   await page.reload()
   await page.locator('[data-test="new-project"]').click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
@@ -65,6 +71,43 @@ try {
     'model picker and Send align in the composer toolbar');
   assert.equal(await page.locator('.conversation-toolbar .export-open').count(), 1,
     'Export is in the conversation header');
+
+  // A warning the model list carries is drawn in the picker with the command it names as code, at the
+  // window's size and at its minimum, in the code type role and inside the menu.
+  const normal = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  for (const [where, size] of [['the window size', normal], ['the minimum size', MINIMUM]]) {
+    await page.setViewportSize(size)
+    assert((await page.evaluate(() => window.innerWidth)) <= size.width, `the window is at ${where}`)
+    await trigger.click()
+    const warning = page.locator('.model-notices p.model-status').filter({ hasText: 'Could not load models from ChatGPT' })
+    await warning.waitFor()
+    assert.equal(await warning.innerText(), WARNING, `${where}: the warning is the sentence the bridge sent`)
+    assert.equal(await warning.locator('code').count(), 1, `${where}: the command is drawn as code`)
+    const code = warning.locator('code')
+    assert.equal(await code.innerText(), WARNING_COMMAND, `${where}: the code is the command`)
+    assert.equal(await code.evaluate((element) => {
+      const probe = document.createElement('span')
+      probe.style.font = 'var(--type-code)'
+      document.body.append(probe)
+      const role = getComputedStyle(probe).font
+      probe.remove()
+      return getComputedStyle(element).font === role
+    }), true, `${where}: the command is in the code type role`)
+    // The menu fades in, and its place is read once it has finished.
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished)))
+    const box = await code.boundingBox()
+    const popover = await page.locator('.model-popover').boundingBox()
+    assert(box && popover && box.x >= popover.x - 1 && box.x + box.width <= popover.x + popover.width + 1, `${where}: the command stays inside the menu`)
+    assert.equal(await code.evaluate((element) => {
+      const at = element.getBoundingClientRect()
+      return element.contains(document.elementFromPoint(at.x + at.width / 2, at.y + at.height / 2))
+    }), true, `${where}: nothing is drawn over the command`)
+    await page.screenshot({ path: `/tmp/bravebot-model-warning-${where === 'the minimum size' ? 'minimum' : 'normal'}.png` })
+    await page.getByRole('combobox', { name: 'Search models' }).press('Escape')
+    await page.locator('.model-popover').waitFor({ state: 'hidden' })
+  }
+  await page.setViewportSize(normal)
+  console.log('PASS: a picker warning draws its command as code, in the code type role and inside the menu, at the window size and at the minimum')
 
   await trigger.click()
   const sonnet = page.getByRole('option', { name: /Claude Sonnet/ })

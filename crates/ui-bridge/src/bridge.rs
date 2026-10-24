@@ -2851,14 +2851,15 @@ fn start_mcp(
 }
 
 /// How a failure is reported to a front end: `kind`, `message`, `category`, `attempts`, `status`,
-/// `account`, `accountMessage`.
+/// `account`, `accountMessage`, `accountCommand`.
 ///
 /// The category, the counts and the account's failure come from the agent's diagnosis. Raw backend
 /// text is not sent. `account` is the fixed name of which failure of a ChatGPT account it was, or
-/// `null` where the account was not involved (CHATGPT-8). `accountMessage` is that failure's sentence
-/// from the terminal's catalog, so the window draws the words and does not keep a second table of
-/// them (SHARE-001). `chosen` is the model that was asked for,
-/// which decides one category below.
+/// `null` where the account was not involved (CHATGPT-8). `accountMessage` is the window's own
+/// sentence for that failure, one sentence in sentence case chosen from the failure alone, and
+/// `accountCommand` the words of it that are a command to run, so the window draws the words and
+/// keeps no table of them, and draws the command as code without reading the sentence for it. Both
+/// are `null` otherwise. `chosen` is the model that was asked for, which decides one category below.
 pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -> Value {
     let ending = error.ending();
     let diagnosis = ending.diagnosis();
@@ -2890,21 +2891,13 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         // it, so a turn never sends this kind.
         TurnError::Manifest { .. } => "manifest",
     };
+    let account = diagnosis.and_then(|d| d.account);
+    let said = account.map(crate::account_words::of_failure);
     json!({ "kind": kind, "message": category.unwrap_or("cancelled"), "category": category,
         "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
-        "account": diagnosis.and_then(|d| d.account).map(AccountFailure::name),
-        "accountMessage": diagnosis.and_then(|d| d.account).map(account_sentence) })
-}
-
-/// The sentence of a failure of a ChatGPT account, the terminal's words with a capital for a title or
-/// a card that starts with it.
-fn account_sentence(failure: AccountFailure) -> String {
-    let sentence = bravebot_agent::chatgpt::said_of_failure(failure);
-    let mut chars = sentence.chars();
-    chars
-        .next()
-        .map(|first| first.to_uppercase().chain(chars).collect())
-        .unwrap_or(sentence)
+        "account": account.map(AccountFailure::name),
+        "accountMessage": said.as_ref().map(|said| &said.sentence),
+        "accountCommand": said.as_ref().and_then(|said| said.command) })
 }
 
 /// Open the point the turn about to run can be rewound to (SESSION-19), as the terminal does.

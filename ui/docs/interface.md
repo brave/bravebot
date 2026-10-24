@@ -187,6 +187,12 @@ and recently chosen models appear near the top. Pricing is not supplied by the c
 Refresh retries discovery if a provider is unavailable; the configured default remains
 selectable. Choosing a model does not change the agent's global default.
 
+Where the models of a service could not be listed, the picker says so above the list, one sentence
+for each service, in the picker's status type. The bridge words each sentence. A sentence that names
+a command to run, such as the one that signs in to ChatGPT again, has that command drawn as code. The
+bridge sends it beside the sentence (`warningCommands`, in the order of `warnings`), so the picker does
+not read a sentence to find it. A warning that names no command is a plain line.
+
 ### Turn notices, usage and audit
 
 **Turn notices** appear beneath the prompt when the turn finishes. New or changed
@@ -838,5 +844,8 @@ processor remarks directly above the diff, labelled untrusted, with any omitted-
 
 The context line reports an unmeasured, measured or unavailable last-request size and
 whether earlier messages were summarised. This is distinct from total billed usage.
-Turn errors use stable categories with specific recovery guidance. Cancellation remains a
-separate outcome, and request-attempt counts and HTTP status appear only when known.
+Turn errors use stable categories with specific recovery guidance. A failure of the ChatGPT
+account says the bridge's own sentence for the step that failed in place of the category's
+guidance, one sentence with the command it names drawn as code, on the error card and on the card
+of a run that stopped. Cancellation remains a separate outcome, and request-attempt counts and HTTP
+status appear only when known.

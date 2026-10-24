@@ -626,11 +626,11 @@ test('a turn the output limit ended says the limit and what the reply was writin
   assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
 })
 
-// CHATGPT-8: a turn the ChatGPT account failed arrives with the agent's sentence for it beside the
-// category. Folded by the window's reducer and drawn through the real row, because the sentence
-// arriving on `turn.error` and going undrawn is the fault, and the card saying "Authentication
-// failed" to a person who never signed in has no command for them to run.
-test('a turn the ChatGPT account failed draws the sentence the agent sent', () => {
+// CHATGPT-8: a turn the ChatGPT account failed arrives with the bridge's sentence for it beside the
+// category and the command it names. Folded by the window's reducer and drawn through the real row,
+// because the sentence arriving on `turn.error` and going undrawn is the fault, and the card saying
+// "Authentication failed" to a person who never signed in has no command for them to run.
+test('a turn the ChatGPT account failed draws the sentence the bridge sent', () => {
   const React = require('react')
   const { renderToStaticMarkup } = require('react-dom/server')
   const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
@@ -640,29 +640,33 @@ test('a turn the ChatGPT account failed draws the sentence the agent sent', () =
 
   const session = liveSession()
   let turn = 0
-  const failed = (category, accountMessage) => {
+  const failed = (category, accountMessage, accountCommand) => {
     turn += 1
     session.send('turn.started', { turn })
-    session.send('turn.error', { kind: 'chat', message: category, category, accountMessage, turn, prompt: 0, contextTokens: 0 })
+    session.send('turn.error', { kind: 'chat', message: category, category, accountMessage, accountCommand, turn, prompt: 0, contextTokens: 0 })
     const entry = session.live.entries.at(-1)
     return renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
   }
 
-  const signedOut = failed('unauthorized', 'Not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in')
-  assert.match(signedOut, /Not signed in to a ChatGPT account\. Run `bravebot auth login chatgpt` to sign in/)
+  const command = 'bravebot auth login chatgpt'
+  const signedOut = failed('unauthorized', `You are not signed in to ChatGPT, so run ${command} in a terminal to sign in.`, command)
+  assert.match(signedOut, /You are not signed in to ChatGPT, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in\./)
   assert.doesNotMatch(signedOut, /Authentication failed/)
+  assert.doesNotMatch(signedOut, /`/)
 
   // Two refusals that name the account arrive in the same category and are drawn apart.
-  const limit = failed('refused', 'OpenAI says this ChatGPT account has reached its usage limit')
-  const barred = failed('refused', 'OpenAI does not allow this ChatGPT account to be used this way')
+  const limit = failed('refused', 'OpenAI says this ChatGPT account has reached its usage limit, so try again later.', null)
+  const barred = failed('refused', "OpenAI does not allow this ChatGPT account to be used this way, so use another account or another service's model.", null)
   assert.match(limit, /reached its usage limit/)
   assert.match(barred, /does not allow this ChatGPT account/)
   assert.doesNotMatch(barred, /usage limit/)
   assert.doesNotMatch(limit + barred, /The provider refused this request/)
+  assert.doesNotMatch(limit + barred, /<code>/)
 
-  // A failure with no sentence is drawn from its category.
-  assert.match(failed('unauthorized', null), /<span slot="title">Authentication failed<\/span>/)
+  // A failure with no sentence is drawn from its category, and a command with no sentence is not drawn.
+  assert.match(failed('unauthorized', null, command), /<span slot="title">Authentication failed<\/span>/)
   assert.match(failed('refused', undefined), /<span slot="title">The provider refused this request<\/span>/)
+  assert.doesNotMatch(failed('unauthorized', null, command), /<code>/)
 
   // The sentence is text and not markup.
   const hostile = '<b>sk-live-123</b>'

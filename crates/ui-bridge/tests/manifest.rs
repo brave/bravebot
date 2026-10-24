@@ -762,6 +762,45 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
     assert_eq!(rounds.try_iter().count(), 0, "a refused run asked a model");
 }
 
+/// CHATGPT-8: a run that failed on the ChatGPT account reaches the window with the window's own
+/// sentence for the step that failed as `accountMessage`, and the command it names as
+/// `accountCommand`, beside the category it has always carried. The home holds no sign-in, so the
+/// run fails before any request is sent. A failure of the model service is told by its category
+/// alone, since its words are the service's.
+///
+/// The faults this rejects: a run that says its category and nothing of the account, and the
+/// terminal's lower case wording sent to the window.
+#[test]
+fn a_run_that_failed_on_the_chatgpt_account_says_the_windows_sentence_and_its_command() {
+    let scratch = Scratch::new("bridge-manifest-account-failed");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let started = front.call(
+        "manifest.run",
+        json!({"session": session, "task": TASK, "model": "chatgpt/gpt-6-sol"}),
+    );
+    assert_eq!(started["run"], 1, "{started}");
+    let ended = front.question_or_the_end();
+
+    assert_eq!(ended["event"], "manifest.error", "{ended}");
+    let data = &ended["data"];
+    assert_eq!(data["category"], "unauthorized", "{ended}");
+    assert_eq!(data["account"], "not-signed-in", "{ended}");
+    assert_eq!(
+        data["accountMessage"],
+        "You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+        "{ended}"
+    );
+    assert_eq!(
+        data["accountCommand"], "bravebot auth login chatgpt",
+        "{ended}"
+    );
+    assert_eq!(data["declined"], false, "{ended}");
+    assert_eq!(scratch.written(), None, "a run that failed wrote a file");
+}
+
 /// A run's record is listed as a run and a session's is not, so a front end can tell which rows
 /// can be continued.
 #[test]

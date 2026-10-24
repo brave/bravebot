@@ -98,11 +98,26 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
             json!(failure.status()),
             "{failure:?}: {sent}"
         );
-        // The sentence is the terminal's, with a capital, so the window keeps no table of its own.
+        // The sentence is the window's own, and the command it names is sent beside it, so the window
+        // keeps no table of its own and reads no sentence for the words to draw as code.
+        let said = crate::account_words::of_failure(failure);
+        assert_eq!(sent["accountMessage"], said.sentence, "{failure:?}: {sent}");
+        assert_eq!(
+            sent["accountCommand"],
+            json!(said.command),
+            "{failure:?}: {sent}"
+        );
+        // Not the terminal's: that one is lower case, two sentences, and has the command in
+        // backticks that a paragraph prints as they are.
         let terminal = bravebot_agent::chatgpt::said_of_failure(failure);
-        let mut capitalised = terminal.clone();
-        capitalised[..1].make_ascii_uppercase();
-        assert_eq!(sent["accountMessage"], capitalised, "{failure:?}: {sent}");
+        assert_ne!(sent["accountMessage"], terminal, "{failure:?}: {sent}");
+        assert!(
+            !sent["accountMessage"]
+                .as_str()
+                .unwrap_or_default()
+                .contains('`'),
+            "{failure:?}: {sent}"
+        );
     }
 
     let counted = failed_with(BackendError::Attempted {
@@ -138,6 +153,7 @@ fn a_failure_with_no_account_in_it_is_sent_with_no_account_name() {
     ] {
         assert_eq!(sent["account"], Value::Null, "{sent}");
         assert_eq!(sent["accountMessage"], Value::Null, "{sent}");
+        assert_eq!(sent["accountCommand"], Value::Null, "{sent}");
         assert_eq!(sent["category"], category, "{sent}");
     }
     let workspace = failure_fields(
@@ -147,11 +163,12 @@ fn a_failure_with_no_account_in_it_is_sent_with_no_account_name() {
     );
     assert_eq!(workspace["account"], Value::Null, "{workspace}");
     assert_eq!(workspace["accountMessage"], Value::Null, "{workspace}");
+    assert_eq!(workspace["accountCommand"], Value::Null, "{workspace}");
 }
 
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a
 /// reply, a request or a settings file held. The keys are `kind`, `message`, `category`, `attempts` and
-/// `status`, and the name and sentence of the account's failure.
+/// `status`, and the name, the sentence and the command of the account's failure.
 #[test]
 fn the_failure_sent_holds_only_fixed_names_and_counts() {
     let sent = failed_with(ChatError::Account(AccountFailure::Named {
@@ -170,6 +187,7 @@ fn the_failure_sent_holds_only_fixed_names_and_counts() {
         keys,
         [
             "account",
+            "accountCommand",
             "accountMessage",
             "attempts",
             "category",

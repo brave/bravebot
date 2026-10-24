@@ -2945,6 +2945,49 @@ failure-account-renewal-incomplete = la connexion ChatGPT n'a pas pu être renou
 failure-account-renewal-transport = la connexion ChatGPT n'a pas pu être renouvelée : la requête n'a pas abouti
 
 
+## Ce que la fenêtre du bureau dit du compte ChatGPT
+
+# Une phrase chacune, avec une majuscule initiale, qui dit ce qui s'est passé et quoi faire, pour la carte
+# d'erreur de la fenêtre, sa carte d'exécution et le sélecteur de modèle. Elles sont choisies d'après
+# l'étape qui a échoué et ne reprennent rien de ce que OpenAI, le fichier de connexion ou un fichier de
+# réglages a dit. La fenêtre affiche { $command } comme du code : il est transmis et envoyé à côté de la
+# phrase, et n'est pas écrit dans les mots entre apostrophes inversées. Les phrases du terminal pour les
+# mêmes échecs sont en minuscules et reçoivent le statut d'un refus après elles, ce qu'une carte ne peut
+# pas faire.
+#
+# La fenêtre et un éditeur lisent le catalogue de référence quelle que soit la langue de la machine
+# (`bravebot-rpc` choisit en-US, `bravebot-host` et `bravebot-acp` n'en choisissent aucune), donc aucun
+# programme ne lit le français de ces messages. Ils sont gardés pour que les deux catalogues contiennent les
+# mêmes messages et que contrib/untranslated-messages.txt ne liste aucun manque.
+desktop-chatgpt-not-signed-in = Vous n'êtes pas connecté à ChatGPT, donc lancez { $command } dans un terminal pour vous connecter.
+desktop-chatgpt-ended = La connexion ChatGPT a pris fin, donc lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-token-refused = OpenAI a refusé le jeton d'accès de la connexion ChatGPT, donc lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-unusable = La connexion ChatGPT enregistrée n'a pas pu être lue, donc lancez { $command } dans un terminal pour en voir la raison.
+desktop-chatgpt-renewal-refused = OpenAI a refusé de renouveler la connexion ChatGPT, donc réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-renewal-rate-limited = La connexion ChatGPT n'a pas pu être renouvelée parce qu'OpenAI limite les requêtes, donc réessayez plus tard.
+desktop-chatgpt-renewal-unavailable = La connexion ChatGPT n'a pas pu être renouvelée parce que le service de connexion d'OpenAI est indisponible, donc réessayez plus tard.
+desktop-chatgpt-renewal-incomplete = La connexion ChatGPT n'a pas pu être renouvelée parce que la réponse d'OpenAI était incomplète, donc réessayez.
+desktop-chatgpt-renewal-transport = La connexion ChatGPT n'a pas pu être renouvelée parce qu'OpenAI n'a pas pu être joint, donc vérifiez la connexion et réessayez.
+desktop-chatgpt-usage-limit = OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez plus tard.
+# Dit quand le refus est arrivé en 429 avec une attente demandée. La requête n'est pas renvoyée, donc toute
+# l'attente reste à venir.
+desktop-chatgpt-usage-limit-wait =
+    { $minutes ->
+        [one] OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez dans environ 1 minute.
+       *[other] OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez dans environ { $minutes } minutes.
+    }
+desktop-chatgpt-not-permitted = OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon, donc utilisez un autre compte ou un modèle d'un autre service.
+# Les avertissements du sélecteur de modèle, un pour chaque façon dont les modèles du compte n'ont pas pu
+# être listés. Le premier concerne un fichier de connexion illisible quand une entrée des réglages nomme les
+# modèles, ce qui n'offre aucune ligne. Le deuxième concerne une liste qui n'a pas pu être lue, où le
+# sélecteur montre la liste intégrée. Les deux derniers concernent une liste refusée par un code qui désigne
+# le compte, où se reconnecter ne change rien.
+desktop-chatgpt-models-unreadable = Impossible de charger les modèles de ChatGPT, donc réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-models-compiled = Impossible de charger les modèles de ChatGPT, donc la liste affichée est intégrée et peut nommer un modèle que le compte ne peut pas utiliser ; réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-models-usage-limit = Impossible de charger les modèles de ChatGPT parce que le compte a atteint sa limite d'utilisation, donc réessayez plus tard.
+desktop-chatgpt-models-not-permitted = Impossible de charger les modèles de ChatGPT parce qu'OpenAI n'autorise pas ce compte à être utilisé de cette façon, donc utilisez un autre compte ou un modèle d'un autre service.
+
+
 ## Répéter une consigne
 
 loop-needs-a-prompt =

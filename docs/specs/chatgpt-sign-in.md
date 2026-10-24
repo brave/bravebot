@@ -13,6 +13,7 @@ governs:
   - crates/tui/src/app/models.rs
   - crates/ui-bridge/src/models.rs
   - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/account_words.rs
   - crates/session/src/sessions.rs
   - ui/src/renderer/failure.ts
   - crates/cli/src/chatgpt.rs
@@ -574,10 +575,19 @@ this ChatGPT account has reached its usage limit, and the service asked for a wa
 every other failure of the account. A failure that carries no value is worded from its category, with its
 status and count.
 
-The desktop is sent the terminal's sentence for the value, capitalised, as `accountMessage` beside the
-name, and draws it as the description of one card in `ui/src/renderer/failure.ts`. The window keeps no
-table of the sentences, so the sentence that sends a person to sign in names the command the terminal
-names ([CHATGPT-1](#CHATGPT-1)). A failure with no sentence is drawn from its category.
+The terminal's sentences are lower case, two sentences where a remedy follows, and write the command
+between backticks, none of which a window can draw as it is, so the desktop is sent sentences of its own,
+which are catalog messages in `bravebot-ui-bridge`. Each is one sentence in sentence case that says what
+happened and what to do, chosen from the value alone. The sentence that sends a person to sign in tells them
+to run the command in a terminal, since no window starts the sign-in, and names the command the terminal
+names ([CHATGPT-1](#CHATGPT-1)). The sentence is sent as `accountMessage` beside the name, and the words of
+it that are the command are sent as `accountCommand`, so the window draws them as code without reading the
+sentence for them. A refusal's status is in `status`, and the window's sentence for the usage limit says a
+wait it asked for in minutes, which a refusal that says the account may not be used this way does not,
+since trying again changes nothing there. `accountMessage` is the description of one card in
+`ui/src/renderer/failure.ts`, drawn by the error card and by the card of a run that stopped, with the
+command in a code element and everything else as text. A failure with no sentence is drawn from its
+category. An editor hosting a session is told the same sentence ([ACP-8](acp.md#ACP-8)).
 
 No code, `state`, `nonce`, verifier, challenge, token, claim, client or host identifier, reply body, header
 value or callback query reaches a trace, a log, an error message, a session record, a transcript, `doctor`,
@@ -642,6 +652,10 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_agent::chatgpt_compaction::a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence`
 `verified-by: bravebot_agent::report::a_failed_summary_says_the_accounts_sentence_where_it_was_the_account_and_the_category_otherwise`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category`
+`verified-by: bravebot_ui_bridge::account_words::the_windows_sentence_is_one_sentence_in_sentence_case_and_names_its_command_once`
+`verified-by: bravebot_ui_bridge::account_words::the_command_is_named_where_it_is_the_remedy_and_a_wait_is_said_in_minutes`
+`verified-by: bravebot_ui_bridge::manifest::a_run_that_failed_on_the_chatgpt_account_says_the_windows_sentence_and_its_command`
+`verified-by: bravebot_ui_bridge::acp::a_turn_that_failed_on_the_chatgpt_account_tells_the_editor_which_command_signs_in`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_with_no_account_in_it_is_sent_with_no_account_name`
 `verified-by: bravebot_ui_bridge::failure_tests::the_failure_sent_holds_only_fixed_names_and_counts`
 `verified-by: bravebot_ui_bridge::history::a_turn_on_the_account_with_no_sign_in_reaches_the_window_as_not_signed_in`
@@ -654,7 +668,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis`
 `verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
 `verified-by: bravebot_tui::app::a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agent-settings.test.mjs holds the sentence the agent sends to the card's description, two sentences to two cards, and a failure with no sentence to the category's wording; ui/scripts/ux-state.test.mjs folds turn.error through the window's reducer and draws the real row, and ui/scripts/plan-card.test.mjs does the same for a run that failed; make check-ui runs them, and the governs list above holds failure.ts to existing)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the error card and the card of a run that stopped for a failure of the account and holds that the window's sentence is one paragraph with its command in a code element and no backtick, that markup in either the sentence or the command is drawn as characters, that a failure of any other service is described by its category, and that the code is set in the code type role; ui/scripts/agent-settings.test.mjs holds the sentence the bridge sends to the card's description, two sentences to two cards, and a failure with no sentence to the category's wording; ui/scripts/ux-state.test.mjs folds turn.error through the window's reducer and draws the real row, and ui/scripts/plan-card.test.mjs does the same for a run that failed; make check-ui runs them, and the governs list above holds failure.ts to existing)`
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_as_the_sign_in_failing`
 `verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
 `verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`
@@ -733,9 +747,13 @@ stored, and nothing is asked of the service then. A stored sign-in whose token c
 cannot be read, is offered the compiled list, except that the models an entry names need neither the token
 nor the listing, only that the file can be read, and offer no row where it cannot be. The desktop picker says
 so in a warning beside the other rosters', and the terminal picker says so in a note in the transcript,
-written when the picker opens, so before it draws, at rest or mid-turn. Where the compiled list is offered
-both say that it is built in and may name a model the account cannot reach. A listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in
-that clause's sentence, which does not send the person to sign in again. A person who never signed in is
+written when the picker opens, so before it draws, at rest or mid-turn. The window's warning is a catalog
+message of its own, one sentence in sentence case that says what happened and what to do, sent with the
+command it names so the picker draws that command as code, and the terminal's note is lower case and names
+`/model`, which the window has no use for. Where the compiled list is offered both say that it is built in
+and may name a model the account cannot reach. A listing refused with a code of
+[CHATGPT-8](#CHATGPT-8)'s closed list is said by both in a sentence of that code's own, which does not send
+the person to sign in again. A person who never signed in is
 told nothing, and a listing that was read, empty or not, is not a failure.
 
 A listing the service refuses for its token with a 401 is asked for again once with a replacement, as a
@@ -794,6 +812,8 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_tui::app::a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists`
 `verified-by: bravebot_tui::app::the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers`
 `verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`
+`verified-by: bravebot_ui_bridge::account_words::each_warning_of_the_picker_is_one_sentence_and_says_nothing_where_nothing_failed`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the picker's warnings and holds that the command a warning names is drawn as code and the rest as text, that a warning with no command or a command its sentence does not hold is a plain paragraph, and that markup in either is drawn as characters; make check-ui runs it; ui/scripts/drive-models.mjs opens the real picker against a model list with one warning and the command it names, and asserts that the command is drawn as code in the code type role and inside the menu, at the window's size and at its minimum)`
 `verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker`
 `verified-by: bravebot_tui::app::the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise`
 `verified-by: bravebot_tui::app::only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says`
@@ -1304,9 +1324,11 @@ These are the places where another spec states something about this service, eac
   is replaced once, a 429 or a 5xx is asked for again, and the turn ends with the sentence of that status.
   The two codes that program retries (`subscription_sharing_usage_unavailable` and
   `subscription_sharing_user_unavailable`) are not in the list and are handled the same way.
-- The sentences of [CHATGPT-8](#CHATGPT-8) are written once, in the catalog, for the terminal, the one-shot
-  run and the goal and manifest runs. The desktop is sent the same sentence capitalised and keeps none. The
-  eleven names are listed in `ui/docs/phase-0-rpc-protocol.md`.
+- The sentences of [CHATGPT-8](#CHATGPT-8) are written in two sets in the catalog: the terminal's, which the
+  one-shot run and the goal and manifest runs say too, and the window's. A change to what a failure says is
+  made in both, and no test holds the wording equal since the two differ in form. A test holds that the
+  command each names is the one the other names. The window keeps no table of its own. The eleven names are
+  listed in `ui/docs/phase-0-rpc-protocol.md`.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
   the dead refresh token and is told the refresh failed, until the person signs in again.

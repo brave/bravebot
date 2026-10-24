@@ -35,10 +35,15 @@ struct Editor {
 impl Editor {
     /// An adapter whose model is the scripted endpoint.
     fn on(endpoint: &str, project: &Path) -> Self {
+        Self::on_model("acp-test/test", endpoint, project)
+    }
+
+    /// An adapter whose model is `model`, with the scripted endpoint configured as a gateway.
+    fn on_model(model: &str, endpoint: &str, project: &Path) -> Self {
         let settings = project.join("test-settings.json");
         std::fs::write(
             &settings,
-            json!({"model": "acp-test/test", "provider": {"acp-test": {
+            json!({"model": model, "provider": {"acp-test": {
                 "options": {"baseURL": endpoint}, "models": {"test": {}}
             }}})
             .to_string(),
@@ -423,6 +428,53 @@ fn no_turn_starts_before_the_trust_question_is_answered() {
     assert!(
         requests.try_recv().is_ok(),
         "a refusal left the session unable to run"
+    );
+}
+
+/// CHATGPT-8: a turn that failed on the ChatGPT account tells the editor which command signs in
+/// again, in the window's own sentence for the step that failed, and not the name of the category,
+/// which says nothing an editor can act on. The turn is on a model of the account in a profile nobody
+/// signed in to, so it fails before any request is sent and no model service is asked.
+///
+/// The faults this rejects: the category's name for a failure of the account, and the terminal's
+/// lower case wording with its backticks reaching an editor that draws them as they are.
+#[test]
+fn a_turn_that_failed_on_the_chatgpt_account_tells_the_editor_which_command_signs_in() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let account_project = project("account-failure");
+    let mut editor = Editor::on_model("chatgpt/gpt-6-sol", "http://127.0.0.1:9", &account_project);
+    let session = editor.session(&account_project);
+    let prompt = editor.prompt(&session, text("hello"));
+    editor.answer_next(selected("allow-once"));
+
+    let done = editor.response(prompt);
+
+    let said = done["error"]["message"].as_str().expect("a failure");
+    assert_eq!(
+        said,
+        "the turn failed: You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+        "{done}"
+    );
+    assert!(
+        !said.contains("unauthorized"),
+        "the category was said in place of the sentence: {said}"
+    );
+
+    // A failure of any other service is the name of its category, which quotes nothing a service
+    // wrote: a gateway that refuses the request is not the sign-in failing.
+    let project = project("gateway-failure");
+    let (config, _requests, server) = endpoint::endpoint(vec!["fail".into()], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let prompt = editor.prompt(&session, text("hello"));
+    editor.answer_next(selected("allow-once"));
+    let done = editor.response(prompt);
+    server.join().unwrap();
+    assert_eq!(
+        done["error"]["message"], "the turn failed: refused",
+        "{done}"
     );
 }
 

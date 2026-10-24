@@ -3447,6 +3447,46 @@ failure-account-renewal-incomplete = the ChatGPT sign-in could not be renewed: t
 failure-account-renewal-transport = the ChatGPT sign-in could not be renewed: the request was not completed
 
 
+## What the desktop window says of the ChatGPT account
+
+# One sentence each, in sentence case, saying what happened and what to do, for the window's error card,
+# its run card and the model picker. They are chosen from the step that failed and repeat nothing OpenAI,
+# the sign-in file or a settings file said. The window draws { $command } as code, so it is passed in and
+# sent beside the sentence and is not written into the words with backticks. The terminal's sentences for
+# the same failures are lower case and take the status of a refusal after them, which a card cannot.
+#
+# The window and an editor read the reference catalog whatever language the machine is set to
+# (`bravebot-rpc` chooses en-US, `bravebot-host` and `bravebot-acp` choose none), so no program reads the
+# French of these messages. They are kept so that both catalogs hold the same messages and
+# contrib/untranslated-messages.txt lists no gap.
+desktop-chatgpt-not-signed-in = You are not signed in to ChatGPT, so run { $command } in a terminal to sign in.
+desktop-chatgpt-ended = The ChatGPT sign-in has ended, so run { $command } in a terminal to sign in again.
+desktop-chatgpt-token-refused = OpenAI refused the ChatGPT sign-in's access token, so run { $command } in a terminal to sign in again.
+desktop-chatgpt-unusable = The stored ChatGPT sign-in could not be read, so run { $command } in a terminal to see why.
+desktop-chatgpt-renewal-refused = OpenAI refused to renew the ChatGPT sign-in, so try again, or run { $command } in a terminal to sign in again.
+desktop-chatgpt-renewal-rate-limited = The ChatGPT sign-in could not be renewed because OpenAI is limiting requests, so try again later.
+desktop-chatgpt-renewal-unavailable = The ChatGPT sign-in could not be renewed because OpenAI's sign-in service is unavailable, so try again later.
+desktop-chatgpt-renewal-incomplete = The ChatGPT sign-in could not be renewed because the reply from OpenAI was incomplete, so try again.
+desktop-chatgpt-renewal-transport = The ChatGPT sign-in could not be renewed because OpenAI could not be reached, so check the connection and try again.
+desktop-chatgpt-usage-limit = OpenAI says this ChatGPT account has reached its usage limit, so try again later.
+# Said where the refusal came as a 429 that asked for a wait. The request is not sent again, so the whole of
+# the wait is ahead.
+desktop-chatgpt-usage-limit-wait =
+    { $minutes ->
+        [one] OpenAI says this ChatGPT account has reached its usage limit, so try again in about 1 minute.
+       *[other] OpenAI says this ChatGPT account has reached its usage limit, so try again in about { $minutes } minutes.
+    }
+desktop-chatgpt-not-permitted = OpenAI does not allow this ChatGPT account to be used this way, so use another account or another service's model.
+# The model picker's warnings, one for each way the account's models could not be listed. The first is for a
+# sign-in file that could not be read where a settings entry names the models, which offers no row. The
+# second is for a listing that could not be read, where the picker shows the built-in list. The last two are
+# for a listing the service refused in a code that names the account, where signing in again is no remedy.
+desktop-chatgpt-models-unreadable = Could not load models from ChatGPT, so try again, or run { $command } in a terminal to sign in again.
+desktop-chatgpt-models-compiled = Could not load models from ChatGPT, so the list shown is built in and may name a model the account cannot reach; try again, or run { $command } in a terminal to sign in again.
+desktop-chatgpt-models-usage-limit = Could not load models from ChatGPT because the account has reached its usage limit, so try again later.
+desktop-chatgpt-models-not-permitted = Could not load models from ChatGPT because OpenAI does not allow this account to be used this way, so use another account or another service's model.
+
+
 ## Repeating a prompt
 
 loop-needs-a-prompt =

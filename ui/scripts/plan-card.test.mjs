@@ -162,20 +162,30 @@ test('a declined plan is said to be declined, read off the flag and not the sent
   assert.ok(failed.includes('The run stopped'), failed)
 })
 
-// CHATGPT-8: a run the ChatGPT account failed carries the same sentence a turn does, so the card does
-// not say "Authentication failed" to a person who never signed in.
-test('a run the ChatGPT account failed is worded from the sentence the agent sent', () => {
-  const signedOut = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', account: 'not-signed-in', accountMessage: 'Not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in' }))
-  assert.ok(signedOut.includes('Not signed in to a ChatGPT account'), signedOut)
+// CHATGPT-8: a run the ChatGPT account failed carries the same sentence a turn does, with the command
+// beside it, so the card does not say "Authentication failed" to a person who never signed in, and
+// draws the command as code and not between backticks a paragraph would print.
+test('a run the ChatGPT account failed is worded from the sentence the bridge sent', () => {
+  const command = 'bravebot auth login chatgpt'
+  const signedOut = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', account: 'not-signed-in', accountMessage: `You are not signed in to ChatGPT, so run ${command} in a terminal to sign in.`, accountCommand: command }))
+  assert.ok(signedOut.includes('You are not signed in to ChatGPT, so run <code>bravebot auth login chatgpt</code> in a terminal to sign in.'), signedOut)
   assert.ok(!signedOut.includes('Authentication failed'), signedOut)
+  assert.ok(!signedOut.includes('`'), signedOut)
+  // The stylesheet sets the code type role on code inside `.plan-detail` only, so the saved run's
+  // code has to be outside that paragraph.
+  assert.match(signedOut, /<p class="plan-detail">[^<]*<code>bravebot auth login chatgpt<\/code>[^<]*<\/p>/, signedOut)
+  assert.match(signedOut, /<p class="plan-record">Saved as run <code>run-123<\/code>\.<\/p>/, signedOut)
+  assert.equal((signedOut.match(/<code>/g) ?? []).length, 2, signedOut)
 
-  const limit = draw(ended({ kind: 'chat', message: 'refused', category: 'refused', account: 'usage-limit', accountMessage: 'OpenAI says this ChatGPT account has reached its usage limit' }))
-  assert.ok(limit.includes('OpenAI says this ChatGPT account has reached its usage limit'), limit)
+  const limit = draw(ended({ kind: 'chat', message: 'refused', category: 'refused', account: 'usage-limit', accountMessage: 'OpenAI says this ChatGPT account has reached its usage limit, so try again later.', accountCommand: null, record: null }))
+  assert.ok(limit.includes('OpenAI says this ChatGPT account has reached its usage limit, so try again later.'), limit)
+  assert.ok(!limit.includes('<code>'), limit)
 
   // No sentence is the category's card.
   for (const accountMessage of [null, undefined]) {
-    const plain = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', accountMessage }))
+    const plain = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', accountMessage, accountCommand: command, record: null }))
     assert.ok(plain.includes('Authentication failed'), plain)
+    assert.ok(!plain.includes('<code>'), plain)
   }
 })
 

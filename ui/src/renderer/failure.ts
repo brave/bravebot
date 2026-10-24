@@ -3,9 +3,11 @@ import type { CutOff } from '../shared/protocol'
 /**
  * Stable agent categories, independent of backend wording or translated diagnostics.
  *
- * `accountMessage` is the agent's sentence for a failure of a ChatGPT account, where it was one. It
- * is the description over the category it arrives beside, under one title, so which failure it was
- * is said once, in the agent, in the words the terminal uses (SHARE-001).
+ * `accountMessage` is the bridge's sentence for a failure of a ChatGPT account, where it was one: one
+ * sentence in sentence case that says what happened and what to do. It is the description over the
+ * category it arrives beside, under one title, so which failure it was is said once, in the bridge's
+ * catalog, and this window keeps no table of the words (SHARE-001). The command it names arrives as
+ * `accountCommand` and the card draws it as code.
  */
 export function failureSummary(category: string, cutOff?: CutOff | null, accountMessage?: string | null): { title: string; description: string } {
   if (accountMessage) return { title: 'The ChatGPT account could not be used', description: accountMessage }

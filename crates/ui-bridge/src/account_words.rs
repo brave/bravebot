@@ -1,0 +1,289 @@
+//! What the window says of the ChatGPT account when a turn failed on it or its models could not be
+//! listed ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8),
+//! [CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+//!
+//! The window draws one sentence in sentence case that says what happened and what to do, with a
+//! command in a code element where one is the remedy. The terminal's sentences are lower case, take
+//! the status of a refusal after them and write the command between backticks, none of which a window
+//! can draw as it is, so the window has messages of its own in the catalog. They are chosen from the
+//! condition alone, as the terminal's are, and repeat nothing a service, a file or a settings file
+//! wrote.
+//!
+//! The command is passed into the message and sent beside the sentence, so the window can draw the
+//! words that are the command as code without reading the sentence to find them.
+
+use bravebot_agent::chatgpt::AccountModels;
+use bravebot_aichat::responses::protocol::Refusal;
+use bravebot_aichat::{AccountFailure, RenewalFailure};
+use bravebot_i18n::t;
+
+/// The command that signs in, which is run in a terminal and nowhere else
+/// ([CHATGPT-1](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-1)).
+const SIGN_IN: &str = "bravebot auth login chatgpt";
+
+/// The command that says why a stored sign-in cannot be read.
+const STATUS: &str = "bravebot auth status chatgpt";
+
+/// A sentence for the window, and the command it names where one is the remedy. A failure's card and a
+/// picker's warning are both this.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Said {
+    /// One sentence in sentence case, with the command in it as plain words.
+    pub(crate) sentence: String,
+    /// The words of `sentence` that are the command, for the window to draw as code.
+    pub(crate) command: Option<&'static str>,
+}
+
+impl Said {
+    /// A sentence that names no command.
+    pub(crate) fn plain(sentence: impl Into<String>) -> Self {
+        Self {
+            sentence: sentence.into(),
+            command: None,
+        }
+    }
+
+    /// A sentence that names the command that is its remedy.
+    pub(crate) fn naming(command: &'static str, sentence: impl Into<String>) -> Self {
+        Self {
+            sentence: sentence.into(),
+            command: Some(command),
+        }
+    }
+}
+
+/// The sentence for a failure of the account.
+pub(crate) fn of_failure(failure: AccountFailure) -> Said {
+    match failure {
+        AccountFailure::NotSignedIn => Said::naming(
+            SIGN_IN,
+            t!(desktop_chatgpt_not_signed_in, command = SIGN_IN),
+        ),
+        AccountFailure::Ended => {
+            Said::naming(SIGN_IN, t!(desktop_chatgpt_ended, command = SIGN_IN))
+        }
+        AccountFailure::Refused => Said::naming(
+            SIGN_IN,
+            t!(desktop_chatgpt_token_refused, command = SIGN_IN),
+        ),
+        AccountFailure::Unusable => {
+            Said::naming(STATUS, t!(desktop_chatgpt_unusable, command = STATUS))
+        }
+        // The wait is said for the usage limit only: it is advice about trying again, and a refusal
+        // that says the account may not be used this way is not one trying again would change.
+        AccountFailure::Named {
+            refusal: Refusal::UsageLimit,
+            ..
+        } => Said::plain(match failure.wait() {
+            Some(wait) => t!(
+                desktop_chatgpt_usage_limit_wait,
+                minutes = bravebot_agent::outcome::minutes_to_wait(wait)
+            ),
+            None => t!(desktop_chatgpt_usage_limit).to_string(),
+        }),
+        AccountFailure::Named {
+            refusal: Refusal::NotPermitted,
+            ..
+        } => Said::plain(t!(desktop_chatgpt_not_permitted)),
+        AccountFailure::Renewal(RenewalFailure::Refused) => Said::naming(
+            SIGN_IN,
+            t!(desktop_chatgpt_renewal_refused, command = SIGN_IN),
+        ),
+        AccountFailure::Renewal(RenewalFailure::RateLimited) => {
+            Said::plain(t!(desktop_chatgpt_renewal_rate_limited))
+        }
+        AccountFailure::Renewal(RenewalFailure::Unavailable) => {
+            Said::plain(t!(desktop_chatgpt_renewal_unavailable))
+        }
+        AccountFailure::Renewal(RenewalFailure::Incomplete) => {
+            Said::plain(t!(desktop_chatgpt_renewal_incomplete))
+        }
+        AccountFailure::Renewal(RenewalFailure::Transport) => {
+            Said::plain(t!(desktop_chatgpt_renewal_transport))
+        }
+    }
+}
+
+/// The warning the model picker shows where the account's models could not be listed, or `None`
+/// where there is nothing to warn of: nobody signed in, or a listing that was read, empty or not.
+pub(crate) fn of_listing(account: &AccountModels) -> Option<Said> {
+    match account {
+        AccountModels::Absent | AccountModels::Offered(_) => None,
+        AccountModels::Unreadable => Some(Said::naming(
+            SIGN_IN,
+            t!(desktop_chatgpt_models_unreadable, command = SIGN_IN),
+        )),
+        AccountModels::Compiled(_) => Some(Said::naming(
+            SIGN_IN,
+            t!(desktop_chatgpt_models_compiled, command = SIGN_IN),
+        )),
+        AccountModels::Refused(Refusal::UsageLimit) => {
+            Some(Said::plain(t!(desktop_chatgpt_models_usage_limit)))
+        }
+        AccountModels::Refused(Refusal::NotPermitted) => {
+            Some(Said::plain(t!(desktop_chatgpt_models_not_permitted)))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Every condition the account can fail in, with the wait a usage limit carries and without.
+    fn every_failure() -> Vec<AccountFailure> {
+        let refusal = |refusal, status, retry_after| AccountFailure::Named {
+            refusal,
+            status,
+            retry_after,
+        };
+        vec![
+            AccountFailure::NotSignedIn,
+            AccountFailure::Ended,
+            AccountFailure::Refused,
+            AccountFailure::Unusable,
+            refusal(Refusal::UsageLimit, None, None),
+            refusal(
+                Refusal::UsageLimit,
+                Some(429),
+                Some(Duration::from_secs(600)),
+            ),
+            refusal(Refusal::UsageLimit, Some(429), Some(Duration::from_secs(5))),
+            refusal(Refusal::NotPermitted, Some(403), None),
+            AccountFailure::Renewal(RenewalFailure::Refused),
+            AccountFailure::Renewal(RenewalFailure::RateLimited),
+            AccountFailure::Renewal(RenewalFailure::Unavailable),
+            AccountFailure::Renewal(RenewalFailure::Incomplete),
+            AccountFailure::Renewal(RenewalFailure::Transport),
+        ]
+    }
+
+    /// What every sentence of the window is held to: one sentence in sentence case, with no backtick
+    /// that a paragraph would print as it is, and its command in it once so the window finds the
+    /// words to draw as code, where it names one.
+    fn assert_one_sentence_naming(said: &Said, what: &str) {
+        let sentence = &said.sentence;
+        let first = sentence.chars().next().expect("a sentence");
+        assert!(first.is_uppercase(), "{what}: {sentence}");
+        assert!(sentence.ends_with('.'), "{what}: {sentence}");
+        assert_eq!(
+            sentence.matches('.').count(),
+            1,
+            "{what} is not one sentence: {sentence}"
+        );
+        assert!(!sentence.contains('`'), "{what}: {sentence}");
+        assert!(
+            !sentence.contains('{') && !sentence.contains('}'),
+            "{what}: {sentence}"
+        );
+        match said.command {
+            Some(command) => assert_eq!(
+                sentence.matches(command).count(),
+                1,
+                "{what} does not carry its command once: {sentence}"
+            ),
+            None => assert!(!sentence.contains("bravebot "), "{what}: {sentence}"),
+        }
+    }
+
+    /// The design skill's microcopy for an error: what happened and what to do, in one sentence, in
+    /// sentence case, and a command in a code element, which the window draws from `command` and
+    /// not from backticks that a paragraph would print as they are. The window's sentences differ
+    /// from one another and name a command only where one is the remedy. The regressions it rejects
+    /// are the terminal's lower case or two-sentence wording reaching the window, backticks in a
+    /// paragraph, and a command named in words the window cannot find.
+    #[test]
+    fn the_windows_sentence_is_one_sentence_in_sentence_case_and_names_its_command_once() {
+        let mut sentences = Vec::new();
+        for failure in every_failure() {
+            let said = of_failure(failure);
+            assert_one_sentence_naming(&said, &format!("{failure:?}"));
+            sentences.push(said.sentence);
+        }
+        let mut distinct = sentences.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), sentences.len(), "{sentences:#?}");
+    }
+
+    /// Where signing in again, or looking at the stored sign-in, is the remedy the sentence names that
+    /// command, and nowhere else does: a usage limit and a refusal that says the account may not be
+    /// used this way are not mended by signing in again. The command is the one the terminal's
+    /// sentence for the same failure names, so a command renamed in one place is renamed in both. A
+    /// wait the refusal asked for is said in minutes rounded up, in the singular for one, for the
+    /// usage limit.
+    #[test]
+    fn the_command_is_named_where_it_is_the_remedy_and_a_wait_is_said_in_minutes() {
+        let command_of = |failure| of_failure(failure).command;
+        assert_eq!(command_of(AccountFailure::NotSignedIn), Some(SIGN_IN));
+        assert_eq!(command_of(AccountFailure::Ended), Some(SIGN_IN));
+        assert_eq!(command_of(AccountFailure::Refused), Some(SIGN_IN));
+        assert_eq!(command_of(AccountFailure::Unusable), Some(STATUS));
+        assert_eq!(
+            command_of(AccountFailure::Renewal(RenewalFailure::Refused)),
+            Some(SIGN_IN)
+        );
+        for failure in every_failure() {
+            // The terminal names a command in the failures where the window names the same one.
+            let terminal = bravebot_agent::chatgpt::said_of_failure(failure);
+            if let Some(command) = command_of(failure)
+                && !matches!(failure, AccountFailure::Renewal(_))
+            {
+                assert!(terminal.contains(command), "{failure:?}: {terminal}");
+            }
+            if matches!(failure, AccountFailure::Named { .. }) {
+                assert_eq!(command_of(failure), None, "{failure:?}");
+            }
+        }
+
+        let limit = |wait| AccountFailure::Named {
+            refusal: Refusal::UsageLimit,
+            status: Some(429),
+            retry_after: wait,
+        };
+        let said = |wait| of_failure(limit(wait)).sentence;
+        assert!(said(None).contains("try again later"), "{}", said(None));
+        let eleven = said(Some(Duration::from_secs(601)));
+        assert!(eleven.contains("about 11 minutes."), "{eleven}");
+        let one = said(Some(Duration::from_secs(5)));
+        assert!(one.contains("about 1 minute."), "{one}");
+    }
+
+    /// The model picker's warnings are held to the same rule, are told apart, and say nothing where
+    /// there is nothing to warn of: a machine nobody signed in on, and a listing that was read, empty
+    /// or not. The compiled list's warning says that the list is built in, and none of them names the
+    /// terminal's `/model`, which is a command of another front end.
+    #[test]
+    fn each_warning_of_the_picker_is_one_sentence_and_says_nothing_where_nothing_failed() {
+        use bravebot_aichat::models::Model;
+        let none: Vec<Model> = Vec::new();
+        assert_eq!(of_listing(&AccountModels::Absent), None);
+        assert_eq!(of_listing(&AccountModels::Offered(none)), None);
+
+        let all = [
+            AccountModels::Unreadable,
+            AccountModels::Compiled(Vec::new()),
+            AccountModels::Refused(Refusal::UsageLimit),
+            AccountModels::Refused(Refusal::NotPermitted),
+        ];
+        let mut sentences = Vec::new();
+        for account in &all {
+            let said = of_listing(account).expect("a warning");
+            assert_one_sentence_naming(&said, &format!("{account:?}"));
+            assert!(!said.sentence.contains("/model"), "{}", said.sentence);
+            sentences.push(said.sentence);
+        }
+        assert!(sentences[1].contains("built in"), "{}", sentences[1]);
+        assert!(!sentences[0].contains("built in"), "{}", sentences[0]);
+        let mut distinct = sentences.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), sentences.len(), "{sentences:#?}");
+        // Signing in again changes neither refusal, so neither warning sends the person to do it.
+        for refusal in [&all[2], &all[3]] {
+            let said = of_listing(refusal).expect("a warning");
+            assert_eq!(said.command, None, "{refusal:?}");
+        }
+    }
+}

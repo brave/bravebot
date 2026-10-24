@@ -333,6 +333,11 @@ export interface ModelCatalogue {
   defaultModel: string
   models: ModelOption[]
   warnings: string[]
+  /**
+   * The command each warning names, drawn as code, in the order of `warnings` and `null` for a
+   * warning that names none. Absent from a bridge that sends none.
+   */
+  warningCommands?: (string | null)[]
 }
 
 /**
@@ -496,10 +501,16 @@ export interface TurnError {
    */
   account?: string | null
   /**
-   * The agent's sentence for that failure, capitalised, and `null` where `account` is. Drawn as
-   * sent: it is the terminal's catalog sentence and holds nothing a reply said.
+   * The bridge's sentence for that failure, and `null` where `account` is: one sentence in sentence
+   * case that says what happened and what to do, chosen from the closed name and holding nothing a
+   * reply said. Drawn as sent, as text.
    */
   accountMessage?: string | null
+  /**
+   * The words of `accountMessage` that are a command to run, drawn as code, and `null` where it
+   * names none. Beside the sentence so nothing reads the sentence to find them.
+   */
+  accountCommand?: string | null
   attempts?: number | null
   status?: number | null
   /** Where the output ceiling ended the turn, and `null` otherwise. */
@@ -659,6 +670,8 @@ export interface ManifestError {
   account?: string | null
   /** As on `TurnError`. */
   accountMessage?: string | null
+  /** As on `TurnError`. */
+  accountCommand?: string | null
   attempts?: number | null
   status?: number | null
   /** Whether the person stopped it. A stopped run is not recorded. */

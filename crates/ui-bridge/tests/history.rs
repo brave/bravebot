@@ -503,10 +503,12 @@ fn a_failed_turn_is_recorded_with_the_reason_the_interface_composed() {
 }
 
 /// CHATGPT-8: a turn on the ChatGPT account where nobody signed in fails in the window naming the
-/// step, beside the category, with the catalog's sentence for it, which the window draws as sent.
+/// step, beside the category, with the window's own sentence for it and the command it names, which
+/// the window draws as sent.
 ///
-/// The faults this rejects: a failure of the account that arrives as its category alone, and one
-/// whose sentence is composed from anything but the closed name.
+/// The faults this rejects: a failure of the account that arrives as its category alone, the
+/// terminal's lower case two-sentence wording sent to the window, and a sentence composed from
+/// anything but the closed name.
 #[test]
 fn a_turn_on_the_account_with_no_sign_in_reaches_the_window_as_not_signed_in() {
     let scratch = Scratch::new("bridge-account-not-signed-in");
@@ -521,7 +523,11 @@ fn a_turn_on_the_account_with_no_sign_in_reaches_the_window_as_not_signed_in() {
     assert_eq!(ended["data"]["account"], "not-signed-in", "{ended}");
     assert_eq!(
         ended["data"]["accountMessage"],
-        "Not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in",
+        "You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+        "{ended}"
+    );
+    assert_eq!(
+        ended["data"]["accountCommand"], "bravebot auth login chatgpt",
         "{ended}"
     );
     assert_eq!(ended["data"]["status"], Value::Null, "{ended}");
