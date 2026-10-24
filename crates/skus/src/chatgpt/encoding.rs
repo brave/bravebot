@@ -183,7 +183,12 @@ pub(crate) fn clock() -> Option<u64> {
 /// token the service then refuses is replaced as one is for a clock that runs behind
 /// ([CHATGPT-7](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-7)).
 pub(crate) fn now() -> u64 {
-    clock().unwrap_or(0)
+    now_at(std::time::SystemTime::now())
+}
+
+/// Seconds since 1970-01-01 at `time`, or 0 before it: what [`now`] reads at that instant.
+pub(crate) fn now_at(time: std::time::SystemTime) -> u64 {
+    clock_at(time).unwrap_or(0)
 }
 
 #[cfg(test)]

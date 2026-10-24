@@ -423,8 +423,12 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    `none`, an HMAC and every other algorithm are refused, and so is a header with `crit`. No other field of
    the header is read, so a `jku`, `x5u`, `jwk` or `x5c` names no key. The key is the only key of the set with
    the header's `kid`, and it is an RSA key a signature may be checked with: `kty` is `RSA`, `use`, `alg` and
-   `key_ops`, where present, say `sig`, `RS256` and `verify`, the modulus is 2048 bits or more and the
-   exponent is 65537 or more. A set that holds two keys under one `kid` has none that is the key.
+   `key_ops`, where present, say `sig`, `RS256` and `verify`, the modulus is 2048 to 8192 bits, which are the
+   limits of the signature check's own parameters, and the exponent is 65537 or more. That is the least
+   FIPS 186-5 allows and what a real key has (`AQAB`), and the check's parameters alone take an exponent as
+   small as 3. A zero byte in front of the exponent does not count toward it, and a key written with one in
+   front of the exponent or of the modulus is refused by that check, as RFC 7518 has both in the fewest bytes.
+   A set that holds two keys under one `kid` has none that is the key.
    The key set is fetched from the host compiled in for it ([CHATGPT-2](#CHATGPT-2)) with no credential,
    following no redirect, and a reply over 64 KiB is refused. The signature is checked with RS256 against
    that key's modulus and exponent, and is as long as the modulus. The payload is read after that, is an
@@ -468,6 +472,8 @@ whether the token verified, and what leaves the crate is that answer and no clai
 `verified-by: bravebot_skus::chatgpt::id_token::a_signature_of_another_length_than_the_modulus_is_refused`
 `verified-by: bravebot_skus::chatgpt::id_token::a_key_of_fewer_than_2048_bits_or_with_a_small_exponent_is_refused_whatever_its_signature_is`
 `verified-by: bravebot_skus::chatgpt::id_token::a_decoded_part_is_overwritten_where_it_lies`
+`verified-by: bravebot_skus::chatgpt::id_token::an_exponent_of_65537_or_more_is_used_and_a_smaller_one_is_not_whatever_its_leading_zeros`
+`verified-by: bravebot_skus::chatgpt::id_token::the_decoded_header_and_payload_are_held_in_buffers_that_are_cleared_in_each_way_a_check_ends`
 `verified-by: bravebot_skus::chatgpt::encoding::base64url_reads_back_what_it_writes_and_nothing_else`
 `verified-by: bravebot_skus::chatgpt::encoding::a_clock_before_1970_reads_as_no_time_and_the_epoch_and_after_as_the_seconds_since`
 `verified-by: bravebot_skus::chatgpt::a_clock_set_before_1970_ends_the_sign_in_before_anything_is_opened_or_asked`
@@ -541,7 +547,8 @@ while the arrangement is understood.
 ### CHATGPT-7: an access token is replaced before it expires
 
 A request to the serving host is built from an access token whose expiry is more than a minute away. The
-expiry is the instant of the reply plus its `expires_in`, or plus 3600 seconds where the reply has none.
+expiry is the instant of the reply plus its `expires_in`, or plus 3600 seconds where the reply has none. The
+instant is read from the system clock, and a clock set before 1970 reads as 0 here (Known costs).
 Otherwise the refresh token is presented to the token endpoint, with the stored client and the `resource`
 of [CHATGPT-3](#CHATGPT-3), the reply is written to the file, and only then is the new access token used. A
 refresh reply that grants no refresh token keeps the one presented. No request is sent with a token past its
@@ -599,6 +606,7 @@ list ends the turn without a replacement.
 
 `verified-by: bravebot_skus::chatgpt::renew::a_token_with_more_than_a_minute_left_is_used_and_nothing_is_asked`
 `verified-by: bravebot_skus::chatgpt::renew::a_token_within_a_minute_of_its_expiry_or_past_it_is_replaced`
+`verified-by: bravebot_skus::chatgpt::renew::a_renewal_under_a_clock_before_1970_stores_an_expiry_the_next_start_renews_again`
 `verified-by: bravebot_skus::chatgpt::renew::a_renewal_presents_the_stored_refresh_token_and_writes_what_it_is_given`
 `verified-by: bravebot_skus::chatgpt::renew::a_reply_with_no_refresh_token_leaves_the_stored_one`
 `verified-by: bravebot_skus::chatgpt::renew::no_stored_sign_in_is_not_signed_in`
@@ -1497,8 +1505,11 @@ These are the places where another spec states something about this service, eac
 - A sign-in ends at OpenAI and this program learns of it at the next refresh, which is the first turn that
   needs one. A turn can also be refused once for a token that a clock running behind made look valid. A
   clock set before 1970 reads as 1970 where a renewal compares an expiry, so every token looks valid and the
-  first request the service refuses replaces it; the sign-in itself refuses such a clock
-  ([CHATGPT-5](#CHATGPT-5)).
+  first request the service refuses replaces it. The renewal stores an `expires_at` of the token's lifetime
+  past 1970, near 3600, so the next start under a correct clock finds the token expired and renews it again.
+  A test renews under a clock that reads no time and checks the file holds the reply's lifetime as the
+  expiry, then starts a second renewer under the system clock and checks it renews again. The sign-in
+  itself refuses such a clock ([CHATGPT-5](#CHATGPT-5)).
 - A process that rotated the refresh token and could not write the file holds the only good copy in
   memory. If another process finds the file's refresh token dead and removes it, and the first exits before
   its write succeeds, the sign-in is gone and the person signs in again.

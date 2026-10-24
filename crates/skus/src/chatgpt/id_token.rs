@@ -662,18 +662,19 @@ mod tests {
         assert_eq!(checked(&spelled(&header_url, &payload_url)).0, Ok(()));
 
         let signature = sign_input(&format!("{header_url}.{payload_url}"));
-        let strays = {
-            // The last character of a signature of 256 bytes holds four bits that are zero. Set one.
-            let last = signature.chars().last().expect("a signature");
+        // The last character of a part whose bytes are not a whole number of groups holds bits after
+        // the last byte, which are zero: four of them in each of the three parts here. Set the lowest.
+        let with_a_stray_bit = |part: &str| {
+            let last = part.chars().last().expect("a part");
             let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
             let at = alphabet
                 .iter()
                 .position(|character| *character as char == last)
                 .expect("a character of the alphabet");
-            // The lowest bit of the last character is one of the four after the last byte.
             let other = alphabet[at ^ 1] as char;
-            format!("{}{other}", &signature[..signature.len() - 1])
+            format!("{}{other}", &part[..part.len() - 1])
         };
+        let strays = with_a_stray_bit(&signature);
         assert_ne!(strays, signature);
         let signature_std = alphabet(&signature);
         assert_ne!(
@@ -730,6 +731,14 @@ mod tests {
             (
                 "a signature with a bit set after its last byte",
                 whole(&header_url, &payload_url, &strays),
+            ),
+            (
+                "a header with a bit set after its last byte",
+                spelled(&with_a_stray_bit(&header_url), &payload_url),
+            ),
+            (
+                "a payload with a bit set after its last byte",
+                spelled(&header_url, &with_a_stray_bit(&payload_url)),
             ),
             (
                 "a line break after the token",
@@ -989,6 +998,118 @@ mod tests {
             assert_eq!(result, Err(Failed::Token), "{}", key.kid);
             assert_eq!(asked, 1, "{}", key.kid);
         }
+    }
+
+    /// The exponent of a key is 65537 or more, which is how many bytes it takes and then which number
+    /// it is: the least FIPS 186-5 allows, which a real key's `AQAB` is. 65536 is refused and 65537 and
+    /// 65539 are not. A leading zero byte is not a longer number, so it neither lets a small exponent
+    /// through nor refuses a large one, and an exponent of no bytes or of nothing but zero is none.
+    #[test]
+    fn an_exponent_of_65537_or_more_is_used_and_a_smaller_one_is_not_whatever_its_leading_zeros() {
+        let with_exponent = |e: &str| {
+            let mut entry = rsa("this");
+            entry["e"] = json!(e);
+            key(&set_of(&[entry]), "this").is_some()
+        };
+        for (written, bytes) in [
+            ("AQAB", "65537, a real key's"),
+            ("AQAD", "65539"),
+            ("AQAAAA", "2^24, four bytes"),
+            ("AAEAAQ", "65537 with a zero byte in front"),
+            ("AAAAAQAB", "65537 with three"),
+        ] {
+            assert!(with_exponent(written), "{bytes} was refused");
+        }
+        // RFC 7518 writes the modulus and the exponent in the fewest bytes. A key written with a zero
+        // byte in front of either is not one the signature check takes, though it is the same number,
+        // so a token it signed is refused and not read as signed by a key it is not.
+        let (n, e) = public();
+        let padded = |bytes: &[u8]| base64url(&[&[0u8][..], bytes].concat());
+        for (case, modulus, exponent) in [
+            (
+                "a modulus with a zero byte in front",
+                padded(&n),
+                base64url(&e),
+            ),
+            (
+                "an exponent with a zero byte in front",
+                base64url(&n),
+                padded(&e),
+            ),
+        ] {
+            let keys = json!({"keys": [{"kty": "RSA", "kid": KID, "use": "sig", "alg": "RS256",
+                "n": modulus, "e": exponent}]})
+            .to_string();
+            let (result, asked) = checked_at(&with(&claims()), &keys, NOW);
+            assert_eq!((result, asked), (Err(Failed::Token), 1), "{case}");
+        }
+        assert_eq!(
+            checked(&with(&claims())).0,
+            Ok(()),
+            "the same key, as it is written"
+        );
+
+        for (written, bytes) in [
+            ("Aw", "3"),
+            ("AQAA", "65536"),
+            ("__8", "65535"),
+            ("AAAD", "3 with a zero byte in front"),
+            ("AAAAAw", "3 with three"),
+            ("AAEA", "256 with a zero byte in front"),
+            ("AA", "0"),
+            ("AAAA", "0 in three bytes"),
+            ("", "no bytes"),
+        ] {
+            assert!(!with_exponent(written), "{bytes} was used");
+        }
+    }
+
+    /// The decoded header and the decoded payload are each held in a buffer that is cleared where it
+    /// goes, in each way a check ends: every buffer that was made was zero when it was dropped, a
+    /// token the header refuses made the one for its header, one the signature refuses made that one
+    /// and no more, and one whose claims are read made both, each as long as the text it holds.
+    #[test]
+    fn the_decoded_header_and_payload_are_held_in_buffers_that_are_cleared_in_each_way_a_check_ends()
+     {
+        let header_length = header().to_string().len();
+        let payload_length = claims().to_string().len();
+        let cleared = |token: &str| {
+            CLEARED.with(|log| log.borrow_mut().clear());
+            let _ = checked(token);
+            CLEARED.with(|log| log.borrow().clone())
+        };
+
+        // Checked to the end, and accepted.
+        assert_eq!(
+            cleared(&with(&claims())),
+            [(header_length, true), (payload_length, true)]
+        );
+        // Refused for a claim, after both were read.
+        let another = changing("aud", Some(json!("another")));
+        assert_eq!(
+            cleared(&with(&another)),
+            [(header_length, true), (another.to_string().len(), true)]
+        );
+        // Refused by the signature, before the payload is decoded.
+        let (signed_part, _) = with(&claims())
+            .rsplit_once('.')
+            .map(|(signed_part, rest)| (signed_part.to_string(), rest.to_string()))
+            .expect("three parts");
+        assert_eq!(
+            cleared(&format!("{signed_part}.{}", base64url(&[1u8; 256]))),
+            [(header_length, true)]
+        );
+        // Refused by the header, which is all that was read.
+        let other = json!({"alg": "none", "kid": KID});
+        assert_eq!(
+            cleared(&signed(&other, &claims())),
+            [(other.to_string().len(), true)]
+        );
+        // A header that is not JSON was a buffer too.
+        assert_eq!(
+            cleared(&format!("{}.e30.AA", base64url(b"not json"))),
+            [(8, true)]
+        );
     }
 
     /// The decoded header and payload are overwritten where they lie when the check is done with

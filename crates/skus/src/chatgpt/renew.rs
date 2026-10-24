@@ -73,6 +73,14 @@ pub struct Renewer {
     agent: ureq::Agent,
     path: PathBuf,
     unwritten: Option<Unwritten>,
+    /// A refresh was refused as the refresh token no longer being valid and the file was removed.
+    /// A missing file does not say why it is missing, so this is what tells a later ask that the
+    /// sign-in ended, where the file alone would say none was made. Forgotten where a sign-in is
+    /// found stored again.
+    ended: bool,
+    /// Seconds since 1970 where an expiry is made and compared, which is 0 for a clock set before
+    /// that. The system clock outside a test.
+    now: fn() -> u64,
 }
 
 impl Renewer {
@@ -95,6 +103,8 @@ impl Renewer {
             agent: exchange::agent(transport),
             path,
             unwritten: None,
+            ended: false,
+            now,
         }
     }
 
@@ -118,7 +128,7 @@ impl Renewer {
             let stored = account::load_at(&self.path)
                 .map_err(TokenError::Store)?
                 .ok_or(TokenError::NotSignedIn)?;
-            if !needs_replacing(&stored, refused) {
+            if !needs_replacing(&stored, refused, (self.now)()) {
                 return Ok(Access {
                     token: stored.access_token,
                     unwritten: None,
@@ -151,7 +161,7 @@ impl Renewer {
             (None, Some(file)) => file.clone(),
             (None, None) => return Err(TokenError::NotSignedIn),
         };
-        if !needs_replacing(&current, refused) {
+        if !needs_replacing(&current, refused, (self.now)()) {
             return Ok(Access {
                 token: current.access_token,
                 unwritten: failed_write,
@@ -170,7 +180,7 @@ impl Renewer {
                     refresh_token: renewed
                         .refresh
                         .unwrap_or_else(|| current.refresh_token.clone()),
-                    expires_at: now().saturating_add(renewed.lifetime),
+                    expires_at: (self.now)().saturating_add(renewed.lifetime),
                     client_id: current.client_id.clone(),
                     host_id: current.host_id.clone(),
                 };
@@ -219,7 +229,7 @@ impl Renewer {
                 // expires.
                 let refused_now =
                     refused.is_some_and(|refused| same_secret(&current.access_token, refused));
-                if !refused_now && current.expires_at > now() {
+                if !refused_now && current.expires_at > (self.now)() {
                     Ok(Access {
                         token: current.access_token,
                         unwritten: failed_write,
@@ -234,9 +244,9 @@ impl Renewer {
 
 /// Whether a request cannot be built from this account's access token: it is within the margin of
 /// its expiry, or it is the one the serving host refused.
-fn needs_replacing(account: &Account, refused: Option<&Secret>) -> bool {
+fn needs_replacing(account: &Account, refused: Option<&Secret>, now: u64) -> bool {
     refused.is_some_and(|refused| same_secret(&account.access_token, refused))
-        || account.expires_at <= now().saturating_add(MARGIN)
+        || account.expires_at <= now.saturating_add(MARGIN)
 }
 
 fn same_secret(a: &Secret, b: &Secret) -> bool {
@@ -374,6 +384,58 @@ mod tests {
             "{} against {wanted}",
             file.expires_at
         );
+    }
+
+    /// The known cost of CHATGPT-7: under a clock set before 1970 every expiry looks far off, a
+    /// token the service refuses is replaced, and the renewal stores an `expires_at` of the reply's
+    /// lifetime past 1970. The next start under a correct clock finds that expired and renews it
+    /// again. A renewal that stored another expiry through any path would leave the file as the
+    /// start under a correct clock finds it.
+    #[test]
+    fn a_renewal_under_a_clock_before_1970_stores_an_expiry_the_next_start_renews_again() {
+        use super::super::encoding::now_at;
+        use std::time::{Duration, UNIX_EPOCH};
+
+        fn before_1970() -> u64 {
+            now_at(UNIX_EPOCH - Duration::from_secs(86_400))
+        }
+
+        let path = scratch("clock-before-1970");
+        account::save_at(&path, &stored("old", "r0", 3600)).expect("a stored account");
+        let server = serve(vec![
+            reply("new", Some("r1"), 1800),
+            reply("newer", Some("r2"), 1800),
+        ]);
+
+        let mut under_that_clock = renewer(&server.base, &path);
+        under_that_clock.now = before_1970;
+        let unexpired = under_that_clock.access_token().expect("a token");
+        assert_eq!(
+            unexpired.token.expose(),
+            "old",
+            "a token an hour from its expiry is sent"
+        );
+        let renewed = under_that_clock
+            .replace_refused(&Secret::new("old"))
+            .expect("a token");
+        assert_eq!(renewed.token.expose(), "new");
+        assert_eq!(
+            on_disk(&path).expires_at,
+            1800,
+            "the expiry is the reading of the clock, which is 0, plus the reply's lifetime"
+        );
+
+        let next = renewer(&server.base, &path)
+            .access_token()
+            .expect("a token");
+        assert_eq!(
+            next.token.expose(),
+            "newer",
+            "the next start did not renew it"
+        );
+        let asked = server.finish();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert_eq!(named(&asked[1].form(), "refresh_token"), "r1");
     }
 
     /// A reply that grants no refresh token keeps the one presented: replacing it with nothing
