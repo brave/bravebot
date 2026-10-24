@@ -166,14 +166,18 @@ its issue is open assume it still occurs.
 **Write the checklist.** This is the contract the work is checked against, and the orchestrator
 writes it before any worker starts. For each item it holds one row for each thing the issue asks
 for, in the issue's words: every sentence that asks for something, every numbered plan point, and
-every open decision that code can settle. Two further sources add rows. Where the issue is governed
-by a spec, each clause it names and each place that spec says something is not built. Where earlier
-pull requests worked on the issue, each bullet of their `Not covered:` lines and each follow-up
-they cite. A row reads `id | requirement | source | state | evidence | cause`. The state is `unmet`
+every open decision that code can settle. Three further sources add rows. Where the issue is governed
+by a spec, each clause it names, each place that spec says something is not built, and each item
+of its list of edits to other specs. Where earlier pull requests worked on the issue, each bullet
+of their `Not covered:` lines and each follow-up they cite. A row reads `id | requirement | source | state | evidence | cause`. The state is `unmet`
 at the start, `met` with evidence (a commit and the test that pins it, or a file and line), or
 `blocked` with a cause from [What is blocked](#what-is-blocked) and the person who can unblock it.
 A row is never narrowed to what is convenient, and a worker never removes or rewords one. A
 requirement that turns out to hold two things becomes two rows.
+
+Rows that earlier work claims to have built are not taken on its word, since a spec sentence that
+says built is not evidence. Before any worker starts, a verifier checks those rows against the tree
+and the orchestrator adds a row for each one it finds unmet.
 
 **Group the items.** Items are related when they have one root cause, one is a prerequisite of
 another, the same function, file or spec clause changes in both, or their changes would conflict
@@ -276,7 +280,10 @@ that closes more items, record it as a decision, and give the other item `Part o
 follow-up for the behaviour it lost (cause 6 under [What is blocked](#what-is-blocked)). Run
 each group's targeted tests again on the combined tree. Mark the items `combined`.
 
-Group branches and their worktrees stay where they are; only the integration branch is pushed.
+Where the conflicts of a group are more than a few lines, or touch code two groups both changed,
+hand that group's combine to a worker with the integration branch, the group's branch and the rows
+of both, and check the result as in step 4. Group branches and their worktrees stay where they are;
+only the integration branch is pushed.
 
 ## 6. Verify once, on the tree that is pushed
 
@@ -436,8 +443,10 @@ lockfile. It is work, not a cause to block a row.
    put it in a setting, an alias or the hook, never change `core.hooksPath` or the hook, never pass
    it for a commit that stages no dependency file, and give each later dependency commit its own
    `--no-verify`.
-4. **Say so in the commit.** The message has a line `Hook bypassed: git commit --no-verify, for the
-   dependency change in <files>.` and the justification of item 1.
+4. **Say so in the commit.** The message has one unwrapped line, `Hook bypassed: git commit --no-verify, for the dependency change in <files>.`,
+   so that `git log --grep 'Hook bypassed'` finds the commit, and the justification of item 1. A
+   commit whose message says it bypassed the hook and that touches no dependency file is a
+   mistake, and is reworded before the pull request opens.
 5. **Say so where the maintainer reads first.** The pull request body opens with this callout
    directly under the closing lines, and a comment on the pull request repeats it, since editing a
    body notifies nobody:
