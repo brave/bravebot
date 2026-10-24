@@ -135,8 +135,9 @@ and the tokens of this account are never sent to a gateway.
 A model of this service is answered with the stored sign-in and with nothing else. `OPENAI_API_KEY`, a
 gateway key and any other variable are not looked for.
 
-**Not built:** the key set. The sign-in sends to the authorization page and the token endpoint, and a turn and
-the pickers send requests to the serving host: the models, and the listing of [CHATGPT-9](#CHATGPT-9).
+**Not built:** the key set. The sign-in sends to the authorization page and the token endpoint, and a turn, the
+pickers and the sign-in command once it has stored the sign-in send requests to the serving host: the models,
+and the listing of [CHATGPT-9](#CHATGPT-9).
 
 **Why.** A settings file may name a destination, which is right where the credential is one the person
 typed for that destination. A checkout's settings file naming where an account's refresh token goes would
@@ -289,8 +290,9 @@ Three conditions keep the argument true, and a change that breaks one is a chang
 1. The crate holds no `Labelled` and carries no workspace content and no model output, as `bravebot-skus`
    does.
 2. What the agent receives from it is a token, in the secret type that
-   [credential-protection.md](credential-protection.md) describes, and a value from the closed set of
-   [CHATGPT-8](#CHATGPT-8). No string taken from a reply is part of either.
+   [credential-protection.md](credential-protection.md) describes, a value from the closed set of
+   [CHATGPT-8](#CHATGPT-8), and whether the file took a renewal, which is the result of a write on this
+   machine. No string taken from a reply is part of any of them.
 3. The ID token is verified once, at the sign-in, and no claim of it is stored, sent or displayed. This
    is not built: the reply's `id_token` is dropped unread, since the verification needs a signature
    verifier this crate does not hold ([Decisions left open](#decisions-left-open)). Its
@@ -410,10 +412,16 @@ nothing. The file is removed, and the turn says the sign-in has ended, whether o
 removed. The file was read with the claim held, so it holds the refresh token that was refused or one this
 process replaced and so killed. Any other failure of the refresh, a connection that did not complete or
 a reply that says the service is busy or unavailable, leaves the file as it is and says which of the
-backends spec's failure categories it was. A write of the reply that fails is reported, the new tokens are
-used from memory for the rest of the process, and the process tries the write again before each later request, under the claim,
-and only if the file still holds the token this process replaced. Where it holds another, or none, the tokens in
-memory are dropped.
+backends spec's failure categories it was. A write of the reply that fails is reported to the person, once,
+as a notice of the turn, in a sentence that names no path and quotes nothing the file or the system said. The
+notice is given after the request that renewed it, and when the turn ends if it has not been given, so a
+renewal made by a call that is not a round's request, such as the goal check or a processor, is reported in
+the turn it was made in. A renewal made outside a turn, for a picker's listing, the sign-in command or a
+compaction at rest, is reported by the next turn that makes a request. The new tokens are used from memory
+for the rest of the process, and the process tries the write again before each later request, under the claim,
+and only if the file still holds the token this process replaced. A retry that fails again is not reported
+again, and one that succeeds clears the report, so a failure after it is reported. Where the file holds
+another token, or none, the tokens in memory are dropped.
 
 **Why.** An authorization server may replace the refresh token each time it is used, and then the copy a
 second process read before the first's reply is dead. A session, a background run and a one-shot run on one
@@ -426,11 +434,10 @@ required here. A server that did not replace it would lose nothing to them. Remo
 on an ended sign-in leaves `auth status` and the picker saying what is true, and stops every later turn
 from presenting a token that cannot work.
 
-**Not built:** the report of a renewal the file could not take, which is held in memory and written again
-before the next request without the turn being told. A turn asks the renewal before every request
-(`Renewer::access_token`) and after a refusal of the token (`Renewer::replace_refused`), which gives a token
-other than the refused one and never the refused one back. Only a refusal with the status 401 is a refusal of
-the token, and one whose body names a code of the closed list ends the turn without a replacement.
+A turn asks the renewal before every request (`Renewer::access_token`) and after a refusal of the token
+(`Renewer::replace_refused`), which gives a token other than the refused one and never the refused one back.
+Only a refusal with the status 401 is a refusal of the token, and one whose body names a code of the closed
+list ends the turn without a replacement.
 
 `verified-by: bravebot_skus::chatgpt::renew::a_token_with_more_than_a_minute_left_is_used_and_nothing_is_asked`
 `verified-by: bravebot_skus::chatgpt::renew::a_token_within_a_minute_of_its_expiry_or_past_it_is_replaced`
@@ -457,6 +464,10 @@ the token, and one whose body names a code of the closed list ends the turn with
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
 `verified-by: bravebot_aichat::client::a_refusal_that_names_no_listed_code_is_replaced_and_sent_again_as_before`
 `verified-by: bravebot_agent::chatgpt::each_failed_step_of_a_renewal_is_its_own_failure_and_only_an_ended_account_is_ended`
+`verified-by: bravebot_agent::chatgpt::a_renewal_the_file_could_not_take_is_said_once_and_again_only_after_a_write_succeeds`
+`verified-by: bravebot_agent::chatgpt::the_report_of_an_unwritten_renewal_is_what_is_noted_and_the_token_is_used_either_way`
+`verified-by: bravebot_agent::chatgpt::the_sentence_for_a_renewal_the_file_could_not_take_quotes_nothing_and_names_the_remedy`
+`verified-by: bravebot_agent::chatgpt_renewal_notice::a_turn_says_a_renewal_the_file_could_not_take_where_it_was_made_and_once`
 
 <a id="CHATGPT-8"></a>
 ### CHATGPT-8: a failure names its step and quotes nothing
@@ -489,7 +500,10 @@ failure. The rest are these, each saying which it is:
   sentence says to sign in again and allow the program to use the subscription's tokens, or to use an API key
   with the `openai` gateway.
 - **The command completed,** and says what it leaves: the account reaches no model, or no model can be
-  offered for it because the listing could not be read and no list is available ([CHATGPT-9](#CHATGPT-9)).
+  offered for it because the listing could not be read and no list is available ([CHATGPT-9](#CHATGPT-9)),
+  or because the service refused the listing in a code of the closed list, in that code's sentence. It says
+  the sign-in is stored before it asks the listing, so a service slow to answer leaves a person knowing it
+  was kept, and the ending is a success whatever the listing says.
 
 The refusals of [CHATGPT-12](#CHATGPT-12), which are made before anything starts, are sentences of the
 command and quote nothing.
@@ -502,10 +516,9 @@ the terminal once by [CHATGPT-13](#CHATGPT-13) and goes nowhere else. A test hol
 against each of those outputs, as the trail's test does for the credentials the agent holds, and leaves out
 that one line.
 
-**Not built:** the completed command that says the account reaches no model, and the test that holds every
-secret the process held against each output of a run that signs in, refreshes and fails. The sentences of the
-sign-in, of a refused refresh, of a refused token and of a request refused with a code of the closed list are
-built.
+**Not built:** the test that holds every secret the process held against each output of a run that signs in,
+refreshes and fails. The sentences of the sign-in, of a refused refresh, of a refused token, of a request
+refused with a code of the closed list and of what the account reaches once the sign-in is stored are built.
 
 **Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
 to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
@@ -525,6 +538,8 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_skus::chatgpt::account::a_refusal_of_a_malformed_file_quotes_none_of_it`
 `verified-by: bravebot_cli::chatgpt::each_stop_of_the_sign_in_has_its_own_sentence_and_names_the_remedy_where_there_is_one`
 `verified-by: bravebot_cli::chatgpt::a_failure_of_the_file_is_worded_with_its_detail_made_printable_and_the_remedy`
+`verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker`
+`verified-by: bravebot_cli::chatgpt::the_sign_in_is_said_before_the_listing_is_asked_and_the_listing_is_asked_once`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 `verified-by: bravebot_agent::backend::an_account_failure_is_diagnosed_by_its_step_and_names_the_command_where_it_is_the_remedy`
 `verified-by: bravebot_agent::backend::a_refusal_of_the_account_is_not_a_refusal_of_the_body`
@@ -598,13 +613,13 @@ account's, so a session on another model sends the stored token nowhere. No row 
 stored, and nothing is asked of the service then. A stored sign-in whose token cannot be had, or whose listing
 cannot be read, offers no row, except that the models an entry names need neither the token nor the listing,
 only that the file can be read. The desktop picker says so in a warning beside the other rosters', and the
-terminal picker says nothing, as it says nothing for a gateway whose listing fails. A listing refused with a
-code of [CHATGPT-8](#CHATGPT-8)'s closed list is warned of by the desktop picker in that clause's sentence,
-which does not send the person to sign in again, and the terminal picker says nothing of it.
+terminal picker says so in a note in the transcript, written when the picker opens, so before it draws, at
+rest or mid-turn. A listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in
+that clause's sentence, which does not send the person to sign in again. A person who never signed in is
+told nothing, and a listing that was read, empty or not, is not a failure.
 
-**Not built:** the compiled list (source 3) with the terminal
-picker's saying that the listing could not be read (#3134). Where the listing cannot be read nothing is
-offered, and a person names the model as `chatgpt/<name>`. A listing the service refuses for its token with a
+**Not built:** the compiled list (source 3) (#3134). Where the listing cannot be read nothing is
+offered, both pickers say so, and a person names the model as `chatgpt/<name>`. A listing the service refuses for its token with a
 401 is asked for again once with a replacement, as a turn's request is, and a second refusal ends it, as does
 a refusal whose body names a code of [CHATGPT-8](#CHATGPT-8)'s closed list, at once. A model
 named `chatgpt/<name>` on the command line or in a settings file is built: it selects the account, the request
@@ -659,6 +674,8 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_tui::app::a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists`
 `verified-by: bravebot_tui::app::the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers`
 `verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more`
+`verified-by: bravebot_tui::app::the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise`
+`verified-by: bravebot_tui::app::only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_account_only_for_one_of_its_own_models`
 `verified-by: bravebot_ui_bridge::models::the_models_list_asks_the_account_whatever_model_is_configured`
 
@@ -817,21 +834,21 @@ holds by reading its manifest.
 
 The requests a turn sends are made by the Responses client of `bravebot-aichat` given a token source, and
 `crates/agent/src/chatgpt.rs` is that source: one renewer for the process, which keeps a renewal the file could
-not take for the rest of it.
+not take for the rest of it, and the note of that, which the turn says once.
 
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-3](#CHATGPT-3), [CHATGPT-4](#CHATGPT-4),
-  [CHATGPT-6](#CHATGPT-6), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12) and
-  [CHATGPT-13](#CHATGPT-13).
-- **Built in part,** each naming what is not: [CHATGPT-2](#CHATGPT-2), [CHATGPT-7](#CHATGPT-7),
-  [CHATGPT-8](#CHATGPT-8), [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and
-  [CHATGPT-14](#CHATGPT-14).
+  [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7), [CHATGPT-11](#CHATGPT-11),
+  [CHATGPT-12](#CHATGPT-12) and [CHATGPT-13](#CHATGPT-13).
+- **Built in part,** each naming what is not: [CHATGPT-2](#CHATGPT-2), [CHATGPT-8](#CHATGPT-8),
+  [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and [CHATGPT-14](#CHATGPT-14).
 - **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); the
   zstd body of [CHATGPT-10](#CHATGPT-10); and the verification of the ID token of
   [CHATGPT-5](#CHATGPT-5).
 
 A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
-`chatgpt` entry names, or where it names none, the models the serving host's listing offers. The command tells
-the person to pick one in `/model` or to name one, and does not ask the listing itself.
+`chatgpt` entry names, or where it names none, the models the serving host's listing offers. Once the sign-in
+is stored the command asks the listing, as a picker does, and tells the person to pick a model in `/model` or
+to name one, that the account reaches no model, or that the listing could not be had.
 
 ## Decisions left open
 
@@ -1003,6 +1020,11 @@ work lands, in the same commit as the code.
 - A process that rotated the refresh token and could not write the file holds the only good copy in
   memory. If another process finds the file's refresh token dead and removes it, and the first exits before
   its write succeeds, the sign-in is gone and the person signs in again.
+- A renewal the file could not take is said by the first turn that makes a request after it. A process that
+  exits before one does, such as one that renewed for a compaction and then exited, says nothing, and the
+  next start finds the sign-in ended. The terminal shows a notice it has already shown in a conversation
+  once, so a failure after a write succeeded is not shown there a second time. The sentence names no path,
+  system error or cause, so a full disk and a folder that cannot be written get the same advice.
 - A person on a machine with no browser forwards the listener's port, which changes at every sign-in, and
   no device-code route is available to this program.
 - The compiled list ([CHATGPT-9](#CHATGPT-9)) can name a model the account cannot reach, which the service
@@ -1017,10 +1039,9 @@ work lands, in the same commit as the code.
 - A turn on the account sends its body uncompressed and refuses one over 1 MiB, so a long conversation is
   shortened sooner than the service would need, and the limit has not been observed.
 - Where the listing cannot be read no picker lists the account's models, so a person types `chatgpt/<name>`,
-  and a name the account cannot reach is refused at the first request. The terminal picker does not say the
-  listing failed.
-- A picker asks the serving host for the listing each time it opens, so a signed-in person who opens one sends
-  the access token to the serving host for a request that is not a turn.
+  and a name the account cannot reach is refused at the first request.
+- A picker asks the serving host for the listing each time it opens, and the sign-in command asks it when the
+  sign-in is stored, so the access token is sent to the serving host in requests that are not a turn.
 - A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,
   since the renewal that finds it removes the file. The next turn on a `chatgpt/` model says so.
 - Every request of a process carries one session identifier, so two sessions of a process share a cache
@@ -1035,9 +1056,6 @@ work lands, in the same commit as the code.
   so the line the terminal and the desktop show for it is the refusal's. A usage limit that came as a 429
   with a `Retry-After` showed the wait, and one that came as a refusal that names the account says that it
   was rejected and nothing more.
-- The terminal picker says nothing of a listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s list, as it
-  says nothing of one that could not be read (#3134), so the account's rows are missing from `/model` with no
-  reason given.
 - The terminal and the desktop say why a turn failed from its category alone, so the sentences of
   [CHATGPT-8](#CHATGPT-8) reach the one-shot run's report and not them. A turn that ended on a refusal that
   names the account says there that the service rejected the request, whichever the code.

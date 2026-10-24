@@ -15,7 +15,16 @@ pub(super) fn list_models(
     // The account is asked only for a turn on one of its own models: every other caller needs the
     // row of the model in force, and a session on a Brave or a gateway model has no business
     // sending a stored sign-in's token to the serving host at each start and each turn.
-    roster(config, chosen, config.runs_on_chatgpt_account(chosen))
+    roster(config, chosen, config.runs_on_chatgpt_account(chosen)).map(|roster| roster.models)
+}
+
+/// The rows a picker offers, and what a person who signed in to ChatGPT is told where the account's
+/// models are not among them.
+pub(super) struct PickerRoster {
+    pub(super) models: Vec<bravebot_aichat::models::Model>,
+    /// Set where a sign-in is stored and its listing could not be had. A person who never signed in
+    /// is told nothing, and a listing that was read, even an empty one, is not a problem.
+    pub(super) account_problem: Option<String>,
 }
 
 /// [`list_models`] for the picker, which offers the account's models whatever is in force
@@ -23,16 +32,12 @@ pub(super) fn list_models(
 pub(super) fn list_models_for_picker(
     config: &Config,
     chosen: Option<&str>,
-) -> Result<Vec<bravebot_aichat::models::Model>, String> {
+) -> Result<PickerRoster, String> {
     roster(config, chosen, true)
 }
 
 /// The rosters of every service, with the ChatGPT account's where `account` says to ask it.
-fn roster(
-    config: &Config,
-    chosen: Option<&str>,
-    account: bool,
-) -> Result<Vec<bravebot_aichat::models::Model>, String> {
+fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<PickerRoster, String> {
     // Bedrock is additive. Its tiers come from configuration rather than from a listing, since it has
     // no listing endpoint and an ARN does not say which model it resolves to, but the Brave roster is
     // what everyone has and a settings block adds to it rather than replacing it.
@@ -69,21 +74,26 @@ fn roster(
     }
 
     // Additive like a gateway: a stored ChatGPT sign-in adds its models to the rows and takes none
-    // away. Not asked where nothing is signed in, and a listing that cannot be had adds nothing.
+    // away. Not asked where nothing is signed in, and a listing that cannot be had adds nothing and
+    // is said, so a person who signed in does not take the missing rows for a service with none.
+    let mut account_problem = None;
     if account {
-        configured.extend(account_rows(
-            ask_the_account(config),
-            chosen.unwrap_or(&config.default_model),
-        ));
+        let asked = ask_the_account(config);
+        account_problem = account_problem_said(&asked);
+        configured.extend(account_rows(asked, chosen.unwrap_or(&config.default_model)));
     }
+    let rostered = |models| PickerRoster {
+        models: requestable(config, models),
+        account_problem,
+    };
 
     // A build from source pointed only at Bedrock has blank Brave credentials, and asking with them
     // would list a roster whose every request then fails unsigned.
     if !config.serves_aichat() {
-        return Ok(requestable(config, configured));
+        return Ok(rostered(configured));
     }
 
-    combined(configured, fetch_models(config)).map(|models| requestable(config, models))
+    combined(configured, fetch_models(config)).map(rostered)
 }
 
 /// What the ChatGPT account offers, asked of the serving host with the stored sign-in
@@ -118,6 +128,28 @@ pub(super) fn account_rows(
         bravebot_agent::chatgpt::AccountModels::Absent
         | bravebot_agent::chatgpt::AccountModels::Unreadable
         | bravebot_agent::chatgpt::AccountModels::Refused(_) => Vec::new(),
+    }
+}
+
+/// What a picker says where the ChatGPT account's models could not be had, or `None` where there is
+/// nothing to say (CHATGPT-9).
+///
+/// A listing refused in a code that names the account is said in that clause's sentence, which does
+/// not send the person to sign in again, since a new sign-in changes nothing there. An account
+/// nobody signed in to, and one whose listing was read, are not a problem.
+pub(super) fn account_problem_said(
+    account: &bravebot_agent::chatgpt::AccountModels,
+) -> Option<String> {
+    match account {
+        bravebot_agent::chatgpt::AccountModels::Unreadable => {
+            Some(t!(session_chatgpt_models_unreadable).into())
+        }
+        bravebot_agent::chatgpt::AccountModels::Refused(refusal) => Some(t!(
+            session_chatgpt_models_refused,
+            refusal = refusal.to_string()
+        )),
+        bravebot_agent::chatgpt::AccountModels::Absent
+        | bravebot_agent::chatgpt::AccountModels::Offered(_) => None,
     }
 }
 
@@ -522,7 +554,15 @@ pub(super) fn choose_model(
     config: &mut Config,
 ) {
     match list_models_for_picker(config, session.model()) {
-        Ok(models) => {
+        Ok(PickerRoster {
+            models,
+            account_problem,
+        }) => {
+            // Before the picker draws, so the sentence is in the transcript behind it and stays there
+            // once it closes.
+            if let Some(problem) = account_problem {
+                session.note(problem);
+            }
             let chosen = crate::model_prompt::choose(terminal, models, session.model(), |frame| {
                 render::draw(frame, session);
             });
@@ -572,9 +612,17 @@ pub(super) fn model_picked(
 /// A refusal or an unreachable endpoint leaves the model as it was and says so, as at rest.
 pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
     match list_models_for_picker(config, session.model()) {
-        Ok(models) => session.open_picking(crate::picking::Picking::Model(
-            crate::model_prompt::Picker::new(models, session.model()),
-        )),
+        Ok(PickerRoster {
+            models,
+            account_problem,
+        }) => {
+            if let Some(problem) = account_problem {
+                session.note(problem);
+            }
+            session.open_picking(crate::picking::Picking::Model(
+                crate::model_prompt::Picker::new(models, session.model()),
+            ));
+        }
         Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),
     }
 }
@@ -584,28 +632,59 @@ pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
 pub(super) mod scripted_account {
     use bravebot_agent::chatgpt::AccountModels;
     use bravebot_aichat::models::Model;
+    use bravebot_aichat::responses::protocol::Refusal;
     use std::cell::{Cell, RefCell};
 
+    /// What the account answers on this thread.
+    enum Answer {
+        Models(Vec<Model>),
+        Unreadable,
+        Refused(Refusal),
+    }
+
     thread_local! {
-        static OFFERED: RefCell<Option<Vec<Model>>> = const { RefCell::new(None) };
+        static ANSWER: RefCell<Option<Answer>> = const { RefCell::new(None) };
         static ASKED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn script(answer: Answer) {
+        ANSWER.with(|scripted| *scripted.borrow_mut() = Some(answer));
+        ASKED.with(|asked| asked.set(0));
     }
 
     /// Offer `models` to whatever asks on this thread, and forget how often it was asked.
     pub(in crate::app) fn offer(models: Vec<Model>) {
-        OFFERED.with(|offered| *offered.borrow_mut() = Some(models));
+        script(Answer::Models(models));
+    }
+
+    /// Answer as a machine nobody signed in to does: nothing is offered and nothing is said.
+    pub(in crate::app) fn nobody_signed_in() {
+        ANSWER.with(|scripted| *scripted.borrow_mut() = None);
         ASKED.with(|asked| asked.set(0));
     }
 
-    /// How often the account was asked about on this thread since [`offer`], or since it began.
+    /// Answer that the listing could not be had.
+    pub(in crate::app) fn fail_to_list() {
+        script(Answer::Unreadable);
+    }
+
+    /// Answer that the listing was refused in a code that names the account.
+    pub(in crate::app) fn refuse(refusal: Refusal) {
+        script(Answer::Refused(refusal));
+    }
+
+    /// How often the account was asked about on this thread since the last script, or since it
+    /// began.
     pub(in crate::app) fn asked() -> usize {
         ASKED.with(Cell::get)
     }
 
     pub(super) fn ask() -> AccountModels {
         ASKED.with(|asked| asked.set(asked.get() + 1));
-        OFFERED.with(|offered| match offered.borrow().as_ref() {
-            Some(models) => AccountModels::Offered(models.clone()),
+        ANSWER.with(|scripted| match scripted.borrow().as_ref() {
+            Some(Answer::Models(models)) => AccountModels::Offered(models.clone()),
+            Some(Answer::Unreadable) => AccountModels::Unreadable,
+            Some(Answer::Refused(refusal)) => AccountModels::Refused(*refusal),
             None => AccountModels::Absent,
         })
     }

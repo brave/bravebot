@@ -1217,6 +1217,11 @@ chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
 chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
 chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
 chatgpt-use-by-name = Pick one of the account's models in /model to use this sign-in, or name one, as in bravebot --model chatgpt/<model>
+# What the command says after the sign-in is stored when the account's listing answered with no model,
+# could not be had, or was refused in a code that names the account. The sign-in is stored in each.
+chatgpt-reaches-no-model = This ChatGPT account reaches no model through bravebot, so /model offers none. The sign-in stays stored.
+chatgpt-listing-unreadable = The account's models could not be listed, so /model offers none. Try /model later, or name one, as in bravebot --model chatgpt/<model>
+chatgpt-listing-refused = The account's models could not be listed: { $refusal }
 chatgpt-forgotten =
     forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings
 chatgpt-nothing-to-forget = no ChatGPT sign-in is stored
@@ -1247,6 +1252,9 @@ chatgpt-account-unusable =
 chatgpt-account-malformed =
     the stored ChatGPT sign-in is unusable: { $defect }; run bravebot auth login chatgpt to sign in again, or bravebot auth logout chatgpt to forget it
 chatgpt-account-unwritable = the ChatGPT sign-in could not be stored: { $detail }; nothing was changed
+# Said once in the turn that renewed the sign-in, where the file could not take the renewal. It names no
+# path and quotes nothing the file or the system said.
+chatgpt-renewal-unwritten = the ChatGPT sign-in was renewed and could not be saved, so it lasts only until bravebot exits; check that the folder it is kept in has room and can be written to, and if the next start says the sign-in ended, run bravebot auth login chatgpt
 chatgpt-defect-empty = the file holds nothing, which an interrupted write leaves behind
 chatgpt-defect-not-json = the file is not valid JSON
 chatgpt-defect-other-version = it was written by another version, and this build reads version 1
@@ -3230,6 +3238,11 @@ session-using-model-from = using { $model } from { $service }
 session-signing-in = signing in to AWS; follow the instructions below, and this returns when it is done
 session-context-budget = compacting above { $budget } tokens, as this model advertises
 session-models-unavailable = could not list models: { $problem }
+# Said when the picker opens with a ChatGPT sign-in stored and its listing could not be had. The second
+# is for a listing the service refused in a code that names the account, where signing in again is no
+# remedy.
+session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
+session-chatgpt-models-refused = could not list the ChatGPT account's models: { $refusal }
 session-theme-set = theme { $theme }
 session-no-such-theme = no theme named { $theme }; try /theme for the list
 session-editing-vi = editing the way vi does; esc for commands, i to type

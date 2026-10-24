@@ -10,13 +10,14 @@
 
 use crate::exit::{Ending, fail};
 use crate::plain::Prompting;
+use bravebot_agent::chatgpt::AccountModels;
 use bravebot_agent::confirm::Decision;
 use bravebot_config::Config;
 use bravebot_i18n::t;
 use bravebot_net::Transport;
 use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath};
 use bravebot_skus::chatgpt::{
-    Account, AccountError, Announcement, Class, Defect, Hosts, Limits, Pages, SignInError,
+    Account, AccountError, Announcement, Class, Defect, Hosts, Limits, Pages, SignInError, SignedIn,
 };
 use std::ffi::OsStr;
 use std::io::IsTerminal;
@@ -71,11 +72,14 @@ pub(crate) fn login() -> ExitCode {
     let incognito = bravebot_core::incognito::engaged();
     // A configuration that cannot be read cannot say whether a block names the service. It is not
     // read in an incognito session, where the answer would not change the refusal.
-    let named_by_a_gateway = match Config::from_env() {
-        _ if incognito => false,
-        Ok(config) => config.providers.iter().any(|provider| provider.id == NAME),
+    let config = match Config::from_env() {
+        _ if incognito => None,
+        Ok(config) => Some(config),
         Err(problem) => return fail(Ending::Configuration, problem),
     };
+    let named_by_a_gateway = config
+        .as_ref()
+        .is_some_and(|config| config.providers.iter().any(|provider| provider.id == NAME));
     let stored = matches!(Account::load(), Ok(Some(_)));
     let facts = Facts {
         incognito,
@@ -90,7 +94,7 @@ pub(crate) fn login() -> ExitCode {
     after_asking(
         stored,
         &mut Prompting::new(std::io::stdin().lock(), std::io::stderr()),
-        sign_in,
+        || sign_in(config.as_ref()),
     )
 }
 
@@ -114,8 +118,11 @@ fn after_asking<R: std::io::BufRead, W: std::io::Write>(
     then()
 }
 
-/// The sign-in itself: the listener, the address, the browser, the exchange and the file.
-fn sign_in() -> ExitCode {
+/// The sign-in itself: the listener, the address, the browser, the exchange and the file, and then
+/// what the account reaches.
+///
+/// `config` is `None` only in an incognito session, which [`refusal`] stops before this runs.
+fn sign_in(config: Option<&Config>) -> ExitCode {
     let signed_in = bravebot_skus::chatgpt::sign_in(
         &Hosts::compiled_in(),
         Transport::shared().agent_config_builder(),
@@ -130,16 +137,58 @@ fn sign_in() -> ExitCode {
         Ok(signed_in) => signed_in,
         Err(stopped) => return fail(Ending::Failed, said_of_sign_in(&stopped)),
     };
-    println!(
+    // A standard output that cannot be written to has nobody to tell, and the sign-in is stored
+    // whatever was said.
+    finish(&signed_in, &mut std::io::stdout(), || match config {
+        Some(config) => bravebot_agent::chatgpt::account_models(
+            config,
+            &mut bravebot_session::audit::Trail::new(),
+        ),
+        None => AccountModels::Absent,
+    })
+    .unwrap_or(());
+    ExitCode::SUCCESS
+}
+
+/// Say that the sign-in is stored, then ask what the account reaches and say that
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+///
+/// The sign-in is said before the listing is asked, so a service slow to answer leaves a person
+/// knowing it was kept. What the listing says never changes the ending: the sign-in is stored
+/// whatever the account reaches today.
+fn finish(
+    signed_in: &SignedIn,
+    shown: &mut impl std::io::Write,
+    listing: impl FnOnce() -> AccountModels,
+) -> std::io::Result<()> {
+    writeln!(
+        shown,
         "{}",
         t!(
             chatgpt_stored,
-            expires = signed_in.expires,
+            expires = signed_in.expires.clone(),
             path = signed_in.stored_in.display().to_string()
         )
-    );
-    println!("{}", t!(chatgpt_use_by_name));
-    ExitCode::SUCCESS
+    )?;
+    shown.flush()?;
+    writeln!(shown, "{}", said_of_listing(&listing()))
+}
+
+/// The sentence for what the listing answered: where to pick a model, that the account reaches none,
+/// or that the listing could not be had and why.
+///
+/// A listing that was read and is empty is the service's answer, and is not told as a failure. One
+/// refused in a code that names the account is said in that clause's sentence, which does not send
+/// the person to sign in again.
+fn said_of_listing(listing: &AccountModels) -> String {
+    match listing {
+        AccountModels::Offered(models) if models.is_empty() => t!(chatgpt_reaches_no_model).into(),
+        AccountModels::Unreadable => t!(chatgpt_listing_unreadable).into(),
+        AccountModels::Refused(refusal) => {
+            t!(chatgpt_listing_refused, refusal = refusal.to_string())
+        }
+        AccountModels::Offered(_) | AccountModels::Absent => t!(chatgpt_use_by_name).into(),
+    }
 }
 
 /// Show the address and the port, then ask for the browser.
@@ -528,6 +577,98 @@ mod tests {
             Some("https://auth.example/authorize?a=1&b=2")
         );
         let _ = &mut shown;
+    }
+
+    /// A sign-in as the flow reports it, with a path that names nothing real.
+    fn signed_in() -> SignedIn {
+        SignedIn {
+            expires: "2026-10-22T21:05:27Z".to_string(),
+            stored_in: std::path::PathBuf::from("/placeholder/chatgpt-account.json"),
+        }
+    }
+
+    /// CHATGPT-8, CHATGPT-9: once the sign-in is stored the command says what the account reaches,
+    /// and each answer of the listing has its own sentence. An account that reaches no model is told
+    /// as that and not as a failure, and a listing that could not be had is not told as the account
+    /// reaching none, since the person would then stop looking for a model the account has. A
+    /// refusal in a code that names the account is said in its own sentence and does not send the
+    /// person to sign in again. Only a listing with a model in it points at `/model` as the way to
+    /// pick one.
+    #[test]
+    fn each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker() {
+        use bravebot_agent::chatgpt::{Model, Refusal};
+
+        let reaches_none = said_of_listing(&AccountModels::Offered(Vec::new()));
+        let unreadable = said_of_listing(&AccountModels::Unreadable);
+        let offered = said_of_listing(&AccountModels::Offered(vec![Model::automatic()]));
+        assert_eq!(reaches_none, t!(chatgpt_reaches_no_model));
+        assert_eq!(unreadable, t!(chatgpt_listing_unreadable));
+        assert_eq!(offered, t!(chatgpt_use_by_name));
+        assert_eq!(said_of_listing(&AccountModels::Absent), offered);
+
+        let mut distinct = vec![reaches_none.clone(), unreadable.clone(), offered.clone()];
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 3, "two answers share a sentence");
+        assert!(
+            unreadable.contains("--model chatgpt/<model>"),
+            "no way out for an unreadable listing: {unreadable}"
+        );
+        assert!(
+            !reaches_none.contains("could not"),
+            "an empty listing was told as a failure: {reaches_none}"
+        );
+        assert!(
+            !unreadable.contains("reaches no model"),
+            "a failed listing was told as the account having nothing: {unreadable}"
+        );
+
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            let said = said_of_listing(&AccountModels::Refused(refusal));
+            assert_eq!(
+                said,
+                t!(chatgpt_listing_refused, refusal = refusal.to_string()),
+                "{refusal:?}"
+            );
+            assert!(
+                !said.contains("sign in again") && !said.contains("auth login"),
+                "a refusal sent the person to sign in again: {said}"
+            );
+        }
+    }
+
+    /// CHATGPT-8: the sign-in is said before the listing is asked, so a service slow to answer
+    /// leaves a person knowing the sign-in was kept, and the listing is asked once. What the listing
+    /// says follows, and the line that says the sign-in is stored names its expiry and where it is
+    /// kept. The regression it rejects is asking first, which holds the confirmation back for as
+    /// long as the request takes.
+    #[test]
+    fn the_sign_in_is_said_before_the_listing_is_asked_and_the_listing_is_asked_once() {
+        let shown = Shown::default();
+        let by_then = std::cell::RefCell::new(None);
+        let mut asked = 0;
+
+        finish(&signed_in(), &mut shown.clone(), || {
+            asked += 1;
+            *by_then.borrow_mut() =
+                Some(String::from_utf8(shown.0.borrow().clone()).expect("text"));
+            AccountModels::Offered(Vec::new())
+        })
+        .expect("written");
+
+        assert_eq!(asked, 1);
+        let stored = t!(
+            chatgpt_stored,
+            expires = "2026-10-22T21:05:27Z",
+            path = "/placeholder/chatgpt-account.json"
+        );
+        assert_eq!(
+            by_then.into_inner().expect("the listing was asked"),
+            format!("{stored}\n"),
+            "the sign-in was not said before the listing was asked"
+        );
+        let all = String::from_utf8(shown.0.borrow().clone()).expect("text");
+        assert_eq!(all, format!("{stored}\n{}\n", t!(chatgpt_reaches_no_model)));
     }
 
     /// CHATGPT-8: each step that stops the sign-in has its own sentence, the sentences of the

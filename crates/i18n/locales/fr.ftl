@@ -1040,6 +1040,12 @@ chatgpt-open-this = Ouvrez cette adresse dans un navigateur pour vous connecter 
 chatgpt-waiting = En attente du navigateur sur 127.0.0.1, port { $port }. Un navigateur sur une autre machine ne l'atteint que par un port redirigé.
 chatgpt-stored = connecté à ChatGPT ; le jeton d'accès expire le { $expires }. La connexion est enregistrée dans { $path }
 chatgpt-use-by-name = Choisissez l'un des modèles du compte avec /model pour utiliser cette connexion, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+# Ce que la commande dit une fois la connexion enregistrée quand la liste du compte ne contient aucun
+# modèle, n'a pas pu être obtenue, ou a été refusée par un code qui désigne le compte. La connexion est
+# enregistrée dans chaque cas.
+chatgpt-reaches-no-model = Ce compte ChatGPT n'atteint aucun modèle avec bravebot, donc /model n'en propose aucun. La connexion reste enregistrée.
+chatgpt-listing-unreadable = Les modèles du compte n'ont pas pu être listés, donc /model n'en propose aucun. Réessayez /model plus tard, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+chatgpt-listing-refused = Les modèles du compte n'ont pas pu être listés : { $refusal }
 chatgpt-forgotten =
     connexion ChatGPT enregistrée oubliée. Elle reste valide chez OpenAI tant qu'on n'y met pas fin : déconnectez-vous de ChatGPT, ou retirez l'accès de bravebot dans les réglages du compte
 chatgpt-nothing-to-forget = aucune connexion ChatGPT n'est enregistrée
@@ -1071,6 +1077,9 @@ chatgpt-account-unusable =
 chatgpt-account-malformed =
     la connexion ChatGPT enregistrée est inutilisable : { $defect } ; lancez bravebot auth login chatgpt pour vous reconnecter, ou bravebot auth logout chatgpt pour l'oublier
 chatgpt-account-unwritable = la connexion ChatGPT n'a pas pu être enregistrée : { $detail } ; rien n'a été modifié
+# Dit une fois, dans le tour qui a renouvelé la connexion, quand le fichier n'a pas pu recevoir le
+# renouvellement. Aucun chemin n'y figure et rien de ce que le fichier ou le système a dit n'y est repris.
+chatgpt-renewal-unwritten = la connexion ChatGPT a été renouvelée sans pouvoir être enregistrée, elle ne dure donc que jusqu'à la fin de bravebot ; vérifiez que le dossier où elle est conservée a de la place et accepte l'écriture, et si le prochain démarrage indique que la connexion a pris fin, lancez bravebot auth login chatgpt
 chatgpt-defect-empty = le fichier ne contient rien, ce que laisse une écriture interrompue
 chatgpt-defect-not-json = le fichier n'est pas du JSON valide
 chatgpt-defect-other-version = il a été écrit par une autre version, et cette version lit la version 1
@@ -2780,6 +2789,11 @@ session-signing-in =
     connexion à AWS ; suivez les instructions ci-dessous, cela reprend une fois terminé
 session-context-budget = compactage au-delà de { $budget } jetons, selon ce que ce modèle annonce
 session-models-unavailable = impossible de lister les modèles : { $problem }
+# Dit à l'ouverture du sélecteur quand une connexion ChatGPT est enregistrée et que sa liste n'a pas pu
+# être obtenue. La seconde concerne une liste refusée par un code qui désigne le compte, où se
+# reconnecter ne change rien.
+session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+session-chatgpt-models-refused = impossible de lister les modèles du compte ChatGPT : { $refusal }
 session-theme-set = thème { $theme }
 session-no-such-theme = aucun thème nommé { $theme } ; essayez /theme pour la liste
 session-editing-vi = édition à la manière de vi ; échap pour les commandes, i pour écrire
