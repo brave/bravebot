@@ -138,7 +138,10 @@ fails at the far end for a reason nothing local could explain.
 **The ChatGPT account** is named by the identifier `chatgpt`, as `chatgpt/<name>`
 ([CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9)). That name selects the account, and only the part after the
 identifier is sent. The bare `<name>` never selects it, so it keeps its meaning, and a `provider` entry that
-has the id `chatgpt` and states an endpoint keeps the name. The protocol a request is made in follows from the
+has the id `chatgpt` and states an endpoint keeps the name. A gateway of another id that lists a model whose
+name begins `chatgpt/` does not take it: that model is reached as `<id>/chatgpt/<name>`
+([BACKEND-18](#BACKEND-18)). A Bedrock account that lists one does not take it either, and its model is
+not reached by any spelling. The protocol a request is made in follows from the
 service and not from anything else: the account is always spoken to in the Responses protocol
 ([BACKEND-61](#BACKEND-61)), and no request to its host is made in another
 ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
@@ -156,6 +159,8 @@ list they read, and a model's own output never reaches it.
 `verified-by: bravebot_agent::backend::a_chatgpt_model_selects_the_account_and_a_bare_name_selects_nothing_of_it`
 `verified-by: bravebot_agent::backend::a_gateway_entry_named_chatgpt_keeps_its_name_and_no_model_is_the_accounts`
 `verified-by: bravebot_agent::chatgpt::the_account_is_one_provider_at_the_serving_host`
+`verified-by: bravebot_agent::backend::a_gateway_listing_a_chatgpt_name_does_not_take_it_from_the_account`
+`verified-by: bravebot_agent::backend::a_bedrock_account_listing_a_chatgpt_name_does_not_take_it_from_the_account`
 
 <a id="BACKEND-4"></a>
 ### BACKEND-4: what a person may choose is every model any reachable service offers
@@ -581,7 +586,8 @@ configures no service. The one entry read for something in that case is `chatgpt
 no gateway, and its `models` are the ones the ChatGPT account is offered
 ([CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9)). `chatgpt` is not a known name. The account's host is a
 constant of the account ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)), and an entry under that id that states
-an endpoint is a gateway like any other and keeps the name.
+an endpoint is a gateway like any other and keeps the name. No other entry takes it by listing a model
+whose name begins `chatgpt/` ([BACKEND-18](#BACKEND-18)).
 
 The set of known names is compiled in: `openrouter`, reached at `https://openrouter.ai/api/v1`,
 `openai`, reached at `https://api.openai.com/v1`, and `anthropic`, reached at
@@ -644,7 +650,9 @@ claims reaches the service that does recognise it, as before.
 The ChatGPT account of [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) is named the same way, by the identifier
 `chatgpt`, and a `provider` entry with that id that states an endpoint keeps it: the entry's models go to its
 gateway and none is the account's. An entry with that id that states no endpoint is no gateway, and its models
-are the ones the account is offered as.
+are the ones the account is offered as. A bare name that begins `chatgpt/` is the account's even where a gateway
+of another id lists it, and that gateway's model is reached by naming it with the gateway's identifier ahead of
+the name, as for any model: `<id>/chatgpt/<name>`.
 
 **Why.** One model is reachable through more than one service, billed and credentialled differently,
 and a bare name cannot say which was chosen. That mattered less while a gateway served only what a
@@ -671,6 +679,8 @@ qualified name at all, which is what keeps the other rosters' spellings out of t
 `verified-by: bravebot_config::lib::only_the_qualified_name_selects_the_chatgpt_account_and_only_the_rest_of_it_is_sent`
 `verified-by: bravebot_config::lib::a_provider_entry_named_chatgpt_keeps_the_name_and_no_model_is_the_accounts`
 `verified-by: bravebot_agent::backend::a_gateway_entry_named_chatgpt_keeps_its_name_and_no_model_is_the_accounts`
+`verified-by: bravebot_config::lib::a_gateway_listing_a_name_that_begins_with_chatgpt_is_reached_by_its_qualified_name_alone`
+`verified-by: bravebot_agent::backend::a_gateway_listing_a_chatgpt_name_does_not_take_it_from_the_account`
 
 <a id="BACKEND-19"></a>
 ### BACKEND-19: a gateway that was told no models is asked what it serves

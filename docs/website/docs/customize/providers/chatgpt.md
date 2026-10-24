@@ -62,7 +62,9 @@ and is refused in the same way where standard input is not a terminal.
 A model of the account is named `chatgpt/<model>`, in `--model` or the `model` key, and `/model` offers
 them once a sign-in is stored. Only the part after `chatgpt/` is sent. A name without it never selects the
 account, so `gpt-5.5` stays the `openai` entry's model of that name, or Brave's, and a choice remembered
-as one cannot change service.
+as one cannot change service. The reverse holds for a name that begins with `chatgpt/`: it is the account's
+even where a gateway lists a model of that name. That gateway's model is named with the gateway's id ahead
+of it, as `litellm/chatgpt/<name>`, which is also how its row appears in `/model`.
 
 `/model` offers what OpenAI lists for the account, leaving out rows the listing marks hidden or not
 available through its API. Each row has the window the listing states and whether any effort level is

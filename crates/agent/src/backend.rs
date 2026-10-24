@@ -2074,6 +2074,132 @@ mod tests {
         assert_eq!(wire_model, "gpt-5.5");
     }
 
+    /// CHATGPT-9: a gateway of another id that lists a model named `chatgpt/gpt-5.5` does not take
+    /// that name from the account. The bare name selects the account and is sent as `gpt-5.5`, with
+    /// the account's token and not the gateway's key. The gateway's model is the one its row is
+    /// keyed by, `litellm/chatgpt/gpt-5.5`, which sends the gateway the name it lists, so the two
+    /// rows are two services and one conversation does not move between them. An entry that has the
+    /// account's id and states an endpoint keeps the name.
+    #[test]
+    fn a_gateway_listing_a_chatgpt_name_does_not_take_it_from_the_account() {
+        let config = with_providers(
+            r#"{"provider": {"litellm": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                "models": {"chatgpt/gpt-5.5": {}}
+            }}}"#,
+        );
+        let egress = Egress::new();
+
+        let Backend::Account { wire_model, .. } =
+            Backend::select(&config, &egress, "chatgpt/gpt-5.5")
+        else {
+            panic!("the gateway's listing took the account's name");
+        };
+        assert_eq!(wire_model, "gpt-5.5");
+        let Backend::Gateway {
+            provider,
+            wire_model,
+            ..
+        } = Backend::select(&config, &egress, "litellm/chatgpt/gpt-5.5")
+        else {
+            panic!("the gateway's own spelling did not reach the gateway");
+        };
+        assert_eq!(provider.id, "litellm");
+        assert_eq!(wire_model, "chatgpt/gpt-5.5");
+
+        assert!(!Backend::serves_both(
+            &config,
+            "chatgpt/gpt-5.5",
+            "litellm/chatgpt/gpt-5.5"
+        ));
+        assert_eq!(
+            Backend::name_as_asked(&config, "chatgpt/gpt-5.5"),
+            "gpt-5.5"
+        );
+        assert_eq!(
+            Backend::name_as_asked(&config, "litellm/chatgpt/gpt-5.5"),
+            "chatgpt/gpt-5.5"
+        );
+
+        let config = with_providers(
+            r#"{"provider": {
+                "litellm": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                    "models": {"chatgpt/gpt-5.5": {}}
+                },
+                "chatgpt": {
+                    "env": ["ANOTHER_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                    "models": {"gpt-5.5": {}}
+                }
+            }}"#,
+        );
+        let Backend::Gateway { provider, .. } =
+            Backend::select(&config, &egress, "chatgpt/gpt-5.5")
+        else {
+            panic!("the entry that holds the id did not keep the name");
+        };
+        assert_eq!(provider.id, "chatgpt");
+    }
+
+    /// CHATGPT-9: a Bedrock account that lists a model under the name `chatgpt/gpt-5.5`, in a block
+    /// or in a tier variable, does not take that name from the account either. The turn goes to the
+    /// account and not to AWS, asks for no AWS sign-in, and is no pair with a Bedrock model of
+    /// another name. The Bedrock model that has an ordinary id is still Bedrock's.
+    #[test]
+    fn a_bedrock_account_listing_a_chatgpt_name_does_not_take_it_from_the_account() {
+        let named_by_a_tier_variable = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".to_string()),
+            env_var::AWS_REGION => Some("us-west-2".to_string()),
+            env_var::BEDROCK_OPUS_MODEL => Some("chatgpt/gpt-5.5".to_string()),
+            env_var::AWS_PROFILE => Some("a-profile-no-machine-has".to_string()),
+            other => aichat_only(other),
+        })
+        .expect("configured");
+        let named_by_a_block = with_providers(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                "models": {"chatgpt/gpt-5.5": {}, "openai.gpt-5.6-sol": {}}
+            }}}"#,
+        );
+        let egress = Egress::new();
+
+        for (config, listed_by) in [
+            (named_by_a_tier_variable, "a tier variable"),
+            (named_by_a_block, "a block"),
+        ] {
+            let Backend::Account { wire_model, .. } =
+                Backend::select(&config, &egress, "chatgpt/gpt-5.5")
+            else {
+                panic!("the name {listed_by} lists was not the account's");
+            };
+            assert_eq!(wire_model, "gpt-5.5", "{listed_by}");
+            assert!(
+                !Backend::needs_sign_in(&config, "chatgpt/gpt-5.5"),
+                "{listed_by}: the account asked for an AWS sign-in"
+            );
+            assert!(
+                !Backend::serves_both(&config, "chatgpt/gpt-5.5", "openai.gpt-5.6-sol"),
+                "{listed_by}"
+            );
+        }
+        assert!(matches!(
+            Backend::select(
+                &with_providers(
+                    r#"{"provider": {"amazon-bedrock": {
+                    "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                    "models": {"chatgpt/gpt-5.5": {}, "openai.gpt-5.6-sol": {}}
+                }}}"#
+                ),
+                &egress,
+                "openai.gpt-5.6-sol"
+            ),
+            Backend::Bedrock { .. }
+        ));
+    }
+
     /// CHATGPT-9: the account answers for its own models alone. One conversation moves between two
     /// of them and no further, the name a reply reports is not compared with the qualified name, and
     /// the account spends no Leo credential and asks for no AWS sign-in.

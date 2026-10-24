@@ -9323,6 +9323,77 @@ fn a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait
     }
 }
 
+/// CHATGPT-9: a gateway of another id that lists a model named `chatgpt/gpt-5.5` does not take the
+/// name from the account. Naming it as the account's row is named goes to the account, which with
+/// no sign-in ends naming the command and sends nothing to the gateway. The gateway's model is
+/// reached as its row is keyed, `openrouter/chatgpt/gpt-5.5`, and the gateway is then sent the name
+/// it lists. A run that matched the gateway's bare listing first would send the first turn to the
+/// gateway, with its key, for a model chosen as the account's.
+#[test]
+fn a_gateway_listing_a_chatgpt_name_does_not_take_a_turn_chosen_as_the_accounts() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let settings = format!(
+        r#"{{"provider": {{"openrouter": {{
+            "env": ["OPENROUTER_API_KEY"],
+            "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}},
+            "models": {{"chatgpt/gpt-5.5": {{}}}}
+        }}}}}}"#,
+        gateway.port
+    );
+    let scratch =
+        Scratch::new("cli-running-chatgpt-name-listed-by-a-gateway").with_settings(&settings);
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "-p",
+            "say something",
+            "--model",
+            "chatgpt/gpt-5.5",
+            "--trust-workspace",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("not signed in to a ChatGPT account")
+            && stderr.contains("bravebot auth login chatgpt"),
+        "the turn did not go to the account: {stderr}"
+    );
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a turn chosen as the account's went to the gateway"
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "-p",
+            "say something",
+            "--model",
+            "openrouter/chatgpt/gpt-5.5",
+            "--trust-workspace",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !stderr.contains("ChatGPT account"),
+        "the gateway's own spelling went to the account: {stdout}{stderr}"
+    );
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the gateway's own spelling reached the gateway");
+    assert!(
+        asked.contains(r#""model":"chatgpt/gpt-5.5""#),
+        "the gateway was not sent the name it lists: {asked}"
+    );
+}
+
 /// CHATGPT-11: logging out removes the one file and says what it leaves, is allowed in an
 /// incognito session, is not an error where nothing is stored, leaves the Leo credentials where
 /// they are, and leaves no claim or temporary behind.

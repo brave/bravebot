@@ -748,6 +748,19 @@ A `provider` entry with the id `chatgpt` that states an endpoint is a gateway, a
 name. While one exists no account model is offered and `auth login chatgpt` is refused, naming the entry,
 since one name cannot select two services.
 
+No other entry takes the name. A gateway of another id that lists a model whose own name begins `chatgpt/`, as
+a LiteLLM proxy can name one, keeps that model, and the model is reached by the spelling its row has,
+`<id>/chatgpt/<name>`, which sends the gateway `chatgpt/<name>`. The gateway's bare listing is not matched
+against a name that begins with the identifier, so `chatgpt/<name>` selects the account, in a request and
+as the account's row in a picker, whatever a gateway lists.
+
+A Bedrock account does not take the name either. A block or a tier variable that names a model
+`chatgpt/<name>` is not asked about it, since a Bedrock model is reached by the id as it stands and has no
+qualified spelling to be reached by instead. The ids AWS gives, `provider.model` and an inference profile's
+ARN, do not begin that way. A choice remembered under a bare name that begins `chatgpt/`, from before the
+account could be signed in to, selects the account as well, and a turn on it says no sign-in is stored where
+there is none.
+
 Where the roster comes from, in order:
 
 1. An entry named `chatgpt` that states no endpoint is read for its `models` and for nothing else, and it is
@@ -822,7 +835,10 @@ models is offered then.
 and answer on different terms, so a bare name cannot say which one a person chose, and a remembered choice
 would change service silently. An entry that already uses the id is not reinterpreted: refusing the sign-in
 and naming the entry is a message, where taking the id over would send a working gateway's requests to
-OpenAI's service with a person's subscription. The listing is asked first because the right list is a fact
+OpenAI's service with a person's subscription. A model a gateway lists under a name that begins with the
+identifier is not a reason to send a signed-in person's turn, and the gateway's key with it, to the
+gateway when the account's row of that name was picked. The gateway's own row has a name of its own, which
+leaves two rows for two services as the `openai` gateway's `gpt-5.5` and the account's `chatgpt/gpt-5.5` are. The listing is asked first because the right list is a fact
 about an account and a date, and a list that waited for a release would offer a model the account cannot
 reach for weeks. It is the one source that says what an account may use, as [BACKEND-19](backends.md#BACKEND-19)
 asks of a gateway. A compiled list stands in only where the listing cannot be read, because whether the
@@ -835,6 +851,11 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_config::lib::a_provider_entry_named_chatgpt_keeps_the_name_and_no_model_is_the_accounts`
 `verified-by: bravebot_agent::backend::a_chatgpt_model_selects_the_account_and_a_bare_name_selects_nothing_of_it`
 `verified-by: bravebot_agent::backend::a_gateway_entry_named_chatgpt_keeps_its_name_and_no_model_is_the_accounts`
+`verified-by: bravebot_config::lib::a_gateway_listing_a_name_that_begins_with_chatgpt_is_reached_by_its_qualified_name_alone`
+`verified-by: bravebot_agent::backend::a_gateway_listing_a_chatgpt_name_does_not_take_it_from_the_account`
+`verified-by: bravebot_config::lib::a_bedrock_account_listing_a_name_that_begins_with_chatgpt_does_not_take_it_from_the_account`
+`verified-by: bravebot_agent::backend::a_bedrock_account_listing_a_chatgpt_name_does_not_take_it_from_the_account`
+`verified-by: bravebot_cli::running::a_gateway_listing_a_chatgpt_name_does_not_take_a_turn_chosen_as_the_accounts`
 `verified-by: bravebot_agent::backend::the_account_answers_for_its_own_models_and_for_nothing_a_credential_of_another_service_is_for`
 `verified-by: bravebot_aichat::models::only_a_row_the_account_lists_and_takes_in_the_api_is_offered_under_the_accounts_identifier`
 `verified-by: bravebot_aichat::models::a_window_the_account_states_is_taken_and_a_missing_or_malformed_one_is_the_assumed_one`
@@ -1352,6 +1373,10 @@ These are the places where another spec states something about this service, eac
   Stating the model in the entry, with its `limit`, gives it one.
 - One account is signed in at a time on one machine, as one subscription is imported at a time.
 - A person whose gateway entry already has the id `chatgpt` renames it to sign in.
+- A gateway model whose name begins `chatgpt/` is reached by its qualified spelling, `<id>/chatgpt/<name>`,
+  and a choice remembered by the bare name selects the account until the person picks the gateway's row
+  again ([CHATGPT-9](#CHATGPT-9)). A Bedrock model listed under such a name cannot be chosen at all, since
+  it has no qualified spelling.
 - A reply that names another model than the one asked for is not reported as a substitution for the account,
   since whether the host answers under the name asked or under a dated one is not observed.
 - The body is encoded at the one level `ruzstd` writes, which makes frames about 1.4 times the size of
