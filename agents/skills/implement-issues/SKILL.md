@@ -283,7 +283,10 @@ costliest thing this skill can do.
 9. A failure in a test the diff cannot reach (the `crates/agent/tests/turn.rs` tests that start a
    mock server are the known case): run that test alone. If it passes alone it was load, so name it
    in the test plan. If it fails alone and also fails on the parent commit, it is not this pull
-   request's: name it in a `<details>` block. A compile error, a lint or a formatting diff is never
+   request's, and it is a defect found and left: file it with the
+   [issue-poster](../../agents/issue-poster.md) definition, which finds an existing issue first,
+   and cite that issue in a `<details>` block and as a bullet under `Not covered:`
+   ([GAP-001](../../../docs/best-practices/gaps.md#GAP-001)). A compile error, a lint or a formatting diff is never
    a flake. Never re-run the whole gate hoping for green.
 10. A rebase after the gates leaves the result standing only when it had no conflict, upstream
     gained nothing in a file the branch touches or the interface it calls, and nothing in
@@ -301,7 +304,8 @@ costliest thing this skill can do.
 
 ## 7. Write the body and open the pull request
 
-Before writing: for each `impossible` part, draft a follow-up and file it with the
+Before writing: for each `impossible` part, and for each test that fails alone on the parent
+commit (step 6, item 9), draft an issue and file it with the
 [issue-poster](../../agents/issue-poster.md) definition, which searches open and closed issues
 first, so its number exists when the body is written. Then re-run `pr-fix.py issue <n>` for every
 item still `combined`: if a pull request now names one, drop it from this one and report it.
@@ -330,8 +334,8 @@ Mark the items `done`.
 `... review <pr>` asks netzenbot-reviewer for a review, then `... ci <pr> --wait` with
 `deadline_seconds: 600`. On a failure, fix it as steps 3 and 5 of the pr-fix skill say, in the
 integration worktree, push with `... push <pr>`, and wait again. Stop after three rounds and report
-what is left. A failure that is not this pull request's (a flake, or one that also fails on the
-base) is reported and left.
+what is left. A failure that passes alone is load and is reported. One that also fails on the base
+is not this pull request's: it is filed and cited as step 6, item 9 says, and left.
 
 ## After review comments
 
@@ -384,8 +388,9 @@ An item, or the part of it, is `impossible` only when:
 
 For each, file the follow-up before the body, describing what remains, why it cannot be done here
 and what would unblock it. The item then has `Part of` where some of it landed, or no closing line
-where nothing did, and `Not covered:` names the follow-up. Nothing else is a follow-up. A case that
-is only large, tedious or in an unfamiliar crate is work for this pull request.
+where nothing did, and `Not covered:` names the follow-up. The one other issue this skill files is
+for a test that also fails on the parent commit (step 6, item 9). A case that is only large,
+tedious or in an unfamiliar crate is work for this pull request.
 
 ## Report
 

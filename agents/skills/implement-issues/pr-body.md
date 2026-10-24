@@ -81,8 +81,9 @@ Not covered:
 - <what is left of #103> (#NNNN)
 ```
 
-An item that is impossible and has no commits gets no closing line and the same bullet. With
-nothing left the line is `Not covered: none`.
+An item that is impossible and has no commits gets no closing line and the same bullet, and so
+does a test that also fails on the parent commit. With nothing left the line is
+`Not covered: none`.
 
 ## User impact
 
@@ -119,7 +120,8 @@ the failure seen) or the coverage is reasoned only. A passing test count is not 
 
 Also state, where each applies: the commit the gates ran on and the commit the branch was rebased
 onto afterwards, with the areas that do not reach the diff; each flaky test, with its isolated
-run; a failure that also fails on the parent commit, in a `<details>` block; and
+run; a failure that also fails on the parent commit, in a `<details>` block that cites the issue
+tracking it, which is also a bullet under `Not covered:`; and
 `Docker gates skipped: host-only`.
 
 ## Never
