@@ -1192,7 +1192,7 @@ auth-status-not-signed-in = not signed in: { $detail }
 auth-status-unusable = unusable: { $detail }
 auth-status-none-usable = no sign-in is usable
 auth-status-not-all-usable = a sign-in asked about is not usable
-auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock or gateway
+auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock, gateway or chatgpt
 auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
 auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
 # The instant is the one the access token expires, written as 2026-10-22T21:05:27Z. The token is

@@ -1009,7 +1009,7 @@ auth-status-not-signed-in = non connecté : { $detail }
 auth-status-unusable = inutilisable : { $detail }
 auth-status-none-usable = aucune connexion n'est utilisable
 auth-status-not-all-usable = une connexion demandée n'est pas utilisable
-auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock ou gateway
+auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock, gateway ou chatgpt
 auth-status-leo-none = aucun abonnement Leo n'est importé ; lancez bravebot auth login leo
 auth-status-leo-nowhere = cette machine n'a nulle part où garder des identifiants, donc aucun n'est importé
 # L'instant est celui où le jeton d'accès expire, écrit sous la forme 2026-10-22T21:05:27Z. Le jeton

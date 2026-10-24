@@ -8915,6 +8915,20 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
         stderr.contains("bravebot auth status [leo|bedrock|gateway [id]|chatgpt]"),
         "{stderr}"
     );
+
+    // The refusal for `import` names the ways that can be asked about, ChatGPT among them, in the
+    // language the interface is in.
+    let (_, _, english) = status_of(&scratch, NOTHING_CONFIGURED, &["import"]);
+    assert!(
+        english.contains("name leo, bedrock, gateway or chatgpt"),
+        "{english}"
+    );
+    let in_french = [NOTHING_CONFIGURED, &[("BRAVEBOT_LOCALE", "fr")]].concat();
+    let (_, _, french) = status_of(&scratch, &in_french, &["import"]);
+    assert!(
+        french.contains("nommez leo, bedrock, gateway ou chatgpt"),
+        "{french}"
+    );
 }
 
 const A_CHATGPT_ACCESS_TOKEN: &str = "placeholder-chatgpt-access-token";
