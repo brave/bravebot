@@ -492,3 +492,37 @@ fn a_window_asks_the_bridge_whether_a_paste_fits_and_is_told_the_terminals_note(
         assert_eq!(refused.code, ErrorCode::BadRequest);
     }
 }
+
+/// SESSION-38. A record another window holds is refused by `session.open` as a bad request, in the
+/// words the terminal uses, and opens once the window that held it has closed the session.
+#[test]
+fn a_record_another_window_holds_is_not_opened() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("held");
+    let (config, _requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+    let done = window.turn(&session, "write this down", json!({}));
+    server.join().unwrap();
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+
+    let mut other = Window::with_settings(window.settings.clone());
+    let refused = other
+        .dispatch("session.open", json!({"directory": project, "id": id}))
+        .expect_err("a record another window holds was opened");
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    assert!(
+        refused.message.contains(&id) && refused.message.contains("bravebot --fork"),
+        "the refusal does not name the session and how to copy it: {}",
+        refused.message
+    );
+
+    window.call("session.close", json!({"session": session}));
+    let opened = other.call("session.open", json!({"directory": project, "id": id}));
+    assert!(opened["session"].is_string(), "{opened}");
+}

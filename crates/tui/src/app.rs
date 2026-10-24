@@ -16760,6 +16760,49 @@ mod tests {
         );
     }
 
+    /// SESSION-38. A record another process holds is refused before anything is shown or restored,
+    /// and the refusal is the one every surface words.
+    #[test]
+    fn a_resume_of_a_record_another_process_holds_restores_nothing() {
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-resume-held");
+        std::fs::create_dir_all(&root).expect("create");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let config = a_config_needing_no_sign_in();
+        let session = Session::new("none");
+        let mut holder =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        with_standing(
+            &session,
+            &Conversation::new(),
+            &TrustStore::new(&root),
+            &TrustedPrograms::new(),
+            &workspace,
+            |standing| holder.save("a session", standing),
+        );
+        let record = sessions::load(&root, holder.id()).expect("the record");
+
+        let mut resumed = Session::new("none");
+        let held = restore_resumed(&mut resumed, &config, &mut workspace, &record)
+            .map(|_| ())
+            .expect_err("a record a live session holds was resumed");
+        assert_eq!(
+            held,
+            sessions::Held::Open {
+                id: record.id.clone()
+            }
+        );
+        assert!(
+            resumed.transcript.is_empty(),
+            "something was shown for a record that was refused"
+        );
+        drop(holder);
+    }
+
     /// The words `/mode` takes: none says, a name puts one in force, `off` leaves. The handler tells
     /// them apart, and a sentence that only mentions the word is still a prompt.
     #[test]
