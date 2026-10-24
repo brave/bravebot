@@ -208,6 +208,22 @@ gh label create session-analysis --repo brave/bravebot --color 8cad49 \
   --description "Found by reading a recorded bravebot session"
 ```
 
+Issues labelled `BraveBot-Researcher` are filed from the BraveBot researcher, a tool kept outside
+this repository that reads papers, release notes and other tools' documentation for capabilities
+bravebot lacks. Before it files, it checks each finding against main the way the
+[peer-features skill](../../agents/skills/peer-features/SKILL.md) verifier does: it opens the sources,
+searches the specs and the code for the capability under other names, searches the tracker open and
+closed, and drops what the rule declines. It applies `BraveBot-Researcher`, a kind (`parity`, or
+`enhancement` where bravebot already has most of the capability), an `area` where one is clear, and no
+axis. Close its issues the usual way: completed when implemented, not planned when not wanted,
+including when bravebot already has it, and as a duplicate when another issue holds the work. The
+researcher reads which, and learns from it. A person creates the label:
+
+```bash
+gh label create BraveBot-Researcher --repo brave/bravebot --color c5def5 \
+  --description "Filed from the BraveBot researcher's findings"
+```
+
 The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
 duplication, files or functions past a length, and the other smells its lanes list, applies the existing `refactor` label, or `bug`
 where a reviewer found a defect, an `area` or `infrastructure` where one is clear, and no axis.
