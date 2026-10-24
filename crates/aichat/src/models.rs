@@ -481,39 +481,90 @@ fn offered_by_account(
                     })
                     .unwrap_or_default()
             };
-            Some(Model {
-                key: format!("{}/{slug}", provider.id),
-                display_name: row
-                    .display_name
+            Some(account_row(
+                provider,
+                slug,
+                row.display_name
                     .as_str()
                     .filter(|name| !name.trim().is_empty())
                     .unwrap_or(slug)
                     .to_string(),
-                // The account's own subscription, which is not Brave's.
-                premium: false,
-                provider: Some(provider.display_name().to_string()),
-                conversation_tokens: Some(
-                    row.context_window
-                        .as_u64()
-                        .filter(|window| *window > 0)
-                        .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
-                ),
+                row.context_window
+                    .as_u64()
+                    .filter(|window| *window > 0)
+                    .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
                 // A listing that names the levels is the service saying what it takes, and one
                 // that names none for a model says it takes none. A row with no such field, or one
                 // in a form other than a list, did not say, which is not a row claiming none: the
                 // answer is then the one the service gives a request that carries a level.
-                reads_effort: match row.supported_reasoning_levels.as_array() {
+                match row.supported_reasoning_levels.as_array() {
                     Some(levels) => !levels.is_empty(),
                     None => true,
-                } && crate::reads_effort(&provider.completion_url(), slug),
-                advertised: Advertised {
+                },
+                Advertised {
                     input_modalities: strings(&row.input_modalities),
                     output_modalities: Vec::new(),
                     parameters: None,
                 },
-            })
+            ))
         })
         .collect()
+}
+
+/// The picker rows a `chatgpt` entry's models become, one for each
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// The person wrote the list, so nothing is asked of the serving host and no row is dropped for
+/// what a listing would say: the service refuses at the first request a model the account cannot
+/// reach, as a gateway does for one a configured block names. Keyed by the account's id for the
+/// reason [`offered_by_account`] gives. A window the entry did not state is the assumed one, as it
+/// is for a gateway's model, and whether the model reads an effort level is what a request has
+/// already learned from the service, since an entry describes no model.
+pub fn named_by_entry(
+    provider: &bravebot_config::provider::Provider,
+    named: &[bravebot_config::provider::AccountModel],
+) -> Vec<Model> {
+    named
+        .iter()
+        .map(|model| {
+            account_row(
+                provider,
+                &model.id,
+                model.id.clone(),
+                model
+                    .context_window
+                    .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
+                true,
+                Advertised::default(),
+            )
+        })
+        .collect()
+}
+
+/// One row of the account's roster, whichever way the model came to be named.
+///
+/// The key carries the account's identifier, since that is what selects the account over the
+/// `openai` gateway offering a model of the same name, and the row is the account's own
+/// subscription, which is not Brave's. `listed_to_read_effort` is what the source of the row said
+/// about the level, and the answer a request has already learned from the service is applied to it.
+fn account_row(
+    provider: &bravebot_config::provider::Provider,
+    slug: &str,
+    display_name: String,
+    window: u64,
+    listed_to_read_effort: bool,
+    advertised: Advertised,
+) -> Model {
+    Model {
+        key: format!("{}/{slug}", provider.id),
+        display_name,
+        premium: false,
+        provider: Some(provider.display_name().to_string()),
+        conversation_tokens: Some(window),
+        reads_effort: listed_to_read_effort
+            && crate::reads_effort(&provider.completion_url(), slug),
+        advertised,
+    }
 }
 
 /// The envelope a gateway's roster arrives in.
@@ -1441,5 +1492,37 @@ mod tests {
             models[0].advertised.input_modalities,
             ["text".to_string(), "image".to_string()]
         );
+    }
+
+    /// CHATGPT-9: a model an entry names is a row under the account's identifier, since a bare name
+    /// would select the `openai` gateway's model of that name. It carries the window the entry
+    /// stated and the assumed one where it stated none, which is the budget a turn compacts against,
+    /// and it is the account's own subscription and not Leo's.
+    #[test]
+    fn the_models_an_entry_names_are_rows_under_the_accounts_identifier_with_the_window_it_states()
+    {
+        let named = |id: &str, window: Option<u64>| bravebot_config::provider::AccountModel {
+            id: id.to_string(),
+            context_window: window,
+        };
+        let rows = named_by_entry(
+            &bravebot_config::provider::Provider::chatgpt_account(),
+            &[named("gpt-big", Some(400_000)), named("gpt-plain", None)],
+        );
+
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(keys, ["chatgpt/gpt-big", "chatgpt/gpt-plain"]);
+        assert_eq!(rows[0].display_name, "gpt-big");
+        assert_eq!(rows[0].conversation_tokens, Some(400_000));
+        assert_eq!(
+            rows[1].conversation_tokens,
+            Some(bravebot_config::provider::CONTEXT_WINDOW),
+            "a window the entry does not state is the assumed one"
+        );
+        for row in &rows {
+            assert_eq!(row.provider.as_deref(), Some("ChatGPT"));
+            assert!(!row.premium, "the account's subscription is not Leo's");
+            assert_eq!(row.advertised, Advertised::default());
+        }
     }
 }

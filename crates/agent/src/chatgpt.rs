@@ -19,7 +19,7 @@ use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_net::{Egress, EgressError, Transport};
-use bravebot_skus::chatgpt::{Access, Class, Hosts, Renewer, TokenError};
+use bravebot_skus::chatgpt::{Access, Account, Class, Hosts, Renewer, TokenError};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// The renewer, made at the first request that needs a token.
@@ -62,6 +62,27 @@ impl AccountAccess for StoredSignIn {
     }
 }
 
+/// Whether a sign-in is stored, apart from whether its token can be had.
+///
+/// For the picker that offers the models an entry names, which needs to know there is an account
+/// and nothing of what it may reach, so its answer is the same offline and a read of it does not
+/// rewrite the file. A stored sign-in that has ended and has not been found out yet is stored here,
+/// and the first request says it has ended.
+pub(crate) trait AccountStored {
+    /// The file is read and nothing is renewed. One that cannot be read is no answer, and is not
+    /// taken for an absent sign-in.
+    fn is_stored(&mut self) -> Result<bool, AccountFailure>;
+}
+
+impl AccountStored for StoredSignIn {
+    fn is_stored(&mut self) -> Result<bool, AccountFailure> {
+        match Account::load() {
+            Ok(stored) => Ok(stored.is_some()),
+            Err(_) => Err(AccountFailure::Unusable),
+        }
+    }
+}
+
 /// What the ChatGPT account offers a picker
 /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
 #[derive(Debug, PartialEq, Eq)]
@@ -70,7 +91,8 @@ pub enum AccountModels {
     /// holds the id. Nothing was asked of the service, and the picker says nothing about it, since
     /// a person who never signed in is not owed a warning about a service they do not use.
     Absent,
-    /// The models the listing offers, in the order it gave them. Empty for an account that reaches
+    /// The models a `provider` entry named `chatgpt` names, where one does, and otherwise the
+    /// models the listing offers, in the order it gave them. Empty for an account that reaches
     /// none, which the service answered and is not a failure.
     Offered(Vec<Model>),
     /// A sign-in is stored and the listing could not be had: the token could not be renewed, the
@@ -101,9 +123,9 @@ pub fn account_models<S: Sink>(config: &Config, sink: &mut S) -> AccountModels {
 
 /// [`account_models`] for a given source of the token and a given service, so a test can stand a
 /// server of its own in for the compiled-in host.
-fn account_models_from<S: Sink>(
+fn account_models_from<S: Sink, A: AccountAccess + AccountStored>(
     config: &Config,
-    access: &mut dyn AccountAccess,
+    access: &mut A,
     provider: &Provider,
     sink: &mut S,
     egress: &Egress,
@@ -111,6 +133,19 @@ fn account_models_from<S: Sink>(
     // An entry with the id is a gateway, and a stored sign-in is not asked about for it.
     if !config.offers_chatgpt_account() {
         return AccountModels::Absent;
+    }
+    // An entry that names models is taken at its word, as a gateway's is: nothing is asked of any
+    // service and the access token is not renewed, so the roster is the same offline. It is offered
+    // where a sign-in is stored, since none of the account's rows is offered without one.
+    if !config.chatgpt_models.is_empty() {
+        return match access.is_stored() {
+            Ok(true) => AccountModels::Offered(bravebot_aichat::models::named_by_entry(
+                provider,
+                &config.chatgpt_models,
+            )),
+            Ok(false) => AccountModels::Absent,
+            Err(_) => AccountModels::Unreadable,
+        };
     }
     // Asked for before anything is sent, so a machine with no sign-in sends nothing. An ended
     // sign-in was removed by the renewal that found it so, and is a missing one from here on.
@@ -258,11 +293,12 @@ mod tests {
         assert_eq!(id.as_bytes()[14], b'4');
     }
 
-    /// A source of tokens that says what it holds, what it gives for a refused one, and what it
-    /// was asked.
+    /// A source of tokens that says what it holds, what it gives for a refused one, whether a
+    /// sign-in is stored, and what it was asked.
     struct Held {
         outcome: Result<&'static str, AccountFailure>,
         replacement: Result<&'static str, AccountFailure>,
+        stored: Result<bool, AccountFailure>,
         asked: usize,
         refused: Vec<String>,
     }
@@ -272,6 +308,7 @@ mod tests {
             Self {
                 outcome,
                 replacement: Err(AccountFailure::Refused),
+                stored: Ok(true),
                 asked: 0,
                 refused: Vec::new(),
             }
@@ -279,6 +316,11 @@ mod tests {
 
         fn replacing_with(mut self, token: &'static str) -> Self {
             self.replacement = Ok(token);
+            self
+        }
+
+        fn stored(mut self, stored: Result<bool, AccountFailure>) -> Self {
+            self.stored = stored;
             self
         }
     }
@@ -292,6 +334,12 @@ mod tests {
         fn replace_refused(&mut self, refused: &Secret) -> Result<Secret, AccountFailure> {
             self.refused.push(refused.expose().to_string());
             self.replacement.map(Secret::new)
+        }
+    }
+
+    impl AccountStored for Held {
+        fn is_stored(&mut self) -> Result<bool, AccountFailure> {
+            self.stored
         }
     }
 
@@ -324,8 +372,18 @@ mod tests {
             panic!("not an object");
         };
         config.providers = Provider::all(&root);
+        config.chatgpt_models = bravebot_config::Settings::parse(block)
+            .chatgpt_models()
+            .to_vec();
         config
     }
+
+    /// An entry named `chatgpt` that states no endpoint and names two models, neither of which the
+    /// stand-in's listing offers.
+    const PINNED: &str = r#"{"provider": {"chatgpt": {"models": {
+        "gpt-pinned": {"limit": {"context": 400000, "output": 128000}},
+        "gpt-plain": {}
+    }}}}"#;
 
     /// What a request to the stand-in carried: its request line and its headers, lower-cased.
     type Seen = (String, Vec<(String, String)>);
@@ -629,6 +687,75 @@ mod tests {
         assert_eq!(offered, AccountModels::Absent);
         assert_eq!(access.asked, 0, "the sign-in was read for a gateway's name");
         assert_eq!(connections(&listener), 0);
+    }
+
+    /// CHATGPT-9: the models an entry names are what is offered, with the window each states, and
+    /// the serving host is not asked for its listing, so a person pins a short list out of an
+    /// account that lists many. The stand-in answers a listing at once, so a client that asked for
+    /// it would offer that model and fail here rather than wait. The access token is not renewed to
+    /// offer the rows either: a token that cannot be had, as it cannot offline, leaves the same
+    /// rows, which is how a gateway's stated models behave without a network.
+    #[test]
+    fn the_models_an_entry_names_are_offered_in_place_of_the_listing_and_need_no_token() {
+        for token in [
+            Ok("placeholder-token-8c1f"),
+            Err(AccountFailure::Renewal(RenewalFailure::Transport)),
+        ] {
+            let (endpoint, received) = answering(vec![(200, LISTING)]);
+            let mut access = Held::new(token);
+            let offered = account_models_from(
+                &configured(PINNED),
+                &mut access,
+                &account_at(&endpoint),
+                &mut RecordingSink::new(),
+                &Egress::new(),
+            );
+
+            let AccountModels::Offered(mut models) = offered else {
+                panic!("{offered:?}");
+            };
+            models.sort_by(|left, right| left.key.cmp(&right.key));
+            let rows: Vec<(&str, Option<u64>)> = models
+                .iter()
+                .map(|model| (model.key.as_str(), model.conversation_tokens))
+                .collect();
+            assert_eq!(
+                rows,
+                [
+                    ("chatgpt/gpt-pinned", Some(400_000)),
+                    (
+                        "chatgpt/gpt-plain",
+                        Some(bravebot_config::provider::CONTEXT_WINDOW)
+                    ),
+                ]
+            );
+            assert_eq!(access.asked, 0, "the token was had for {token:?}");
+            assert!(received.try_recv().is_err(), "the listing was asked for");
+        }
+    }
+
+    /// CHATGPT-9: none of the account's rows is offered where no sign-in is stored, so an entry's
+    /// models are offered only where one is. A file that cannot be read is told from an absent one
+    /// as it is for the listing, and neither sends a request or has the token renewed.
+    #[test]
+    fn the_models_an_entry_names_are_offered_only_where_somebody_is_signed_in() {
+        for (stored, expected) in [
+            (Ok(false), AccountModels::Absent),
+            (Err(AccountFailure::Unusable), AccountModels::Unreadable),
+        ] {
+            let (endpoint, listener) = silent();
+            let mut access = Held::new(Ok("placeholder-token-8c1f")).stored(stored);
+            let offered = account_models_from(
+                &configured(PINNED),
+                &mut access,
+                &account_at(&endpoint),
+                &mut RecordingSink::new(),
+                &Egress::new(),
+            );
+            assert_eq!(offered, expected, "{stored:?}");
+            assert_eq!(access.asked, 0, "{stored:?} had the token renewed");
+            assert_eq!(connections(&listener), 0, "{stored:?} sent a request");
+        }
     }
 
     /// CHATGPT-2: the service is one constant, reached in the Responses protocol, and the same
