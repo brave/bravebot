@@ -548,6 +548,25 @@ mod tests {
         regions(Rect::new(0, 0, 80, 24), rows, PANEL.width)[0]
     }
 
+    /// Rejects: `regions` laying the list out differently from `draw`, which would make every click
+    /// land a row off while the other mouse tests, built on `regions`, still passed.
+    #[test]
+    fn the_rows_are_drawn_where_regions_says_the_list_is() {
+        let picker = open_on(0);
+        let list = list_of(3);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| draw(frame, &picker, &PANEL))
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer();
+        for (offset, word) in ["one", "two", "three"].iter().enumerate() {
+            let row: String = (list.x..list.right())
+                .map(|x| buffer[(x, list.y + offset as u16)].symbol())
+                .collect();
+            assert!(row.contains(word), "row {offset} reads {row:?}");
+        }
+    }
+
     /// MOUSE-15. Rejects: a press that moves nothing, a press that takes at once, and a row
     /// found from the wrong rectangle: the first press puts the cursor on the row it landed on
     /// and a second one on the same cell takes it.
