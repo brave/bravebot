@@ -10,8 +10,8 @@
 //! renewer for the rest of the process, so a second one made for each request would drop it, and
 //! the next request would present a refresh token the server has already replaced.
 
-use bravebot_aichat::models::Model;
-use bravebot_aichat::responses::protocol::Refusal;
+pub use bravebot_aichat::models::Model;
+pub use bravebot_aichat::responses::protocol::Refusal;
 use bravebot_aichat::{AccountAccess, AccountFailure, ChatError, RenewalFailure};
 use bravebot_config::provider::Provider;
 use bravebot_config::{Config, Secret};

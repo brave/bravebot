@@ -135,8 +135,9 @@ and the tokens of this account are never sent to a gateway.
 A model of this service is answered with the stored sign-in and with nothing else. `OPENAI_API_KEY`, a
 gateway key and any other variable are not looked for.
 
-**Not built:** the key set. The sign-in sends to the authorization page and the token endpoint, and a turn and
-the pickers send requests to the serving host: the models, and the listing of [CHATGPT-9](#CHATGPT-9).
+**Not built:** the key set. The sign-in sends to the authorization page and the token endpoint, and a turn, the
+pickers and the sign-in command once it has stored the sign-in send requests to the serving host: the models,
+and the listing of [CHATGPT-9](#CHATGPT-9).
 
 **Why.** A settings file may name a destination, which is right where the credential is one the person
 typed for that destination. A checkout's settings file naming where an account's refresh token goes would
@@ -489,7 +490,10 @@ failure. The rest are these, each saying which it is:
   sentence says to sign in again and allow the program to use the subscription's tokens, or to use an API key
   with the `openai` gateway.
 - **The command completed,** and says what it leaves: the account reaches no model, or no model can be
-  offered for it because the listing could not be read and no list is available ([CHATGPT-9](#CHATGPT-9)).
+  offered for it because the listing could not be read and no list is available ([CHATGPT-9](#CHATGPT-9)),
+  or because the service refused the listing in a code of the closed list, in that code's sentence. It says
+  the sign-in is stored before it asks the listing, so a service slow to answer leaves a person knowing it
+  was kept, and the ending is a success whatever the listing says.
 
 The refusals of [CHATGPT-12](#CHATGPT-12), which are made before anything starts, are sentences of the
 command and quote nothing.
@@ -502,10 +506,9 @@ the terminal once by [CHATGPT-13](#CHATGPT-13) and goes nowhere else. A test hol
 against each of those outputs, as the trail's test does for the credentials the agent holds, and leaves out
 that one line.
 
-**Not built:** the completed command that says the account reaches no model, and the test that holds every
-secret the process held against each output of a run that signs in, refreshes and fails. The sentences of the
-sign-in, of a refused refresh, of a refused token and of a request refused with a code of the closed list are
-built.
+**Not built:** the test that holds every secret the process held against each output of a run that signs in,
+refreshes and fails. The sentences of the sign-in, of a refused refresh, of a refused token, of a request
+refused with a code of the closed list and of what the account reaches once the sign-in is stored are built.
 
 **Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
 to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
@@ -525,6 +528,8 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_skus::chatgpt::account::a_refusal_of_a_malformed_file_quotes_none_of_it`
 `verified-by: bravebot_cli::chatgpt::each_stop_of_the_sign_in_has_its_own_sentence_and_names_the_remedy_where_there_is_one`
 `verified-by: bravebot_cli::chatgpt::a_failure_of_the_file_is_worded_with_its_detail_made_printable_and_the_remedy`
+`verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker`
+`verified-by: bravebot_cli::chatgpt::the_sign_in_is_said_before_the_listing_is_asked_and_the_listing_is_asked_once`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 `verified-by: bravebot_agent::backend::an_account_failure_is_diagnosed_by_its_step_and_names_the_command_where_it_is_the_remedy`
 `verified-by: bravebot_agent::backend::a_refusal_of_the_account_is_not_a_refusal_of_the_body`
@@ -832,8 +837,9 @@ not take for the rest of it.
   [CHATGPT-5](#CHATGPT-5).
 
 A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
-`chatgpt` entry names, or where it names none, the models the serving host's listing offers. The command tells
-the person to pick one in `/model` or to name one, and does not ask the listing itself.
+`chatgpt` entry names, or where it names none, the models the serving host's listing offers. Once the sign-in
+is stored the command asks the listing, as a picker does, and tells the person to pick a model in `/model` or
+to name one, that the account reaches no model, or that the listing could not be had.
 
 ## Decisions left open
 
@@ -1020,8 +1026,8 @@ work lands, in the same commit as the code.
   shortened sooner than the service would need, and the limit has not been observed.
 - Where the listing cannot be read no picker lists the account's models, so a person types `chatgpt/<name>`,
   and a name the account cannot reach is refused at the first request.
-- A picker asks the serving host for the listing each time it opens, so a signed-in person who opens one sends
-  the access token to the serving host for a request that is not a turn.
+- A picker asks the serving host for the listing each time it opens, and the sign-in command asks it when the
+  sign-in is stored, so the access token is sent to the serving host in requests that are not a turn.
 - A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,
   since the renewal that finds it removes the file. The next turn on a `chatgpt/` model says so.
 - Every request of a process carries one session identifier, so two sessions of a process share a cache

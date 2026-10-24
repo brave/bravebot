@@ -1040,6 +1040,12 @@ chatgpt-open-this = Ouvrez cette adresse dans un navigateur pour vous connecter 
 chatgpt-waiting = En attente du navigateur sur 127.0.0.1, port { $port }. Un navigateur sur une autre machine ne l'atteint que par un port redirigé.
 chatgpt-stored = connecté à ChatGPT ; le jeton d'accès expire le { $expires }. La connexion est enregistrée dans { $path }
 chatgpt-use-by-name = Choisissez l'un des modèles du compte avec /model pour utiliser cette connexion, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+# Ce que la commande dit une fois la connexion enregistrée quand la liste du compte ne contient aucun
+# modèle, n'a pas pu être obtenue, ou a été refusée par un code qui désigne le compte. La connexion est
+# enregistrée dans chaque cas.
+chatgpt-reaches-no-model = Ce compte ChatGPT n'atteint aucun modèle avec bravebot, donc /model n'en propose aucun. La connexion reste enregistrée.
+chatgpt-listing-unreadable = Les modèles du compte n'ont pas pu être listés, donc /model n'en propose aucun. Réessayez /model plus tard, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+chatgpt-listing-refused = Les modèles du compte n'ont pas pu être listés : { $refusal }
 chatgpt-forgotten =
     connexion ChatGPT enregistrée oubliée. Elle reste valide chez OpenAI tant qu'on n'y met pas fin : déconnectez-vous de ChatGPT, ou retirez l'accès de bravebot dans les réglages du compte
 chatgpt-nothing-to-forget = aucune connexion ChatGPT n'est enregistrée

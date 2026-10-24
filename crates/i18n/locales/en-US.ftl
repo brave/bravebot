@@ -1217,6 +1217,11 @@ chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
 chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
 chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
 chatgpt-use-by-name = Pick one of the account's models in /model to use this sign-in, or name one, as in bravebot --model chatgpt/<model>
+# What the command says after the sign-in is stored when the account's listing answered with no model,
+# could not be had, or was refused in a code that names the account. The sign-in is stored in each.
+chatgpt-reaches-no-model = This ChatGPT account reaches no model through bravebot, so /model offers none. The sign-in stays stored.
+chatgpt-listing-unreadable = The account's models could not be listed, so /model offers none. Try /model later, or name one, as in bravebot --model chatgpt/<model>
+chatgpt-listing-refused = The account's models could not be listed: { $refusal }
 chatgpt-forgotten =
     forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings
 chatgpt-nothing-to-forget = no ChatGPT sign-in is stored
