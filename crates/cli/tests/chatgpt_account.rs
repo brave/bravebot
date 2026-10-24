@@ -29,8 +29,8 @@ use std::time::{Duration, Instant};
 mod chatgpt_stand_in;
 
 use chatgpt_stand_in::{
-    ACCESS_TWO, Asked, CLIENT, CODE, Fault, MODEL, REFRESH_ONE, REFRESH_TWO, Refresh, STAND_IN,
-    Serving, StandIn, USAGE_LIMIT, files_under, form, now, url_encoded,
+    ACCESS_TWO, Asked, CLIENT, CODE, Fault, Handled, MODEL, REFRESH_ONE, REFRESH_TWO, Refresh,
+    STAND_IN, Serving, StandIn, USAGE_LIMIT, files_under, form, now, url_encoded,
 };
 
 /// A directory a run takes as its home, removed when the test ends.
@@ -108,11 +108,20 @@ fn sign_in(home: &Scratch, stand_in: &StandIn) -> (String, String, bool) {
     let program = env!("CARGO_BIN_EXE_bravebot");
     let mut command = Command::new("/usr/bin/script");
     #[cfg(target_os = "macos")]
-    command.args(["-q", "/dev/null", program, "auth", "login", "chatgpt"]);
+    command.args([
+        "-q",
+        "/dev/null",
+        program,
+        "--log-level",
+        "debug",
+        "auth",
+        "login",
+        "chatgpt",
+    ]);
     #[cfg(target_os = "linux")]
     command.args([
         "-qec",
-        &format!("'{program}' auth login chatgpt"),
+        &format!("'{program}' --log-level debug auth login chatgpt"),
         "/dev/null",
     ]);
     environment(&mut command, home, stand_in);
@@ -223,9 +232,20 @@ impl Typed {
         let program = env!("CARGO_BIN_EXE_bravebot");
         let mut command = Command::new("/usr/bin/script");
         #[cfg(target_os = "macos")]
-        command.args(["-q", "/dev/null", program, "--plain"]);
+        command.args([
+            "-q",
+            "/dev/null",
+            program,
+            "--log-level",
+            "debug",
+            "--plain",
+        ]);
         #[cfg(target_os = "linux")]
-        command.args(["-qec", &format!("'{program}' --plain"), "/dev/null"]);
+        command.args([
+            "-qec",
+            &format!("'{program}' --log-level debug --plain"),
+            "/dev/null",
+        ]);
         environment(&mut command, home, stand_in);
         let mut child = command
             .stdin(Stdio::piped())
@@ -317,15 +337,16 @@ impl Typed {
 
 /// CHATGPT-8: no value the sign-in handled reaches an output of a run that signs in, refreshes and
 /// fails. The run signs in (the code exchange, the key set and the ID token), its listing is refused
-/// for the first token and renews it, a turn is answered, a turn is refused in a code that names the
-/// account, and a last turn is refused, its refresh is refused as no longer valid and the sign-in
-/// ends. Every reply that refuses repeats every value the stand-in has seen. Then each output is
-/// searched for each value: what the sign-in showed in its terminal (less the authorization URL, the
-/// one line CHATGPT-13 lets through), what each run and `auth status` and `doctor` wrote to their
-/// streams under `--trace` and the debug log, every file the runs left in the home (the trail, the
-/// logs, the session records and their audit files), and the environment of the program each turn
-/// started, which a hook writes there. A run that left no session record, no trail or no log is not
-/// one that was searched, so each of them is required.
+/// for the first token and renews it, and turns are made in text, as JSON and as a JSON stream: three
+/// that are answered, three refused in a code that names the account, one whose refresh is refused as
+/// no longer valid, which ends the sign-in, and two after it. Every reply that refuses
+/// repeats every value the stand-in has seen. Then each output is searched for each value: what the
+/// sign-in showed in its terminal, which holds the authorization URL once, what each run and `auth
+/// status` and `doctor` wrote to their streams, under `--trace` for a turn and `--log-level debug` for
+/// each, the debug log each run left, taken as it ended, every file the runs left in the home (the
+/// trail, the logs, the session records and their audit files), and the environment of each program a
+/// turn started, which a hook writes there. A run that left no session record, no trail or no log is not one that
+/// was searched, so each of them is required, and the count of each is exact.
 ///
 /// What the other outputs are held by is stated with CHATGPT-8: the terminal client's transcript, its
 /// screen and its record by `bravebot_tui::chatgpt_failure_tests`, and what the desktop bridge sends and
@@ -370,76 +391,183 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         "the listing was not asked of the stand-in, so the serving host's seam is off"
     );
 
-    let mut outputs = vec![("the sign-in's terminal".to_string(), terminal.into_bytes())];
-    let mut run = |name: &str, arguments: &[&str]| {
-        let output = bravebot(&home, &stand_in, arguments);
-        outputs.push((name.to_string(), said(&output).into_bytes()));
-        output
+    // Every command here is run with the debug log, and each turn with the trace as well, which is the
+    // option of a task and of no other command. A turn also has a program started at each
+    // of its two moments, so the environment of that program is there to be searched for each turn.
+    struct Runs<'a> {
+        home: &'a Scratch,
+        stand_in: &'a StandIn,
+        started: PathBuf,
+        outputs: Vec<(String, Vec<u8>)>,
+        /// The debug log each run left, taken as the run ended, since a state directory keeps the
+        /// newest ten and this run has more.
+        logs: Vec<(String, Vec<u8>)>,
+        seen: std::collections::BTreeSet<PathBuf>,
+        turns: usize,
+    }
+    impl Runs<'_> {
+        fn hook_runs(&self) -> usize {
+            std::fs::read_to_string(&self.started)
+                .unwrap_or_default()
+                .matches("HOME=")
+                .count()
+        }
+
+        /// The logs a run left that were not there before it, kept under its name.
+        fn collect_logs(&mut self, name: &str) -> usize {
+            let mut new = 0;
+            for (path, bytes) in files_under(&self.home.path) {
+                if path.display().to_string().contains("/logs/") && self.seen.insert(path) {
+                    self.logs.push((name.to_string(), bytes));
+                    new += 1;
+                }
+            }
+            new
+        }
+
+        /// A run of a command that asks the stand-in nothing, so it logs nothing.
+        fn run(&mut self, name: &str, arguments: &[&str]) -> Output {
+            let output = self.run_logging(name, arguments);
+            let logged = self.collect_logs(name);
+            assert_eq!(
+                logged, 0,
+                "{name} asked nothing of the stand-in and left a log"
+            );
+            output
+        }
+
+        fn run_logging(&mut self, name: &str, arguments: &[&str]) -> Output {
+            let mut every = vec!["--log-level", "debug"];
+            every.extend_from_slice(arguments);
+            let output = bravebot(self.home, self.stand_in, &every);
+            self.outputs
+                .push((name.to_string(), said(&output).into_bytes()));
+            output
+        }
+
+        fn turn(&mut self, name: &str, format: &[&str]) -> Output {
+            let before = self.hook_runs();
+            let mut arguments = vec!["--trace", "-p", "say something", "--model", MODEL];
+            arguments.extend_from_slice(format);
+            arguments.push("--trust-workspace");
+            let output = self.run_logging(name, &arguments);
+            self.turns += 1;
+            assert_eq!(
+                self.hook_runs() - before,
+                2,
+                "{name}: the hooks of the turn did not both start a program"
+            );
+            let logged = self.collect_logs(name);
+            assert_eq!(logged, 1, "{name} left {logged} debug logs and not one");
+            output
+        }
+    }
+    let mut runs = Runs {
+        home: &home,
+        stand_in: &stand_in,
+        started: started.clone(),
+        outputs: vec![("the sign-in's terminal".to_string(), terminal.into_bytes())],
+        logs: Vec::new(),
+        seen: std::collections::BTreeSet::new(),
+        turns: 0,
     };
-    let turn = [
-        "--trace",
-        "--log-level",
-        "debug",
-        "-p",
-        "say something",
-        "--model",
-        MODEL,
-        "--trust-workspace",
-    ];
-    run(
+    assert_eq!(
+        runs.collect_logs("the sign-in"),
+        1,
+        "the sign-in left no debug log, or more than one"
+    );
+    runs.run(
         "auth status while signed in",
         &["auth", "status", "chatgpt"],
     );
-    run("doctor while signed in", &["doctor"]);
-    let answered = run("the turn that is answered", &turn);
+    runs.run("doctor while signed in", &["doctor"]);
+    let answered = runs.turn("the turn that is answered", &[]);
     assert!(
         String::from_utf8_lossy(&answered.stdout).contains("all done"),
         "the turn was not answered: {}",
         said(&answered)
     );
+    // The result a script reads, and the stream of events before it.
+    let result = runs.turn("the turn that is answered, as JSON", &["--json"]);
+    assert!(
+        String::from_utf8_lossy(&result.stdout).contains("all done"),
+        "{}",
+        said(&result)
+    );
+    let stream = runs.turn(
+        "the turn that is answered, as a JSON stream",
+        &["--json-stream"],
+    );
+    assert!(
+        String::from_utf8_lossy(&stream.stdout).lines().count() > 1,
+        "{}",
+        said(&stream)
+    );
     // The account has reached its usage limit: a refusal in a listed code, whatever its status, and
     // here the status that otherwise has the token replaced. It replaces none, so no refresh is
     // asked for.
-    stand_in
-        .state()
-        .serving
-        .push_back(Serving::RefusesWithCode(401, USAGE_LIMIT));
-    let limited = run("the turn that is refused in a listed code", &turn);
-    assert!(!limited.status.success(), "{}", said(&limited));
+    for (name, format) in [
+        ("the turn that is refused in a listed code", &[][..]),
+        (
+            "the turn that is refused in a listed code, as JSON",
+            &["--json"][..],
+        ),
+        (
+            "the turn that is refused in a listed code, as a JSON stream",
+            &["--json-stream"][..],
+        ),
+    ] {
+        stand_in
+            .state()
+            .serving
+            .push_back(Serving::RefusesWithCode(401, USAGE_LIMIT));
+        let limited = runs.turn(name, format);
+        assert!(!limited.status.success(), "{}", said(&limited));
+    }
     assert_eq!(
         stand_in.presented(),
         [REFRESH_ONE],
         "a refusal in a listed code asked for a new token"
     );
     stand_in.state().refusing = true;
-    let failed = run("the turn that fails", &turn);
+    let failed = runs.turn("the turn that fails", &[]);
     assert!(!failed.status.success(), "{}", said(&failed));
     assert!(
         said(&failed).contains("bravebot auth login chatgpt"),
         "the ended sign-in did not name the command: {}",
         said(&failed)
     );
-    run("auth status once ended", &["auth", "status", "chatgpt"]);
-    run("doctor once ended", &["doctor"]);
     assert!(
         !home.account().exists(),
         "the ended sign-in was not removed"
     );
+    // With the sign-in ended, a turn is told so, and a script reads that as a result.
+    let ended = runs.turn("the turn after the sign-in ended, as JSON", &["--json"]);
+    assert!(!ended.status.success(), "{}", said(&ended));
+    let ended = runs.turn(
+        "the turn after the sign-in ended, as a JSON stream",
+        &["--json-stream"],
+    );
+    assert!(!ended.status.success(), "{}", said(&ended));
+    runs.run("auth status once ended", &["auth", "status", "chatgpt"]);
+    runs.run("doctor once ended", &["doctor"]);
 
     assert_eq!(
         stand_in.presented(),
         [REFRESH_ONE, REFRESH_TWO],
         "the refreshes made"
     );
-    assert!(
-        std::fs::read_to_string(&started).is_ok_and(|text| text.contains("HOME=")),
-        "no program a turn started wrote its environment"
+    assert_eq!(
+        runs.hook_runs(),
+        2 * runs.turns,
+        "a program was started for each moment of each turn"
     );
 
-    // What the run left in the home: the record of the turn that was answered, which is the one a
-    // one-shot run records, its audit file, and a debug log for each run. A turn that fails is not
-    // recorded by a one-shot run, so the records of failed turns are held by the front ends that
-    // write them.
+    // What the run left in the home: the record of each turn that was answered, which are the ones a
+    // one-shot run records, its audit file, and a debug log for each run, the sign-in's included. A
+    // turn that fails is not recorded by a one-shot run, so the records of failed turns are held by
+    // the front ends that write them.
+    let outputs = std::mem::take(&mut runs.outputs);
     let files = files_under(&home.path);
     let named = |part: &str, ending: &str| {
         files
@@ -453,15 +581,23 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
     let left: Vec<&PathBuf> = files.iter().map(|(path, _)| path).collect();
     assert_eq!(
         named("/sessions/", ".json"),
-        1,
-        "the answered turn did not leave one session record: {left:?}"
+        3,
+        "the three turns that were answered did not leave a session record each: {left:?}"
     );
     assert_eq!(
         named("/sessions/", ".audit.jsonl"),
-        1,
-        "the answered turn did not leave its trail: {left:?}"
+        3,
+        "the three turns that were answered did not leave a trail each: {left:?}"
     );
-    assert!(named("/logs/", ".log") >= 4, "the debug logs: {left:?}");
+    // A log is written by a run that logged something, and the sign-in and each turn ask something of
+    // the stand-in. `auth status` and `doctor` ask nothing of it and leave none.
+    assert_eq!(
+        runs.logs.len(),
+        runs.turns + 1,
+        "a debug log for the sign-in and for each of the {} turns",
+        runs.turns
+    );
+    let logs = std::mem::take(&mut runs.logs);
 
     let handled = stand_in.handled();
     handled.assert_distinct();
@@ -474,9 +610,15 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
     );
     // The sign-in's terminal holds the authorization URL once. No other output holds it.
     for (name, bytes) in &outputs {
-        handled.assert_none_in_but_the_address(name, &String::from_utf8_lossy(bytes));
+        let text = String::from_utf8_lossy(bytes);
+        if name == "the sign-in's terminal" {
+            handled.assert_none_in_but_one_copy_of_the_address(name, &text);
+        } else {
+            handled.assert_none_in(name, &text);
+        }
     }
-    // The outputs the spec names are there to be searched: the trace of each turn, and a debug log.
+    // The outputs the spec names are there to be searched: the trace of each turn, which a run
+    // writes to its standard error whatever the format of its result, and a debug log.
     for (name, output) in &outputs {
         if name.starts_with("the turn") {
             assert!(
@@ -485,15 +627,22 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
             );
         }
     }
+    for (name, bytes) in &logs {
+        handled.assert_none_in(
+            &format!("the debug log of {name}"),
+            &String::from_utf8_lossy(bytes),
+        );
+    }
     let mut found = Vec::new();
     for (path, bytes) in &files {
-        for name in handled.found_in(&String::from_utf8_lossy(bytes)) {
+        let text = String::from_utf8_lossy(bytes);
+        for name in handled.found_in(&text) {
             found.push(format!("{} holds {name}", path.display()));
         }
     }
     assert!(found.is_empty(), "{found:#?}");
     assert!(
-        outputs.len() >= 8 && files.len() >= 8,
+        outputs.len() >= 14 && files.len() >= 20,
         "{} outputs and {} files, so this would pass by reading almost nothing",
         outputs.len(),
         files.len()
@@ -505,6 +654,239 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         ),
         "no log recorded a request of a run, so none was searched"
     );
+}
+
+/// Require `count` logs among `files`, one of which recorded a request, so the logs are not a number
+/// of empty files.
+fn assert_logs(files: &[(PathBuf, Vec<u8>)], count: usize, whose: &str) {
+    let logs: Vec<_> = files
+        .iter()
+        .filter(|(path, _)| path.display().to_string().contains("/logs/"))
+        .collect();
+    assert_eq!(
+        logs.len(),
+        count,
+        "a debug log for each of {whose}: {:?}",
+        logs.iter().map(|(path, _)| path).collect::<Vec<_>>()
+    );
+    assert!(
+        logs.iter()
+            .any(|(_, bytes)| chatgpt_stand_in::holds(bytes, "net.fetch")),
+        "no log recorded a request of a run, so none was searched"
+    );
+}
+
+/// What a hold of an output against the values of a run says, as a panic, or `None` where it holds.
+fn what_a_hold_says(hold: impl FnOnce()) -> Option<String> {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(hold));
+    outcome.err().map(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_string())
+            })
+            .unwrap_or_default()
+    })
+}
+
+/// CHATGPT-8 lets one line reach one output: the authorization URL, written once to the terminal of
+/// the sign-in. The hold of the sign-in's terminal lets that one copy through. It fails where the
+/// terminal holds the URL twice or not at all, or holds the `state` anywhere else in it. The hold of
+/// any other output lets no copy through, and fails where `auth status`, `doctor` or a turn's trace
+/// holds the URL, or only a value that is in it.
+///
+/// The faults it rejects: a hold that removes every copy of the URL from the terminal, one that
+/// removes it from an output that is not the sign-in's, and one that lets a value through because
+/// it was part of the line.
+#[test]
+fn the_authorization_url_is_let_through_once_in_the_sign_in_terminal_and_in_no_other_output() {
+    let address = "http://127.0.0.1:1/authorize?state=STATE-0123456789&nonce=NONCE-0123456789\
+                   &code_challenge=CHALLENGE-0123456789";
+    let handled = Handled::of(
+        vec![
+            ("the state".into(), "STATE-0123456789".into()),
+            ("the nonce".into(), "NONCE-0123456789".into()),
+            ("the code challenge".into(), "CHALLENGE-0123456789".into()),
+        ],
+        address,
+    );
+    let terminal = |lines: &[&str]| lines.join("\r\n");
+
+    // The sign-in's terminal: the line once, and nothing else of the run.
+    let once = terminal(&[
+        "Open this address in a browser:",
+        address,
+        "Waiting for the browser",
+    ]);
+    assert_eq!(
+        what_a_hold_says(|| handled.assert_none_in_but_one_copy_of_the_address("terminal", &once)),
+        None
+    );
+    for (case, text, says) in [
+        (
+            "the line twice",
+            terminal(&[address, "Waiting", address]),
+            "2 times",
+        ),
+        ("no line", terminal(&["Waiting for the browser"]), "0 times"),
+        (
+            "the line and the state again",
+            terminal(&[address, "the state is STATE-0123456789"]),
+            "the state",
+        ),
+        (
+            "the line and a part of it",
+            terminal(&[address, "challenge CHALLENGE-0123456789"]),
+            "the code challenge",
+        ),
+    ] {
+        let said = what_a_hold_says(|| {
+            handled.assert_none_in_but_one_copy_of_the_address("terminal", &text);
+        });
+        assert!(
+            said.as_deref().is_some_and(|said| said.contains(says)),
+            "{case}: the hold said {said:?}"
+        );
+    }
+
+    // Any other output: no copy of the line, and no value that is in it.
+    for (case, text) in [
+        ("the line", terminal(&["signed in", address])),
+        (
+            "the line in a trace",
+            format!("audit trail\n  ok  {address}"),
+        ),
+        ("the state", terminal(&["STATE-0123456789"])),
+        ("the nonce", terminal(&["nonce NONCE-0123456789"])),
+    ] {
+        let said = what_a_hold_says(|| handled.assert_none_in("auth status", &text));
+        assert!(
+            said.is_some(),
+            "{case}: an output other than the sign-in's let it through"
+        );
+    }
+    assert_eq!(
+        what_a_hold_says(|| handled.assert_none_in("auth status", "signed in until later")),
+        None
+    );
+}
+
+/// The scanner every other test of this file holds an output to has to find a value in each form a
+/// writer here gives it, has to refuse an output that holds nothing, and has to refuse a set of
+/// values in which a hit would not say which was found. Each is made by hand.
+///
+/// The faults it rejects: a scanner that matches a value only as it is written and not as an address
+/// or a form body writes it, one that passes an empty capture as an output that holds none of the
+/// values, and one that lets two values be equal, one be part of another, or one be too short to be
+/// told from text.
+#[test]
+fn the_scanner_finds_a_value_percent_encoded_refuses_an_empty_output_and_refuses_overlapping_values()
+ {
+    let value = "a value/with+reserved=characters&more";
+    let handled = Handled::of(vec![("a secret".into(), value.into())], "");
+
+    // As it is written, and as an address or a form body writes it.
+    let encoded = url_encoded(value);
+    assert_ne!(encoded, value, "the value has nothing to encode");
+    assert_eq!(handled.found_in(value), ["a secret"]);
+    assert_eq!(
+        handled.found_in(&format!("code=1&v={encoded}&x=2")),
+        ["a secret"]
+    );
+    for (case, text) in [
+        ("as written", format!("it said {value}")),
+        ("percent-encoded", format!("code=1&v={encoded}&x=2")),
+    ] {
+        let said = what_a_hold_says(|| handled.assert_none_in("an output", &text));
+        assert!(
+            said.as_deref()
+                .is_some_and(|said| said.contains("a secret")),
+            "{case}: the hold said {said:?}"
+        );
+    }
+    assert!(handled.found_in("nothing the run handled").is_empty());
+    assert_eq!(
+        what_a_hold_says(|| handled.assert_none_in("an output", "nothing the run handled")),
+        None
+    );
+
+    // An output that holds nothing is not one that was searched.
+    let said = what_a_hold_says(|| handled.assert_none_in("a capture", ""));
+    assert!(
+        said.as_deref()
+            .is_some_and(|said| said.contains("a capture is empty")),
+        "an empty output was let through: {said:?}"
+    );
+
+    // Values a hit could not be told apart by.
+    let distinct = |values: &[(&str, &str)]| {
+        let values = values
+            .iter()
+            .map(|(name, value)| ((*name).into(), (*value).into()))
+            .collect();
+        what_a_hold_says(|| Handled::of(values, "").assert_distinct())
+    };
+    assert_eq!(
+        distinct(&[
+            ("the code", "code-0123456789"),
+            ("the state", "state-0123456789")
+        ]),
+        None
+    );
+    // The ID token and each of its parts are text of the whole by design.
+    assert_eq!(
+        distinct(&[
+            ("the ID token", "header-0123.payload-0123.signature-0123"),
+            ("the ID token's header", "header-0123"),
+            ("the ID token's payload", "payload-0123"),
+        ]),
+        None
+    );
+    for (case, values, says) in [
+        (
+            "two values that are equal",
+            &[
+                ("the code", "same-0123456789"),
+                ("the state", "same-0123456789"),
+            ][..],
+            "is part of",
+        ),
+        (
+            "a value inside another",
+            &[
+                ("the code", "inner-0123456789"),
+                ("the state", "outer-inner-0123456789-end"),
+            ][..],
+            "is part of",
+        ),
+        (
+            "a value too short to be told from text",
+            &[("the code", "short"), ("the state", "state-0123456789")][..],
+            "too short",
+        ),
+        (
+            "an empty value",
+            &[("the code", ""), ("the state", "state-0123456789")][..],
+            "too short",
+        ),
+        (
+            "a part of the ID token under another name",
+            &[
+                ("the ID token", "header-0123.payload-0123.signature-0123"),
+                ("the code", "payload-0123"),
+            ][..],
+            "is part of",
+        ),
+    ] {
+        let said = distinct(values);
+        assert!(
+            said.as_deref().is_some_and(|said| said.contains(says)),
+            "{case}: the check said {said:?}"
+        );
+    }
 }
 
 /// CHATGPT-8: no value a sign-in that stops handled reaches the terminal it stopped on or a file it
@@ -558,15 +940,15 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_s
     }
 }
 
-/// CHATGPT-8: no value a sign-in handled reaches the terminal of the session in lines or the record it
-/// keeps of a turn that failed. The run signs in, and a person then types four prompts in
+/// CHATGPT-8: no value a sign-in handled reaches the terminal of the session in lines. The run signs in, and a person then types four prompts in
 /// `bravebot --plain`, each of which fails: the service refuses the request, refuses it in a code that
 /// names the account, turns the token away while the token endpoint is busy, and turns it away while
 /// the token endpoint says the refresh token is no longer valid. Every refusal repeats every value
 /// the stand-in has seen. The terminal and every file the session left are searched for them, and
 /// the terminal is required to have shown a prompt after each of the four turns, so each of them
 /// ended in the line that said why. A session in lines keeps no record of its turns outside a
-/// background host, so the terminal is the output of it that is held.
+/// background host, so the terminal is the output of it that is held. The sign-in and the session each
+/// run with `--log-level debug`, and each is required to have left one log.
 #[test]
 fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface() {
     let home = Scratch::new("cli-chatgpt-account-line-interface");
@@ -621,6 +1003,9 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface() {
     );
 
     let files = files_under(&home.path);
+    // The sign-in and the session each ran with the debug log and each left one, and the session's
+    // is among the files held below. It recorded the requests of the turns.
+    assert_logs(&files, 2, "the sign-in and the session");
     let handled = stand_in.handled();
     handled.assert_distinct();
     handled.assert_none_in("the terminal of the session in lines", &shown);

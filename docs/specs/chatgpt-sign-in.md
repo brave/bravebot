@@ -741,60 +741,107 @@ window's narration row holds the account's sentences in sentence case beside the
 any other service, and the window rewords neither.
 
 No code, `state`, `nonce`, verifier, challenge, token, claim, client or host identifier, reply body, header
-value or callback query reaches a trace, a log, an error message, a session record, a transcript, `doctor`,
-`auth status`, the terminal or the environment of a program a turn starts. The one exception is the
-authorization URL, which carries the `state`, the `nonce`, the challenge and the identifiers, is written to
-the terminal once by [CHATGPT-13](#CHATGPT-13) and goes nowhere else.
+value or callback query reaches a trace, a log, an error message, a session record, a transcript, an exported
+conversation, a result or stream a script reads, the connection of a front end, `doctor`, `auth status`, the
+terminal or the environment of a program a turn starts: a hook, a program `run` starts, an MCP server or a
+language server. The one exception is one copy of the authorization URL, which carries the `state`, the
+`nonce`, the challenge and the identifiers. [CHATGPT-13](#CHATGPT-13) writes it to the terminal of the sign-in
+once and it goes nowhere else: no other output holds it, and that terminal holds it once.
 
 A test holds every value the run handled against each of those outputs, as the trail's test does for the
-credentials the agent holds, and leaves out that one line. The values are the code, the `state`, the `nonce`,
-the challenge, the verifier, both pairs of tokens, the ID token and each of its three dot-separated parts, the
-client and host identifiers, the identifier the process made for its session, and the text of each refusal: the
-stand-in repeats every value it has seen in the body of every refusal it makes. Each output is required to be
-there and to hold something, so a run that wrote none of them does not pass. Each test below makes the run
+credentials the agent holds. The values are the code, the `state`, the `nonce`, the challenge, the verifier,
+both pairs of tokens, the ID token and each of its three dot-separated parts, the client and host identifiers,
+the identifier the process made for its session, and the text of each refusal: the stand-in repeats every
+value it has seen in the body of every refusal it makes. The authorization URL is held as a value too. The
+terminal of the sign-in is held with one copy of it taken out, and fails if it holds none or more than one,
+and every other output and every file is held to it whole.
+
+The scan looks for each value as the run wrote it and percent-encoded with upper-case hexadecimal digits,
+which is how an address and a form body write one that is not URL-safe, and for the authorization URL as it
+was written. It does not find a value written percent-encoded with lower-case digits, in base64 or
+hexadecimal, folded to another case, split over two lines of a file or over two rows of the screen, or cut
+short, partly redacted or otherwise changed. An output that carries a value in one of those forms passes, so a
+hold is a hold against the forms this program's own writers use and not against every way a value could be
+written. Each value is required to be longer than eight bytes and not part of another, so that a hit names the
+value it found. The ID token and its three parts are the exception, since they are text of the whole by
+design.
+
+Each output is required to be there, and to hold something unless nothing writes to it in the run: the
+standard error of the bridge and of the ACP adapter, the standard output of the local host, and the standard
+output and standard error of the background host, which these runs leave empty, are held when they hold
+anything and accepted when they hold nothing, and the two files the background host's output is sent to are
+required to exist. A run that wrote none of the other outputs does not pass. Each test below makes the run
 itself and holds what its own writers produce from it:
 
+- `bravebot_cli::chatgpt_account::the_authorization_url_is_let_through_once_in_the_sign_in_terminal_and_in_no_other_output`
+  holds outputs made by hand against the values of a run. The terminal of the sign-in with the URL once
+  passes. It fails with the URL twice or not at all, and with the `state` or a part of the URL besides the one
+  copy. Any other output fails with a copy of the URL, in a trace or alone, and with the `state` or the
+  `nonce` alone.
+- `bravebot_cli::chatgpt_account::the_scanner_finds_a_value_percent_encoded_refuses_an_empty_output_and_refuses_overlapping_values`
+  holds values made by hand. It finds one as written and percent-encoded, fails an output with nothing in it,
+  and fails a set of values in which two are equal, one is inside another, one is too short or one is empty.
 - `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
   runs the built binary against the stand-in through the seam of [CHATGPT-2](#CHATGPT-2): the sign-in in a
-  terminal, `auth status` and `doctor` while signed in and once the sign-in has ended, and three print-mode
-  turns, one answered, one refused in a code of the closed list at the status that otherwise has the token
-  replaced, and one whose refresh is refused as no longer valid. It holds the sign-in's terminal less the
-  authorization URL, each command's standard output and standard error under `--trace` and the debug log,
-  which is where the trace and the error message are, every file left in the home, the session record and
-  trail the answered turn left, and the environment a hook started by each turn writes. It requires one record,
-  one trail and a log for each run, and that the refusal in a listed code asked for no new token. A print-mode
-  turn that fails records nothing, so the record of a failed turn is held where one is written.
+  terminal, `auth status` and `doctor` while signed in and once the sign-in has ended, and these print-mode
+  turns: one answered as text, one as `--json` and one as `--json-stream`; three refused in a code of the
+  closed list, as text, as JSON and as a stream, at the status that otherwise has the token replaced; one
+  whose refresh is refused as no longer valid; and two after the sign-in has ended, as JSON and as a stream.
+  Every command is run with `--log-level debug` and each turn with `--trace`, which is an option of a task and
+  of no other command. A hook of the home starts a program at each of the two moments of a turn, and the test
+  requires that each turn started two and holds the environment they wrote. It holds the sign-in's terminal,
+  each command's standard output and standard error, which is where the trace, the JSON result and the stream
+  are, the debug log of the sign-in and of each turn, taken as each run ends because a state directory keeps
+  the newest ten, every file left in the home, and the session record and trail of each answered turn. It
+  requires one log for the sign-in and one for each turn and none for `auth status` and `doctor`, which ask
+  the stand-in nothing, one record and one trail for each answered turn, and that the refusals in a listed
+  code asked for no new token. A print-mode turn that fails records nothing, so the record of a failed turn is
+  held where one is written.
 - `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops`
   runs the sign-in in a terminal three times, against a stand-in that refuses the code, issues an ID token
   that names another sign-in's nonce, and cannot serve the key set. It holds the terminal of each, less one
   copy of the authorization URL, and every file each left. Each leaves none, since a sign-in that stops
   stores nothing and writes no log, and the test fails where one leaves a file so that the file is searched.
 - `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface`
-  types four prompts that fail in four ways into `bravebot --plain` in a terminal, and holds the terminal and
-  every file left. A session in lines keeps no record of its turns outside a background host.
+  runs `bravebot --log-level debug --plain` in a terminal and types four prompts that fail in four ways. It
+  holds the terminal and every file left, and requires a log for the sign-in and one for the session. A
+  session in lines keeps no record of its turns outside a background host.
 - `bravebot_tui::chatgpt_failure_tests::what_the_terminal_client_keeps_and_draws_of_a_failed_turn_holds_none_of_the_values_of_the_run`
   signs in and makes four turns that fail, as a renewal while the token endpoint is busy, a refusal that is
   not of the token, a refusal in a code of the closed list, and a sign-in that has ended, and gives each
   failure to `fold_outcome` and `record_turn` as a finished turn is given. It holds the transcript, its
   markdown export, the screen as cells and as the bytes written to a terminal, the turns the record keeps with
-  each reason, the note the picker says for a listing that cannot be read and for one refused in a code of
-  the closed list, the error message of each turn, its debug form, how it ended, what it reported and the
+  each reason, the note the picker says for a listing that cannot be read and for one refused in a code of the
+  closed list, the error message of each turn, its debug form, how it ended, what it reported and the
   conversation, every file the session wrote but the sign-in file, and the terminal of the process that made
   the run. It requires that the record's reason is the failure the transcript shows and that no two of the
   four turns failed alike. The run is made in a child of the test binary, since the account's hosts and the
   state directory are read from the environment, this crate forbids `unsafe`, and `fold_outcome` is private.
 - `bravebot_ui_bridge::chatgpt_secrets::what_the_bridge_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
-  signs in in a child of the test binary and then drives `bravebot-rpc`, the binary the desktop starts, over its
-  pipe through the same four failures and two `models.list` requests, one for a listing that cannot be read
-  and one for a listing refused in a code of the closed list. It holds the `turn.error` event of each turn, the
-  answer to each `models.list` with its warnings, every line the binary wrote to its pipe, its standard error,
-  and the record and trail it wrote. It requires that no two turns failed alike and that the record keeps
-  the four.
+  signs in in a child of the test binary and then drives `bravebot-rpc`, the binary the desktop starts, over
+  its pipe through the same four failures and two `models.list` requests, one for a listing that cannot be
+  read and one for a listing refused in a code of the closed list. It holds the `turn.error` event of each
+  turn, the answer to each `models.list` with its warnings, every line the binary wrote to its pipe, its
+  standard error, and the record and trail it wrote. It requires that no two turns failed alike and that the
+  record keeps the four.
 
-Every output the clause names is held by one of these, except what the renderer in `ui/` draws from the
-events the bridge sends. The renderer is not a crate, so the events are what is held, and what the window makes
-of the `account` name and the sentence in one is pinned by the scripts the `by-construction` entry of this
-clause names.
+Every output the clause names is held by one of these, except the environment of a program `run` starts and of
+an MCP server; the environment of a language server, and a background host's terminal and record; the file
+`/export` writes; the connection of the ACP adapter and of the local host; what the renderer in `ui/` draws
+from the events the bridge sends; and the debug log of the full-screen terminal client. The renderer is not a
+crate, so the events are what is held, and what the window makes of the `account` name and the sentence in one
+is pinned by the scripts the `by-construction` entry of this clause names. The test of the full-screen client
+is made in a child of its test binary that sets no log level, and the client's crate has no dependency on the
+crate that writes the log, so the debug log of that client is not made to be held, and the files its session
+wrote are.
+
+Two more things are not reached. The loop in `run_turn_animated` that takes what a turn's reporter sends into
+the session needs a terminal, and no test runs it. The test of the terminal client makes its turns with the
+client's own `RemoteReporter`, requires that the prompt and the request were reported, holds every `ToMain`
+message the reporter sent, and takes each into the session with the call that loop makes for it, so the
+reporter and its messages are driven and the loop's own match is not. And the bridge, the ACP adapter and the
+host start no debug log, since only `crates/cli/src/main.rs` configures one, so no log of theirs exists to be
+held: the files their sessions leave are.
 
 The command's tests run on Linux and macOS, where `script` gives the command a terminal, and not on Windows.
 
@@ -807,6 +854,8 @@ a rate limit by status here is waited out and reported as a rate limit is elsewh
 signing in again would not supply is not offered. A usage limit named by a code is not waited out, since
 nothing a second request or a wait of this program's does changes it.
 
+`verified-by: bravebot_cli::chatgpt_account::the_authorization_url_is_let_through_once_in_the_sign_in_terminal_and_in_no_other_output`
+`verified-by: bravebot_cli::chatgpt_account::the_scanner_finds_a_value_percent_encoded_refuses_an_empty_output_and_refuses_overlapping_values`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface`

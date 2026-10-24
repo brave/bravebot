@@ -343,23 +343,37 @@ impl Handled {
     }
 
     /// The name of every value that `text` holds, as it is written or percent-encoded, which is how
-    /// an address and a form body write the ones that are not URL-safe.
+    /// an address and a form body write the ones that are not URL-safe, and the authorization URL
+    /// itself, which is one of them.
     pub fn found_in(&self, text: &str) -> Vec<String> {
-        self.values
+        let mut found: Vec<String> = self
+            .values
             .iter()
             .filter(|(_, value)| {
                 text.contains(value.as_str()) || text.contains(&url_encoded(value))
             })
             .map(|(name, _)| name.clone())
-            .collect()
+            .collect();
+        if !self.address.is_empty() && text.contains(self.address.as_str()) {
+            found.push("the authorization URL".to_string());
+        }
+        found
     }
 
     /// Fail where `text`, the `output` of the run, holds a value the run handled, and where it is
     /// empty, since an output with nothing in it holds nothing and is not one that was searched.
+    ///
+    /// The authorization URL is a value too: it carries the `state`, the `nonce` and the challenge, and
+    /// only the sign-in's terminal may hold it, once, which is
+    /// [`Handled::assert_none_in_but_one_copy_of_the_address`]. Every other output is held whole.
     pub fn assert_none_in(&self, output: &str, text: &str) {
         assert!(
             !text.is_empty(),
             "{output} is empty, so nothing was searched"
+        );
+        assert!(
+            self.address.is_empty() || !text.contains(self.address.as_str()),
+            "{output} holds the authorization URL, which only the sign-in's terminal may, once: {text}"
         );
         let found = self.found_in(text);
         assert!(
@@ -389,15 +403,12 @@ impl Handled {
         );
     }
 
-    /// [`Handled::assert_none_in`] for what a program wrote to a terminal, leaving out the line that
-    /// is the authorization URL, the one line the clause lets through.
-    pub fn assert_none_in_but_the_address(&self, output: &str, text: &str) {
-        let without = if self.address.is_empty() {
-            text.to_string()
-        } else {
-            text.replace(self.address.as_str(), "")
-        };
-        self.assert_none_in(output, &without);
+    /// Values and an address made by hand, for a test of what holding an output against them does.
+    pub fn of(values: Vec<(String, String)>, address: &str) -> Self {
+        Self {
+            values,
+            address: address.to_string(),
+        }
     }
 }
 

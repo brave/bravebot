@@ -73,11 +73,6 @@ pub struct Renewer {
     agent: ureq::Agent,
     path: PathBuf,
     unwritten: Option<Unwritten>,
-    /// A refresh was refused as the refresh token no longer being valid and the file was removed.
-    /// A missing file does not say why it is missing, so this is what tells a later ask that the
-    /// sign-in ended, where the file alone would say none was made. Forgotten where a sign-in is
-    /// found stored again.
-    ended: bool,
     /// Seconds since 1970 where an expiry is made and compared, which is 0 for a clock set before
     /// that. The system clock outside a test.
     now: fn() -> u64,
@@ -103,7 +98,6 @@ impl Renewer {
             agent: exchange::agent(transport),
             path,
             unwritten: None,
-            ended: false,
             now,
         }
     }
