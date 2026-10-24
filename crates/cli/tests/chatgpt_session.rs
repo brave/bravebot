@@ -1,12 +1,14 @@
-//! CHATGPT-10 through the built binary, against a stand-in for the serving host: the identifier
-//! each request to the account carries as its session, thread and client request identifier, and
-//! the effort level its body asks for.
+//! CHATGPT-10 through the built binary, against the stand-in of
+//! `crates/agent/test-support/chatgpt_stand_in.rs`: the identifier each request to the account
+//! carries as its session, thread and client request identifier, and the effort level its body asks
+//! for.
 //!
 //! The binary reaches the stand-in through the `test-hosts` seam of `bravebot-skus` and
-//! `bravebot-config`, which this crate's dev-dependencies turn on ([CHATGPT-2]). A request to the
-//! account is a zstd frame, which the stand-in decodes for the level and reads nothing else of. It
-//! answers by the order sessions first appear in, so the first identifier it sees is the run's own
-//! and the next is a delegate's, which starts only after the run's first reply asked for it.
+//! `bravebot-config`, which this crate's dev-dependencies turn on ([CHATGPT-2]). The stand-in keeps
+//! the headers and the body of each request. A request to the account is a zstd frame, which this
+//! file decodes for the level. The stand-in answers by the order sessions first appear in, so the
+//! first identifier it sees is the run's own and the next is a delegate's, which starts only after
+//! the run's first reply asked for it.
 //!
 //! These tests run on Linux and macOS, as `chatgpt_account.rs` does, since the home directory the
 //! binary reads is set by `HOME`.
@@ -16,22 +18,18 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::collections::VecDeque;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 
 #[path = "../../aichat/test-support/account_body.rs"]
 mod account_body;
+#[path = "../../agent/test-support/chatgpt_stand_in.rs"]
+mod chatgpt_stand_in;
 
-/// The variable the seam reads, taken from the crate so that this file does not compile where the
-/// seam is off.
-const STAND_IN: &str = bravebot_skus::chatgpt::STAND_IN;
-
-const MODEL: &str = "chatgpt/gpt-placeholder";
-const ACCESS: &str = "PLACEHOLDER-ACCESS-a1a1";
-const REFRESH: &str = "PLACEHOLDER-REFRESH-r1r1";
+use chatgpt_stand_in::{ACCESS_TWO, Asked, MODEL, REFRESH_TWO, STAND_IN, Serving, StandIn};
 
 /// A directory a run takes as its home, removed when the test ends.
 struct Scratch {
@@ -58,8 +56,8 @@ impl Scratch {
             path.join(".bravebot/chatgpt-account.json"),
             serde_json::json!({
                 "version": 1,
-                "access_token": ACCESS,
-                "refresh_token": REFRESH,
+                "access_token": ACCESS_TWO,
+                "refresh_token": REFRESH_TWO,
                 "expires_at": expires,
                 "client_id": "placeholder-client",
                 "host_id": "urn:uuid:placeholder-host-0000",
@@ -75,168 +73,6 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
-}
-
-/// What the stand-in answers one request with.
-#[derive(Clone, Copy)]
-enum Reply {
-    /// A text reply.
-    Text(&'static str),
-    /// A call of a tool, with its arguments as the JSON they are sent in.
-    Call(&'static str, &'static str),
-}
-
-/// What the three headers of one request held, whether the request carried the token, and the
-/// level its body asked for.
-#[derive(Debug, Clone, PartialEq)]
-struct Asked {
-    session: Option<String>,
-    thread: Option<String>,
-    client_request: Option<String>,
-    bearer: Option<String>,
-    /// `reasoning.effort` of the body, or `None` where the body has no such field.
-    level: Option<String>,
-}
-
-#[derive(Default)]
-struct State {
-    /// The replies for the first session that appears, then for the second, and so on. A session
-    /// beyond the list is answered with text.
-    scripts: Vec<Vec<Reply>>,
-    /// Each distinct `session-id` in the order it first appeared, and how many requests it made.
-    sessions: Vec<(String, usize)>,
-    asked: Vec<Asked>,
-}
-
-/// A stand-in for the serving host at `base`.
-struct StandIn {
-    base: String,
-    state: Arc<Mutex<State>>,
-}
-
-impl StandIn {
-    fn new(scripts: Vec<Vec<Reply>>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let base = format!("http://{}", listener.local_addr().expect("an address"));
-        let state = Arc::new(Mutex::new(State {
-            scripts,
-            ..State::default()
-        }));
-        std::thread::spawn({
-            let state = Arc::clone(&state);
-            move || {
-                while let Ok((stream, _)) = listener.accept() {
-                    let state = Arc::clone(&state);
-                    std::thread::spawn(move || serve(stream, &state));
-                }
-            }
-        });
-        Self { base, state }
-    }
-
-    fn asked(&self) -> Vec<Asked> {
-        self.state.lock().expect("the state").asked.clone()
-    }
-}
-
-/// The events of `reply`, ending as the host ends a stream.
-fn events(reply: Reply) -> String {
-    let event = |value: serde_json::Value| format!("data: {value}\n\n");
-    let finished = event(serde_json::json!({"type": "response.completed",
-        "response": {"model": "gpt-placeholder", "output": []}}));
-    match reply {
-        Reply::Text(words) => format!(
-            "{}{finished}",
-            event(serde_json::json!({"type": "response.output_text.delta", "delta": words}))
-        ),
-        Reply::Call(name, arguments) => format!(
-            "{}{}{finished}",
-            event(
-                serde_json::json!({"type": "response.output_item.added", "output_index": 0,
-                "item": {"type": "function_call", "call_id": "call_1", "name": name,
-                    "arguments": ""}})
-            ),
-            event(
-                serde_json::json!({"type": "response.output_item.done", "output_index": 0,
-                "item": {"type": "function_call", "call_id": "call_1", "name": name,
-                    "arguments": arguments}})
-            ),
-        ),
-    }
-}
-
-/// Answer one request.
-fn serve(stream: TcpStream, state: &Mutex<State>) {
-    let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-    let mut line = String::new();
-    let _ = reader.read_line(&mut line);
-    let path = line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or_default()
-        .to_string();
-    let mut asked = Asked {
-        session: None,
-        thread: None,
-        client_request: None,
-        bearer: None,
-        level: None,
-    };
-    let mut length = 0usize;
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
-            break;
-        }
-        let Some((name, value)) = header.split_once(':') else {
-            continue;
-        };
-        let (name, value) = (name.trim().to_ascii_lowercase(), value.trim().to_string());
-        match name.as_str() {
-            "content-length" => length = value.parse().unwrap_or(0),
-            "session-id" => asked.session = Some(value),
-            "thread-id" => asked.thread = Some(value),
-            "x-client-request-id" => asked.client_request = Some(value),
-            "authorization" => asked.bearer = value.strip_prefix("Bearer ").map(str::to_string),
-            _ => {}
-        }
-    }
-    let mut body = vec![0u8; length];
-    let _ = reader.read_exact(&mut body);
-
-    let (status, kind, reply) = if path == "/v1/responses" {
-        asked.level = account_body::level_in(&body);
-        let mut state = state.lock().expect("the state");
-        let session = asked.session.clone().unwrap_or_default();
-        let position = match state.sessions.iter().position(|(seen, _)| *seen == session) {
-            Some(position) => position,
-            None => {
-                state.sessions.push((session, 0));
-                state.sessions.len() - 1
-            }
-        };
-        let nth = state.sessions[position].1;
-        state.sessions[position].1 += 1;
-        let reply = state
-            .scripts
-            .get(position)
-            .and_then(|replies| replies.get(nth))
-            .copied()
-            .unwrap_or(Reply::Text("done"));
-        state.asked.push(asked);
-        (200, "text/event-stream", events(reply))
-    } else {
-        (404, "text/plain", String::new())
-    };
-    let mut stream = stream;
-    let _ = stream.write_all(
-        format!(
-            "HTTP/1.1 {status} \r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
-            reply.len()
-        )
-        .as_bytes(),
-    );
-    let _ = stream.flush();
 }
 
 /// Run the binary in `home` against `stand_in` with `arguments`, its stdin empty.
@@ -269,13 +105,46 @@ fn said(output: &Output) -> String {
     )
 }
 
+/// A stand-in that answers the first session that makes a request with the first of `scripts`, the
+/// second session with the second, and so on. A session past its script is answered with text.
+fn a_stand_in_answering(scripts: Vec<Vec<Serving>>) -> StandIn {
+    let stand_in = StandIn::new(vec![]);
+    stand_in.state().session_scripts = scripts.into_iter().map(VecDeque::from).collect();
+    stand_in
+}
+
+/// The requests the stand-in took as a turn, in order.
+fn turns(stand_in: &StandIn) -> Vec<Asked> {
+    stand_in
+        .asked()
+        .into_iter()
+        .filter(|asked| asked.path == "/v1/responses")
+        .collect()
+}
+
 /// The identifier a request carried, which is the value of all three headers or no value at all.
 fn identifier(asked: &Asked) -> String {
-    let session = asked.session.clone().expect("a session-id header");
-    assert_eq!(asked.thread, Some(session.clone()), "{asked:?}");
-    assert_eq!(asked.client_request, Some(session.clone()), "{asked:?}");
-    assert_eq!(asked.bearer.as_deref(), Some(ACCESS), "{asked:?}");
+    let session = asked
+        .header("session-id")
+        .expect("a session-id header")
+        .to_string();
+    assert_eq!(
+        asked.header("thread-id"),
+        Some(session.as_str()),
+        "{asked:?}"
+    );
+    assert_eq!(
+        asked.header("x-client-request-id"),
+        Some(session.as_str()),
+        "{asked:?}"
+    );
+    assert_eq!(asked.bearer.as_deref(), Some(ACCESS_TWO), "{asked:?}");
     session
+}
+
+/// The level a request to the account asked for, or `None` where it asked for none.
+fn level_of(asked: &Asked) -> Option<String> {
+    account_body::level_in(&asked.body.0)
 }
 
 /// A session in lines in `home`, which reads its prompts from a terminal, given each of `prompts`
@@ -336,7 +205,7 @@ fn in_lines(home: &Scratch, stand_in: &StandIn, prompts: &[&str]) -> String {
     for (at, prompt) in prompts.iter().enumerate() {
         writeln!(typed, "{prompt}").expect("a prompt");
         let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while stand_in.asked().len() <= at && std::time::Instant::now() < until {
+        while turns(stand_in).len() <= at && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
@@ -371,16 +240,16 @@ fn in_lines(home: &Scratch, stand_in: &StandIn, prompts: &[&str]) -> String {
 #[test]
 fn a_run_carries_one_identifier_in_all_three_headers_and_its_delegate_carries_another() {
     let home = Scratch::new("cli-chatgpt-session-delegate");
-    let stand_in = StandIn::new(vec![
+    let stand_in = a_stand_in_answering(vec![
         vec![
-            Reply::Call(
+            Serving::Calls(
                 "spawn_agent",
                 r#"{"kind":"reader","task":"say something short"}"#,
             ),
-            Reply::Text("nothing to add while it works"),
-            Reply::Text("relayed"),
+            Serving::Says("nothing to add while it works"),
+            Serving::Says("relayed"),
         ],
-        vec![Reply::Text("REPORTED BACK")],
+        vec![Serving::Says("REPORTED BACK")],
     ]);
 
     let output = bravebot(
@@ -390,8 +259,8 @@ fn a_run_carries_one_identifier_in_all_three_headers_and_its_delegate_carries_an
     );
 
     assert!(output.status.success(), "{}", said(&output));
-    let asked = stand_in.asked();
-    let sessions = stand_in.state.lock().expect("the state").sessions.clone();
+    let asked = turns(&stand_in);
+    let sessions = stand_in.requests_by_session();
     assert_eq!(
         sessions.iter().map(|(_, count)| *count).collect::<Vec<_>>(),
         [3, 1],
@@ -424,9 +293,9 @@ fn a_run_carries_one_identifier_in_all_three_headers_and_its_delegate_carries_an
 #[test]
 fn the_rounds_and_the_checks_of_a_goal_run_carry_one_identifier() {
     let home = Scratch::new("cli-chatgpt-session-goal");
-    let stand_in = StandIn::new(vec![vec![
-        Reply::Text("it is made"),
-        Reply::Text("MET\nthe exchange says it is made"),
+    let stand_in = a_stand_in_answering(vec![vec![
+        Serving::Says("it is made"),
+        Serving::Says("MET\nthe exchange says it is made"),
     ]]);
 
     let output = bravebot(
@@ -444,7 +313,7 @@ fn the_rounds_and_the_checks_of_a_goal_run_carry_one_identifier() {
     );
 
     assert!(output.status.success(), "{}", said(&output));
-    let asked = stand_in.asked();
+    let asked = turns(&stand_in);
     assert_eq!(asked.len(), 2, "one round and one check: {asked:?}");
     assert_eq!(identifier(&asked[0]), identifier(&asked[1]));
 }
@@ -461,7 +330,7 @@ fn a_session_in_lines_carries_one_identifier_through_every_prompt() {
 
     let terminal = in_lines(&home, &stand_in, &["first", "second"]);
 
-    let asked = stand_in.asked();
+    let asked = turns(&stand_in);
     assert_eq!(asked.len(), 2, "{asked:?}\n{terminal}");
     assert_eq!(identifier(&asked[0]), identifier(&asked[1]));
 }
@@ -474,9 +343,9 @@ fn a_session_in_lines_carries_one_identifier_through_every_prompt() {
 #[test]
 fn a_one_shot_run_asks_for_the_level_it_was_started_with_and_a_check_of_its_goal_for_none() {
     let home = Scratch::new("cli-chatgpt-session-level");
-    let stand_in = StandIn::new(vec![vec![
-        Reply::Text("it is made"),
-        Reply::Text("MET\nthe exchange says it is made"),
+    let stand_in = a_stand_in_answering(vec![vec![
+        Serving::Says("it is made"),
+        Serving::Says("MET\nthe exchange says it is made"),
     ]]);
 
     let output = bravebot(
@@ -496,11 +365,7 @@ fn a_one_shot_run_asks_for_the_level_it_was_started_with_and_a_check_of_its_goal
     );
 
     assert!(output.status.success(), "{}", said(&output));
-    let levels: Vec<Option<String>> = stand_in
-        .asked()
-        .into_iter()
-        .map(|asked| asked.level)
-        .collect();
+    let levels: Vec<Option<String>> = turns(&stand_in).iter().map(level_of).collect();
     assert_eq!(levels, [Some("low".to_string()), None]);
 }
 
@@ -517,13 +382,10 @@ fn a_session_in_lines_asks_for_the_level_chosen_in_every_prompt() {
 
     let terminal = in_lines(&home, &stand_in, &["first", "second"]);
 
-    let asked = stand_in.asked();
+    let asked = turns(&stand_in);
     assert_eq!(asked.len(), 2, "{asked:?}\n{terminal}");
     assert_eq!(
-        asked
-            .iter()
-            .map(|asked| asked.level.as_deref())
-            .collect::<Vec<_>>(),
-        [Some("medium"), Some("medium")]
+        asked.iter().map(level_of).collect::<Vec<_>>(),
+        [Some("medium".to_string()), Some("medium".to_string())]
     );
 }

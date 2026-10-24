@@ -23,7 +23,7 @@
 
 use bravebot_skus::chatgpt::stand_in_key::{header, key_set, signed};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -35,6 +35,10 @@ mod refusal_codes;
 pub const USAGE_LIMIT: &str = refusal_codes::USAGE_LIMIT;
 /// One of the six codes of the list that say the account may not be used this way.
 pub const NOT_ELIGIBLE: &str = refusal_codes::NOT_ELIGIBLE;
+
+#[path = "chatgpt_host.rs"]
+mod chatgpt_host;
+use chatgpt_host::{Request, call_events, read_request, respond, text_events};
 
 /// The variable both seams read. Taken from the crate rather than written here, so a build where
 /// the seam is off does not compile the tests that include this file.
@@ -102,8 +106,10 @@ pub enum Refresh {
 /// What the serving host does with the next turn, or the next listing, it is given.
 #[derive(Clone, Copy, Debug)]
 pub enum Serving {
-    /// A turn is answered.
+    /// A turn is answered, in the text `all done`.
     Answers,
+    /// A turn is answered, in this text.
+    Says(&'static str),
     /// The token is turned away: a 401 that repeats what the stand-in has seen.
     RefusesTheToken,
     /// The request is refused with a status of its own and a body that repeats what it has seen.
@@ -112,6 +118,9 @@ pub enum Serving {
     /// [CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8), in a body that repeats what it
     /// has seen.
     RefusesWithCode(u16, &'static str),
+    /// A turn is answered with one call of the tool `name` with the JSON `arguments`, as the model
+    /// would ask for it, and ends there.
+    Calls(&'static str, &'static str),
 }
 
 /// One request the stand-in took.
@@ -121,6 +130,30 @@ pub struct Asked {
     pub path: String,
     pub bearer: Option<String>,
     pub form: Vec<(String, String)>,
+    /// Every header the request carried, in the order they came.
+    pub headers: Vec<(String, String)>,
+    /// The body as the bytes that arrived, which for a request to the serving host is a zstd frame.
+    pub body: Body,
+}
+
+impl Asked {
+    /// The value of the header `name`, which is compared without regard to case.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(each, _)| each.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// The bytes of a request body, which a failure message names by their number and does not print.
+#[derive(Clone)]
+pub struct Body(pub Vec<u8>);
+
+impl std::fmt::Debug for Body {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} bytes", self.0.len())
+    }
 }
 
 /// What the stand-in knows and answers with.
@@ -138,6 +171,9 @@ pub struct State {
     /// What each turn is answered with, in order, until it is empty. Then a turn is answered by the
     /// rules of [`State::refusing`] and [`ACCESS_ONE`].
     pub serving: VecDeque<Serving>,
+    /// What each turn of a session is answered with, for the first session that makes a request, then
+    /// for the second, and so on. A session with no script left is answered from [`State::serving`].
+    pub session_scripts: Vec<VecDeque<Serving>>,
     /// What each listing is answered with, in order, until it is empty.
     pub listing: VecDeque<Serving>,
     /// Every request to the serving host is refused with a 401.
@@ -162,6 +198,20 @@ impl State {
                 .and_then(|file| std::fs::read_to_string(file).ok())
                 .filter(|text| !text.is_empty())
         })
+    }
+
+    /// Where the session `id` comes among the sessions that have made a request, the first to appear
+    /// being first: its place, or the next one where it has made none.
+    fn place_of_session(&self, id: &str) -> usize {
+        let mut seen: Vec<&str> = Vec::new();
+        for each in &self.sessions {
+            if !seen.contains(&each.as_str()) {
+                seen.push(each);
+            }
+        }
+        seen.iter()
+            .position(|each| *each == id)
+            .unwrap_or(seen.len())
     }
 
     /// One parameter of the announced URL.
@@ -192,6 +242,7 @@ impl StandIn {
             renewals,
             refreshing: VecDeque::new(),
             serving: VecDeque::new(),
+            session_scripts: Vec::new(),
             listing: VecDeque::new(),
             refusing: false,
             fault: Fault::None,
@@ -219,6 +270,26 @@ impl StandIn {
 
     pub fn asked(&self) -> Vec<Asked> {
         self.state().asked.clone()
+    }
+
+    /// How many requests to the serving host each session made, for each session that made one, the
+    /// first to appear first.
+    pub fn requests_by_session(&self) -> Vec<(String, usize)> {
+        let mut counted: Vec<(String, usize)> = Vec::new();
+        for asked in self
+            .asked()
+            .iter()
+            .filter(|asked| asked.path == "/v1/responses")
+        {
+            let Some(id) = asked.header("session-id") else {
+                continue;
+            };
+            match counted.iter_mut().find(|(seen, _)| seen == id) {
+                Some((_, count)) => *count += 1,
+                None => counted.push((id.to_string(), 1)),
+            }
+        }
+        counted
     }
 
     /// The refresh tokens the token endpoint has been given, in order.
@@ -458,17 +529,10 @@ impl Serving {
     /// The reply, as the status, the kind and the body.
     fn reply(self, state: &State) -> (u16, &'static str, String) {
         match self {
-            Self::Answers => {
-                let events = [
-                    serde_json::json!({"type": "response.output_text.delta", "delta": "all done"}),
-                    serde_json::json!({"type": "response.completed",
-                        "response": {"model": "gpt-placeholder", "output": []}}),
-                ];
-                let body: String = events
-                    .iter()
-                    .map(|event| format!("data: {event}\n\n"))
-                    .collect();
-                (200, "text/event-stream", body)
+            Self::Answers => (200, "text/event-stream", text_events("all done")),
+            Self::Says(words) => (200, "text/event-stream", text_events(words)),
+            Self::Calls(name, arguments) => {
+                (200, "text/event-stream", call_events(name, arguments))
             }
             Self::RefusesTheToken => refusal(state, 401),
             Self::Refuses(status) => refusal(state, status),
@@ -479,33 +543,20 @@ impl Serving {
 
 /// Answer one request.
 fn serve(stream: TcpStream, state: &Mutex<State>) {
-    let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-    let mut line = String::new();
-    let _ = reader.read_line(&mut line);
-    let mut words = line.split_whitespace();
-    let method = words.next().unwrap_or_default().to_string();
-    let path = words.next().unwrap_or_default().to_string();
-    let (mut length, mut bearer, mut session) = (0usize, None, None);
-    loop {
-        let mut header = String::new();
-        if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
-            break;
-        }
-        if let Some((name, value)) = header.split_once(':') {
-            let (name, value) = (name.trim(), value.trim());
-            if name.eq_ignore_ascii_case("content-length") {
-                length = value.parse().unwrap_or(0);
-            }
-            if name.eq_ignore_ascii_case("authorization") {
-                bearer = value.strip_prefix("Bearer ").map(str::to_string);
-            }
-            if name.eq_ignore_ascii_case("session-id") {
-                session = Some(value.to_string());
-            }
-        }
-    }
-    let mut body = vec![0u8; length];
-    let _ = reader.read_exact(&mut body);
+    let Some(request) = read_request(&stream) else {
+        return;
+    };
+    let bearer = request
+        .header("authorization")
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_string);
+    let session = request.header("session-id").map(str::to_string);
+    let Request {
+        method,
+        path,
+        headers,
+        body,
+    } = request;
     // Only the token endpoint takes a form. A request to the serving host carries a zstd frame.
     let form = if path == "/token" {
         form(&String::from_utf8_lossy(&body))
@@ -514,12 +565,15 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
     };
 
     let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+    let place = session.as_deref().map(|id| state.place_of_session(id));
     state.sessions.extend(session);
     state.asked.push(Asked {
         method: method.clone(),
         path: path.clone(),
         bearer: bearer.clone(),
         form: form.clone(),
+        headers,
+        body: Body(body),
     });
     let named = |name: &str| {
         form.iter()
@@ -528,7 +582,10 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
     };
     let scripted = match (method.as_str(), path.as_str()) {
         ("GET", "/v1/models") => state.listing.pop_front(),
-        ("POST", "/v1/responses") => state.serving.pop_front(),
+        ("POST", "/v1/responses") => place
+            .and_then(|at| state.session_scripts.get_mut(at))
+            .and_then(VecDeque::pop_front)
+            .or_else(|| state.serving.pop_front()),
         _ => None,
     };
     let (status, kind, reply) = if let Some(how) = scripted {
@@ -615,19 +672,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>) {
         }
     };
     drop(state);
-    respond(stream, status, kind, &reply);
-}
-
-fn respond(stream: TcpStream, status: u16, kind: &str, reply: &str) {
-    let mut stream = stream;
-    let _ = stream.write_all(
-        format!(
-            "HTTP/1.1 {status} \r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
-            reply.len()
-        )
-        .as_bytes(),
-    );
-    let _ = stream.flush();
+    respond(&stream, status, kind, &reply);
 }
 
 pub fn now() -> u64 {

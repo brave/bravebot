@@ -32,6 +32,11 @@ pub(crate) fn scratch_dir(name: &str) -> PathBuf {
 #[path = "../tests/repository/mod.rs"]
 pub(crate) mod repository;
 
+/// What the stand-ins for the ChatGPT serving host share: a request read off a connection, the reply
+/// written to it, and the events of a reply.
+#[path = "../test-support/chatgpt_host.rs"]
+mod chatgpt_host;
+
 /// What a stage puts at the name of a directory once it has moved the directory.
 #[cfg(unix)]
 pub(crate) type PutThere<'a> = Box<dyn Fn(&Path) + 'a>;
@@ -85,8 +90,6 @@ impl Host {
 
 /// Start a [`Host`] that answers its first connections with `answers`, in order.
 pub(crate) fn serving_host(answers: Vec<Answer>) -> Host {
-    use std::io::{BufRead, BufReader, Read, Write};
-
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
     let endpoint = format!(
         "http://127.0.0.1:{}",
@@ -96,83 +99,25 @@ pub(crate) fn serving_host(answers: Vec<Answer>) -> Host {
     let kept = std::sync::Arc::clone(&taken);
     std::thread::spawn(move || {
         for answer in answers {
-            let Ok((mut stream, _)) = listener.accept() else {
+            let Ok((stream, _)) = listener.accept() else {
                 return;
             };
-            let Ok(clone) = stream.try_clone() else {
+            let Some(request) = chatgpt_host::read_request(&stream) else {
                 return;
             };
-            let mut reader = BufReader::new(clone);
-            let mut line = String::new();
-            if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                return;
-            }
-            let mut headers = Vec::new();
-            let mut length = 0usize;
-            loop {
-                let mut header = String::new();
-                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
-                    break;
-                }
-                if let Some((name, value)) = header.split_once(':') {
-                    if name.trim().eq_ignore_ascii_case("content-length") {
-                        length = value.trim().parse().unwrap_or(0);
-                    }
-                    headers.push((name.trim().to_string(), value.trim().to_string()));
-                }
-            }
-            let mut body = vec![0u8; length];
-            let _ = reader.read_exact(&mut body);
             if let Ok(mut kept) = kept.lock() {
-                kept.push(headers);
+                kept.push(request.headers);
             }
-            let reply = match answer {
-                Answer::Status(status) => format!(
-                    "HTTP/1.1 {status} Nope\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            match answer {
+                Answer::Status(status) => chatgpt_host::respond(&stream, status, "text/plain", ""),
+                Answer::Words(words) => chatgpt_host::respond(
+                    &stream,
+                    200,
+                    "text/event-stream",
+                    &chatgpt_host::text_events(words),
                 ),
-                Answer::Words(words) => format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{}",
-                    words_as_a_stream(words)
-                ),
-            };
-            let _ = stream.write_all(reply.as_bytes());
-            let _ = stream.flush();
+            }
         }
     });
     Host { endpoint, taken }
-}
-
-/// The events of a text reply, ending as the ChatGPT host ends one: the final response states the
-/// figures and its own `output` list is empty.
-fn words_as_a_stream(words: &str) -> String {
-    let event = |kind: &str, fields: serde_json::Value| {
-        let mut payload = serde_json::json!({ "type": kind });
-        if let (Some(into), serde_json::Value::Object(from)) = (payload.as_object_mut(), fields) {
-            into.extend(from);
-        }
-        format!("data: {payload}\n\n")
-    };
-    [
-        event(
-            "response.created",
-            serde_json::json!({"response": {"status": "in_progress"}}),
-        ),
-        event(
-            "response.output_item.added",
-            serde_json::json!({"output_index": 0,
-                "item": {"type": "message", "role": "assistant", "content": []}}),
-        ),
-        event(
-            "response.output_text.delta",
-            serde_json::json!({"delta": words}),
-        ),
-        event(
-            "response.completed",
-            serde_json::json!({"response": {"model": "served-model", "output": [], "usage": {
-                "input_tokens": 23, "output_tokens": 5, "total_tokens": 28,
-                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
-                "output_tokens_details": {"reasoning_tokens": 0}}}}),
-        ),
-    ]
-    .concat()
 }

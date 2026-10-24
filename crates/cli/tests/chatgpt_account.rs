@@ -337,15 +337,16 @@ impl Typed {
 
 /// CHATGPT-8: no value the sign-in handled reaches an output of a run that signs in, refreshes and
 /// fails. The run signs in (the code exchange, the key set and the ID token), its listing is refused
-/// for the first token and renews it, and turns are made in text, as JSON and as a JSON stream: three
+/// for the first token and renews it, and turns are made in text, as JSON and as a JSON stream: five
 /// that are answered, three refused in a code that names the account, one whose refresh is refused as
-/// no longer valid, which ends the sign-in, and two after it. Every reply that refuses
+/// no longer valid, which ends the sign-in, and two after it. Two of the answered turns start a program, one through `run` and one an MCP server a
+/// person declared. Every reply that refuses
 /// repeats every value the stand-in has seen. Then each output is searched for each value: what the
 /// sign-in showed in its terminal, which holds the authorization URL once, what each run and `auth
 /// status` and `doctor` wrote to their streams, under `--trace` for a turn and `--log-level debug` for
 /// each, the debug log each run left, taken as it ended, every file the runs left in the home (the
 /// trail, the logs, the session records and their audit files), and the environment of each program a
-/// turn started, which a hook writes there. A run that left no session record, no trail or no log is not one that
+/// turn started, which a hook, `run` and the server write there. A run that left no session record, no trail or no log is not one that
 /// was searched, so each of them is required, and the count of each is exact.
 ///
 /// What the other outputs are held by is stated with CHATGPT-8: the terminal client's transcript, its
@@ -503,6 +504,67 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         "{}",
         said(&stream)
     );
+    // A program a turn starts through `run`, and a server a person declared that a turn starts: each
+    // writes the environment it was given, which is searched with the files of the home. The model
+    // asks for the program in its first reply and answers in its second. Nothing is asked of a
+    // person, so the mode that answers for them is named.
+    let program = home.path.join("work/dump-env.sh");
+    std::fs::write(&program, "#!/bin/sh\n/usr/bin/env > \"$PWD/run-env.txt\"\n")
+        .expect("a program for `run` to start");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("the program is executable");
+    }
+    stand_in
+        .state()
+        .serving
+        .push_back(Serving::Calls("run", r#"{"command": "./dump-env.sh"}"#));
+    let started = runs.turn(
+        "the turn that starts a program through `run`",
+        &["--dangerously-skip-permissions"],
+    );
+    assert!(
+        String::from_utf8_lossy(&started.stdout).contains("all done"),
+        "{}",
+        said(&started)
+    );
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        r#"/usr/bin/env > "$HOME/mcp-env.txt"; /usr/bin/env 1>&2"#.to_string(),
+    ];
+    let declaration =
+        bravebot_config::mcp::Declaration::stdio(argv.clone(), vec!["PATH".into()], None)
+            .expect("a declaration");
+    std::fs::write(
+        home.path.join(".bravebot/mcp.json"),
+        serde_json::json!({"servers": {"dumper": {
+            "transport": "stdio", "argv": argv, "variables": ["PATH"]}}})
+        .to_string(),
+    )
+    .expect("the declaration");
+    std::fs::write(
+        home.path.join(".bravebot/mcp-approved"),
+        format!("{}\n", declaration.digest()),
+    )
+    .expect("the approval");
+    std::fs::write(
+        home.path.join(".bravebot/settings.json"),
+        r#"{"mcp": {"request": ["dumper"]}}"#,
+    )
+    .expect("the request");
+    let served = runs.turn(
+        "the turn that starts a declared server",
+        &["--dangerously-skip-permissions"],
+    );
+    assert!(
+        String::from_utf8_lossy(&served.stdout).contains("all done"),
+        "{}",
+        said(&served)
+    );
+    std::fs::remove_file(home.path.join(".bravebot/settings.json"))
+        .expect("the request is taken out");
     // The account has reached its usage limit: a refusal in a listed code, whatever its status, and
     // here the status that otherwise has the token replaced. It replaces none, so no refresh is
     // asked for.
@@ -581,13 +643,13 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
     let left: Vec<&PathBuf> = files.iter().map(|(path, _)| path).collect();
     assert_eq!(
         named("/sessions/", ".json"),
-        3,
-        "the three turns that were answered did not leave a session record each: {left:?}"
+        5,
+        "the five turns that were answered did not leave a session record each: {left:?}"
     );
     assert_eq!(
         named("/sessions/", ".audit.jsonl"),
-        3,
-        "the three turns that were answered did not leave a trail each: {left:?}"
+        5,
+        "the five turns that were answered did not leave a trail each: {left:?}"
     );
     // A log is written by a run that logged something, and the sign-in and each turn ask something of
     // the stand-in. `auth status` and `doctor` ask nothing of it and leave none.
@@ -599,6 +661,27 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
     );
     let logs = std::mem::take(&mut runs.logs);
 
+    // The environment of each kind of program a turn starts was written, so it is among the files.
+    let dumps: Vec<(String, &Vec<u8>)> = files
+        .iter()
+        .filter(|(path, _)| {
+            path.file_name()
+                .is_some_and(|name| name == "run-env.txt" || name == "mcp-env.txt")
+        })
+        .map(|(path, bytes)| (path.display().to_string(), bytes))
+        .collect();
+    assert_eq!(
+        dumps.len(),
+        2,
+        "the environments of `run` and of the server: {left:?}"
+    );
+    for (path, bytes) in &dumps {
+        let text = String::from_utf8_lossy(bytes);
+        assert!(
+            text.contains("HOME=") && text.contains("PATH="),
+            "{path} does not hold an environment: {text}"
+        );
+    }
     let handled = stand_in.handled();
     handled.assert_distinct();
     assert!(

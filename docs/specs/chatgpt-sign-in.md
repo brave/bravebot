@@ -784,19 +784,21 @@ itself and holds what its own writers produce from it:
 - `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
   runs the built binary against the stand-in through the seam of [CHATGPT-2](#CHATGPT-2): the sign-in in a
   terminal, `auth status` and `doctor` while signed in and once the sign-in has ended, and these print-mode
-  turns: one answered as text, one as `--json` and one as `--json-stream`; three refused in a code of the
-  closed list, as text, as JSON and as a stream, at the status that otherwise has the token replaced; one
-  whose refresh is refused as no longer valid; and two after the sign-in has ended, as JSON and as a stream.
-  Every command is run with `--log-level debug` and each turn with `--trace`, which is an option of a task and
-  of no other command. A hook of the home starts a program at each of the two moments of a turn, and the test
-  requires that each turn started two and holds the environment they wrote. It holds the sign-in's terminal,
-  each command's standard output and standard error, which is where the trace, the JSON result and the stream
-  are, the debug log of the sign-in and of each turn, taken as each run ends because a state directory keeps
-  the newest ten, every file left in the home, and the session record and trail of each answered turn. It
-  requires one log for the sign-in and one for each turn and none for `auth status` and `doctor`, which ask
-  the stand-in nothing, one record and one trail for each answered turn, and that the refusals in a listed
-  code asked for no new token. A print-mode turn that fails records nothing, so the record of a failed turn is
-  held where one is written.
+  turns: one answered as text, one as `--json` and one as `--json-stream`; one in which the model calls `run`
+  for a program that writes its environment to a file; one for a workspace that declares an MCP server that
+  writes its environment to a file and to its standard error; three refused in a code of the closed list, as
+  text, as JSON and as a stream, at the status that otherwise has the token replaced; one whose refresh is
+  refused as no longer valid; and two after the sign-in has ended, as JSON and as a stream. Every command is
+  run with `--log-level debug` and each turn with `--trace`, which is an option of a task and of no other
+  command. A hook of the home starts a program at each of the two moments of a turn, and the test requires
+  that each turn started two and holds the environment they wrote. It holds the sign-in's terminal, each
+  command's standard output and standard error, which is where the trace, the JSON result and the stream are,
+  the debug log of the sign-in and of each turn, taken as each run ends because a state directory keeps the
+  newest ten, every file left in the home, which holds the environments of `run` and of the server, and the
+  session record and trail of each answered turn. It requires one log for the sign-in and one for each turn
+  and none for `auth status` and `doctor`, which ask the stand-in nothing, one record and one trail for each
+  answered turn, and that the refusals in a listed code asked for no new token. A print-mode turn that fails
+  records nothing, so the record of a failed turn is held where one is written.
 - `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops`
   runs the sign-in in a terminal three times, against a stand-in that refuses the code, issues an ID token
   that names another sign-in's nonce, and cannot serve the key set. It holds the terminal of each, less one
@@ -825,15 +827,14 @@ itself and holds what its own writers produce from it:
   standard error, and the record and trail it wrote. It requires that no two turns failed alike and that the
   record keeps the four.
 
-Every output the clause names is held by one of these, except the environment of a program `run` starts and of
-an MCP server; the environment of a language server, and a background host's terminal and record; the file
-`/export` writes; the connection of the ACP adapter and of the local host; what the renderer in `ui/` draws
-from the events the bridge sends; and the debug log of the full-screen terminal client. The renderer is not a
-crate, so the events are what is held, and what the window makes of the `account` name and the sentence in one
-is pinned by the scripts the `by-construction` entry of this clause names. The test of the full-screen client
-is made in a child of its test binary that sets no log level, and the client's crate has no dependency on the
-crate that writes the log, so the debug log of that client is not made to be held, and the files its session
-wrote are.
+Every output the clause names is held by one of these, except the environment of a language server, and a
+background host's terminal and record; the file `/export` writes; the connection of the ACP adapter and of the
+local host; what the renderer in `ui/` draws from the events the bridge sends; and the debug log of the
+full-screen terminal client. The renderer is not a crate, so the events are what is held, and what the window
+makes of the `account` name and the sentence in one is pinned by the scripts the `by-construction` entry of
+this clause names. The test of the full-screen client is made in a child of its test binary that sets no log
+level, and the client's crate has no dependency on the crate that writes the log, so the debug log of that
+client is not made to be held, and the files its session wrote are.
 
 Two more things are not reached. The loop in `run_turn_animated` that takes what a turn's reporter sends into
 the session needs a terminal, and no test runs it. The test of the terminal client makes its turns with the
