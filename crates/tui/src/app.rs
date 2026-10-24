@@ -12544,6 +12544,64 @@ mod tests {
         assert_eq!(session.caret(), end);
     }
 
+    /// MOUSE-16: a click on the box's text leaves the caret alone while a history search, the files
+    /// state, a picker or the vi style of box is the one in use, each of which a guard of its own
+    /// refuses.
+    #[test]
+    fn a_click_in_the_box_does_nothing_where_another_mode_is_in_use() {
+        type Setup = fn(&mut Session);
+        let modes: [(&str, Setup); 4] = [
+            ("a history search", |session| {
+                session.history = crate::history::History::from_entries(vec![
+                    bravebot_session::store::Entry::sent("old one", None),
+                ]);
+                assert!(session.open_history_search(), "no search opened");
+            }),
+            ("the files state", |session| {
+                let diff = bravebot_agent::diff::Diff::compute("old\n", "new\n");
+                session.transcript.push(crate::state::Entry::tool(
+                    bravebot_agent::report::Activity::running("Update", "a.rs")
+                        .of_tool("edit_file")
+                        .with_changes(diff.condensed(3))
+                        .with_written(Some(bravebot_agent::report::Written {
+                            landed: "a.rs".into(),
+                            added: diff.added(),
+                            removed: diff.removed(),
+                            numbers: diff.condensed_numbers(3),
+                        }))
+                        .done("done"),
+                ));
+                session.laid.columns = 120;
+                session.toggle_files();
+                assert!(session.files_open(), "the files state did not open");
+            }),
+            ("a picker", |session| {
+                session.open_picking(crate::picking::Picking::Effort(
+                    crate::effort_prompt::Picker::new(None),
+                ));
+            }),
+            ("the vi box", |session| {
+                session.choose_editing(crate::vim::Editing::Vi);
+            }),
+        ];
+        for (name, setup) in modes {
+            let (mut session, buffer) = typing("hello world");
+            let (row, column) = find_cell(&buffer, "hello");
+            let end = session.caret();
+            click(&mut session, row, column + 1);
+            assert_eq!(
+                session.caret(),
+                1,
+                "{name}: the fixture's click moved nothing"
+            );
+            session.move_to_line_end();
+            session.last_click = None;
+            setup(&mut session);
+            click(&mut session, row, column + 1);
+            assert_eq!(session.caret(), end, "{name}: a click moved the caret");
+        }
+    }
+
     /// The row and column where `needle` is drawn in the session's own frame.
     fn find_on_text(session: &Session, needle: &str) -> (u16, u16) {
         let text = render::as_text(session);

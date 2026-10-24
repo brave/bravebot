@@ -255,11 +255,12 @@ the press is a single click, so a drag, a double click and a triple click are se
 read as the box drew it: the same wrap, the window of rows around the caret and the prompt character
 or indent that opens each row. A cell on the prompt character lands at the start of its row and a cell
 past the end of a row at its end; the border is not text. A cell on a marker lands at the marker's
-start, because the arrows never rest inside one. A click over the scroller or a history search, in
-the vi style of box, and in the files state does nothing to the caret. The arrow keys stay the way to
-move it without a mouse.
+start, because the arrows never rest inside one. A click over the scroller, a history search or a
+picker, in the vi style of box, and in the files state does nothing to the caret. The arrow keys stay
+the way to move it without a mouse.
 
 `verified-by: bravebot_tui::app::a_click_in_the_box_puts_the_caret_where_it_landed`
 `verified-by: bravebot_tui::app::a_click_in_the_box_counts_a_wide_character_as_one`
 `verified-by: bravebot_tui::app::a_click_on_a_marker_puts_the_caret_before_it`
 `verified-by: bravebot_tui::app::a_drag_a_double_click_or_a_click_off_the_text_leaves_the_caret_alone`
+`verified-by: bravebot_tui::app::a_click_in_the_box_does_nothing_where_another_mode_is_in_use`

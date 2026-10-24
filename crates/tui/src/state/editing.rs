@@ -238,10 +238,13 @@ impl Session {
     /// the last frame drew it (MOUSE-16).
     ///
     /// None where the cell is not one of the box's text, and where the box is not the one in use:
-    /// the files state owns every key, and the vi box has modes a click would have to know the
-    /// meaning of.
+    /// a picker is painted over the frame and takes every key, the files state owns every key, and
+    /// the vi box has modes a click would have to know the meaning of.
     pub fn offset_in_the_box(&self, row: u16, column: u16) -> Option<usize> {
-        if self.files_open() || self.editing() != crate::vim::Editing::Ordinary {
+        if self.picking().is_some()
+            || self.files_open()
+            || self.editing() != crate::vim::Editing::Ordinary
+        {
             return None;
         }
         let (_, area) = self
