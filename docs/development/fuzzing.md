@@ -17,7 +17,7 @@ Cargo added only `libfuzzer-sys`, `arbitrary` and what they need.
 | Path | Holds |
 |---|---|
 | `fuzz_targets/<target>.rs` | One `fuzz_target!`. Its input type derives `Arbitrary`, so the type states what the input's bytes mean. |
-| `src/` | What the targets share: generators, encoders and evaluators, with unit tests. |
+| `src/` | What the targets share: generators, encoders, evaluators and a counting allocator, with unit tests. |
 | `dictionaries/<target>.dict` | Tokens the target's parser branches on. |
 | `seeds/<target>/` | Committed inputs of at most 4 KiB, at most 100 for each target. |
 | `regressions/<target>/` | Reproducers of crashes that were fixed. |
@@ -30,7 +30,7 @@ Cargo added only `libfuzzer-sys`, `arbitrary` and what they need.
 |---|---|---|---|
 | `regex` | `agent::regex` | A pattern rendered from a syntax tree of the supported subset and a text, or raw pattern text | The engine agrees with an evaluator that reads the tree and shares no code with it, `matches` agrees with `matches_by_automaton`, a pattern over 1,000 characters or 50 groups deep is refused with the matching `PatternError`, and the answer does not depend on what the engine's buffers last held |
 | `diff` | `agent::diff`, `agent::replace` | Two texts, or a text and edits that derive the second from it, or an edit | The lines a diff keeps are the same in both texts, its rows account for every line, its hunks put `before` back byte for byte, and `replace` refuses what its documentation says it refuses |
-| `event_stream` | `bedrock::eventstream::FrameDecoder` | Raw bytes, or frames with correct checksums, the last of them damaged, and in either case cut into reads | Any cutting into reads gives the same events, a frame that claims an impossible size or ends in a wrong checksum is refused, and an undamaged stream gives the events its frames hold |
+| `event_stream` | `bedrock::eventstream::FrameDecoder` | Raw bytes, or frames with correct checksums, the last of them damaged, and in either case cut into reads | Any cutting into reads gives the same events, a frame that claims an impossible size or ends in a wrong checksum is refused, a claim past 16 MiB makes the decoder allocate less than a sixteenth of that, and an undamaged stream gives the events its frames hold |
 | `sse` | `aichat::protocol::SseDecoder`, `ChatChunk`, `StreamAccumulator` | Lines of known meaning, or raw bytes, cut into reads, with a limit from a few bytes to a few kibibytes | Any cutting into reads gives the same payloads, the decoder holds no more than its limit, a line over the limit ends the decoding, and the accumulator holds what the chunks say |
 
 `regex` and `sse` need three functions that only the targets use from outside their crates.
@@ -38,6 +38,13 @@ Cargo added only `libfuzzer-sys`, `arbitrary` and what they need.
 with a small limit, and was private to the module that builds the default one. `SseDecoder::held`
 reads how much a decoder holds. At the limit every caller gets, 16 MiB, no input a fuzzer makes
 could reach the bound. All three are `#[doc(hidden)]`.
+
+`event_stream` measures what the decoder allocates with `allocation::Counting`, which wraps the
+system allocator and counts the bytes the calling thread holds. A global allocator is an `unsafe`
+impl, so `fuzz/src/lib.rs` denies `unsafe_code` and the one impl allows it with a reason, while the
+other modules and every target forbid it. Only the `event_stream` target registers the allocator,
+so the other targets run on the system allocator. `event_stream` checks on every input that it is
+registered, since a bound on a count of zero holds for anything.
 
 ## Running
 
@@ -163,8 +170,3 @@ checksum in `event_stream`, or the automaton in `regex`.
 4. A timeout or an out-of-memory stop is a finding. A failed property is a finding against the
    documentation or clause it came from. Where the property was wrong, correct it in the harness
    and say why in the commit.
-
-## What the targets do not check
-
-The `event_stream` target checks that a frame claiming more than 16 MiB is refused. It does not
-measure how much the decoder allocates, since that needs a global allocator, which is `unsafe`.
