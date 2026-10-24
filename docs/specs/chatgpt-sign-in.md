@@ -539,9 +539,14 @@ the terminal once by [CHATGPT-13](#CHATGPT-13) and goes nowhere else. A test hol
 against each of those outputs, as the trail's test does for the credentials the agent holds, and leaves out
 that one line.
 
-**Not built:** the test that holds every secret the process held against each output of a run that signs in,
-refreshes and fails. The sentences of the sign-in, of a refused refresh, of a refused token, of a request
-refused with a code of the closed list and of what the account reaches once the sign-in is stored are built.
+The test runs the built binary against a stand-in through the seam of [CHATGPT-2](#CHATGPT-2): the sign-in in
+a terminal, `auth status`, `doctor`, a turn that renews a refused token and is answered, and a turn whose
+refresh is refused as no longer valid, every refusal repeating every value the stand-in has seen. It searches
+each command's streams under `--trace` and the debug log, every file left in the home, and the environment a
+hook started by each turn writes there. The desktop window is not one of them: what the bridge says of a
+failed listing is pinned by
+`bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more`.
+The test runs on Linux and macOS, where `script` gives the sign-in a terminal, and not on Windows.
 
 **Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
 to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
@@ -552,6 +557,7 @@ a rate limit by status here is waited out and reported as a rate limit is elsewh
 signing in again would not supply is not offered. A usage limit named by a code is not waited out, since
 nothing a second request or a wait of this program's does changes it.
 
+`verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
 `verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
 `verified-by: bravebot_skus::chatgpt::an_id_token_that_does_not_verify_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
@@ -863,10 +869,11 @@ The requests a turn sends are made by the Responses client of `bravebot-aichat` 
 not take for the rest of it, and the note of that, which the turn says once.
 
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2), [CHATGPT-3](#CHATGPT-3),
-  [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7), [CHATGPT-11](#CHATGPT-11),
-  [CHATGPT-12](#CHATGPT-12) and [CHATGPT-13](#CHATGPT-13).
-- **Built in part,** each naming what is not: [CHATGPT-8](#CHATGPT-8),
-  [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and [CHATGPT-14](#CHATGPT-14).
+  [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7),
+  [CHATGPT-8](#CHATGPT-8), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12) and
+  [CHATGPT-13](#CHATGPT-13).
+- **Built in part,** each naming what is not: [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and
+  [CHATGPT-14](#CHATGPT-14).
 - **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); and the
   zstd body of [CHATGPT-10](#CHATGPT-10).
 
