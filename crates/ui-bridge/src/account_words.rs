@@ -69,8 +69,7 @@ pub(crate) fn of_failure(failure: AccountFailure) -> Said {
         AccountFailure::Unusable => {
             Said::naming(STATUS, t!(desktop_chatgpt_unusable, command = STATUS))
         }
-        // The wait is said for the usage limit only: it is advice about trying again, and a refusal
-        // that says the account may not be used this way is not one trying again would change.
+        // The wait a refusal asked for at a 429 is said for either refusal, as the terminal says it.
         AccountFailure::Named {
             refusal: Refusal::UsageLimit,
             ..
@@ -84,11 +83,16 @@ pub(crate) fn of_failure(failure: AccountFailure) -> Said {
         AccountFailure::Named {
             refusal: Refusal::NotPermitted,
             ..
-        } => Said::plain(t!(desktop_chatgpt_not_permitted)),
-        AccountFailure::Renewal(RenewalFailure::Refused) => Said::naming(
-            SIGN_IN,
-            t!(desktop_chatgpt_renewal_refused, command = SIGN_IN),
-        ),
+        } => Said::plain(match failure.wait() {
+            Some(wait) => t!(
+                desktop_chatgpt_not_permitted_wait,
+                minutes = bravebot_agent::outcome::minutes_to_wait(wait)
+            ),
+            None => t!(desktop_chatgpt_not_permitted).to_string(),
+        }),
+        AccountFailure::Renewal(RenewalFailure::Refused) => {
+            Said::plain(t!(desktop_chatgpt_renewal_refused))
+        }
         AccountFailure::Renewal(RenewalFailure::RateLimited) => {
             Said::plain(t!(desktop_chatgpt_renewal_rate_limited))
         }
@@ -176,6 +180,11 @@ mod tests {
             ),
             refusal(Refusal::UsageLimit, Some(429), Some(Duration::from_secs(5))),
             refusal(Refusal::NotPermitted, Some(403), None),
+            refusal(
+                Refusal::NotPermitted,
+                Some(429),
+                Some(Duration::from_secs(61)),
+            ),
             AccountFailure::Renewal(RenewalFailure::Refused),
             AccountFailure::Renewal(RenewalFailure::RateLimited),
             AccountFailure::Renewal(RenewalFailure::Unavailable),
@@ -233,46 +242,113 @@ mod tests {
     }
 
     /// Where signing in again, or looking at the stored sign-in, is the remedy the sentence names that
-    /// command, and nowhere else does: a usage limit and a refusal that says the account may not be
-    /// used this way are not mended by signing in again. The command is the one the terminal's
-    /// sentence for the same failure names, so a command renamed in one place is renamed in both. A
-    /// wait the refusal asked for is said in minutes rounded up, in the singular for one, for the
-    /// usage limit.
+    /// command, and nowhere else does: a usage limit, a refusal that says the account may not be used
+    /// this way and every failed renewal are not mended by signing in again, as
+    /// [CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8) lists them.
     #[test]
-    fn the_command_is_named_where_it_is_the_remedy_and_a_wait_is_said_in_minutes() {
+    fn the_command_is_named_where_it_is_the_remedy() {
         let command_of = |failure| of_failure(failure).command;
         assert_eq!(command_of(AccountFailure::NotSignedIn), Some(SIGN_IN));
         assert_eq!(command_of(AccountFailure::Ended), Some(SIGN_IN));
         assert_eq!(command_of(AccountFailure::Refused), Some(SIGN_IN));
         assert_eq!(command_of(AccountFailure::Unusable), Some(STATUS));
-        assert_eq!(
-            command_of(AccountFailure::Renewal(RenewalFailure::Refused)),
-            Some(SIGN_IN)
-        );
         for failure in every_failure() {
-            // The terminal names a command in the failures where the window names the same one.
-            let terminal = bravebot_agent::chatgpt::said_of_failure(failure);
-            if let Some(command) = command_of(failure)
-                && !matches!(failure, AccountFailure::Renewal(_))
-            {
-                assert!(terminal.contains(command), "{failure:?}: {terminal}");
-            }
-            if matches!(failure, AccountFailure::Named { .. }) {
+            if matches!(
+                failure,
+                AccountFailure::Named { .. } | AccountFailure::Renewal(_)
+            ) {
                 assert_eq!(command_of(failure), None, "{failure:?}");
             }
         }
+    }
 
-        let limit = |wait| AccountFailure::Named {
-            refusal: Refusal::UsageLimit,
-            status: Some(429),
-            retry_after: wait,
+    /// A wait a refusal asked for at a 429 is said for either refusal, in minutes rounded up and in
+    /// the singular for one, as the terminal and the one-shot run say it, and one that came with
+    /// another status or on a stream says none. The rule is
+    /// [CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)'s: the service's `Retry-After` is
+    /// told to the person wherever the failure is, and which refusal it was does not decide it.
+    #[test]
+    fn a_wait_asked_for_at_a_429_is_said_in_minutes_for_either_refusal() {
+        let refusal = |refusal, status, wait: Option<u64>| {
+            of_failure(AccountFailure::Named {
+                refusal,
+                status,
+                retry_after: wait.map(Duration::from_secs),
+            })
+            .sentence
         };
-        let said = |wait| of_failure(limit(wait)).sentence;
-        assert!(said(None).contains("try again later"), "{}", said(None));
-        let eleven = said(Some(Duration::from_secs(601)));
-        assert!(eleven.contains("about 11 minutes."), "{eleven}");
-        let one = said(Some(Duration::from_secs(5)));
-        assert!(one.contains("about 1 minute."), "{one}");
+        for kind in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            let eleven = refusal(kind, Some(429), Some(601));
+            assert!(eleven.contains("about 11 minutes"), "{kind:?}: {eleven}");
+            let one = refusal(kind, Some(429), Some(5));
+            assert!(
+                one.contains("about 1 minute") && !one.contains("1 minutes"),
+                "{kind:?}: {one}"
+            );
+            let none = refusal(kind, Some(429), None);
+            assert!(!none.contains("minute"), "{kind:?}: {none}");
+            for status in [Some(403), Some(401), None] {
+                let unasked = refusal(kind, status, Some(600));
+                assert!(
+                    !unasked.contains("minute"),
+                    "{kind:?} {status:?}: {unasked}"
+                );
+            }
+        }
+        // The two refusals stay told apart whatever the wait.
+        assert!(refusal(Refusal::UsageLimit, Some(429), Some(600)).contains("usage limit"));
+        assert!(!refusal(Refusal::NotPermitted, Some(429), Some(600)).contains("usage limit"));
+    }
+
+    /// The command the window names for a failure is the one the terminal's sentence for the same
+    /// failure names, for every failure of the account and every way its models could not be listed,
+    /// the failed renewals included, and neither names one the other does not. A command renamed in
+    /// one catalog and not the other, or named by the window where the terminal sends nobody to
+    /// run it, fails here.
+    #[test]
+    fn the_window_names_the_command_the_terminal_names_for_every_failure() {
+        let named_by = |sentence: &str| -> Option<&'static str> {
+            let named: Vec<&'static str> = [SIGN_IN, STATUS]
+                .into_iter()
+                .filter(|command| sentence.contains(command))
+                .collect();
+            assert!(named.len() <= 1, "{sentence}");
+            named.first().copied()
+        };
+        for failure in every_failure() {
+            let terminal = bravebot_agent::chatgpt::said_of_failure(failure);
+            assert_eq!(
+                of_failure(failure).command,
+                named_by(&terminal),
+                "{failure:?}: {terminal}"
+            );
+        }
+        let listings = [
+            AccountModels::Unreadable,
+            AccountModels::Compiled(Vec::new()),
+            AccountModels::Refused(Refusal::UsageLimit),
+            AccountModels::Refused(Refusal::NotPermitted),
+        ];
+        for listing in &listings {
+            let terminal = match listing {
+                AccountModels::Unreadable => {
+                    bravebot_i18n::t!(session_chatgpt_models_unreadable).to_string()
+                }
+                AccountModels::Compiled(_) => {
+                    bravebot_i18n::t!(session_chatgpt_models_compiled).to_string()
+                }
+                AccountModels::Refused(refusal) => bravebot_i18n::t!(
+                    session_chatgpt_models_refused,
+                    refusal = bravebot_agent::chatgpt::said_of_refusal(*refusal)
+                ),
+                _ => unreachable!("a listing with a warning"),
+            };
+            assert_eq!(
+                of_listing(listing).expect("a warning").command,
+                named_by(&terminal),
+                "{listing:?}: {terminal}"
+            );
+        }
     }
 
     /// What the window narrates where a summary could not be made and the account failed is two

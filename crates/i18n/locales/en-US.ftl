@@ -3468,20 +3468,25 @@ desktop-chatgpt-not-signed-in = You are not signed in to ChatGPT, so run { $comm
 desktop-chatgpt-ended = The ChatGPT sign-in has ended, so run { $command } in a terminal to sign in again.
 desktop-chatgpt-token-refused = OpenAI refused the ChatGPT sign-in's access token, so run { $command } in a terminal to sign in again.
 desktop-chatgpt-unusable = The stored ChatGPT sign-in could not be read, so run { $command } in a terminal to see why.
-desktop-chatgpt-renewal-refused = OpenAI refused to renew the ChatGPT sign-in, so try again, or run { $command } in a terminal to sign in again.
+desktop-chatgpt-renewal-refused = OpenAI refused to renew the ChatGPT sign-in, so try again later.
 desktop-chatgpt-renewal-rate-limited = The ChatGPT sign-in could not be renewed because OpenAI is limiting requests, so try again later.
 desktop-chatgpt-renewal-unavailable = The ChatGPT sign-in could not be renewed because OpenAI's sign-in service is unavailable, so try again later.
 desktop-chatgpt-renewal-incomplete = The ChatGPT sign-in could not be renewed because the reply from OpenAI was incomplete, so try again.
 desktop-chatgpt-renewal-transport = The ChatGPT sign-in could not be renewed because OpenAI could not be reached, so check the connection and try again.
 desktop-chatgpt-usage-limit = OpenAI says this ChatGPT account has reached its usage limit, so try again later.
-# Said where the refusal came as a 429 that asked for a wait. The request is not sent again, so the whole of
-# the wait is ahead.
+# Said where the refusal came as a 429 that asked for a wait, for either refusal, as the terminal says it.
+# The request is not sent again, so the whole of the wait is ahead.
 desktop-chatgpt-usage-limit-wait =
     { $minutes ->
         [one] OpenAI says this ChatGPT account has reached its usage limit, so try again in about 1 minute.
        *[other] OpenAI says this ChatGPT account has reached its usage limit, so try again in about { $minutes } minutes.
     }
 desktop-chatgpt-not-permitted = OpenAI does not allow this ChatGPT account to be used this way, so use another account or another service's model.
+desktop-chatgpt-not-permitted-wait =
+    { $minutes ->
+        [one] OpenAI does not allow this ChatGPT account to be used this way and asked for a wait of about 1 minute, so use another account or another service's model.
+       *[other] OpenAI does not allow this ChatGPT account to be used this way and asked for a wait of about { $minutes } minutes, so use another account or another service's model.
+    }
 # What the window narrates where a turn goes on or moves on after the account failed on the way: a summary
 # it could not make, and the model it moved off for the person's fallbackModel. The first is followed by the
 # account's sentence above, so each line is one sentence.

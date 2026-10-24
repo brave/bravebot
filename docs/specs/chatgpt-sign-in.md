@@ -519,7 +519,12 @@ of the backends spec's failure categories: refused, rate-limited, unavailable, i
 failure. The rest are these, each saying which it is:
 
 - **Signing in again is the remedy,** and the sentence names `bravebot auth login chatgpt`: not signed in,
-  the sign-in has ended, the service refused the token.
+  the sign-in has ended, the service refused the token. A renewal that failed in any other way, refused,
+  rate-limited, unavailable, incomplete or not completed, names no command in the terminal or the window:
+  the file is left as it is and the next request asks again, so signing in again is not offered as the
+  remedy for a failure that may pass. Whether signing in again would mend a renewal the server refuses in
+  a code this program does not read as the end of the sign-in is not observed (see
+  [Known costs](#known-costs)).
 - **The sign-in file** cannot be read, cannot be written, or has nowhere to be kept on this platform, with the
   remedy the Leo store gives for a batch it cannot use.
 - **The account has reached its usage limit, or may not be used this way.** A request is refused with one of
@@ -591,9 +596,10 @@ happened and what to do, chosen from the value alone. The sentence that sends a 
 to run the command in a terminal, since no window starts the sign-in, and names the command the terminal
 names ([CHATGPT-1](#CHATGPT-1)). The sentence is sent as `accountMessage` beside the name, and the words of
 it that are the command are sent as `accountCommand`, so the window draws them as code without reading the
-sentence for them. A refusal's status is in `status`, and the window's sentence for the usage limit says a
-wait it asked for in minutes, which a refusal that says the account may not be used this way does not,
-since trying again changes nothing there. `accountMessage` is the description of one card in
+sentence for them. A refusal's status is in `status`, and the window's sentence for a refusal that asked
+for a wait at a 429 says it, for either refusal and in the same minutes as the terminal does: the wait is the
+service's, and which refusal it came with does not change that it is when to ask again. The rule is the
+terminal's, the one-shot run's and the window's alike. `accountMessage` is the description of one card in
 `ui/src/renderer/failure.ts`, drawn by the error card and by the card of a run that stopped, with the
 command in a code element and everything else as text. A failure with no sentence is drawn from its
 category. An editor hosting a session is told the same sentence ([ACP-8](acp.md#ACP-8)).
@@ -672,7 +678,9 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_agent::report::the_line_for_a_summary_the_account_refused_has_the_wait_and_no_status`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category`
 `verified-by: bravebot_ui_bridge::account_words::the_windows_sentence_is_one_sentence_in_sentence_case_and_names_its_command_once`
-`verified-by: bravebot_ui_bridge::account_words::the_command_is_named_where_it_is_the_remedy_and_a_wait_is_said_in_minutes`
+`verified-by: bravebot_ui_bridge::account_words::the_command_is_named_where_it_is_the_remedy`
+`verified-by: bravebot_ui_bridge::account_words::a_wait_asked_for_at_a_429_is_said_in_minutes_for_either_refusal`
+`verified-by: bravebot_ui_bridge::account_words::the_window_names_the_command_the_terminal_names_for_every_failure`
 `verified-by: bravebot_ui_bridge::account_words::the_notices_of_a_turn_that_goes_on_after_the_account_failed_are_sentences_of_the_window`
 `verified-by: bravebot_ui_bridge::history::a_summary_that_failed_on_the_account_reaches_the_window_in_the_windows_words`
 `verified-by: bravebot_ui_bridge::acp::a_summary_that_failed_on_the_chatgpt_account_is_told_to_the_editor_in_the_windows_words`
@@ -1353,8 +1361,9 @@ These are the places where another spec states something about this service, eac
 - The sentences of [CHATGPT-8](#CHATGPT-8) are written in two sets in the catalog: the terminal's, which the
   one-shot run and the goal and manifest runs say too, and the window's. A change to what a failure says is
   made in both, and no test holds the wording equal since the two differ in form. A test holds that the
-  command each names is the one the other names. The window keeps no table of its own. The eleven names are
-  listed in `ui/docs/phase-0-rpc-protocol.md`.
+  command each names is the one the other names, for every failure of the account including the failed
+  renewals, and for each way the account's models could not be listed. The window keeps no table of its
+  own. The eleven names are listed in `ui/docs/phase-0-rpc-protocol.md`.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
   the dead refresh token and is told the refresh failed, until the person signs in again.

@@ -2969,20 +2969,25 @@ desktop-chatgpt-not-signed-in = Vous n'êtes pas connecté à ChatGPT, donc lanc
 desktop-chatgpt-ended = La connexion ChatGPT a pris fin, donc lancez { $command } dans un terminal pour vous reconnecter.
 desktop-chatgpt-token-refused = OpenAI a refusé le jeton d'accès de la connexion ChatGPT, donc lancez { $command } dans un terminal pour vous reconnecter.
 desktop-chatgpt-unusable = La connexion ChatGPT enregistrée n'a pas pu être lue, donc lancez { $command } dans un terminal pour en voir la raison.
-desktop-chatgpt-renewal-refused = OpenAI a refusé de renouveler la connexion ChatGPT, donc réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-renewal-refused = OpenAI a refusé de renouveler la connexion ChatGPT, donc réessayez plus tard.
 desktop-chatgpt-renewal-rate-limited = La connexion ChatGPT n'a pas pu être renouvelée parce qu'OpenAI limite les requêtes, donc réessayez plus tard.
 desktop-chatgpt-renewal-unavailable = La connexion ChatGPT n'a pas pu être renouvelée parce que le service de connexion d'OpenAI est indisponible, donc réessayez plus tard.
 desktop-chatgpt-renewal-incomplete = La connexion ChatGPT n'a pas pu être renouvelée parce que la réponse d'OpenAI était incomplète, donc réessayez.
 desktop-chatgpt-renewal-transport = La connexion ChatGPT n'a pas pu être renouvelée parce qu'OpenAI n'a pas pu être joint, donc vérifiez la connexion et réessayez.
 desktop-chatgpt-usage-limit = OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez plus tard.
-# Dit quand le refus est arrivé en 429 avec une attente demandée. La requête n'est pas renvoyée, donc toute
-# l'attente reste à venir.
+# Dit quand le refus est arrivé en 429 avec une attente demandée, pour l'un ou l'autre refus, comme le dit le
+# terminal. La requête n'est pas renvoyée, donc toute l'attente reste à venir.
 desktop-chatgpt-usage-limit-wait =
     { $minutes ->
         [one] OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez dans environ 1 minute.
        *[other] OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez dans environ { $minutes } minutes.
     }
 desktop-chatgpt-not-permitted = OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon, donc utilisez un autre compte ou un modèle d'un autre service.
+desktop-chatgpt-not-permitted-wait =
+    { $minutes ->
+        [one] OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon et a demandé une attente d'environ 1 minute, donc utilisez un autre compte ou un modèle d'un autre service.
+       *[other] OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon et a demandé une attente d'environ { $minutes } minutes, donc utilisez un autre compte ou un modèle d'un autre service.
+    }
 # Ce que la fenêtre raconte quand un tour continue ou change de modèle après un échec du compte en chemin :
 # un résumé qu'il n'a pas pu faire, et le modèle qu'il quitte pour le fallbackModel de la personne. Le premier
 # est suivi de la phrase du compte ci-dessus, donc chaque ligne est une seule phrase.
