@@ -528,11 +528,12 @@ failure. The rest are these, each saying which it is:
   that does not grant the scope `chatgpt.tokens.use.direct` ends the command in the same way, and the
   sentence says to sign in again and allow the program to use the subscription's tokens, or to use an API key
   with the `openai` gateway.
-- **The command completed,** and says what it leaves: the account reaches no model, or no model can be
-  offered for it because the listing could not be read and no list is available ([CHATGPT-9](#CHATGPT-9)),
-  or because the service refused the listing in a code of the closed list, in that code's sentence. It says
-  the sign-in is stored before it asks the listing, so a service slow to answer leaves a person knowing it
-  was kept, and the ending is a success whatever the listing says.
+- **The command completed,** and says what it leaves: the account reaches no model, or the listing could not
+  be read and the picker offers the compiled list in its place, which may name a model the account cannot
+  reach ([CHATGPT-9](#CHATGPT-9)), or no model can be offered for it because the sign-in file could not be
+  read where an entry names the models, or because the service refused the listing in a code of the closed
+  list, in that code's sentence. It says the sign-in is stored before it asks the listing, so a service slow
+  to answer leaves a person knowing it was kept, and the ending is a success whatever the listing says.
 
 The refusals of [CHATGPT-12](#CHATGPT-12), which are made before anything starts, are sentences of the
 command and quote nothing.
@@ -570,7 +571,7 @@ refresh is refused as no longer valid, every refusal repeating every value the s
 each command's streams under `--trace` and the debug log, every file left in the home, and the environment a
 hook started by each turn writes there. The desktop window is not one of them: what the bridge says of a
 failed listing is pinned by
-`bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more`.
+`bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`.
 The test runs on Linux and macOS, where `script` gives the sign-in a terminal, and not on Windows.
 
 **Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
@@ -668,12 +669,20 @@ Where the roster comes from, in order:
    whole number, costs that row its place and keeps the rest.
 3. Where the listing cannot be read, because the token could not be had, the request failed or its body is not
    the shape above, a compiled list of model names is offered instead, and the picker says the listing could
-   not be read. A listing that is read and is empty offers nothing, and the compiled list is not used.
+   not be read, that the list is built in and that a row may name a model the account cannot reach. A listing
+   that is read and is empty offers nothing, and the compiled list is not used. A listing refused in a code
+   of [CHATGPT-8](#CHATGPT-8)'s closed list is an answer and not one that could not be read: it offers
+   nothing and is said in that code's sentence.
 
 The window comes from the entry or the listing as it does for a gateway's, and the assumed low window applies
 where neither states one. An output ceiling is not read from the entry, for the reason above, and no model is
 left out for what it can call, since neither source says. The compiled list is a constant of the source that
-names models only and takes nothing from a reply.
+names models only and takes nothing from a reply. Its names are those of the fallback set in opencode's source
+(`fallbackModels` in `packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`). Each row takes
+the assumed window, which a turn on one of the account's models compacts against where the listing cannot
+be read, and no label of its own, and whether it reads an effort level is what a request has already
+learned from the service, as for the model an entry names. None of the names is observed against the
+service.
 
 An account whose listing is empty, where the entry names no model, is signed in. The command completes,
 says the account reaches no model, and the picker has no row for it. Nothing is invented for a tier nobody named.
@@ -682,20 +691,20 @@ The roster is asked of the one function both pickers call, so the terminal and t
 rows. It is asked each time a picker opens, and otherwise only for the window of a model in force that is the
 account's, so a session on another model sends the stored token nowhere. No row is offered where no sign-in is
 stored, and nothing is asked of the service then. A stored sign-in whose token cannot be had, or whose listing
-cannot be read, offers no row, except that the models an entry names need neither the token nor the listing,
-only that the file can be read. The desktop picker says so in a warning beside the other rosters', and the
-terminal picker says so in a note in the transcript, written when the picker opens, so before it draws, at
-rest or mid-turn. A listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in
+cannot be read, is offered the compiled list, except that the models an entry names need neither the token
+nor the listing, only that the file can be read, and offer no row where it cannot be. The desktop picker says
+so in a warning beside the other rosters', and the terminal picker says so in a note in the transcript,
+written when the picker opens, so before it draws, at rest or mid-turn. Where the compiled list is offered
+both say that it is built in and may name a model the account cannot reach. A listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in
 that clause's sentence, which does not send the person to sign in again. A person who never signed in is
 told nothing, and a listing that was read, empty or not, is not a failure.
 
-**Not built:** the compiled list (source 3) (#3134). Where the listing cannot be read nothing is
-offered, both pickers say so, and a person names the model as `chatgpt/<name>`. A listing the service refuses for its token with a
-401 is asked for again once with a replacement, as a turn's request is, and a second refusal ends it, as does
-a refusal whose body names a code of [CHATGPT-8](#CHATGPT-8)'s closed list, at once. A model
-named `chatgpt/<name>` on the command line or in a settings file is built: it selects the account, the request
-carries the part after the identifier, and an entry with the id keeps it, and none of the account's models is
-offered then.
+A listing the service refuses for its token with a 401 is asked for again once with a replacement, as a
+turn's request is, and a second refusal ends it and leaves the compiled list, since the token could not be
+had. A refusal whose body names a code of [CHATGPT-8](#CHATGPT-8)'s closed list ends it at once and offers
+nothing. A model named `chatgpt/<name>` on the command line or in a settings file selects the account, the
+request carries the part after the identifier, and an entry with the id keeps it, and none of the account's
+models is offered then.
 
 **Why.** Where two services serve a model of one name they are billed differently, authenticate differently
 and answer on different terms, so a bare name cannot say which one a person chose, and a remembered choice
@@ -723,7 +732,8 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_the_accounts_listing_is_a_failure_and_goes_nowhere`
 `verified-by: bravebot_aichat::client::a_reply_that_is_not_the_accounts_listing_cannot_be_read_and_an_empty_one_can`
 `verified-by: bravebot_agent::chatgpt::a_machine_nobody_signed_in_on_offers_nothing_and_asks_the_service_nothing`
-`verified-by: bravebot_agent::chatgpt::an_account_whose_token_cannot_be_had_is_unreadable_and_asks_the_service_nothing`
+`verified-by: bravebot_agent::chatgpt::an_account_whose_token_cannot_be_had_is_offered_the_compiled_list_and_asks_the_service_nothing`
+`verified-by: bravebot_aichat::models::the_compiled_list_is_rows_under_the_accounts_identifier_one_to_a_name`
 `verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
 `verified-by: bravebot_agent::chatgpt::an_unreadable_listing_is_told_apart_from_an_empty_one`
 `verified-by: bravebot_agent::chatgpt::a_listing_refused_for_its_token_is_asked_again_once_with_a_replacement`
@@ -740,11 +750,12 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_config::lib::the_models_a_chatgpt_entry_names_are_not_carried_where_a_gateway_holds_the_id`
 `verified-by: bravebot_config::lib::a_machine_level_provider_block_replaces_the_models_a_chatgpt_entry_names`
 `verified-by: bravebot_config::settings::only_the_layers_a_provider_block_is_read_from_choose_the_accounts_models`
-`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none`
+`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
 `verified-by: bravebot_tui::app::a_caller_on_a_model_that_is_not_the_accounts_never_asks_the_account`
 `verified-by: bravebot_tui::app::a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists`
 `verified-by: bravebot_tui::app::the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers`
-`verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more`
+`verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`
+`verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker`
 `verified-by: bravebot_tui::app::the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise`
 `verified-by: bravebot_tui::app::only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_account_only_for_one_of_its_own_models`
@@ -927,13 +938,13 @@ of a request to the account with `ruzstd` ([CHATGPT-10](#CHATGPT-10)).
 
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2), [CHATGPT-3](#CHATGPT-3),
   [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7),
-  [CHATGPT-8](#CHATGPT-8), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12),
+  [CHATGPT-8](#CHATGPT-8), [CHATGPT-9](#CHATGPT-9), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12),
   [CHATGPT-13](#CHATGPT-13) and [CHATGPT-14](#CHATGPT-14).
-- **Built in part,** each naming what is not: [CHATGPT-9](#CHATGPT-9) and [CHATGPT-10](#CHATGPT-10).
-- **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134).
+- **Built in part,** naming what is not: [CHATGPT-10](#CHATGPT-10).
 
 A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
-`chatgpt` entry names, or where it names none, the models the serving host's listing offers. Once the sign-in
+`chatgpt` entry names, or where it names none, the models the serving host's listing offers, or where the
+listing cannot be read, the compiled names. Once the sign-in
 is stored the command asks the listing, as a picker does, and tells the person to pick a model in `/model` or
 to name one, that the account reaches no model, or that the listing could not be had.
 
@@ -946,8 +957,9 @@ These are a person's to decide, and no test can settle them.
   subscription this way, and whether OpenAI's registration accepts this program, has to be decided before
   this ships. If it does not, this should not land as written.
 - **The compiled list.** [CHATGPT-9](#CHATGPT-9) offers one where the listing cannot be read. Its contents
-  are a constant a release changes. The alternative is to offer nothing in that case and say to name the
-  models in the `chatgpt` entry.
+  are the fallback set of opencode's source, a constant a release changes, and none of its names is observed
+  against the service. The alternative is to offer nothing in that case and say to name the models in the
+  `chatgpt` entry.
 
 ## What the exchange has to record
 
@@ -1012,6 +1024,8 @@ real ChatGPT account on this program's own build:
   key set.
 - The ID token's issuer. The sign-in compares it with the constant `https://auth.openai.com`, which is not
   observed from the service: a real token that names another refuses every sign-in.
+- That each name of the compiled list ([CHATGPT-9](#CHATGPT-9)) is a model the service takes, and in
+  particular the names ending in `-fast`, which are names of the program the list is read from.
 - What the three session headers do for prompt-cache affinity, and that there is no native compaction and no
   change of effort in a session.
 - That the service decodes a zstd body, which the program this is read from sends for every request to it.
@@ -1110,8 +1124,13 @@ work lands, in the same commit as the code.
   system error or cause, so a full disk and a folder that cannot be written get the same advice.
 - A person on a machine with no browser forwards the listener's port, which changes at every sign-in, and
   no device-code route is available to this program.
-- The compiled list ([CHATGPT-9](#CHATGPT-9)) can name a model the account cannot reach, which the service
-  refuses at the first request.
+- Where the listing cannot be read the pickers list the compiled names ([CHATGPT-9](#CHATGPT-9)), and a
+  person who wants another types `chatgpt/<name>`. The names are another program's and none has been
+  observed against the service, so one may name a model the account cannot reach. The service refuses it
+  at the first request, and the turn says that the service rejected the request, without naming the model.
+- The egress layer reads at most 2 MiB of a reply, and the listing is about half a megabyte for nine rows,
+  so an account whose listing passes 2 MiB is read as one that cannot be read and is offered the compiled
+  names.
 - Where an entry names models ([CHATGPT-9](#CHATGPT-9)), a model named directly that the entry does not name
   has no row, so a turn on it compacts against the assumed window and not the one the listing would give.
   Stating the model in the entry, with its `limit`, gives it one.
@@ -1129,8 +1148,6 @@ work lands, in the same commit as the code.
   is read from calls, have a content size and no checksum. A service that needs the size before it reads the
   frame refuses every body. The change that follows is the `zstd` crate, which writes the size, at the cost
   of compiling its C library for each target.
-- Where the listing cannot be read no picker lists the account's models, so a person types `chatgpt/<name>`,
-  and a name the account cannot reach is refused at the first request.
 - A picker asks the serving host for the listing each time it opens, and the sign-in command asks it when the
   sign-in is stored, so the access token is sent to the serving host in requests that are not a turn.
 - A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,

@@ -168,10 +168,16 @@ pub enum AccountModels {
     /// models the listing offers, in the order it gave them. Empty for an account that reaches
     /// none, which the service answered and is not a failure.
     Offered(Vec<Model>),
+    /// A `provider` entry named `chatgpt` names models, a sign-in is stored and its file cannot be
+    /// read, so nothing can be said to be the account's. Nothing is offered, and the picker says the
+    /// models could not be loaded.
+    Unreadable,
     /// A sign-in is stored and the listing could not be had: the token could not be renewed, the
     /// request failed or was refused for its token or its status, or the reply was not a listing.
-    /// Nothing is offered, and the picker says the models could not be loaded.
-    Unreadable,
+    /// The compiled list stands in for it
+    /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)), and the picker says the
+    /// listing could not be read and that a row may name a model the account cannot reach.
+    Compiled(Vec<Model>),
     /// A sign-in is stored and the serving host refused the listing in a code that names the
     /// account ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Nothing is offered,
     /// and both pickers and the sign-in command say so in that clause's sentence, which does not send
@@ -222,10 +228,12 @@ fn account_models_from<S: Sink, A: AccountAccess + AccountStored>(
     }
     // Asked for before anything is sent, so a machine with no sign-in sends nothing. An ended
     // sign-in was removed by the renewal that found it so, and is a missing one from here on.
+    let compiled =
+        || AccountModels::Compiled(bravebot_aichat::models::compiled_for_account(provider));
     let mut token = match access.access_token() {
         Ok(token) => token,
         Err(AccountFailure::NotSignedIn | AccountFailure::Ended) => return AccountModels::Absent,
-        Err(_) => return AccountModels::Unreadable,
+        Err(_) => return compiled(),
     };
     let mut routing = Routing::new();
     routing.insert_trusted("models", provider.models_url());
@@ -235,7 +243,7 @@ fn account_models_from<S: Sink, A: AccountAccess + AccountStored>(
         CapabilitySet::from_iter([Capability::WebFetch]),
         sink,
     ) else {
-        return AccountModels::Unreadable;
+        return compiled();
     };
     let mut replaced = false;
     loop {
@@ -256,13 +264,13 @@ fn account_models_from<S: Sink, A: AccountAccess + AccountStored>(
                     Err(AccountFailure::NotSignedIn | AccountFailure::Ended) => {
                         return AccountModels::Absent;
                     }
-                    Err(_) => return AccountModels::Unreadable,
+                    Err(_) => return compiled(),
                 };
             }
             Err(ChatError::Account(AccountFailure::Named(refusal))) => {
                 return AccountModels::Refused(refusal);
             }
-            Err(_) => return AccountModels::Unreadable,
+            Err(_) => return compiled(),
         }
     }
 }
@@ -603,6 +611,14 @@ mod tests {
         {"slug":"gpt-a","display_name":"GPT A","visibility":"list","supported_in_api":true},
         {"slug":"gpt-b","visibility":"hide","supported_in_api":true}]}"#;
 
+    /// What a picker is given where the listing could not be read: the compiled list, which is the
+    /// same whatever the service said or failed to say.
+    fn compiled() -> AccountModels {
+        AccountModels::Compiled(bravebot_aichat::models::compiled_for_account(
+            &Provider::chatgpt_account(),
+        ))
+    }
+
     /// CHATGPT-9: where no usable sign-in is stored nothing is offered and nothing is asked of the
     /// service, and an ended sign-in is one that is no longer stored. A listing is a request the
     /// token goes with, so a machine that never signed in sends none.
@@ -624,10 +640,12 @@ mod tests {
         }
     }
 
-    /// CHATGPT-9: a sign-in that is stored and cannot be used says so to the picker, which is not
-    /// the silence of a machine that never signed in, and sends nothing either.
+    /// CHATGPT-9: a sign-in that is stored and cannot be used is offered the compiled list and says
+    /// so to the picker, which is not the silence of a machine that never signed in, and sends
+    /// nothing either.
     #[test]
-    fn an_account_whose_token_cannot_be_had_is_unreadable_and_asks_the_service_nothing() {
+    fn an_account_whose_token_cannot_be_had_is_offered_the_compiled_list_and_asks_the_service_nothing()
+     {
         for failure in [
             AccountFailure::Unusable,
             AccountFailure::Refused,
@@ -642,7 +660,7 @@ mod tests {
                 &mut RecordingSink::new(),
                 &Egress::new(),
             );
-            assert_eq!(offered, AccountModels::Unreadable, "{failure:?}");
+            assert_eq!(offered, compiled(), "{failure:?}");
             assert_eq!(connections(&listener), 0, "{failure:?} sent a request");
         }
     }
@@ -681,9 +699,10 @@ mod tests {
         );
     }
 
-    /// CHATGPT-9: a listing the service refused or answered in another shape offers nothing and
-    /// says it could not be read, and one it answered empty offers nothing and says nothing: the
-    /// account reaches no model, which the service said.
+    /// CHATGPT-9: a listing the service refused or answered in another shape offers the compiled
+    /// list and says it could not be read, and one it answered empty offers nothing and says
+    /// nothing: the account reaches no model, which the service said, and the compiled list is not
+    /// used in its place.
     #[test]
     fn an_unreadable_listing_is_told_apart_from_an_empty_one() {
         for (status, body) in [
@@ -701,7 +720,7 @@ mod tests {
                 &mut RecordingSink::new(),
                 &Egress::new(),
             );
-            assert_eq!(offered, AccountModels::Unreadable, "{status} {body}");
+            assert_eq!(offered, compiled(), "{status} {body}");
             assert!(
                 access.refused.is_empty(),
                 "{status}: only a 401 is a refused token"
@@ -755,7 +774,7 @@ mod tests {
             ]
         );
 
-        // The replacement refused as well: one replacement per listing, and nothing offered.
+        // The replacement refused as well: one replacement per listing, and the compiled list.
         let (endpoint, _received) = answering(vec![(401, "{}"), (401, "{}")]);
         let mut access =
             Held::new(Ok("placeholder-token-8c1f")).replacing_with("placeholder-token-2e90");
@@ -766,13 +785,13 @@ mod tests {
             &mut RecordingSink::new(),
             &Egress::new(),
         );
-        assert_eq!(offered, AccountModels::Unreadable);
+        assert_eq!(offered, compiled());
         assert_eq!(access.refused.len(), 1);
 
         // A replacement that cannot be made is a sign-in that cannot be used, or one that is gone.
         for (failure, expected) in [
             (AccountFailure::Ended, AccountModels::Absent),
-            (AccountFailure::Refused, AccountModels::Unreadable),
+            (AccountFailure::Refused, compiled()),
         ] {
             let (endpoint, _received) = answering(vec![(401, "{}")]);
             let mut access = Held::new(Ok("placeholder-token-8c1f"));

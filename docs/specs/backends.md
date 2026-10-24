@@ -679,7 +679,8 @@ gateway is still read: what a gateway puts under `capabilities` is its own.
 
 **The ChatGPT account is asked as [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) says,** and only where a sign-in
 is stored. It is a roster beside the others, its rows are keyed by its own identifier, and a listing that cannot
-be had contributes nothing and takes nothing away from the rest.
+be had contributes the compiled names of [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) and takes nothing away from
+the rest. A listing refused in a code that names the account contributes nothing.
 
 `verified-by: bravebot_aichat::models::a_gateway_roster_is_offered_under_names_that_say_which_gateway_serves_them`
 `verified-by: bravebot_aichat::models::a_window_a_gateway_reports_is_taken_from_the_listing`
@@ -702,7 +703,7 @@ be had contributes nothing and takes nothing away from the rest.
 `verified-by: bravebot_tui::app::a_fetched_roster_leads_with_the_model_in_force`
 `verified-by: bravebot_tui::app::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
 `verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
-`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none`
+`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
 
 <a id="BACKEND-20"></a>
 ### BACKEND-20: how hard to think is carried, never inferred

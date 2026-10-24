@@ -19,7 +19,8 @@ pub fn list(config: &Config) -> Value {
 ///
 /// Every turn builds its configuration afresh, so nothing carries over from an earlier model: the
 /// budget is the default until this says otherwise. A model whose row states no window, or that no
-/// row describes, or a listing that could not be fetched, leaves the default in place.
+/// row describes, or a listing that could not be fetched, leaves the default in place, except that the
+/// compiled names of the ChatGPT account stand in for its listing and carry the assumed window.
 pub fn adopt_window(config: &mut Config, model: Option<&str>) {
     // The account is asked only for a turn on one of its own models, as the terminal does: a turn on
     // any other model has no use for the account's listing, and its token goes nowhere for it.
@@ -143,7 +144,7 @@ fn ask_the_account(config: &Config) -> bravebot_agent::chatgpt::AccountModels {
 /// be had.
 ///
 /// Split from the request so it is testable without a server. A person who never signed in is told
-/// nothing about it, and a listing that could not be had adds no row, as a gateway's does.
+/// nothing about it, and a listing that could not be had adds the compiled list and says so.
 fn with_account(
     rows: &mut Vec<Model>,
     warnings: &mut Vec<String>,
@@ -151,6 +152,15 @@ fn with_account(
 ) {
     match account {
         bravebot_agent::chatgpt::AccountModels::Offered(models) => rows.extend(models),
+        bravebot_agent::chatgpt::AccountModels::Compiled(models) => {
+            rows.extend(models);
+            warnings.push(
+                "Could not load models from ChatGPT, so the list shown is built in and may name a \
+                 model the account cannot reach. Try again, or sign in again with \
+                 `bravebot auth login chatgpt`."
+                    .into(),
+            );
+        }
         bravebot_agent::chatgpt::AccountModels::Unreadable => {
             warnings.push(
                 "Could not load models from ChatGPT. Try again, or sign in again with \
@@ -449,10 +459,12 @@ mod tests {
     }
 
     /// CHATGPT-9 in the window: the account's models are added beside the rows already there and
-    /// take none away, a listing that could not be had says so and adds nothing, and an account
-    /// nobody signed in to is not mentioned. The row reaches the window under the account's name.
+    /// take none away, a listing that could not be had adds the compiled list and says that it is
+    /// one, a sign-in file that could not be read says so and adds nothing, and an account nobody
+    /// signed in to is not mentioned. The row reaches the window under the account's name.
     #[test]
-    fn the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more() {
+    fn the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning()
+     {
         use bravebot_agent::chatgpt::AccountModels;
         let elsewhere = Model {
             provider: Some("openrouter".into()),
@@ -480,10 +492,31 @@ mod tests {
         assert_eq!(row["contextWindow"], 272_000);
 
         let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
+        with_account(
+            &mut rows,
+            &mut warnings,
+            AccountModels::Compiled(vec![account_row("chatgpt/gpt-5.5")]),
+        );
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(keys, ["openrouter/z-ai/glm-4.6", "chatgpt/gpt-5.5"]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("Could not load models from ChatGPT"));
+        assert!(
+            warnings[0].contains("built in") && warnings[0].contains("cannot reach"),
+            "the compiled list was not said to be one that may be refused: {}",
+            warnings[0]
+        );
+
+        let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
         with_account(&mut rows, &mut warnings, AccountModels::Unreadable);
         assert_eq!(rows, std::slice::from_ref(&elsewhere));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].starts_with("Could not load models from ChatGPT."));
+        assert!(
+            !warnings[0].contains("built in"),
+            "no list was offered: {}",
+            warnings[0]
+        );
 
         // A listing refused for a code that names the account is told in the refusal's sentence, which
         // is not the unreadable listing's and does not name signing in again.

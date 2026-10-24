@@ -1218,9 +1218,12 @@ chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browse
 chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
 chatgpt-use-by-name = Pick one of the account's models in /model to use this sign-in, or name one, as in bravebot --model chatgpt/<model>
 # What the command says after the sign-in is stored when the account's listing answered with no model,
-# could not be had, or was refused in a code that names the account. The sign-in is stored in each.
+# could not be had, or was refused in a code that names the account. The sign-in is stored in each. Of the
+# two for a listing that could not be had, the second is for an account whose picker offers the built-in
+# list in its place.
 chatgpt-reaches-no-model = This ChatGPT account reaches no model through bravebot, so /model offers none. The sign-in stays stored.
 chatgpt-listing-unreadable = The account's models could not be listed, so /model offers none. Try /model later, or name one, as in bravebot --model chatgpt/<model>
+chatgpt-listing-compiled = The account's models could not be listed, so /model offers a built-in list that may name a model the account cannot reach. Try /model later, or name one, as in bravebot --model chatgpt/<model>
 chatgpt-listing-refused = The account's models could not be listed: { $refusal }
 chatgpt-forgotten =
     forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings
@@ -3242,10 +3245,13 @@ session-using-model-from = using { $model } from { $service }
 session-signing-in = signing in to AWS; follow the instructions below, and this returns when it is done
 session-context-budget = compacting above { $budget } tokens, as this model advertises
 session-models-unavailable = could not list models: { $problem }
-# Said when the picker opens with a ChatGPT sign-in stored and its listing could not be had. The second
-# is for a listing the service refused in a code that names the account, where signing in again is no
-# remedy.
+# Said when the picker opens with a ChatGPT sign-in stored and its listing could not be had. The first
+# is for a sign-in file that could not be read where a settings entry names the models, which offers no
+# row. The second is for a listing that could not be had, where the picker shows the built-in list. The
+# third is for a listing the service refused in a code that names the account, where signing in again
+# is no remedy.
 session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
+session-chatgpt-models-compiled = could not list the ChatGPT account's models, so /model shows a built-in list that may name a model the account cannot reach; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
 session-chatgpt-models-refused = could not list the ChatGPT account's models: { $refusal }
 session-theme-set = theme { $theme }
 session-no-such-theme = no theme named { $theme }; try /theme for the list

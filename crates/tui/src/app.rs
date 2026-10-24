@@ -7890,10 +7890,11 @@ mod tests {
     }
 
     /// CHATGPT-9: the account's rows are met in the order a fetched gateway roster is, the model in
-    /// force first and the rest by name, and a listing that could not be had, or an account nobody
-    /// signed in to, adds none.
+    /// force first and the rest by name, whether they were listed or compiled in, and a sign-in
+    /// file that could not be read, a listing refused in a code that names the account, or an
+    /// account nobody signed in to, adds none.
     #[test]
-    fn the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none() {
+    fn the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one() {
         use bravebot_agent::chatgpt::AccountModels;
         let rows = || {
             vec![
@@ -7912,6 +7913,14 @@ mod tests {
                 "chatgpt/gpt-c"
             )),
             ["chatgpt/gpt-c", "chatgpt/gpt-a", "chatgpt/gpt-b"]
+        );
+        assert_eq!(
+            keys(account_rows(
+                AccountModels::Compiled(rows()),
+                "chatgpt/gpt-c"
+            )),
+            ["chatgpt/gpt-c", "chatgpt/gpt-a", "chatgpt/gpt-b"],
+            "the compiled list is met as a listing is"
         );
         assert!(account_rows(AccountModels::Unreadable, "chatgpt/gpt-c").is_empty());
         assert!(
@@ -8537,7 +8546,7 @@ mod tests {
     /// Each caller is run on a fresh configuration so the budget it ends with is its own.
     #[test]
     fn a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists() {
-        use models::scripted_account::{asked, offer};
+        use models::scripted_account::{asked, fail_to_list, offer};
         offer(the_accounts_listing());
 
         let mut config = a_config_with_a_named_roster();
@@ -8562,6 +8571,16 @@ mod tests {
         offer(the_accounts_listing());
         assert!(reads_structured_output(&config, "chatgpt/gpt-5.5"));
         assert_eq!(asked(), 1, "the structured-output check did not ask");
+
+        // The listing could not be had, so the compiled name stands in and its window is the assumed one.
+        fail_to_list();
+        let mut config = a_config_with_a_named_roster();
+        adopt_listing_for_model(&mut config, "chatgpt/gpt-5.5");
+        assert_eq!(asked(), 1, "a run's lookup did not ask");
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::provider::CONTEXT_WINDOW
+        );
     }
 
     /// CHATGPT-9: the picker asks the account whatever model is in force, and offers what it lists
@@ -8589,9 +8608,9 @@ mod tests {
         );
     }
 
-    /// CHATGPT-9: a person who signed in to ChatGPT and finds none of the account's rows in the
-    /// picker is told why, in the sentence for the failure, and the rows already there are still
-    /// offered. A listing refused in a code that names the account is said in the refusal's own
+    /// CHATGPT-9: a person who signed in to ChatGPT and whose listing could not be had is told why, in
+    /// the sentence for the failure, with the compiled names offered beside the rows already there.
+    /// A sign-in file that could not be read offers none of the account's rows and says that. A listing refused in a code that names the account is said in the refusal's own
     /// sentence, which does not send the person to sign in again, since a new sign-in changes nothing
     /// there. An account nobody signed in to and a listing that was read, empty or not, say nothing:
     /// the first is not owed a warning about a service it does not use, and the second is the
@@ -8600,7 +8619,9 @@ mod tests {
     #[test]
     fn the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise() {
         use bravebot_aichat::responses::protocol::Refusal;
-        use models::scripted_account::{fail_to_list, nobody_signed_in, offer, refuse};
+        use models::scripted_account::{
+            fail_to_list, fail_to_read_the_file, nobody_signed_in, offer, refuse,
+        };
 
         let config = a_config_with_a_named_roster();
         let said_after_opening = |script: &dyn Fn()| -> (Vec<String>, Vec<String>) {
@@ -8616,14 +8637,35 @@ mod tests {
         };
 
         let (said, rows) = said_after_opening(&fail_to_list);
-        assert_eq!(said, [t!(session_chatgpt_models_unreadable).to_string()]);
+        assert_eq!(said, [t!(session_chatgpt_models_compiled).to_string()]);
         assert!(
             said[0].contains("bravebot auth login chatgpt"),
             "an unreadable listing was not given its remedy: {said:?}"
         );
         assert!(
+            said[0].contains("built-in"),
+            "the compiled list was not said to be one: {said:?}"
+        );
+        assert!(
             rows.contains(&"opus-arn".to_string()),
             "a failed listing took a row away: {rows:?}"
+        );
+        let compiled = bravebot_aichat::models::compiled_for_account(
+            &bravebot_config::provider::Provider::chatgpt_account(),
+        );
+        for row in &compiled {
+            assert!(
+                rows.contains(&row.key),
+                "a failed listing did not offer {}: {rows:?}",
+                row.key
+            );
+        }
+
+        let (said, rows) = said_after_opening(&fail_to_read_the_file);
+        assert_eq!(said, [t!(session_chatgpt_models_unreadable).to_string()]);
+        assert!(
+            !rows.iter().any(|row| row.starts_with("chatgpt/")),
+            "a sign-in file that could not be read offered the account's rows: {rows:?}"
         );
 
         for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
@@ -8683,6 +8725,10 @@ mod tests {
         assert_eq!(
             account_problem_said(&AccountModels::Unreadable).as_deref(),
             Some(t!(session_chatgpt_models_unreadable))
+        );
+        assert_eq!(
+            account_problem_said(&AccountModels::Compiled(the_accounts_listing())).as_deref(),
+            Some(t!(session_chatgpt_models_compiled))
         );
         assert_eq!(
             account_problem_said(&AccountModels::Refused(Refusal::UsageLimit)),

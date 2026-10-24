@@ -543,7 +543,7 @@ fn holds(haystack: &[u8], needle: &str) -> bool {
 /// the environment of the program each turn started, which a hook writes there.
 ///
 /// The desktop window is an output this cannot reach: the bridge's account failures are pinned by
-/// `bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more`.
+/// `bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`.
 #[test]
 fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails() {
     let home = Scratch::new("cli-chatgpt-account-outputs");

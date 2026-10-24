@@ -1042,9 +1042,11 @@ chatgpt-stored = connecté à ChatGPT ; le jeton d'accès expire le { $expires }
 chatgpt-use-by-name = Choisissez l'un des modèles du compte avec /model pour utiliser cette connexion, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
 # Ce que la commande dit une fois la connexion enregistrée quand la liste du compte ne contient aucun
 # modèle, n'a pas pu être obtenue, ou a été refusée par un code qui désigne le compte. La connexion est
-# enregistrée dans chaque cas.
+# enregistrée dans chaque cas. Des deux messages pour une liste qui n'a pas pu être obtenue, le second
+# concerne un compte dont le sélecteur propose la liste intégrée à la place.
 chatgpt-reaches-no-model = Ce compte ChatGPT n'atteint aucun modèle avec bravebot, donc /model n'en propose aucun. La connexion reste enregistrée.
 chatgpt-listing-unreadable = Les modèles du compte n'ont pas pu être listés, donc /model n'en propose aucun. Réessayez /model plus tard, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+chatgpt-listing-compiled = Les modèles du compte n'ont pas pu être listés, donc /model propose une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser. Réessayez /model plus tard, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
 chatgpt-listing-refused = Les modèles du compte n'ont pas pu être listés : { $refusal }
 chatgpt-forgotten =
     connexion ChatGPT enregistrée oubliée. Elle reste valide chez OpenAI tant qu'on n'y met pas fin : déconnectez-vous de ChatGPT, ou retirez l'accès de bravebot dans les réglages du compte
@@ -2794,9 +2796,12 @@ session-signing-in =
 session-context-budget = compactage au-delà de { $budget } jetons, selon ce que ce modèle annonce
 session-models-unavailable = impossible de lister les modèles : { $problem }
 # Dit à l'ouverture du sélecteur quand une connexion ChatGPT est enregistrée et que sa liste n'a pas pu
-# être obtenue. La seconde concerne une liste refusée par un code qui désigne le compte, où se
-# reconnecter ne change rien.
+# être obtenue. Le premier concerne un fichier de connexion illisible quand une entrée des réglages nomme
+# les modèles, ce qui n'offre aucune ligne. Le deuxième concerne une liste qui n'a pas pu être obtenue,
+# où le sélecteur montre la liste intégrée. Le troisième concerne une liste refusée par un code qui
+# désigne le compte, où se reconnecter ne change rien.
 session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+session-chatgpt-models-compiled = impossible de lister les modèles du compte ChatGPT, donc /model montre une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
 session-chatgpt-models-refused = impossible de lister les modèles du compte ChatGPT : { $refusal }
 session-theme-set = thème { $theme }
 session-no-such-theme = aucun thème nommé { $theme } ; essayez /theme pour la liste

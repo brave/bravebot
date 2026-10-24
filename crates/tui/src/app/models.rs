@@ -74,8 +74,8 @@ fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<Picker
     }
 
     // Additive like a gateway: a stored ChatGPT sign-in adds its models to the rows and takes none
-    // away. Not asked where nothing is signed in, and a listing that cannot be had adds nothing and
-    // is said, so a person who signed in does not take the missing rows for a service with none.
+    // away. Not asked where nothing is signed in, and a listing that cannot be had adds the compiled
+    // names and is said, so a person who signed in does not take them for what the account reaches.
     let mut account_problem = None;
     if account {
         let asked = ask_the_account(config);
@@ -118,13 +118,15 @@ fn ask_the_account(config: &Config) -> bravebot_agent::chatgpt::AccountModels {
 /// roster is met in.
 ///
 /// Split from the request so the joining is testable without a server. A listing that could not be
-/// had adds nothing, as a gateway's does.
+/// had adds the compiled list, and one the service refused in a code that names the account adds
+/// nothing.
 pub(super) fn account_rows(
     account: bravebot_agent::chatgpt::AccountModels,
     chosen: &str,
 ) -> Vec<bravebot_aichat::models::Model> {
     match account {
-        bravebot_agent::chatgpt::AccountModels::Offered(rows) => in_reading_order(rows, chosen),
+        bravebot_agent::chatgpt::AccountModels::Offered(rows)
+        | bravebot_agent::chatgpt::AccountModels::Compiled(rows) => in_reading_order(rows, chosen),
         bravebot_agent::chatgpt::AccountModels::Absent
         | bravebot_agent::chatgpt::AccountModels::Unreadable
         | bravebot_agent::chatgpt::AccountModels::Refused(_) => Vec::new(),
@@ -143,6 +145,9 @@ pub(super) fn account_problem_said(
     match account {
         bravebot_agent::chatgpt::AccountModels::Unreadable => {
             Some(t!(session_chatgpt_models_unreadable).into())
+        }
+        bravebot_agent::chatgpt::AccountModels::Compiled(_) => {
+            Some(t!(session_chatgpt_models_compiled).into())
         }
         bravebot_agent::chatgpt::AccountModels::Refused(refusal) => Some(t!(
             session_chatgpt_models_refused,
@@ -639,6 +644,7 @@ pub(super) mod scripted_account {
     enum Answer {
         Models(Vec<Model>),
         Unreadable,
+        Compiled,
         Refused(Refusal),
     }
 
@@ -663,8 +669,13 @@ pub(super) mod scripted_account {
         ASKED.with(|asked| asked.set(0));
     }
 
-    /// Answer that the listing could not be had.
+    /// Answer that the listing could not be had, so the compiled list stands in for it.
     pub(in crate::app) fn fail_to_list() {
+        script(Answer::Compiled);
+    }
+
+    /// Answer that nothing can be offered because the sign-in file could not be read.
+    pub(in crate::app) fn fail_to_read_the_file() {
         script(Answer::Unreadable);
     }
 
@@ -684,6 +695,11 @@ pub(super) mod scripted_account {
         ANSWER.with(|scripted| match scripted.borrow().as_ref() {
             Some(Answer::Models(models)) => AccountModels::Offered(models.clone()),
             Some(Answer::Unreadable) => AccountModels::Unreadable,
+            Some(Answer::Compiled) => {
+                AccountModels::Compiled(bravebot_aichat::models::compiled_for_account(
+                    &bravebot_config::provider::Provider::chatgpt_account(),
+                ))
+            }
             Some(Answer::Refused(refusal)) => AccountModels::Refused(*refusal),
             None => AccountModels::Absent,
         })
