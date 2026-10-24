@@ -11,7 +11,7 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, the permission mode under the box, and the rows of the `/effort` and `/config` pickers, is built. Clicking other things on the screen, a context menu, edge
+drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, the permission mode under the box, the rows of the `/effort` and `/config` pickers, and a place in the prompt box's text, is built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
@@ -245,3 +245,22 @@ a mouse. The other pickers and the pickers opened while a turn runs are not cove
 `verified-by: bravebot_tui::list_picker::two_presses_on_different_rows_or_far_apart_take_nothing`
 `verified-by: bravebot_tui::list_picker::a_press_outside_the_rows_and_anything_but_a_press_leave_the_picker_alone`
 `verified-by: bravebot_tui::list_picker::a_press_finds_its_row_in_a_list_that_has_scrolled`
+
+<a id="MOUSE-16"></a>
+### MOUSE-16: a click in the prompt box puts the caret there
+
+In the prompt box, a left click that sweeps nothing on a cell of its text puts the caret before the
+character drawn there. As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and
+the press is a single click, so a drag, a double click and a triple click are selections. The cell is
+read as the box drew it: the same wrap, the window of rows around the caret and the prompt character
+or indent that opens each row. A cell on the prompt character lands at the start of its row and a cell
+past the end of a row at its end; the border is not text. A cell on a marker lands at the marker's
+start, because the arrows never rest inside one. A click over the scroller, a history search or a
+picker, in the vi style of box, and in the files state does nothing to the caret. The arrow keys stay
+the way to move it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_in_the_box_puts_the_caret_where_it_landed`
+`verified-by: bravebot_tui::app::a_click_in_the_box_counts_a_wide_character_as_one`
+`verified-by: bravebot_tui::app::a_click_on_a_marker_puts_the_caret_before_it`
+`verified-by: bravebot_tui::app::a_drag_a_double_click_or_a_click_off_the_text_leaves_the_caret_alone`
+`verified-by: bravebot_tui::app::a_click_in_the_box_does_nothing_where_another_mode_is_in_use`

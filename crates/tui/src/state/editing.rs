@@ -234,6 +234,42 @@ impl Session {
         }
     }
 
+    /// The offset in the line that a press on screen cell (`row`, `column`) lands on, in the box as
+    /// the last frame drew it (MOUSE-16).
+    ///
+    /// None where the cell is not one of the box's text, and where the box is not the one in use:
+    /// a picker is painted over the frame and takes every key, the files state owns every key, and
+    /// the vi box has modes a click would have to know the meaning of.
+    pub fn offset_in_the_box(&self, row: u16, column: u16) -> Option<usize> {
+        if self.picking().is_some()
+            || self.files_open()
+            || self.editing() != crate::vim::Editing::Ordinary
+        {
+            return None;
+        }
+        let (_, area) = self
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Input)?;
+        crate::render::caret_offset_at(self, *area, row, column)
+    }
+
+    /// Put the caret where a press on screen cell (`row`, `column`) lands in the box, and say
+    /// whether it was a cell of the box's text.
+    ///
+    /// A cell on a marker puts the caret at the marker's start, since the places the caret can rest
+    /// are the ones the arrows reach.
+    pub fn click_in_the_box(&mut self, row: u16, column: u16) -> bool {
+        let Some(at) = self.offset_in_the_box(row, column) else {
+            return false;
+        };
+        let at = at.min(self.input.len());
+        self.caret = self.marker_at(at).map_or(at, |(start, _)| start);
+        self.ordinary_run_open = false;
+        true
+    }
+
     /// Move the caret to the start of the word before it.
     ///
     /// Words are runs of anything but whitespace, which is what makes a path or a flag one word:

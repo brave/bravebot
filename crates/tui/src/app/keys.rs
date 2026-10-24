@@ -1828,6 +1828,12 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
         MouseEventKind::Up(MouseButton::Left) if is_a_shortcut_click(session, mouse) => {
             click_shortcut(session, mouse)
         }
+        // A click in the prompt box that swept nothing puts the caret where it landed (MOUSE-16).
+        MouseEventKind::Up(MouseButton::Left) if is_a_click_on(session, mouse) => {
+            session.clear_selection();
+            session.click_in_the_box(mouse.row, mouse.column);
+            Action::Redraw
+        }
         MouseEventKind::Up(MouseButton::Left) => Action::Copy,
         _ => Action::None,
     }
@@ -1845,6 +1851,17 @@ fn is_a_shortcut_click(session: &Session, mouse: MouseEvent) -> bool {
             .is_some_and(|click| click.count() == 1 && click.cell() == (mouse.row, mouse.column))
         && (session.panel_target_at(mouse.row, mouse.column).is_some()
             || session.on_the_mode(mouse.row, mouse.column))
+}
+
+/// Whether a release is the end of a single click that swept nothing, on a cell of the prompt box's
+/// text, with the box in use at the plain prompt.
+fn is_a_click_on(session: &Session, mouse: MouseEvent) -> bool {
+    !session.scrolling()
+        && !session.searching_history()
+        && session
+            .last_click
+            .is_some_and(|click| click.count() == 1 && click.cell() == (mouse.row, mouse.column))
+        && session.offset_in_the_box(mouse.row, mouse.column).is_some()
 }
 
 /// What a click [`is_a_shortcut_click`] names does.

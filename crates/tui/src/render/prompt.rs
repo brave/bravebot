@@ -78,6 +78,42 @@ pub(super) fn input_height(session: &Session, width: u16, height: u16) -> u16 {
     (rows + 2).min(ceiling) as u16
 }
 
+/// The byte offset in the line that a press on screen cell (`row`, `column`) lands on, for a box
+/// drawn over `area` (MOUSE-16).
+///
+/// Measured the way [`draw_input`] draws it: the same wrap, the same window of rows around the
+/// caret and the same two columns of lead on each row. A cell on the border lands nowhere. A cell
+/// past the end of a row lands at its end, and one on the lead at its start. A character drawn two
+/// cells wide is taken from either of them.
+pub(crate) fn offset_at(session: &Session, area: Rect, row: u16, column: u16) -> Option<usize> {
+    if row <= area.y || row + 1 >= area.bottom() || column <= area.x || column + 1 >= area.right() {
+        return None;
+    }
+    let wrapped = wrap::wrap(
+        session.input(),
+        input_text_width(area.width),
+        session.caret(),
+    );
+    let visible = (area.height as usize).saturating_sub(2).max(1);
+    let (first, rows) = wrapped.window(visible);
+    let drawn = usize::from(row - area.y - 1);
+    let text = rows.get(drawn)?;
+    let index = first + drawn;
+    let lead = lead_for(index, session.shell, session.shell_private()).len();
+    let target = usize::from(column - area.x - 1).saturating_sub(lead);
+
+    let mut offset = 0;
+    let mut width = 0;
+    for (bytes, columns) in wrap::clusters(text) {
+        if target < width + columns {
+            break;
+        }
+        width += columns;
+        offset += bytes;
+    }
+    Some(wrapped.starts[index] + offset)
+}
+
 /// A row with `at..through` of it drawn as a block, which is where the caret is.
 ///
 /// A block rather than a glyph inserted between two characters, because inserting one moves
