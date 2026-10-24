@@ -9,7 +9,7 @@ description:
   comments are handled afterwards with pr-fix. Triggers on: /implement-issues <issues or query>,
   work through this label, one pull request for these issues, implement all of these.'
 argument-hint: '<issue numbers, links or search queries, separated by commas, or the number of a pull request this skill opened>'
-allowed-tools: Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(git *), Bash(gh api search/issues *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(make *), Bash(cargo *), Read, Edit, Write
+allowed-tools: Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
 ---
 
 # Implement a list of issues in one pull request
@@ -75,7 +75,7 @@ closing lines and its `**#<n>**` blocks and from `git worktree list`, then go to
 Where the `run` tool takes `scopes` and `unconfined`, the pr-fix skill gives the arguments for each
 of its steps and says why. This skill's other calls take these:
 
-- `gh api search/issues`, and every `...` step the pr-fix skill gives `scopes: ["remote"]`
+- `gh api -X GET search/issues`, and every `...` step the pr-fix skill gives `scopes: ["remote"]`
   (`kind`, `issue <n>`, `ci`, `comments`, `reply`, `review`): `scopes: ["remote"]`.
 - `... issue <n> --branch`, `... open`, `... start`, `... continue`, `... check`, `... push`: as the
   pr-fix skill gives them, which is `unconfined: true` on macOS.
@@ -264,7 +264,7 @@ costliest thing this skill can do.
    from the `EXIT=` line, never from a notification's exit code or a `sleep` and `grep`:
 
    ```sh
-   { BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make check-affected; echo "EXIT=$?"; } > "$LOG" 2>&1
+   BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make check-affected > "$LOG" 2>&1; echo "EXIT=$?" >> "$LOG"
    ```
 
    Docker gates run only when an item is about another platform: the issue names Linux, Windows or
@@ -291,9 +291,9 @@ costliest thing this skill can do.
     branch was then rebased onto `<sha>` over changes that do not reach the diff. Otherwise re-run
     what the new changes reach.
 11. For a change under `crates/tui/`, capture the screen it produces: drive the client with
-    `contrib/drive_tui.py --raw` and replay the capture with
-    `contrib/terminal-screenshot.py --strict` at the same `--cols` and `--rows`. Paste screens for
-    `ui/` changes too. Never write a screen from the code.
+    `python3 contrib/drive_tui.py --raw` and replay the capture with
+    `python3 contrib/terminal-screenshot.py --strict` at the same `--cols` and `--rows`. Paste
+    screens for `ui/` changes too. Never write a screen from the code.
 12. Run every item's reproduction from the ledger on this tree and compare it with what should
     happen. An item that still fails goes back to step 4, and the gates its fix reaches run again.
     `Closes` is claimed only for an item whose reproduction now ends as expected.
