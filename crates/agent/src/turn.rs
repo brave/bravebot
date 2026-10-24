@@ -3851,6 +3851,9 @@ where
     }
     *rounds_taken = state.steps;
     *worked_out = state.worked;
+    // A ChatGPT sign-in renewed by a call that is not a round's request, such as the goal check or a
+    // processor, and not said yet (CHATGPT-7).
+    crate::chatgpt::say_an_unsaved_renewal(reporter);
     state.spent.wall = began.elapsed();
     reporter.spent(crate::outcome::Spent {
         timing: state.spent.finish(),
@@ -4283,6 +4286,9 @@ where
                 }
             })
         };
+        // Whatever came of the request: a ChatGPT sign-in renewed for it that the file could not take
+        // is news either way, and nothing is said unless one was (CHATGPT-7).
+        crate::chatgpt::say_an_unsaved_renewal(reporter);
         state.shown_before = written_before + round_shown;
         // Retries included, because a round that had to reconnect really did keep the turn waiting
         // that long. The count is what the turn spent, not what the endpoint would have taken had

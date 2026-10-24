@@ -1252,6 +1252,9 @@ chatgpt-account-unusable =
 chatgpt-account-malformed =
     the stored ChatGPT sign-in is unusable: { $defect }; run bravebot auth login chatgpt to sign in again, or bravebot auth logout chatgpt to forget it
 chatgpt-account-unwritable = the ChatGPT sign-in could not be stored: { $detail }; nothing was changed
+# Said once in the turn that renewed the sign-in, where the file could not take the renewal. It names no
+# path and quotes nothing the file or the system said.
+chatgpt-renewal-unwritten = the ChatGPT sign-in was renewed and could not be saved, so it lasts only until bravebot exits; check that the folder it is kept in has room and can be written to, and if the next start says the sign-in ended, run bravebot auth login chatgpt
 chatgpt-defect-empty = the file holds nothing, which an interrupted write leaves behind
 chatgpt-defect-not-json = the file is not valid JSON
 chatgpt-defect-other-version = it was written by another version, and this build reads version 1

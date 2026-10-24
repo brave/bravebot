@@ -10,6 +10,7 @@
 //! renewer for the rest of the process, so a second one made for each request would drop it, and
 //! the next request would present a refresh token the server has already replaced.
 
+use crate::report::Reporter;
 pub use bravebot_aichat::models::Model;
 pub use bravebot_aichat::responses::protocol::Refusal;
 use bravebot_aichat::{AccountAccess, AccountFailure, ChatError, RenewalFailure};
@@ -18,12 +19,75 @@ use bravebot_config::{Config, Secret};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+use bravebot_i18n::t;
 use bravebot_net::{Egress, EgressError, Transport};
 use bravebot_skus::chatgpt::{Access, Account, Class, Hosts, Renewer, TokenError};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// The renewer, made at the first request that needs a token.
 static RENEWER: Mutex<Option<Renewer>> = Mutex::new(None);
+
+/// Whether the file holds the last renewal, and whether the person has been told where it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Saving {
+    /// No renewal has failed to be written, or the last one that did has since been written.
+    Saved,
+    /// A renewal could not be written and no turn has said so.
+    Unsaid,
+    /// A renewal could not be written and a turn has said so. It is not said again until a write
+    /// succeeds and a later one fails.
+    Said,
+}
+
+/// What the file holds of the renewals this process made, as the turns that follow tell it.
+static SAVING: Mutex<Saving> = Mutex::new(Saving::Saved);
+
+/// Record, in `saving`, that a request's token was had, where `unwritten` says the renewer holds a
+/// renewal the file could not take.
+///
+/// Each request retries a write that failed, so a file that stays unwritable fails on every request
+/// and the person is told once. A write that then succeeds clears it, so the next failure is told.
+fn record_a_token(saving: &Mutex<Saving>, unwritten: bool) {
+    let mut saving = saving.lock().unwrap_or_else(PoisonError::into_inner);
+    *saving = match (unwritten, *saving) {
+        (false, _) => Saving::Saved,
+        (true, Saving::Saved) => Saving::Unsaid,
+        (true, told) => told,
+    };
+}
+
+/// The token of `access`, noting in `saving` whether the file took the renewal that made it.
+fn token_of(saving: &Mutex<Saving>, access: &Access) -> Secret {
+    record_a_token(saving, access.unwritten.is_some());
+    Secret::new(access.token.expose())
+}
+
+/// Say, in the turn that made the request, that the sign-in was renewed and the file could not take
+/// the renewal ([CHATGPT-7](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-7)).
+///
+/// Called after each round's request, whatever came of it, and when the turn ends, so a renewal made
+/// by a call that is not a round's request is said in the turn it was made in. The renewed tokens are used from memory
+/// for the rest of the process, so the turn goes on. The file still holds a refresh token the
+/// server has replaced, so the sign-in ends at the next start unless it can be written by then,
+/// which is what the sentence tells the person. It names no path and quotes nothing the file or the
+/// operating system said.
+pub(crate) fn say_an_unsaved_renewal(reporter: &mut (impl Reporter + ?Sized)) {
+    say_from(&SAVING, reporter);
+}
+
+/// [`say_an_unsaved_renewal`] for a given record of what the file holds, so a test need not share
+/// the process's.
+fn say_from(saving: &Mutex<Saving>, reporter: &mut (impl Reporter + ?Sized)) {
+    let mut saving = saving.lock().unwrap_or_else(PoisonError::into_inner);
+    let say = *saving == Saving::Unsaid;
+    if say {
+        *saving = Saving::Said;
+    }
+    drop(saving);
+    if say {
+        reporter.notice(t!(chatgpt_renewal_unwritten).into());
+    }
+}
 
 /// The service a stored sign-in reaches: the one built from constants, shared by every request.
 pub(crate) fn account_provider() -> &'static Provider {
@@ -101,8 +165,8 @@ pub enum AccountModels {
     Unreadable,
     /// A sign-in is stored and the serving host refused the listing in a code that names the
     /// account ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Nothing is offered,
-    /// and the desktop picker says so in that clause's sentence, which does not send the person to
-    /// sign in again.
+    /// and both pickers and the sign-in command say so in that clause's sentence, which does not send
+    /// the person to sign in again.
     Refused(Refusal),
 }
 
@@ -209,7 +273,7 @@ fn obtained(
     }
     let renewer = held.as_mut().ok_or(AccountFailure::Unusable)?;
     ask(renewer)
-        .map(|access| Secret::new(access.token.expose()))
+        .map(|access| token_of(&SAVING, &access))
         .map_err(|failure| failure_of(&failure))
 }
 
@@ -291,6 +355,90 @@ mod tests {
         assert_eq!(groups, [8, 4, 4, 4, 12], "{id}");
         assert!(id.chars().all(|c| c == '-' || c.is_ascii_hexdigit()));
         assert_eq!(id.as_bytes()[14], b'4');
+    }
+
+    /// CHATGPT-7: a renewal the file could not take is said to the person once, after the request
+    /// that renewed it. Each later request retries the write, so a file that stays unwritable would
+    /// say it on every round if nothing remembered having said it. A write that succeeds clears it,
+    /// and a failure after that is a new one and is said. Nothing is said while no write has failed.
+    /// The regressions it rejects are a failure that goes unsaid, one repeated on every round of a
+    /// turn, and one said only the first time a process ever failed.
+    #[test]
+    fn a_renewal_the_file_could_not_take_is_said_once_and_again_only_after_a_write_succeeds() {
+        let saving = Mutex::new(Saving::Saved);
+        let mut reporter = crate::report::RecordingReporter::default();
+
+        say_from(&saving, &mut reporter);
+        assert!(reporter.notices.is_empty(), "said with nothing to say");
+
+        record_a_token(&saving, true);
+        say_from(&saving, &mut reporter);
+        assert_eq!(reporter.notices, [t!(chatgpt_renewal_unwritten)]);
+
+        // The next request retries the write and it fails again.
+        record_a_token(&saving, true);
+        say_from(&saving, &mut reporter);
+        say_from(&saving, &mut reporter);
+        assert_eq!(reporter.notices.len(), 1, "{:?}", reporter.notices);
+
+        // The write succeeds, and a later one fails.
+        record_a_token(&saving, false);
+        say_from(&saving, &mut reporter);
+        assert_eq!(reporter.notices.len(), 1, "said after a write succeeded");
+        record_a_token(&saving, true);
+        say_from(&saving, &mut reporter);
+        assert_eq!(reporter.notices.len(), 2, "a new failure was not said");
+
+        // A failure no turn has said yet, which a later request's retry then wrote: nothing is left
+        // to say, and a stale report would send the person to a file that holds the renewal.
+        let saving = Mutex::new(Saving::Saved);
+        let mut reporter = crate::report::RecordingReporter::default();
+        record_a_token(&saving, true);
+        record_a_token(&saving, false);
+        say_from(&saving, &mut reporter);
+        assert!(reporter.notices.is_empty(), "{:?}", reporter.notices);
+    }
+
+    /// CHATGPT-7: it is the renewer's report that the file could not take a renewal that is noted,
+    /// and the token is the one it made either way, so the request goes on with it. A token whose
+    /// renewal was written, or that needed none, is not a failure to say. The regression it rejects
+    /// is the report read the other way round, which would say it for every request that went well
+    /// and for none that did not.
+    #[test]
+    fn the_report_of_an_unwritten_renewal_is_what_is_noted_and_the_token_is_used_either_way() {
+        let access = |unwritten| Access {
+            token: bravebot_skus::Secret::new("a-token"),
+            unwritten,
+        };
+        let said_after = |unwritten| {
+            let saving = Mutex::new(Saving::Saved);
+            let token = token_of(&saving, &access(unwritten));
+            assert_eq!(token.expose(), "a-token");
+            let mut reporter = crate::report::RecordingReporter::default();
+            say_from(&saving, &mut reporter);
+            reporter.notices.len()
+        };
+
+        let unwritable = AccountError::Unwritable {
+            detail: "a path".to_string(),
+        };
+        assert_eq!(said_after(Some(unwritable)), 1);
+        assert_eq!(said_after(None), 0);
+    }
+
+    /// CHATGPT-7: the sentence names no path and nothing a file or the system said, and tells the
+    /// person what to do about it, which is to see that the folder has room and can be written to and,
+    /// if the sign-in has ended by the next start, to sign in again. The regression it rejects is a sentence that carries the
+    /// failure's detail, which is text about a file and not about the sign-in.
+    #[test]
+    fn the_sentence_for_a_renewal_the_file_could_not_take_quotes_nothing_and_names_the_remedy() {
+        let said = t!(chatgpt_renewal_unwritten);
+        assert!(said.contains("bravebot auth login chatgpt"), "{said}");
+        assert!(said.contains("room"), "{said}");
+        assert!(said.contains("written to"), "{said}");
+        for quoted in ["/", "\\", "os error", "Permission denied"] {
+            assert!(!said.contains(quoted), "{quoted}: {said}");
+        }
     }
 
     /// A source of tokens that says what it holds, what it gives for a refused one, whether a

@@ -290,8 +290,9 @@ Three conditions keep the argument true, and a change that breaks one is a chang
 1. The crate holds no `Labelled` and carries no workspace content and no model output, as `bravebot-skus`
    does.
 2. What the agent receives from it is a token, in the secret type that
-   [credential-protection.md](credential-protection.md) describes, and a value from the closed set of
-   [CHATGPT-8](#CHATGPT-8). No string taken from a reply is part of either.
+   [credential-protection.md](credential-protection.md) describes, a value from the closed set of
+   [CHATGPT-8](#CHATGPT-8), and whether the file took a renewal, which is the result of a write on this
+   machine. No string taken from a reply is part of any of them.
 3. The ID token is verified once, at the sign-in, and no claim of it is stored, sent or displayed. This
    is not built: the reply's `id_token` is dropped unread, since the verification needs a signature
    verifier this crate does not hold ([Decisions left open](#decisions-left-open)). Its
@@ -411,10 +412,16 @@ nothing. The file is removed, and the turn says the sign-in has ended, whether o
 removed. The file was read with the claim held, so it holds the refresh token that was refused or one this
 process replaced and so killed. Any other failure of the refresh, a connection that did not complete or
 a reply that says the service is busy or unavailable, leaves the file as it is and says which of the
-backends spec's failure categories it was. A write of the reply that fails is reported, the new tokens are
-used from memory for the rest of the process, and the process tries the write again before each later request, under the claim,
-and only if the file still holds the token this process replaced. Where it holds another, or none, the tokens in
-memory are dropped.
+backends spec's failure categories it was. A write of the reply that fails is reported to the person, once,
+as a notice of the turn, in a sentence that names no path and quotes nothing the file or the system said. The
+notice is given after the request that renewed it, and when the turn ends if it has not been given, so a
+renewal made by a call that is not a round's request, such as the goal check or a processor, is reported in
+the turn it was made in. A renewal made outside a turn, for a picker's listing, the sign-in command or a
+compaction at rest, is reported by the next turn that makes a request. The new tokens are used from memory
+for the rest of the process, and the process tries the write again before each later request, under the claim,
+and only if the file still holds the token this process replaced. A retry that fails again is not reported
+again, and one that succeeds clears the report, so a failure after it is reported. Where the file holds
+another token, or none, the tokens in memory are dropped.
 
 **Why.** An authorization server may replace the refresh token each time it is used, and then the copy a
 second process read before the first's reply is dead. A session, a background run and a one-shot run on one
@@ -427,11 +434,10 @@ required here. A server that did not replace it would lose nothing to them. Remo
 on an ended sign-in leaves `auth status` and the picker saying what is true, and stops every later turn
 from presenting a token that cannot work.
 
-**Not built:** the report of a renewal the file could not take, which is held in memory and written again
-before the next request without the turn being told. A turn asks the renewal before every request
-(`Renewer::access_token`) and after a refusal of the token (`Renewer::replace_refused`), which gives a token
-other than the refused one and never the refused one back. Only a refusal with the status 401 is a refusal of
-the token, and one whose body names a code of the closed list ends the turn without a replacement.
+A turn asks the renewal before every request (`Renewer::access_token`) and after a refusal of the token
+(`Renewer::replace_refused`), which gives a token other than the refused one and never the refused one back.
+Only a refusal with the status 401 is a refusal of the token, and one whose body names a code of the closed
+list ends the turn without a replacement.
 
 `verified-by: bravebot_skus::chatgpt::renew::a_token_with_more_than_a_minute_left_is_used_and_nothing_is_asked`
 `verified-by: bravebot_skus::chatgpt::renew::a_token_within_a_minute_of_its_expiry_or_past_it_is_replaced`
@@ -458,6 +464,9 @@ the token, and one whose body names a code of the closed list ends the turn with
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
 `verified-by: bravebot_aichat::client::a_refusal_that_names_no_listed_code_is_replaced_and_sent_again_as_before`
 `verified-by: bravebot_agent::chatgpt::each_failed_step_of_a_renewal_is_its_own_failure_and_only_an_ended_account_is_ended`
+`verified-by: bravebot_agent::chatgpt::a_renewal_the_file_could_not_take_is_said_once_and_again_only_after_a_write_succeeds`
+`verified-by: bravebot_agent::chatgpt::the_report_of_an_unwritten_renewal_is_what_is_noted_and_the_token_is_used_either_way`
+`verified-by: bravebot_agent::chatgpt::the_sentence_for_a_renewal_the_file_could_not_take_quotes_nothing_and_names_the_remedy`
 
 <a id="CHATGPT-8"></a>
 ### CHATGPT-8: a failure names its step and quotes nothing
@@ -824,14 +833,13 @@ holds by reading its manifest.
 
 The requests a turn sends are made by the Responses client of `bravebot-aichat` given a token source, and
 `crates/agent/src/chatgpt.rs` is that source: one renewer for the process, which keeps a renewal the file could
-not take for the rest of it.
+not take for the rest of it, and the note of that, which the turn says once.
 
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-3](#CHATGPT-3), [CHATGPT-4](#CHATGPT-4),
-  [CHATGPT-6](#CHATGPT-6), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12) and
-  [CHATGPT-13](#CHATGPT-13).
-- **Built in part,** each naming what is not: [CHATGPT-2](#CHATGPT-2), [CHATGPT-7](#CHATGPT-7),
-  [CHATGPT-8](#CHATGPT-8), [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and
-  [CHATGPT-14](#CHATGPT-14).
+  [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7), [CHATGPT-11](#CHATGPT-11),
+  [CHATGPT-12](#CHATGPT-12) and [CHATGPT-13](#CHATGPT-13).
+- **Built in part,** each naming what is not: [CHATGPT-2](#CHATGPT-2), [CHATGPT-8](#CHATGPT-8),
+  [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and [CHATGPT-14](#CHATGPT-14).
 - **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); the
   zstd body of [CHATGPT-10](#CHATGPT-10); and the verification of the ID token of
   [CHATGPT-5](#CHATGPT-5).
@@ -1011,6 +1019,11 @@ work lands, in the same commit as the code.
 - A process that rotated the refresh token and could not write the file holds the only good copy in
   memory. If another process finds the file's refresh token dead and removes it, and the first exits before
   its write succeeds, the sign-in is gone and the person signs in again.
+- A renewal the file could not take is said by the first turn that makes a request after it. A process that
+  exits before one does, such as one that renewed for a compaction and then exited, says nothing, and the
+  next start finds the sign-in ended. The terminal shows a notice it has already shown in a conversation
+  once, so a failure after a write succeeded is not shown there a second time. The sentence names no path,
+  system error or cause, so a full disk and a folder that cannot be written get the same advice.
 - A person on a machine with no browser forwards the listener's port, which changes at every sign-in, and
   no device-code route is available to this program.
 - The compiled list ([CHATGPT-9](#CHATGPT-9)) can name a model the account cannot reach, which the service

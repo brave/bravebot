@@ -1077,6 +1077,9 @@ chatgpt-account-unusable =
 chatgpt-account-malformed =
     la connexion ChatGPT enregistrée est inutilisable : { $defect } ; lancez bravebot auth login chatgpt pour vous reconnecter, ou bravebot auth logout chatgpt pour l'oublier
 chatgpt-account-unwritable = la connexion ChatGPT n'a pas pu être enregistrée : { $detail } ; rien n'a été modifié
+# Dit une fois, dans le tour qui a renouvelé la connexion, quand le fichier n'a pas pu recevoir le
+# renouvellement. Aucun chemin n'y figure et rien de ce que le fichier ou le système a dit n'y est repris.
+chatgpt-renewal-unwritten = la connexion ChatGPT a été renouvelée sans pouvoir être enregistrée, elle ne dure donc que jusqu'à la fin de bravebot ; vérifiez que le dossier où elle est conservée a de la place et accepte l'écriture, et si le prochain démarrage indique que la connexion a pris fin, lancez bravebot auth login chatgpt
 chatgpt-defect-empty = le fichier ne contient rien, ce que laisse une écriture interrompue
 chatgpt-defect-not-json = le fichier n'est pas du JSON valide
 chatgpt-defect-other-version = il a été écrit par une autre version, et cette version lit la version 1
