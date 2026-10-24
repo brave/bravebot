@@ -90,3 +90,42 @@ test('stable failure categories do not depend on service wording', () => {
   assert.equal(failureSummary('model-unconfigured').title, 'Choose a model from your configured service')
   assert.match(failureSummary('unknown-future-category').title, /could not finish/)
 })
+
+// CHATGPT-8: the agent sends which failure of the ChatGPT account it was as a name from a closed
+// set, beside the category, and the window words it from the name. Each name is its own title
+// and sentence, and the usage limit is told apart from the account not being usable.
+test('a failure of the ChatGPT account is worded from the name the agent sent and from nothing else', () => {
+  const { failureSummary } = load('src/renderer/failure.ts')
+  const signIn = 'Run bravebot auth login chatgpt in a terminal to sign in'
+  const rows = [
+    ['not-signed-in', 'unauthorized', 'Not signed in to ChatGPT', `${signIn}, then send the message again.`],
+    ['ended', 'unauthorized', 'The ChatGPT sign-in has ended', `${signIn} again.`],
+    ['token-refused', 'unauthorized', 'OpenAI refused the ChatGPT sign-in', `${signIn} again.`],
+    ['unusable', 'unauthorized', 'The stored ChatGPT sign-in could not be read', 'Run bravebot auth status chatgpt in a terminal to see why.'],
+    ['usage-limit', 'refused', 'OpenAI says this ChatGPT account has reached its usage limit', 'Choose a model from another service to keep working.'],
+    ['not-permitted', 'refused', 'OpenAI does not allow this ChatGPT account to be used this way', 'Choose a model from another service to keep working.'],
+    ['renewal-refused', 'refused', 'The ChatGPT sign-in could not be renewed', 'The request to renew it was refused.'],
+    ['renewal-rate-limited', 'rate-limited', 'The ChatGPT sign-in could not be renewed', 'The request to renew it was rate-limited. Wait before trying again.'],
+    ['renewal-unavailable', 'unavailable', 'The ChatGPT sign-in could not be renewed', 'The request to renew it was met with an unavailable service. Try again when it recovers.'],
+    ['renewal-incomplete', 'incomplete', 'The ChatGPT sign-in could not be renewed', 'The reply to the request to renew it could not be read.'],
+    ['renewal-transport', 'transport', 'The ChatGPT sign-in could not be renewed', 'The request to renew it was not completed. Check the connection and try again.'],
+  ]
+  for (const [name, category, title, description] of rows) {
+    assert.deepEqual(failureSummary(category, null, name), { title, description }, name)
+    assert.notDeepEqual(failureSummary(category, null, name), failureSummary(category), `${name} is worded as its category is`)
+  }
+  assert.equal(new Set(rows.map(([name]) => JSON.stringify(failureSummary('refused', null, name)))).size, rows.length, 'two failures are worded alike')
+
+  // The name decides, whatever category it arrives with, and a refusal that names the account does not
+  // send the person to sign in again, which would change nothing.
+  assert.equal(failureSummary('unauthorized', null, 'usage-limit').title, 'OpenAI says this ChatGPT account has reached its usage limit')
+  for (const name of ['usage-limit', 'not-permitted']) assert.doesNotMatch(JSON.stringify(failureSummary('refused', null, name)), /auth login|sign in/, name)
+
+  // Without a name, and for one this build does not know, the card says what the category says. Nothing
+  // of what a name spells is drawn: a name is looked up, never printed.
+  for (const unknown of [undefined, null, '', 'ended-in-the-future', 'constructor', '__proto__', 'toString', '<b>sk-live-123</b>']) {
+    assert.deepEqual(failureSummary('unauthorized', null, unknown), failureSummary('unauthorized'), String(unknown))
+    assert.deepEqual(failureSummary('model-unconfigured', null, unknown), failureSummary('model-unconfigured'), String(unknown))
+  }
+  assert.equal(failureSummary('unauthorized', null, 'not-signed-in').title.includes('Authentication'), false)
+})

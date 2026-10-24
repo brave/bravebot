@@ -541,6 +541,51 @@ pub fn named_by_entry(
         .collect()
 }
 
+/// The model names offered where the account's listing cannot be read
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// Names only, so a row takes the window and the label a model the listing did not describe has.
+/// They are the set opencode offers for this sign-in (`fallbackModels` in
+/// `packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`). None is observed against
+/// the service, so one may name a model the account cannot reach, which the service refuses at the
+/// first request. A release changes this list; no reply, model or settings file does.
+const COMPILED_ACCOUNT_MODELS: &[&str] = &[
+    "gpt-5.5",
+    "gpt-5.5-fast",
+    "gpt-5.6-luna",
+    "gpt-5.6-luna-fast",
+    "gpt-5.6-sol",
+    "gpt-5.6-sol-fast",
+    "gpt-5.6-terra",
+    "gpt-5.6-terra-fast",
+    "gpt-6-astra",
+    "gpt-6-astra-fast",
+    "gpt-6-luna",
+    "gpt-6-luna-fast",
+    "gpt-6-sol",
+    "gpt-6-sol-fast",
+    "gpt-6.1-sol",
+    "gpt-6.1-sol-fast",
+];
+
+/// The picker rows of the compiled list, under the account's identifier for the reason
+/// [`offered_by_account`] gives.
+pub fn compiled_for_account(provider: &bravebot_config::provider::Provider) -> Vec<Model> {
+    COMPILED_ACCOUNT_MODELS
+        .iter()
+        .map(|slug| {
+            account_row(
+                provider,
+                slug,
+                (*slug).to_string(),
+                bravebot_config::provider::CONTEXT_WINDOW,
+                true,
+                Advertised::default(),
+            )
+        })
+        .collect()
+}
+
 /// One row of the account's roster, whichever way the model came to be named.
 ///
 /// The key carries the account's identifier, since that is what selects the account over the
@@ -1522,6 +1567,49 @@ mod tests {
         for row in &rows {
             assert_eq!(row.provider.as_deref(), Some("ChatGPT"));
             assert!(!row.premium, "the account's subscription is not Leo's");
+            assert_eq!(row.advertised, Advertised::default());
+        }
+    }
+
+    /// CHATGPT-9: the compiled list is rows under the account's identifier, one to a name, each
+    /// with the assumed window and no advertised capability, and it is the account's own
+    /// subscription and not Leo's. A row keyed by the bare name would select the `openai` gateway's
+    /// model of that name, and a repeated key is a row nobody could tell from the first.
+    #[test]
+    fn the_compiled_list_is_rows_under_the_accounts_identifier_one_to_a_name() {
+        let rows = compiled_for_account(&bravebot_config::provider::Provider::chatgpt_account());
+
+        assert!(
+            !rows.is_empty(),
+            "a picker with no model offers nothing to pick"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for row in &rows {
+            let name = row
+                .key
+                .strip_prefix("chatgpt/")
+                .unwrap_or_else(|| panic!("{} is not under the account's identifier", row.key));
+            assert!(
+                !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-.".contains(c)),
+                "{name} is not a name a request can carry as the model"
+            );
+            assert!(seen.insert(row.key.clone()), "{} appears twice", row.key);
+            assert_eq!(row.display_name, name);
+            assert_eq!(
+                row.conversation_tokens,
+                Some(bravebot_config::provider::CONTEXT_WINDOW),
+                "a name carries the assumed window"
+            );
+            assert_eq!(row.provider.as_deref(), Some("ChatGPT"));
+            assert!(!row.premium, "the account's subscription is not Leo's");
+            assert!(
+                row.reads_effort,
+                "{} was said to take no effort level, which no source says",
+                row.key
+            );
             assert_eq!(row.advertised, Advertised::default());
         }
     }

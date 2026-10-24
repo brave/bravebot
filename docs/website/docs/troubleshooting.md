@@ -52,7 +52,8 @@ how long a rate limit asked you to wait: bravebot reads it as a number, waits it
 is two minutes or less, and when it is longer says `the service asked for fewer requests, and for a wait of
 about N minutes` so you know when to ask again. Where the status is known it is appended as
 `(HTTP 429)`, and where requests were sent it says `after 3 attempts`, counting retries and
-capability probes.
+capability probes. A failure of a ChatGPT account is said in a sentence of its own that names the step
+and what to run, and no status or count follows it.
 
 | What it says | What it means |
 |---|---|

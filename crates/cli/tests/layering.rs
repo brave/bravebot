@@ -693,6 +693,154 @@ fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
     assert_eq!(callers, ["crates/cli/src/chatgpt.rs"]);
 }
 
+/// The features that exist so a test can point a flow at a server of its own
+/// ([CHATGPT-2](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-2)). A build with one reads a variable
+/// that names where a token goes, so no build that ships may have it.
+const TEST_SEAMS: [&str; 1] = ["test-hosts"];
+
+/// Each line of `manifest` that names a test seam anywhere but in a table of dev-dependencies or in
+/// the seam's own declaration, `<seam> = []`, under `[features]`.
+///
+/// A seam a crate's `[dependencies]`, its build dependencies, the workspace's catalogue or a feature
+/// of any crate enables, `default` included, is on in the build that ships, where cargo builds a
+/// crate's dev-dependencies only for its tests. A declaration that enables something else would turn
+/// that on with it.
+fn seam_outside_tests(manifest: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut table: Vec<String> = Vec::new();
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            table = line
+                .trim_matches(|c| c == '[' || c == ']')
+                .split('.')
+                .map(|part| {
+                    part.trim()
+                        .trim_matches(|c| c == '"' || c == '\'')
+                        .to_string()
+                })
+                .collect();
+            if !TEST_SEAMS.iter().any(|seam| line.contains(seam)) {
+                continue;
+            }
+        }
+        let Some(seam) = TEST_SEAMS.iter().find(|seam| line.contains(*seam)) else {
+            continue;
+        };
+        let for_tests = table.iter().any(|part| part == "dev-dependencies");
+        let declared = table == ["features"]
+            && line
+                .split_once('=')
+                .is_some_and(|(key, value)| key.trim() == *seam && value.trim() == "[]");
+        if !for_tests && !declared {
+            found.push(line.to_string());
+        }
+    }
+    found
+}
+
+/// CHATGPT-2: a test seam is turned on by dev-dependencies and by nothing a release build reads.
+/// Cargo builds a crate's dev-dependencies, and the features they ask for, only for that crate's
+/// tests, so a seam enabled there is in the binary `cargo test` runs and in no binary a release
+/// builds. A manifest that enabled it under `[dependencies]`, in `default` or in another feature
+/// would put a variable that chooses where a token goes into the shipped binary. The seams are
+/// declared and enabled somewhere, so the test is not satisfied by a tree that dropped them.
+#[test]
+fn a_test_seam_is_enabled_by_dev_dependencies_alone() {
+    let workspace = workspace();
+    let root = std::fs::read_to_string(workspace.join("Cargo.toml")).expect("the root manifest");
+    let mut manifests = vec![("Cargo.toml".to_string(), root.clone())];
+    for member in members(&root) {
+        let path = format!("{member}/Cargo.toml");
+        let manifest =
+            std::fs::read_to_string(workspace.join(&path)).expect("a workspace member's manifest");
+        manifests.push((path, manifest));
+    }
+
+    let mut outside: Vec<(String, String)> = Vec::new();
+    for (path, manifest) in &manifests {
+        for line in seam_outside_tests(manifest) {
+            outside.push((path.clone(), line));
+        }
+    }
+    assert!(
+        outside.is_empty(),
+        "a test seam is named where a build that ships would read it: {outside:?}"
+    );
+
+    for seam in TEST_SEAMS {
+        let mut declaring: Vec<&str> = manifests
+            .iter()
+            .filter(|(_, manifest)| {
+                manifest
+                    .lines()
+                    .any(|line| line.trim().replace(' ', "") == format!("{seam}=[]"))
+            })
+            .map(|(path, _)| path.as_str())
+            .collect();
+        declaring.sort_unstable();
+        assert_eq!(
+            declaring,
+            ["crates/config/Cargo.toml", "crates/skus/Cargo.toml"],
+            "{seam}"
+        );
+        assert!(
+            manifests
+                .iter()
+                .any(|(_, manifest)| manifest.contains(&format!("features = [\"{seam}\"]"))),
+            "nothing enables {seam}, so the tests that need it run against the compiled-in hosts"
+        );
+    }
+}
+
+/// The reader of the test seams finds one in every place a shipping build would read it, and none
+/// in a table of dev-dependencies or the seam's own declaration.
+#[test]
+fn the_seam_reader_finds_a_seam_wherever_a_build_that_ships_reads_it() {
+    let manifest = "\
+[workspace.dependencies]
+bravebot-skus = { path = \"crates/skus\", features = [\"test-hosts\"] }
+
+[features]
+test-hosts = []
+default = [\"test-hosts\"]
+everything = [\"bravebot-skus/test-hosts\"]
+
+[dependencies]
+bravebot-config = { path = \"../config\", features = [\"test-hosts\"] }
+
+[dependencies.bravebot-skus]
+features = ['test-hosts']
+
+[target.'cfg(unix)'.build-dependencies]
+bravebot-net = { path = \"../net\", features = [\"test-hosts\"] }
+
+[dev-dependencies]
+bravebot-skus = { path = \"../skus\", features = [\"test-hosts\"] }
+
+[target.'cfg(unix)'.dev-dependencies.bravebot-config]
+features = [\"test-hosts\"]
+";
+    assert_eq!(
+        seam_outside_tests(manifest),
+        [
+            "bravebot-skus = { path = \"crates/skus\", features = [\"test-hosts\"] }",
+            "default = [\"test-hosts\"]",
+            "everything = [\"bravebot-skus/test-hosts\"]",
+            "bravebot-config = { path = \"../config\", features = [\"test-hosts\"] }",
+            "features = ['test-hosts']",
+            "bravebot-net = { path = \"../net\", features = [\"test-hosts\"] }",
+        ]
+    );
+    assert_eq!(
+        seam_outside_tests("[features]\ntest-hosts = [\"bravebot-net/proxy\"]\n"),
+        ["test-hosts = [\"bravebot-net/proxy\"]"]
+    );
+}
+
 /// The scan that holds the kernel to no I/O has to see each way of reaching out, or the test
 /// above passes on a crate that has found one it does not look for.
 #[test]
