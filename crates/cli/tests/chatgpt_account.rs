@@ -793,3 +793,71 @@ fn an_incognito_session_writes_the_renewal_of_its_sign_in() {
         "{stored}"
     );
 }
+
+/// INCOG-8 and CHATGPT-14: an incognito session removes a sign-in that OpenAI has ended, as any
+/// session does. The stored access token is within the minute of its expiry, so the turn's first
+/// request presents the refresh token, which the stand-in does not know and refuses as no longer
+/// valid. The file is gone afterwards, the turn says so naming the command, and no request went
+/// to the serving host with a token that cannot work. A session that took the mode as a reason not
+/// to touch the file would leave a refresh token that is dead, and every later session would
+/// present it again.
+#[test]
+fn an_incognito_session_removes_a_sign_in_whose_refresh_is_refused_as_ended() {
+    let home = Scratch::new("cli-chatgpt-account-incognito-ended");
+    let stand_in = StandIn::new(Vec::new());
+    std::fs::write(
+        home.account(),
+        serde_json::json!({
+            "version": 1,
+            "access_token": "PLACEHOLDER-ACCESS-NEARLY-EXPIRED",
+            "refresh_token": REFRESH_ONE,
+            "expires_at": now() + 5,
+            "client_id": CLIENT,
+            "host_id": "urn:uuid:placeholder-host-0000",
+        })
+        .to_string(),
+    )
+    .expect("a stored sign-in");
+
+    let output = bravebot(
+        &home,
+        &stand_in,
+        &[
+            "--incognito",
+            "-p",
+            "say something",
+            "--model",
+            MODEL,
+            "--trust-workspace",
+        ],
+    );
+
+    assert!(!output.status.success(), "{}", said(&output));
+    // The mode was in force: an incognito session keeps no record of itself.
+    assert!(
+        !home.path.join(".bravebot/sessions").exists(),
+        "the run kept a session record, so it was not incognito"
+    );
+    assert!(
+        said(&output).contains("bravebot auth login chatgpt"),
+        "the turn did not name the command that signs in again: {}",
+        said(&output)
+    );
+    assert!(
+        !home.account().exists(),
+        "the ended sign-in was not removed in an incognito session"
+    );
+    let asked = stand_in.asked();
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|asked| asked.method == "POST" && asked.path == "/token")
+            .count(),
+        1,
+        "{asked:?}"
+    );
+    assert!(
+        asked.iter().all(|asked| asked.path != "/v1/responses"),
+        "a request went to the serving host with a token that cannot work: {asked:?}"
+    );
+}
