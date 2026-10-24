@@ -977,7 +977,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `manifest.request` | `{ request, task, steps }` | run a frozen plan; one line per step |
 | `manifest.started` | `{ run, mode }` | a manifest run began; `run` counts runs in this open session |
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
-| `manifest.error` | `{ run, kind, message, category, attempts, status, account, stopped, declined, problem, attempt, record, notices }` | a run stopped |
+| `manifest.error` | `{ run, kind, message, category, attempts, status, account, accountMessage, stopped, declined, problem, attempt, record, notices }` | a run stopped |
 | `exposure.request` | `{ request, path, shownPath, credentials, summary }` | let the planner read a file holding a credential |
 | `mcp.starting` | `{ servers }` | a session's first turn is starting the MCP servers its settings request |
 | `mcp-server.request` | `{ request, alias, transport, command, url, program, variables, reads, directory, digest, requestedBy, changed, fetching }` | use an MCP server (SERVERS-4) |
@@ -1150,7 +1150,7 @@ a client that reloads on receipt sees the same thing on disk.
 ```json
 { "event": "turn.error", "session": "s1", "data": {
   "turn": 5, "kind": "cancelled"|"precommit"|"workspace"|"chat", "message": "…",
-  "category": "too-long", "account": null,
+  "category": "too-long", "account": null, "accountMessage": null,
   "cutOff": { "ceiling": 32000, "call": { "tool": "write_file" }, "thought": false },
   "notices": ["hook turn-finished: /usr/bin/fmt could not be started"],
   "prompt": 4, "id": "saved-session-id-or-null" } }
@@ -1163,8 +1163,9 @@ prompt is in the conversation and is still a place a fork can be cut at.
 not come from the account. It is one of `not-signed-in`, `ended`, `token-refused`, `unusable`,
 `usage-limit`, `not-permitted`, `renewal-refused`, `renewal-rate-limited`, `renewal-unavailable`,
 `renewal-incomplete` and `renewal-transport`, and the `category` beside it is still the class the
-failure belongs to. A client words the failure from the name, and treats a name it does not know as
-absent. No sentence and no text from a reply travels with it.
+failure belongs to. `accountMessage` is the terminal's sentence for that failure, capitalised, and
+`null` where `account` is. A client draws it as sent and does not word the failure from the name. It
+holds no text from a reply.
 
 `cutOff` is set where a reply stopped at the output ceiling is what failed, and `null`
 otherwise. That is `category: "too-long"`, or `"internal"` where the stop was in a plan's
@@ -1451,7 +1452,7 @@ Still open:
   The desktop category `model-unconfigured` identifies a selected Brave model without
   Brave configuration when another gateway or Bedrock service is configured; select
   a model from that service instead of replacing its credential.
-  Error events include stable `category`, optional `status` and `attempts`, `account` for a failure
+  Error events include stable `category`, optional `status` and `attempts`, `account` and `accountMessage` for a failure
   of a ChatGPT account, and `cutOff` for a turn the output ceiling ended; raw backend
   diagnostic text is not sent as a turn error.
 - `hooks.inspect` reports the hooks file as the agent reads it: `path`, its `text` (null for a
@@ -1501,7 +1502,7 @@ Still open:
 - `manifest.request` carries `request`, `task` and `steps`. `manifest.reply` carries the
   session, request and explicit decision. An approval covers that plan and does not approve its
   writes, which arrive as `confirm.request` when their steps are reached.
-- `manifest.error` reports the cause of the failure in `kind`, `category` and `account`, which are
+- `manifest.error` reports the cause of the failure in `kind`, `category`, `account` and `accountMessage`, which are
   those of `turn.error`. `declined` says
   the plan was put to the person and not approved. `stopped` says the person stopped the run.
   `problem` is the agent's own sentence, and is null for a model service failure.

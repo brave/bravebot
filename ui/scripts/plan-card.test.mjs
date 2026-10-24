@@ -162,22 +162,20 @@ test('a declined plan is said to be declined, read off the flag and not the sent
   assert.ok(failed.includes('The run stopped'), failed)
 })
 
-// CHATGPT-8: a run the ChatGPT account failed carries the same name a turn does, so the card does not
-// say "Authentication failed" to a person who never signed in.
-test('a run the ChatGPT account failed is worded from the name the agent sent', () => {
-  const signedOut = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', account: 'not-signed-in' }))
-  assert.ok(signedOut.includes('Not signed in to ChatGPT'), signedOut)
-  assert.ok(signedOut.includes('Run bravebot auth login chatgpt in a terminal to sign in'), signedOut)
+// CHATGPT-8: a run the ChatGPT account failed carries the same sentence a turn does, so the card does
+// not say "Authentication failed" to a person who never signed in.
+test('a run the ChatGPT account failed is worded from the sentence the agent sent', () => {
+  const signedOut = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', account: 'not-signed-in', accountMessage: 'Not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in' }))
+  assert.ok(signedOut.includes('Not signed in to a ChatGPT account'), signedOut)
   assert.ok(!signedOut.includes('Authentication failed'), signedOut)
 
-  const limit = draw(ended({ kind: 'chat', message: 'refused', category: 'refused', account: 'usage-limit' }))
+  const limit = draw(ended({ kind: 'chat', message: 'refused', category: 'refused', account: 'usage-limit', accountMessage: 'OpenAI says this ChatGPT account has reached its usage limit' }))
   assert.ok(limit.includes('OpenAI says this ChatGPT account has reached its usage limit'), limit)
 
-  // No name, or one this build does not know, is the category's card.
-  for (const account of [null, undefined, 'a-future-name']) {
-    const plain = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', account }))
+  // No sentence is the category's card.
+  for (const accountMessage of [null, undefined]) {
+    const plain = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', accountMessage }))
     assert.ok(plain.includes('Authentication failed'), plain)
-    assert.ok(!plain.includes('a-future-name'), plain)
   }
 })
 

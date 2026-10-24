@@ -154,12 +154,8 @@ fn with_account(
         bravebot_agent::chatgpt::AccountModels::Offered(models) => rows.extend(models),
         bravebot_agent::chatgpt::AccountModels::Compiled(models) => {
             rows.extend(models);
-            warnings.push(
-                "Could not load models from ChatGPT, so the list shown is built in and may name a \
-                 model the account cannot reach. Try again, or sign in again with \
-                 `bravebot auth login chatgpt`."
-                    .into(),
-            );
+            // The terminal's sentence, so the two surfaces say the same thing (SHARE-001).
+            warnings.push(bravebot_i18n::t!(session_chatgpt_models_compiled).to_string());
         }
         bravebot_agent::chatgpt::AccountModels::Unreadable => {
             warnings.push(
@@ -500,11 +496,10 @@ mod tests {
         let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
         assert_eq!(keys, ["openrouter/z-ai/glm-4.6", "chatgpt/gpt-5.5"]);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].starts_with("Could not load models from ChatGPT"));
-        assert!(
-            warnings[0].contains("built in") && warnings[0].contains("cannot reach"),
-            "the compiled list was not said to be one that may be refused: {}",
-            warnings[0]
+        assert_eq!(
+            warnings[0],
+            bravebot_i18n::t!(session_chatgpt_models_compiled).to_string(),
+            "the window did not say what the terminal says"
         );
 
         let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());

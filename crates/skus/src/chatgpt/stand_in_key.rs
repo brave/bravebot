@@ -145,7 +145,8 @@ pub fn signed(header: &serde_json::Value, claims: &serde_json::Value) -> String 
     format!("{input}.{}", base64url(&signature))
 }
 
-/// The header of a token the stand-in signs: RS256 under [`KID`].
+/// The header a token the verifier accepts carries, so a test of a refusal starts from it and changes the
+/// one field that should be refused.
 pub fn header() -> serde_json::Value {
     serde_json::json!({ "alg": "RS256", "kid": KID, "typ": "JWT" })
 }

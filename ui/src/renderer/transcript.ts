@@ -189,7 +189,7 @@ export type Entry = (
   /** A manifest run that stopped: declined, stopped by the person, or failed. */
   | { kind: 'plan-ended'; id: string; ended: ManifestError }
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
-  | { kind: 'error'; id: string; text: string; category?: string | null; account?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
+  | { kind: 'error'; id: string; text: string; category?: string | null; accountMessage?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
   /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
   | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }

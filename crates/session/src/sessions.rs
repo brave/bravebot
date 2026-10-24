@@ -763,7 +763,7 @@ pub fn failure_reason(
 
 /// The sentence for a failure of a ChatGPT account, chosen from the closed value alone
 /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Nothing a reply said is in it.
-fn account_failure(failure: bravebot_aichat::AccountFailure) -> String {
+pub fn account_failure(failure: bravebot_aichat::AccountFailure) -> String {
     use bravebot_aichat::responses::protocol::Refusal;
     use bravebot_aichat::{AccountFailure, RenewalFailure};
     match failure {

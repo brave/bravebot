@@ -1707,12 +1707,12 @@ function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
       ? 'The plan was declined, so nothing ran'
       : ended.problem
         ? 'The run stopped'
-        : failureSummary(ended.category ?? ended.kind, null, ended.account).title
+        : failureSummary(ended.category ?? ended.kind, null, ended.accountMessage).title
   const detail = ended.stopped
     ? 'Steps that finished before the stop remain in the project. The run was not saved.'
     : declined
       ? 'Nothing was read or written.'
-      : ended.problem ?? failureSummary(ended.category ?? ended.kind, null, ended.account).description
+      : ended.problem ?? failureSummary(ended.category ?? ended.kind, null, ended.accountMessage).description
   const attempt = ended.attempt
   return (
     <div className={`plan-ended ${ended.stopped || declined ? 'quiet' : 'failed'}`}>
@@ -1925,7 +1925,7 @@ function Card({
     case 'watch':
       return <div className="watch-turn"><Icon name="eye-on" /><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
     case 'error':
-      return <ErrorCard category={entry.category} account={entry.account} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
+      return <ErrorCard category={entry.category} accountMessage={entry.accountMessage} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 
     case 'replayed-tool':
       // No outcome, because the record does not keep one. Drawn quietly for the same

@@ -83,6 +83,11 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
         assert_eq!(sent["category"], category, "{failure:?}: {sent}");
         assert_eq!(sent["kind"], "chat", "{failure:?}: {sent}");
         assert_eq!(sent["status"], Value::Null, "{failure:?}: {sent}");
+        // The sentence is the terminal's, with a capital, so the window keeps no table of its own.
+        let terminal = bravebot_session::sessions::account_failure(failure);
+        let mut capitalised = terminal.clone();
+        capitalised[..1].make_ascii_uppercase();
+        assert_eq!(sent["accountMessage"], capitalised, "{failure:?}: {sent}");
     }
 
     let counted = failed_with(BackendError::Attempted {
@@ -117,6 +122,7 @@ fn a_failure_with_no_account_in_it_is_sent_with_no_account_name() {
         (failed_with(ChatError::NoContent), "undecodable"),
     ] {
         assert_eq!(sent["account"], Value::Null, "{sent}");
+        assert_eq!(sent["accountMessage"], Value::Null, "{sent}");
         assert_eq!(sent["category"], category, "{sent}");
     }
     let workspace = failure_fields(
@@ -125,11 +131,12 @@ fn a_failure_with_no_account_in_it_is_sent_with_no_account_name() {
         "stub-model",
     );
     assert_eq!(workspace["account"], Value::Null, "{workspace}");
+    assert_eq!(workspace["accountMessage"], Value::Null, "{workspace}");
 }
 
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a
 /// reply, a request or a settings file held. The keys are `kind`, `message`, `category`, `attempts` and
-/// `status`, and the name of the account's failure.
+/// `status`, and the name and sentence of the account's failure.
 #[test]
 fn the_failure_sent_holds_only_fixed_names_and_counts() {
     let sent = failed_with(ChatError::Account(AccountFailure::Named(
@@ -145,10 +152,16 @@ fn the_failure_sent_holds_only_fixed_names_and_counts() {
     assert_eq!(
         keys,
         [
-            "account", "attempts", "category", "kind", "message", "status"
+            "account",
+            "accountMessage",
+            "attempts",
+            "category",
+            "kind",
+            "message",
+            "status"
         ],
         "{sent}"
     );
-    // `message` is the category's name and not a sentence of the account's, which the window words.
+    // `message` is the category's name and not a sentence of the account's, which the window draws as `accountMessage`.
     assert_eq!(sent["message"], "refused", "{sent}");
 }
