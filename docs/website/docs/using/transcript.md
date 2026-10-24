@@ -347,7 +347,7 @@ collapses it. The extra lines are cleaned the same way the short view is: contro
 replaced and each line is cut to one row. Clicking a call that has more to show does the same for
 that call, and clicking it again collapses it. Clicking a delegate's block opens that delegate's view, as the watch key does. A drag, a double click or a triple click still selects.
 
-In the [info panel](sessions.md#telling-sessions-apart), clicking the model row opens the `/model` picker and clicking the effort row opens the `/effort` picker, clicking the context reading runs `/context`, and clicking a started MCP server lists the servers as `/mcp` does. Clicking the permission mode under the box cycles it, as the key does. In the `/effort` and `/config` pickers, clicking a row moves the cursor to it and clicking it again takes it, as Enter does.
+In the [info panel](sessions.md#telling-sessions-apart), clicking the model row opens the `/model` picker and clicking the effort row opens the `/effort` picker, clicking the context reading runs `/context`, and clicking a started MCP server lists the servers as `/mcp` does. Clicking the permission mode under the box cycles it, as the key does. Clicking in the text of the prompt box puts the caret there. In the `/effort` and `/config` pickers, clicking a row moves the cursor to it and clicking it again takes it, as Enter does.
 
 `v` opens the transcript in your editor. What goes is the rows as they are drawn, margins and all,
 so untrusted content is marked in the file exactly the way it is marked on the screen. It is written

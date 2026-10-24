@@ -12442,6 +12442,108 @@ mod tests {
         );
     }
 
+    /// The row and column of the cell where `needle` is drawn, counting cells and not the bytes of
+    /// the border characters before it.
+    fn find_cell(buffer: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
+        (0..buffer.area.height)
+            .find_map(|row| {
+                let cells: Vec<String> = (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol().to_string())
+                    .collect();
+                let first = needle.chars().next()?.to_string();
+                (0..cells.len())
+                    .find(|&at| cells[at] == first && cells[at..].concat().starts_with(needle))
+                    .map(|column| (row, column as u16))
+            })
+            .expect("text on the screen")
+    }
+
+    /// A session with `text` in the box, drawn once so the box is recorded.
+    fn typing(text: &str) -> (Session, ratatui::buffer::Buffer) {
+        let mut session = Session::new("none");
+        session.paste(text);
+        let buffer = drawn(&mut session);
+        (session, buffer)
+    }
+
+    /// MOUSE-16: a click on a character of the box puts the caret before it, on whichever row the
+    /// line was drawn over, and one past the end of a row or on the prompt character puts it at the
+    /// row's end or start.
+    #[test]
+    fn a_click_in_the_box_puts_the_caret_where_it_landed() {
+        let (mut session, buffer) = typing("hello world\nsecond row");
+        let (row, column) = find_cell(&buffer, "world");
+        assert_eq!(click(&mut session, row, column + 2), Action::Redraw);
+        assert_eq!(session.caret(), "hello wo".len());
+        assert!(session.selection.is_none());
+
+        let (row, column) = find_cell(&buffer, "second");
+        click(&mut session, row, column);
+        assert_eq!(session.caret(), "hello world\n".len());
+        click(&mut session, row, column + 60);
+        assert_eq!(session.caret(), session.input().len());
+        click(&mut session, row, column - 2);
+        assert_eq!(session.caret(), "hello world\n".len());
+    }
+
+    /// MOUSE-16: a character drawn two cells wide is taken from either of its cells, and a click
+    /// after it lands after it.
+    #[test]
+    fn a_click_in_the_box_counts_a_wide_character_as_one() {
+        let (mut session, buffer) = typing("日本語 end");
+        let (row, column) = find_cell(&buffer, "日");
+        click(&mut session, row, column + 1);
+        assert_eq!(session.caret(), 0);
+        click(&mut session, row, column + 2);
+        assert_eq!(session.caret(), "日".len());
+        click(&mut session, row, column + 6);
+        assert_eq!(session.caret(), "日本語".len());
+    }
+
+    /// MOUSE-16: a click on a folded paste puts the caret at the start of the marker, never inside it.
+    #[test]
+    fn a_click_on_a_marker_puts_the_caret_before_it() {
+        let mut session = Session::new("none");
+        session.paste("see ");
+        session.paste_text("one\ntwo\nthree\nfour");
+        let buffer = drawn(&mut session);
+        let (row, column) = find_cell(&buffer, "Pasted");
+        click(&mut session, row, column + 3);
+        assert_eq!(session.caret(), "see ".len());
+    }
+
+    /// MOUSE-16: a drag across the box, a double click, a click on the border and a click over the
+    /// scroller leave the caret where it was.
+    #[test]
+    fn a_drag_a_double_click_or_a_click_off_the_text_leaves_the_caret_alone() {
+        let (mut session, buffer) = typing("hello world");
+        let (row, column) = find_cell(&buffer, "hello");
+        let end = session.caret();
+
+        swept(&mut session, (row, column), (row, column + 4));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 4);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert_eq!(session.caret(), end);
+
+        session.clear_selection();
+        session.last_click = None;
+        click(&mut session, row, column + 1);
+        assert_eq!(session.caret(), 1);
+        session.move_to_line_end();
+        click(&mut session, row, column + 1);
+        click(&mut session, row, column + 1);
+        assert_eq!(session.caret(), end);
+
+        session.last_click = None;
+        click(&mut session, row - 1, column + 1);
+        click(&mut session, row, 0);
+        assert_eq!(session.caret(), end);
+
+        session.open_scroller();
+        click(&mut session, row, column + 1);
+        assert_eq!(session.caret(), end);
+    }
+
     /// The row and column where `needle` is drawn in the session's own frame.
     fn find_on_text(session: &Session, needle: &str) -> (u16, u16) {
         let text = render::as_text(session);

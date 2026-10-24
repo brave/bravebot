@@ -37,6 +37,7 @@ pub(crate) use self::transcript::{EntryLines, ReplyLines, opening_screen, rows_o
 
 use self::beneath::lines_beneath_the_box;
 use self::hint::draw_hint;
+pub(crate) use self::prompt::offset_at as caret_offset_at;
 use self::prompt::{draw_input, draw_status, input_height, status_height};
 use self::scroller::draw_scroller;
 use self::transcript::draw_transcript;
