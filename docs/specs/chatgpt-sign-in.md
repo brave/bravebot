@@ -728,8 +728,19 @@ itself and holds what its own writers produce from it:
 - `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface`
   types four prompts that fail in four ways into `bravebot --plain` in a terminal, and holds the terminal and
   every file left. A session in lines keeps no record of its turns outside a background host.
+- `bravebot_tui::chatgpt_failure_tests::what_the_terminal_client_keeps_and_draws_of_a_failed_turn_holds_none_of_the_values_of_the_run`
+  signs in and makes four turns that fail, as a renewal while the token endpoint is busy, a refusal that is
+  not of the token, a refusal in a code of the closed list, and a sign-in that has ended, and gives each
+  failure to `fold_outcome` and `record_turn` as a finished turn is given. It holds the transcript, its
+  markdown export, the screen as cells and as the bytes written to a terminal, the turns the record keeps with
+  each reason, the note the picker says for a listing that cannot be read and for one refused in a code of
+  the closed list, the error message of each turn, its debug form, how it ended, what it reported and the
+  conversation, every file the session wrote but the sign-in file, and the terminal of the process that made
+  the run. It requires that the record's reason is the failure the transcript shows and that no two of the
+  four turns failed alike. The run is made in a child of the test binary, since the account's hosts and the
+  state directory are read from the environment, this crate forbids `unsafe`, and `fold_outcome` is private.
 
-The tests run on Linux and macOS, where `script` gives the command a terminal, and not on Windows.
+The command's tests run on Linux and macOS, where `script` gives the command a terminal, and not on Windows.
 
 **Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
 to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
@@ -743,6 +754,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface`
+`verified-by: bravebot_tui::chatgpt_failure_tests::what_the_terminal_client_keeps_and_draws_of_a_failed_turn_holds_none_of_the_values_of_the_run`
 `verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
 `verified-by: bravebot_skus::chatgpt::an_id_token_that_does_not_verify_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`

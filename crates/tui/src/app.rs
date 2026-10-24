@@ -6150,6 +6150,15 @@ fn run_turn_animated(
         // A question that arrives once the work has been stopped is refused undrawn, by the
         // wrapper below; see [`drain_worker_until_stopped`].
         let mut handle = |message: crate::remote_confirm::ToMain| {
+            // What asks nothing is taken into the session, and what is left is a question.
+            let Some(message) = crate::from_worker::show_in_a_turn(
+                session,
+                message,
+                beside.config.context_budget,
+                beside.config.budget_is_guessed(),
+            ) else {
+                return;
+            };
             // Which prompt widget is open is the driver's own state, so a message that blocks the
             // worker on the person is what turns the title to waiting, and its answer turns it back.
             let asks = title_state_during(&message) == crate::title::State::Waiting;
@@ -6345,66 +6354,17 @@ fn run_turn_animated(
                     });
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(answers));
                 }
-                // No reply: each of these is recorded and the next redraw, one iteration away,
-                // shows it. That is what makes a long turn legible while it runs.
-                crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
-                crate::remote_confirm::ToMain::Spent(spent) => progress_of_a_turn(
-                    session,
-                    spent,
-                    beside.config.context_budget,
-                    beside.config.budget_is_guessed(),
-                ),
-                crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
-                crate::remote_confirm::ToMain::RequestBuilt(view) => {
-                    session.set_last_request(*view)
+                // What `show_in_a_turn` took above is not here. A question added to `ToMain` that no
+                // arm draws is refused, as in a manifest run, since the worker is blocked on it.
+                other => {
+                    if let Some(reply) = refusal(&other) {
+                        #[expect(
+                            clippy::let_underscore_must_use,
+                            reason = "the worker may have ended, and a refusal to nobody has no one to be told"
+                        )]
+                        let _ = answer_tx.send(reply);
+                    }
                 }
-                crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
-                crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
-                crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
-                crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
-                crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
-                crate::remote_confirm::ToMain::Thinking(text) => session.thinking(&text),
-                crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
-                crate::remote_confirm::ToMain::Started(activity) => {
-                    session.start_activity(activity)
-                }
-                crate::remote_confirm::ToMain::Finished(activity) => {
-                    session.finish_activity(activity)
-                }
-                crate::remote_confirm::ToMain::Movable(handoff) => session.movable(handoff),
-                crate::remote_confirm::ToMain::Job(event) => session.job(event),
-                crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
-                crate::remote_confirm::ToMain::CheckFinished => session.checked(),
-                crate::remote_confirm::ToMain::HookStarted(moment, program) => {
-                    session.hook_running(moment, program)
-                }
-                crate::remote_confirm::ToMain::HookFinished => session.hook_over(),
-                crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
-                crate::remote_confirm::ToMain::Printed(output) => session.command_printed(output),
-                crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
-                crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
-                // The turn has taken the oldest waiting prompt, so it stops being something waiting
-                // above the box and becomes something said. Which prompt is not named: the turn takes
-                // them in the order they were sent and this end hands them over in that order, so the
-                // oldest is the one that has gone.
-                crate::remote_confirm::ToMain::Interjected(_) => session.interjected(),
-                // Whose work the lines that follow are, as the driver said. Nothing here reads a line
-                // to find out: several delegates and the turn report at once.
-                crate::remote_confirm::ToMain::ReportingFor(delegate) => {
-                    session.reporting_for(delegate)
-                }
-                crate::remote_confirm::ToMain::DelegateWaiting(delegate) => {
-                    session.waiting_on_delegate(delegate)
-                }
-                crate::remote_confirm::ToMain::DelegateStarted(delegation) => {
-                    session.delegate_started(delegation)
-                }
-                crate::remote_confirm::ToMain::DelegateFinished {
-                    id,
-                    note,
-                    failed,
-                    reported,
-                } => session.delegate_finished(id, note, failed, reported),
             }
             if asks {
                 mark_title(terminal, crate::title::State::Working);
@@ -7070,7 +7030,7 @@ fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u
 /// waiting for the turn to end (INPUT-22, PANEL-8).
 ///
 /// A report with no request behind it yet leaves both where they were.
-fn progress_of_a_turn(
+pub(crate) fn progress_of_a_turn(
     session: &mut Session,
     spent: bravebot_agent::Spent,
     budget: u64,
@@ -37431,6 +37391,10 @@ mod tests {
 #[cfg(test)]
 #[path = "undo_tests.rs"]
 mod undo_tests;
+
+#[cfg(all(test, unix))]
+#[path = "chatgpt_failure_tests.rs"]
+mod chatgpt_failure_tests;
 
 #[cfg(test)]
 #[path = "credential_mode_tests.rs"]

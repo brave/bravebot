@@ -35,6 +35,7 @@ pub mod dropped;
 pub mod editor;
 pub mod effort_prompt;
 pub mod files_mode;
+mod from_worker;
 pub mod goals;
 pub mod help_command;
 pub mod hidden;
