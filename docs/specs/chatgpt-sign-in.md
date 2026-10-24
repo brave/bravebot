@@ -835,14 +835,27 @@ itself and holds what its own writers produce from it:
   turn, the answer to each `models.list` with its warnings, every line the binary wrote to its pipe, its
   standard error, and the record and trail it wrote. It requires that no two turns failed alike and that the
   record keeps the four.
+- `bravebot_ui_bridge::chatgpt_secrets::what_the_acp_adapter_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
+  drives `bravebot-acp` over its pipe as an editor does, through `initialize`, `session/new` and
+  `session/prompt`, with the same four failures, and answers its request to trust the directory with
+  `allow-once`. It holds what the editor is told of each turn that fails, every line the adapter wrote to its
+  pipe, its standard error, and the record and trail it wrote. It requires that the record keeps the four and
+  that the four errors the editor is told are four distinct messages, since the adapter says the account's
+  sentence for each failure of the account ([ACP-8](acp.md#ACP-8)).
+- `bravebot_ui_bridge::chatgpt_secrets::what_the_local_host_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
+  starts `bravebot-host`, which keeps the bridge's sessions while the program that drives it comes and goes,
+  with this test binary run again as that program, which copies the channel the host made for it to a socket
+  the test listens on. The test speaks the bridge's protocol through it, with the same four failures. It holds
+  every line the client is sent, the host's standard output and standard error, and every file left under the
+  sessions root and the home, and requires one record, which keeps the four turns each with a reason of its
+  own, and one trail.
 
-Every output the clause names is held by one of these, except the connection of the ACP adapter and of the
-local host; what the renderer in `ui/` draws from the events the bridge sends; and the debug log of the
-full-screen terminal client. The renderer is not a crate, so the events are what is held, and what the window
-makes of the `account` name and the sentence in one is pinned by the scripts the `by-construction` entry of
-this clause names. The test of the full-screen client is made in a child of its test binary that sets no log
-level, and the client's crate has no dependency on the crate that writes the log, so the debug log of that
-client is not made to be held, and the files its session wrote are.
+Every output the clause names is held by one of these, except what the renderer in `ui/` draws from the events
+the bridge sends and the debug log of the full-screen terminal client. The renderer is not a crate, so the
+events are what is held, and what the window makes of the `account` name and the sentence in one is pinned by
+the scripts the `by-construction` entry of this clause names. The test of the full-screen client is made in a
+child of its test binary that sets no log level, and the client's crate has no dependency on the crate that
+writes the log, so the debug log of that client is not made to be held, and the files its session wrote are.
 
 Two more things are not reached. The loop in `run_turn_animated` that takes what a turn's reporter sends into
 the session needs a terminal, and no test runs it. The test of the terminal client makes its turns with the
@@ -871,6 +884,8 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_record_of_a_background_session`
 `verified-by: bravebot_tui::chatgpt_failure_tests::what_the_terminal_client_keeps_and_draws_of_a_failed_turn_holds_none_of_the_values_of_the_run`
 `verified-by: bravebot_ui_bridge::chatgpt_secrets::what_the_bridge_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
+`verified-by: bravebot_ui_bridge::chatgpt_secrets::what_the_acp_adapter_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
+`verified-by: bravebot_ui_bridge::chatgpt_secrets::what_the_local_host_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
 `verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
 `verified-by: bravebot_skus::chatgpt::an_id_token_that_does_not_verify_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
