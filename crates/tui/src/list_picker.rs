@@ -284,7 +284,7 @@ pub fn draw<R: PickerRow>(frame: &mut Frame, picker: &ListPicker<R>, panel: &Pan
 
 /// The list, the line saying what the row under the cursor means, and the line of keys, inside the
 /// border of the panel [`draw`] draws over `frame`.
-fn regions(frame: Rect, rows: usize, width: u16) -> std::rc::Rc<[Rect]> {
+pub fn regions(frame: Rect, rows: usize, width: u16) -> std::rc::Rc<[Rect]> {
     let area = centred(frame, rows, width);
     split(Block::default().borders(Borders::ALL).inner(area))
 }

@@ -15,9 +15,11 @@ use bravebot_i18n::t;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyModifiers, MouseEvent};
+use ratatui::layout::Rect;
 
 use crate::input;
+use crate::select;
 
 use crate::list_picker::{self, ListPicker, Outcome, Panel, PickerRow};
 use crate::theme::{self, Theme};
@@ -98,6 +100,29 @@ pub fn press(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -> Out
     outcome
 }
 
+/// Interpret one mouse event, with the theme under the cursor in force as it is for a key.
+///
+/// A press on a row moves the cursor there, so the row is previewed, and a second press on it takes
+/// the theme. Nothing else the mouse does leaves the picker (MOUSE-17).
+pub fn click(
+    picker: &mut Picker,
+    list: Rect,
+    mouse: MouseEvent,
+    last: &mut Option<select::Click>,
+    now: std::time::Instant,
+) -> Outcome {
+    let outcome = list_picker::handle_mouse(picker, list, mouse, last, now);
+    match outcome {
+        Outcome::Continue => picker.preview(),
+        Outcome::Select => match picker.chosen() {
+            Some(theme) => theme::apply(theme),
+            None => picker.restore(),
+        },
+        Outcome::Cancel => picker.restore(),
+    }
+    outcome
+}
+
 /// Draw the panel over whatever is already in the frame.
 pub fn draw(frame: &mut Frame, picker: &Picker) {
     list_picker::draw(frame, picker, &panel());
@@ -117,12 +142,15 @@ pub fn choose<B: Backend>(
 ) -> Option<Theme> {
     let mut picker = opened(themes, current);
     let panel = panel();
+    let mut list = Rect::default();
+    let mut last = None;
 
     loop {
         if terminal
             .draw(|frame| {
                 behind(frame);
                 list_picker::draw(frame, &picker, &panel);
+                list = list_picker::regions(frame.area(), picker.rows().len(), panel.width)[0];
             })
             .is_err()
         {
@@ -134,6 +162,13 @@ pub fn choose<B: Backend>(
             picker.restore();
             return None;
         };
+        if let TermEvent::Mouse(mouse) = event {
+            let now = std::time::Instant::now();
+            match click(&mut picker, list, mouse, &mut last, now) {
+                Outcome::Select => return picker.chosen().cloned(),
+                Outcome::Continue | Outcome::Cancel => continue,
+            }
+        }
         let Some(key) = input::key_of(&event) else {
             continue;
         };
@@ -165,7 +200,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-    use ratatui::layout::Rect;
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
 
     fn offered() -> Vec<Theme> {
         theme::builtins()
@@ -339,5 +374,72 @@ mod tests {
         assert!(area.height <= 8);
         assert!(area.x + area.width <= 30);
         assert!(area.y + area.height <= 8);
+    }
+
+    fn left_press(row: u16, column: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// MOUSE-17. Rejects: a click that moves the cursor without putting the theme under it in
+    /// force, and a second click that takes nothing or loses the preview: the first press previews
+    /// the row it landed on and the second takes it.
+    #[test]
+    fn a_click_previews_the_row_and_a_second_click_takes_it() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let mut picker = opened(offered(), theme::BRAVE);
+        let list = Rect::new(10, 5, 30, 8);
+        let (mut last, now) = (None, std::time::Instant::now());
+
+        let outcome = click(
+            &mut picker,
+            list,
+            left_press(list.y + 2, list.x),
+            &mut last,
+            now,
+        );
+        assert_eq!(outcome, Outcome::Continue);
+        let named = offered()[2].name.clone();
+        assert_eq!(picker.chosen().expect("a theme").name, named);
+        assert_eq!(theme::name(), named, "the row was not previewed");
+
+        let outcome = click(
+            &mut picker,
+            list,
+            left_press(list.y + 2, list.x),
+            &mut last,
+            now,
+        );
+        assert_eq!(outcome, Outcome::Select);
+        assert_eq!(theme::name(), named, "taking the row dropped the preview");
+        theme::apply_brave();
+    }
+
+    /// MOUSE-17. Rejects: a press outside the list or a wheel turn moving the preview or leaving.
+    #[test]
+    fn a_press_outside_the_list_leaves_the_theme_alone() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let mut picker = opened(offered(), theme::BRAVE);
+        let list = Rect::new(10, 5, 30, 8);
+        let (mut last, now) = (None, std::time::Instant::now());
+        for _ in 0..2 {
+            let outcome = click(&mut picker, list, left_press(0, 0), &mut last, now);
+            assert_eq!(outcome, Outcome::Continue);
+        }
+        let wheel = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            ..left_press(list.y + 1, list.x)
+        };
+        assert_eq!(
+            click(&mut picker, list, wheel, &mut last, now),
+            Outcome::Continue
+        );
+        assert_eq!(theme::name(), theme::BRAVE);
     }
 }
