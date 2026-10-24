@@ -151,6 +151,24 @@ previously named `blocked`:
 gh label edit blocked --repo brave/bravebot --name blocked/needs-planning
 ```
 
+## Flaky tests
+
+`flaky-test` says the issue is about a test whose outcome changes between runs of the same build.
+It marks what the issue is about and is not a kind, so `is:open label:flaky-test` lists every flake
+however it was filed.
+
+The Test determinism workflow files one issue per flaky test, titled `Flaky test: <name>`, through
+`contrib/measure-flakes.py`. It applies `flaky-test` and no other label, because nobody has read
+what it files, so no kind, `area` or axis is claimed for it. The poster applies `flaky-test` to an
+issue about a flaky test filed from a session, in addition to the kind and the `area` that issue
+would otherwise get. The poster refuses to post while `flaky-test` does not exist, because a person
+creates labels:
+
+```bash
+gh label create flaky-test --repo brave/bravebot --color 5ff714 \
+  --description "A test whose outcome changes between runs of the same build"
+```
+
 ## Security
 
 `security` says the issue is about the guarantee this repository exists for, and it goes on with a
