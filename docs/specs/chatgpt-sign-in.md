@@ -850,11 +850,13 @@ of a sign-in made before the session, and nothing about which project or which p
 **Why.** A refresh that was not written would end the sign-in whenever the server replaces the refresh
 token on use, and the person would find out at the first turn of the next session.
 
-**Not built:** a test that drives an incognito session through a renewal. A turn asks for the token, and the
-renewal takes no mode and writes the file whatever the caller is doing.
+A turn asks for the token, and the renewal takes no mode and writes the file whatever the caller is doing.
+The test runs the built binary with `--incognito` against a stand-in through the seam of
+[CHATGPT-2](#CHATGPT-2), on Linux and macOS.
 
 `verified-by: bravebot_skus::chatgpt::renew::a_renewal_presents_the_stored_refresh_token_and_writes_what_it_is_given`
 `verified-by: bravebot_skus::chatgpt::renew::a_write_that_fails_is_reported_and_tried_again_before_the_next_request`
+`verified-by: bravebot_cli::chatgpt_account::an_incognito_session_writes_the_renewal_of_its_sign_in`
 
 ## What is built
 
@@ -870,10 +872,9 @@ not take for the rest of it, and the note of that, which the turn says once.
 
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2), [CHATGPT-3](#CHATGPT-3),
   [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7),
-  [CHATGPT-8](#CHATGPT-8), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12) and
-  [CHATGPT-13](#CHATGPT-13).
-- **Built in part,** each naming what is not: [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and
-  [CHATGPT-14](#CHATGPT-14).
+  [CHATGPT-8](#CHATGPT-8), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12),
+  [CHATGPT-13](#CHATGPT-13) and [CHATGPT-14](#CHATGPT-14).
+- **Built in part,** each naming what is not: [CHATGPT-9](#CHATGPT-9) and [CHATGPT-10](#CHATGPT-10).
 - **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); and the
   zstd body of [CHATGPT-10](#CHATGPT-10).
 

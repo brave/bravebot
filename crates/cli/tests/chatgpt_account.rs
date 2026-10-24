@@ -715,3 +715,76 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         "no log recorded a request of a run, so none was searched"
     );
 }
+
+/// CHATGPT-14: an incognito session spends a stored sign-in and writes its renewal. The stored
+/// access token is within the minute of its expiry, so the turn's first request renews it, and the
+/// file holds the new tokens afterwards with the client and the host it had. A session that took
+/// the mode as a reason not to write would leave the refresh token the server has replaced, and
+/// the next session would find the sign-in ended.
+#[test]
+fn an_incognito_session_writes_the_renewal_of_its_sign_in() {
+    let home = Scratch::new("cli-chatgpt-account-incognito-renewal");
+    let stand_in = StandIn::new(vec![(REFRESH_ONE, ACCESS_TWO, REFRESH_TWO)]);
+    let host = "urn:uuid:placeholder-host-0000";
+    std::fs::write(
+        home.account(),
+        serde_json::json!({
+            "version": 1,
+            "access_token": "PLACEHOLDER-ACCESS-NEARLY-EXPIRED",
+            "refresh_token": REFRESH_ONE,
+            "expires_at": now() + 5,
+            "client_id": CLIENT,
+            "host_id": host,
+        })
+        .to_string(),
+    )
+    .expect("a stored sign-in");
+
+    let output = bravebot(
+        &home,
+        &stand_in,
+        &[
+            "--incognito",
+            "-p",
+            "say something",
+            "--model",
+            MODEL,
+            "--trust-workspace",
+        ],
+    );
+
+    assert!(output.status.success(), "{}", said(&output));
+    // The mode was in force: an incognito session keeps no record of itself.
+    assert!(
+        !home.path.join(".bravebot/sessions").exists(),
+        "the run kept a session record, so it was not incognito"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("all done"),
+        "{}",
+        said(&output)
+    );
+    let refreshed: Vec<Asked> = stand_in
+        .asked()
+        .into_iter()
+        .filter(|asked| asked.method == "POST" && asked.path == "/token")
+        .collect();
+    assert_eq!(refreshed.len(), 1, "{refreshed:?}");
+    let stored: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.account()).expect("the sign-in is still stored"),
+    )
+    .expect("a sign-in file");
+    assert_eq!(
+        stored["access_token"], ACCESS_TWO,
+        "the renewal was not written"
+    );
+    assert_eq!(stored["refresh_token"], REFRESH_TWO);
+    assert_eq!(stored["client_id"], CLIENT);
+    assert_eq!(stored["host_id"], host);
+    assert!(
+        stored["expires_at"]
+            .as_u64()
+            .is_some_and(|expires| expires > now() + 3000),
+        "{stored}"
+    );
+}
