@@ -467,6 +467,7 @@ list ends the turn without a replacement.
 `verified-by: bravebot_agent::chatgpt::a_renewal_the_file_could_not_take_is_said_once_and_again_only_after_a_write_succeeds`
 `verified-by: bravebot_agent::chatgpt::the_report_of_an_unwritten_renewal_is_what_is_noted_and_the_token_is_used_either_way`
 `verified-by: bravebot_agent::chatgpt::the_sentence_for_a_renewal_the_file_could_not_take_quotes_nothing_and_names_the_remedy`
+`verified-by: bravebot_agent::chatgpt_renewal_notice::a_turn_says_a_renewal_the_file_could_not_take_where_it_was_made_and_once`
 
 <a id="CHATGPT-8"></a>
 ### CHATGPT-8: a failure names its step and quotes nothing

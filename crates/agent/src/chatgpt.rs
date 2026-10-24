@@ -75,6 +75,15 @@ pub(crate) fn say_an_unsaved_renewal(reporter: &mut (impl Reporter + ?Sized)) {
     say_from(&SAVING, reporter);
 }
 
+/// Note that the renewal behind a request's token could not be written, as having the token does.
+///
+/// For the test of what a turn says about it, which cannot make the renewer fail: the hosts it
+/// renews at are compiled in. Nothing else calls it.
+#[doc(hidden)]
+pub fn note_a_renewal_the_file_could_not_take(unwritten: bool) {
+    record_a_token(&SAVING, unwritten);
+}
+
 /// [`say_an_unsaved_renewal`] for a given record of what the file holds, so a test need not share
 /// the process's.
 fn say_from(saving: &Mutex<Saving>, reporter: &mut (impl Reporter + ?Sized)) {
