@@ -30,7 +30,7 @@ mod chatgpt_stand_in;
 
 use chatgpt_stand_in::{
     ACCESS_TWO, Asked, CLIENT, CODE, Fault, MODEL, REFRESH_ONE, REFRESH_TWO, Refresh, STAND_IN,
-    Serving, StandIn, files_under, form, now, url_encoded,
+    Serving, StandIn, USAGE_LIMIT, files_under, form, now, url_encoded,
 };
 
 /// A directory a run takes as its home, removed when the test ends.
@@ -314,9 +314,6 @@ impl Typed {
         shown
     }
 }
-
-/// The `error.code` of the closed list of CHATGPT-8 that says the account has reached its usage limit.
-const USAGE_LIMIT: &str = "subscription_sharing_usage_limit_exceeded";
 
 /// CHATGPT-8: no value the sign-in handled reaches an output of a run that signs in, refreshes and
 /// fails. The run signs in (the code exchange, the key set and the ID token), its listing is refused

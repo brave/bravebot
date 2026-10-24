@@ -26,6 +26,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+#[path = "../../aichat/test-support/refusal_codes.rs"]
+mod refusal_codes;
+
 /// A directory handed to a run as its own, removed when the test that made it ends.
 ///
 /// Under this crate's build directory rather than the system temporary one, which is shared
@@ -9267,8 +9270,7 @@ fn a_turn_that_failed_on_the_chatgpt_account_is_reported_in_the_language_chosen(
 /// one, and a count of tries tacked on after the sentence.
 #[test]
 fn a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait_and_the_status() {
-    const USAGE_LIMIT: &str = "subscription_sharing_usage_limit_exceeded";
-    const NOT_ELIGIBLE: &str = "subscription_sharing_user_not_eligible";
+    use refusal_codes::{NOT_ELIGIBLE, USAGE_LIMIT};
     let usage_limit = "OpenAI says this ChatGPT account has reached its usage limit";
     let not_permitted = "OpenAI does not allow this ChatGPT account to be used this way";
     for (status, code, line) in [

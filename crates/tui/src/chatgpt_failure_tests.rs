@@ -24,7 +24,8 @@ use bravebot_session::sessions::{self, Front, Handle};
 #[path = "../../agent/test-support/chatgpt_stand_in.rs"]
 mod chatgpt_stand_in;
 use chatgpt_stand_in::{
-    ACCESS_TWO, MODEL, REFRESH_ONE, REFRESH_TWO, Refresh, STAND_IN, Serving, StandIn, files_under,
+    ACCESS_TWO, MODEL, NOT_ELIGIBLE, REFRESH_ONE, REFRESH_TWO, Refresh, STAND_IN, Serving, StandIn,
+    USAGE_LIMIT, files_under,
 };
 
 /// The variables that tell the child what to do. The child does nothing without them, so running
@@ -32,11 +33,6 @@ use chatgpt_stand_in::{
 const OUT: &str = "BRAVEBOT_CHATGPT_TUI_TEST_OUT";
 const WORK: &str = "BRAVEBOT_CHATGPT_TUI_TEST_WORK";
 const URL_FILE: &str = "BRAVEBOT_CHATGPT_TUI_TEST_URL";
-
-/// The code of the closed list of CHATGPT-8 that says the account has reached its usage limit, and
-/// one of the six that say it may not be used this way.
-const USAGE_LIMIT: &str = "subscription_sharing_usage_limit_exceeded";
-const NOT_ELIGIBLE: &str = "subscription_sharing_invalid_user";
 
 /// The screen the session draws, as the rows a terminal would show.
 fn screen(session: &mut Session) -> String {

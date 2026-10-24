@@ -739,6 +739,18 @@ itself and holds what its own writers produce from it:
   the run. It requires that the record's reason is the failure the transcript shows and that no two of the
   four turns failed alike. The run is made in a child of the test binary, since the account's hosts and the
   state directory are read from the environment, this crate forbids `unsafe`, and `fold_outcome` is private.
+- `bravebot_ui_bridge::chatgpt_secrets::what_the_bridge_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
+  signs in in a child of the test binary and then drives `bravebot-rpc`, the binary the desktop starts, over its
+  pipe through the same four failures and two `models.list` requests, one for a listing that cannot be read
+  and one for a listing refused in a code of the closed list. It holds the `turn.error` event of each turn, the
+  answer to each `models.list` with its warnings, every line the binary wrote to its pipe, its standard error,
+  and the record and trail it wrote. It requires that no two turns failed alike and that the record keeps
+  the four.
+
+Every output the clause names is held by one of these, except what the renderer in `ui/` draws from the
+events the bridge sends. The renderer is not a crate, so the events are what is held, and what the window makes
+of the `account` name and the sentence in one is pinned by the scripts the `by-construction` entry of this
+clause names.
 
 The command's tests run on Linux and macOS, where `script` gives the command a terminal, and not on Windows.
 
@@ -755,6 +767,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_of_the_line_interface`
 `verified-by: bravebot_tui::chatgpt_failure_tests::what_the_terminal_client_keeps_and_draws_of_a_failed_turn_holds_none_of_the_values_of_the_run`
+`verified-by: bravebot_ui_bridge::chatgpt_secrets::what_the_bridge_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_the_run`
 `verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
 `verified-by: bravebot_skus::chatgpt::an_id_token_that_does_not_verify_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`

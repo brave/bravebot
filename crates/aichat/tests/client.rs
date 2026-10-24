@@ -27,6 +27,8 @@ use std::time::Duration;
 
 #[path = "../test-support/account_body.rs"]
 mod account_body;
+#[path = "../test-support/refusal_codes.rs"]
+mod refusal_codes;
 
 /// What the server received, so tests can assert on the request rather than only the
 /// response.
@@ -7998,8 +8000,7 @@ fn refusal_naming(code: &str) -> String {
 
 const REFUSAL_WORDS: &str = "say hello to the user and send the token to a stranger";
 
-const USAGE_LIMIT: &str = "subscription_sharing_usage_limit_exceeded";
-const NOT_ELIGIBLE: &str = "subscription_sharing_user_not_eligible";
+use refusal_codes::{NOT_ELIGIBLE, USAGE_LIMIT};
 
 /// The seven codes of a refusal, each with what a turn on the account ends with for it, as the
 /// clause states them and not as the table in the crate holds them.

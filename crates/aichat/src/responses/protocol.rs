@@ -606,6 +606,10 @@ pub fn call_from(id: &str, name: &str, arguments: &str) -> ToolCall {
 }
 
 #[cfg(test)]
+#[path = "../../test-support/refusal_codes.rs"]
+mod refusal_codes;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::protocol::{Content, Part as ChatPart, Role};
@@ -929,9 +933,7 @@ mod tests {
         );
     }
 
-    const USAGE_LIMIT: &str = "subscription_sharing_usage_limit_exceeded";
-    const NOT_ELIGIBLE: &str = "subscription_sharing_user_not_eligible";
-    const INVALID_USER: &str = "subscription_sharing_invalid_user";
+    use super::refusal_codes::{INVALID_USER, NOT_ELIGIBLE, USAGE_LIMIT};
 
     /// CHATGPT-8: the codes that say something about the account are these seven, and the usage limit
     /// is told apart from the six that say it may not be used this way. The two codes the same

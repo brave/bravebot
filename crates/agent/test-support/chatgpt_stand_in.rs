@@ -29,6 +29,13 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+#[path = "../../aichat/test-support/refusal_codes.rs"]
+mod refusal_codes;
+/// The code of the closed list of CHATGPT-8 that says the account has reached its usage limit.
+pub const USAGE_LIMIT: &str = refusal_codes::USAGE_LIMIT;
+/// One of the six codes of the list that say the account may not be used this way.
+pub const NOT_ELIGIBLE: &str = refusal_codes::NOT_ELIGIBLE;
+
 /// The variable both seams read. Taken from the crate rather than written here, so a build where
 /// the seam is off does not compile the tests that include this file.
 pub const STAND_IN: &str = bravebot_skus::chatgpt::STAND_IN;
