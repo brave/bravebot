@@ -31,4 +31,8 @@ bravebot-stamp = { path = "../stamp" }
 bravebot-tui = { path = "../tui" }
 
 [dev-dependencies]
+# The seams that point the ChatGPT sign-in, its renewal and the account's requests at a stand-in, for
+# the tests that run the built binary against one. Enabled here and nowhere else.
+bravebot-config = { path = "../config", features = ["test-hosts"] }
+bravebot-skus = { path = "../skus", features = ["test-hosts"] }
 serde_json.workspace = true
