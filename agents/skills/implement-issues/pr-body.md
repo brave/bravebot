@@ -16,6 +16,15 @@ Closes brave/bravebot#101
 Closes brave/bravebot#102
 Part of brave/bravebot#103
 
+> [!WARNING]
+> **The commit hook was bypassed for 1 dependency change.** `git commit --no-verify` was used once
+> for each commit below, because the hook refuses a staged dependency file.
+>
+> - `<sha>` <subject>: `<file>` adds `<crate> <version>`, or changes `<crate> <old> to <new>`.
+>   Buys: <what it buys>. Instead: <what existing code or writing the behaviour would cost>.
+>   Brings: <transitive crates, build scripts, native code and the targets it builds for, or
+>   "nothing beyond the crate">. Licence and upkeep: <the licence, and who maintains it>.
+
 User impact: <one line: what a person using bravebot can now see, or "none" and why>
 Not covered: none
 
@@ -73,17 +82,32 @@ stays in the open, since it is the part a reviewer wants most.
 
 Every `Closes` line comes first, then the `Part of` lines, each in the `brave/bravebot#<n>` form (a
 bare `#<n>` closes nothing in another repository). The first line is the issue number `... open`
-is given. An item gets `Closes` only when the pull request finishes it. An item that is partly
-done gets `Part of` and a bullet under `Not covered:` naming the follow-up that holds the rest:
+is given. An item gets `Closes` when every row of its checklist is `met`, and that is the default.
+An item with a `blocked` row gets `Part of` and a bullet under `Not covered:` naming the follow-up
+that holds the rest, which is an issue of its own and never the issue the pull request is for:
 
 ```text
 Not covered:
 - <what is left of #103> (#NNNN)
 ```
 
-An item that is impossible and has no commits gets no closing line and the same bullet, and so
+An item that is blocked and has no commits gets no closing line and the same bullet, and so
 does a test that also fails on the parent commit. With nothing left the line is
 `Not covered: none`.
+
+## The dependency callout
+
+Present only where a commit bypassed the hook, and then the first thing under the closing lines,
+before `User impact:`. It is a `> [!WARNING]` block, so GitHub draws it apart from the text, and it
+holds one bullet for each commit that touched a dependency file: the commit, the file, the
+dependency and its version (old and new where it is changed), and the four statements of
+[DEP-001](../../../docs/best-practices/dependencies.md#DEP-001) that the template gives slots to:
+what it buys, what existing code would cost, what it brings, and its licence and upkeep. It is
+never a `## Decisions to confirm` entry, never inside a `<details>` block, and never left to the
+test plan. The same text is posted as a comment on the pull request once it is open, because
+editing a body notifies nobody. `... open` refuses a body whose callout does not name each such
+commit by its hash. [Dependency changes](SKILL.md#dependency-changes-and-hook-bypasses) says when
+the bypass is allowed and how the list is checked.
 
 ## User impact
 
