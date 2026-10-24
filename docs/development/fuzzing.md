@@ -109,8 +109,9 @@ both until the run is deleted. Report a crash that may be a vulnerability throug
 
 `fuzz/Cargo.lock` began as a copy of the root `Cargo.lock`, so the crates under test build at the
 versions that ship. It does not follow the root lock on its own. `make bump-version` refreshes the
-version of each bravebot crate in it. After a dependency in the root lock changes, bring it up to
-the root lock again:
+version of each bravebot crate in it. `make check-deps` reads this lockfile too, so an advisory
+fixed in the root lock fails the dependency policy for this graph until this one is brought up to
+date. After a dependency in the root lock changes, bring it up to the root lock again:
 
 ```sh
 cp Cargo.lock fuzz/Cargo.lock
