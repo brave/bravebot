@@ -892,7 +892,9 @@ const TEST_SEAMS: [&str; 1] = ["test-hosts"];
 
 /// What a Cargo file says about the test seams: the lines that name one anywhere but in a table of
 /// dev-dependencies or the seam's own declaration, `<seam> = []` under `[features]`, and the lines
-/// that name one in a table of dev-dependencies.
+/// that name one in a table of dev-dependencies. The escapes of a TOML string that write a character
+/// by its number are decoded first, since the workspace has no TOML parser to do it (the crate of
+/// this test depends on none, and this change adds none).
 ///
 /// A seam a crate's `[dependencies]`, its build dependencies, the workspace's catalogue, a feature of
 /// any crate (`default` included) or a Cargo configuration file enables is on in the build that ships,
@@ -901,6 +903,9 @@ const TEST_SEAMS: [&str; 1] = ["test-hosts"];
 fn seam_mentions(manifest: &str) -> (Vec<String>, Vec<String>) {
     let (mut outside, mut inside) = (Vec::new(), Vec::new());
     let mut table: Vec<String> = Vec::new();
+    // A TOML string may write a character by its number, so `"test\u002dhosts"` is the feature's
+    // name, and no parser here decodes it.
+    let manifest = with_escapes_decoded(manifest);
     for line in manifest.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -1039,6 +1044,21 @@ fn a_test_seam_is_enabled_by_dev_dependencies_alone() {
         outside.is_empty(),
         "a test seam is named where a build that ships would read it: {outside:?}"
     );
+    // And no manifest or configuration file turns debug assertions on, makes a panic unwind,
+    // overrides the release profile or defines a profile cargo does not have of its own.
+    let mut bypassing = Vec::new();
+    for (path, manifest) in &files {
+        for spelling in bypasses_of_the_refusal(manifest) {
+            bypassing.push((path.as_str(), spelling.to_string()));
+        }
+        for name in custom_profiles(path, manifest) {
+            bypassing.push((path.as_str(), format!("the profile {name}")));
+        }
+    }
+    assert!(
+        bypassing.is_empty(),
+        "a Cargo file undoes what makes a release build refuse the test-hosts seam: {bypassing:?}"
+    );
     assert_eq!(
         enabling, ENABLE_A_SEAM_FOR_TESTS,
         "the crates whose tests turn a seam on are the ones that run a flow against a stand-in, \
@@ -1115,6 +1135,20 @@ features = [\"test-hosts\"]
         seam_mentions("[features]\ntest-hosts = [\"bravebot-net/proxy\"]\n").0,
         ["test-hosts = [\"bravebot-net/proxy\"]"]
     );
+    // A feature written with the escapes of a TOML string is the feature.
+    for manifest in [
+        "[dependencies]\nbravebot-skus = { path = \"../skus\", features = [\"test\\u002dhosts\"] }\n",
+        "[dependencies]\nbravebot-skus = { path = \"../skus\", features = [\"\\u0074est-hosts\"] }\n",
+        "[features]\ndefault = [\"bravebot-skus/test\\U0000002dhosts\"]\n",
+        "[dependencies]\nbravebot-skus = { path = \"../skus\", features = [\"test\\x2dhosts\"] }\n",
+    ] {
+        assert_eq!(seam_mentions(manifest).0.len(), 1, "{manifest}");
+    }
+    // The same in a table of dev-dependencies is the use that is allowed.
+    let (outside, inside) = seam_mentions(
+        "[dev-dependencies]\nbravebot-skus = { path = \"../skus\", features = [\"test\\u002dhosts\"] }\n",
+    );
+    assert!(outside.is_empty() && inside.len() == 1);
     // A Cargo configuration file has no dependency tables, so a flag in one is a use.
     assert_eq!(
         seam_mentions("[build]\nrustflags = [\"--cfg\", \"feature=\\\"test-hosts\\\"\"]\n")
@@ -1298,40 +1332,79 @@ fn a_build_that_aborts_on_a_panic_or_asserts_nothing_refuses_the_seam() {
     );
 }
 
-/// The files that run a build, or tell a person which command builds a release, and the
-/// directories that hold more of them. A script whose name says it tests another script is left
-/// out: it holds the fixtures of the commands it checks, and runs none of them. `.githooks` and
-/// `.github` are directories of their own, and `docs/specs` is not read, because the clause that
-/// states this guard has to say the words it looks for.
-const COMMAND_FILES: [&str; 12] = [
-    "Makefile",
-    "Dockerfile.cross",
-    "install.sh",
-    "install.ps1",
-    "package.json",
-    "README.md",
-    "deny.toml",
-    "extension/README.md",
-    "ui/package.json",
-    "mobile/package.json",
-    "mobile/README.md",
-    "packages/package.json",
+/// The directories the walk for commands does not go into, beyond [`NOT_WALKED`]: the output of a
+/// build, which a checkout may hold and a clean one does not.
+const NOT_WALKED_FOR_COMMANDS: [&str; 4] = ["dist", "out", "build", ".docusaurus"];
+
+/// The directory the walk for commands leaves out because it says in words what the guards look for.
+const SPECS: &str = "docs/specs";
+
+/// The files that list what a lock pins, which a tool writes and which hold no command. Named in
+/// full: a name that only contains `lock` would leave out a script called `block.sh`.
+const LOCK_FILES: [&str; 5] = [
+    "Cargo.lock",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "Podfile.lock",
 ];
-const COMMAND_DIRECTORIES: [&str; 13] = [
-    ".github",
-    ".githooks",
-    "ui/scripts",
-    "ui/docs",
-    "mobile/scripts",
-    "npm/scripts",
-    "npm/bin",
-    "packages/scripts",
-    "scripts",
-    "contrib",
-    "agents",
-    "docs/development",
-    "fuzz",
-];
+
+/// Whether `path`, relative to the workspace, is a file the walk for commands reads: every file
+/// there is, whatever it is called and whatever it ends in, but a Rust source, a lock file, a
+/// `Cargo.toml` and what is under [`SPECS`].
+///
+/// A Rust source is read for who may name a host by the tests of what a release compiles, and a
+/// `Cargo.toml` by the manifest guard, which reads its tables. A file that is not text is left out
+/// where it is read, in [`command_files`]. The name of a file says nothing of whether it holds a
+/// command, so no other name is left out: a script that ends in `.bash`, a `Justfile` and a
+/// `Makefile.local` are read as a `Makefile` is.
+fn holds_a_command(path: &std::path::Path) -> bool {
+    let relative = relative(path);
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    !(relative.starts_with(&format!("{SPECS}/"))
+        || name == "Cargo.toml"
+        || LOCK_FILES.contains(&name)
+        || path.extension().is_some_and(|extension| extension == "rs"))
+}
+
+/// Every file the walk for commands reads, by path relative to the workspace and its text. A file
+/// with a NUL byte in it is an image, an archive or a font, and holds no command.
+fn command_files() -> Vec<(String, String)> {
+    fn walk(directory: &std::path::Path, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            if path.is_dir() {
+                let skipped = NOT_WALKED
+                    .iter()
+                    .chain(NOT_WALKED_FOR_COMMANDS.iter())
+                    .any(|skipped| name == *skipped);
+                if !skipped {
+                    walk(&path, found);
+                }
+            } else if holds_a_command(&path) {
+                found.push(path);
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    walk(&workspace(), &mut paths);
+    paths.sort();
+    paths
+        .iter()
+        .filter_map(|path| {
+            let bytes = std::fs::read(path).ok()?;
+            (!bytes.contains(&0))
+                .then(|| (relative(path), String::from_utf8_lossy(&bytes).into_owned()))
+        })
+        .collect()
+}
 
 /// The commands in the text of a file, one per logical line: a line that ends in a backslash goes on
 /// with the next, as a shell and a Makefile read it.
@@ -1357,45 +1430,228 @@ fn logical_lines(text: &str) -> Vec<String> {
     lines
 }
 
-/// Whether a logical line passes a test seam to a build: it names the seam and a way of enabling a
-/// feature. The word alone is English, and a line that says "a test-hosts file" is not it.
-fn passes_a_test_seam(line: &str) -> bool {
-    TEST_SEAMS.iter().any(|seam| {
-        line.contains(seam)
-            && [
-                "--features",
-                "--feature",
-                "--cfg",
-                " -F",
-                "features =",
-                "features=",
-                &format!("/{seam}"),
-            ]
-            .iter()
-            .any(|way| line.contains(way))
-    })
+/// `text` with the escapes of a TOML or a JSON string that write a character by its number
+/// (`\u002d`, `\U0000002d`, `\x2d`) written out as the character. A manifest has no TOML parser here
+/// to do it, and a `package.json` command is a JSON string: either could spell a feature's name with
+/// one. A backslash before a backslash is a backslash, so `\\u002d` is left as it is.
+fn with_escapes_decoded(text: &str) -> String {
+    let characters: Vec<char> = text.chars().collect();
+    let mut decoded = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < characters.len() {
+        if characters[at] == '\\' && at + 1 < characters.len() {
+            let digits = match characters[at + 1] {
+                'u' => 4,
+                'U' => 8,
+                'x' => 2,
+                '\\' => {
+                    decoded.push_str("\\\\");
+                    at += 2;
+                    continue;
+                }
+                _ => 0,
+            };
+            let end = at + 2 + digits;
+            if digits > 0 && end <= characters.len() {
+                let number: String = characters[at + 2..end].iter().collect();
+                if let Some(character) = u32::from_str_radix(&number, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    decoded.push(character);
+                    at = end;
+                    continue;
+                }
+            }
+        }
+        decoded.push(characters[at]);
+        at += 1;
+    }
+    decoded
 }
 
-/// What a file's commands do with features, as the logical lines that pass a seam and the ones that
-/// ask for every feature, `--all-features` or cargo-deny's `all-features = true`, which enables each
-/// seam for every crate the build selects.
-fn feature_commands(text: &str) -> (Vec<String>, Vec<String>) {
-    let (mut naming, mut all) = (Vec::new(), Vec::new());
-    for line in logical_lines(text) {
-        if passes_a_test_seam(&line) {
-            naming.push(line.clone());
+/// `text` with what separates the pieces of one word in a command taken out: white space, quotes,
+/// backslashes, commas and plus signs, in lower case with `_` read as `-`, so that a name split over
+/// lines, written as a list of arguments, quoted in any way, written with the escapes of a string or
+/// spelled as an environment variable is the same text as the name.
+fn squeezed(text: &str) -> String {
+    with_escapes_decoded(text)
+        .chars()
+        .filter(|c| !c.is_whitespace() && !matches!(c, '"' | '\'' | '`' | '\\' | ',' | '+'))
+        .map(|c| {
+            if c == '_' {
+                '-'
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// Whether `text` names a test seam in any way a command could: the name is not a word of any
+/// command a release runs, so a file that holds it, in a line or beside the flag or on a line of its
+/// own, is one a person has to look at.
+fn names_a_test_seam(text: &str) -> bool {
+    let squeezed = squeezed(text);
+    TEST_SEAMS
+        .iter()
+        .chain(SEAM_VARIABLE_WORDS.iter())
+        .any(|word| squeezed.contains(word))
+}
+
+/// What the variable that names a stand-in is called, in the form `squeezed` gives it, which is also
+/// the part of its name no other variable has. A command that sets it names the seam as a flag does.
+const SEAM_VARIABLE_WORDS: [&str; 1] = ["chatgpt-stand-in"];
+
+/// The logical lines of `text` that ask for every feature, which enables each seam for every crate
+/// the build selects: `--all-features`, cargo-deny's `all-features = true` and the spellings
+/// `squeezed` makes of them.
+fn all_features_lines(text: &str) -> Vec<String> {
+    logical_lines(text)
+        .into_iter()
+        .filter(|line| squeezed(line).contains("all-features"))
+        .collect()
+}
+
+/// The spellings, in the form [`squeezed`] gives them, of the settings that let a release build
+/// compile the seam. The refusal reads two things a release has and a test build does not: debug
+/// assertions off and a panic that aborts. Turning the assertions on, making a panic unwind, or
+/// overriding the release profile from the environment undoes one or the other, with the feature on
+/// or without it. Each is the spelling of a flag (`-C debug-assertions`, `-C panic=unwind`), of a
+/// profile setting (`debug-assertions = true`, `panic = "unwind"`) or of a variable
+/// (`CARGO_PROFILE_RELEASE_*`), in a command, a workflow or a configuration file.
+const BYPASSES_OF_THE_REFUSAL: [(&str, &str); 3] = [
+    (
+        "debug-assertions",
+        "turns debug assertions on or states them",
+    ),
+    ("panic=unwind", "makes a panic unwind"),
+    (
+        "cargo-profile-release",
+        "overrides a setting of the release profile from the environment",
+    ),
+];
+
+/// Each of [`BYPASSES_OF_THE_REFUSAL`] that `text` spells, however it is split, quoted or capitalised.
+fn bypasses_of_the_refusal(text: &str) -> Vec<&'static str> {
+    let squeezed = squeezed(text);
+    BYPASSES_OF_THE_REFUSAL
+        .iter()
+        .filter(|(spelling, _)| squeezed.contains(spelling))
+        .map(|(spelling, _)| *spelling)
+        .collect()
+}
+
+/// The profiles cargo has of its own. A profile of another name states what it inherits, and one that
+/// inherits `dev` or `release` and is built with `--all-targets` or `--profile <name>` has the
+/// settings of one under a name no refusal reads.
+const BUILT_IN_PROFILES: [&str; 4] = ["dev", "release", "test", "bench"];
+
+/// What `--profile` names in a file that is not cargo's, by the file and the word after it: the
+/// install profile of `rustup`, and a profile of the AWS CLI in a message.
+const NOT_A_CARGO_PROFILE: [(&str, &str); 3] = [
+    ("Makefile", "minimal"),
+    ("Makefile", "<name>"),
+    ("docs/development/fuzzing.md", "minimal"),
+];
+
+/// Whether `path` is a file cargo reads its settings from: a manifest, or a configuration file.
+fn is_a_cargo_file(path: &str) -> bool {
+    let (directory, name) = path.rsplit_once('/').unwrap_or(("", path));
+    name == "Cargo.toml" || (directory.ends_with(".cargo") && name.starts_with("config"))
+}
+
+/// The profiles a cargo file defines, by name: the second part of a `[profile.<name>]` table or of a
+/// dotted key that starts `profile.`, and the first part of a key under `[profile]`. A `profile` table
+/// written as one inline value cannot be read here, so it is named as what it is.
+fn profile_tables(text: &str) -> Vec<String> {
+    let unquoted = |part: &str| {
+        part.trim()
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_string()
+    };
+    let mut found = Vec::new();
+    // Before the first table header a key is at the root of the file, where `profile` is the table.
+    let mut at_root = true;
+    let mut under_profile = false;
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
         }
-        if line.contains("all-features") {
-            all.push(line);
+        if line.starts_with('[') {
+            at_root = false;
+            let parts: Vec<String> = line
+                .trim_matches(|c| c == '[' || c == ']')
+                .split('.')
+                .map(unquoted)
+                .collect();
+            under_profile = parts == ["profile"];
+            if parts.first().is_some_and(|first| first == "profile") && parts.len() > 1 {
+                found.push(parts[1].clone());
+            }
+        } else if let Some(key) = line.split('=').next().map(unquoted) {
+            if at_root && key == "profile" {
+                found.push("an inline table".to_string());
+            } else if let Some(rest) = key.strip_prefix("profile.").filter(|_| at_root) {
+                found.push(unquoted(rest.split('.').next().unwrap_or_default()));
+            } else if under_profile {
+                found.push(unquoted(key.split('.').next().unwrap_or_default()));
+            }
         }
     }
-    (naming, all)
+    found
+}
+
+/// The profiles `text`, the file at `path`, asks for or defines that cargo does not have of its own:
+/// the word after `--profile`, the profile of a `--config profile.<name>`, the name in a
+/// `CARGO_PROFILE_<NAME>_` variable and, in a file cargo reads, the profile a table defines. A
+/// comment is not a command, so a line that starts `#` is not read for a flag.
+fn custom_profiles(path: &str, text: &str) -> Vec<String> {
+    let decoded = with_escapes_decoded(text);
+    let commands: String = decoded
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tokens: Vec<&str> = commands
+        .split(|c: char| c.is_whitespace() || "\"'`,=()[]{};".contains(c))
+        .filter(|token| !token.is_empty())
+        .collect();
+    let mut found = Vec::new();
+    for (at, token) in tokens.iter().enumerate() {
+        let next = tokens.get(at + 1).copied().unwrap_or_default();
+        match *token {
+            "--profile" => found.push(next.to_string()),
+            "--config" => {
+                if let Some(rest) = next.strip_prefix("profile.") {
+                    found.push(rest.split('.').next().unwrap_or_default().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    let squeezed = squeezed(text);
+    for (at, _) in squeezed.match_indices("cargo-profile-") {
+        let name = squeezed[at + "cargo-profile-".len()..]
+            .split('-')
+            .next()
+            .unwrap_or_default();
+        found.push(name.to_string());
+    }
+    if is_a_cargo_file(path) {
+        found.extend(profile_tables(&decoded));
+    }
+    found.retain(|name| {
+        !BUILT_IN_PROFILES.contains(&name.as_str())
+            && !NOT_A_CARGO_PROFILE.contains(&(path, name.as_str()))
+    });
+    found
 }
 
 /// The commands that may ask for every feature, each by the file, the text that names it, how many
 /// times that text occurs in the file, and why it ships nothing. A command added to a build or a
 /// release is not in this list and is refused, so a new use is added here by name, with the reason.
-const MAY_ASK_FOR_ALL_FEATURES: [(&str, &str, usize, &str); 12] = [
+const MAY_ASK_FOR_ALL_FEATURES: [(&str, &str, usize, &str); 13] = [
     (
         "Makefile",
         "cargo clippy --all-targets --all-features -- -D warnings",
@@ -1445,6 +1701,12 @@ const MAY_ASK_FOR_ALL_FEATURES: [(&str, &str, usize, &str); 12] = [
         "a lint run",
     ),
     (
+        "agents/pr_worktree_selftest.py",
+        "\"--all-targets\", \"--all-features\", \"--\", \"-D\", \"warnings\"",
+        1,
+        "the plan that script is checked against, which runs nothing",
+    ),
+    (
         "ui/docs/testing.md",
         "cargo clippy --all-targets --all-features -- -D warnings",
         2,
@@ -1472,59 +1734,44 @@ const MAY_ASK_FOR_ALL_FEATURES: [(&str, &str, usize, &str); 12] = [
 
 /// A release is made by `make` targets that run `cargo build --release` and `cargo zigbuild
 /// --release`, and CHATGPT-2 lets no flag turn on a feature that names a host. A manifest cannot
-/// say what a build command passes, so this reads the commands: the Makefile, the Dockerfile of the
-/// cross-build, the workflows and the git hooks, the scripts the desktop app and the packages are
-/// built with, the tools under `contrib` and `agents`, the fuzz package, and the documents that give
-/// build and release commands. None may pass a seam, and `all-features`, which would enable each, is
-/// asked for only by the runs [`MAY_ASK_FOR_ALL_FEATURES`] names.
+/// say what a build command passes, so this reads every text file of the repository
+/// ([`holds_a_command`]). None may name a seam at all, in a line, a list of arguments, a
+/// variable or a line of its own, and `all-features`, which would enable each, is asked for only
+/// by the runs [`MAY_ASK_FOR_ALL_FEATURES`] names, and by no spelling that hides it from the lines.
+/// None turns debug assertions on, makes a panic unwind or overrides the release profile
+/// ([`BYPASSES_OF_THE_REFUSAL`]), and none builds with a profile cargo does not have
+/// ([`custom_profiles`]).
 #[test]
 fn no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_by_name() {
-    let root = workspace();
-    let runs_no_build = |path: &std::path::Path| {
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        name.contains("selftest") || name.contains(".test.") || name.contains("-test.")
-    };
-    let mut files: Vec<PathBuf> = COMMAND_FILES
-        .iter()
-        .map(|file| root.join(file))
-        .filter(|path| path.is_file())
-        .collect();
-    for directory in COMMAND_DIRECTORIES {
-        files.extend(files_where(&root.join(directory), &|path| {
-            !runs_no_build(path)
-                && path.extension().is_none_or(|extension| {
-                    [
-                        "yml", "yaml", "sh", "ps1", "py", "mjs", "js", "ts", "json", "md", "mk",
-                        "toml",
-                    ]
-                    .iter()
-                    .any(|kept| extension == *kept)
-                })
-        }));
-    }
-    let texts: Vec<(String, String)> = files
-        .iter()
-        .map(|path| {
-            (
-                relative(path),
-                std::fs::read_to_string(path).unwrap_or_default(),
-            )
-        })
-        .collect();
+    let texts = command_files();
 
-    // The files that build a release are among those read, and hold the commands that do.
+    // The files that build a release, and each place a command is kept, are among those read.
     let paths: Vec<&str> = texts.iter().map(|(path, _)| path.as_str()).collect();
     for needed in [
         "Makefile",
         "Dockerfile.cross",
         "deny.toml",
+        "install.sh",
+        "install.ps1",
+        "package.json",
+        "README.md",
         ".github/workflows/ci.yml",
         ".githooks/pre-commit",
         "ui/scripts/build-bridge.sh",
+        "ui/package.json",
+        "ui/README.md",
+        "mobile/package.json",
+        "npm/scripts/stage-platform-package.js",
+        "extension/package.json",
+        "packages/agent-client/package.json",
+        "packages/agent-client/README.md",
         "docs/development/releasing.md",
+        "docs/website/package.json",
+        "docs/website/docs/development.md",
+        "contrib/check-lint-increase.py",
+        ".envrc.example",
+        "crates/i18n/locales/en-US.ftl",
+        "ui/src/renderer/App.tsx",
     ] {
         assert!(paths.contains(&needed), "{needed} was not read: {paths:?}");
     }
@@ -1544,41 +1791,82 @@ fn no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_b
         "the commands that build a release were not found, so this test would pass by reading none"
     );
 
-    let mut all_features: Vec<(String, String)> = Vec::new();
+    let mut naming = Vec::new();
     for (path, text) in &texts {
-        let (naming, all) = feature_commands(text);
-        assert!(
-            naming.is_empty(),
-            "{path} passes a test seam to a build, which would put a way to name a host into \
-             whatever the command builds: {naming:?}"
-        );
-        all_features.extend(all.into_iter().map(|line| (path.clone(), line)));
+        if names_a_test_seam(text) {
+            naming.push(path.as_str());
+        }
     }
+    assert!(
+        naming.is_empty(),
+        "{naming:?} name a test seam, which no command a release runs does: a flag, a variable or a \
+         list of arguments with it would put a way to name a host into whatever the command builds"
+    );
+
+    // Nothing turns debug assertions on, makes a panic unwind or overrides the release profile, any of
+    // which would let a release build compile the seam, and nothing builds with a profile that cargo
+    // does not have of its own, which can inherit the settings of `dev`.
+    let mut bypassing = Vec::new();
+    let mut profiles = Vec::new();
+    for (path, text) in &texts {
+        for spelling in bypasses_of_the_refusal(text) {
+            bypassing.push((path.as_str(), spelling));
+        }
+        for name in custom_profiles(path, text) {
+            profiles.push((path.as_str(), name));
+        }
+    }
+    assert!(
+        bypassing.is_empty(),
+        "{bypassing:?} turn off what makes a release build refuse the test-hosts seam: {BYPASSES_OF_THE_REFUSAL:?}"
+    );
+    assert!(
+        profiles.is_empty(),
+        "{profiles:?} name a profile that cargo does not have of its own, which may inherit `dev` and \
+         is built without the refusal that a release has"
+    );
+
     let mut allowed = 0;
     for (file, needle, times, why) in MAY_ASK_FOR_ALL_FEATURES {
         allowed += times;
-        let found = all_features
+        let found = texts
             .iter()
-            .filter(|(path, line)| path == file && line.contains(needle))
+            .filter(|(path, _)| path == file)
+            .flat_map(|(_, text)| all_features_lines(text))
+            .filter(|line| line.contains(needle))
             .count();
         assert_eq!(
             found, times,
             "{file}: `{needle}` ({why}) was expected {times} times and found {found}"
         );
     }
+    let mut every: Vec<(String, usize)> = Vec::new();
+    for (path, text) in &texts {
+        let lines = all_features_lines(text).len();
+        // The word where it is written over lines or in pieces is a use that the lines do not show.
+        let hidden = squeezed(text).matches("all-features").count();
+        assert_eq!(
+            lines, hidden,
+            "{path} asks for every feature in a form the lines of it do not show"
+        );
+        if lines > 0 {
+            every.push((path.clone(), lines));
+        }
+    }
     assert_eq!(
-        all_features.len(),
+        every.iter().map(|(_, lines)| lines).sum::<usize>(),
         allowed,
         "a command asks for every feature that is not named in MAY_ASK_FOR_ALL_FEATURES, and that \
-         enables each test seam for every crate the build selects: {all_features:#?}"
+         enables each test seam for every crate the build selects: {every:#?}"
     );
 }
 
-/// The command reader has to see each way a build can be given a seam, has to join a command that
-/// goes on over lines, and has to pass over the word where it is only English, or the test above
-/// passes on a command it cannot read.
+/// The command reader has to see each way a build can be given a seam, in a line, a list of
+/// arguments, a variable, a line of its own and a word split over lines, and has to see a request
+/// for every feature however it is spelled, or the test above passes on a command it cannot read.
+/// It has to pass over a command that names neither.
 #[test]
-fn the_command_reader_sees_a_seam_passed_over_a_continuation_and_not_the_word() {
+fn the_command_reader_sees_a_seam_and_every_feature_however_a_command_spells_them() {
     for (command, spelling) in [
         (
             "cargo build --release --features bravebot-skus/test-hosts",
@@ -1604,29 +1892,349 @@ fn the_command_reader_sees_a_seam_passed_over_a_continuation_and_not_the_word() 
             "cargo\", \"build\", \"--features\", \"bravebot-skus/test-hosts\"",
             "a list of arguments",
         ),
+        (
+            "args:\n  - --features\n  - test-hosts\n",
+            "a list of arguments in a workflow, the name on a line of its own",
+        ),
+        (
+            "FEATURES=(\n  --features\n  \"test-hosts\"\n)\n",
+            "a shell array, the name quoted on a line of its own",
+        ),
+        (
+            "features = [\n  \"bravebot-skus/test-hosts\",\n]\n",
+            "a list in a manifest",
+        ),
+        (
+            "export CARGO_FEATURE_TEST_HOSTS=1",
+            "the variable cargo sets for a feature",
+        ),
+        (
+            "cargo build --features test_hosts",
+            "the name written with an underscore",
+        ),
+        ("cargo build --features TEST-HOSTS", "the name in capitals"),
+        (
+            "{\"scripts\": {\"build\": \"cargo build --release --features test\\u002dhosts\"}}",
+            "the name written with a JSON escape",
+        ),
+        (
+            "cargo build --features test\\U0000002dhosts",
+            "the name written with a long escape",
+        ),
+        (
+            "cargo build --features test\\x2dhosts",
+            "the name written with a byte escape",
+        ),
+        (
+            "cargo build --features \\u0074est-hosts",
+            "a letter of the name written with an escape",
+        ),
+        (
+            "cargo build --features test-\\\nhosts",
+            "the name split by a continuation",
+        ),
+        (
+            "cargo build --features 'test-' 'hosts'",
+            "the name quoted in two pieces",
+        ),
     ] {
-        let (naming, _) = feature_commands(command);
-        assert_eq!(naming.len(), 1, "{spelling} was not seen: {command}");
+        assert!(
+            names_a_test_seam(command),
+            "{spelling} was not seen: {command}"
+        );
     }
-    for prose in [
-        "a test-hosts file that is only mentioned",
-        "the test-hosts words in a sentence",
+    for command in [
         "cargo build --release --locked",
+        "cargo zigbuild --release --locked --target x86_64-unknown-linux-musl",
+        "pnpm run test",
+        // A backslash before a backslash is a backslash, so this is not an escape.
+        "cargo build --features test\\\\u002dhosts",
     ] {
-        let (naming, all) = feature_commands(prose);
-        assert!(naming.is_empty() && all.is_empty(), "{prose}");
+        assert!(!names_a_test_seam(command), "{command}");
+        assert!(all_features_lines(command).is_empty(), "{command}");
     }
-    let (_, all) = feature_commands("cargo build --release \\\n  --workspace \\\n  --all-features");
-    assert_eq!(
-        all,
-        ["cargo build --release --workspace --all-features"],
-        "a command over three lines was not joined"
+    for (command, spelling) in [
+        (
+            "cargo build --release --workspace --all-features",
+            "the flag",
+        ),
+        (
+            "cargo build --release \\\n  --workspace \\\n  --all-features",
+            "the flag over three lines",
+        ),
+        ("[graph]\nall-features = true\n", "cargo-deny's setting"),
+        ("args:\n  - --all-features\n", "a list of arguments"),
+        ("cargo build --all_features", "an underscore"),
+        ("cargo build --ALL-FEATURES", "capitals"),
+    ] {
+        assert!(
+            !all_features_lines(command).is_empty(),
+            "{spelling} was not seen: {command}"
+        );
+    }
+    let (joined, _) = (
+        all_features_lines("cargo build --release \\\n  --workspace \\\n  --all-features"),
+        (),
     );
-    let (_, all) = feature_commands("[graph]\nall-features = true\n");
-    assert_eq!(
-        all,
-        ["all-features = true"],
-        "cargo-deny's setting was not seen"
+    assert_eq!(joined, ["cargo build --release --workspace --all-features"]);
+    // A word split by a line continuation is one logical line that holds it once, so the lines show
+    // it as often as the whole text does, which is what the test above compares.
+    let split = "cargo build --all-\\\nfeatures";
+    assert_eq!(squeezed(split).matches("all-features").count(), 1);
+    assert_eq!(all_features_lines(split).len(), 1);
+}
+
+/// The reader of what undoes the refusal and of the profiles cargo does not have has to see each way
+/// a command, a workflow or a configuration file spells them, and has to pass over what is not one.
+/// Each is the verifier's evasion of a guard that read only the feature's name.
+#[test]
+fn the_command_reader_sees_what_undoes_the_refusal_and_a_profile_of_its_own() {
+    for (text, spelling) in [
+        (
+            "RUSTFLAGS=\"-C panic=unwind\" cargo build --release",
+            "RUSTFLAGS with an unwinding panic",
+        ),
+        (
+            "RUSTFLAGS='-Cdebug-assertions=on' cargo build --release",
+            "RUSTFLAGS with the short form of the flag",
+        ),
+        (
+            "env:\n  CARGO_ENCODED_RUSTFLAGS: \"-Cdebug-assertions\"",
+            "CARGO_ENCODED_RUSTFLAGS in a workflow",
+        ),
+        (
+            "export CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true",
+            "the release profile's variable",
+        ),
+        (
+            "export CARGO_PROFILE_RELEASE_PANIC=unwind",
+            "the release profile's panic",
+        ),
+        (
+            "cargo build --release --config 'profile.release.panic=\"unwind\"'",
+            "a --config of the release profile",
+        ),
+        (
+            "[profile.release]\npanic = \"unwind\"\n",
+            "a table of the release profile",
+        ),
+        (
+            "[build]\nrustflags = [\"-C\", \"debug-assertions=on\"]\n",
+            "a configuration file's rustflags",
+        ),
+        (
+            "cargo build --release \\\n  -C debug\\\n-assertions",
+            "a word split over lines",
+        ),
+        (
+            "RUSTFLAGS=-C DEBUG_ASSERTIONS=1",
+            "capitals and an underscore",
+        ),
+    ] {
+        assert!(
+            !bypasses_of_the_refusal(text).is_empty(),
+            "{spelling} was not seen: {text}"
+        );
+    }
+    for text in [
+        "cargo build --release --locked",
+        "RUSTFLAGS=\"-D warnings\" cargo build --release",
+        "[profile.release]\npanic = \"abort\"\nlto = true\n",
+        "env:\n  CARGO_PROFILE_DEV_DEBUG: line-tables-only",
+    ] {
+        assert!(bypasses_of_the_refusal(text).is_empty(), "{text}");
+    }
+
+    let profiles = |path: &str, text: &str| custom_profiles(path, text);
+    for (path, text, spelling) in [
+        (
+            "build.sh",
+            "cargo build --profile shipping --all-targets",
+            "--profile",
+        ),
+        ("build.sh", "cargo build --profile=shipping", "--profile="),
+        (
+            "ci.yml",
+            "args:\n  - cargo\n  - build\n  - --profile\n  - shipping\n",
+            "a list of arguments",
+        ),
+        (
+            "build.sh",
+            "cargo build --config 'profile.shipping.inherits=\"dev\"'",
+            "--config",
+        ),
+        (
+            "build.sh",
+            "export CARGO_PROFILE_SHIPPING_INHERITS=dev",
+            "a variable",
+        ),
+        (
+            "crates/x/Cargo.toml",
+            "[profile.shipping]\ninherits = \"dev\"\n",
+            "a table",
+        ),
+        (
+            ".cargo/config.toml",
+            "[profile.shipping.package.\"*\"]\nopt-level = 3\n",
+            "a table of a package of a profile",
+        ),
+        (
+            "Cargo.toml",
+            "[profile]\nshipping.inherits = \"dev\"\n",
+            "a key under [profile]",
+        ),
+        (
+            "Cargo.toml",
+            "profile.shipping.inherits = \"dev\"\n",
+            "a dotted key",
+        ),
+        (
+            "Cargo.toml",
+            "profile = { shipping = { inherits = \"dev\" } }\n",
+            "an inline table",
+        ),
+        (
+            "other.sh",
+            "rustup toolchain install stable --profile minimal",
+            "a profile of another tool, in a file that does not name it",
+        ),
+    ] {
+        assert!(
+            !profiles(path, text).is_empty(),
+            "{spelling} was not seen: {text}"
+        );
+    }
+    for (path, text) in [
+        ("build.sh", "cargo build --release --locked"),
+        ("build.sh", "cargo build --profile release"),
+        ("build.sh", "cargo test --profile dev"),
+        ("build.sh", "# cargo build --profile shipping"),
+        (
+            "ci.yml",
+            "env:\n  CARGO_PROFILE_DEV_DEBUG: line-tables-only",
+        ),
+        ("Cargo.toml", "[profile.release]\npanic = \"abort\"\n"),
+        ("Cargo.toml", "[profile.dev.package.\"*\"]\nopt-level = 2\n"),
+        ("Cargo.toml", "[dependencies]\nprofile = \"1\"\n"),
+        (
+            "Makefile",
+            "rustup toolchain install nightly --profile minimal",
+        ),
+        (
+            "crates/a/src/profile.json",
+            "{\"profile.json\": 1, \"user.profile.name\": 2}",
+        ),
+    ] {
+        // A key named `profile` under `[dependencies]` is not a profile table.
+        let found = profiles(path, text);
+        assert!(found.is_empty(), "{path}: {text}: {found:?}");
+    }
+}
+
+/// CHATGPT-2 says what the guards read, and the lists they read are the lists the clause names:
+/// every directory the walk leaves out, every kind of file it leaves out, the spellings it refuses
+/// and the profiles it allows.
+#[test]
+fn the_clause_names_what_the_command_guard_reads_and_leaves_out() {
+    let spec = std::fs::read_to_string(workspace().join("docs/specs/chatgpt-sign-in.md"))
+        .expect("the spec");
+    let body = clause(&spec, "CHATGPT-2");
+    let mut missing = Vec::new();
+    for name in NOT_WALKED
+        .iter()
+        .chain(NOT_WALKED_FOR_COMMANDS.iter())
+        .chain(LOCK_FILES.iter())
+        .chain(BUILT_IN_PROFILES.iter())
+        .chain([SPECS, "Cargo.toml", ".rs"].iter())
+    {
+        if !body.contains(&format!("`{name}`")) {
+            missing.push((*name).to_string());
+        }
+    }
+    for (spelling, _) in BYPASSES_OF_THE_REFUSAL {
+        // The spelling is in the form `squeezed` gives it, and the clause names the flag or the
+        // setting, so what is looked for is the part of it a person would write.
+        let written = spelling.replace("cargo-profile-release", "CARGO_PROFILE_RELEASE");
+        if !body.contains(&written) {
+            missing.push(written);
+        }
+    }
+    for (file, word) in NOT_A_CARGO_PROFILE {
+        if !body.contains(&format!("`{file}`")) || !body.contains(&format!("`{word}`")) {
+            missing.push(format!("{file}: {word}"));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "CHATGPT-2 does not name what the guard reads or leaves out: {missing:?}"
+    );
+    // And what the clause allows `--all-features` to is what the test allows.
+    for (file, _, _, _) in MAY_ASK_FOR_ALL_FEATURES {
+        assert!(
+            body.contains(&format!("`{file}`")),
+            "CHATGPT-2 does not name `{file}`, which may ask for every feature"
+        );
+    }
+}
+
+/// The walk for commands reads a file whatever it is called, which the verifier showed it did not:
+/// a script that ends in `.bash`, a `Justfile`, a `Makefile.local`. It leaves out the kinds of file
+/// the clause names and no other.
+#[test]
+fn the_command_walk_reads_a_file_whatever_it_is_called_and_leaves_out_what_the_clause_names() {
+    let at = |path: &str| workspace().join(path);
+    for read in [
+        "build.bash",
+        "Justfile",
+        "Makefile.local",
+        "scripts/release.zsh",
+        "deploy",
+        "ci/build.cmd",
+        "build.sh.in",
+        "block.sh",
+        "clock.py",
+        "build.lock",
+        "tools/Taskfile.yml",
+        "fuzz/run",
+    ] {
+        assert!(
+            holds_a_command(&at(read)),
+            "{read} is a file the walk does not read"
+        );
+    }
+    for left_out in [
+        "crates/x/src/lib.rs",
+        "crates/x/Cargo.toml",
+        "Cargo.lock",
+        "fuzz/Cargo.lock",
+        "ui/pnpm-lock.yaml",
+        "docs/specs/chatgpt-sign-in.md",
+        "docs/specs/tools/run.md",
+    ] {
+        assert!(
+            !holds_a_command(&at(left_out)),
+            "{left_out} is a file the walk reads"
+        );
+    }
+    // And what the walk found is most of the repository's text: the files of every kind a command
+    // could be kept in, which the lists it replaced did not name.
+    let paths: Vec<String> = command_files().into_iter().map(|(path, _)| path).collect();
+    assert!(
+        paths.len() > 600,
+        "{} files were read, so this walk would pass by reading almost nothing",
+        paths.len()
+    );
+    for extension in ["css", "svg", "html", "ftl", "txt", "properties", "xml"] {
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with(&format!(".{extension}"))),
+            "no .{extension} file was read"
+        );
+    }
+    assert!(
+        !paths.iter().any(|path| path.ends_with(".rs")),
+        "a Rust source was read"
     );
 }
 

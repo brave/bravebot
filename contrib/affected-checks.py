@@ -37,6 +37,38 @@ NOTHING = frozenset()
 DECIDES = ("Makefile", "contrib/affected-checks.py")
 DECIDES_UNDER = (".github/workflows/",)
 
+# Files the guard of the cli crate's tests that reads every build command reads and pins a command
+# in: it counts the lines that ask for every feature in each, so a change to one can change what
+# that test finds whatever else the change is. They add the Rust checks to what their own area
+# needs.
+READ_BY_THE_SEAM_GUARD = frozenset({
+    ".envrc.example",
+    ".githooks/pre-commit",
+    "Dockerfile.cross",
+    "agents/pr_worktree.py",
+    "agents/pr_worktree_selftest.py",
+    "agents/skills/maintenance/maintenance.py",
+    "deny.toml",
+    "docs/development/fuzzing.md",
+    "docs/development/releasing.md",
+    "docs/website/docs/development.md",
+    "docs/website/package.json",
+    "fuzz/Cargo.lock",
+    "fuzz/Cargo.toml",
+    "mobile/package.json",
+    "package.json",
+    "packages/agent-client/README.md",
+    "packages/agent-client/package.json",
+    "ui/README.md",
+    "ui/docs/development.md",
+    "ui/docs/testing.md",
+    "ui/docs/v0.9.0-implementation.md",
+    "ui/package.json",
+    "ui/pnpm-lock.yaml",
+    "ui/scripts/build-bridge.sh",
+    "ui/src/renderer/App.tsx",
+})
+
 # Outside crates/, and read by a test all the same.
 READ_BY_RUST = ("CHANGELOG.md",)
 
@@ -113,6 +145,14 @@ CONTAINERS = {"rust": ("check-msrv", "check-windows", "check-linux")}
 def classify(path, desktop, fuzz):
     """The areas a change to `path` could affect, where `desktop` is desktop_crates() and `fuzz`
     is fuzz_crates()."""
+    found = classify_by_area(path, desktop, fuzz)
+    if path in READ_BY_THE_SEAM_GUARD:
+        found = found | {"rust"}
+    return found
+
+
+def classify_by_area(path, desktop, fuzz):
+    """The areas `path` belongs to by what it is, before a test that reads it is counted."""
     if path in DECIDES or path.startswith(DECIDES_UNDER):
         return EVERYTHING
     if path == "Cargo.toml":
@@ -354,9 +394,9 @@ CASES = (
     ("somewhere-new/file.txt", EVERYTHING),
     ("Cargo.lock", {"rust", "ui", "build", "deps"}),
     ("Cargo.toml", {"rust", "ui", "build", "deps", "fuzz"}),
-    ("deny.toml", {"deps"}),
+    ("deny.toml", {"deps", "rust"}),
     ("contrib/check-deny-reasons.py", {"deps"}),
-    ("Dockerfile.cross", {"build"}),
+    ("Dockerfile.cross", {"build", "rust"}),
     ("crates/tui/src/render.rs", {"rust"}),
     ("crates/core/src/policy.rs", {"rust", "ui", "fuzz"}),
     ("crates/agent/src/regex.rs", {"rust", "fuzz"}),
@@ -366,9 +406,9 @@ CASES = (
     ("fuzz/fuzz_targets/regex.rs", {"fuzz"}),
     ("fuzz/seeds/regex/0a1b", {"fuzz"}),
     ("fuzz/dictionaries/regex.dict", {"fuzz"}),
-    ("fuzz/Cargo.toml", {"fuzz", "deps"}),
-    ("fuzz/Cargo.lock", {"fuzz", "deps"}),
-    ("docs/development/fuzzing.md", NOTHING),
+    ("fuzz/Cargo.toml", {"fuzz", "deps", "rust"}),
+    ("fuzz/Cargo.lock", {"fuzz", "deps", "rust"}),
+    ("docs/development/fuzzing.md", {"rust"}),
     ("crates/config/build.rs", {"rust", "build"}),
     ("docs/specs/layering.md", {"rust"}),
     ("docs/specs/credential-protection.md", {"rust"}),
@@ -381,8 +421,8 @@ CASES = (
     ("docs/website/pnpm-lock.yaml", {"docs", "npm"}),
     ("docs/website/pnpm-workspace.yaml", {"docs", "npm"}),
     ("ui/src/App.tsx", {"ui"}),
-    ("ui/package.json", {"ui", "npm"}),
-    ("ui/pnpm-lock.yaml", {"ui", "npm"}),
+    ("ui/package.json", {"ui", "npm", "rust"}),
+    ("ui/pnpm-lock.yaml", {"ui", "npm", "rust"}),
     ("ui/pnpm-workspace.yaml", {"ui", "npm"}),
     ("ui/scripts/windows-installer.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/check-windows-install.mjs", {"ui", "build", "installers"}),
@@ -396,7 +436,7 @@ CASES = (
     ("packages/agent-client/pnpm-workspace.yaml", {"ui", "mobile", "npm"}),
     ("mobile/src/App.tsx", {"mobile"}),
     ("mobile/ios/Bravebot.xcodeproj/project.pbxproj", {"mobile"}),
-    ("mobile/package.json", {"mobile", "npm"}),
+    ("mobile/package.json", {"mobile", "npm", "rust"}),
     ("mobile/pnpm-lock.yaml", {"mobile", "npm"}),
     ("mobile/pnpm-workspace.yaml", {"mobile", "npm"}),
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),

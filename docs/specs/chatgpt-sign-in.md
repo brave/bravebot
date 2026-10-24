@@ -173,17 +173,37 @@ no more.
 - One reads every `Cargo.toml` in the repository, the fuzz package's included, and every `.cargo/config*`
   file, and walks none of `target`, `node_modules`, `.git`, `.worktrees` and `__pycache__`. It fails if the
   feature is named anywhere but its declaration in `bravebot-skus` and `bravebot-config` and the
-  `[dev-dependencies]` of the three crates above.
-- One reads the commands that build: `Makefile`, `Dockerfile.cross`, `deny.toml`, `install.sh`,
-  `install.ps1`, the `README.md` and `package.json` files at the root and in the packages that build, and the
-  scripts, workflows, hooks, manifests and documents under `.github`, `.githooks`, `ui/scripts`, `ui/docs`,
-  `mobile/scripts`, `npm/scripts`, `npm/bin`, `packages/scripts`, `contrib`, `agents`, `docs/development`
-  and `fuzz`. It joins a command that goes on over several lines. It fails if a command passes the feature, or
-  asks for every feature (`--all-features`, or `all-features = true` in `deny.toml`) and is not one of the
-  twelve the test names with their file and how often each occurs: the `cargo clippy` runs, which compile and
-  ship nothing, the descriptions of them in `ui/docs`, and the setting of `deny.toml`, which reads the
-  dependency graph and compiles nothing. It reads no source file, nothing under `docs/specs`, no script whose
-  name marks it as a test of another, and no command a person types elsewhere.
+  `[dev-dependencies]` of the three crates above. It decodes the escapes of a TOML string that write a
+  character by its number (`\u002d`) before it looks, so `"test\u002dhosts"` is the feature, because the
+  workspace has no TOML parser and the crate of the test depends on none. It fails as
+  well if one of these files defines a profile cargo does not have of its own, or spells a way to undo what
+  refuses the seam in a release, both as the next test does.
+- One reads every text file of the repository, whatever it is called or ends in: a script that ends in
+  `.bash`, a `Justfile` and a `Makefile.local` are read as a `Makefile` is. It walks none of the directories
+  above or of `dist`, `out`, `build` and `.docusaurus`, which are build output, and leaves out `docs/specs`,
+  which says in words what the test looks for, every `Cargo.toml`, which the first test reads, every Rust
+  source (`.rs`), which the third reads for who may name a host, and the lock files `Cargo.lock`,
+  `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` and `Podfile.lock`. A file with a NUL byte in it is not
+  text and is not read. It reads no command a person types elsewhere. It fails if any file names the feature
+  or the variable that names a stand-in at all, in a flag, a list of arguments, a variable or a line of its
+  own, in capitals, with `_` for `-`, quoted in pieces, split over lines or written with the escapes of a
+  string. It fails if any file asks for every feature (`--all-features`, `all_features`, or
+  `all-features = true` in `deny.toml`) in a form the lines of the file do not show, or on a line that is not
+  one of the thirteen the test names with their file and how often each occurs: the `cargo clippy` runs in
+  `Makefile`, `.github/workflows/ci.yml`, `.githooks/pre-commit`, `contrib/check-lint-increase.py`,
+  `agents/pr_worktree.py` and `agents/skills/maintenance/maintenance.py`, which compile and ship nothing, the
+  plan `agents/pr_worktree_selftest.py` checks the second of those against, which runs nothing, the
+  descriptions of them in `ui/docs/testing.md`, `ui/docs/development.md` and
+  `ui/docs/v0.9.0-implementation.md`, and the setting of `deny.toml`, which reads the dependency graph and
+  compiles nothing. It fails if any file spells a way to undo the two things a release has that the refusal
+  reads: `debug-assertions` in any form (`-C debug-assertions`, a profile setting), `panic=unwind`, or
+  `CARGO_PROFILE_RELEASE_` (a variable, or a `--config` of the release profile), however they are quoted,
+  split or capitalised. It fails if any file names a profile cargo does not have of its own, by `--profile`,
+  by a `--config profile.<name>`, by a `CARGO_PROFILE_<NAME>_` variable or by a table, since one can inherit
+  `dev` and be built with `--all-targets`. The profiles cargo has are `dev`, `release`, `test` and `bench`.
+  The `--profile` of another tool is named by its file and word: `minimal` in `Makefile` and
+  `docs/development/fuzzing.md`, which is `rustup`'s, and `<name>` in `Makefile`, which is the AWS CLI's in a
+  message. A test holds the lists in this paragraph to the lists the test reads.
 - One reads the source a release build compiles, which is every file under a crate's `src` except test
   modules, the files only a test module declares, and comments, and pins who may name a host. `Hosts::at` has
   no caller. `Hosts::compiled_in` has two, the agent's one renewer and the sign-in command.
@@ -220,7 +240,10 @@ compiled in.
 `verified-by: bravebot_cli::layering::the_seam_reader_finds_a_seam_wherever_a_build_that_ships_reads_it`
 `verified-by: bravebot_cli::layering::a_build_that_aborts_on_a_panic_or_asserts_nothing_refuses_the_seam`
 `verified-by: bravebot_cli::layering::no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_by_name`
-`verified-by: bravebot_cli::layering::the_command_reader_sees_a_seam_passed_over_a_continuation_and_not_the_word`
+`verified-by: bravebot_cli::layering::the_command_reader_sees_a_seam_and_every_feature_however_a_command_spells_them`
+`verified-by: bravebot_cli::layering::the_command_reader_sees_what_undoes_the_refusal_and_a_profile_of_its_own`
+`verified-by: bravebot_cli::layering::the_command_walk_reads_a_file_whatever_it_is_called_and_leaves_out_what_the_clause_names`
+`verified-by: bravebot_cli::layering::the_clause_names_what_the_command_guard_reads_and_leaves_out`
 `verified-by: bravebot_cli::layering::only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the_seam`
 `verified-by: bravebot_cli::layering::the_caller_scan_reads_code_and_leaves_out_tests_and_comments`
 `verified-by: bravebot_cli::layering::the_call_and_signature_readers_split_where_rust_splits`
@@ -1545,6 +1568,17 @@ These are the places where another spec states something about this service, eac
   tokens where it says. A person who runs that binary from `target/debug` as their own carries the seam.
   `cargo test --workspace` gives the feature to every workspace binary it builds, and `cargo test --release`
   and `cargo build --release --all-targets` stop at the guard that refuses a release build with it.
+- The guards of the `test-hosts` seam read text. They do not read a command kept under `docs/specs`, in a Rust
+  source (a `build.rs`, or a test that runs `cargo`), in a file with a NUL byte, in a directory named
+  `target`, `node_modules`, `.git`, `.worktrees`, `__pycache__`, `dist`, `out`, `build` or `.docusaurus` (a
+  manifest under `target` is not read either), or outside the repository, such as a person's
+  `~/.cargo/config.toml` or a variable set on a build machine, and they do not see a command that builds a
+  name or a flag when it runs, such as `f=test-; cargo build --features "${f}hosts"`. A release built that way
+  carries the seam without a test of this repository failing, if it also turns debug assertions on and makes a
+  panic unwind, since the refusal at compile time stops a build with either of them as a release has them.
+  Nobody has built one. The guards run with the Rust checks. A change to a file they name and count lines in
+  (`contrib/affected-checks.py` lists them) runs those checks whatever else it is, and a command added to a
+  file they only scan, in a change that touches no Rust, is found when the Rust checks next run.
 - Whether a third-party program may use a subscription this way is not this spec's to settle
   ([Decisions left open](#decisions-left-open)). The design assumes a person is allowed to, and an answer of
   no ends it.
