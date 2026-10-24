@@ -16,8 +16,10 @@ Every job follows the same steps:
 4. Commit the ledger the skill wrote, if it has one, on a branch and open a pull request. A ledger
    records what was reviewed, so the next run, on any machine, reads only what is new.
 
-Filed issues are assigned to netzenbot, and `/pr-fix <issue>` implements one. Fixing is a separate
-step from finding, and a run never does both.
+Filed issues are assigned to netzenbot, and `/pr-fix <issue>` implements one.
+[`/implement-issues`](../../agents/skills/implement-issues/SKILL.md) implements a list of them, or
+every issue a search returns, in one pull request, and `/pr-fix <pr>` handles its review comments.
+Fixing is a separate step from finding, and a run never does both.
 
 ## The jobs
 
