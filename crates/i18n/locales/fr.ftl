@@ -815,6 +815,8 @@ ceiling-stop-in-a-call = le modèle a atteint sa limite de sortie de { $tokens }
 ceiling-stop-thinking = le modèle a atteint sa limite de sortie de { $tokens } jetons en réfléchissant, avant d'avoir rien écrit ; il lui est redemandé
 ceiling-stop-silent = le modèle a atteint sa limite de sortie de { $tokens } jetons avant d'avoir rien écrit ; il lui est redemandé
 fallback-model-in-use = { $from } a échoué ({ $category }) ; ce tour passe à { $to }
+# Pareil quand l'échec est celui du compte ChatGPT, qui est dit dans sa propre phrase.
+fallback-model-in-use-account = { $from } a échoué ({ $problem }) ; ce tour passe à { $to }
 # Ce que compte une limite, sous la forme du nom que les phrases suivantes complètent.
 limit-unit-tokens = jetons
 limit-unit-credits = crédits
@@ -2981,6 +2983,13 @@ desktop-chatgpt-usage-limit-wait =
        *[other] OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez dans environ { $minutes } minutes.
     }
 desktop-chatgpt-not-permitted = OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon, donc utilisez un autre compte ou un modèle d'un autre service.
+# Ce que la fenêtre raconte quand un tour continue ou change de modèle après un échec du compte en chemin :
+# un résumé qu'il n'a pas pu faire, et le modèle qu'il quitte pour le fallbackModel de la personne. Le premier
+# est suivi de la phrase du compte ci-dessus, donc chaque ligne est une seule phrase.
+desktop-compaction-failed = La conversation n'a pas pu être résumée, donc le tour continue avec les messages qu'il a.
+desktop-chatgpt-fell-back-rate-limited = Ce tour passe de { $from } à { $to } parce que la connexion ChatGPT n'a pas pu être renouvelée pendant qu'OpenAI limite les requêtes.
+desktop-chatgpt-fell-back-unavailable = Ce tour passe de { $from } à { $to } parce que la connexion ChatGPT n'a pas pu être renouvelée pendant que le service de connexion d'OpenAI est indisponible.
+desktop-chatgpt-fell-back = Ce tour passe de { $from } à { $to } parce que le compte ChatGPT n'a pas pu être utilisé.
 # Les avertissements du sélecteur de modèle, un pour chaque façon dont les modèles du compte n'ont pas pu
 # être listés. Le premier concerne un fichier de connexion illisible quand une entrée des réglages nomme les
 # modèles, ce qui n'offre aucune ligne. Le deuxième concerne une liste qui n'a pas pu être lue, où le

@@ -104,6 +104,31 @@ pub(crate) fn of_failure(failure: AccountFailure) -> Said {
     }
 }
 
+/// What the window narrates where a summary of the conversation could not be made and the account was
+/// what failed: that the turn goes on without one, and then the account's sentence, one sentence
+/// each.
+pub(crate) fn of_summary_failure(failure: AccountFailure) -> [Said; 2] {
+    [
+        Said::plain(t!(desktop_compaction_failed)),
+        of_failure(failure),
+    ]
+}
+
+/// What the window narrates where a turn moved off its model for the person's fallback model and
+/// the account was what failed. Only a renewal that was rate-limited or met an unavailable service
+/// reaches it, since every other failure of the account is a category no fallback answers for.
+pub(crate) fn of_fall_back(failure: AccountFailure, from: &str, to: &str) -> Said {
+    Said::plain(match failure {
+        AccountFailure::Renewal(RenewalFailure::RateLimited) => {
+            t!(desktop_chatgpt_fell_back_rate_limited, from = from, to = to)
+        }
+        AccountFailure::Renewal(RenewalFailure::Unavailable) => {
+            t!(desktop_chatgpt_fell_back_unavailable, from = from, to = to)
+        }
+        _ => t!(desktop_chatgpt_fell_back, from = from, to = to),
+    })
+}
+
 /// The warning the model picker shows where the account's models could not be listed, or `None`
 /// where there is nothing to warn of: nobody signed in, or a listing that was read, empty or not.
 pub(crate) fn of_listing(account: &AccountModels) -> Option<Said> {
@@ -248,6 +273,38 @@ mod tests {
         assert!(eleven.contains("about 11 minutes."), "{eleven}");
         let one = said(Some(Duration::from_secs(5)));
         assert!(one.contains("about 1 minute."), "{one}");
+    }
+
+    /// What the window narrates where a summary could not be made and the account failed is two
+    /// sentences, each one line: that the turn goes on, and the account's own sentence with its
+    /// command. A move to the fallback model names no command and says which model it moves from and
+    /// to, and a failure that cannot reach it is still said in a sentence.
+    #[test]
+    fn the_notices_of_a_turn_that_goes_on_after_the_account_failed_are_sentences_of_the_window() {
+        for failure in every_failure() {
+            let [goes_on, why] = of_summary_failure(failure);
+            assert_one_sentence_naming(&goes_on, "the line that the turn goes on");
+            assert!(goes_on.command.is_none());
+            assert_eq!(why, of_failure(failure), "{failure:?}");
+        }
+        for failure in every_failure() {
+            let said = of_fall_back(failure, "chatgpt/gpt-a", "chatgpt/gpt-b");
+            assert_one_sentence_naming(&said, &format!("{failure:?}"));
+            assert!(said.command.is_none(), "{failure:?}");
+            assert!(
+                said.sentence.contains("chatgpt/gpt-a") && said.sentence.contains("chatgpt/gpt-b"),
+                "{failure:?}: {}",
+                said.sentence
+            );
+        }
+        let sentence = |failure| of_fall_back(failure, "a", "b").sentence;
+        assert!(
+            sentence(AccountFailure::Renewal(RenewalFailure::RateLimited))
+                .contains("limiting requests")
+        );
+        assert!(
+            sentence(AccountFailure::Renewal(RenewalFailure::Unavailable)).contains("unavailable")
+        );
     }
 
     /// The model picker's warnings are held to the same rule, are told apart, and say nothing where

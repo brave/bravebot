@@ -2596,8 +2596,13 @@ model ends the turn. A delegate, and a turn running on the model a definition na
 drew.
 
 The person is told which model failed and which one the turn moved to, and the trail records both
-names with the category. The model that answered is not then reported as a substitution for the
-session's own: it is the model the person named for this case.
+names with the category. Where the failure was one of the ChatGPT account's own, a renewal that was
+rate-limited or met an unavailable service, the line says it in that failure's sentence
+([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)) beside the model names, and the front end is handed the
+failure as a closed value so that the window can word it itself. The category of such a failure is
+the one its closed value maps to, and the agent reads no status for it. The model that answered is
+not then reported as a substitution for the session's own: it is the model the person named for this
+case.
 
 **Why.** A person running a long turn against a busy model has to notice the failure and switch by
 hand. The name is configuration, so naming it is the endorsement for the request field it lands in,
@@ -2608,6 +2613,9 @@ as the `model` key is, and the switch is decided by a category the driver derive
 `verified-by: bravebot_agent::turn::a_fallback_that_is_the_model_that_failed_is_not_asked_again`
 `verified-by: bravebot_agent::turn::a_failure_that_is_not_an_overload_does_not_move_the_turn_to_the_fallback`
 `verified-by: bravebot_agent::turn::a_fallback_another_service_would_answer_is_not_used`
+`verified-by: bravebot_agent::turn::round_steps::a_move_to_the_fallback_after_the_accounts_failure_says_the_accounts_sentence`
+`verified-by: bravebot_ui_bridge::notice_tests::a_move_to_the_fallback_after_the_account_failed_reaches_the_window_as_its_own_sentence`
+`verified-by: bravebot_ui_bridge::history::a_move_to_the_fallback_model_reaches_the_window_as_a_narration`
 `verified-by: bravebot_agent::turn::a_turn_moves_to_the_fallback_once`
 `verified-by: bravebot_agent::turn::a_delegate_does_not_fall_back`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_name_the_fallback_model`

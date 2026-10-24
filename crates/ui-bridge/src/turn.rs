@@ -20,7 +20,7 @@ use bravebot_agent::confirm::{
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
     ToolListRequest, VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
-use bravebot_agent::report::{Activity, Landing, Phase, Reporter, Shown};
+use bravebot_agent::report::{self, Activity, Landing, Phase, Reporter, Shown, Why};
 use bravebot_core::ask::{Answer, AnswerMemo, Asking};
 use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::Sink;
@@ -298,6 +298,15 @@ impl BridgeReporter {
     fn say(&self, name: &'static str, data: serde_json::Value) {
         self.emitter.send(Event::new(name, &self.session, data));
     }
+
+    /// A narration the bridge words itself: the sentence, and the words of it that are a command,
+    /// or `null`, so the window draws them as code without reading the sentence for them.
+    fn narrate_said(&self, said: &crate::account_words::Said) {
+        self.say(
+            "narration",
+            json!({ "text": said.sentence, "command": said.command }),
+        );
+    }
 }
 
 impl Reporter for BridgeReporter {
@@ -369,6 +378,34 @@ impl Reporter for BridgeReporter {
             return;
         }
         self.say("narration", json!({ "text": text }));
+    }
+
+    /// A summary could not be made and the turn goes on without it. Where it was the ChatGPT
+    /// account that failed the window is told in its own sentences, with the command the second
+    /// names beside it to draw as code. Any other failure is said in the terminal's words, as it
+    /// was.
+    fn summary_failed(&mut self, why: Why) {
+        match why {
+            Why::Account(failure) => {
+                for said in crate::account_words::of_summary_failure(failure) {
+                    self.narrate_said(&said);
+                }
+            }
+            Why::Category(_) => self.narration(report::summary_failed_in_the_terminals_words(why)),
+        }
+    }
+
+    /// The turn moved to the person's fallback model. Said in the window's own words where the
+    /// ChatGPT account was what failed, and in the terminal's otherwise.
+    fn fell_back(&mut self, from: &str, to: &str, why: Why) {
+        match why {
+            Why::Account(failure) => {
+                self.narrate_said(&crate::account_words::of_fall_back(failure, from, to));
+            }
+            Why::Category(_) => {
+                self.narration(report::fell_back_in_the_terminals_words(from, to, why));
+            }
+        }
     }
 
     /// What the model has thought since the last event, for the window to draw on request
@@ -1025,3 +1062,7 @@ impl bravebot_agent::servers::Asker for BridgeConfirmer {
 #[cfg(test)]
 #[path = "answering_tests.rs"]
 mod answering_tests;
+
+#[cfg(test)]
+#[path = "notice_tests.rs"]
+mod notice_tests;

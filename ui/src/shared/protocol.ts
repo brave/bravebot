@@ -970,7 +970,8 @@ export interface EventMap {
   composing: { call: string | null }
   /** What the model has thought since the last one, never empty. A delegate's is not sent (VIEW-34). */
   thinking: { text: string }
-  narration: { text: string }
+  /** `command` is the words of `text` that are a command to run, drawn as code, where the notice names one. */
+  narration: { text: string; command?: string | null }
   'tool.started': Activity
   'tool.finished': Activity
   'check.started': Checking

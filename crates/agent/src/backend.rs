@@ -68,13 +68,7 @@ impl fmt::Display for BackendError {
             // The sentence is the catalog's, since the crate that names the condition has none. The
             // status of a refusal is said after it, as the status of any other refusal is said.
             Self::Aichat(ChatError::Account(failure)) => {
-                let said = crate::chatgpt::said_of_failure(*failure);
-                match failure.status() {
-                    Some(status) => {
-                        f.write_str(&t!(failure_with_status, what = said, status = status))
-                    }
-                    None => f.write_str(&said),
-                }
+                f.write_str(&crate::chatgpt::told_of_failure(*failure))
             }
             Self::Aichat(e) => write!(f, "{e}"),
             Self::Bedrock(e) => write!(f, "{e}"),

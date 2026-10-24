@@ -17,7 +17,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildSync } from 'esbuild'
+import { buildSync, transformSync } from 'esbuild'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -695,22 +695,35 @@ test('a picker warning draws the command it names as code and the rest as text',
  *
  * A bare `<code>` takes the browser's own monospace, a different face and size from the window's other
  * code, so each surface that draws one gives it `--type-code`, as the cards that already draw inline
- * code do. The stylesheets are read as text, since the cascade is the browser's to resolve: what is
- * held is that a rule for the code in each surface's paragraphs names the token and not another font.
+ * code do. The rule has to match only the element the sentence is drawn in, since a wider one
+ * restyles code the sentence does not draw (the saved run's, beside a run's sentence).
+ *
+ * esbuild parses each stylesheet, so a rule inside a comment is no rule here. The surface's code has
+ * to be set by exactly one rule across the stylesheets, with the selector written here, so a second
+ * rule that names the surface's code and sets a font is found, whatever its specificity. The cascade
+ * itself is the browser's: `drive-models.mjs` reads the computed font of the picker's warning.
  */
-test('the code in a failure card and a picker warning is set in the code type role', () => {
-  const rule = (file, selector) => {
-    const css = readFileSync(join('src/renderer/styles', file), 'utf8')
-    const at = css.indexOf(`${selector} {`)
-    assert.ok(at >= 0, `${file} has no rule for ${selector}`)
-    return css.slice(at, css.indexOf('}', at))
-  }
-  for (const [file, selector] of [
-    ['cards.css', '.error-card p code'],
-    ['transcript.css', '.plan-ended .plan-detail code'],
-    ['menus.css', '.model-status code'],
+test('the code in a failure card, a narration and a picker warning is set in the code type role', () => {
+  const directory = 'src/renderer/styles'
+  const rules = readdirSync(directory).filter((name) => name.endsWith('.css')).flatMap((name) => {
+    const { code } = transformSync(readFileSync(join(directory, name), 'utf8'), { loader: 'css' })
+    // As esbuild prints a top-level rule: its selectors one to a line, then one declaration to a line.
+    return [...code.matchAll(/^([^\s@}][^{]*?) \{\n((?:  [^\n]*\n)*)\}$/gm)].map(([, selectors, body]) => ({
+      file: name,
+      selectors: selectors.split(',\n'),
+      declarations: Object.fromEntries([...body.matchAll(/^  ([a-z-]+): (.*);$/gm)].map(([, property, value]) => [property, value.replace(/\s+/g, '')])),
+    }))
+  })
+  for (const [file, surface, selector] of [
+    ['cards.css', '.error-card', '.error-card p code'],
+    ['transcript.css', '.plan-detail', '.plan-ended .plan-detail code'],
+    ['menus.css', '.model-status', '.model-status code'],
+    ['activity.css', '.narration', '.narration code'],
   ]) {
-    assert.match(rule(file, selector), /font:\s*var\(--type-code\)/, `${selector} is not in the code type role`)
+    const setting = rules.filter((rule) => 'font' in rule.declarations || 'font-family' in rule.declarations || 'font-size' in rule.declarations)
+      .filter((rule) => rule.selectors.some((one) => one.includes(surface) && /(^|[\s>+~])code$/.test(one)))
+    assert.deepEqual(setting.map((rule) => [rule.file, rule.selectors]), [[file, [selector]]], `${surface}: the rules that set the font of its code`)
+    assert.equal(setting[0].declarations.font, 'var(--type-code)', `${selector} is not in the code type role`)
   }
 })
 

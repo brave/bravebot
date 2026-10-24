@@ -431,6 +431,18 @@ pub fn said_of_failure(failure: AccountFailure) -> String {
     }
 }
 
+/// [`said_of_failure`] with the status of a refusal that came with one after it, as the terminal's
+/// line for a failed turn, the one-shot run's report and the record of a session say it
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). The lines for a summary that
+/// could not be made and for a move to the fallback model say [`said_of_failure`] alone.
+pub fn told_of_failure(failure: AccountFailure) -> String {
+    let said = said_of_failure(failure);
+    match failure.status() {
+        Some(status) => t!(failure_with_status, what = said, status = status),
+        None => said,
+    }
+}
+
 /// The sentence for what a refusal that names the account says, from the message catalog
 /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
 ///

@@ -695,16 +695,15 @@ pub fn failure_reason(
 ) -> String {
     use bravebot_agent::Category;
     use bravebot_aichat::OpenCall;
-    // A failure of a ChatGPT account is said in the sentence of its own step (CHATGPT-8). A
-    // refusal that came with a status says it after the sentence, as any other refusal does. No
-    // count of tries follows, since the sentence says what to do and the category beside it says
-    // only what class the failure was.
+    // A failure of a ChatGPT account is said in the sentence of its own step (CHATGPT-8), with the
+    // status of a refusal that came with one after it, as the one-shot run says it: from the one
+    // function both call. No count of tries follows, since the sentence says what to do and the
+    // category beside it says only what class the failure was.
     if let Some(account) = diagnosis.account {
-        let mut said = bravebot_agent::chatgpt::said_of_failure(account);
-        if let Some(status) = account.status() {
-            said = t!(failure_with_status, what = said, status = status);
-        }
-        return t!(session_error, problem = said);
+        return t!(
+            session_error,
+            problem = bravebot_agent::chatgpt::told_of_failure(account)
+        );
     }
     let what: std::borrow::Cow<'_, str> = match diagnosis.category {
         Category::Unauthorized => t!(failure_unauthorized).into(),

@@ -56,7 +56,7 @@ export function apply(
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':
-        return { ...old, composing: null, thinking: '', entries: [...old.entries, t.narrated(message.data.text)] }
+        return { ...old, composing: null, thinking: '', entries: [...old.entries, t.narrated(message.data.text, message.data.command)] }
       case 'tool.started':
         return { ...old, composing: null, thinking: '', entries: [...old.entries, t.started(message.data)] }
       case 'tool.finished':

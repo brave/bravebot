@@ -565,15 +565,24 @@ Each sentence is a message of the catalog, in English and in French, chosen from
 prints for a failure of the account is that name. The one-shot run reports the sentence as the error of the
 failed turn, a goal run and a manifest run report it as the reason they stopped, and the terminal says it
 as the line for a failed turn, for a failed goal check and for a manifest run, in the language the person
-chose. The terminal's `/compact` and the line a turn narrates for a summary it could not make say it as
-well, where a summary that failed in any other way says the name of its category. The record of a session
-keeps the terminal's line in either front end. It is the whole reason, so no
+chose. The terminal's `/compact`, the line a turn narrates for a summary it could not make and the line it
+narrates for a move to the fallback model ([BACKEND-53](backends.md#BACKEND-53)) say it as well, where a
+failure of any other service says the name of its category. A turn hands those two notices to its front end
+as the closed value ([`Why`](../../crates/agent/src/report.rs)) and not as a sentence, so the terminal
+narrates the terminal's sentence and the window and an editor are told theirs, below. The record of a
+session keeps the terminal's line in either front end. It is the whole reason, so no
 count of tries follows it, since what it says to do ends it. A refusal that came in a reply says the wait
-it asked for in its sentence, in minutes rounded up, and its status after it, in each of them: "OpenAI says
-this ChatGPT account has reached its usage limit, and the service asked for a wait of about 10 minutes
-(HTTP 429)". A refusal reported in an event of the stream carries neither and is the sentence alone, as does
-every other failure of the account. A failure that carries no value is worded from its category, with its
-status and count.
+it asked for in its sentence, in minutes rounded up, in each of them. Its status follows the sentence in the
+terminal's line for a failed turn, a failed goal check and a manifest run, in the one-shot run's report, in
+a goal or manifest run's reason and in the record of a session: "OpenAI says this ChatGPT account has
+reached its usage limit, and the service asked for a wait of about 10 minutes (HTTP 429)". The terminal's
+`/compact`, the line a turn narrates for a summary it could not make, the line it narrates for a move to
+the fallback model, the window's sentence and an editor's error say the sentence alone, with no status or
+count after it, since each says a closed value the agent chose and nothing from a reply: "OpenAI says this
+ChatGPT account has reached its usage limit, and the service asked for a wait of about 10 minutes". A
+refusal reported in an event of the stream carries neither a wait nor a status and is the sentence alone, as
+does every other failure of the account. A failure that carries no value is worded from its category, with
+its status and count.
 
 The terminal's sentences are lower case, two sentences where a remedy follows, and write the command
 between backticks, none of which a window can draw as it is, so the desktop is sent sentences of its own,
@@ -588,6 +597,14 @@ since trying again changes nothing there. `accountMessage` is the description of
 `ui/src/renderer/failure.ts`, drawn by the error card and by the card of a run that stopped, with the
 command in a code element and everything else as text. A failure with no sentence is drawn from its
 category. An editor hosting a session is told the same sentence ([ACP-8](acp.md#ACP-8)).
+
+The window is told a summary the account could not make as two narrations of its own, one sentence each:
+that the turn goes on with the messages it has, and then the failure's sentence with its command beside it
+in `command`, which the narration row draws as code. A move to the fallback model after the account failed
+is one narration naming both models and the cause, which names no command. An editor is told the same
+lines as text. A failure of any other service is narrated in the terminal's words in all three, so the
+window's narration row holds the account's sentences in sentence case beside the terminal's own lines for
+any other service, and the window rewords neither.
 
 No code, `state`, `nonce`, verifier, challenge, token, claim, client or host identifier, reply body, header
 value or callback query reaches a trace, a log, an error message, a session record, a transcript, `doctor`,
@@ -649,11 +666,19 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_tui::app::a_goal_check_that_failed_on_the_chatgpt_account_says_its_own_sentence`
 `verified-by: bravebot_tui::app::a_manifest_run_that_failed_on_the_chatgpt_account_says_its_own_sentence`
 `verified-by: bravebot_tui::app::a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence`
+`verified-by: bravebot_tui::app::a_compact_the_account_refused_says_the_wait_and_no_status`
 `verified-by: bravebot_agent::chatgpt_compaction::a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence`
 `verified-by: bravebot_agent::report::a_failed_summary_says_the_accounts_sentence_where_it_was_the_account_and_the_category_otherwise`
+`verified-by: bravebot_agent::report::the_line_for_a_summary_the_account_refused_has_the_wait_and_no_status`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category`
 `verified-by: bravebot_ui_bridge::account_words::the_windows_sentence_is_one_sentence_in_sentence_case_and_names_its_command_once`
 `verified-by: bravebot_ui_bridge::account_words::the_command_is_named_where_it_is_the_remedy_and_a_wait_is_said_in_minutes`
+`verified-by: bravebot_ui_bridge::account_words::the_notices_of_a_turn_that_goes_on_after_the_account_failed_are_sentences_of_the_window`
+`verified-by: bravebot_ui_bridge::history::a_summary_that_failed_on_the_account_reaches_the_window_in_the_windows_words`
+`verified-by: bravebot_ui_bridge::acp::a_summary_that_failed_on_the_chatgpt_account_is_told_to_the_editor_in_the_windows_words`
+`verified-by: bravebot_tui::app::the_terminal_narrates_a_summary_that_failed_on_the_account_in_the_terminals_words`
+`verified-by: bravebot_agent::turn::round_steps::a_move_to_the_fallback_after_the_accounts_failure_says_the_accounts_sentence`
+`verified-by: bravebot_ui_bridge::notice_tests::a_move_to_the_fallback_after_the_account_failed_reaches_the_window_as_its_own_sentence`
 `verified-by: bravebot_ui_bridge::manifest::a_run_that_failed_on_the_chatgpt_account_says_the_windows_sentence_and_its_command`
 `verified-by: bravebot_ui_bridge::acp::a_turn_that_failed_on_the_chatgpt_account_tells_the_editor_which_command_signs_in`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_with_no_account_in_it_is_sent_with_no_account_name`
@@ -668,7 +693,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis`
 `verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
 `verified-by: bravebot_tui::app::a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the error card and the card of a run that stopped for a failure of the account and holds that the window's sentence is one paragraph with its command in a code element and no backtick, that markup in either the sentence or the command is drawn as characters, that a failure of any other service is described by its category, and that the code is set in the code type role; ui/scripts/agent-settings.test.mjs holds the sentence the bridge sends to the card's description, two sentences to two cards, and a failure with no sentence to the category's wording; ui/scripts/ux-state.test.mjs folds turn.error through the window's reducer and draws the real row, and ui/scripts/plan-card.test.mjs does the same for a run that failed; make check-ui runs them, and the governs list above holds failure.ts to existing)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the error card and the card of a run that stopped for a failure of the account and holds that the window's sentence is one paragraph with its command in a code element and no backtick, that markup in either the sentence or the command is drawn as characters, that a failure of any other service is described by its category, and that the code is set in the code type role; ui/scripts/agent-settings.test.mjs holds the sentence the bridge sends to the card's description, two sentences to two cards, and a failure with no sentence to the category's wording; ui/scripts/ux-state.test.mjs folds turn.error and a narration that names a command through the window's reducer and draws the real row, and ui/scripts/plan-card.test.mjs does the same for a run that failed; make check-ui runs them, and the governs list above holds failure.ts to existing)`
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_as_the_sign_in_failing`
 `verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
 `verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`

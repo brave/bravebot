@@ -35648,6 +35648,114 @@ mod tests {
         assert!(!said.contains("unauthorized"), "{said}");
     }
 
+    /// CHATGPT-8: a `/compact` that the account refused as a 429 with a wait says the refusal's
+    /// sentence, which holds the wait, and has no status after it, which the terminal's line for a
+    /// failed turn has. The error is the one the thread that summarises hands back, which
+    /// `summarise_on_a_worker` makes with `why_a_summary_failed`, for either refusal.
+    ///
+    /// The regression it rejects is the status of the refusal put after the sentence.
+    #[test]
+    fn a_compact_the_account_refused_says_the_wait_and_no_status() {
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            let failure = AccountFailure::Named {
+                refusal,
+                status: Some(429),
+                retry_after: Some(std::time::Duration::from_secs(600)),
+            };
+            let error = bravebot_agent::compact::CompactError::Chat(
+                bravebot_agent::backend::BackendError::from(ChatError::Account(failure)),
+            );
+            let done = Err(bravebot_agent::report::why_a_summary_failed(&error));
+            let mut session = having_sent(&["first question"]);
+            session.begin_aside();
+
+            compact_ended(&mut session, 100_000, &done, false);
+
+            let said = last_note(&session);
+            assert!(
+                said.contains(&bravebot_agent::chatgpt::said_of_failure(failure)),
+                "{refusal:?}: {said}"
+            );
+            assert!(
+                said.contains("a wait of about 10 minutes"),
+                "{refusal:?}: {said}"
+            );
+            assert!(
+                !said.contains("HTTP") && !said.contains("429"),
+                "{refusal:?}: {said}"
+            );
+        }
+    }
+
+    /// CHATGPT-8: the terminal narrates a summary that failed on the ChatGPT account in the terminal's
+    /// own words, the lower case sentence that writes the command between backticks, and says that the
+    /// turn goes on. The turn is the real one, reporting through the channel the terminal's loop reads,
+    /// on a session whose summary model is the account in a profile nobody signed in to, so nothing is
+    /// sent. The window and an editor are told the same failure in the window's words, which
+    /// `bravebot_ui_bridge` tests.
+    ///
+    /// The regression it rejects is the window's wording reaching the terminal, and the category's
+    /// name in place of the sentence.
+    #[test]
+    fn the_terminal_narrates_a_summary_that_failed_on_the_account_in_the_terminals_words() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-narrated-summary");
+        std::fs::create_dir_all(&root).expect("a project");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let config = a_config_needing_no_sign_in();
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("port the parser to the new lexer", "started on it"),
+            ("what about the error type", "widened it"),
+            ("now the tests", "updated them"),
+            ("carry on", "carrying on"),
+        ] {
+            conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+            conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+        }
+        conversation.measured(50_000);
+        let (to_main, from_worker) = mpsc::channel();
+        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
+        let task = Task::new("finish").with_model(Some("chatgpt/gpt-6-sol".to_string()));
+
+        let ended = turn::resume(
+            &config,
+            &Egress::new(),
+            &workspace,
+            &task,
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut Trail::new(),
+            bravebot_agent::workspace::trust_store(workspace.root()),
+            TrustedPrograms::new(),
+            None,
+            &Cancel::new(),
+        )
+        .outcome;
+
+        assert!(ended.is_err(), "a turn with no sign-in went through");
+        let mut session = having_sent(&["first question"]);
+        for message in from_worker.try_iter() {
+            if let crate::remote_confirm::ToMain::Narration(text) = message {
+                session.narrate(text);
+            }
+        }
+        let said = notes_of(&session).join("\n");
+        assert!(
+            said.contains(
+                "the conversation could not be summarised: not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in; continuing with the existing context"
+            ),
+            "{said}"
+        );
+        assert!(!said.contains("You are not signed in"), "{said}");
+    }
+
     /// CHATGPT-8: a goal check that failed on the ChatGPT account says that failure's own sentence in
     /// the line the person is told, which names the command that signs in again, and not the name of
     /// a category or of the condition. The check is the one the worker thread runs, on a model of the

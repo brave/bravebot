@@ -960,7 +960,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |
-| `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |
+| `narration` | `{ text }`, or `{ text, command }` | `Reporter::narration`, **empty ones dropped**; the bridge's own notices (a summary the ChatGPT account could not make, a move to the fallback model after it failed) carry `command`, the words of `text` that are a command to run, or `null` |
 | `tool.started` | `Activity` | `Reporter::tool_started` |
 | `tool.finished` | `Activity` | `Reporter::tool_finished` |
 | `check.started` | `{ lines }` or `{ file }` | `Reporter::check_started` |

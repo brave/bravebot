@@ -231,6 +231,8 @@
 .watch-turn leo-icon { flex: none; align-self: center; }
 /* Line breaks are kept: a manifest run narrates its goal and its plan as several lines. */
 .narration { font-style: italic; white-space: pre-wrap; }
+/* A command a notice names is code, in the code type role like the rest of the window's code. */
+.narration code { font: var(--type-code); overflow-wrap: anywhere; }
 .attached {
   overflow: hidden;
   white-space: nowrap;

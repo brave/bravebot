@@ -4,6 +4,8 @@ title: Hosting a session in an editor over the Agent Client Protocol
 status: normative
 governs:
   - crates/ui-bridge/src/acp.rs
+  - crates/ui-bridge/src/account_words.rs
+  - crates/ui-bridge/src/turn.rs
   - crates/ui-bridge/src/bin/bravebot-acp.rs
 documented-by: docs/website/docs/using/editors.md
 ---

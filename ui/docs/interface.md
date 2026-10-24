@@ -849,3 +849,13 @@ account says the bridge's own sentence for the step that failed in place of the 
 guidance, one sentence with the command it names drawn as code, on the error card and on the card
 of a run that stopped. Cancellation remains a separate outcome, and request-attempt counts and HTTP
 status appear only when known.
+
+A **narration** is a line of the transcript between a turn's tool calls, set in italics beside a file
+icon, with its line breaks kept. It is what the model said between two calls, the goal and plan a
+manifest run narrates, or a notice the bridge wrote: that a summary of the conversation could not be
+made, or that the turn moved to the fallback model. The bridge words a notice about a failure of the
+ChatGPT account itself, as one sentence in sentence case. The command such a sentence names arrives
+beside it as `command` and is drawn as code. A failure of any other service is narrated in the
+terminal's words, which are not in sentence case, name the failure's category and name no command, so
+the row mixes the two styles. What the model said is drawn as text whatever it holds: a word in it that
+looks like a command is not drawn as code, since only the bridge sends a `command`.

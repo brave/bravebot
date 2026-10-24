@@ -40,15 +40,17 @@ impl Editor {
 
     /// An adapter whose model is `model`, with the scripted endpoint configured as a gateway.
     fn on_model(model: &str, endpoint: &str, project: &Path) -> Self {
-        let settings = project.join("test-settings.json");
-        std::fs::write(
-            &settings,
-            json!({"model": model, "provider": {"acp-test": {
-                "options": {"baseURL": endpoint}, "models": {"test": {}}
-            }}})
-            .to_string(),
-        )
-        .unwrap();
+        Self::on_settings(json!({"model": model}), endpoint, project)
+    }
+
+    /// An adapter whose settings are `settings` and the scripted endpoint as a gateway besides.
+    fn on_settings(mut settings: Value, endpoint: &str, project: &Path) -> Self {
+        settings["provider"] = json!({"acp-test": {
+            "options": {"baseURL": endpoint}, "models": {"test": {}}
+        }});
+        let settings_file = project.join("test-settings.json");
+        std::fs::write(&settings_file, settings.to_string()).unwrap();
+        let settings = settings_file;
         let (sent, written) = mpsc::channel();
         Self {
             acp: Acp::new(
@@ -475,6 +477,58 @@ fn a_turn_that_failed_on_the_chatgpt_account_tells_the_editor_which_command_sign
     assert_eq!(
         done["error"]["message"], "the turn failed: refused",
         "{done}"
+    );
+}
+
+/// CHATGPT-8: a summary of the conversation that could not be made because the account's sign-in is
+/// not there is told to the editor in the window's own sentences, one each, the second naming the
+/// command that signs in again, and the prompt still ends normally on the model that was asked. The
+/// summary model is the account and the service said each earlier prompt filled its window, so the
+/// fourth prompt has exchanges to cut.
+///
+/// The faults this rejects: the terminal's lower case line with its backticks reaching the editor,
+/// and a prompt that fails because its summary could not be made.
+#[test]
+fn a_summary_that_failed_on_the_chatgpt_account_is_told_to_the_editor_in_the_windows_words() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let long = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5000000,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n";
+    let project = project("account-summary");
+    let (config, _requests, server) = endpoint::endpoint(vec![long.into(); 4], None);
+    let mut editor = Editor::on_settings(
+        json!({"model": "acp-test/test", "summaryModel": "chatgpt/gpt-6-sol"}),
+        &config.endpoint,
+        &project,
+    );
+    let session = editor.session(&project);
+    for words in ["one", "two", "three", "four"] {
+        let prompt = editor.prompt(&session, text(words));
+        if words == "one" {
+            editor.answer_next(selected("allow-once"));
+        }
+        let done = editor.response(prompt);
+        assert_eq!(done["result"]["stopReason"], "end_turn", "{words}: {done}");
+    }
+    server.join().unwrap();
+
+    let told = editor.texts();
+    let window = [
+        "The conversation could not be summarised, so the turn goes on with the messages it has.",
+        "You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+    ];
+    assert_eq!(
+        told.iter()
+            .filter(|said| window.contains(&said.as_str()))
+            .count(),
+        2,
+        "{told:?}"
+    );
+    assert!(
+        !told
+            .iter()
+            .any(|said| said.contains("`") || said.contains("unauthorized")),
+        "{told:?}"
     );
 }
 

@@ -40,10 +40,26 @@ fn a_long_conversation() -> bravebot_agent::Conversation {
     conversation
 }
 
+/// A reporter that keeps the closed value a summary's failure is handed, which is what a front end
+/// with words of its own for it, the desktop's, is given.
+#[derive(Default)]
+struct Handed {
+    why: Vec<bravebot_agent::report::Why>,
+}
+
+impl bravebot_agent::report::Reporter for Handed {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn summary_failed(&mut self, why: bravebot_agent::report::Why) {
+        self.why.push(why);
+    }
+}
+
 /// A summary that fails on the account is narrated as the account's sentence, in the one line that
 /// says the turn goes on without it, and not as the name of a category, which cannot say which
-/// command to type. The regressions it rejects are the category's name shown for a failure of the
-/// account, and a line that left out that the turn carries on.
+/// command to type. The front end is handed the closed value and not the line, so the desktop can
+/// say it in its own words. The regressions it rejects are the category's name shown for a failure of
+/// the account, a line that left out that the turn carries on, and a failure handed on as text.
 #[test]
 fn a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence() {
     let scratch = Scratch::new("agent-chatgpt-compaction");
@@ -97,4 +113,28 @@ fn a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence() {
         "{narration}"
     );
     assert!(!narration.contains("unauthorized"), "{narration}");
+
+    // The same turn, for a front end that words the failure itself.
+    let mut conversation = a_long_conversation();
+    let mut handed = Handed::default();
+    let _ = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut handed,
+        &mut RecordingSink::new(),
+        bravebot_agent::workspace::trust_store(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    );
+    assert_eq!(
+        handed.why,
+        [bravebot_agent::report::Why::Account(
+            bravebot_aichat::AccountFailure::NotSignedIn
+        )]
+    );
 }

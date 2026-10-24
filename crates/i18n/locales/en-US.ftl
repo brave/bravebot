@@ -973,6 +973,8 @@ repeated-call-refused = { $tool } was not run: the same call { $count } times in
 repeated-call-stopped = stopped at a repeated call: { $tool } made { $count } times in a row
 # Said when a turn's model kept failing and the person's fallbackModel takes over for the rest of it.
 fallback-model-in-use = { $from } failed as { $category }; this turn moves to { $to }
+# The same where the failure was the ChatGPT account's, which is said in its own sentence.
+fallback-model-in-use-account = { $from } failed ({ $problem }); this turn moves to { $to }
 # Said instead where the turn has no tools left, so the model is asked for an answer rather than
 # for the work.
 ceiling-stop-answer-now = the model reached its output limit of { $tokens } tokens; asking it for a shorter answer
@@ -3480,6 +3482,13 @@ desktop-chatgpt-usage-limit-wait =
        *[other] OpenAI says this ChatGPT account has reached its usage limit, so try again in about { $minutes } minutes.
     }
 desktop-chatgpt-not-permitted = OpenAI does not allow this ChatGPT account to be used this way, so use another account or another service's model.
+# What the window narrates where a turn goes on or moves on after the account failed on the way: a summary
+# it could not make, and the model it moved off for the person's fallbackModel. The first is followed by the
+# account's sentence above, so each line is one sentence.
+desktop-compaction-failed = The conversation could not be summarised, so the turn goes on with the messages it has.
+desktop-chatgpt-fell-back-rate-limited = This turn moves from { $from } to { $to } because the ChatGPT sign-in could not be renewed while OpenAI is limiting requests.
+desktop-chatgpt-fell-back-unavailable = This turn moves from { $from } to { $to } because the ChatGPT sign-in could not be renewed while OpenAI's sign-in service is unavailable.
+desktop-chatgpt-fell-back = This turn moves from { $from } to { $to } because the ChatGPT account could not be used.
 # The model picker's warnings, one for each way the account's models could not be listed. The first is for a
 # sign-in file that could not be read where a settings entry names the models, which offers no row. The
 # second is for a listing that could not be read, where the picker shows the built-in list. The last two are

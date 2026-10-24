@@ -1893,7 +1893,7 @@ function Card({
       )
 
     case 'narration':
-      return <div className="narration"><Icon name="file-text" />{entry.text}</div>
+      return <div className="narration"><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
 
     case 'attached':
       // A line rather than a bubble, and the path rather than the contents. This is the same
