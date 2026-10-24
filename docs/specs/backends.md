@@ -1727,8 +1727,10 @@ A failure of a ChatGPT account reports which one it was beside its category
 ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)): the step of the sign-in that failed, the refusal that
 names the account, or the class of a failed renewal. It is one of a closed set, chosen by a step or
 by the client that sent the request comparing a code with a closed list, and no text from a reply is
-in it. A failure of any other kind reports none. The planner is told the category and the request
-count and no more, as for every failure.
+in it. A failure of any other kind reports none. A refusal that names the account also reports the
+status of the reply that refused and, at a 429, the wait its `Retry-After` asked for, as any other
+refusal does, and one reported in an event of a stream reports neither. The planner is told the category
+and the request count and no more, as for every failure.
 
 `verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`
@@ -1739,6 +1741,8 @@ count and no more, as for every failure.
 `verified-by: bravebot_session::sessions::a_reply_stopped_at_a_ceiling_says_which_ceiling`
 `verified-by: bravebot_agent::backend::a_diagnosis_carries_which_failure_of_the_account_it_was`
 `verified-by: bravebot_agent::backend::a_failure_with_no_account_in_it_carries_no_account_value`
+`verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis`
+`verified-by: bravebot_aichat::client::a_refusal_that_names_the_account_keeps_the_status_and_the_wait_it_came_with`
 `verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
 `verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
 `verified-by: bravebot_agent::turn::a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status`

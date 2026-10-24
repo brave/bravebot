@@ -683,7 +683,13 @@ impl<'a> ResponsesClient<'a> {
                     // a failure it did not name.
                     Decoded::Event(Event::Refused(refusal)) => {
                         return Err(if self.account.is_some() {
-                            ChatError::Account(crate::AccountFailure::Named(refusal))
+                            ChatError::Account(crate::AccountFailure::Named {
+                                refusal,
+                                // The stream was answered 200 before the event came, so it
+                                // carries no status and asked for no wait.
+                                status: None,
+                                retry_after: None,
+                            })
                         } else {
                             ChatError::Reported {
                                 failure: Failure::Unknown,

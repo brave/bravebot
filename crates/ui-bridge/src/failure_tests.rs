@@ -9,6 +9,7 @@ use super::*;
 use bravebot_agent::backend::BackendError;
 use bravebot_aichat::responses::protocol::Refusal;
 use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure};
+use std::time::Duration;
 
 fn configured() -> Config {
     Config::from_lookup(|key| match key {
@@ -43,12 +44,20 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
         (AccountFailure::Refused, "token-refused", "unauthorized"),
         (AccountFailure::Unusable, "unusable", "unauthorized"),
         (
-            AccountFailure::Named(Refusal::UsageLimit),
+            AccountFailure::Named {
+                refusal: Refusal::UsageLimit,
+                status: Some(429),
+                retry_after: Some(Duration::from_secs(600)),
+            },
             "usage-limit",
             "refused",
         ),
         (
-            AccountFailure::Named(Refusal::NotPermitted),
+            AccountFailure::Named {
+                refusal: Refusal::NotPermitted,
+                status: None,
+                retry_after: None,
+            },
             "not-permitted",
             "refused",
         ),
@@ -82,7 +91,13 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
         assert_eq!(sent["account"], name, "{failure:?}: {sent}");
         assert_eq!(sent["category"], category, "{failure:?}: {sent}");
         assert_eq!(sent["kind"], "chat", "{failure:?}: {sent}");
-        assert_eq!(sent["status"], Value::Null, "{failure:?}: {sent}");
+        // The status a refusal came with reaches the window beside the category, and no other
+        // failure of the account carries one.
+        assert_eq!(
+            sent["status"],
+            json!(failure.status()),
+            "{failure:?}: {sent}"
+        );
         // The sentence is the terminal's, with a capital, so the window keeps no table of its own.
         let terminal = bravebot_session::sessions::account_failure(failure);
         let mut capitalised = terminal.clone();
@@ -139,9 +154,11 @@ fn a_failure_with_no_account_in_it_is_sent_with_no_account_name() {
 /// `status`, and the name and sentence of the account's failure.
 #[test]
 fn the_failure_sent_holds_only_fixed_names_and_counts() {
-    let sent = failed_with(ChatError::Account(AccountFailure::Named(
-        Refusal::UsageLimit,
-    )));
+    let sent = failed_with(ChatError::Account(AccountFailure::Named {
+        refusal: Refusal::UsageLimit,
+        status: None,
+        retry_after: None,
+    }));
     let mut keys: Vec<&str> = sent
         .as_object()
         .expect("an object")

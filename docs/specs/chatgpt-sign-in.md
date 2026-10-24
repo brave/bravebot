@@ -311,8 +311,10 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    does.
 2. What the agent receives from it is a token, in the secret type that
    [credential-protection.md](credential-protection.md) describes, a value from the closed set of
-   [CHATGPT-8](#CHATGPT-8), and whether the file took a renewal, which is the result of a write on this
-   machine. No string taken from a reply is part of any of them.
+   [CHATGPT-8](#CHATGPT-8), which for a refusal that names the account holds the status of the reply and
+   the wait it asked for as numbers, the wait bounded as any other is, and whether the file took a
+   renewal, which is the result of a write on this machine. No string taken from a reply is part of any
+   of them. The driver copies the numbers into the line a person reads and decides nothing from them.
 3. The ID token is verified once, at the sign-in, before anything is stored, and no claim of it is
    stored, sent or displayed. A code exchange whose reply holds no `id_token`, or one that is not a
    string, ends the sign-in as a token that did not verify, so no sign-in is stored unverified. A token
@@ -522,7 +524,10 @@ failure. The rest are these, each saying which it is:
 - **The account has reached its usage limit, or may not be used this way.** A request is refused with one of
   the codes the exchange records as ending the use of a subscription, in the `error.code` of the refusal's
   body, whatever its status, or of a `response.failed` event or an `error` event of the stream, where it is
-  `code`. The request is not repeated and no token is replaced. `subscription_sharing_usage_limit_exceeded`
+  `code`. The request is not repeated and no token is replaced. A refusal that came in a reply keeps the
+  status of that reply and, at a 429, the wait its `Retry-After` asked for, as numbers and bounded as any
+  other wait is. A refusal reported in an event of the stream arrives in a reply that was answered 200 and
+  carries neither. `subscription_sharing_usage_limit_exceeded`
   has a sentence of its own, which says the account has reached its usage limit. The other six (user not
   eligible, capability or route not supported, invalid user, the token's scope or authorization context not
   authorized) have one sentence that says the account may not be used this way. It names no cause, since the
@@ -549,15 +554,19 @@ command and quote nothing.
 **What a front end is given.** The diagnosis of a failed turn carries which of the failures above it was,
 beside its category ([BACKEND-37](backends.md#BACKEND-37)), and the failure the desktop is sent carries its
 fixed name as `account`, which is `null` for a failure that did not come from the account. The value is a
-step of this clause or the refusal chosen above, and no string from a reply is in it. The planner is told
-the category and the request count, as for every failure ([TURN-13](turns.md#TURN-13)), and not which
-failure of the account it was.
+step of this clause or the refusal chosen above, and no string from a reply is in it. A refusal's status is
+in the diagnosis and in the desktop's `status`, and the wait it asked for is in the diagnosis. The planner
+is told the category and the request count, as for every failure ([TURN-13](turns.md#TURN-13)), and not
+which failure of the account it was, nor a status or a wait.
 
 The one-shot run reports the sentences above as the error of the failed turn. The terminal says the
 sentence of the value from its catalog, worded as that report words it, and the record of a session keeps
-that line in either front end. It is the whole reason: no HTTP status and no count of tries follows it,
-since the remedy ends it. A failure that carries no value is worded from its category, with its status and
-count.
+that line in either front end. It is the whole reason, so no count of tries follows it, since what it says
+to do ends it. A refusal that came in a reply says the wait it asked for in its sentence, in minutes rounded
+up, and its status after it: "OpenAI says this ChatGPT account has reached its usage limit, and the service
+asked for a wait of about 10 minutes (HTTP 429)". A refusal reported in an event of the stream carries
+neither and is the sentence alone, as does every other failure of the account. A failure that carries no
+value is worded from its category, with its status and count.
 
 The desktop is sent the terminal's sentence for the value, capitalised, as `accountMessage` beside the
 name, and draws it as the description of one card in `ui/src/renderer/failure.ts`. The window keeps no
@@ -620,6 +629,9 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_ui_bridge::history::a_turn_on_the_account_with_no_sign_in_is_recorded_in_the_sentence_of_its_step`
 `verified-by: bravebot_session::sessions::a_failure_of_the_account_is_said_in_the_sentence_of_its_own_step`
 `verified-by: bravebot_session::sessions::a_refusal_naming_the_account_says_usage_limit_or_not_permitted_and_never_a_rejected_request`
+`verified-by: bravebot_session::sessions::a_refusal_that_named_the_account_says_its_wait_and_its_status_and_no_count`
+`verified-by: bravebot_aichat::client::a_refusal_that_names_the_account_keeps_the_status_and_the_wait_it_came_with`
+`verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis`
 `verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
 `verified-by: bravebot_tui::app::a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agent-settings.test.mjs holds the sentence the agent sends to the card's description, two sentences to two cards, and a failure with no sentence to the category's wording; ui/scripts/ux-state.test.mjs folds turn.error through the window's reducer and draws the real row, and ui/scripts/plan-card.test.mjs does the same for a run that failed; make check-ui runs them, and the governs list above holds failure.ts to existing)`
@@ -1272,9 +1284,6 @@ These are the places where another spec states something about this service, eac
   is replaced once, a 429 or a 5xx is asked for again, and the turn ends with the sentence of that status.
   The two codes that program retries (`subscription_sharing_usage_unavailable` and
   `subscription_sharing_user_unavailable`) are not in the list and are handled the same way.
-- A refusal that names the account carries no HTTP status and no wait, so the line that says the usage limit
-  was reached does not say when it lifts. A usage limit sent as a 429 with a `Retry-After` shows its wait in
-  the terminal, and one sent as a refusal naming the account does not.
 - The sentences of [CHATGPT-8](#CHATGPT-8) are written in two places: the one-shot run's report and the
   terminal's catalog, which a test holds equal to it. The desktop is sent the catalog's sentence and
   keeps none. The eleven names are listed in `ui/docs/phase-0-rpc-protocol.md`.

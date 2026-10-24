@@ -3425,13 +3425,21 @@ failure-internal = something went wrong here
 failure-with-status = { $what } (HTTP { $status })
 failure-with-attempts = { $what }, after { $attempts } attempts
 # A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot run
-# reports for it (CHATGPT-8). Each is the whole reason, so no status or count of tries is added.
+# reports for it (CHATGPT-8). No count of tries is added, and a status follows only the sentence of a
+# refusal that came with one.
 failure-account-not-signed-in = not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in
 failure-account-ended = the ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again
 failure-account-token-refused = OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login chatgpt` to sign in again
 failure-account-unusable = the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` to see why
 failure-account-usage-limit = OpenAI says this ChatGPT account has reached its usage limit
 failure-account-not-permitted = OpenAI does not allow this ChatGPT account to be used this way
+# A refusal that came as a 429 with a wait it asked for says the wait after its sentence. The request is
+# not sent again, so the whole of the wait is ahead.
+failure-account-wait =
+    { $minutes ->
+        [one] { $what }, and the service asked for a wait of about 1 minute
+       *[other] { $what }, and the service asked for a wait of about { $minutes } minutes
+    }
 failure-account-renewal-refused = the ChatGPT sign-in could not be renewed: the request was refused
 failure-account-renewal-rate-limited = the ChatGPT sign-in could not be renewed: the request was rate-limited
 failure-account-renewal-unavailable = the ChatGPT sign-in could not be renewed: the request was met with an unavailable service

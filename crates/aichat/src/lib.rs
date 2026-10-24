@@ -176,9 +176,16 @@ pub(crate) fn failure_of_refusal<S: Sink>(
     policy: &mut Policy<'_, S>,
     mut error: EgressError,
 ) -> ChatError {
-    let EgressError::Status { body, .. } = &mut error else {
+    let EgressError::Status {
+        status,
+        retry_after,
+        body,
+        ..
+    } = &mut error
+    else {
         return error.into();
     };
+    let (status, retry_after) = (*status, *retry_after);
     // Taken out of the error, so the status that is handed on carries none of it.
     let Some(body) = body.take() else {
         return error.into();
@@ -186,7 +193,11 @@ pub(crate) fn failure_of_refusal<S: Sink>(
     let label = body.label();
     let (bytes, _) = policy.decode_transport("refusal", label).decode(body);
     match responses::protocol::refusal_in(&bytes) {
-        Some(refusal) => ChatError::Account(AccountFailure::Named(refusal)),
+        Some(refusal) => ChatError::Account(AccountFailure::Named {
+            refusal,
+            status: Some(status),
+            retry_after,
+        }),
         None => error.into(),
     }
 }
@@ -292,7 +303,19 @@ pub enum AccountFailure {
     Refused,
     /// The serving host refused a request in a code that names the account, which a new token or a
     /// second request does not change, and no sentence sends the person to sign in again for.
-    Named(responses::protocol::Refusal),
+    ///
+    /// Carries what the refusal said besides its code, as numbers and never as text: the status of
+    /// the reply that refused, and the wait its `Retry-After` header asked for. A refusal that
+    /// arrived as an event of a stream that had begun was answered 200 and carries neither.
+    Named {
+        refusal: responses::protocol::Refusal,
+        /// The status of the reply, where the refusal came with one.
+        status: Option<u16>,
+        /// How long the service asked for the next request to wait, read out of the header as a
+        /// number of seconds and bounded by `bravebot_net::LONGEST_RETRY_AFTER`. Read at any status
+        /// and said only at a 429 ([`AccountFailure::wait`]).
+        retry_after: Option<Duration>,
+    },
     /// The sign-in file could not be read, or the claim on it could not be taken.
     Unusable,
     /// The token could not be renewed, and the reason is the class of the reply.
@@ -317,14 +340,43 @@ impl AccountFailure {
             Self::NotSignedIn => "not-signed-in",
             Self::Ended => "ended",
             Self::Refused => "token-refused",
-            Self::Named(responses::protocol::Refusal::UsageLimit) => "usage-limit",
-            Self::Named(responses::protocol::Refusal::NotPermitted) => "not-permitted",
+            Self::Named {
+                refusal: responses::protocol::Refusal::UsageLimit,
+                ..
+            } => "usage-limit",
+            Self::Named {
+                refusal: responses::protocol::Refusal::NotPermitted,
+                ..
+            } => "not-permitted",
             Self::Unusable => "unusable",
             Self::Renewal(RenewalFailure::Refused) => "renewal-refused",
             Self::Renewal(RenewalFailure::RateLimited) => "renewal-rate-limited",
             Self::Renewal(RenewalFailure::Unavailable) => "renewal-unavailable",
             Self::Renewal(RenewalFailure::Incomplete) => "renewal-incomplete",
             Self::Renewal(RenewalFailure::Transport) => "renewal-transport",
+        }
+    }
+
+    /// The status of the reply that refused, for a refusal that named the account in one.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Named { status, .. } => *status,
+            _ => None,
+        }
+    }
+
+    /// The wait the service asked for, where it is one a person can act on: a refusal that named
+    /// the account, came as a 429 and carried a `Retry-After`. The request was not repeated, so
+    /// unlike the wait of any other 429, which this client sits through up to [`LONGEST_WAIT`], the
+    /// whole of it is still ahead.
+    pub fn wait(&self) -> Option<Duration> {
+        match self {
+            Self::Named {
+                status: Some(429),
+                retry_after,
+                ..
+            } => *retry_after,
+            _ => None,
         }
     }
 }
@@ -342,7 +394,7 @@ impl fmt::Display for AccountFailure {
                 "OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login \
                  chatgpt` to sign in again",
             ),
-            Self::Named(refusal) => fmt::Display::fmt(refusal, f),
+            Self::Named { refusal, .. } => fmt::Display::fmt(refusal, f),
             Self::Unusable => f.write_str(
                 "the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` \
                  to see why",
@@ -1506,11 +1558,19 @@ mod tests {
             (AccountFailure::Refused, "token-refused"),
             (AccountFailure::Unusable, "unusable"),
             (
-                AccountFailure::Named(responses::protocol::Refusal::UsageLimit),
+                AccountFailure::Named {
+                    refusal: responses::protocol::Refusal::UsageLimit,
+                    status: Some(429),
+                    retry_after: Some(Duration::from_secs(600)),
+                },
                 "usage-limit",
             ),
             (
-                AccountFailure::Named(responses::protocol::Refusal::NotPermitted),
+                AccountFailure::Named {
+                    refusal: responses::protocol::Refusal::NotPermitted,
+                    status: None,
+                    retry_after: None,
+                },
                 "not-permitted",
             ),
             (

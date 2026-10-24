@@ -35403,12 +35403,30 @@ mod tests {
                 "the stored ChatGPT sign-in could not be read",
             ),
             (
-                AccountFailure::Named(Refusal::UsageLimit),
+                AccountFailure::Named {
+                    refusal: Refusal::UsageLimit,
+                    status: None,
+                    retry_after: None,
+                },
                 "has reached its usage limit",
             ),
             (
-                AccountFailure::Named(Refusal::NotPermitted),
+                AccountFailure::Named {
+                    refusal: Refusal::NotPermitted,
+                    status: None,
+                    retry_after: None,
+                },
                 "does not allow this ChatGPT account to be used this way",
+            ),
+            // A usage limit that arrived as a 429 with a wait says the wait and the status, after
+            // the sentence and before nothing: no count of the two tries follows.
+            (
+                AccountFailure::Named {
+                    refusal: Refusal::UsageLimit,
+                    status: Some(429),
+                    retry_after: Some(std::time::Duration::from_secs(600)),
+                },
+                "has reached its usage limit, and the service asked for a wait of about 10 minutes (HTTP 429)",
             ),
             (
                 AccountFailure::Renewal(RenewalFailure::Refused),

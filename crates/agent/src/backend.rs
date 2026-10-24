@@ -157,7 +157,7 @@ impl BackendError {
                     // used this way, which a new sign-in does not change, so it is no failure of the
                     // credential. A refusal is a category no fallback model is used for, and the
                     // account answers for every model it serves.
-                    AccountFailure::Named(_) => Category::Refused,
+                    AccountFailure::Named { .. } => Category::Refused,
                     AccountFailure::Renewal(class) => match class {
                         RenewalFailure::Refused => Category::Refused,
                         RenewalFailure::RateLimited => Category::RateLimited,
@@ -216,7 +216,18 @@ impl BackendError {
             // failed, or by the client that sent the request comparing a code with the closed
             // list, so it is passed on and compared with nothing.
             Self::Aichat(ChatError::Account(failure)) => {
-                Diagnosis::of(category).with_account(*failure)
+                let diagnosis = Diagnosis::of(category).with_account(*failure);
+                // A refusal that names the account keeps the status it came with and the wait it
+                // asked for, as any other refusal does, so every line that says a failure can say
+                // them. One that arrived as an event of a stream came with neither.
+                let diagnosis = match failure.status() {
+                    Some(status) => diagnosis.with_status(status),
+                    None => diagnosis,
+                };
+                match failure.wait() {
+                    Some(wait) => diagnosis.asking_for_a_wait_of(wait),
+                    None => diagnosis,
+                }
             }
             _ => Diagnosis::of(category),
         }
@@ -1957,6 +1968,71 @@ mod tests {
         assert!(!Backend::needs_sign_in(&config, "chatgpt/gpt-5.5"));
     }
 
+    /// A refusal that names the account, with neither a status nor a wait, as one reported on a
+    /// stream is.
+    fn refused(refusal: Refusal) -> AccountFailure {
+        AccountFailure::Named {
+            refusal,
+            status: None,
+            retry_after: None,
+        }
+    }
+
+    /// CHATGPT-8: a refusal that names the account keeps the status it came with in the diagnosis,
+    /// and the wait it asked for where it came as a 429, so every line that says the failure can say
+    /// them as it does for any other refusal. The category is the refusal's whatever the status, so a
+    /// retry or a fallback is decided as before. A refusal reported on a stream came with neither,
+    /// and a wait that came with another status is not carried into the diagnosis.
+    ///
+    /// The regressions it rejects are a refusal that loses its status and its wait, which says only
+    /// that the account was refused where a usage limit that came as a 429 used to say when to ask
+    /// again, a wait carried for a status that did not ask for one, and a status invented for a
+    /// refusal that came on a stream.
+    #[test]
+    fn a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis() {
+        use std::time::Duration;
+        let named = |status, retry_after| AccountFailure::Named {
+            refusal: Refusal::UsageLimit,
+            status,
+            retry_after,
+        };
+        let ten_minutes = Some(Duration::from_secs(600));
+
+        let waiting = BackendError::from(ChatError::Account(named(Some(429), ten_minutes)))
+            .counted(3, None, None);
+        let diagnosis = waiting.diagnosis();
+        assert_eq!(diagnosis.category, Category::Refused);
+        assert_eq!(diagnosis.status, Some(429));
+        assert_eq!(diagnosis.retry_after, ten_minutes);
+        assert_eq!(diagnosis.attempts, Some(3));
+
+        // A wait that came with another status is carried by the failure and not said.
+        let forbidden = BackendError::from(ChatError::Account(named(Some(403), ten_minutes)));
+        assert_eq!(forbidden.diagnosis().status, Some(403));
+        assert_eq!(forbidden.diagnosis().retry_after, None);
+
+        // Neither status nor wait where the refusal came on a stream.
+        let streamed = BackendError::from(ChatError::Account(named(None, None)));
+        let diagnosis = streamed.diagnosis();
+        assert_eq!((diagnosis.status, diagnosis.retry_after), (None, None));
+
+        // No other failure of the account carries a status or a wait.
+        for other in [
+            AccountFailure::NotSignedIn,
+            AccountFailure::Ended,
+            AccountFailure::Refused,
+            AccountFailure::Unusable,
+            AccountFailure::Renewal(RenewalFailure::RateLimited),
+        ] {
+            let diagnosis = BackendError::from(ChatError::Account(other)).diagnosis();
+            assert_eq!(
+                (diagnosis.status, diagnosis.retry_after),
+                (None, None),
+                "{other:?}"
+            );
+        }
+    }
+
     /// CHATGPT-8: each failure of the sign-in is diagnosed from its step, and where signing in
     /// again is the remedy the sentence says which command to type. None holds text from a reply.
     #[test]
@@ -1966,16 +2042,8 @@ mod tests {
             (AccountFailure::Ended, Category::Unauthorized, true),
             (AccountFailure::Refused, Category::Unauthorized, true),
             (AccountFailure::Unusable, Category::Unauthorized, false),
-            (
-                AccountFailure::Named(Refusal::UsageLimit),
-                Category::Refused,
-                false,
-            ),
-            (
-                AccountFailure::Named(Refusal::NotPermitted),
-                Category::Refused,
-                false,
-            ),
+            (refused(Refusal::UsageLimit), Category::Refused, false),
+            (refused(Refusal::NotPermitted), Category::Refused, false),
             (
                 AccountFailure::Renewal(RenewalFailure::Refused),
                 Category::Refused,
@@ -2023,8 +2091,8 @@ mod tests {
             AccountFailure::Ended,
             AccountFailure::Refused,
             AccountFailure::Unusable,
-            AccountFailure::Named(Refusal::UsageLimit),
-            AccountFailure::Named(Refusal::NotPermitted),
+            refused(Refusal::UsageLimit),
+            refused(Refusal::NotPermitted),
             AccountFailure::Renewal(RenewalFailure::Refused),
             AccountFailure::Renewal(RenewalFailure::RateLimited),
             AccountFailure::Renewal(RenewalFailure::Unavailable),
@@ -2092,10 +2160,7 @@ mod tests {
     #[test]
     fn a_refusal_of_the_account_is_not_a_refusal_of_the_body() {
         let mut sentences = Vec::new();
-        for failure in [
-            AccountFailure::Named(Refusal::UsageLimit),
-            AccountFailure::Named(Refusal::NotPermitted),
-        ] {
+        for failure in [refused(Refusal::UsageLimit), refused(Refusal::NotPermitted)] {
             let error = BackendError::from(ChatError::Account(failure));
             assert!(!error.refused_the_body(), "{failure:?}");
             assert!(!error.is_unreachable(), "{failure:?}");
@@ -2159,10 +2224,7 @@ mod tests {
             Some(("chatgpt/gpt-b".to_string(), Category::RateLimited))
         );
 
-        for failure in [
-            AccountFailure::Named(Refusal::UsageLimit),
-            AccountFailure::Named(Refusal::NotPermitted),
-        ] {
+        for failure in [refused(Refusal::UsageLimit), refused(Refusal::NotPermitted)] {
             let refused = BackendError::from(ChatError::Account(failure));
             assert_eq!(
                 refused.diagnosis().category,

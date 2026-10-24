@@ -2391,10 +2391,17 @@ mod tests {
             "{before_egress}"
         );
 
-        // Which failure of the account it was is for the person's screen. The planner is told the
-        // category, as it is for every other failure.
+        // Which failure of the account it was, and the status and wait it came with, are for the
+        // person's screen. The planner is told the category, as it is for every other failure.
+        let wait = std::time::Duration::from_secs(600);
         let of_the_account = Diagnosis::of(Category::Refused)
-            .with_account(AccountFailure::Named(Refusal::UsageLimit))
+            .with_status(429)
+            .asking_for_a_wait_of(wait)
+            .with_account(AccountFailure::Named {
+                refusal: Refusal::UsageLimit,
+                status: Some(429),
+                retry_after: Some(wait),
+            })
             .after(1);
         assert_eq!(
             failed_turn(of_the_account),

@@ -381,7 +381,7 @@ fn account_models_from<S: Sink, A: AccountAccess + AccountStored>(
                     Err(_) => return compiled(),
                 };
             }
-            Err(ChatError::Account(AccountFailure::Named(refusal))) => {
+            Err(ChatError::Account(AccountFailure::Named { refusal, .. })) => {
                 return AccountModels::Refused(refusal);
             }
             Err(_) => return compiled(),

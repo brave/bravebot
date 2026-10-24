@@ -1168,7 +1168,9 @@ not come from the account. It is one of `not-signed-in`, `ended`, `token-refused
 `renewal-incomplete` and `renewal-transport`, and the `category` beside it is still the class the
 failure belongs to. `accountMessage` is the terminal's sentence for that failure, capitalised, and
 `null` where `account` is. A client draws it as sent and does not word the failure from the name. It
-holds no text from a reply.
+holds no text from a reply. For `usage-limit` and `not-permitted`, `status` is the status of the reply that
+refused, and `null` where the refusal came in an event of the stream; a wait the refusal asked for at a
+429 is in `accountMessage`.
 
 `cutOff` is set where a reply stopped at the output ceiling is what failed, and `null`
 otherwise. That is `category: "too-long"`, or `"internal"` where the stop was in a plan's

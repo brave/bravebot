@@ -2933,6 +2933,11 @@ failure-account-token-refused = OpenAI a refusé le jeton d'accès de la connexi
 failure-account-unusable = la connexion ChatGPT enregistrée n'a pas pu être lue. Lancez `bravebot auth status chatgpt` pour voir pourquoi
 failure-account-usage-limit = OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation
 failure-account-not-permitted = OpenAI n'autorise pas l'utilisation de ce compte ChatGPT de cette manière
+failure-account-wait =
+    { $minutes ->
+        [one] { $what }, et le service a demandé une attente d'environ 1 minute
+       *[other] { $what }, et le service a demandé une attente d'environ { $minutes } minutes
+    }
 failure-account-renewal-refused = la connexion ChatGPT n'a pas pu être renouvelée : la requête a été refusée
 failure-account-renewal-rate-limited = la connexion ChatGPT n'a pas pu être renouvelée : le service limite le nombre de requêtes
 failure-account-renewal-unavailable = la connexion ChatGPT n'a pas pu être renouvelée : la requête a rencontré un service indisponible
