@@ -65564,8 +65564,11 @@ fn a_failed_advisor_call_tells_the_planner_only_the_category() {
     .expect("a failed consultation does not fail the turn");
     let last = every_request(&received).pop().expect("a last request");
     assert!(last.contains("error: advisor request"), "got: {last}");
+    // The request names the scratch directory, which holds this process's id, and an id can hold
+    // the status the service replied with.
+    let without_the_process_id = last.replace(&std::process::id().to_string(), "");
     assert!(
-        !last.contains("401"),
+        !without_the_process_id.contains("401"),
         "the planner was told more than the category: {last}"
     );
 }
