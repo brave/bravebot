@@ -27,7 +27,7 @@ Usage:
   bravebot bug-report                    Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
   bravebot update                        Print the command that updates this copy
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
-  bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
+  bravebot auth logout <way>             Forget an imported Leo Premium subscription, a stored gateway key or a ChatGPT sign-in
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
   bravebot import-providers              Import a model service Claude Code or opencode configured
@@ -61,7 +61,8 @@ Usage:
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
-| `bravebot auth status [leo\|bedrock\|gateway [id]]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
+| `bravebot auth logout chatgpt` | forget the ChatGPT sign-in `auth login chatgpt` stored |
+| `bravebot auth status [leo\|bedrock\|gateway [id]\|chatgpt]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot --bg "<prompt>"` | start a session that runs in the background and keeps going after the terminal closes ([Sessions](../using/sessions.md#sessions-in-the-background)) |
@@ -882,6 +883,9 @@ Answers "what will this actually use", and changes nothing. It reports:
 - any project or local settings file whose `provider` block or `model` key was ignored, since those two
   are read from your own file and the one `--settings` names;
 - whether a gateway key is stored by `bravebot auth login gateway`, without printing it;
+- where a ChatGPT sign-in is stored by `bravebot auth login chatgpt`, when its access token expires and
+  what would end it, without printing either token, nothing where none is stored, and that the file cannot
+  be read, with the remedy, where it cannot, which fails the report;
 - any settings file that tries to declare an [MCP server](../customize/mcp-servers.md), which fails
   the report, since only `~/.bravebot/mcp.json` declares one;
 - which names a machine-level file pinned, and where that file is;
@@ -953,10 +957,11 @@ what was already true.
 ## `auth`
 
 ```sh
-bravebot auth login [leo [channel] | bedrock | import | gateway [id]]
+bravebot auth login [leo [channel] | bedrock | import | gateway [id] | chatgpt]
 bravebot auth logout leo
 bravebot auth logout gateway [id]
-bravebot auth status [leo | bedrock | gateway [id]]
+bravebot auth logout chatgpt
+bravebot auth status [leo | bedrock | gateway [id] | chatgpt]
 ```
 
 With no way named, `auth login` lists the ways to sign in, marks the ones already in use, and asks
@@ -968,13 +973,15 @@ which to run. It needs a terminal for that. A script names the way instead:
 | `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names, then sets `BRAVEBOT_USE_BEDROCK` to `1` in `~/.bravebot/settings.json` once the `AWS_PROFILE` account signs in, unless that file names it, something turns Bedrock off, or the session is incognito |
 | `import` | what `import-providers` runs |
 | `gateway [id]` | asks for the key of a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json` |
+| `chatgpt` | prints an address on `auth.openai.com` and opens it in a browser, waits five minutes for the browser to return to a port on `127.0.0.1`, and keeps the sign-in in `chatgpt-account.json` ([ChatGPT](../customize/providers/chatgpt.md)) |
 
 `gateway` needs a terminal even with the id named, since the key is typed rather than given as an
 argument. With one gateway configured it asks for no id.
 
 `auth logout leo` runs `import-leo-creds --forget`. `auth logout gateway [id]` forgets a stored key,
-and the id can be left off when only one is stored. In an incognito session the `leo`, `import` and
-`gateway` ways are refused, and `bedrock`, `auth status` and both forms of `auth logout` are allowed. See
+and the id can be left off when only one is stored. `auth logout chatgpt` forgets the stored ChatGPT
+sign-in and ends nothing at OpenAI. In an incognito session the `leo`, `import`, `gateway` and `chatgpt`
+ways are refused, and `bedrock`, `auth status` and every form of `auth logout` are allowed. See
 [Signing in](../customize/signing-in.md).
 
 `auth status` prints one line per sign-in and changes nothing:
@@ -984,11 +991,13 @@ $ bravebot auth status
 leo: signed in: production subscription imported, 12 of 30 credentials unspent
 bedrock: not signed in: the AWS session has lapsed: run `bravebot auth login bedrock`
 gateway openrouter: signed in: stored by bravebot auth login gateway (never printed)
+chatgpt: signed in: the access token expires 2026-10-22T21:05:27Z
 ```
 
 A line says signed in, not signed in (signing in fixes it), or unusable (it does not: a stored
 subscription for another Brave channel, an unreadable file, a missing `aws`), with the reason and
-what to run. Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
+what to run. For ChatGPT it says when the access token expires, and a token past that time is still
+signed in, since the next request replaces it. Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
 is one of four fixed sentences: the AWS session has lapsed, the AWS CLI has no profile by the name
 you set, the AWS CLI is not installed, or the AWS CLI answered with something that is not a
 credential. What the AWS CLI itself printed is never copied, because it can name accounts and roles.

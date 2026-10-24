@@ -293,8 +293,9 @@ Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) a
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
 directly. Tab finishes a started level, so `/effort h` becomes `/effort high`, and leaves a start that fits more than one level, such as `m`, as typed. A word that names no level changes nothing and says so rather than reaching a request
 field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
-is the first sent at it, since the running one keeps the level it began with. The bare `/effort` waits
-for the turn to end.
+is the first sent at it, since the running one keeps the level it began with. On a model of a ChatGPT
+account the level is fixed for the whole session instead: the account is sent the level the session began
+with, and the choice applies from the next session. The bare `/effort` waits for the turn to end.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
 except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key

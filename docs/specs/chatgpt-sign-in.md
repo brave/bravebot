@@ -46,7 +46,8 @@ governs:
   - crates/tui/src/panel.rs
   - crates/tui/src/state/settings.rs
 documented-by:
-  - none (gap: a page on signing in with a ChatGPT account, owed until the design is built)
+  - docs/website/docs/customize/providers/chatgpt.md
+  - docs/website/docs/customize/signing-in.md
 ---
 
 ## Scope

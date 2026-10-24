@@ -677,8 +677,9 @@ A level recorded by `/effort` ranks as a recorded model does: it wins over the k
 wins, and the run asks for none. A blank or a value that is not a string names nothing, so the
 record answers, but it hides the key in a file below it: with nothing recorded, the run asks for no
 level. [`--effort`](../reference/cli.md#--effort-level) on a one-shot run, and a level
-picked in the session that is running, win over everything. Nothing bakes a level in and no
-variable names one.
+picked in the session that is running, win over everything. A session on a model of a ChatGPT account is
+the exception: it is sent the level it began with, so a level picked in it applies from the next session.
+Nothing bakes a level in and no variable names one.
 
 This is the way a **project** can ask for a level, and the way a machine where nobody ever opens the
 interactive interface gets one at all: `bravebot -p` and `bravebot --plain` read the key just as the
