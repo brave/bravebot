@@ -2919,6 +2919,17 @@ failure-workspace = l'espace de travail n'a pas pu être utilisé
 failure-internal = un problème est survenu ici
 failure-with-status = { $what } (HTTP { $status })
 failure-with-attempts = { $what }, après { $attempts } tentatives
+failure-account-not-signed-in = pas connecté à un compte ChatGPT. Lancez `bravebot auth login chatgpt` pour vous connecter
+failure-account-ended = la connexion ChatGPT a pris fin. Lancez `bravebot auth login chatgpt` pour vous reconnecter
+failure-account-token-refused = OpenAI a refusé le jeton d'accès de la connexion ChatGPT. Lancez `bravebot auth login chatgpt` pour vous reconnecter
+failure-account-unusable = la connexion ChatGPT enregistrée n'a pas pu être lue. Lancez `bravebot auth status chatgpt` pour voir pourquoi
+failure-account-usage-limit = OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation
+failure-account-not-permitted = OpenAI n'autorise pas l'utilisation de ce compte ChatGPT de cette manière
+failure-account-renewal-refused = la connexion ChatGPT n'a pas pu être renouvelée : la requête a été refusée
+failure-account-renewal-rate-limited = la connexion ChatGPT n'a pas pu être renouvelée : le service limite le nombre de requêtes
+failure-account-renewal-unavailable = la connexion ChatGPT n'a pas pu être renouvelée : la requête a rencontré un service indisponible
+failure-account-renewal-incomplete = la connexion ChatGPT n'a pas pu être renouvelée : la réponse à la requête avait une forme illisible
+failure-account-renewal-transport = la connexion ChatGPT n'a pas pu être renouvelée : la requête n'a pas abouti
 
 
 ## Répéter une consigne

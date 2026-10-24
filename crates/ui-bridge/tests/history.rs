@@ -527,6 +527,30 @@ fn a_turn_on_the_account_with_no_sign_in_reaches_the_window_as_not_signed_in() {
     );
 }
 
+/// CHATGPT-8: a turn on the ChatGPT account where nobody signed in is recorded as failed with the
+/// sentence of that step, the one a terminal says for it, so a session reopened in either front
+/// end reads the command to run and not the words of the category.
+///
+/// The fault this rejects: recording the category's line, which says the service would not accept
+/// the credentials.
+#[test]
+fn a_turn_on_the_account_with_no_sign_in_is_recorded_in_the_sentence_of_its_step() {
+    let scratch = Scratch::new("bridge-account-recorded");
+    let (endpoint, _) = stub_service(Chat::Answers);
+
+    let ended = Window::open(&scratch.home(), &scratch.project(), &endpoint, None)
+        .turn_on("chatgpt/gpt-test", "first question");
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+
+    let saved = record(&scratch.home());
+    assert_eq!(
+        saved["history"][0]["outcome"],
+        json!({"kind": "failed",
+               "reason": "error: not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in"}),
+        "{saved}"
+    );
+}
+
 /// CHATGPT-8: a key a gateway refused is not the sign-in failing, so the window is sent no name of
 /// the account's, only the category and the status it carries.
 ///

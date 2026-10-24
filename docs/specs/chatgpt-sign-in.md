@@ -13,6 +13,7 @@ governs:
   - crates/tui/src/app/models.rs
   - crates/ui-bridge/src/models.rs
   - crates/ui-bridge/src/bridge.rs
+  - crates/session/src/sessions.rs
   - crates/cli/src/chatgpt.rs
   - crates/skus/src/chatgpt/mod.rs
   - crates/skus/src/chatgpt/account.rs
@@ -542,6 +543,12 @@ step of this clause or the refusal chosen above, and no string from a reply is i
 the category and the request count, as for every failure ([TURN-13](turns.md#TURN-13)), and not which
 failure of the account it was.
 
+The one-shot run reports the sentences above as the error of the failed turn. The terminal says the
+sentence of the value from its catalog, worded as that report words it, and the record of a session keeps
+that line in either front end. It is the whole reason: no HTTP status and no count of tries follows it,
+since the remedy ends it. A failure that carries no value is worded from its category, with its status and
+count.
+
 No code, `state`, `nonce`, verifier, challenge, token, claim, client or host identifier, reply body, header
 value or callback query reaches a trace, a log, an error message, a session record, a transcript, `doctor`,
 `auth status`, the terminal or the environment of a program a turn starts. The one exception is the
@@ -595,6 +602,11 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_ui_bridge::failure_tests::the_failure_sent_holds_only_fixed_names_and_counts`
 `verified-by: bravebot_ui_bridge::history::a_turn_on_the_account_with_no_sign_in_reaches_the_window_as_not_signed_in`
 `verified-by: bravebot_ui_bridge::history::a_refused_key_in_the_window_is_sent_with_no_account_name`
+`verified-by: bravebot_ui_bridge::history::a_turn_on_the_account_with_no_sign_in_is_recorded_in_the_sentence_of_its_step`
+`verified-by: bravebot_session::sessions::a_failure_of_the_account_is_said_in_the_sentence_of_its_own_step`
+`verified-by: bravebot_session::sessions::a_refusal_naming_the_account_says_usage_limit_or_not_permitted_and_never_a_rejected_request`
+`verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
+`verified-by: bravebot_tui::app::a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript`
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
 `verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
 `verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`
@@ -1123,13 +1135,13 @@ work lands, in the same commit as the code.
   is replaced once, a 429 or a 5xx is asked for again, and the turn ends with the sentence of that status.
   The two codes that program retries (`subscription_sharing_usage_unavailable` and
   `subscription_sharing_user_unavailable`) are not in the list and are handled the same way.
-- A refusal that names the account carries no HTTP status and no wait, and is a refusal among the categories,
-  so the line the terminal and the desktop show for it is the refusal's. A usage limit that came as a 429
-  with a `Retry-After` showed the wait, and one that came as a refusal that names the account says that it
-  was rejected and nothing more.
-- The terminal and the desktop say why a turn failed from its category alone, so the sentences of
-  [CHATGPT-8](#CHATGPT-8) reach the one-shot run's report and not them. A turn that ended on a refusal that
-  names the account says there that the service rejected the request, whichever the code.
+- A refusal that names the account carries no HTTP status and no wait, and is a refusal among the categories.
+  The terminal says it as the usage limit or as the account not being usable this way, with no wait. A usage
+  limit that came as a 429 with a `Retry-After` showed the wait. The desktop still shows it as the refusal's
+  category does.
+- The desktop says why a turn failed from its category alone, so the sentences of
+  [CHATGPT-8](#CHATGPT-8) reach the one-shot run's report and the terminal and not it. A turn that ended on a
+  refusal that names the account says there that the provider refused the request, whichever the code.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
   the dead refresh token and is told the refresh failed, until the person signs in again.

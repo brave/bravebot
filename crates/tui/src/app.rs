@@ -34584,6 +34584,133 @@ mod tests {
         assert_eq!(exported.matches("503").count(), 1);
         assert!(session.finished.unwrap().failed());
     }
+
+    /// CHATGPT-8: a turn that failed in the account's own way is said in the transcript and the
+    /// status area in the sentence of that failure, the one a one-shot run reports, and not in the
+    /// words of its category. A person told "the service would not accept the credentials" for a
+    /// sign-in that was never made has no command to run.
+    ///
+    /// The faults this rejects: the category's line for each (the one every failure of that class
+    /// shared before), and one sentence for the two refusals that name the account.
+    #[test]
+    fn a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript() {
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure};
+
+        let said_for = |failure: AccountFailure| -> String {
+            let mut session = Session::new("none");
+            type_line(&mut session, "read a file");
+            session.submit().unwrap();
+            let error = bravebot_agent::backend::BackendError::Attempted {
+                usage: None,
+                context_tokens: None,
+                attempts: 2,
+                cause: Box::new(bravebot_agent::backend::BackendError::from(
+                    ChatError::Account(failure),
+                )),
+            };
+            fold_outcome(
+                &mut session,
+                Err(turn::TurnError::from(error)),
+                Trail::new(),
+                Carried {
+                    asked: Default::default(),
+                    exposed: Default::default(),
+                    trust: TrustStore::new("/work"),
+                    programs: TrustedPrograms::new(),
+                },
+                Occupied {
+                    budget: 1000,
+                    guessed: false,
+                    last_request_tokens: 0,
+                },
+                Asked {
+                    name: "chatgpt/gpt-test".into(),
+                    comparable: true,
+                },
+                Line {
+                    text: "read a file",
+                    addressed: None,
+                    offered_a_later_look: false,
+                },
+                &workspace_for_test(),
+            );
+            assert!(session.finished.unwrap().failed(), "{failure:?}");
+            session
+                .failure_said()
+                .expect("a visible reason")
+                .to_string()
+        };
+
+        let said = [
+            (
+                AccountFailure::NotSignedIn,
+                "not signed in to a ChatGPT account",
+            ),
+            (AccountFailure::Ended, "the ChatGPT sign-in has ended"),
+            (
+                AccountFailure::Refused,
+                "OpenAI refused the ChatGPT sign-in's access token",
+            ),
+            (
+                AccountFailure::Unusable,
+                "the stored ChatGPT sign-in could not be read",
+            ),
+            (
+                AccountFailure::Named(Refusal::UsageLimit),
+                "has reached its usage limit",
+            ),
+            (
+                AccountFailure::Named(Refusal::NotPermitted),
+                "does not allow this ChatGPT account to be used this way",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Refused),
+                "could not be renewed: the request was refused",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::RateLimited),
+                "could not be renewed: the request was rate-limited",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Unavailable),
+                "could not be renewed: the request was met with an unavailable service",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Incomplete),
+                "could not be renewed: the request was answered in a shape that could not be read",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Transport),
+                "could not be renewed: the request was not completed",
+            ),
+        ];
+        let mut lines = Vec::new();
+        for (failure, words) in said {
+            let line = said_for(failure);
+            assert!(line.starts_with("error: "), "{failure:?}: {line}");
+            assert!(line.contains(words), "{failure:?}: {line}");
+            // The line of the category, and the count of tries that ends it, are for the other failures.
+            for category_line in [
+                "the service would not accept the credentials",
+                "the service rejected the request",
+                "the service asked for fewer requests",
+                "the service could not answer",
+                "the request did not get through",
+                "the reply stopped before it was finished",
+                "attempts",
+            ] {
+                assert!(
+                    !line.contains(category_line),
+                    "{failure:?} is said in a category's words: {line}"
+                );
+            }
+            lines.push(line);
+        }
+        lines.sort_unstable();
+        lines.dedup();
+        assert_eq!(lines.len(), said.len(), "two failures share a line");
+    }
     /// The stop arm the event loop reaches takes the prompt the turn began with, so it is the
     /// half that can hand it back to the box. An interjection the turn had already taken is part
     /// of the conversation it carries on with, so neither prompt moves: the opening one stays sent
