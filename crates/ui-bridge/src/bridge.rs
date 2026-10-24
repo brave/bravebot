@@ -24,6 +24,7 @@ use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
 use bravebot_agent::workspace::WorkspaceError;
 use bravebot_agent::{Confining, LiveMode, PermissionMode, Workspace};
+use bravebot_aichat::AccountFailure;
 use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
@@ -2842,10 +2843,13 @@ fn start_mcp(
     Some(reached.session())
 }
 
-/// How a failure is reported to a front end: `kind`, `message`, `category`, `attempts`, `status`.
+/// How a failure is reported to a front end: `kind`, `message`, `category`, `attempts`, `status`,
+/// `account`.
 ///
-/// The category and the counts come from the agent's diagnosis. Raw backend text is not sent.
-/// `chosen` is the model that was asked for, which decides one category below.
+/// The category, the counts and the account's failure come from the agent's diagnosis. Raw backend
+/// text is not sent. `account` is the fixed name of which failure of a ChatGPT account it was, or
+/// `null` where the account was not involved (CHATGPT-8). `chosen` is the model that was asked for,
+/// which decides one category below.
 pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -> Value {
     let ending = error.ending();
     let diagnosis = ending.diagnosis();
@@ -2878,7 +2882,8 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         TurnError::Manifest { .. } => "manifest",
     };
     json!({ "kind": kind, "message": category.unwrap_or("cancelled"), "category": category,
-        "attempts": attempts, "status": diagnosis.and_then(|d| d.status) })
+        "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
+        "account": diagnosis.and_then(|d| d.account).map(AccountFailure::name) })
 }
 
 /// Open the point the turn about to run can be rewound to (SESSION-19), as the terminal does.
@@ -3989,3 +3994,7 @@ mod control_tests;
 #[cfg(test)]
 #[path = "opening_tests.rs"]
 mod opening_tests;
+
+#[cfg(test)]
+#[path = "failure_tests.rs"]
+mod failure_tests;

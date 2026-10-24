@@ -12,6 +12,7 @@ governs:
   - crates/aichat/src/models.rs
   - crates/tui/src/app/models.rs
   - crates/ui-bridge/src/models.rs
+  - crates/ui-bridge/src/bridge.rs
   - crates/cli/src/chatgpt.rs
   - crates/skus/src/chatgpt/mod.rs
   - crates/skus/src/chatgpt/account.rs
@@ -282,7 +283,9 @@ shape:
   and that it may not be used this way, chosen by comparing the error code of the body with a closed list
   of codes the exchange records ([CHATGPT-8](#CHATGPT-8)); that comparison is made in the client that sends the request, which is not the
   driver, and the egress crate hands the client the whole body of the refusal under the label of its
-  request and reads none of it ([NET-12](network-egress.md#NET-12)). A turn already branches on the categories, and none is content anyone authored. The
+  request and reads none of it ([NET-12](network-egress.md#NET-12)). A turn already branches on the categories, and none is content anyone authored. Which of
+  these values a failure was is carried to the terminal and the desktop beside its category, where it
+  chooses a sentence ([CHATGPT-8](#CHATGPT-8)), and the driver adds no comparison of its own for it. The
   rest of a reply's body, its error text and its claims stay in the crate. That is the ordinary case the
   document's section on the inverse mistake describes, and the same footing as the fields of a model
   listing the code already reads.
@@ -532,6 +535,13 @@ failure. The rest are these, each saying which it is:
 The refusals of [CHATGPT-12](#CHATGPT-12), which are made before anything starts, are sentences of the
 command and quote nothing.
 
+**What a front end is given.** The diagnosis of a failed turn carries which of the failures above it was,
+beside its category ([BACKEND-37](backends.md#BACKEND-37)), and the failure the desktop is sent carries its
+fixed name as `account`, which is `null` for a failure that did not come from the account. The value is a
+step of this clause or the refusal chosen above, and no string from a reply is in it. The planner is told
+the category and the request count, as for every failure ([TURN-13](turns.md#TURN-13)), and not which
+failure of the account it was.
+
 No code, `state`, `nonce`, verifier, challenge, token, claim, client or host identifier, reply body, header
 value or callback query reaches a trace, a log, an error message, a session record, a transcript, `doctor`,
 `auth status`, the terminal or the environment of a program a turn starts. The one exception is the
@@ -576,6 +586,15 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_agent::backend::an_account_failure_is_diagnosed_by_its_step_and_names_the_command_where_it_is_the_remedy`
 `verified-by: bravebot_agent::backend::a_refusal_of_the_account_is_not_a_refusal_of_the_body`
 `verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_never_falls_back_to_another_model_of_it`
+`verified-by: bravebot_agent::backend::a_diagnosis_carries_which_failure_of_the_account_it_was`
+`verified-by: bravebot_agent::backend::a_failure_with_no_account_in_it_carries_no_account_value`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
+`verified-by: bravebot_aichat::lib::each_account_failure_has_a_fixed_name_of_its_own`
+`verified-by: bravebot_ui_bridge::failure_tests::a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category`
+`verified-by: bravebot_ui_bridge::failure_tests::a_failure_with_no_account_in_it_is_sent_with_no_account_name`
+`verified-by: bravebot_ui_bridge::failure_tests::the_failure_sent_holds_only_fixed_names_and_counts`
+`verified-by: bravebot_ui_bridge::history::a_turn_on_the_account_with_no_sign_in_reaches_the_window_as_not_signed_in`
+`verified-by: bravebot_ui_bridge::history::a_refused_key_in_the_window_is_sent_with_no_account_name`
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
 `verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
 `verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`

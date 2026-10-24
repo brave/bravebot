@@ -309,6 +309,26 @@ pub enum RenewalFailure {
     Transport,
 }
 
+impl AccountFailure {
+    /// A fixed name for a front end to word the failure from, in the way the agent's failure
+    /// categories are named. One name for each value, and no text taken from a reply.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NotSignedIn => "not-signed-in",
+            Self::Ended => "ended",
+            Self::Refused => "token-refused",
+            Self::Named(responses::protocol::Refusal::UsageLimit) => "usage-limit",
+            Self::Named(responses::protocol::Refusal::NotPermitted) => "not-permitted",
+            Self::Unusable => "unusable",
+            Self::Renewal(RenewalFailure::Refused) => "renewal-refused",
+            Self::Renewal(RenewalFailure::RateLimited) => "renewal-rate-limited",
+            Self::Renewal(RenewalFailure::Unavailable) => "renewal-unavailable",
+            Self::Renewal(RenewalFailure::Incomplete) => "renewal-incomplete",
+            Self::Renewal(RenewalFailure::Transport) => "renewal-transport",
+        }
+    }
+}
+
 impl fmt::Display for AccountFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1473,6 +1493,54 @@ mod tests {
             .iter()
             .find(|(header, _)| header == name)
             .map(|(_, value)| value.as_str())
+    }
+
+    /// CHATGPT-8: each failure of a ChatGPT account has a name of its own, from a closed set, which
+    /// is what the desktop is sent so it can word the failure. A name two failures shared would
+    /// give them one sentence, and a usage limit would read as an account that may not be used.
+    #[test]
+    fn each_account_failure_has_a_fixed_name_of_its_own() {
+        let names = [
+            (AccountFailure::NotSignedIn, "not-signed-in"),
+            (AccountFailure::Ended, "ended"),
+            (AccountFailure::Refused, "token-refused"),
+            (AccountFailure::Unusable, "unusable"),
+            (
+                AccountFailure::Named(responses::protocol::Refusal::UsageLimit),
+                "usage-limit",
+            ),
+            (
+                AccountFailure::Named(responses::protocol::Refusal::NotPermitted),
+                "not-permitted",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Refused),
+                "renewal-refused",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::RateLimited),
+                "renewal-rate-limited",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Unavailable),
+                "renewal-unavailable",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Incomplete),
+                "renewal-incomplete",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Transport),
+                "renewal-transport",
+            ),
+        ];
+        for (failure, name) in names {
+            assert_eq!(failure.name(), name, "{failure:?}");
+        }
+        let mut distinct: Vec<&str> = names.iter().map(|(_, name)| *name).collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), names.len(), "two failures share a name");
     }
 
     /// The name a request carries says which service is meant, and the id in front of it is this
