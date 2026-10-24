@@ -4585,8 +4585,11 @@ mod preserved_history {
             next.contains("Failure category: unauthorized. Requests sent for the failed call: 1."),
             "{next}"
         );
+        // The request names the scratch directory, which holds this process's id, and an id can
+        // hold the status the service replied with.
+        let without_the_process_id = next.replace(&std::process::id().to_string(), "");
         assert!(
-            !next.contains("401"),
+            !without_the_process_id.contains("401"),
             "the status of the reply was sent: {next}"
         );
         assert!(
