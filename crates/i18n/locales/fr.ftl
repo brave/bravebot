@@ -2780,6 +2780,11 @@ session-signing-in =
     connexion à AWS ; suivez les instructions ci-dessous, cela reprend une fois terminé
 session-context-budget = compactage au-delà de { $budget } jetons, selon ce que ce modèle annonce
 session-models-unavailable = impossible de lister les modèles : { $problem }
+# Dit à l'ouverture du sélecteur quand une connexion ChatGPT est enregistrée et que sa liste n'a pas pu
+# être obtenue. La seconde concerne une liste refusée par un code qui désigne le compte, où se
+# reconnecter ne change rien.
+session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+session-chatgpt-models-refused = impossible de lister les modèles du compte ChatGPT : { $refusal }
 session-theme-set = thème { $theme }
 session-no-such-theme = aucun thème nommé { $theme } ; essayez /theme pour la liste
 session-editing-vi = édition à la manière de vi ; échap pour les commandes, i pour écrire

@@ -3230,6 +3230,11 @@ session-using-model-from = using { $model } from { $service }
 session-signing-in = signing in to AWS; follow the instructions below, and this returns when it is done
 session-context-budget = compacting above { $budget } tokens, as this model advertises
 session-models-unavailable = could not list models: { $problem }
+# Said when the picker opens with a ChatGPT sign-in stored and its listing could not be had. The second
+# is for a listing the service refused in a code that names the account, where signing in again is no
+# remedy.
+session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
+session-chatgpt-models-refused = could not list the ChatGPT account's models: { $refusal }
 session-theme-set = theme { $theme }
 session-no-such-theme = no theme named { $theme }; try /theme for the list
 session-editing-vi = editing the way vi does; esc for commands, i to type

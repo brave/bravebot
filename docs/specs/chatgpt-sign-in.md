@@ -598,13 +598,13 @@ account's, so a session on another model sends the stored token nowhere. No row 
 stored, and nothing is asked of the service then. A stored sign-in whose token cannot be had, or whose listing
 cannot be read, offers no row, except that the models an entry names need neither the token nor the listing,
 only that the file can be read. The desktop picker says so in a warning beside the other rosters', and the
-terminal picker says nothing, as it says nothing for a gateway whose listing fails. A listing refused with a
-code of [CHATGPT-8](#CHATGPT-8)'s closed list is warned of by the desktop picker in that clause's sentence,
-which does not send the person to sign in again, and the terminal picker says nothing of it.
+terminal picker says so in a note in the transcript, written when the picker opens, so before it draws, at
+rest or mid-turn. A listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in
+that clause's sentence, which does not send the person to sign in again. A person who never signed in is
+told nothing, and a listing that was read, empty or not, is not a failure.
 
-**Not built:** the compiled list (source 3) with the terminal
-picker's saying that the listing could not be read (#3134). Where the listing cannot be read nothing is
-offered, and a person names the model as `chatgpt/<name>`. A listing the service refuses for its token with a
+**Not built:** the compiled list (source 3) (#3134). Where the listing cannot be read nothing is
+offered, both pickers say so, and a person names the model as `chatgpt/<name>`. A listing the service refuses for its token with a
 401 is asked for again once with a replacement, as a turn's request is, and a second refusal ends it, as does
 a refusal whose body names a code of [CHATGPT-8](#CHATGPT-8)'s closed list, at once. A model
 named `chatgpt/<name>` on the command line or in a settings file is built: it selects the account, the request
@@ -659,6 +659,8 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_tui::app::a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists`
 `verified-by: bravebot_tui::app::the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers`
 `verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more`
+`verified-by: bravebot_tui::app::the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise`
+`verified-by: bravebot_tui::app::only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_account_only_for_one_of_its_own_models`
 `verified-by: bravebot_ui_bridge::models::the_models_list_asks_the_account_whatever_model_is_configured`
 
@@ -1017,8 +1019,7 @@ work lands, in the same commit as the code.
 - A turn on the account sends its body uncompressed and refuses one over 1 MiB, so a long conversation is
   shortened sooner than the service would need, and the limit has not been observed.
 - Where the listing cannot be read no picker lists the account's models, so a person types `chatgpt/<name>`,
-  and a name the account cannot reach is refused at the first request. The terminal picker does not say the
-  listing failed.
+  and a name the account cannot reach is refused at the first request.
 - A picker asks the serving host for the listing each time it opens, so a signed-in person who opens one sends
   the access token to the serving host for a request that is not a turn.
 - A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,
@@ -1035,9 +1036,6 @@ work lands, in the same commit as the code.
   so the line the terminal and the desktop show for it is the refusal's. A usage limit that came as a 429
   with a `Retry-After` showed the wait, and one that came as a refusal that names the account says that it
   was rejected and nothing more.
-- The terminal picker says nothing of a listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s list, as it
-  says nothing of one that could not be read (#3134), so the account's rows are missing from `/model` with no
-  reason given.
 - The terminal and the desktop say why a turn failed from its category alone, so the sentences of
   [CHATGPT-8](#CHATGPT-8) reach the one-shot run's report and not them. A turn that ended on a refusal that
   names the account says there that the service rejected the request, whichever the code.

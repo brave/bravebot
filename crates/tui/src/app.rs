@@ -8577,6 +8577,110 @@ mod tests {
         );
     }
 
+    /// CHATGPT-9: a person who signed in to ChatGPT and finds none of the account's rows in the
+    /// picker is told why, in the sentence for the failure, and the rows already there are still
+    /// offered. A listing refused in a code that names the account is said in the refusal's own
+    /// sentence, which does not send the person to sign in again, since a new sign-in changes nothing
+    /// there. An account nobody signed in to and a listing that was read, empty or not, say nothing:
+    /// the first is not owed a warning about a service it does not use, and the second is the
+    /// service's answer. The regressions it rejects are a failure that goes unsaid, the refusal worded
+    /// as an unreadable listing, and a warning where nothing went wrong.
+    #[test]
+    fn the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise() {
+        use bravebot_aichat::responses::protocol::Refusal;
+        use models::scripted_account::{fail_to_list, nobody_signed_in, offer, refuse};
+
+        let config = a_config_with_a_named_roster();
+        let said_after_opening = |script: &dyn Fn()| -> (Vec<String>, Vec<String>) {
+            script();
+            let mut session = Session::new("none");
+            open_model_picker(&mut session, &config);
+            let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+                panic!("no model picker is open");
+            };
+            let rows = picker.matching().iter().map(|m| m.key.clone()).collect();
+            let said = session.transcript.iter().map(|e| e.text.clone()).collect();
+            (said, rows)
+        };
+
+        let (said, rows) = said_after_opening(&fail_to_list);
+        assert_eq!(said, [t!(session_chatgpt_models_unreadable).to_string()]);
+        assert!(
+            said[0].contains("bravebot auth login chatgpt"),
+            "an unreadable listing was not given its remedy: {said:?}"
+        );
+        assert!(
+            rows.contains(&"opus-arn".to_string()),
+            "a failed listing took a row away: {rows:?}"
+        );
+
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            let (said, rows) = said_after_opening(&|| refuse(refusal));
+            assert_eq!(
+                said,
+                [t!(
+                    session_chatgpt_models_refused,
+                    refusal = refusal.to_string()
+                )
+                .to_string()],
+                "{refusal:?}"
+            );
+            assert!(
+                !said[0].contains("auth login"),
+                "a refusal sent the person to sign in again: {said:?}"
+            );
+            assert!(
+                rows.contains(&"opus-arn".to_string()),
+                "{refusal:?}: {rows:?}"
+            );
+        }
+
+        let (said, _) = said_after_opening(&|| offer(the_accounts_listing()));
+        assert!(
+            said.is_empty(),
+            "a listing that was read was said: {said:?}"
+        );
+        let (said, _) = said_after_opening(&|| offer(Vec::new()));
+        assert!(said.is_empty(), "an empty listing was said: {said:?}");
+        let (said, _) = said_after_opening(&nobody_signed_in);
+        assert!(
+            said.is_empty(),
+            "an account nobody signed in to was said: {said:?}"
+        );
+    }
+
+    /// CHATGPT-9: the sentence a roster carries is chosen from what the account answered, by the one
+    /// function both ways of opening the picker use, so `/model` at rest and typed mid-turn say the
+    /// same. Only an unreadable listing and a refused one are problems. The regression it rejects is
+    /// a sentence for an account that answered, which would tell a person with no model to reach that
+    /// the service failed.
+    #[test]
+    fn only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says() {
+        use bravebot_agent::chatgpt::AccountModels;
+        use bravebot_aichat::responses::protocol::Refusal;
+
+        assert_eq!(account_problem_said(&AccountModels::Absent), None);
+        assert_eq!(
+            account_problem_said(&AccountModels::Offered(Vec::new())),
+            None
+        );
+        assert_eq!(
+            account_problem_said(&AccountModels::Offered(the_accounts_listing())),
+            None
+        );
+        assert_eq!(
+            account_problem_said(&AccountModels::Unreadable).as_deref(),
+            Some(t!(session_chatgpt_models_unreadable))
+        );
+        assert_eq!(
+            account_problem_said(&AccountModels::Refused(Refusal::UsageLimit)),
+            Some(t!(
+                session_chatgpt_models_refused,
+                refusal = Refusal::UsageLimit.to_string()
+            ))
+        );
+    }
+
     #[test]
     fn a_schema_is_refused_only_where_the_roster_states_parameters_without_it() {
         let row = |key: &str, parameters: Option<&[&str]>| bravebot_aichat::models::Model {
