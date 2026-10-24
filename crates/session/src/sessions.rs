@@ -1964,14 +1964,8 @@ pub fn is_open_elsewhere(project: &Path, id: &str) -> bool {
     let Ok(file) = std::fs::File::open(lock_path(&directory, id)) else {
         return false;
     };
-    match file.try_lock() {
-        Ok(()) => {
-            let _ = file.unlock();
-            false
-        }
-        Err(std::fs::TryLockError::WouldBlock) => true,
-        Err(std::fs::TryLockError::Error(_)) => false,
-    }
+    // A lock this takes is dropped with `file`, when the function returns.
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
 }
 
 /// Whether the record at `path` was written by a writer that is not the one that last wrote
@@ -2846,14 +2840,12 @@ pub(crate) fn delete_in(directory: &Path, id: &str) -> Result<(), Deletion> {
 /// Taken before it is removed, because a lock that is unlinked while a process holds it stays with
 /// that process and leaves the next one to lock a new file at the same name, so two processes would
 /// hold one record. A lock that is held stays until its process ends.
-fn remove_lock(directory: &Path, id: &str) {
+fn remove_lock(directory: &Path, id: &str) -> bool {
     let path = lock_path(directory, id);
     let Ok(file) = std::fs::File::open(&path) else {
-        return;
+        return false;
     };
-    if file.try_lock().is_ok() {
-        let _ = std::fs::remove_file(&path);
-    }
+    file.try_lock().is_ok() && std::fs::remove_file(&path).is_ok()
 }
 
 /// Remove the records under `root` that have not been written since `cutoff`, with the trail, the
@@ -2924,8 +2916,7 @@ fn remove_project_records_unwritten_since(
             let no_record = std::fs::symlink_metadata(directory.join(format!("{id}.json")))
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
             if is_a_session_name(id) && !kept(id) && no_record {
-                remove_lock(directory, id);
-                removed_any |= !entry.path().exists();
+                removed_any |= remove_lock(directory, id);
             }
         } else if let Some(id) = name
             .strip_suffix(".audit.jsonl")
