@@ -11,7 +11,7 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, and the permission mode under the box, is built. Clicking other things on the screen, a context menu, edge
+drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, the permission mode under the box, and the rows of the `/effort` and `/config` pickers, is built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
@@ -229,3 +229,19 @@ cycle reaches bypass only where the key does. The key stays the way to do it wit
 
 `verified-by: bravebot_tui::app::a_click_on_the_footers_permission_mode_cycles_it`
 `verified-by: bravebot_tui::app::a_drag_over_the_mode_or_a_click_beside_it_leaves_the_permission_mode_alone`
+
+<a id="MOUSE-15"></a>
+### MOUSE-15: a click on a row of an `/effort` or `/config` picker moves the cursor, and a second takes it
+
+In the list picker that `/effort` and `/config` open at rest, a left press on a row of the list
+puts the cursor on it, and a second press on the same cell within the double-click interval takes
+the row, as Enter does. A press outside the list, on the border, or below the last row, a press of
+another button, a drag, a release and a wheel turn leave the picker open with the cursor where it
+was, and no mouse event cancels it. Rows are counted from the first row drawn, so a list that has
+scrolled to keep the cursor in view is read as it is drawn. The keys stay the way to do it without
+a mouse. The other pickers and the pickers opened while a turn runs are not covered.
+
+`verified-by: bravebot_tui::list_picker::a_press_moves_the_cursor_and_a_second_press_takes_the_row`
+`verified-by: bravebot_tui::list_picker::two_presses_on_different_rows_or_far_apart_take_nothing`
+`verified-by: bravebot_tui::list_picker::a_press_outside_the_rows_and_anything_but_a_press_leave_the_picker_alone`
+`verified-by: bravebot_tui::list_picker::a_press_finds_its_row_in_a_list_that_has_scrolled`
