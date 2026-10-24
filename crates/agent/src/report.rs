@@ -29,6 +29,23 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
     }
 }
 
+/// What a person is told of a summary that could not be made: the sentence for the failure of the
+/// ChatGPT account where it was the account that failed
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)), and the name of the failure's
+/// category for every other failure.
+///
+/// Here for the reason [`summary_model_refusal`] is: the sentence is looked up in a catalog, and
+/// every string in `compact.rs` is read by the planner. A summary that failed on the account says
+/// which command to type where signing in again is the remedy, which the category's name does not.
+pub fn why_a_summary_failed(error: &crate::compact::CompactError) -> String {
+    match error {
+        crate::compact::CompactError::Chat(backend) if backend.diagnosis().account.is_some() => {
+            backend.to_string()
+        }
+        other => other.category().name().to_string(),
+    }
+}
+
 /// What a person is told when `processorModel` or `--processor-model` names a model a processor
 /// cannot run on.
 ///
@@ -1475,6 +1492,44 @@ mod tests {
 
         let search = Activity::running("Search", "./todo ");
         assert_eq!(search.shown_file(), "./todo ");
+    }
+
+    /// CHATGPT-8: a summary that failed on the ChatGPT account is told in that failure's sentence,
+    /// the status of a refusal that came with one included, and every other failure keeps the name
+    /// of its category, since nothing in a reply may be put in the line. The regressions it rejects
+    /// are the category's name for a failure of the account, and a sentence for a failure that is not
+    /// the account's, such as a gateway's refused key.
+    #[test]
+    fn a_failed_summary_says_the_accounts_sentence_where_it_was_the_account_and_the_category_otherwise()
+     {
+        use crate::backend::BackendError;
+        use crate::compact::{CompactError, SideModelRefusal};
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        let chat = |error: ChatError| CompactError::Chat(BackendError::from(error));
+        for failure in [AccountFailure::Ended, AccountFailure::NotSignedIn] {
+            assert_eq!(
+                why_a_summary_failed(&chat(ChatError::Account(failure))),
+                crate::chatgpt::said_of_failure(failure),
+                "{failure:?}"
+            );
+        }
+        let status = |status: u16| {
+            chat(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://api.example.invalid/v1/responses".to_string(),
+                status,
+                retry_after: None,
+                body: None,
+            }))
+        };
+        assert_eq!(why_a_summary_failed(&status(401)), "unauthorized");
+        assert_eq!(why_a_summary_failed(&status(503)), "unavailable");
+        assert_eq!(
+            why_a_summary_failed(&CompactError::SummaryModel(SideModelRefusal::NeedsSignIn(
+                "a-model".to_string()
+            ))),
+            "unconfigured"
+        );
     }
 
     /// Some work has nothing to name, and an empty pair of brackets reads as a bug rather than

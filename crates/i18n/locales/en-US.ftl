@@ -3761,6 +3761,8 @@ compact-done =
     summarised { $summarised } earlier messages, keeping the last { $kept } as they are
 compact-nothing-to-do = there is nothing to summarise yet
 compact-failed = the conversation could not be summarised: { $problem }
+# Said by a turn that asked for a summary and did not get one, which carries on with the history it has.
+compact-failed-and-continuing = the conversation could not be summarised: { $problem }; continuing with the existing context
 turn-ended-unexpectedly = the turn ended unexpectedly
 
 

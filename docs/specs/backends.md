@@ -1692,7 +1692,9 @@ delegate failures tell the planner that the delegate did not finish, and nothing
 beyond that. Where the run had spent its round bound, the driver's own count of that bound is said
 too ([DELEGATE-26](delegation.md#DELEGATE-26)), which is a number this process fixed before the run
 started rather than anything read out of the answer that failed. Compaction failure messages also
-use the category. These paths do not copy raw backend errors into the conversation.
+use the category, except that one that failed on the ChatGPT account says that failure's sentence
+([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)). These paths do not copy raw backend errors into the
+conversation.
 
 Cancellation is distinct from failure. A processor carries cancellation and its attempt count
 separately from its tool-result text, so the parent can report the stop without parsing that text.
@@ -1741,6 +1743,9 @@ and the request count and no more, as for every failure.
 `verified-by: bravebot_session::sessions::a_reply_stopped_at_a_ceiling_says_which_ceiling`
 `verified-by: bravebot_agent::backend::a_diagnosis_carries_which_failure_of_the_account_it_was`
 `verified-by: bravebot_agent::backend::a_failure_with_no_account_in_it_carries_no_account_value`
+`verified-by: bravebot_agent::chatgpt_compaction::a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence`
+`verified-by: bravebot_agent::report::a_failed_summary_says_the_accounts_sentence_where_it_was_the_account_and_the_category_otherwise`
+`verified-by: bravebot_tui::app::a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence`
 `verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis`
 `verified-by: bravebot_aichat::client::a_refusal_that_names_the_account_keeps_the_status_and_the_wait_it_came_with`
 `verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`

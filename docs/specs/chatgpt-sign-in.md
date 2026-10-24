@@ -564,7 +564,9 @@ Each sentence is a message of the catalog, in English and in French, chosen from
 prints for a failure of the account is that name. The one-shot run reports the sentence as the error of the
 failed turn, a goal run and a manifest run report it as the reason they stopped, and the terminal says it
 as the line for a failed turn, for a failed goal check and for a manifest run, in the language the person
-chose. The record of a session keeps the terminal's line in either front end. It is the whole reason, so no
+chose. The terminal's `/compact` and the line a turn narrates for a summary it could not make say it as
+well, where a summary that failed in any other way says the name of its category. The record of a session
+keeps the terminal's line in either front end. It is the whole reason, so no
 count of tries follows it, since what it says to do ends it. A refusal that came in a reply says the wait
 it asked for in its sentence, in minutes rounded up, and its status after it, in each of them: "OpenAI says
 this ChatGPT account has reached its usage limit, and the service asked for a wait of about 10 minutes
@@ -636,6 +638,9 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_cli::running::a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait_and_the_status`
 `verified-by: bravebot_tui::app::a_goal_check_that_failed_on_the_chatgpt_account_says_its_own_sentence`
 `verified-by: bravebot_tui::app::a_manifest_run_that_failed_on_the_chatgpt_account_says_its_own_sentence`
+`verified-by: bravebot_tui::app::a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence`
+`verified-by: bravebot_agent::chatgpt_compaction::a_summary_that_failed_on_the_account_is_narrated_in_the_accounts_sentence`
+`verified-by: bravebot_agent::report::a_failed_summary_says_the_accounts_sentence_where_it_was_the_account_and_the_category_otherwise`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_with_no_account_in_it_is_sent_with_no_account_name`
 `verified-by: bravebot_ui_bridge::failure_tests::the_failure_sent_holds_only_fixed_names_and_counts`

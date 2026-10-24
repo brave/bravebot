@@ -3253,6 +3253,8 @@ compact-done =
     { $summarised } messages antérieurs résumés, les { $kept } derniers gardés tels quels
 compact-nothing-to-do = il n'y a encore rien à résumer
 compact-failed = la conversation n'a pas pu être résumée : { $problem }
+# Dit par un tour qui a demandé un résumé sans l'obtenir, et qui poursuit avec l'historique qu'il a.
+compact-failed-and-continuing = la conversation n'a pas pu être résumée : { $problem } ; poursuite avec le contexte existant
 turn-ended-unexpectedly = le tour s'est terminé de façon inattendue
 btw-needs-a-question = /btw prend la question à poser, que la conversation ne lira pas
 btw-stopped = la question a été arrêtée

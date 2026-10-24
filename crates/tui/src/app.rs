@@ -4669,7 +4669,7 @@ fn summarise_on_a_worker(
         cancel,
         Some(turn::Hooked { home, workspace }),
     )
-    .map_err(|error| error.category().name().to_string());
+    .map_err(|error| bravebot_agent::report::why_a_summary_failed(&error));
     (done, conversation, sink)
 }
 
@@ -35513,6 +35513,57 @@ mod tests {
         lines.dedup();
         assert_eq!(lines.len(), said.len(), "two failures share a line");
     }
+    /// CHATGPT-8: a `/compact` that failed on the ChatGPT account says that failure's own sentence in
+    /// the line it leaves, which names the command that signs in again, and not the name of a
+    /// category, which cannot. The thread that summarises is the real one, on a model of the account
+    /// in a profile nobody signed in to, so nothing is sent. A failure of any other kind keeps the
+    /// category's name. The regression it rejects is the category's name for a failure of the account.
+    #[test]
+    fn a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-compact-account");
+        std::fs::create_dir_all(&root).expect("a project");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let config = a_config_needing_no_sign_in();
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("port the parser to the new lexer", "started on it"),
+            ("what about the error type", "widened it"),
+            ("now the tests", "updated them"),
+            ("carry on", "carrying on"),
+        ] {
+            conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+            conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+        }
+        let (to_main, _from_worker) = mpsc::channel();
+
+        let (done, _unchanged, _trail) = summarise_on_a_worker(
+            &config,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            conversation,
+            Some("chatgpt/gpt-6-sol"),
+            TrustStore::new(&root),
+            None,
+            &Cancel::new(),
+            &workspace,
+            None,
+            to_main,
+        );
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        compact_ended(&mut session, 100_000, &done, false);
+        let said = last_note(&session);
+        assert!(
+            said.contains("not signed in to a ChatGPT account"),
+            "{said}"
+        );
+        assert!(said.contains("bravebot auth login chatgpt"), "{said}");
+        assert!(!said.contains("unauthorized"), "{said}");
+    }
+
     /// CHATGPT-8: a goal check that failed on the ChatGPT account says that failure's own sentence in
     /// the line the person is told, which names the command that signs in again, and not the name of
     /// a category or of the condition. The check is the one the worker thread runs, on a model of the

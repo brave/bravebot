@@ -698,11 +698,13 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
             }
             Err(error) => {
                 *may_compact = false;
-                let category = error.category();
-                reporter.narration(format!(
-                "the conversation could not be summarised ({}); continuing with the existing context",
-                category.name()
-            ));
+                reporter.narration(
+                    t!(
+                        compact_failed_and_continuing,
+                        problem = crate::report::why_a_summary_failed(&error)
+                    )
+                    .to_string(),
+                );
             }
         }
     }
