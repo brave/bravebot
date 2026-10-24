@@ -95,11 +95,12 @@ the Rust build.
 CI runs its heavier jobs only where a change could fail them.
 [contrib/affected-checks.py](../../contrib/affected-checks.py) reads the paths a pull request
 touches and says which of Rust, the desktop app, the cross-builds, the Windows installers, the
-website, the pnpm lockfiles and the dependency policy they could affect. On a pull request the
+website, the pnpm lockfiles, the dependency policy and the fuzz targets they could affect. On a pull request the
 Windows installers are built and installed only for a change to the scripts that make them; main
 and every tag build and install them whatever changed. The specs, security, locales, versions and narration
 jobs take seconds and run on every change, and the narration job also reads the body's `Not covered:` line. A change to a crate needs the desktop jobs when the desktop app
-builds that crate, which is any crate the two bridge crates name, however far down. A job skipped
+builds that crate, which is any crate the two bridge crates name, however far down, and needs the fuzz job when
+the fuzz package builds it, which is any crate its manifest names, however far down. A job skipped
 by its condition reports success, and branch protection counts that as passing, so every doubt runs
 the job: a path no rule names runs everything, and so do a change to the workflows, the Makefile or
 the classifier, any run that is not a pull request, and a run where the classifier itself failed.
@@ -112,7 +113,8 @@ stops on one that is in neither that list nor `NAMED_NOT_READ`.
 `origin/main` where there is no upstream remote, or `BASE=<ref>`, which `check-reviewdog` is
 measured from as well. The branch is its commits, its uncommitted edits and its untracked files. It prints each area and the path that needs it before
 running the checks it names, keeps going past a failed check, and stops without running any when
-the classifier cannot answer. It is for iterating on a branch; `make check-all` is still the whole.
+the classifier cannot answer. It is for iterating on a branch; `make check-all` is still the whole. For a change the fuzz job
+needs it prints that and runs nothing, since `make check-fuzz` needs a nightly toolchain and cargo-fuzz.
 
 `make check-all` requires Docker for the platform checks. A missing prerequisite fails
 the target; it does not count as a pass. Add `-k`, for example `make -k check-all-local`,
@@ -364,8 +366,9 @@ lockfile or `deny.toml`, on main, and once a day, since an advisory arrives with
 
 `make check-fuzz` lints, builds, replays and briefly runs the fuzz targets in `fuzz/`, which is a package
 of its own with its own lockfile. It needs a nightly toolchain, whose date is `FUZZ_TOOLCHAIN` in the
-`Makefile`, and cargo-fuzz, so `make check-all` and `make check-affected` leave it out and no CI job runs
-it. Run it for a change to a function a target reads, or to `fuzz/`. `make fuzz TARGET=<name>` runs one
+`Makefile`, and cargo-fuzz (`make fuzz-install`), so `make check-all` and `make check-affected` leave it out.
+CI's `Fuzz build and replay` job runs it where `fuzz/` or a crate the targets build changed. Run it for a
+change to a function a target reads, or to `fuzz/`. `make fuzz TARGET=<name>` runs one
 target. [fuzzing.md](fuzzing.md) lists the targets and says what to do with a crash.
 
 `make check-windows` lints the target that ships to Windows, `x86_64-pc-windows-gnu`, over every

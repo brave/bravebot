@@ -58,7 +58,7 @@ the `make` targets say for themselves and a command typed here has to:
 TC=$(make -s fuzz-toolchain)
 export BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1
 rustup toolchain install "$TC" --profile minimal -c rustfmt -c clippy -c rust-src
-cargo install cargo-fuzz --locked
+make fuzz-install
 ```
 
 ```sh
@@ -70,7 +70,11 @@ make check-fuzz                              # lint, build, replay, then every t
 `make check-fuzz` runs `cargo fmt --check`, clippy with `-D warnings`, the unit tests of `fuzz/src`,
 `cargo fuzz build -a` for every target, a replay of `seeds/` and `regressions/` with `-runs=0`, and
 then each target. It stops at the first failure. It is not part of `make check-all` or
-`make check-affected`, which run without a nightly toolchain.
+`make check-affected`, which run without a nightly toolchain. CI runs it in the `Fuzz build and replay`
+job on a pull request where `fuzz/`, the root manifest or a crate the targets build changed, and on
+every push to `main` and every tag. Each run of a target starts from a seed of its own, so one can
+find a defect the code already had and fail an unrelated pull request. The job uploads
+`fuzz/artifacts/` when it fails.
 
 Targets are built with debug assertions and overflow checks (`-a`) and AddressSanitizer, so an
 arithmetic site that wraps in a release build is reported when an input reaches it. Every
