@@ -20,8 +20,10 @@ Part of brave/bravebot#103
 > **The commit hook was bypassed for 1 dependency change.** `git commit --no-verify` was used once
 > for each commit below, because the hook refuses a staged dependency file.
 >
-> - `<sha>` <subject>: `<file>` adds `<crate> <version>`. <What it buys and what the alternative
->   cost.>
+> - `<sha>` <subject>: `<file>` adds `<crate> <version>`, or changes `<crate> <old> to <new>`.
+>   Buys: <what it buys>. Instead: <what existing code or writing the behaviour would cost>.
+>   Brings: <transitive crates, build scripts, native code and the targets it builds for, or
+>   "nothing beyond the crate">. Licence and upkeep: <the licence, and who maintains it>.
 
 User impact: <one line: what a person using bravebot can now see, or "none" and why>
 Not covered: none
@@ -98,11 +100,13 @@ does a test that also fails on the parent commit. With nothing left the line is
 Present only where a commit bypassed the hook, and then the first thing under the closing lines,
 before `User impact:`. It is a `> [!WARNING]` block, so GitHub draws it apart from the text, and it
 holds one bullet for each commit that touched a dependency file: the commit, the file, the
-dependency and version, and the DEP-001 justification in a sentence or two. It is never a
-`## Decisions to confirm` entry, never inside a `<details>` block, and never left to the test plan.
-The same text is posted as a comment on the pull request once it is open, because editing a body
-notifies nobody. [Dependency changes](SKILL.md#dependency-changes-and-hook-bypasses) says when the
-bypass is allowed and how the list is checked.
+dependency and its version (old and new where it is changed), and the four statements of
+[DEP-001](../../../docs/best-practices/dependencies.md#DEP-001) that the template gives slots to:
+what it buys, what existing code would cost, what it brings, and its licence and upkeep. It is
+never a `## Decisions to confirm` entry, never inside a `<details>` block, and never left to the
+test plan. The same text is posted as a comment on the pull request once it is open, because
+editing a body notifies nobody. [Dependency changes](SKILL.md#dependency-changes-and-hook-bypasses)
+says when the bypass is allowed and how the list is checked.
 
 ## User impact
 

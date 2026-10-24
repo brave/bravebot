@@ -447,8 +447,10 @@ lockfile. It is work, not a cause to block a row.
    > **The commit hook was bypassed for <n> dependency change(s).** `git commit --no-verify` was
    > used once for each commit below, because the hook refuses a staged dependency file.
    >
-   > - `<sha>` <subject>: `<file>` adds `<crate> <version>`. <What it buys and what the alternative
-   >   cost, in a sentence or two.>
+   > - `<sha>` <subject>: `<file>` adds `<crate> <version>`, or changes `<crate> <old> to <new>`.
+   >   Buys: <what it buys>. Instead: <what existing code or writing the behaviour would cost>.
+   >   Brings: <transitive crates, build scripts, native code and the targets it builds for, or
+   >   "nothing beyond the crate">. Licence and upkeep: <the licence, and who maintains it>.
    ```
 
    It is not a `## Decisions to confirm` entry, and it is not inside a `<details>` block. The final
