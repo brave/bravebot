@@ -781,13 +781,27 @@ over 1 MiB as it is built and under it as a frame is sent. The limit is the one 
 from states for an uncompressed body, and whether it applies to the frame or to what the frame decodes to
 has not been observed. This program adds a `content-encoding` to the request of no other service. Compaction of a
 conversation for this service is by summary ([compaction.md](compaction.md)), as it is for every service,
-and the service offers no native compaction to use instead. The effort level of a session is fixed when the session starts. Nothing else a reply, a model or a settings file says is
-added to a request to this host: a gateway's options are carried into its requests, and this service takes
-none. The sign-in stores no identifier of the account and no header value is taken from a reply.
+and the service offers no native compaction to use instead.
 
-**Not built:** the identifier is one per process and not one per session, since the agent holds no
-session, so a second session in a process presents the first's. The effort level is not held fixed for the
-session.
+The identifier is a version 4 value generated from the operating system's random source when a session
+begins, and it holds nothing about the person, the account, the project or what was asked. A session carries
+it in every request it makes: a turn's rounds, a summary, a question asked beside the work, a goal check, a
+commit message, a processor, a vetting, an advisor and the calls of a manifest run. Two sessions of one
+process carry two. The terminal begins one with its session and another for `/clear` and for a handoff, the
+desktop with each session it opens, resumes or forks, and a plain or background session where it is
+assembled. A one-shot run begins one with its first request, and the rounds of a goal run and the checks
+between them share it, since each is made from a clone of the first round's task. A delegate is a session
+of its own. A session resumed from a record begins a new one, since nothing of it is written to a record.
+`/branch` moves the running session onto a copy of its conversation and keeps the identifier, because the
+copy shares the prefix the service has cached and the original is not asked anything more. A request made
+in no session carries an identifier of its own.
+
+The effort level of a session is fixed when the session starts. Nothing else a reply, a model or a settings
+file says is added to a request to this host: a gateway's options are carried into its requests, and this
+service takes none. The sign-in stores no identifier of the account and no header value is taken from a
+reply.
+
+**Not built:** the effort level is not held fixed for the session.
 
 **Why.** The service decides the protocol, and a protocol written for one service is a second copy of the
 work for the next. A header a settings file could add would be a way to put a value, or another credential,
@@ -804,6 +818,10 @@ crate would compile the C library into each target this program is built for. li
 `compression.zstd`, for bodies from empty to 8 MiB and for ones that do not compress, and no other decoder
 has been tried. The encoder writes one level, roughly zstd level 1, with the frame's checksum and no content
 size in the header.
+The service derives its cache affinity from the identifier, which is why two sessions do not share one and a
+session does not change it. A record that held the identifier would tie the record on this machine to the
+requests the service logged for the account, so a session resumed from one begins a new identifier, and a
+cache the service still holds for the earlier requests is not found ([Known costs](#known-costs)).
 
 `verified-by: bravebot_aichat::client::an_account_request_carries_the_token_the_three_session_headers_and_the_zstd_encoding_and_nothing_a_gateway_would`
 `verified-by: bravebot_aichat::client::a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_built`
@@ -812,7 +830,37 @@ size in the header.
 `verified-by: bravebot_aichat::client::a_gateways_body_is_plain_json_with_no_content_encoding`
 `verified-by: bravebot_aichat::client::a_gateways_refused_key_is_not_reported_as_the_chatgpt_sign_in_failing`
 `verified-by: bravebot_agent::backend::a_body_not_sent_for_its_size_is_a_refusal_of_the_body_and_no_failure_of_the_sign_in`
-`verified-by: bravebot_agent::chatgpt::the_session_identifier_is_one_random_value_for_the_process`
+`verified-by: bravebot_agent::chatgpt::a_sessions_identifier_is_random_and_every_handle_on_it_gives_the_same_one`
+`verified-by: bravebot_agent::turn::every_round_of_a_turn_on_the_account_carries_the_identifier_of_its_session`
+`verified-by: bravebot_agent::turn::turns_of_one_session_carry_one_identifier_and_another_session_carries_its_own`
+`verified-by: bravebot_agent::turn::a_turn_given_no_session_is_a_session_of_its_own`
+`verified-by: bravebot_agent::turn::a_clone_of_a_task_is_in_the_session_the_task_is_in`
+`verified-by: bravebot_agent::turn::a_turn_on_the_account_sends_the_identifier_of_its_session_in_each_of_the_three_headers`
+`verified-by: bravebot_agent::turn::a_summary_a_question_and_a_judgement_carry_the_identifier_of_the_session_that_asked`
+`verified-by: bravebot_agent::turn::a_summary_made_inside_a_turn_carries_the_identifier_of_its_session`
+`verified-by: bravebot_agent::turn::a_commit_message_is_drafted_in_the_session_that_asked_for_it`
+`verified-by: bravebot_agent::turn::the_planning_calls_and_the_steps_of_a_manifest_run_carry_the_identifier_of_its_session`
+`verified-by: bravebot_agent::turn::the_advisor_a_turn_consults_is_asked_in_the_session_of_the_turn`
+`verified-by: bravebot_agent::turn::a_delegate_is_a_session_of_its_own_and_carries_one_identifier_throughout`
+`verified-by: bravebot_agent::processor::a_side_request_to_the_account_is_made_in_the_session_the_chat_was_made_for`
+`verified-by: bravebot_tui::app::every_turn_of_a_session_is_built_in_it_and_clearing_begins_another`
+`verified-by: bravebot_tui::app::branching_a_session_goes_on_with_the_identifier_of_the_conversation_it_copies`
+`verified-by: bravebot_ui_bridge::running::two_sessions_open_in_one_process_carry_identifiers_of_their_own`
+`verified-by: bravebot_ui_bridge::account_session_tests::every_turn_of_a_desktop_session_is_built_in_it_and_another_session_in_its_own`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_manifest_run_is_built_in_the_session_that_started_it`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_session_resumed_from_a_record_begins_an_identifier_each_time`
+`verified-by: bravebot_cli::plain_retention_tests::every_prompt_of_a_plain_session_is_built_in_it_and_another_session_has_its_own`
+`verified-by: bravebot_cli::main::a_one_shot_run_is_a_session_its_clones_share_and_another_run_is_not`
+`verified-by: bravebot_cli::goal_run::the_rounds_of_a_goal_run_are_one_session_to_the_account`
+`verified-by: bravebot_cli::chatgpt_session::a_run_carries_one_identifier_in_all_three_headers_and_its_delegate_carries_another`
+`verified-by: bravebot_cli::chatgpt_session::the_rounds_and_the_checks_of_a_goal_run_carry_one_identifier`
+`verified-by: bravebot_cli::chatgpt_session::a_session_in_lines_carries_one_identifier_through_every_prompt`
+`verified-by: bravebot_cli::account_sessions::every_task_and_every_backend_the_code_builds_is_in_a_session_or_listed_as_not`
+`verified-by: bravebot_cli::account_sessions::a_test_attribute_hides_a_module_of_tests_and_no_task_or_backend_the_code_builds`
+`verified-by: bravebot_cli::account_sessions::a_session_named_for_the_task_beside_a_task_is_not_credited_to_it`
+`verified-by: bravebot_cli::account_sessions::a_comment_or_a_string_that_names_a_session_does_not_name_it`
+`verified-by: bravebot_cli::account_sessions::a_test_attribute_takes_out_its_own_item_and_nothing_after_it`
+`verified-by: bravebot_cli::account_sessions::a_session_of_the_account_is_begun_only_where_a_session_begins`
 `verified-by: bravebot_agent::chatgpt::the_account_is_one_provider_at_the_serving_host`
 
 <a id="CHATGPT-11"></a>
@@ -933,7 +981,9 @@ brings.
 The requests a turn sends are made by the Responses client of `bravebot-aichat` given a token source, and
 `crates/agent/src/chatgpt.rs` is that source: one renewer for the process, which keeps a renewal the file could
 not take for the rest of it, and the note of that, which the turn says once. The same client encodes the body
-of a request to the account with `ruzstd` ([CHATGPT-10](#CHATGPT-10)).
+of a request to the account with `ruzstd` ([CHATGPT-10](#CHATGPT-10)). The identifier a session carries is an
+`AccountSession` in the same file, which whatever holds a session begins and hands to each turn and each side
+request it makes.
 
 - **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2), [CHATGPT-3](#CHATGPT-3),
   [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7),
@@ -1151,8 +1201,8 @@ work lands, in the same commit as the code.
   sign-in is stored, so the access token is sent to the serving host in requests that are not a turn.
 - A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,
   since the renewal that finds it removes the file. The next turn on a `chatgpt/` model says so.
-- Every request of a process carries one session identifier, so two sessions of a process share a cache
-  affinity.
+- A session resumed from a record, and a fork begun from one, carry an identifier of their own, so the first
+  request after either does not find a cache the service still holds for the earlier session's requests.
 - The codes that say the account has reached its usage limit or may not be used this way, and the fields of a
   refusal and of a failed event that hold them, are read from another program's source and have not been seen
   from this service. A refusal that says it in another code or another field is handled as its status: a 401

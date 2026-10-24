@@ -334,6 +334,7 @@ pub(crate) mod scripted {
             const { RefCell::new(None) };
         static ASKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static THOUGHT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static SESSIONS: RefCell<Vec<Option<String>>> = const { RefCell::new(Vec::new()) };
     }
 
     /// Answer the next requests on this thread with `replies`, and forget what was asked before.
@@ -341,6 +342,7 @@ pub(crate) mod scripted {
         REPLIES.with(|scripted| *scripted.borrow_mut() = Some(replies.into()));
         ASKED.with(|asked| asked.borrow_mut().clear());
         THOUGHT.with(|thought| thought.borrow_mut().clear());
+        SESSIONS.with(|sessions| sessions.borrow_mut().clear());
     }
 
     /// Report `pieces` as the thinking a service streamed, one report each, ahead of every scripted
@@ -353,6 +355,13 @@ pub(crate) mod scripted {
     /// The body of each request a scripted reply answered, in order.
     pub(crate) fn asked() -> Vec<String> {
         ASKED.with(|asked| asked.borrow().clone())
+    }
+
+    /// The identifier of the session each request a scripted reply answered would have carried to
+    /// the ChatGPT account, in order. `None` where the backend was not the account or the request
+    /// belonged to no session.
+    pub(crate) fn sessions() -> Vec<Option<String>> {
+        SESSIONS.with(|sessions| sessions.borrow().clone())
     }
 
     /// Stop answering from a script, so a test that fails part way leaves nothing for the next
@@ -379,13 +388,17 @@ pub(crate) mod scripted {
     /// The scripted reply to `request`, where this thread has a script. A script that has run out
     /// is a turn asking more than the test expected, which is a failure rather than a request to
     /// go and send.
-    pub(super) fn next(request: &ChatRequest) -> Option<Result<Completion, BackendError>> {
+    pub(super) fn next(
+        request: &ChatRequest,
+        session: Option<String>,
+    ) -> Option<Result<Completion, BackendError>> {
         REPLIES.with(|scripted| {
             let mut scripted = scripted.borrow_mut();
             let replies = scripted.as_mut()?;
             let reply = replies
                 .pop_front()
                 .unwrap_or_else(|| panic!("asked once more than the script answers"));
+            SESSIONS.with(|sessions| sessions.borrow_mut().push(session));
             ASKED.with(|asked| {
                 asked
                     .borrow_mut()
@@ -489,6 +502,10 @@ pub enum Backend<'a> {
         wire_model: String,
         egress: &'a Egress,
         cancel: Option<Cancel>,
+        /// The session the request belongs to, whose identifier it carries
+        /// ([`Backend::in_session`]). `None` is a request of no session, which gets an identifier
+        /// of its own.
+        session: Option<crate::chatgpt::AccountSession>,
     },
 }
 
@@ -862,6 +879,7 @@ impl<'a> Backend<'a> {
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
+                session: None,
             };
         }
         Self::Aichat {
@@ -1032,6 +1050,18 @@ impl<'a> Backend<'a> {
         self
     }
 
+    /// Make the requests this backend sends the ones of `session`, where it is the ChatGPT account
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Ignored by every other backend, which carries no session identifier. A request sent with no
+    /// session given carries an identifier of its own, so it shares no cache with another.
+    pub fn in_session(mut self, session: &crate::chatgpt::AccountSession) -> Self {
+        if let Self::Account { session: held, .. } = &mut self {
+            *held = Some(session.clone());
+        }
+        self
+    }
+
     /// Send a request and wait for the whole reply.
     pub fn complete<S: Sink>(
         &mut self,
@@ -1074,9 +1104,10 @@ impl<'a> Backend<'a> {
                 wire_model,
                 egress,
                 cancel,
+                session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in);
+                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
@@ -1093,7 +1124,16 @@ impl<'a> Backend<'a> {
         progress: impl FnMut(Progress),
     ) -> Result<Completion, BackendError> {
         #[cfg(test)]
-        if let Some(reply) = scripted::next(request) {
+        if let Some(reply) = scripted::next(
+            request,
+            match self {
+                Self::Account {
+                    session: Some(session),
+                    ..
+                } => Some(session.identifier().to_string()),
+                _ => None,
+            },
+        ) {
             scripted::report_thinking(progress);
             return reply;
         }
@@ -1133,9 +1173,10 @@ impl<'a> Backend<'a> {
                 wire_model,
                 egress,
                 cancel,
+                session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in);
+                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
@@ -1178,20 +1219,27 @@ fn bedrock_client<'a>(
 
 /// A client for the ChatGPT account, asking `sign_in` for a token before each request.
 ///
-/// The service, its protocol and its headers are constants, and the session identifier is the
-/// process's own ([`crate::chatgpt::session_id`]). Nothing a settings file, a variable or a gateway
-/// block says reaches it, so no key but the sign-in's is ever the account's.
+/// The service, its protocol and its headers are constants, and the session identifier is the one of
+/// `session`, or one of its own where the request belongs to none. Nothing a settings file, a
+/// variable or a gateway block says reaches it, so no key but the sign-in's is ever the account's.
 fn account_client<'a>(
     wire_model: &str,
     egress: &'a Egress,
     sign_in: &'a mut crate::chatgpt::StoredSignIn,
+    session: Option<&crate::chatgpt::AccountSession>,
 ) -> GatewayClient<'a> {
+    let identifier = match session {
+        Some(session) => session.identifier().to_string(),
+        None => crate::chatgpt::AccountSession::begin()
+            .identifier()
+            .to_string(),
+    };
     GatewayClient::Responses(ResponsesClient::for_account(
         egress,
         crate::chatgpt::account_provider(),
         wire_model,
         sign_in,
-        crate::chatgpt::session_id(),
+        identifier,
     ))
 }
 

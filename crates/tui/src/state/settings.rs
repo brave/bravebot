@@ -280,6 +280,13 @@ impl Session {
         self.effort.filter(|_| self.model_reads_effort)
     }
 
+    /// What this session carries into its requests to the ChatGPT account, which every request it
+    /// makes is made in: a turn, a summary, a question beside the work, a goal check, a commit
+    /// message and an MCP server's prompt.
+    pub fn account_session(&self) -> &bravebot_agent::chatgpt::AccountSession {
+        &self.account
+    }
+
     /// Whether the model in force reads a level at all.
     ///
     /// For saying so where it does not: a level reported as in force while the service discards it

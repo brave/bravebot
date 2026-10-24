@@ -600,6 +600,7 @@ pub(super) struct AfterCompacting<'a> {
 pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     cancel: &Cancel,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
@@ -633,7 +634,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     if retries.refused.is_some() || *may_compact && account.context_tokens >= config.context_budget
     {
         reporter.phase(Phase::Compacting);
-        let mut chat = crate::processor::Chat::new(config, egress)
+        let mut chat = crate::processor::Chat::new(config, egress, session)
             .spending(subscription)
             .on(turn_model)
             .stoppable_by(cancel);

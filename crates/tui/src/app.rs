@@ -2180,6 +2180,7 @@ impl RunSettings {
             .with_cache(bravebot_agent::home::cache())
             .with_model(session.model().map(str::to_string))
             .with_effort(session.effort_in_force())
+            .in_account_session(session.account_session().clone())
             .with_permissions(permissions.clone())
             .with_permission_mode(session.live_permission_mode())
             .with_attribution(self.attribution.clone())
@@ -3071,6 +3072,7 @@ fn suggest_next(
     let config = config.clone();
     let trust = trust.clone();
     let session_model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     let (send, answer) = mpsc::channel();
     thread::spawn(move || {
         let egress = Egress::new();
@@ -3084,6 +3086,7 @@ fn suggest_next(
                     turn::aside(
                         &config,
                         &egress,
+                        &account,
                         asking,
                         Some(model.as_ref()),
                         &mut bravebot_agent::report::IgnoreReports,
@@ -4555,6 +4558,7 @@ fn compact_animated(
     let worker_config = config.clone();
     let worker_trust = trust.clone();
     let model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     let focus = (!focus.is_empty()).then(|| focus.to_string());
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
@@ -4566,6 +4570,7 @@ fn compact_animated(
     let worker = thread::spawn(move || {
         summarise_on_a_worker(
             &worker_config,
+            &account,
             conversation,
             model.as_deref(),
             worker_trust,
@@ -4628,6 +4633,7 @@ fn compact_animated(
 )]
 fn summarise_on_a_worker(
     config: &Config,
+    account: &bravebot_agent::chatgpt::AccountSession,
     conversation: Conversation,
     model: Option<&str>,
     trust: TrustStore,
@@ -4650,6 +4656,7 @@ fn summarise_on_a_worker(
     let done = turn::compact(
         config,
         &egress,
+        account,
         &mut conversation,
         model,
         &mut reporter,
@@ -4826,6 +4833,7 @@ fn ask_animated(
     let mut worker_trust = trust.clone();
     let worker_workspace = workspace.clone();
     let model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
@@ -4898,6 +4906,7 @@ fn ask_animated(
         let done = turn::aside(
             &worker_config,
             &egress,
+            &account,
             asking,
             model.as_deref(),
             &mut reporter,
@@ -4994,6 +5003,7 @@ fn commit_message_animated(
     let worker_workspace = workspace.clone();
     let asked = asked.clone();
     let model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
     session.begin_aside();
@@ -5007,6 +5017,7 @@ fn commit_message_animated(
         let done = turn::commit_message(
             &worker_config,
             &egress,
+            &account,
             &worker_workspace,
             &asked.source,
             asked.format.as_deref(),
@@ -5636,6 +5647,7 @@ fn goal_check_animated(
     let worker_config = config.clone();
     let worker_trust = trust.clone();
     let model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
     // the conversation. The conversation stays on this thread and is not touched again.
     let check = bravebot_agent::goal::Check::of(conversation, &condition);
@@ -5653,6 +5665,7 @@ fn goal_check_animated(
         let done = turn::goal(
             &worker_config,
             &egress,
+            &account,
             check,
             model.as_deref(),
             &mut reporter,
@@ -17519,6 +17532,38 @@ mod tests {
         assert_eq!(session.spend_limit().credits(), 0);
     }
 
+    /// CHATGPT-10: every turn of a session is built in the session, so the requests of all of them
+    /// carry its identifier, and a second session of the process has its own. `/clear` begins a new
+    /// conversation and with it a new session, which shares no cache with the one that is gone. The
+    /// regressions it rejects are a task built with an identifier for the turn, one for the
+    /// process, and a cleared session that goes on with the old one.
+    #[test]
+    fn every_turn_of_a_session_is_built_in_it_and_clearing_begins_another() {
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let permissions = Permissions::new();
+        let mut session = Session::new("none");
+        let other = Session::new("none");
+
+        let first = run_settings.task("one", &session, &permissions);
+        let second = run_settings.task("two", &session, &permissions);
+        let elsewhere = run_settings.task("three", &other, &permissions);
+
+        let identifier = session.account_session().identifier().to_string();
+        assert_eq!(first.account_session().identifier(), identifier);
+        assert_eq!(second.account_session().identifier(), identifier);
+        assert_ne!(elsewhere.account_session().identifier(), identifier);
+
+        session.clear();
+        assert_ne!(session.account_session().identifier(), identifier);
+        assert_eq!(
+            run_settings
+                .task("four", &session, &permissions)
+                .account_session()
+                .identifier(),
+            session.account_session().identifier()
+        );
+    }
+
     /// The turn holds the session's own handle, so a limit typed while it runs reaches its next
     /// request, and the figure the person gives at the question is the session's afterwards. It
     /// also carries what the session had spent, which the limit is read against.
@@ -28064,6 +28109,7 @@ mod tests {
 
         let (done, shortened, _trail) = summarise_on_a_worker(
             &config,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
             conversation,
             None,
             TrustStore::new("/work"),
@@ -31557,6 +31603,34 @@ mod tests {
         answers.asked_about.record(make);
         answers.exposed.allow(".env");
         answers.servers = Some(LanguageServers::new(root, None));
+    }
+
+    /// CHATGPT-10: a branch goes on in the session it was made in, with the identifier its requests
+    /// to the ChatGPT account already carry. The copy shares the prefix the service has cached for
+    /// them, and the original is not asked anything more. The regression it rejects is a branch that
+    /// begins a session of its own, which would leave that cache unfound.
+    #[test]
+    fn branching_a_session_goes_on_with_the_identifier_of_the_conversation_it_copies() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-account-session");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        let identifier = session.account_session().identifier().to_string();
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert_eq!(session.account_session().identifier(), identifier);
     }
 
     /// SESSION-31: the session moves onto a marked copy of its record and says where the original

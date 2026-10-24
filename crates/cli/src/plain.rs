@@ -505,6 +505,7 @@ fn run(
         agent,
         reads_effort,
         effort,
+        account: bravebot_agent::chatgpt::AccountSession::begin(),
         complained: None,
         home,
         profile,
@@ -681,6 +682,13 @@ struct Running<'a> {
     /// Resolved once where the session is assembled, for the reason the attribution is: a file
     /// edited mid-session describes the next one, and this mode has no command that changes it.
     effort: Option<bravebot_session::store::Effort>,
+    /// What this session carries into its requests to the ChatGPT account: the identifier they carry
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Begun where the session is assembled and given to every turn it takes, so a background
+    /// session's turns are one session to the account, and another background session or a one-shot
+    /// run is another. A session resumed from a record begins its own: the record keeps none.
+    account: bravebot_agent::chatgpt::AccountSession,
     /// The last substitution said, so the same complaint is not repeated every turn.
     ///
     /// A session asks the same model over and over, so a substitution said once per turn is one
@@ -882,9 +890,11 @@ impl Kept {
     }
 }
 
-impl<C: Confirmer + Send> Turns<C> for Running<'_> {
-    fn take(&mut self, prompt: &str, asking: &mut C) -> Said {
-        let task = Task::new(prompt.to_string())
+impl Running<'_> {
+    /// The task one prompt of this session is run as: built from what the session holds, and in the
+    /// session, so every prompt of it carries the same identifier to the ChatGPT account.
+    fn task(&self, prompt: &str) -> Task {
+        Task::new(prompt.to_string())
             .with_mcp(self.mcp.clone())
             .with_home(self.home.clone())
             .with_profile(self.profile.clone())
@@ -898,6 +908,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             // itself is left on disk, so it applies again under a model that reads one
             // (BACKEND-22).
             .with_effort(self.effort.filter(|_| self.reads_effort))
+            .in_account_session(self.account.clone())
             .with_permissions(self.permissions.clone())
             .with_permission_mode(self.mode)
             .with_attribution(self.attribution.clone())
@@ -913,7 +924,13 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .already_exposed(self.answers.exposed.clone())
             .with_inbox(self.inbox.clone())
             .with_courier(self.courier.clone())
-            .addressing(self.agent.as_ref().map(|agent| agent.name.clone()));
+            .addressing(self.agent.as_ref().map(|agent| agent.name.clone()))
+    }
+}
+
+impl<C: Confirmer + Send> Turns<C> for Running<'_> {
+    fn take(&mut self, prompt: &str, asking: &mut C) -> Said {
+        let task = self.task(prompt);
 
         // The mode as the session holds it. The confirmer below is what enforces it, and the task
         // above is the half the planner is told about; both are set from the one value, and

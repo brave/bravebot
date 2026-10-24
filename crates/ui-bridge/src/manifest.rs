@@ -102,6 +102,7 @@ pub(crate) fn walk(walk: Walk) {
         .with_home(bravebot_agent::home::directory())
         .with_cache(bravebot_agent::home::cache())
         .with_model(model)
+        .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
@@ -130,6 +131,8 @@ pub(crate) fn walk(walk: Walk) {
     let mut sink = BridgeSink::for_run(emitter.clone(), &session, run);
     let egress = Egress::new();
 
+    #[cfg(test)]
+    crate::running::built_in::record("manifest", task.account_session().identifier());
     let outcome = bravebot_agent::manifest::run_recording(
         &config,
         &egress,

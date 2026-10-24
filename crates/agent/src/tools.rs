@@ -20739,7 +20739,7 @@ mod tests {
                 skills: &skills,
                 slots: &mut slots,
                 reads: &mut reads,
-                chat: Chat::new(&config, &egress),
+                chat: Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin()),
                 cancel: &cancel,
                 scheduling: Scheduling::ArrangingALook,
                 arming: Arming::Allowed { free: 1 },

@@ -3187,8 +3187,8 @@ and Gemini clients: the request, the events, calls and their results, usage, the
 of a stream, and the refusals, reached at the entry's `/responses` route with its key as a bearer token.
 
 **Not built:** an `npm` on a model, so the SDK an entry names decides for every model it lists; the ChatGPT
-account's identifier for a session and its effort level held fixed for one, which wait on a session the agent
-holds ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)); a run's `--output-schema`, which the request does not
+account's effort level, which [CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10) states per session and the
+request path does not yet hold fixed for one; a run's `--output-schema`, which the request does not
 carry; a document attachment, which is dropped
 ([#3121](https://github.com/brave/bravebot/issues/3121)); a refusal the model writes as a
 content part of a reply that completes, which is read as no content

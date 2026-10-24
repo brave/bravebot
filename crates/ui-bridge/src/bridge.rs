@@ -2515,6 +2515,7 @@ fn work(work: Work) {
         // number would only interrupt work that was going fine (TURN-2).
         .with_rounds(None)
         .with_model(model)
+        .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_download_cap(download_cap)
@@ -2579,6 +2580,8 @@ fn work(work: Work) {
     // in a verdict read the same answer.
     let mut confining = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
+    #[cfg(test)]
+    crate::running::built_in::record("turn", task.account_session().identifier());
     let began_at = std::time::Instant::now();
     let completed = agent_turn::resume(
         &config,
@@ -3388,6 +3391,7 @@ mod coverage_tests {
         parent_state.answers.exposed.allow(".env");
         parent_state.answers.exposed.allow_creating(&key);
         parent_state.answers.servers = Some(bravebot_agent::lsp::LanguageServers::new(root, None));
+        let parents_account_session = parent_state.account.identifier().to_string();
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let parent = bridge.mint(Open::opened(
             root.to_path_buf(),
@@ -3411,6 +3415,12 @@ mod coverage_tests {
             .get(forked["session"].as_str().unwrap())
             .unwrap();
         let state = child.state.lock().unwrap();
+        // CHATGPT-10: two sessions open in the process, so they are two sessions to the account.
+        assert_ne!(
+            state.account.identifier(),
+            parents_account_session,
+            "the fork shares the parent's cache affinity"
+        );
         assert!(
             state.answers.trust.is_trusted("notes.md"),
             "the fork lost the map"
@@ -4016,3 +4026,7 @@ mod opening_tests;
 #[cfg(test)]
 #[path = "failure_tests.rs"]
 mod failure_tests;
+
+#[cfg(test)]
+#[path = "account_session_tests.rs"]
+mod account_session_tests;

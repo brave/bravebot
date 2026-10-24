@@ -100,20 +100,102 @@ fn say_from(saving: &Mutex<Saving>, reporter: &mut (impl Reporter + ?Sized)) {
 
 /// The service a stored sign-in reaches: the one built from constants, shared by every request.
 pub(crate) fn account_provider() -> &'static Provider {
+    #[cfg(test)]
+    if let Some(host) = stand_in::host() {
+        return host;
+    }
     static PROVIDER: OnceLock<Provider> = OnceLock::new();
     PROVIDER.get_or_init(Provider::chatgpt_account)
 }
 
-/// The identifier every request of this process carries as its session, thread and client request
-/// identifiers.
+/// A server a test of this crate runs in place of the serving host, and a token in place of the
+/// stored sign-in, for the requests made on the thread that installed it.
 ///
-/// Generated here and from the operating system's random source, so it holds nothing a reply, a
-/// model or a settings file chose and nothing about the person or the account. One for the process:
-/// the service derives its prompt-cache affinity from it, so a value that changed between requests
-/// would be a cache that never hit.
-pub(crate) fn session_id() -> &'static str {
-    static SESSION: OnceLock<String> = OnceLock::new();
-    SESSION.get_or_init(bravebot_skus::new_request_id)
+/// Compiled into this crate's test build alone, so no flag, variable or file can reach it and the
+/// serving host is the one constant in every other build. It is a mechanism of its own, apart from
+/// the `test-hosts` feature, which points the built binary at a stand-in through a variable. It
+/// reaches the thread that asked for it and no other, which is where a turn's own rounds and a
+/// summary are made. It reads no stored sign-in and sends no real token anywhere.
+#[cfg(test)]
+pub(crate) mod stand_in {
+    use super::{Provider, Secret};
+    use std::cell::Cell;
+
+    /// The token the stand-in hands out, which no stored sign-in holds.
+    pub(super) const TOKEN: &str = "a-stand-in-token";
+
+    thread_local! {
+        static HOST: Cell<Option<&'static Provider>> = const { Cell::new(None) };
+    }
+
+    /// What ends the stand-in when it is dropped.
+    pub(crate) struct Installed;
+
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            HOST.with(|host| host.set(None));
+        }
+    }
+
+    /// Send this thread's requests to the account to the server at `endpoint`.
+    pub(crate) fn at(endpoint: &str) -> Installed {
+        let text = format!(
+            r#"{{"provider": {{"chatgpt-stand-in": {{"name": "ChatGPT", "npm": "@ai-sdk/openai",
+                "options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#
+        );
+        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+            panic!("not an object");
+        };
+        let provider = Provider::all(&root).pop().expect("one provider");
+        HOST.with(|host| host.set(Some(Box::leak(Box::new(provider)))));
+        Installed
+    }
+
+    pub(super) fn host() -> Option<&'static Provider> {
+        HOST.with(Cell::get)
+    }
+
+    pub(super) fn token() -> Option<Secret> {
+        host().map(|_| Secret::new(TOKEN))
+    }
+}
+
+/// What one session carries into the requests it makes to the ChatGPT account
+/// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)): the identifier those requests
+/// carry as their session, thread and client request identifiers.
+///
+/// Made when a session begins and held by whatever holds the session, so every request the session
+/// makes carries the same identifier, and a second session of the same process carries another. The
+/// service derives its prompt-cache affinity from the identifier, so one that changed between a
+/// session's requests would be a cache that never hit, and one two sessions shared would give them
+/// each other's cache. A delegate, a background session, a resumed session and a fork each begin
+/// their own: nothing here is stored in a session's record.
+///
+/// Cloning gives another handle on the same session.
+#[derive(Debug, Clone)]
+pub struct AccountSession(std::sync::Arc<Begun>);
+
+#[derive(Debug)]
+struct Begun {
+    identifier: String,
+}
+
+impl AccountSession {
+    /// A new session.
+    ///
+    /// The identifier is generated here and from the operating system's random source, so it holds
+    /// nothing a reply, a model or a settings file chose and nothing about the person, the account,
+    /// the project or what was asked.
+    pub fn begin() -> Self {
+        Self(std::sync::Arc::new(Begun {
+            identifier: bravebot_skus::new_request_id(),
+        }))
+    }
+
+    /// The identifier the session's requests carry.
+    pub fn identifier(&self) -> &str {
+        &self.0.identifier
+    }
 }
 
 /// The access token of the stored sign-in, renewed where it is about to expire.
@@ -126,10 +208,18 @@ pub(crate) struct StoredSignIn;
 
 impl AccountAccess for StoredSignIn {
     fn access_token(&mut self) -> Result<Secret, AccountFailure> {
+        #[cfg(test)]
+        if let Some(token) = stand_in::token() {
+            return Ok(token);
+        }
         obtained(Renewer::access_token)
     }
 
     fn replace_refused(&mut self, refused: &Secret) -> Result<Secret, AccountFailure> {
+        #[cfg(test)]
+        if let Some(token) = stand_in::token() {
+            return Ok(token);
+        }
         let refused = bravebot_skus::Secret::new(refused.expose());
         obtained(|renewer| renewer.replace_refused(&refused))
     }
@@ -360,13 +450,16 @@ mod tests {
         }
     }
 
-    /// CHATGPT-10: the three session headers carry one identifier for the whole process, so the
-    /// service can tie requests to one conversation's cache, and it is a fresh random value of the
-    /// shape of a version 4 identifier rather than anything about the person or the account.
+    /// CHATGPT-10: a session's identifier is a fresh random value of the shape of a version 4
+    /// identifier, and a handle on the session gives the identifier it was made with. The
+    /// regressions it rejects are an identifier built from anything but the random source, and a
+    /// clone that begins a session of its own.
     #[test]
-    fn the_session_identifier_is_one_random_value_for_the_process() {
-        let id = session_id();
-        assert_eq!(id, session_id());
+    fn a_sessions_identifier_is_random_and_every_handle_on_it_gives_the_same_one() {
+        let session = AccountSession::begin();
+        let id = session.identifier();
+        assert_eq!(id, session.clone().identifier());
+        assert_ne!(id, AccountSession::begin().identifier());
         assert_ne!(id, bravebot_skus::new_request_id());
         let groups: Vec<usize> = id.split('-').map(str::len).collect();
         assert_eq!(groups, [8, 4, 4, 4, 12], "{id}");

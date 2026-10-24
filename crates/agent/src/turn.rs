@@ -929,6 +929,7 @@ pub(crate) fn delegated(
 pub fn compact<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     conversation: &mut Conversation,
     model: Option<&str>,
     reporter: &mut R,
@@ -953,7 +954,7 @@ pub fn compact<S: Sink, R: Reporter>(
     reporter.phase(Phase::Compacting);
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat::new(config, egress)
+    let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
         .stoppable_by(cancel);
@@ -1051,7 +1052,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             skills: &skills,
             slots: &mut slots,
             reads: &mut reads,
-            chat: crate::processor::Chat::new(config, egress),
+            chat: crate::processor::Chat::new(config, egress, task.account_session()),
             cancel: &cancel,
             scheduling: tools::Scheduling::NoLaterLook,
             arming: crate::watch::Arming::Unavailable,
@@ -1115,6 +1116,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
 pub fn aside<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     question: crate::aside::Question,
     model: Option<&str>,
     reporter: &mut R,
@@ -1132,7 +1134,7 @@ pub fn aside<S: Sink, R: Reporter>(
         .resuming(question.context());
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat::new(config, egress)
+    let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
         .stoppable_by(cancel);
@@ -1166,6 +1168,7 @@ pub fn aside<S: Sink, R: Reporter>(
 pub fn goal<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     check: crate::goal::Check,
     model: Option<&str>,
     reporter: &mut R,
@@ -1185,7 +1188,7 @@ pub fn goal<S: Sink, R: Reporter>(
         .resuming(check.context());
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat::new(config, egress)
+    let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
         .stoppable_by(cancel);
@@ -1214,6 +1217,7 @@ pub fn goal<S: Sink, R: Reporter>(
 pub fn commit_message<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     workspace: &Workspace,
     source: &crate::commit_message::Source,
     format: Option<&str>,
@@ -1235,7 +1239,7 @@ pub fn commit_message<S: Sink, R: Reporter>(
         .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat::new(config, egress)
+    let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
         .stoppable_by(cancel);
@@ -3645,7 +3649,7 @@ where
         (None, Some(session)) => {
             let settled = session.settle(
                 policy,
-                &mut crate::processor::Chat::new(config, egress)
+                &mut crate::processor::Chat::new(config, egress, task.account_session())
                     .spending(subscription.as_mut())
                     .on(task.model.as_deref())
                     .stoppable_by(cancel),
@@ -4182,6 +4186,7 @@ where
         round_steps::compact_if_due(
             config,
             egress,
+            task.account_session(),
             cancel,
             policy,
             conversation,
@@ -4253,8 +4258,9 @@ where
 
         let asked_at = Instant::now();
         let completion = {
-            let mut client =
-                crate::backend::Backend::select(config, egress, model).with_cancel(cancel.clone());
+            let mut client = crate::backend::Backend::select(config, egress, model)
+                .with_cancel(cancel.clone())
+                .in_session(task.account_session());
             if let Some(subscription) = state.subscription.as_mut() {
                 client = client.with_subscription(subscription);
             }
@@ -4659,7 +4665,7 @@ where
                         skills: catalogue,
                         slots: quarantine,
                         reads,
-                        chat: crate::processor::Chat::new(config, egress)
+                        chat: crate::processor::Chat::new(config, egress, task.account_session())
                             .spending(state.subscription.as_mut())
                             .on(state.turn_model.as_deref())
                             .stoppable_by(cancel),
@@ -6674,6 +6680,545 @@ mod tests {
                 panic!("one frame for the one message waiting: {told:?}");
             };
             assert!(framed.contains("> FOR-THE-SESSIONS-PLANNER"), "{framed}");
+        }
+    }
+
+    /// CHATGPT-10: the identifier each request to the ChatGPT account carries as its session.
+    ///
+    /// What is read is the identifier the backend would have sent, taken from the backend each call
+    /// selected: that the three headers carry it is the client's, and its tests read them off the wire.
+    mod account_session {
+        use super::ceiling::said;
+        use super::fallback::{configured, take};
+        use super::*;
+        use crate::backend::scripted;
+        use crate::chatgpt::AccountSession;
+        use bravebot_aichat::protocol::Message;
+        use bravebot_core::cancel::Cancel;
+
+        const ACCOUNT_MODEL: &str = "chatgpt/a-model";
+
+        fn on_the_account(task: Task) -> Task {
+            task.with_model(Some(ACCOUNT_MODEL.into()))
+        }
+
+        fn carried_by(session: &AccountSession) -> Option<String> {
+            Some(session.identifier().to_string())
+        }
+
+        /// A turn of two rounds, the first calling a tool, and the identifier each request carried.
+        fn two_rounds(name: &str, task: Task) -> Vec<Option<String>> {
+            let taken = take(
+                name,
+                &configured(None),
+                on_the_account(task),
+                vec![
+                    said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None),
+                    said("done", &[], None),
+                ],
+            );
+            taken.outcome.expect("the turn answered");
+            scripted::sessions()
+        }
+
+        /// The request the session's rounds make are where a cache is hit or not: one round that went
+        /// out under an identifier of its own would be the part of the conversation the service never
+        /// finds again. The regression it rejects is a round whose backend is not given the turn's
+        /// session.
+        #[test]
+        fn every_round_of_a_turn_on_the_account_carries_the_identifier_of_its_session() {
+            let session = AccountSession::begin();
+
+            let carried = two_rounds(
+                "account-session-rounds",
+                Task::new("look it up").in_account_session(session.clone()),
+            );
+
+            assert_eq!(carried, [carried_by(&session), carried_by(&session)]);
+        }
+
+        /// Two turns of a session are the requests the service is meant to tie together, and two
+        /// sessions of a process are the ones it must not. The regressions it rejects are one
+        /// identifier for the whole process and one identifier for each turn.
+        #[test]
+        fn turns_of_one_session_carry_one_identifier_and_another_session_carries_its_own() {
+            let first = AccountSession::begin();
+            let second = AccountSession::begin();
+
+            let one = two_rounds(
+                "account-session-one",
+                Task::new("a").in_account_session(first.clone()),
+            );
+            let again = two_rounds(
+                "account-session-again",
+                Task::new("b").in_account_session(first.clone()),
+            );
+            let other = two_rounds(
+                "account-session-other",
+                Task::new("c").in_account_session(second.clone()),
+            );
+
+            assert_eq!(one, again);
+            assert_eq!(one, [carried_by(&first), carried_by(&first)]);
+            assert_eq!(other, [carried_by(&second), carried_by(&second)]);
+            assert_ne!(first.identifier(), second.identifier());
+        }
+
+        /// A caller that says nothing runs a session of one turn: the rounds of it share an
+        /// identifier, and another such turn has its own. The regression it rejects is an identifier
+        /// that does not depend on the task, which is what one for the process was.
+        #[test]
+        fn a_turn_given_no_session_is_a_session_of_its_own() {
+            let one = two_rounds("account-session-none-one", Task::new("a"));
+            let another = two_rounds("account-session-none-another", Task::new("b"));
+
+            assert!(one[0].is_some(), "{one:?}");
+            assert_eq!(one[0], one[1]);
+            assert_eq!(another[0], another[1]);
+            assert_ne!(one[0], another[0]);
+        }
+
+        /// A goal run sends one task's clones as its turns, so a clone is in the session its task is
+        /// in, whether the task was told the session, began it with a request, or has not begun it
+        /// yet when the clone is made. The regressions it rejects are a clone that does not carry
+        /// the session it was told, and one that begins a session of its own where the task had
+        /// none yet, which would give each round of a goal run its own identifier.
+        #[test]
+        fn a_clone_of_a_task_is_in_the_session_the_task_is_in() {
+            let session = AccountSession::begin();
+            let told = Task::new("work towards it").in_account_session(session.clone());
+            assert_eq!(
+                told.clone().account_session().identifier(),
+                session.identifier(),
+                "a clone of a task that was told its session is in another"
+            );
+
+            let unsaid = Task::new("work towards it");
+            let before_any_ask = unsaid.clone();
+            let begun = unsaid.account_session().identifier().to_string();
+            assert_eq!(
+                before_any_ask.account_session().identifier(),
+                begun,
+                "a clone made before the task began its session began another"
+            );
+            assert_eq!(
+                unsaid.clone().account_session().identifier(),
+                begun,
+                "a clone made after the task began its session is in another"
+            );
+            assert_eq!(
+                unsaid.account_session().identifier(),
+                begun,
+                "the session changed between two asks"
+            );
+        }
+
+        /// One turn of `task`, on the account, with the stand-in host installed on this thread.
+        fn take_a_turn_at_the_host(name: &str, task: Task) {
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let completed = resume(
+                &configured(None),
+                &Egress::new(),
+                &workspace,
+                &on_the_account(task),
+                &mut Conversation::new(),
+                &mut crate::confirm::ApproveWrites,
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            );
+            completed.outcome.expect("the host answered the turn");
+        }
+
+        /// The request a turn on the account sends carries the identifier of the turn's session in
+        /// each of the three headers, and the same value in all three. This runs the whole path from
+        /// the task to the wire. The regressions it rejects are a request sent with an identifier of
+        /// its own, whether because the session was not given to the backend or because it was
+        /// replaced by another between the backend and the client, and one header carrying another
+        /// value than the other two.
+        #[test]
+        fn a_turn_on_the_account_sends_the_identifier_of_its_session_in_each_of_the_three_headers()
+        {
+            use crate::testutil::{Answer, serving_host};
+            let host = serving_host(vec![Answer::Words("ok"); 3]);
+            let _at = crate::chatgpt::stand_in::at(&host.endpoint);
+            let session = AccountSession::begin();
+            let other = AccountSession::begin();
+
+            take_a_turn_at_the_host(
+                "account-session-wire-one",
+                Task::new("a").in_account_session(session.clone()),
+            );
+            take_a_turn_at_the_host(
+                "account-session-wire-two",
+                Task::new("b").in_account_session(session.clone()),
+            );
+            take_a_turn_at_the_host(
+                "account-session-wire-three",
+                Task::new("c").in_account_session(other.clone()),
+            );
+
+            let expected =
+                [&session, &session, &other].map(|session| Some(session.identifier().to_string()));
+            for name in ["session-id", "thread-id", "x-client-request-id"] {
+                assert_eq!(host.header(name), expected, "{name}");
+            }
+        }
+
+        fn an_exchange() -> Conversation {
+            let mut conversation = Conversation::new();
+            for (prompt, answer) in [
+                ("port the parser to the new lexer", "started on it"),
+                ("what about the error type", "widened it"),
+                ("now the tests", "updated them"),
+                ("carry on", "carrying on"),
+            ] {
+                conversation.push(Message::user(prompt));
+                conversation.push(Message::assistant(answer));
+            }
+            conversation.measured(50_000);
+            conversation
+        }
+
+        /// A summary, a question asked beside the work and the judgement of a goal are each a request
+        /// the session makes outside a turn, and each has to say which session. The regression it
+        /// rejects is one of the three made under an identifier of its own.
+        #[test]
+        fn a_summary_a_question_and_a_judgement_carry_the_identifier_of_the_session_that_asked() {
+            let session = AccountSession::begin();
+            let config = configured(None);
+            let egress = Egress::new();
+            let mut conversation = an_exchange();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            scripted::script(vec![
+                said("they were porting the parser", &[], None),
+                said("because the grammar nests", &[], None),
+                said("MET\nthe listing shows a.txt", &[], None),
+            ]);
+
+            compact(
+                &config,
+                &egress,
+                &session,
+                &mut conversation,
+                Some(ACCOUNT_MODEL),
+                &mut reporter,
+                &mut sink,
+                TrustStore::new("/work"),
+                None,
+                &Cancel::new(),
+                None,
+            )
+            .expect("the summary was made")
+            .expect("a long conversation has something to summarise");
+            aside(
+                &config,
+                &egress,
+                &session,
+                crate::aside::Question::recap(&conversation),
+                Some(ACCOUNT_MODEL),
+                &mut reporter,
+                &mut sink,
+                TrustStore::new("/work"),
+                |_| {},
+                &Cancel::new(),
+            )
+            .expect("the question was answered");
+            goal(
+                &config,
+                &egress,
+                &session,
+                crate::goal::Check::of(&conversation, "a.txt exists"),
+                Some(ACCOUNT_MODEL),
+                &mut reporter,
+                &mut sink,
+                TrustStore::new("/work"),
+                &Cancel::new(),
+            )
+            .expect("the condition was judged");
+            let carried = scripted::sessions();
+            scripted::clear();
+
+            assert_eq!(carried, vec![carried_by(&session); 3]);
+        }
+
+        /// A manifest run asks the account twice to plan and once for each step that reads, and all
+        /// of them are the session's requests. The regressions it rejects are a planning call, and
+        /// the chat the steps are run with, each made under an identifier of its own.
+        #[test]
+        fn the_planning_calls_and_the_steps_of_a_manifest_run_carry_the_identifier_of_its_session()
+        {
+            let session = AccountSession::begin();
+            let scratch = crate::testutil::scratch_dir("account-session-manifest");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            std::fs::write(scratch.join("README.md"), "bravebot is a coding agent").unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let task = on_the_account(Task::new("summarise the readme"))
+                .in_account_session(session.clone());
+            let plan = r#"{"steps": [
+                {"capability": "FILE_READ", "args": {"path": "README.md", "out_slot": "readme"}},
+                {"capability": "TRANSFORM", "args": {"reads": ["readme"],
+                    "instruction": "summarise", "out_slot": "summary"}},
+                {"capability": "ANSWER", "args": {"from_slot": "summary"}}]}"#;
+            scripted::script(vec![
+                said(
+                    "1. Read what the task names. 2. Say what it holds.",
+                    &[],
+                    None,
+                ),
+                said(plan, &[], None),
+                said(
+                    &format!(
+                        "{}\nA coding agent.",
+                        bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+                    ),
+                    &[],
+                    None,
+                ),
+            ]);
+
+            let outcome = crate::manifest::run(
+                &configured(None),
+                &Egress::new(),
+                &workspace,
+                &task,
+                &mut crate::Confining::new(
+                    &mut crate::confirm::Unattended,
+                    crate::PermissionMode::Bypass,
+                    false,
+                ),
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                TrustStore::new("/work"),
+                &Cancel::new(),
+            );
+            let carried = scripted::sessions();
+            scripted::clear();
+
+            assert_eq!(
+                outcome.expect("the run finished").reply_for_display(),
+                "A coding agent."
+            );
+            assert_eq!(carried, vec![carried_by(&session); 3]);
+        }
+
+        /// A commit message is drafted from a diff by a processor, off any turn, for the person who
+        /// asked in a session. The regression it rejects is a draft requested under an identifier of
+        /// its own, which no cache of that session would ever serve.
+        #[test]
+        fn a_commit_message_is_drafted_in_the_session_that_asked_for_it() {
+            let session = AccountSession::begin();
+            let scratch = crate::testutil::scratch_dir("account-session-commit-message");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            crate::testutil::repository::commit_files(
+                &scratch,
+                &[("src/lib.rs", "pub fn old() {}\n")],
+                "first",
+            );
+            crate::testutil::repository::commit_files(
+                &scratch,
+                &[("src/lib.rs", "pub fn renamed() {}\n")],
+                "second",
+            );
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = crate::workspace::trust_store(workspace.root());
+            trust.trust(".");
+            scripted::script(vec![said(
+                &format!(
+                    "It renames a function.\n{}\nRename old to renamed",
+                    bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+                ),
+                &[],
+                None,
+            )]);
+
+            let drafted = commit_message(
+                &configured(None),
+                &Egress::new(),
+                &session,
+                &workspace,
+                &crate::commit_message::Source::Range("HEAD~1..HEAD".into()),
+                None,
+                Some(ACCOUNT_MODEL),
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                trust,
+                &Cancel::new(),
+            );
+            let carried = scripted::sessions();
+            scripted::clear();
+
+            assert_eq!(drafted.expect("a draft").message, "Rename old to renamed");
+            assert_eq!(carried, vec![carried_by(&session)]);
+        }
+
+        /// The planner's question to its advisor is a request the turn makes beside its rounds, and
+        /// it is made through the chat the turn handed its tools, which is what a processor and a
+        /// vetting use as well. The regression it rejects is that chat being made for a session of
+        /// its own, which would leave the advisor, the processors and the vettings of a turn each
+        /// asking the account in an identifier its rounds never carry.
+        #[test]
+        fn the_advisor_a_turn_consults_is_asked_in_the_session_of_the_turn() {
+            let session = AccountSession::begin();
+            let task = Task::new("choose the first file to read")
+                .in_account_session(session.clone())
+                .with_advisor(Some("chatgpt/an-advisor".into()));
+
+            let taken = take(
+                "account-session-advisor",
+                &configured(None),
+                on_the_account(task),
+                vec![
+                    said(
+                        "",
+                        &[(
+                            "advisor",
+                            r#"{"question":"which file should I read first?","why":"unsure"}"#,
+                        )],
+                        None,
+                    ),
+                    said("read the manifest first", &[], None),
+                    said("done", &[], None),
+                ],
+            );
+
+            taken.outcome.expect("the turn answered");
+            assert_eq!(taken.sent.len(), 3, "the advisor was not asked");
+            assert_eq!(scripted::sessions(), vec![carried_by(&session); 3]);
+        }
+
+        /// A conversation that has outgrown its budget is summarised inside the turn, before the
+        /// round that would have overflowed. The summary is the session's request like any other:
+        /// the regression it rejects is a summary made under an identifier of its own, which would
+        /// leave the turn's next round to find the summary's cache empty.
+        #[test]
+        fn a_summary_made_inside_a_turn_carries_the_identifier_of_its_session() {
+            let session = AccountSession::begin();
+            let mut config = configured(None);
+            config.context_budget = 1_000;
+            let scratch = crate::testutil::scratch_dir("account-session-compaction");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            scripted::script(vec![
+                said("they were porting the parser", &[], None),
+                said("carrying on", &[], None),
+            ]);
+
+            let completed = resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &on_the_account(Task::new("go on").in_account_session(session.clone())),
+                &mut an_exchange(),
+                &mut crate::confirm::ApproveWrites,
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            );
+            let asked = scripted::asked();
+            let carried = scripted::sessions();
+            scripted::clear();
+
+            completed.outcome.expect("the turn answered");
+            assert_eq!(asked.len(), 2, "the conversation was not summarised");
+            assert_eq!(carried, vec![carried_by(&session); 2]);
+        }
+
+        /// Two delegates, each of two rounds, on the account: the identifier each request carried.
+        fn two_delegates(name: &str) -> Vec<Option<String>> {
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let config = configured(None);
+            let egress = Egress::new();
+            let mut replies = Vec::new();
+            for _ in 0..2 {
+                replies.push(said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None));
+                replies.push(said("done", &[], None));
+            }
+            scripted::script(replies);
+
+            for _ in 0..2 {
+                let ended = crate::delegate::run(
+                    &seeded_reader(),
+                    &config,
+                    &egress,
+                    &workspace,
+                    None,
+                    None,
+                    Some(ACCOUNT_MODEL),
+                    None,
+                    crate::PermissionMode::Ask,
+                    false,
+                    &bravebot_config::Attribution::default(),
+                    None,
+                    None,
+                    crate::exec::Deadlines::BUILT_IN,
+                    false,
+                    bravebot_sandbox::SandboxMode::default(),
+                    None,
+                    &Cancel::new(),
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &mut bravebot_core::event::RecordingSink::new(),
+                    None,
+                    None,
+                );
+                ended.delegated.expect("the delegate answered");
+            }
+            let carried = scripted::sessions();
+            scripted::clear();
+            carried
+        }
+
+        /// Everything a delegate asks of the account is one session's, and a second delegate is
+        /// another. The regressions it rejects are a delegate that carries its parent's identifier
+        /// (here, a process-wide one) and one that begins a session for each round.
+        #[test]
+        fn a_delegate_is_a_session_of_its_own_and_carries_one_identifier_throughout() {
+            let carried = two_delegates("account-session-delegates");
+
+            let [first, second, third, fourth] = carried.as_slice() else {
+                panic!("two requests for each of two delegates: {carried:?}");
+            };
+            assert!(first.is_some(), "{carried:?}");
+            assert_eq!(first, second);
+            assert_eq!(third, fourth);
+            assert_ne!(first, third);
+        }
+
+        /// What the kernel settles about a delegate before it exists, for a reader.
+        fn seeded_reader() -> crate::delegate::Seeded {
+            let mut trail = bravebot_core::event::RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "ask a delegate");
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let held = CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]);
+            let policy = Policy::begin(routing, ReleasePlan::new(), held.clone(), &mut trail)
+                .expect("a policy")
+                .with_trust(trust);
+            let seeded = crate::delegate::seed(&policy, a_delegate_spec("reader", held), None);
+            policy.finish();
+            seeded
         }
     }
 
