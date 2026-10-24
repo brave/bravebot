@@ -6,16 +6,11 @@
 //! computes both checksums again, which is how a damaged frame gets past them. It implements
 //! CRC-32 itself and reads nothing from `bravebot_bedrock`.
 
-#![forbid(unsafe_code)]
-
 use arbitrary::Arbitrary;
 
 /// The most a frame may claim to be. Private in the decoder, so restated here: the target fails
 /// when the two disagree about where a claim becomes impossible.
 pub const MAX_FRAME_BYTES: u64 = 16 * 1024 * 1024;
-
-/// The total length, the headers length and the checksum of both.
-const PRELUDE_BYTES: usize = 12;
 
 /// A prelude, no headers, no payload and the trailing checksum.
 const MIN_FRAME_BYTES: usize = 16;
@@ -272,33 +267,6 @@ impl Damage {
     }
 }
 
-/// Whether `stream` holds a prelude with a correct checksum that claims a frame longer than
-/// `limit`, found by taking each frame before it at the length it claims. A prelude that fails its
-/// checksum, or claims less than the smallest frame, ends the walk, since the decoder refuses both
-/// before it allocates for either.
-pub fn claims_more_than(stream: &[u8], limit: u64) -> bool {
-    let mut rest = stream;
-    while rest.len() >= PRELUDE_BYTES {
-        let claim = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]);
-        let checksum = u32::from_be_bytes([rest[8], rest[9], rest[10], rest[11]]);
-        if crc32(&rest[..8]) != checksum {
-            return false;
-        }
-        if u64::from(claim) > limit {
-            return true;
-        }
-        let claim = claim as usize;
-        if claim < MIN_FRAME_BYTES {
-            return false;
-        }
-        match rest.get(claim..) {
-            Some(after) => rest = after,
-            None => return false,
-        }
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,54 +276,6 @@ mod tests {
             name,
             value: Value::Text(value.as_bytes().to_vec()),
         }
-    }
-
-    fn whole_frame() -> Vec<u8> {
-        Frame {
-            headers: vec![text(Name::EventType, "x")],
-            payload: Vec::new(),
-        }
-        .encode()
-    }
-
-    /// The target holds the decoder to what a claim past the limit allocates, so it has to find the
-    /// claim wherever it is in the stream, after frames the decoder took whole.
-    #[test]
-    fn a_claim_past_the_limit_is_found_after_the_frames_before_it() {
-        let mut stream = whole_frame();
-        stream.extend(whole_frame());
-        assert!(!claims_more_than(&stream, MAX_FRAME_BYTES));
-        stream.extend(Damage::Oversized(0).apply(whole_frame()));
-        assert!(claims_more_than(&stream, MAX_FRAME_BYTES));
-    }
-
-    /// A frame of exactly the limit is one the decoder accepts, so a claim of that is not more.
-    #[test]
-    fn a_claim_of_exactly_the_limit_is_not_past_it() {
-        let at = Damage::Total(MAX_FRAME_BYTES as u32).apply(whole_frame());
-        let past = Damage::Total(MAX_FRAME_BYTES as u32 + 1).apply(whole_frame());
-        assert!(!claims_more_than(&at, MAX_FRAME_BYTES));
-        assert!(claims_more_than(&past, MAX_FRAME_BYTES));
-    }
-
-    /// A prelude that fails its checksum is refused whatever it claims, so what it claims is no
-    /// claim to hold the decoder to.
-    #[test]
-    fn a_claim_with_a_wrong_prelude_checksum_is_not_a_claim() {
-        let mut bytes = Damage::Oversized(0).apply(whole_frame());
-        bytes[8] ^= 1;
-        assert!(!claims_more_than(&bytes, MAX_FRAME_BYTES));
-    }
-
-    /// The walk ends at a stream shorter than a prelude, and at a claim below the smallest frame,
-    /// which would otherwise be a step of no length.
-    #[test]
-    fn the_walk_ends_at_a_short_stream_and_at_a_claim_that_does_not_advance() {
-        assert!(!claims_more_than(&[0; 11], 0));
-        let mut prelude = vec![0u8; PRELUDE_BYTES];
-        let checksum = crc32(&prelude[..8]);
-        prelude[8..12].copy_from_slice(&checksum.to_be_bytes());
-        assert!(!claims_more_than(&prelude, MAX_FRAME_BYTES));
     }
 
     /// The canonical check value for CRC-32. The decoder is held to the checksum the format

@@ -10,8 +10,6 @@
 //! reaches a fixed point without a guard. Its cost is polynomial in the text, so the limits below
 //! protect the harness from long texts only.
 
-#![forbid(unsafe_code)]
-
 use arbitrary::{Arbitrary, Result, Unstructured};
 use std::collections::BTreeSet;
 

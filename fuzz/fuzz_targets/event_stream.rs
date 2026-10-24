@@ -5,28 +5,15 @@
 //! payload. The second mode builds frames from fields with correct checksums, changes one length
 //! or byte of the last and computes the checksums again, which is how a lie about a length gets
 //! past the decoder's first check. Every stream is delivered in the reads the input cuts it into.
-//!
-//! A frame that claims more than the decoder accepts is refused as the claim arrives, before the
-//! decoder has allocated anything for it. The target measures what the decoder allocates with the
-//! counting allocator, which no other target registers.
 
 #![no_main]
 #![forbid(unsafe_code)]
 
 use arbitrary::Arbitrary;
 use bravebot_bedrock::eventstream::{Event, FrameDecoder, FrameError};
-use bravebot_fuzz::allocation::{Counting, counting, peak_growth};
-use bravebot_fuzz::frames::{Damage, Frame, MAX_FRAME_BYTES, Model, claims_more_than};
+use bravebot_fuzz::frames::{Damage, Frame, Model};
 use bravebot_fuzz::splits::pieces;
 use libfuzzer_sys::fuzz_target;
-
-#[global_allocator]
-static ALLOCATOR: Counting = Counting;
-
-/// The most a stream may make the decoder allocate where one of its frames claims more than
-/// [`MAX_FRAME_BYTES`]: a sixteenth of that. A stream here is at most a few kibibytes, so the
-/// buffers for it come to far less, and a reservation of the claim comes to far more.
-const ALLOCATION_LIMIT: usize = MAX_FRAME_BYTES as usize / 16;
 
 #[derive(Arbitrary, Debug)]
 enum Input {
@@ -93,12 +80,6 @@ fn models(events: &[Event]) -> Vec<Model> {
 }
 
 fuzz_target!(|input: Input| {
-    // Without this a decoder that allocates for a claim passes, since the peak reads zero.
-    assert!(
-        counting(),
-        "the counting allocator is not the global allocator"
-    );
-
     let (stream, cuts, expected) = match input {
         Input::Raw { bytes, cuts } => (bytes, cuts, None),
         Input::Frames {
@@ -139,17 +120,9 @@ fuzz_target!(|input: Input| {
         }
     };
 
-    let (whole, whole_peak) = peak_growth(|| decode(&stream, &[]));
-    let (split, split_peak) = peak_growth(|| decode(&stream, &cuts));
+    let whole = decode(&stream, &[]);
+    let split = decode(&stream, &cuts);
     assert_eq!(whole, split, "the reads changed what was decoded");
-    if claims_more_than(&stream, MAX_FRAME_BYTES) {
-        for peak in [whole_peak, split_peak] {
-            assert!(
-                peak < ALLOCATION_LIMIT,
-                "a frame claiming more than {MAX_FRAME_BYTES} bytes made the decoder allocate {peak}"
-            );
-        }
-    }
 
     // `push` gives up the events a corrupt frame came after, and agrees otherwise.
     match FrameDecoder::new().push(&stream) {

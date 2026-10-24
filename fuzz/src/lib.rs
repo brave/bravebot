@@ -5,11 +5,8 @@
 //! Nothing here reads a file or starts a program. An evaluator shares no code with the function it
 //! checks, so a disagreement is a defect in one of the two.
 
-// `deny` rather than `forbid` so that `allocation` can allow it at the one impl that needs it.
-// Every other module here forbids it for itself, and so does each target.
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
-pub mod allocation;
 pub mod frames;
 pub mod lines;
 pub mod pattern;
