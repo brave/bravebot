@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 bravebot-agent = { path = "../agent" }
 bravebot-approval = { path = "../approval" }
+bravebot-backtrace = { path = "../backtrace" }
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 bravebot-diag = { path = "../diag" }

@@ -3316,6 +3316,13 @@ update-how = update with: { $command }
 update-not-installed-by-us =
     this copy was not installed by the npm package or by the install script, so there is no update
     command for it. A build from source is updated by pulling and building again.
+# Said once, on the startup screen of the first launch that sends crash reports (CRASH-9). The key
+# and the variable are the two ways of turning it off, and are not a translator's to reword.
+crash-reports-notice =
+    if bravebot crashes, a report is sent to Brave on the next launch. It holds the version, your
+    operating system and the line of bravebot's source that failed, and never your prompts, files
+    or keys. To turn this off, set crashReports to false in your settings file, or set
+    BRAVEBOT_CRASH_REPORTS=0.
 session-started-server = running the { $language } language server for this session ({ $program })
 # Said when a person agrees to offer a server's tools to the model. The list is recorded, so it
 # is offered again in later sessions until the server's list changes.

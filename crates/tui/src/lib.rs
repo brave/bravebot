@@ -30,6 +30,7 @@ pub mod command_table;
 pub mod commit_message_command;
 pub mod config_prompt;
 pub mod confirm;
+pub mod crash_notice;
 pub mod dropped;
 pub mod editor;
 pub mod effort_prompt;

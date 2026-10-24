@@ -370,6 +370,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `tui.mouse` | `false` stops the interface capturing the mouse, so the terminal's own selection works ([below](#tuimouse)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
+| `crashReports` | `false` stops crash reports being written and sent. Read from your own file only ([below](#crashreports)) |
 | `vetting` | whether quarantined content is checked without asking you ([below](#vetting)) |
 
 In `env`, only string values: a number or a boolean is skipped rather than coerced, so write `"1"` and
@@ -961,6 +962,33 @@ recorded, and no line is said. Setting the environment variable `BRAVEBOT_UPDATE
 same, for a machine where updates are managed elsewhere, and either one is enough. Only the boolean
 `false` and the value `0` turn it off. It does not affect the installer's checksum and signature
 checks.
+
+### `crashReports`
+
+```json
+{ "crashReports": false }
+```
+
+When bravebot panics it leaves a small report in `~/.bravebot/crash-reports`. The next launch sends
+it to Brave's Backtrace project and deletes it. Reports are on in a released build, and `false` turns
+them off: none is written, none is sent and no line is said. Setting the environment variable
+`BRAVEBOT_CRASH_REPORTS=0` does the same, and either one is enough. Only the boolean `false` and the
+value `0` turn them off.
+
+A report holds the version and build, the operating system and architecture, which executable
+panicked and how bravebot was installed, and the source file, line and column of the panic. It
+holds the panic's message only where the source wrote it as a fixed string. It never holds your
+prompts, file contents, credentials, working directory, host name, anything a model or a server
+said, or an identifier that stays the same from one report to the next. The service sees the network
+address a request came from, as any server does.
+
+Only your own `~/.bravebot/settings.json` is read for this key. A `.bravebot/settings.json` in a
+checkout can neither turn reports off nor turn them on again after you did, and a build made without
+a submission address, which is every build from source that did not have one set, sends nothing. A
+session started with `--incognito` has no state directory to leave a report in, so it leaves and
+sends none. The terminal says once, on the startup screen, that reports are sent. The desktop
+application does not, so this page and the README are where it is said for that. See
+[Crash reports](../security/security.md#crash-reports) for what leaves the process.
 
 ### `run.scrubEnv`
 

@@ -40,6 +40,7 @@ requires backend configuration. For the Brave backend, supply these exported nam
 | `BRAVE_AI_CHAT_ENDPOINT` | Backend endpoint |
 | `BRAVEBOT_DEFAULT_MODEL` | Optional default model, for every backend; otherwise `automatic-bravebot` |
 | `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | Optional premium endpoint |
+| `BACKTRACE_SUBMIT_URL` | Optional crash report address, baked in at build time. Leave it unset for development builds, which would otherwise report their own panics |
 
 Use the exported names, not the `DEV_`/`PROD_` inputs used by the agent's example
 configuration. Keep the values outside the checkout, for example in

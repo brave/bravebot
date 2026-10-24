@@ -38,7 +38,7 @@ VERSION_FILES = Cargo.toml Cargo.lock package.json ui/package.json
 # Forwarded into the cross-build container, which does not inherit the host environment.
 BUILD_ENV = SERVICES_KEY_AICHAT BRAVE_SERVICES_KEY_ID BRAVE_AI_CHAT_ENDPOINT \
             BRAVE_AI_CHAT_PREMIUM_ENDPOINT BRAVEBOT_DEFAULT_MODEL \
-            BRAVEBOT_ALLOW_UNCONFIGURED_BUILD
+            BACKTRACE_SUBMIT_URL BRAVEBOT_ALLOW_UNCONFIGURED_BUILD
 
 .PHONY: help
 help:

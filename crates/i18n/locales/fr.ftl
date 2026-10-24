@@ -2844,6 +2844,11 @@ update-not-installed-by-us =
     cette copie n'a été installée ni par le paquet npm ni par le script d'installation ; il n'y a
     donc pas de commande de mise à jour pour elle. Une version compilée depuis les sources se met
     à jour en récupérant les sources et en recompilant.
+crash-reports-notice =
+    si bravebot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version,
+    votre système d'exploitation et la ligne du code source de bravebot qui a échoué, jamais vos
+    invites, vos fichiers ni vos clés. Pour l'éviter, mettez crashReports à false dans votre
+    fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
 session-started-server = serveur de langage { $language } actif pour cette session ({ $program })
 session-offered-tools =
     { $count ->
