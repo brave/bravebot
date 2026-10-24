@@ -1294,16 +1294,26 @@ These are the places where another spec states something about this service, eac
   own is needed if the flow comes to need the secret type of `bravebot-config` or the clearing of buffers in
   `bravebot-sandbox`, which `bravebot-skus` spells for itself. [CHATGPT-5](#CHATGPT-5) rests on the dependency
   set either way.
-- **Network egress.** [network-egress.md](network-egress.md) names no host for any service, so none is added,
-  and the key set is fetched from the authorization server's host without a credential. The crate keeps a client of its own as `bravebot-skus` does, because a request here carries no labelled
-  value for the gate in `bravebot-net` to judge, so the register in its Known costs gains the crate, and the
-  client is configured to follow no redirect, which the register records as undecided for `bravebot-skus`.
-  The register's cost about a hop to any https host gains an exception: a request to the serving host that
-  carries the access token follows no redirect, since a person did not choose that host. Its scope is
-  requests that leave this process, so the listener, which receives one, is governed by
-  [CHATGPT-4](#CHATGPT-4).
-- **Labels.** Nothing changes. [CHATGPT-5](#CHATGPT-5) shows the flow holds the rule, and no exception is
-  added.
+- **Network egress.** [network-egress.md](network-egress.md) names the destinations of this flow by
+  pointing at [CHATGPT-2](#CHATGPT-2) and holds no copy of the addresses. Its register of the crates that
+  keep an HTTP client of their own records that `bravebot-skus` builds one for the subscription service
+  and one for this sign-in, because a request there carries no labelled value for the gate in
+  `bravebot-net` to judge, and that the code exchange, the key set and the renewal of an access token go
+  through them over the transport the caller states. This sign-in's clients follow no redirect, and
+  what the subscription client does with one stays undecided there. A turn and a listing go through the
+  one way out of [NET-1](network-egress.md#NET-1) with a request that refuses redirects
+  ([NET-2](network-egress.md#NET-2)) and is handed the body of a refusal
+  ([NET-12](network-egress.md#NET-12)). The register's cost about a hop within https has an exception for
+  a request to the serving host, which carries the access token and follows no redirect, since a person
+  did not choose that host. That spec's scope is requests that leave this process, so the listener,
+  which accepts connections from any program on this machine, answers each with a fixed page and makes
+  no request, is governed by [CHATGPT-4](#CHATGPT-4).
+- **Labels.** No exception is added to [labels.md](labels.md): [CHATGPT-5](#CHATGPT-5) shows the flow
+  holds the rule. The counts that spec pins moved with the body of a refusal that a request may ask
+  for ([NET-12](network-egress.md#NET-12)): `Labelled::new` in the egress crate went from 2 to 4, for
+  the place that labels the body handed back and a test that builds a failure carrying one, and
+  `Policy::decode_transport` went from 2 to 3 in the aichat crate's `lib.rs`, for the one place the body
+  is read, and from 2 to 3 in the egress crate's `tests/egress.rs`, for a test.
 
 ## Known costs
 
