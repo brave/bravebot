@@ -149,7 +149,7 @@ impl fmt::Display for ChatError {
                 "the request body is larger than the {limit} bytes the service takes, even compressed, \
                  so it was not sent. Shorten the conversation"
             ),
-            Self::Account(failure) => write!(f, "{failure}"),
+            Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
             Self::Subscription(detail) => write!(
                 f,
                 "the Leo subscription could not be used: {detail}. Run `bravebot auth login leo` to \
@@ -290,8 +290,9 @@ pub trait AccountAccess {
 /// Why a ChatGPT account's request was not sent, or was refused.
 ///
 /// Each is a step, or a code compared with a closed list, and no text from a reply, so a sentence
-/// made from it quotes nothing ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
-/// Where signing in again is the remedy the sentence names `bravebot auth login chatgpt`.
+/// made from it quotes nothing ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). The
+/// sentence for each is in the message catalog and is chosen by the layer that shows the failure,
+/// since this crate has none: it names the condition and says nothing to a person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountFailure {
     /// Nothing is stored.
@@ -340,14 +341,7 @@ impl AccountFailure {
             Self::NotSignedIn => "not-signed-in",
             Self::Ended => "ended",
             Self::Refused => "token-refused",
-            Self::Named {
-                refusal: responses::protocol::Refusal::UsageLimit,
-                ..
-            } => "usage-limit",
-            Self::Named {
-                refusal: responses::protocol::Refusal::NotPermitted,
-                ..
-            } => "not-permitted",
+            Self::Named { refusal, .. } => refusal.name(),
             Self::Unusable => "unusable",
             Self::Renewal(RenewalFailure::Refused) => "renewal-refused",
             Self::Renewal(RenewalFailure::RateLimited) => "renewal-rate-limited",
@@ -381,36 +375,12 @@ impl AccountFailure {
     }
 }
 
+/// The name of the condition and no sentence, for a log or an assertion. This crate has no message
+/// catalog, so the sentence a person reads is chosen by the layer that shows the failure, from the
+/// condition alone ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
 impl fmt::Display for AccountFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotSignedIn => f.write_str(
-                "not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in",
-            ),
-            Self::Ended => f.write_str(
-                "the ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again",
-            ),
-            Self::Refused => f.write_str(
-                "OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login \
-                 chatgpt` to sign in again",
-            ),
-            Self::Named { refusal, .. } => fmt::Display::fmt(refusal, f),
-            Self::Unusable => f.write_str(
-                "the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` \
-                 to see why",
-            ),
-            Self::Renewal(class) => write!(
-                f,
-                "the ChatGPT sign-in could not be renewed: the request was {}",
-                match class {
-                    RenewalFailure::Refused => "refused",
-                    RenewalFailure::RateLimited => "rate-limited",
-                    RenewalFailure::Unavailable => "met with an unavailable service",
-                    RenewalFailure::Incomplete => "answered in a shape that could not be read",
-                    RenewalFailure::Transport => "not completed",
-                }
-            ),
-        }
+        f.write_str(self.name())
     }
 }
 
@@ -1601,6 +1571,63 @@ mod tests {
         distinct.sort_unstable();
         distinct.dedup();
         assert_eq!(distinct.len(), names.len(), "two failures share a name");
+    }
+
+    /// CHATGPT-8: this crate names the condition of an account failure and words none, since it has
+    /// no catalog and the layer that shows a failure chooses the sentence. A sentence here would
+    /// reach a person in English whatever language they chose, and would be a second place for the
+    /// wording. What is shown is the failure's fixed name, which differs between failures, so a
+    /// person shown the wrong sentence for a condition is not hidden by two that read alike.
+    #[test]
+    fn an_account_failure_is_shown_as_its_name_and_never_as_a_sentence() {
+        use responses::protocol::Refusal;
+        let every = [
+            AccountFailure::NotSignedIn,
+            AccountFailure::Ended,
+            AccountFailure::Refused,
+            AccountFailure::Unusable,
+            AccountFailure::Named {
+                refusal: Refusal::UsageLimit,
+                status: Some(429),
+                retry_after: Some(Duration::from_secs(600)),
+            },
+            AccountFailure::Named {
+                refusal: Refusal::NotPermitted,
+                status: None,
+                retry_after: None,
+            },
+            AccountFailure::Renewal(RenewalFailure::Refused),
+            AccountFailure::Renewal(RenewalFailure::RateLimited),
+            AccountFailure::Renewal(RenewalFailure::Unavailable),
+            AccountFailure::Renewal(RenewalFailure::Incomplete),
+            AccountFailure::Renewal(RenewalFailure::Transport),
+        ];
+        let mut shown: Vec<String> = every.iter().map(ToString::to_string).collect();
+        for (failure, said) in every.iter().zip(&shown) {
+            assert_eq!(said, failure.name(), "{failure:?}");
+            assert!(
+                !said.contains(char::is_whitespace) && !said.contains('.'),
+                "{failure:?} is worded as a sentence: {said}"
+            );
+            assert!(
+                !said.contains("login") && !said.contains("chatgpt"),
+                "{failure:?} names a command: {said}"
+            );
+        }
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            assert_eq!(refusal.to_string(), refusal.name());
+            assert!(
+                !refusal.to_string().contains(char::is_whitespace),
+                "{refusal:?} is worded as a sentence"
+            );
+        }
+        shown.sort();
+        shown.dedup();
+        assert_eq!(shown.len(), every.len(), "two conditions read the same");
+        assert_eq!(
+            ChatError::Account(AccountFailure::Ended).to_string(),
+            "ChatGPT account: ended"
+        );
     }
 
     /// The name a request carries says which service is meant, and the id in front of it is this

@@ -167,7 +167,10 @@ fn with_account(
         // Said in the sentence of the refusal, which does not send the person to sign in again:
         // a new sign-in is not what changes it.
         bravebot_agent::chatgpt::AccountModels::Refused(refusal) => {
-            warnings.push(format!("Could not load models from ChatGPT: {refusal}."));
+            warnings.push(format!(
+                "Could not load models from ChatGPT: {}.",
+                bravebot_agent::chatgpt::said_of_refusal(refusal)
+            ));
         }
         bravebot_agent::chatgpt::AccountModels::Absent => {}
     }

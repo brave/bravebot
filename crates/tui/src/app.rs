@@ -5498,21 +5498,7 @@ fn manifest_animated(
 
     let recorded = run.complete(session, workspace.root(), &asked, &outcome, &cancel);
 
-    match &outcome {
-        Ok(finished) => {
-            // Released for a screen, exactly as a turn's reply is, and into the transcript rather
-            // than into the conversation: what this run said is not something a later turn holds.
-            // Nothing is said about that here. A reply that arrived is the run having worked, and a
-            // line under it announcing what did not happen reads as a complaint about the run.
-            session.narrate(finished.reply_for_display());
-        }
-        // Stopped by the person, so there is nothing to report. The transcript already holds the
-        // steps that ran, and a complaint about a run they turned off themselves is noise.
-        Err(_) if stopped_by_the_person => {}
-        Err(failure) => {
-            session.note(t!(manifest_failed, problem = failure.to_string()));
-        }
-    }
+    say_how_a_manifest_run_ended(session, &outcome, stopped_by_the_person);
     // Last, so it is the line under the reply or under what went wrong. The run's own record is
     // where the plan, the proposal and the steps are kept in full, and the id is the only way in:
     // the picker marks a run's row but refuses Enter on it, so naming the id on the command line is
@@ -5660,24 +5646,15 @@ fn goal_check_animated(
     session.begin_aside();
 
     let worker = thread::spawn(move || {
-        let mut sink = Trail::new();
-        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
-        let egress = Egress::new();
-        // Reduced to what a person can be told before it crosses back, since the error types are
-        // the kernel's and this thread is the only place they mean anything.
-        let done = turn::goal(
+        check_the_goal_on_a_worker(
             &worker_config,
-            &egress,
             &account,
             check,
             model.as_deref(),
-            &mut reporter,
-            &mut sink,
             worker_trust,
             &worker_cancel,
+            to_main,
         )
-        .map_err(|e| e.to_string());
-        (done, sink)
     });
 
     loop {
@@ -5714,6 +5691,67 @@ fn goal_check_animated(
         goal_checked(session, done, cancel.is_cancelled()),
         sink.events().to_vec(),
     ))
+}
+
+/// What the transcript says of how a manifest run ended: its reply, nothing for a run the person
+/// stopped, and for a failure the sentence a person is told, which is the ChatGPT account's own
+/// sentence where it was that account's planner that failed and the category's name otherwise.
+///
+/// Apart from the loop that walks the run, which needs a terminal, so a test can say what a run
+/// ended with.
+fn say_how_a_manifest_run_ended(
+    session: &mut Session,
+    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    stopped_by_the_person: bool,
+) {
+    match outcome {
+        Ok(finished) => {
+            // Released for a screen, exactly as a turn's reply is, and into the transcript rather
+            // than into the conversation: what this run said is not something a later turn holds.
+            // Nothing is said about that here. A reply that arrived is the run having worked, and a
+            // line under it announcing what did not happen reads as a complaint about the run.
+            session.narrate(finished.reply_for_display());
+        }
+        // Stopped by the person, so there is nothing to report. The transcript already holds the
+        // steps that ran, and a complaint about a run they turned off themselves is noise.
+        Err(_) if stopped_by_the_person => {}
+        Err(failure) => {
+            session.note(t!(manifest_failed, problem = failure.to_string()));
+        }
+    }
+}
+
+/// The goal check, as the thread that runs it does it.
+///
+/// Apart from [`goal_check_animated`] so a test can run what the thread runs without a terminal. The
+/// failure is reduced to the sentence a person is told before it crosses back, since the error types
+/// are the kernel's and this thread is the only place they mean anything: the sentence of the ChatGPT
+/// account's failure where it was that account's, and the category's name otherwise.
+fn check_the_goal_on_a_worker(
+    config: &Config,
+    account: &bravebot_agent::chatgpt::AccountSession,
+    check: bravebot_agent::goal::Check,
+    model: Option<&str>,
+    trust: TrustStore,
+    cancel: &Cancel,
+    to_main: mpsc::Sender<crate::remote_confirm::ToMain>,
+) -> (Result<bravebot_agent::goal::Assessed, String>, Trail) {
+    let mut sink = Trail::new();
+    let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
+    let egress = Egress::new();
+    let done = turn::goal(
+        config,
+        &egress,
+        account,
+        check,
+        model,
+        &mut reporter,
+        &mut sink,
+        trust,
+        cancel,
+    )
+    .map_err(|e| e.to_string());
+    (done, sink)
 }
 
 /// Take what the goal check came back with, and give back the prompt that carries the work on
@@ -8815,7 +8853,7 @@ mod tests {
                 said,
                 [t!(
                     session_chatgpt_models_refused,
-                    refusal = refusal.to_string()
+                    refusal = bravebot_agent::chatgpt::said_of_refusal(refusal)
                 )
                 .to_string()],
                 "{refusal:?}"
@@ -8875,7 +8913,7 @@ mod tests {
             account_problem_said(&AccountModels::Refused(Refusal::UsageLimit)),
             Some(t!(
                 session_chatgpt_models_refused,
-                refusal = Refusal::UsageLimit.to_string()
+                refusal = bravebot_agent::chatgpt::said_of_refusal(Refusal::UsageLimit)
             ))
         );
     }
@@ -35475,6 +35513,104 @@ mod tests {
         lines.dedup();
         assert_eq!(lines.len(), said.len(), "two failures share a line");
     }
+    /// CHATGPT-8: a goal check that failed on the ChatGPT account says that failure's own sentence in
+    /// the line the person is told, which names the command that signs in again, and not the name of
+    /// a category or of the condition. The check is the one the worker thread runs, on a model of the
+    /// account in a profile nobody signed in to, so nothing is sent. The regressions it rejects are
+    /// the category's name for a failure of the account, and the name of the condition shown as it
+    /// is.
+    #[test]
+    fn a_goal_check_that_failed_on_the_chatgpt_account_says_its_own_sentence() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-goal-account");
+        std::fs::create_dir_all(&root).expect("a project");
+        let config = a_config_needing_no_sign_in();
+        let mut conversation = Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("run the tests"));
+        conversation.push(bravebot_aichat::protocol::Message::assistant("they pass"));
+        let check = bravebot_agent::goal::Check::of(&conversation, "cargo test exits 0");
+        let (to_main, _from_worker) = mpsc::channel();
+
+        let (done, _trail) = check_the_goal_on_a_worker(
+            &config,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            check,
+            Some("chatgpt/gpt-6-sol"),
+            TrustStore::new(&root),
+            &Cancel::new(),
+            to_main,
+        );
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        session.start_goal("cargo test exits 0".to_string());
+        assert!(goal_checked(&mut session, done, false).is_none());
+        let said = last_note(&session);
+        assert!(
+            said.contains("not signed in to a ChatGPT account")
+                && said.contains("bravebot auth login chatgpt"),
+            "{said}"
+        );
+        assert!(
+            !said.contains("unauthorized") && !said.contains("ChatGPT account:"),
+            "{said}"
+        );
+    }
+
+    /// CHATGPT-8: a manifest run whose planner failed on the ChatGPT account says that failure's own
+    /// sentence in the line the transcript keeps, and a run the person stopped says nothing. The run
+    /// is the one the worker thread starts, on a model of the account in a profile nobody signed in
+    /// to, so it fails before anything is sent.
+    #[test]
+    fn a_manifest_run_that_failed_on_the_chatgpt_account_says_its_own_sentence() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-manifest-account");
+        std::fs::create_dir_all(&root).expect("a project");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let config = a_config_needing_no_sign_in();
+        let task = Task::new("read a.md").with_model(Some("chatgpt/gpt-6-sol".to_string()));
+        let mut trust = TrustStore::new(&root);
+
+        let outcome = bravebot_agent::manifest::run_recording(
+            &config,
+            &Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut bravebot_core::event::RecordingSink::new(),
+            &mut trust,
+            &Cancel::new(),
+        );
+
+        assert!(outcome.is_err(), "a run with no sign-in went through");
+        let mut session = having_sent(&["first question"]);
+        say_how_a_manifest_run_ended(&mut session, &outcome, false);
+        let said = last_note(&session);
+        assert!(
+            said.contains("not signed in to a ChatGPT account"),
+            "{said}"
+        );
+        assert!(said.contains("bravebot auth login chatgpt"), "{said}");
+        assert!(
+            !said.contains("unauthorized") && !said.contains("ChatGPT account:"),
+            "{said}"
+        );
+
+        let mut stopped = having_sent(&["first question"]);
+        let before = stopped.transcript.len();
+        say_how_a_manifest_run_ended(&mut stopped, &outcome, true);
+        assert_eq!(
+            stopped.transcript.len(),
+            before,
+            "a stopped run was reported"
+        );
+    }
+
     /// The stop arm the event loop reaches takes the prompt the turn began with, so it is the
     /// half that can hand it back to the box. An interjection the turn had already taken is part
     /// of the conversation it carries on with, so neither prompt moves: the opening one stays sent

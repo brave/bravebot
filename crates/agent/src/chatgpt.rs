@@ -389,6 +389,60 @@ fn account_models_from<S: Sink, A: AccountAccess + AccountStored>(
     }
 }
 
+/// The sentence for a failure of the account, from the message catalog
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+///
+/// The one place the failures are worded, for the terminal's line, the one-shot run's report, the line
+/// for a failed goal check and the line for a summary that could not be made. It is chosen from the
+/// condition alone, so it holds nothing a service, a file or a settings file said, and where signing in
+/// again is the remedy it names `bravebot auth login chatgpt`. A refusal that came as a 429 with a wait
+/// says the wait in it, in minutes rounded up. The status of a refusal is said after it by the layer that
+/// words the line, as that layer says the status of any other failure.
+pub fn said_of_failure(failure: AccountFailure) -> String {
+    match failure {
+        AccountFailure::NotSignedIn => t!(failure_account_not_signed_in).into(),
+        AccountFailure::Ended => t!(failure_account_ended).into(),
+        AccountFailure::Refused => t!(failure_account_token_refused).into(),
+        AccountFailure::Unusable => t!(failure_account_unusable).into(),
+        // The same words whatever the code, so both refusals are told when to ask again.
+        AccountFailure::Named { refusal, .. } => match failure.wait() {
+            Some(wait) => t!(
+                failure_account_wait,
+                what = said_of_refusal(refusal),
+                minutes = crate::outcome::minutes_to_wait(wait)
+            ),
+            None => said_of_refusal(refusal).into(),
+        },
+        AccountFailure::Renewal(RenewalFailure::Refused) => {
+            t!(failure_account_renewal_refused).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::RateLimited) => {
+            t!(failure_account_renewal_rate_limited).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::Unavailable) => {
+            t!(failure_account_renewal_unavailable).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::Incomplete) => {
+            t!(failure_account_renewal_incomplete).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::Transport) => {
+            t!(failure_account_renewal_transport).into()
+        }
+    }
+}
+
+/// The sentence for what a refusal that names the account says, from the message catalog
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+///
+/// Neither names signing in again as a remedy, since a new sign-in does not change what either says,
+/// and neither names a cause the six codes of the second do not say.
+pub fn said_of_refusal(refusal: Refusal) -> &'static str {
+    match refusal {
+        Refusal::UsageLimit => t!(failure_account_usage_limit),
+        Refusal::NotPermitted => t!(failure_account_not_permitted),
+    }
+}
+
 /// Ask the renewer for a token, making it first where this is the first request.
 fn obtained(
     ask: impl FnOnce(&mut Renewer) -> Result<Access, TokenError>,
@@ -472,6 +526,159 @@ mod tests {
             let shown = step.to_string();
             assert_eq!(failure_of(&step), expected, "{shown}");
         }
+    }
+
+    /// A refusal that names the account, with neither a status nor a wait, as one reported on a
+    /// stream is.
+    fn refused(refusal: Refusal) -> AccountFailure {
+        AccountFailure::Named {
+            refusal,
+            status: None,
+            retry_after: None,
+        }
+    }
+
+    /// Every failure of the account, with the command it names where signing in again, or looking
+    /// at the stored sign-in, is the remedy.
+    fn every_failure() -> [(AccountFailure, Option<&'static str>); 11] {
+        let login = Some("bravebot auth login chatgpt");
+        [
+            (AccountFailure::NotSignedIn, login),
+            (AccountFailure::Ended, login),
+            (AccountFailure::Refused, login),
+            (
+                AccountFailure::Unusable,
+                Some("bravebot auth status chatgpt"),
+            ),
+            (refused(Refusal::UsageLimit), None),
+            (refused(Refusal::NotPermitted), None),
+            (AccountFailure::Renewal(RenewalFailure::Refused), None),
+            (AccountFailure::Renewal(RenewalFailure::RateLimited), None),
+            (AccountFailure::Renewal(RenewalFailure::Unavailable), None),
+            (AccountFailure::Renewal(RenewalFailure::Incomplete), None),
+            (AccountFailure::Renewal(RenewalFailure::Transport), None),
+        ]
+    }
+
+    /// CHATGPT-8: each failure of the account has a sentence of its own, from the catalog and from
+    /// the condition alone. Where signing in again is the remedy it names the command, and nowhere
+    /// else does: a refusal that names the account sends nobody to sign in again, and only the usage
+    /// limit says so. A usage limit and a refusal that says the account may not be used are told
+    /// apart in the listing's sentence and in a turn's. The regressions it rejects are one sentence
+    /// for every failure, a command named where it is no remedy, and a condition left without a
+    /// sentence, which would show a person the category's line in its place.
+    #[test]
+    fn every_failure_of_the_account_has_its_own_sentence_and_names_the_command_only_as_a_remedy() {
+        let mut sentences = Vec::new();
+        for (failure, command) in every_failure() {
+            let said = said_of_failure(failure);
+            assert!(!said.trim().is_empty(), "{failure:?} has no sentence");
+            assert!(
+                !said.contains('{') && !said.contains('}'),
+                "{failure:?}: {said}"
+            );
+            match command {
+                Some(command) => assert!(said.contains(command), "{failure:?}: {said}"),
+                None => assert!(!said.contains("auth login"), "{failure:?}: {said}"),
+            }
+            assert_eq!(
+                said.contains("usage limit"),
+                failure == refused(Refusal::UsageLimit),
+                "{failure:?}: {said}"
+            );
+            if let AccountFailure::Renewal(_) = failure {
+                assert!(said.contains("could not be renewed"), "{said}");
+            }
+            sentences.push(said);
+        }
+        let mut distinct = sentences.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), sentences.len(), "{sentences:#?}");
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            assert_eq!(
+                said_of_refusal(refusal),
+                said_of_failure(refused(refusal)),
+                "a refusal is worded one way in the listing and in a turn"
+            );
+        }
+    }
+
+    /// CHATGPT-8: a refusal that came as a 429 with a wait says the wait in its sentence, in minutes
+    /// rounded up and in the singular for one, whichever of the two refusals it is, and one that came
+    /// with another status or on a stream says none. The regression it rejects is a wait said where
+    /// the service did not ask for one, which would tell a person when to try a limit that has no
+    /// date.
+    #[test]
+    fn a_refusal_that_asked_for_a_wait_says_it_in_minutes_and_one_that_did_not_says_none() {
+        use std::time::Duration;
+        let named = |refusal, status, seconds: u64| AccountFailure::Named {
+            refusal,
+            status,
+            retry_after: Some(Duration::from_secs(seconds)),
+        };
+        let limit = said_of_refusal(Refusal::UsageLimit);
+        assert_eq!(
+            said_of_failure(named(Refusal::UsageLimit, Some(429), 601)),
+            format!("{limit}, and the service asked for a wait of about 11 minutes")
+        );
+        assert_eq!(
+            said_of_failure(named(Refusal::UsageLimit, Some(429), 5)),
+            format!("{limit}, and the service asked for a wait of about 1 minute")
+        );
+        assert!(
+            said_of_failure(named(Refusal::NotPermitted, Some(429), 60))
+                .contains("a wait of about 1 minute")
+        );
+        for status in [Some(403), Some(401), None] {
+            assert_eq!(
+                said_of_failure(named(Refusal::UsageLimit, status, 600)),
+                limit,
+                "{status:?}"
+            );
+        }
+        assert_eq!(said_of_failure(refused(Refusal::UsageLimit)), limit);
+    }
+
+    /// CHATGPT-8: everywhere a failed request is printed as the error that carries it, a turn, a goal
+    /// check, a compaction and an advisor's answer included, the account's failure reads as the
+    /// catalog's sentence and not as the name of its condition, and the status of a refusal that came
+    /// with one follows it. The one-shot run's report, the goal run's `unchecked` line and the
+    /// terminal's goal and manifest lines are made from these, and a layer that printed the name
+    /// would show a person the identifier.
+    #[test]
+    fn a_turn_a_goal_check_a_compaction_and_an_advice_print_the_accounts_sentence() {
+        let backend = |failure| crate::backend::BackendError::from(ChatError::Account(failure));
+        for (failure, _) in every_failure() {
+            let sentence = said_of_failure(failure);
+            assert_eq!(
+                crate::turn::TurnError::Chat(backend(failure)).to_string(),
+                sentence
+            );
+            assert_eq!(
+                crate::goal::GoalError::Chat(backend(failure)).to_string(),
+                sentence
+            );
+            assert_eq!(
+                crate::compact::CompactError::Chat(backend(failure)).to_string(),
+                sentence
+            );
+            assert_eq!(
+                crate::advisor::AdviceError::Chat(backend(failure)).to_string(),
+                sentence
+            );
+            assert!(!sentence.contains("ChatGPT account:"), "{sentence}");
+        }
+
+        let with_status = AccountFailure::Named {
+            refusal: Refusal::UsageLimit,
+            status: Some(429),
+            retry_after: None,
+        };
+        assert_eq!(
+            crate::turn::TurnError::Chat(backend(with_status)).to_string(),
+            format!("{} (HTTP 429)", said_of_failure(with_status))
+        );
     }
 
     /// CHATGPT-10: a session's identifier is a fresh random value of the shape of a version 4

@@ -99,7 +99,7 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
             "{failure:?}: {sent}"
         );
         // The sentence is the terminal's, with a capital, so the window keeps no table of its own.
-        let terminal = bravebot_session::sessions::account_failure(failure);
+        let terminal = bravebot_agent::chatgpt::said_of_failure(failure);
         let mut capitalised = terminal.clone();
         capitalised[..1].make_ascii_uppercase();
         assert_eq!(sent["accountMessage"], capitalised, "{failure:?}: {sent}");

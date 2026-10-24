@@ -186,7 +186,10 @@ fn said_of_listing(listing: &AccountModels) -> String {
         AccountModels::Unreadable => t!(chatgpt_listing_unreadable).into(),
         AccountModels::Compiled(_) => t!(chatgpt_listing_compiled).into(),
         AccountModels::Refused(refusal) => {
-            t!(chatgpt_listing_refused, refusal = refusal.to_string())
+            t!(
+                chatgpt_listing_refused,
+                refusal = bravebot_agent::chatgpt::said_of_refusal(*refusal)
+            )
         }
         AccountModels::Offered(_) | AccountModels::Absent => t!(chatgpt_use_by_name).into(),
     }
@@ -648,7 +651,10 @@ mod tests {
             let said = said_of_listing(&AccountModels::Refused(refusal));
             assert_eq!(
                 said,
-                t!(chatgpt_listing_refused, refusal = refusal.to_string()),
+                t!(
+                    chatgpt_listing_refused,
+                    refusal = bravebot_agent::chatgpt::said_of_refusal(refusal)
+                ),
                 "{refusal:?}"
             );
             assert!(

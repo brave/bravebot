@@ -2899,7 +2899,7 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
 /// The sentence of a failure of a ChatGPT account, the terminal's words with a capital for a title or
 /// a card that starts with it.
 fn account_sentence(failure: AccountFailure) -> String {
-    let sentence = bravebot_session::sessions::account_failure(failure);
+    let sentence = bravebot_agent::chatgpt::said_of_failure(failure);
     let mut chars = sentence.chars();
     chars
         .next()

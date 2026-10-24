@@ -3284,6 +3284,56 @@ fn a_manifest_plan_nobody_could_approve_exits_on_the_refused_status() {
     assert_eq!(object["refusals"][0]["gate"], "manifest_plan", "{stdout}");
 }
 
+/// CLI-6, CHATGPT-8: a manifest run whose planner is the ChatGPT account with nobody signed in
+/// ends on the status for a credential nobody holds and says why in the account's sentence, in the
+/// language the person chose, as the turn of a one-shot run does. The run plans before it reads
+/// anything, so nothing is read and nothing is written. A run that printed the name of the condition
+/// would show a person an identifier, and one worded in English would ignore the language.
+#[test]
+fn a_manifest_run_whose_planner_is_the_chatgpt_account_with_no_sign_in_says_the_sentence() {
+    for (language, words) in [
+        ("en-US", "not signed in to a ChatGPT account"),
+        ("fr", "pas connecté à un compte ChatGPT"),
+    ] {
+        let scratch = Scratch::new(&format!(
+            "cli-running-manifest-chatgpt-signed-out-{language}"
+        ))
+        .with_file("a.md", "hello");
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.push(("BRAVEBOT_LOCALE", language));
+
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            &environment,
+            &[
+                "--mode",
+                "manifest",
+                "--model",
+                "chatgpt/gpt-5.5",
+                "--trust-workspace",
+                "-p",
+                "read a.md",
+            ],
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{language}: {stdout}{stderr}"
+        );
+        assert!(
+            stderr.contains(words) && stderr.contains("`bravebot auth login chatgpt`"),
+            "{language}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("ChatGPT account:") && !stderr.contains("NotSignedIn"),
+            "{language}: the name of the condition was printed: {stderr}"
+        );
+    }
+}
+
 /// CLI-24: a run that is refused a write writes its events while it goes and ends on the result
 /// object. The write nobody could approve is recorded as a refusal (TRACE-1), so the stream
 /// carries it as a `refusal` event before the call it ended. Streaming a gate's refusal in general
@@ -8928,6 +8978,124 @@ fn a_turn_on_a_chatgpt_model_with_no_sign_in_ends_naming_the_command_and_stores_
         !scratch.path.join(".bravebot/chatgpt-account.json").exists(),
         "a refused turn stored a sign-in"
     );
+}
+
+/// CHATGPT-8, LOCALE-8: a turn that failed on the account is reported in the sentence of the
+/// catalog the person chose, and not in English whatever they chose, with the command that signs in
+/// again left as typed. `--json` carries the same sentence as the run's error. The run is the one-shot
+/// run, which is the layer that prints `BB1001`. A crate that worded the failure itself would print
+/// English in either.
+#[test]
+fn a_turn_that_failed_on_the_chatgpt_account_is_reported_in_the_language_chosen() {
+    let scratch = Scratch::new("cli-running-chatgpt-failure-in-french");
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("BRAVEBOT_LOCALE", "fr"));
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &[
+            "-p",
+            "say something",
+            "--model",
+            "chatgpt/gpt-5.5",
+            "--trust-workspace",
+            "--json",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    for said in [&stderr, &stdout] {
+        assert!(
+            said.contains("pas connecté à un compte ChatGPT")
+                && said.contains("`bravebot auth login chatgpt`"),
+            "{said}"
+        );
+        assert!(!said.contains("not signed in"), "{said}");
+    }
+}
+
+/// CHATGPT-8: a refusal that names the account and came as a 429 with a `Retry-After` is reported by
+/// the one-shot run as the account's sentence with the wait in it, in minutes rounded up, and the
+/// status after it, and with no count of tries, for either refusal. The same refusal at another
+/// status carries the header and does not say a wait, since only a 429 asks for one. The request is
+/// sent once, to a stand-in for the serving host, and nothing the service wrote is repeated.
+///
+/// The regressions it rejects are a refusal reported as the category's line, which said "the service
+/// asked for fewer requests (HTTP 429), after 3 attempts" before the refusal was named, a wait
+/// dropped on the way from the client to the line, a wait said at a status that did not ask for
+/// one, and a count of tries tacked on after the sentence.
+#[test]
+fn a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait_and_the_status() {
+    const USAGE_LIMIT: &str = "subscription_sharing_usage_limit_exceeded";
+    const NOT_ELIGIBLE: &str = "subscription_sharing_user_not_eligible";
+    let usage_limit = "OpenAI says this ChatGPT account has reached its usage limit";
+    let not_permitted = "OpenAI does not allow this ChatGPT account to be used this way";
+    for (status, code, line) in [
+        (
+            429,
+            USAGE_LIMIT,
+            format!(
+                "{usage_limit}, and the service asked for a wait of about 10 minutes (HTTP 429)"
+            ),
+        ),
+        (
+            429,
+            NOT_ELIGIBLE,
+            format!(
+                "{not_permitted}, and the service asked for a wait of about 10 minutes (HTTP 429)"
+            ),
+        ),
+        (403, USAGE_LIMIT, format!("{usage_limit} (HTTP 403)")),
+    ] {
+        let refusal =
+            serde_json::json!({"error": {"code": code, "message": "WORDS-OF-THE-SERVICE"}})
+                .to_string();
+        let reply = format!(
+            "HTTP/1.1 {status} \r\ncontent-type: application/json\r\nretry-after: 600\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{refusal}",
+            refusal.len()
+        );
+        let service = a_gateway("[]", move |_| reply.clone());
+        let base = format!("http://127.0.0.1:{}", service.port);
+        let scratch = Scratch::new(&format!("cli-running-chatgpt-wait-{status}-{code}"))
+            .with_state("chatgpt-account.json", &a_chatgpt_sign_in(4_102_444_800));
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.push((bravebot_skus::chatgpt::STAND_IN, base.as_str()));
+
+        let output = bravebot(
+            &scratch.path,
+            &environment,
+            &[
+                "-p",
+                "say something",
+                "--model",
+                "chatgpt/gpt-5.5",
+                "--trust-workspace",
+            ],
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{status} {code}: {stdout}{stderr}"
+        );
+        assert!(
+            stderr
+                .lines()
+                .any(|found| found == format!("BB1001: {line}")),
+            "{status} {code}: {stderr}"
+        );
+        for left_out in ["attempts", "fewer requests", "WORDS-OF-THE-SERVICE"] {
+            assert!(!stderr.contains(left_out), "{status} {code}: {stderr}");
+        }
+        assert_eq!(
+            service.asked.try_iter().count(),
+            1,
+            "{status} {code}: the refusal was sent again"
+        );
+    }
 }
 
 /// CHATGPT-11: logging out removes the one file and says what it leaves, is allowed in an
@@ -18331,6 +18499,51 @@ fn a_goal_judge_that_cannot_be_reached_ends_the_run_on_the_unreachable_status() 
         1,
         "only the round reached the gateway: {stderr}"
     );
+}
+
+/// CLI-35, CHATGPT-8: a judge that is the ChatGPT account with nobody signed in leaves the goal
+/// unchecked and says why in the account's sentence, which names the command that signs in again, and
+/// not in the name of a category or a sentence in English whatever language was chosen. The rounds
+/// ran against the gateway, so the sentence is the judge's. A run that printed the category would say
+/// the credentials were refused of a sign-in nobody made.
+#[test]
+fn a_goal_run_whose_judge_is_the_chatgpt_account_with_no_sign_in_says_the_sentence() {
+    for (language, words) in [
+        ("en-US", "not signed in to a ChatGPT account"),
+        ("fr", "pas connecté à un compte ChatGPT"),
+    ] {
+        let gateway = a_gateway_for_a_goal(&["MET\nfine"], 0);
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&settings_for(&gateway)).expect("settings are JSON");
+        settings["summaryModel"] = serde_json::json!("chatgpt/gpt-judge");
+        let scratch = Scratch::new(&format!("cli-running-goal-judge-account-{language}"))
+            .with_settings(&settings.to_string());
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("BRAVEBOT_LOCALE", language));
+
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            &environment,
+            &["--goal", A_CONDITION, "-p", "get the build green"],
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(stdout.trim(), "round 1 done", "{language}: {stderr}");
+        assert!(
+            stderr.contains(words) && stderr.contains("`bravebot auth login chatgpt`"),
+            "{language}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("ChatGPT account:") && !stderr.contains("NotSignedIn"),
+            "{language}: the name of the condition was printed: {stderr}"
+        );
+        assert_eq!(
+            checks_among(&gateway.asked.try_iter().collect::<Vec<_>>()),
+            0,
+            "{language}: the judge reached the gateway"
+        );
+    }
 }
 
 /// CLI-35: a round that fails has nothing to judge, so the run ends as a turn that failed does and

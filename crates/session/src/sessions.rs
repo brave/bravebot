@@ -700,7 +700,7 @@ pub fn failure_reason(
     // count of tries follows, since the sentence says what to do and the category beside it says
     // only what class the failure was.
     if let Some(account) = diagnosis.account {
-        let mut said = account_failure(account);
+        let mut said = bravebot_agent::chatgpt::said_of_failure(account);
         if let Some(status) = account.status() {
             said = t!(failure_with_status, what = said, status = status);
         }
@@ -764,50 +764,6 @@ pub fn failure_reason(
         said = t!(failure_with_attempts, what = said, attempts = attempts);
     }
     t!(session_error, problem = said)
-}
-
-/// The sentence for a failure of a ChatGPT account, chosen from the closed value alone
-/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Nothing a reply said is in it.
-pub fn account_failure(failure: bravebot_aichat::AccountFailure) -> String {
-    use bravebot_aichat::responses::protocol::Refusal;
-    use bravebot_aichat::{AccountFailure, RenewalFailure};
-    match failure {
-        AccountFailure::NotSignedIn => t!(failure_account_not_signed_in).into(),
-        AccountFailure::Ended => t!(failure_account_ended).into(),
-        AccountFailure::Refused => t!(failure_account_token_refused).into(),
-        AccountFailure::Unusable => t!(failure_account_unusable).into(),
-        // The wait is said where the refusal came as a 429 that asked for one, in the same words
-        // whatever the code, so both refusals are told when to ask again.
-        AccountFailure::Named { refusal, .. } => {
-            let what: String = match refusal {
-                Refusal::UsageLimit => t!(failure_account_usage_limit).into(),
-                Refusal::NotPermitted => t!(failure_account_not_permitted).into(),
-            };
-            match failure.wait() {
-                Some(wait) => t!(
-                    failure_account_wait,
-                    what = what,
-                    minutes = bravebot_agent::outcome::minutes_to_wait(wait)
-                ),
-                None => what,
-            }
-        }
-        AccountFailure::Renewal(RenewalFailure::Refused) => {
-            t!(failure_account_renewal_refused).into()
-        }
-        AccountFailure::Renewal(RenewalFailure::RateLimited) => {
-            t!(failure_account_renewal_rate_limited).into()
-        }
-        AccountFailure::Renewal(RenewalFailure::Unavailable) => {
-            t!(failure_account_renewal_unavailable).into()
-        }
-        AccountFailure::Renewal(RenewalFailure::Incomplete) => {
-            t!(failure_account_renewal_incomplete).into()
-        }
-        AccountFailure::Renewal(RenewalFailure::Transport) => {
-            t!(failure_account_renewal_transport).into()
-        }
-    }
 }
 
 /// One point a rewind can go back to, as it is written down.
@@ -3768,10 +3724,9 @@ mod tests {
         ];
         let mut said = Vec::new();
         for (failure, sentence) in sentences {
-            // The line a one-shot run reports is the same sentence, so the three places say one thing.
-            assert_eq!(failure.to_string(), sentence, "{failure:?}");
-
             let error = BackendError::from(ChatError::Account(failure));
+            // The line a one-shot run reports is the same sentence, so the two places say one thing.
+            assert_eq!(error.to_string(), sentence, "{failure:?}");
             let line = failure_reason(error.diagnosis(), None);
             assert_eq!(line, format!("error: {sentence}"), "{failure:?}");
             said.push(line);

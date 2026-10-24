@@ -7254,10 +7254,11 @@ fn a_token_the_host_refuses_is_replaced_once_and_the_request_is_sent_again_with_
 }
 
 /// CHATGPT-7 and CHATGPT-8: a replacement is not itself refused again and again. A second refusal
-/// ends the turn as the sign-in failing, with the words of the sign-in, and a replacement that
-/// cannot be made ends it with the reason it could not, with no second request sent.
+/// ends the turn as the sign-in failing, named by the step and with no sentence from this crate,
+/// which has no catalog to word one from, and a replacement that cannot be made ends it with the
+/// reason it could not, with no second request sent.
 #[test]
-fn a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words() {
+fn a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_as_the_sign_in_failing() {
     let egress = Egress::new();
 
     let (endpoint, received) = serve_attempts(vec![
@@ -7276,9 +7277,10 @@ fn a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_si
         matches!(error, ChatError::Account(AccountFailure::Refused)),
         "{error:?}"
     );
-    assert!(
-        error.to_string().contains("bravebot auth login chatgpt"),
-        "{error}"
+    assert_eq!(
+        error.to_string(),
+        "ChatGPT account: token-refused",
+        "this crate worded the failure as a sentence"
     );
     assert_eq!(sign_in.refused.len(), 1, "replaced once and not again");
     received.recv().unwrap();
@@ -7854,12 +7856,12 @@ fn refused_with(refusal: Refusal, status: u16) -> AccountFailure {
     }
 }
 
-/// CHATGPT-7 and CHATGPT-8: a request refused with any listed code ends the turn at once in the
-/// sentence for what the code says, the usage limit in its own and the rest in one that says the
+/// CHATGPT-7 and CHATGPT-8: a request refused with any listed code ends the turn at once as the
+/// refusal for what the code says, the usage limit as its own and the rest as one that says the
 /// account may not be used this way. No token is replaced and no second request is sent, since
-/// neither changes what the code says, and no sentence sends the person to sign in again. A client
-/// that replaced the token as it does for any 401 would send a second request and spend a refresh,
-/// and one that told every code in one sentence would say a usage limit is a matter of eligibility.
+/// neither changes what the code says. A client that replaced the token as it does for any 401
+/// would send a second request and spend a refresh, and one that told every code as one refusal
+/// would say a usage limit is a matter of eligibility.
 #[test]
 fn a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing() {
     let egress = Egress::new();
@@ -7887,15 +7889,6 @@ fn a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing() {
         assert!(
             received.recv_timeout(Duration::from_millis(200)).is_err(),
             "{code}: the request was sent again"
-        );
-        assert!(
-            !error.to_string().contains("auth login"),
-            "{code}: signing in again was named as the remedy: {error}"
-        );
-        assert_eq!(
-            error.to_string().contains("usage limit"),
-            refusal == Refusal::UsageLimit,
-            "{code}: {error}"
         );
         for shown in [error.to_string(), format!("{error:?}")] {
             assert!(!shown.contains("say hello"), "{code}: {shown}");

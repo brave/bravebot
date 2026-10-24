@@ -499,7 +499,7 @@ list ends the turn without a replacement.
 `verified-by: bravebot_skus::chatgpt::exchange::the_exchange_refuses_a_reply_that_grants_no_refresh_token`
 `verified-by: bravebot_aichat::client::an_account_asks_for_its_token_before_every_request_and_sends_the_one_it_is_given`
 `verified-by: bravebot_aichat::client::a_token_the_host_refuses_is_replaced_once_and_the_request_is_sent_again_with_the_new_one`
-`verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
+`verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_as_the_sign_in_failing`
 `verified-by: bravebot_aichat::client::a_refusal_that_names_no_listed_code_is_replaced_and_sent_again_as_before`
 `verified-by: bravebot_agent::chatgpt::each_failed_step_of_a_renewal_is_its_own_failure_and_only_an_ended_account_is_ended`
 `verified-by: bravebot_agent::chatgpt::a_renewal_the_file_could_not_take_is_said_once_and_again_only_after_a_write_succeeds`
@@ -559,14 +559,18 @@ in the diagnosis and in the desktop's `status`, and the wait it asked for is in 
 is told the category and the request count, as for every failure ([TURN-13](turns.md#TURN-13)), and not
 which failure of the account it was, nor a status or a wait.
 
-The one-shot run reports the sentences above as the error of the failed turn. The terminal says the
-sentence of the value from its catalog, worded as that report words it, and the record of a session keeps
-that line in either front end. It is the whole reason, so no count of tries follows it, since what it says
-to do ends it. A refusal that came in a reply says the wait it asked for in its sentence, in minutes rounded
-up, and its status after it: "OpenAI says this ChatGPT account has reached its usage limit, and the service
-asked for a wait of about 10 minutes (HTTP 429)". A refusal reported in an event of the stream carries
-neither and is the sentence alone, as does every other failure of the account. A failure that carries no
-value is worded from its category, with its status and count.
+Each sentence is a message of the catalog, in English and in French, chosen from the value alone in
+`bravebot-agent`. `bravebot-aichat` has no catalog, so it names each condition and holds no sentence: what it
+prints for a failure of the account is that name. The one-shot run reports the sentence as the error of the
+failed turn, a goal run and a manifest run report it as the reason they stopped, and the terminal says it
+as the line for a failed turn, for a failed goal check and for a manifest run, in the language the person
+chose. The record of a session keeps the terminal's line in either front end. It is the whole reason, so no
+count of tries follows it, since what it says to do ends it. A refusal that came in a reply says the wait
+it asked for in its sentence, in minutes rounded up, and its status after it, in each of them: "OpenAI says
+this ChatGPT account has reached its usage limit, and the service asked for a wait of about 10 minutes
+(HTTP 429)". A refusal reported in an event of the stream carries neither and is the sentence alone, as does
+every other failure of the account. A failure that carries no value is worded from its category, with its
+status and count.
 
 The desktop is sent the terminal's sentence for the value, capitalised, as `accountMessage` beside the
 name, and draws it as the description of one card in `ui/src/renderer/failure.ts`. The window keeps no
@@ -621,6 +625,17 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_agent::backend::a_failure_with_no_account_in_it_carries_no_account_value`
 `verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
 `verified-by: bravebot_aichat::lib::each_account_failure_has_a_fixed_name_of_its_own`
+`verified-by: bravebot_aichat::lib::an_account_failure_is_shown_as_its_name_and_never_as_a_sentence`
+`verified-by: bravebot_agent::chatgpt::every_failure_of_the_account_has_its_own_sentence_and_names_the_command_only_as_a_remedy`
+`verified-by: bravebot_agent::chatgpt::a_refusal_that_asked_for_a_wait_says_it_in_minutes_and_one_that_did_not_says_none`
+`verified-by: bravebot_agent::chatgpt::a_turn_a_goal_check_a_compaction_and_an_advice_print_the_accounts_sentence`
+`verified-by: bravebot_agent::chatgpt_failures_in_french::each_failure_of_the_account_is_said_in_the_chosen_catalog_and_names_the_same_command`
+`verified-by: bravebot_cli::running::a_turn_that_failed_on_the_chatgpt_account_is_reported_in_the_language_chosen`
+`verified-by: bravebot_cli::running::a_goal_run_whose_judge_is_the_chatgpt_account_with_no_sign_in_says_the_sentence`
+`verified-by: bravebot_cli::running::a_manifest_run_whose_planner_is_the_chatgpt_account_with_no_sign_in_says_the_sentence`
+`verified-by: bravebot_cli::running::a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait_and_the_status`
+`verified-by: bravebot_tui::app::a_goal_check_that_failed_on_the_chatgpt_account_says_its_own_sentence`
+`verified-by: bravebot_tui::app::a_manifest_run_that_failed_on_the_chatgpt_account_says_its_own_sentence`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category`
 `verified-by: bravebot_ui_bridge::failure_tests::a_failure_with_no_account_in_it_is_sent_with_no_account_name`
 `verified-by: bravebot_ui_bridge::failure_tests::the_failure_sent_holds_only_fixed_names_and_counts`
@@ -635,7 +650,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
 `verified-by: bravebot_tui::app::a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agent-settings.test.mjs holds the sentence the agent sends to the card's description, two sentences to two cards, and a failure with no sentence to the category's wording; ui/scripts/ux-state.test.mjs folds turn.error through the window's reducer and draws the real row, and ui/scripts/plan-card.test.mjs does the same for a run that failed; make check-ui runs them, and the governs list above holds failure.ts to existing)`
-`verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
+`verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_as_the_sign_in_failing`
 `verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
 `verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`
 `verified-by: bravebot_aichat::client::a_rate_limit_that_names_no_listed_code_is_asked_for_again`
@@ -1284,9 +1299,9 @@ These are the places where another spec states something about this service, eac
   is replaced once, a 429 or a 5xx is asked for again, and the turn ends with the sentence of that status.
   The two codes that program retries (`subscription_sharing_usage_unavailable` and
   `subscription_sharing_user_unavailable`) are not in the list and are handled the same way.
-- The sentences of [CHATGPT-8](#CHATGPT-8) are written in two places: the one-shot run's report and the
-  terminal's catalog, which a test holds equal to it. The desktop is sent the catalog's sentence and
-  keeps none. The eleven names are listed in `ui/docs/phase-0-rpc-protocol.md`.
+- The sentences of [CHATGPT-8](#CHATGPT-8) are written once, in the catalog, for the terminal, the one-shot
+  run and the goal and manifest runs. The desktop is sent the same sentence capitalised and keeps none. The
+  eleven names are listed in `ui/docs/phase-0-rpc-protocol.md`.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
   the dead refresh token and is told the refresh failed, until the person signs in again.

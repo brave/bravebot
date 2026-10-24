@@ -151,7 +151,7 @@ pub(super) fn account_problem_said(
         }
         bravebot_agent::chatgpt::AccountModels::Refused(refusal) => Some(t!(
             session_chatgpt_models_refused,
-            refusal = refusal.to_string()
+            refusal = bravebot_agent::chatgpt::said_of_refusal(*refusal)
         )),
         bravebot_agent::chatgpt::AccountModels::Absent
         | bravebot_agent::chatgpt::AccountModels::Offered(_) => None,
