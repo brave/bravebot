@@ -17,7 +17,7 @@ Cargo added only `libfuzzer-sys`, `arbitrary` and what they need.
 | Path | Holds |
 |---|---|
 | `fuzz_targets/<target>.rs` | One `fuzz_target!`. Its input type derives `Arbitrary`, so the type states what the input's bytes mean. |
-| `src/` | What the targets share: generators, encoders and evaluators, with unit tests. |
+| `src/` | What the targets share: generators, encoders, evaluators and a counting allocator, with unit tests. |
 | `dictionaries/<target>.dict` | Tokens the target's parser branches on. |
 | `seeds/<target>/` | Committed inputs of at most 4 KiB, at most 100 for each target. |
 | `regressions/<target>/` | Reproducers of crashes that were fixed. |
@@ -30,7 +30,7 @@ Cargo added only `libfuzzer-sys`, `arbitrary` and what they need.
 |---|---|---|---|
 | `regex` | `agent::regex` | A pattern rendered from a syntax tree of the supported subset and a text, or raw pattern text | The engine agrees with an evaluator that reads the tree and shares no code with it, `matches` agrees with `matches_by_automaton`, a pattern over 1,000 characters or 50 groups deep is refused with the matching `PatternError`, and the answer does not depend on what the engine's buffers last held |
 | `diff` | `agent::diff`, `agent::replace` | Two texts, or a text and edits that derive the second from it, or an edit | The lines a diff keeps are the same in both texts, its rows account for every line, its hunks put `before` back byte for byte, and `replace` refuses what its documentation says it refuses |
-| `event_stream` | `bedrock::eventstream::FrameDecoder` | Raw bytes, or frames with correct checksums, the last of them damaged, and in either case cut into reads | Any cutting into reads gives the same events, a frame that claims an impossible size or ends in a wrong checksum is refused, and an undamaged stream gives the events its frames hold |
+| `event_stream` | `bedrock::eventstream::FrameDecoder` | Raw bytes, or frames with correct checksums, the last of them damaged, and in either case cut into reads | Any cutting into reads gives the same events, a frame that claims an impossible size or ends in a wrong checksum is refused, a claim past 16 MiB makes the decoder allocate less than a sixteenth of that, and an undamaged stream gives the events its frames hold |
 | `sse` | `aichat::protocol::SseDecoder`, `ChatChunk`, `StreamAccumulator` | Lines of known meaning, or raw bytes, cut into reads, with a limit from a few bytes to a few kibibytes | Any cutting into reads gives the same payloads, the decoder holds no more than its limit, a line over the limit ends the decoding, and the accumulator holds what the chunks say |
 
 `regex` and `sse` need three functions that only the targets use from outside their crates.
@@ -38,6 +38,13 @@ Cargo added only `libfuzzer-sys`, `arbitrary` and what they need.
 with a small limit, and was private to the module that builds the default one. `SseDecoder::held`
 reads how much a decoder holds. At the limit every caller gets, 16 MiB, no input a fuzzer makes
 could reach the bound. All three are `#[doc(hidden)]`.
+
+`event_stream` measures what the decoder allocates with `allocation::Counting`, which wraps the
+system allocator and counts the bytes the calling thread holds. A global allocator is an `unsafe`
+impl, so `fuzz/src/lib.rs` denies `unsafe_code` and the one impl allows it with a reason, while the
+other modules and every target forbid it. Only the `event_stream` target registers the allocator,
+so the other targets run on the system allocator. `event_stream` checks on every input that it is
+registered, since a bound on a count of zero holds for anything.
 
 ## Running
 
@@ -51,7 +58,7 @@ the `make` targets say for themselves and a command typed here has to:
 TC=$(make -s fuzz-toolchain)
 export BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1
 rustup toolchain install "$TC" --profile minimal -c rustfmt -c clippy -c rust-src
-cargo install cargo-fuzz --locked
+make fuzz-install
 ```
 
 ```sh
@@ -63,7 +70,11 @@ make check-fuzz                              # lint, build, replay, then every t
 `make check-fuzz` runs `cargo fmt --check`, clippy with `-D warnings`, the unit tests of `fuzz/src`,
 `cargo fuzz build -a` for every target, a replay of `seeds/` and `regressions/` with `-runs=0`, and
 then each target. It stops at the first failure. It is not part of `make check-all` or
-`make check-affected`, which run without a nightly toolchain.
+`make check-affected`, which run without a nightly toolchain. CI runs it in the `Fuzz build and replay`
+job on a pull request where `fuzz/`, the root manifest or a crate the targets build changed, and on
+every push to `main` and every tag. Each run of a target starts from a seed of its own, so one can
+find a defect the code already had and fail an unrelated pull request. The job uploads
+`fuzz/artifacts/` when it fails.
 
 Targets are built with debug assertions and overflow checks (`-a`) and AddressSanitizer, so an
 arithmetic site that wraps in a release build is reported when an input reaches it. Every
@@ -72,12 +83,35 @@ reproduce in a build without it. Runs use `-timeout=10 -rss_limit_mb=2048`, and 
 except `diff`, which reads two texts and gets `65536`. A target that has a dictionary in
 `dictionaries/` is given it.
 
+## The weekly run
+
+`.github/workflows/fuzz.yml` runs each target for an hour every Wednesday on the default branch,
+and on `workflow_dispatch`, which takes a `target` and 1 to 300 `minutes`. A pull request that
+changes the file runs the first target for one minute, so that its steps run before the file is on
+the default branch. Each target is a leg of its own, taken from `FUZZ_TARGETS` in the `Makefile`.
+A leg restores the corpus the last run saved from `actions/cache`, runs the target with `make fuzz`,
+reduces the corpus with `make fuzz-cmin` and saves it, also when the target stopped on a crash.
+Only this workflow saves a corpus. The repository's caches share a 10 GB allowance, so the leg
+prints the size of the corpus and fails above 50 MB, and then saves nothing.
+
+GitHub deletes a cache entry that was not read for seven days, and a leg saves its entry about an
+hour after it starts, so a run that starts more than about an hour later than the one before it
+finds no corpus. The leg then warns that it starts from the seeds.
+
+A crash, a timeout or an out-of-memory stop uploads `fuzz/artifacts/<target>/` as a workflow
+artifact kept for 30 days and fails the leg. The workflow files no issue. A person reads each
+failed run and files it as the section below says. The repository is public, so the log of a
+failed run prints the input that stopped the target and the artifact holds it, and anyone can read
+both until the run is deleted. Report a crash that may be a vulnerability through HackerOne
+([SECURITY.md](../../SECURITY.md)), and a maintainer can delete the run.
+
 ## The lockfile
 
 `fuzz/Cargo.lock` began as a copy of the root `Cargo.lock`, so the crates under test build at the
 versions that ship. It does not follow the root lock on its own. `make bump-version` refreshes the
-version of each bravebot crate in it. After a dependency in the root lock changes, bring it up to
-the root lock again:
+version of each bravebot crate in it. `make check-deps` reads this lockfile too, so an advisory
+fixed in the root lock fails the dependency policy for this graph until this one is brought up to
+date. After a dependency in the root lock changes, bring it up to the root lock again:
 
 ```sh
 cp Cargo.lock fuzz/Cargo.lock
@@ -107,7 +141,7 @@ Cargo keeps every version the copy names and adds only what the fuzz package nee
 A grown corpus holds many inputs that reach the same code. Reduce it before promoting any of it:
 
 ```sh
-cargo +$TC fuzz cmin -a regex                  # keeps the inputs that each reach something new
+make fuzz-cmin TARGET=regex                   # keeps the inputs that each reach something new
 ```
 
 Keep at most 100 inputs of at most 4 KiB for a target, choosing the ones that between them reach the
@@ -136,8 +170,3 @@ checksum in `event_stream`, or the automaton in `regex`.
 4. A timeout or an out-of-memory stop is a finding. A failed property is a finding against the
    documentation or clause it came from. Where the property was wrong, correct it in the harness
    and say why in the commit.
-
-## What the targets do not check
-
-The `event_stream` target checks that a frame claiming more than 16 MiB is refused. It does not
-measure how much the decoder allocates, since that needs a global allocator, which is `unsafe`.
