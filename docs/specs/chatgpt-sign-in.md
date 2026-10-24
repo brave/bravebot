@@ -8,15 +8,20 @@ governs:
   - crates/agent/src/backend.rs
   - crates/agent/src/chatgpt.rs
   - crates/aichat/src/lib.rs
+  - crates/aichat/src/responses.rs
   - crates/aichat/src/models.rs
   - crates/tui/src/app/models.rs
   - crates/ui-bridge/src/models.rs
+  - crates/ui-bridge/src/bridge.rs
+  - crates/session/src/sessions.rs
+  - ui/src/renderer/failure.ts
   - crates/cli/src/chatgpt.rs
   - crates/skus/src/chatgpt/mod.rs
   - crates/skus/src/chatgpt/account.rs
   - crates/skus/src/chatgpt/authorize.rs
   - crates/skus/src/chatgpt/encoding.rs
   - crates/skus/src/chatgpt/exchange.rs
+  - crates/skus/src/chatgpt/id_token.rs
   - crates/skus/src/chatgpt/listener.rs
   - crates/skus/src/chatgpt/renew.rs
 documented-by:
@@ -124,7 +129,12 @@ Four destinations are used, each a constant in the source:
 
 A page, a reply, a model, a settings file at any layer, an environment variable and a redirect name none of
 them, and none of them is looked up from anything fetched, as the backends spec holds for a gateway's known
-name. A test points the flow at a server of its own through a seam that exists only in test builds.
+name. A test points the flow at a server of its own through a seam that exists only in a debug build with
+the `test-hosts` feature of `bravebot-skus` and of `bravebot-config`, under which the variable
+`BRAVEBOT_TEST_CHATGPT_STAND_IN` names one server that stands in for the four destinations. Only the
+`[dev-dependencies]` of `bravebot-cli` enable it, so the binary `cargo test` builds for that crate's tests
+has it and a release build does not. A build without the feature holds no code that reads the variable, and
+a release build with it, by `--all-features` or by a manifest, does not compile.
 
 The access token is sent to the serving host and to no other. The refresh token and the code are sent to
 the token endpoint and to no other. The request for the key set carries no credential. A request to any of
@@ -134,10 +144,6 @@ and the tokens of this account are never sent to a gateway.
 
 A model of this service is answered with the stored sign-in and with nothing else. `OPENAI_API_KEY`, a
 gateway key and any other variable are not looked for.
-
-**Not built:** the key set. The sign-in sends to the authorization page and the token endpoint, and a turn, the
-pickers and the sign-in command once it has stored the sign-in send requests to the serving host: the models,
-and the listing of [CHATGPT-9](#CHATGPT-9).
 
 **Why.** A settings file may name a destination, which is right where the credential is one the person
 typed for that destination. A checkout's settings file naming where an account's refresh token goes would
@@ -150,10 +156,13 @@ compiled in.
 `verified-by: bravebot_skus::chatgpt::authorize::a_first_sign_in_asks_for_a_client_and_carries_the_parameters_listed_and_no_other`
 `verified-by: bravebot_skus::chatgpt::a_redirect_in_answer_to_the_exchange_is_not_followed`
 `verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
+`verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
+`verified-by: bravebot_cli::layering::a_test_seam_is_enabled_by_dev_dependencies_alone`
+`verified-by: bravebot_cli::layering::the_seam_reader_finds_a_seam_wherever_a_build_that_ships_reads_it`
 `verified-by: bravebot_config::provider::the_chatgpt_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own`
 `verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_an_account_request_is_a_failure_and_goes_nowhere`
-`verified-by: bravebot_aichat::client::an_account_request_carries_the_token_and_three_session_headers_and_nothing_a_gateway_would`
+`verified-by: bravebot_aichat::client::an_account_request_carries_the_token_the_three_session_headers_and_the_zstd_encoding_and_nothing_a_gateway_would`
 
 <a id="CHATGPT-3"></a>
 ### CHATGPT-3: the values the request depends on are generated here, for one sign-in
@@ -234,7 +243,7 @@ one address the listener is bound to. A page that repeated the query would put a
 and a log of it would keep a `code` and a `state` for as long as the log. Reading only the three named
 parameters keeps a callback, which is bytes a browser sent, down to a `code` to hand on, a `state` to
 compare and a client identifier that is checked for its shape and then verified by the exchange, and by the ID
-token once that is verified ([CHATGPT-5](#CHATGPT-5)).
+token, which has to name it as its audience ([CHATGPT-5](#CHATGPT-5)).
 
 `verified-by: bravebot_skus::chatgpt::listener::the_listener_is_bound_to_the_loopback_address_only`
 `verified-by: bravebot_skus::chatgpt::listener::the_callback_with_the_state_is_served_and_answered_with_a_page_that_repeats_nothing`
@@ -266,8 +275,9 @@ message to the planner. That is the argument [premium-credentials.md](premium-cr
 is checked here against [reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md), shape by
 shape:
 
-- **A branch on untrusted bytes.** The comparisons are the `state` against the value generated here, and a
-  reply's status and the fields the next step needs. They decide this program's own sign-in. What crosses
+- **A branch on untrusted bytes.** The comparisons are the `state` against the value generated here, a
+  reply's status and the fields the next step needs, and the ID token's header, signature and five claims
+  against the key set and the values this sign-in sent. They decide this program's own sign-in. What crosses
   into the driver is a token and a category, which is the class of a reply's status, as the failure
   categories of the backends spec are for the reply of any other service. A refused refresh adds one value,
   that the refresh token is no longer valid, chosen by comparing one field of the error body with `invalid_grant`
@@ -275,7 +285,9 @@ shape:
   and that it may not be used this way, chosen by comparing the error code of the body with a closed list
   of codes the exchange records ([CHATGPT-8](#CHATGPT-8)); that comparison is made in the client that sends the request, which is not the
   driver, and the egress crate hands the client the whole body of the refusal under the label of its
-  request and reads none of it ([NET-12](network-egress.md#NET-12)). A turn already branches on the categories, and none is content anyone authored. The
+  request and reads none of it ([NET-12](network-egress.md#NET-12)). A turn already branches on the categories, and none is content anyone authored. Which of
+  these values a failure was is carried to the terminal and the desktop beside its category, where it
+  chooses a sentence ([CHATGPT-8](#CHATGPT-8)), and the driver adds no comparison of its own for it. The
   rest of a reply's body, its error text and its claims stay in the crate. That is the ordinary case the
   document's section on the inverse mistake describes, and the same footing as the fields of a model
   listing the code already reads.
@@ -293,13 +305,23 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    [credential-protection.md](credential-protection.md) describes, a value from the closed set of
    [CHATGPT-8](#CHATGPT-8), and whether the file took a renewal, which is the result of a write on this
    machine. No string taken from a reply is part of any of them.
-3. The ID token is verified once, at the sign-in, and no claim of it is stored, sent or displayed. This
-   is not built: the reply's `id_token` is dropped unread, since the verification needs a signature
-   verifier this crate does not hold ([Decisions left open](#decisions-left-open)). Its
-   signature is checked against the key set with RS256 only, and its issuer, audience (the client of the
-   sign-in), expiry, nonce (the one sent) and subject (present and not empty) are compared. No other claim
-   is read. The access token's expiry is read from the `expires_in` field of the reply, not from the token,
-   and is compared with the clock. Claims such as an organisation's name are text somebody else chose.
+3. The ID token is verified once, at the sign-in, before anything is stored, and no claim of it is
+   stored, sent or displayed. A code exchange whose reply holds no `id_token`, or one that is not a
+   string, ends the sign-in as a token that did not verify, so no sign-in is stored unverified. A token
+   longer than 16 KiB is refused before it is decoded. Its header names RS256 and nothing that has to be
+   understood: `none`, an HMAC and every other algorithm are refused, and so is a header with `crit`. The
+   key is the only key of the set with the header's `kid`, and it is an RSA key a signature may be checked
+   with: `kty` is `RSA`, and `use`, `alg` and `key_ops`, where present, say `sig`, `RS256` and `verify`.
+   A set that holds two keys under one `kid` has none that is the key.
+   The key set is fetched from the host compiled in for it ([CHATGPT-2](#CHATGPT-2)) with no credential,
+   following no redirect, and a reply over 64 KiB is refused. The signature is checked with RS256 against
+   that key's modulus and exponent, and then the issuer (the constant `https://auth.openai.com`), the
+   audience (a string equal to the client of the sign-in, or a list holding it), the expiry (later than
+   the clock), the nonce (the one sent, compared in constant time) and the subject (a string that is not
+   empty) are compared. No other claim is read. The decoded header and claims are cleared when they are
+   dropped. The access token's expiry is read from the `expires_in` field of the reply, not from the
+   token, and is compared with the clock. Claims such as an organisation's name are text somebody else
+   chose.
 
 No exception is added to [labels.md](labels.md). The counts it pins for `Labelled::new` and
 `Policy::decode_transport` move by the one place a refusal's body is read and the one that hands it back,
@@ -311,9 +333,15 @@ program on the machine, or a page in the browser. Nothing they could write reach
 only things read from the callback are a value compared with one generated here, and a `code` and a client
 identifier handed to the authorization server, which accepts the pair only if it issued the `code` to that
 client for this verifier. A reply from that server is the other place, and what leaves the crate from it is a
-token that is never read, or a category computed from a status.
+token that is never read, or a category computed from a status. The ID token and the key set are read for
+whether the token verified, and what leaves the crate is that answer and no claim.
 
-`verified-by: none`
+`verified-by: bravebot_skus::chatgpt::an_id_token_that_does_not_verify_stops_the_sign_in_and_stores_nothing`
+`verified-by: bravebot_skus::chatgpt::an_id_token_whose_audience_lists_the_client_among_others_signs_in`
+`verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
+`verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
+`verified-by: bravebot_skus::chatgpt::id_token::only_an_rsa_key_for_rs256_signatures_named_by_the_kid_is_used`
+`verified-by: bravebot_skus::chatgpt::encoding::base64url_reads_back_what_it_writes_and_nothing_else`
 
 <a id="CHATGPT-6"></a>
 ### CHATGPT-6: the tokens are one file the account owns
@@ -494,19 +522,39 @@ failure. The rest are these, each saying which it is:
   categories, which no fallback model is used for: the account answers for every model it serves, so the
   fallback would be refused the same way.
 - **The command stopped,** and says so: the listener could not start, the browser returned no code or no
-  usable client, the ID token did not verify, the time bound passed, a `provider` entry named `chatgpt` is a
+  usable client, the reply held no ID token or one that did not verify, the key set could not be fetched (in
+  the category of that request), the time bound passed, a `provider` entry named `chatgpt` is a
   gateway ([CHATGPT-9](#CHATGPT-9)). The entry's name in that sentence is the constant `chatgpt`. A reply
   that does not grant the scope `chatgpt.tokens.use.direct` ends the command in the same way, and the
   sentence says to sign in again and allow the program to use the subscription's tokens, or to use an API key
   with the `openai` gateway.
-- **The command completed,** and says what it leaves: the account reaches no model, or no model can be
-  offered for it because the listing could not be read and no list is available ([CHATGPT-9](#CHATGPT-9)),
-  or because the service refused the listing in a code of the closed list, in that code's sentence. It says
-  the sign-in is stored before it asks the listing, so a service slow to answer leaves a person knowing it
-  was kept, and the ending is a success whatever the listing says.
+- **The command completed,** and says what it leaves: the account reaches no model, or the listing could not
+  be read and the picker offers the compiled list in its place, which may name a model the account cannot
+  reach ([CHATGPT-9](#CHATGPT-9)), or no model can be offered for it because the sign-in file could not be
+  read where an entry names the models, or because the service refused the listing in a code of the closed
+  list, in that code's sentence. It says the sign-in is stored before it asks the listing, so a service slow
+  to answer leaves a person knowing it was kept, and the ending is a success whatever the listing says.
 
 The refusals of [CHATGPT-12](#CHATGPT-12), which are made before anything starts, are sentences of the
 command and quote nothing.
+
+**What a front end is given.** The diagnosis of a failed turn carries which of the failures above it was,
+beside its category ([BACKEND-37](backends.md#BACKEND-37)), and the failure the desktop is sent carries its
+fixed name as `account`, which is `null` for a failure that did not come from the account. The value is a
+step of this clause or the refusal chosen above, and no string from a reply is in it. The planner is told
+the category and the request count, as for every failure ([TURN-13](turns.md#TURN-13)), and not which
+failure of the account it was.
+
+The one-shot run reports the sentences above as the error of the failed turn. The terminal says the
+sentence of the value from its catalog, worded as that report words it, and the record of a session keeps
+that line in either front end. It is the whole reason: no HTTP status and no count of tries follows it,
+since the remedy ends it. A failure that carries no value is worded from its category, with its status and
+count.
+
+The desktop is sent the terminal's sentence for the value, capitalised, as `accountMessage` beside the
+name, and draws it as the description of one card in `ui/src/renderer/failure.ts`. The window keeps no
+table of the sentences, so the sentence that sends a person to sign in names the command the terminal
+names ([CHATGPT-1](#CHATGPT-1)). A failure with no sentence is drawn from its category.
 
 No code, `state`, `nonce`, verifier, challenge, token, claim, client or host identifier, reply body, header
 value or callback query reaches a trace, a log, an error message, a session record, a transcript, `doctor`,
@@ -516,9 +564,14 @@ the terminal once by [CHATGPT-13](#CHATGPT-13) and goes nowhere else. A test hol
 against each of those outputs, as the trail's test does for the credentials the agent holds, and leaves out
 that one line.
 
-**Not built:** the test that holds every secret the process held against each output of a run that signs in,
-refreshes and fails. The sentences of the sign-in, of a refused refresh, of a refused token, of a request
-refused with a code of the closed list and of what the account reaches once the sign-in is stored are built.
+The test runs the built binary against a stand-in through the seam of [CHATGPT-2](#CHATGPT-2): the sign-in in
+a terminal, `auth status`, `doctor`, a turn that renews a refused token and is answered, and a turn whose
+refresh is refused as no longer valid, every refusal repeating every value the stand-in has seen. It searches
+each command's streams under `--trace` and the debug log, every file left in the home, and the environment a
+hook started by each turn writes there. The desktop window is not one of them: what the bridge says of a
+failed listing is pinned by
+`bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`.
+The test runs on Linux and macOS, where `script` gives the sign-in a terminal, and not on Windows.
 
 **Why.** A message that quoted an authorization server's error would carry a value it chose to the person and
 to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
@@ -529,7 +582,10 @@ a rate limit by status here is waited out and reported as a rate limit is elsewh
 signing in again would not supply is not offered. A usage limit named by a code is not waited out, since
 nothing a second request or a wait of this program's does changes it.
 
+`verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
 `verified-by: bravebot_skus::chatgpt::no_error_of_a_sign_in_holds_a_value_the_flow_handled`
+`verified-by: bravebot_skus::chatgpt::an_id_token_that_does_not_verify_stops_the_sign_in_and_stores_nothing`
+`verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_failed_exchange_is_classed_by_its_status_and_quotes_nothing`
 `verified-by: bravebot_skus::chatgpt::a_reply_that_does_not_allow_the_use_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_browser_that_never_returns_ends_the_sign_in_at_the_bound`
@@ -544,6 +600,21 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_agent::backend::an_account_failure_is_diagnosed_by_its_step_and_names_the_command_where_it_is_the_remedy`
 `verified-by: bravebot_agent::backend::a_refusal_of_the_account_is_not_a_refusal_of_the_body`
 `verified-by: bravebot_agent::backend::a_refusal_that_names_the_account_never_falls_back_to_another_model_of_it`
+`verified-by: bravebot_agent::backend::a_diagnosis_carries_which_failure_of_the_account_it_was`
+`verified-by: bravebot_agent::backend::a_failure_with_no_account_in_it_carries_no_account_value`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
+`verified-by: bravebot_aichat::lib::each_account_failure_has_a_fixed_name_of_its_own`
+`verified-by: bravebot_ui_bridge::failure_tests::a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category`
+`verified-by: bravebot_ui_bridge::failure_tests::a_failure_with_no_account_in_it_is_sent_with_no_account_name`
+`verified-by: bravebot_ui_bridge::failure_tests::the_failure_sent_holds_only_fixed_names_and_counts`
+`verified-by: bravebot_ui_bridge::history::a_turn_on_the_account_with_no_sign_in_reaches_the_window_as_not_signed_in`
+`verified-by: bravebot_ui_bridge::history::a_refused_key_in_the_window_is_sent_with_no_account_name`
+`verified-by: bravebot_ui_bridge::history::a_turn_on_the_account_with_no_sign_in_is_recorded_in_the_sentence_of_its_step`
+`verified-by: bravebot_session::sessions::a_failure_of_the_account_is_said_in_the_sentence_of_its_own_step`
+`verified-by: bravebot_session::sessions::a_refusal_naming_the_account_says_usage_limit_or_not_permitted_and_never_a_rejected_request`
+`verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
+`verified-by: bravebot_tui::app::a_failure_of_the_account_is_said_in_its_own_sentence_in_the_transcript`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agent-settings.test.mjs holds the sentence the agent sends to the card's description, two sentences to two cards, and a failure with no sentence to the category's wording; ui/scripts/ux-state.test.mjs folds turn.error through the window's reducer and draws the real row, and ui/scripts/plan-card.test.mjs does the same for a run that failed; make check-ui runs them, and the governs list above holds failure.ts to existing)`
 `verified-by: bravebot_aichat::client::a_second_refusal_or_a_replacement_that_cannot_be_made_ends_the_turn_in_the_sign_ins_words`
 `verified-by: bravebot_aichat::client::a_refusal_naming_a_listed_code_ends_the_turn_and_replaces_nothing`
 `verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`
@@ -597,12 +668,20 @@ Where the roster comes from, in order:
    whole number, costs that row its place and keeps the rest.
 3. Where the listing cannot be read, because the token could not be had, the request failed or its body is not
    the shape above, a compiled list of model names is offered instead, and the picker says the listing could
-   not be read. A listing that is read and is empty offers nothing, and the compiled list is not used.
+   not be read, that the list is built in and that a row may name a model the account cannot reach. A listing
+   that is read and is empty offers nothing, and the compiled list is not used. A listing refused in a code
+   of [CHATGPT-8](#CHATGPT-8)'s closed list is an answer and not one that could not be read: it offers
+   nothing and is said in that code's sentence.
 
 The window comes from the entry or the listing as it does for a gateway's, and the assumed low window applies
 where neither states one. An output ceiling is not read from the entry, for the reason above, and no model is
 left out for what it can call, since neither source says. The compiled list is a constant of the source that
-names models only and takes nothing from a reply.
+names models only and takes nothing from a reply. Its names are those of the fallback set in opencode's source
+(`fallbackModels` in `packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`). Each row takes
+the assumed window, which a turn on one of the account's models compacts against where the listing cannot
+be read, and no label of its own, and whether it reads an effort level is what a request has already
+learned from the service, as for the model an entry names. None of the names is observed against the
+service.
 
 An account whose listing is empty, where the entry names no model, is signed in. The command completes,
 says the account reaches no model, and the picker has no row for it. Nothing is invented for a tier nobody named.
@@ -611,20 +690,20 @@ The roster is asked of the one function both pickers call, so the terminal and t
 rows. It is asked each time a picker opens, and otherwise only for the window of a model in force that is the
 account's, so a session on another model sends the stored token nowhere. No row is offered where no sign-in is
 stored, and nothing is asked of the service then. A stored sign-in whose token cannot be had, or whose listing
-cannot be read, offers no row, except that the models an entry names need neither the token nor the listing,
-only that the file can be read. The desktop picker says so in a warning beside the other rosters', and the
-terminal picker says so in a note in the transcript, written when the picker opens, so before it draws, at
-rest or mid-turn. A listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in
+cannot be read, is offered the compiled list, except that the models an entry names need neither the token
+nor the listing, only that the file can be read, and offer no row where it cannot be. The desktop picker says
+so in a warning beside the other rosters', and the terminal picker says so in a note in the transcript,
+written when the picker opens, so before it draws, at rest or mid-turn. Where the compiled list is offered
+both say that it is built in and may name a model the account cannot reach. A listing refused with a code of [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in
 that clause's sentence, which does not send the person to sign in again. A person who never signed in is
 told nothing, and a listing that was read, empty or not, is not a failure.
 
-**Not built:** the compiled list (source 3) (#3134). Where the listing cannot be read nothing is
-offered, both pickers say so, and a person names the model as `chatgpt/<name>`. A listing the service refuses for its token with a
-401 is asked for again once with a replacement, as a turn's request is, and a second refusal ends it, as does
-a refusal whose body names a code of [CHATGPT-8](#CHATGPT-8)'s closed list, at once. A model
-named `chatgpt/<name>` on the command line or in a settings file is built: it selects the account, the request
-carries the part after the identifier, and an entry with the id keeps it, and none of the account's models is
-offered then.
+A listing the service refuses for its token with a 401 is asked for again once with a replacement, as a
+turn's request is, and a second refusal ends it and leaves the compiled list, since the token could not be
+had. A refusal whose body names a code of [CHATGPT-8](#CHATGPT-8)'s closed list ends it at once and offers
+nothing. A model named `chatgpt/<name>` on the command line or in a settings file selects the account, the
+request carries the part after the identifier, and an entry with the id keeps it, and none of the account's
+models is offered then.
 
 **Why.** Where two services serve a model of one name they are billed differently, authenticate differently
 and answer on different terms, so a bare name cannot say which one a person chose, and a remembered choice
@@ -652,7 +731,8 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_the_accounts_listing_is_a_failure_and_goes_nowhere`
 `verified-by: bravebot_aichat::client::a_reply_that_is_not_the_accounts_listing_cannot_be_read_and_an_empty_one_can`
 `verified-by: bravebot_agent::chatgpt::a_machine_nobody_signed_in_on_offers_nothing_and_asks_the_service_nothing`
-`verified-by: bravebot_agent::chatgpt::an_account_whose_token_cannot_be_had_is_unreadable_and_asks_the_service_nothing`
+`verified-by: bravebot_agent::chatgpt::an_account_whose_token_cannot_be_had_is_offered_the_compiled_list_and_asks_the_service_nothing`
+`verified-by: bravebot_aichat::models::the_compiled_list_is_rows_under_the_accounts_identifier_one_to_a_name`
 `verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
 `verified-by: bravebot_agent::chatgpt::an_unreadable_listing_is_told_apart_from_an_empty_one`
 `verified-by: bravebot_agent::chatgpt::a_listing_refused_for_its_token_is_asked_again_once_with_a_replacement`
@@ -669,11 +749,12 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_config::lib::the_models_a_chatgpt_entry_names_are_not_carried_where_a_gateway_holds_the_id`
 `verified-by: bravebot_config::lib::a_machine_level_provider_block_replaces_the_models_a_chatgpt_entry_names`
 `verified-by: bravebot_config::settings::only_the_layers_a_provider_block_is_read_from_choose_the_accounts_models`
-`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none`
+`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
 `verified-by: bravebot_tui::app::a_caller_on_a_model_that_is_not_the_accounts_never_asks_the_account`
 `verified-by: bravebot_tui::app::a_caller_on_one_of_the_accounts_models_asks_the_account_and_takes_the_window_it_lists`
 `verified-by: bravebot_tui::app::the_picker_asks_the_account_whatever_model_is_in_force_and_lists_what_it_offers`
-`verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_is_a_warning_and_nothing_more`
+`verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`
+`verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker`
 `verified-by: bravebot_tui::app::the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise`
 `verified-by: bravebot_tui::app::only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_account_only_for_one_of_its_own_models`
@@ -688,33 +769,47 @@ events, a tool call and its result, usage and cache figures and the effort level
 this service adds no protocol of its own. The effort level maps to the service's reasoning field, and no
 request to this host is made in another protocol.
 
-The access token is sent as a bearer token in `authorization`. The request carries three more headers,
-`session-id`, `thread-id` and `x-client-request-id`, each holding the identifier of the session that makes
-the request, which this program generated. The service derives its prompt-cache affinity from `session-id`.
-The body is compressed with zstd and sent with `content-encoding: zstd`, since the service rejects an
-uncompressed body over about 1 MiB and decodes zstd. Compaction of a conversation for this service is by
-summary ([compaction.md](compaction.md)), as it is for every service, and the service offers no native
-compaction to use instead. The effort level of a session is fixed when the session starts. Nothing else a reply, a model or a settings file says is
+The access token is sent as a bearer token in `authorization`. The request carries four more headers.
+`session-id`, `thread-id` and `x-client-request-id` each hold the identifier of the session that makes
+the request, which this program generated, and the service derives its prompt-cache affinity from
+`session-id`. The fourth is `content-encoding: zstd`: the body is the JSON of [BACKEND-61](backends.md#BACKEND-61)
+compressed with zstd into one frame, whatever its size, since the service rejects an uncompressed body over
+about 1 MiB and decodes zstd. The frame is what is sent: the length the request states and every check on
+the body's size are the frame's. A frame over 1 MiB is not sent: the turn is told the body is too large,
+spends no token on it, and shortens the conversation as it does where a service refuses the body. A body
+over 1 MiB as it is built and under it as a frame is sent. The limit is the one the program this is read
+from states for an uncompressed body, and whether it applies to the frame or to what the frame decodes to
+has not been observed. This program adds a `content-encoding` to the request of no other service. Compaction of a
+conversation for this service is by summary ([compaction.md](compaction.md)), as it is for every service,
+and the service offers no native compaction to use instead. The effort level of a session is fixed when the session starts. Nothing else a reply, a model or a settings file says is
 added to a request to this host: a gateway's options are carried into its requests, and this service takes
 none. The sign-in stores no identifier of the account and no header value is taken from a reply.
 
-**Not built:** the zstd body. The body is sent as it is built, and one over 1 MiB is not sent: the turn is told
-the body is too large, spends no token on it, and shortens the conversation as it does where a service
-refuses the body. The limit is the one the
-program this is read from states and has not been observed. No encoder is in the tree, and adding one is a
-decision about a dependency ([Decisions left open](#decisions-left-open)). The identifier is one per process
-and not one per session, since the agent holds no session, so a second session in a process presents the
-first's. The effort level is not held fixed for the session.
+**Not built:** the identifier is one per process and not one per session, since the agent holds no
+session, so a second session in a process presents the first's. The effort level is not held fixed for the
+session.
 
 **Why.** The service decides the protocol, and a protocol written for one service is a second copy of the
 work for the next. A header a settings file could add would be a way to put a value, or another credential,
-on a request this clause promises carries only the token and the session's identifiers. Headers built only
+on a request this clause promises carries only the token, the session's identifiers and the encoding.
+Headers built only
 from constants and from values this program generated cannot carry a line break or a length a reply chose.
 A body the service refuses for its size would fail a long conversation at the point a person has the most
-to lose, so the encoding is not left to a setting.
+to lose, so the encoding is not left to a setting, and it is applied to every body so that no size is sent
+in a form the others are not. The program this is read from compresses every body of this service, with no
+size above which it starts, and sends a body to another service as it is unless a person asked for an
+encoding. The encoder is `ruzstd`, which is Rust with no build script and no native code, where the `zstd`
+crate would compile the C library into each target this program is built for. libzstd decodes the frames
+`ruzstd` writes, through its command line tool at 1.5.7, Node 24's `zlib` and Python 3.15's
+`compression.zstd`, for bodies from empty to 8 MiB and for ones that do not compress, and no other decoder
+has been tried. The encoder writes one level, roughly zstd level 1, with the frame's checksum and no content
+size in the header.
 
-`verified-by: bravebot_aichat::client::an_account_request_carries_the_token_and_three_session_headers_and_nothing_a_gateway_would`
+`verified-by: bravebot_aichat::client::an_account_request_carries_the_token_the_three_session_headers_and_the_zstd_encoding_and_nothing_a_gateway_would`
+`verified-by: bravebot_aichat::client::a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_built`
 `verified-by: bravebot_aichat::client::a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token`
+`verified-by: bravebot_aichat::client::an_account_body_is_encoded_whatever_its_size`
+`verified-by: bravebot_aichat::client::a_gateways_body_is_plain_json_with_no_content_encoding`
 `verified-by: bravebot_aichat::client::a_gateways_refused_key_is_not_reported_as_the_chatgpt_sign_in_failing`
 `verified-by: bravebot_agent::backend::a_body_not_sent_for_its_size_is_a_refusal_of_the_body_and_no_failure_of_the_sign_in`
 `verified-by: bravebot_agent::chatgpt::the_session_identifier_is_one_random_value_for_the_process`
@@ -819,34 +914,36 @@ of a sign-in made before the session, and nothing about which project or which p
 **Why.** A refresh that was not written would end the sign-in whenever the server replaces the refresh
 token on use, and the person would find out at the first turn of the next session.
 
-**Not built:** a test that drives an incognito session through a renewal. A turn asks for the token, and the
-renewal takes no mode and writes the file whatever the caller is doing.
+A turn asks for the token, and the renewal takes no mode and writes the file whatever the caller is doing.
+The test runs the built binary with `--incognito` against a stand-in through the seam of
+[CHATGPT-2](#CHATGPT-2), on Linux and macOS.
 
 `verified-by: bravebot_skus::chatgpt::renew::a_renewal_presents_the_stored_refresh_token_and_writes_what_it_is_given`
 `verified-by: bravebot_skus::chatgpt::renew::a_write_that_fails_is_reported_and_tried_again_before_the_next_request`
+`verified-by: bravebot_cli::chatgpt_account::an_incognito_session_writes_the_renewal_of_its_sign_in`
 
 ## What is built
 
 The sign-in is the `chatgpt` module of `bravebot-skus` and the command is `crates/cli/src/chatgpt.rs`.
-[LAYER-1](layering.md#LAYER-1)'s row for `bravebot-skus` covers the module, which needs no dependency the
-crate does not hold and depends on no crate of this workspace, so [CHATGPT-5](#CHATGPT-5)'s first condition
-holds by reading its manifest.
+[LAYER-1](layering.md#LAYER-1)'s row for `bravebot-skus` covers the module, which depends on no crate of this
+workspace, so [CHATGPT-5](#CHATGPT-5)'s first condition holds by reading its manifest. The signature of the ID
+token is checked with `ring`, the library `rustls` already brings, at the version and with the features it
+brings.
 
 The requests a turn sends are made by the Responses client of `bravebot-aichat` given a token source, and
 `crates/agent/src/chatgpt.rs` is that source: one renewer for the process, which keeps a renewal the file could
-not take for the rest of it, and the note of that, which the turn says once.
+not take for the rest of it, and the note of that, which the turn says once. The same client encodes the body
+of a request to the account with `ruzstd` ([CHATGPT-10](#CHATGPT-10)).
 
-- **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-3](#CHATGPT-3), [CHATGPT-4](#CHATGPT-4),
-  [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7), [CHATGPT-11](#CHATGPT-11),
-  [CHATGPT-12](#CHATGPT-12) and [CHATGPT-13](#CHATGPT-13).
-- **Built in part,** each naming what is not: [CHATGPT-2](#CHATGPT-2), [CHATGPT-8](#CHATGPT-8),
-  [CHATGPT-9](#CHATGPT-9), [CHATGPT-10](#CHATGPT-10) and [CHATGPT-14](#CHATGPT-14).
-- **Not built:** the compiled list of [CHATGPT-9](#CHATGPT-9) (#3134); the
-  zstd body of [CHATGPT-10](#CHATGPT-10); and the verification of the ID token of
-  [CHATGPT-5](#CHATGPT-5).
+- **Built whole:** [CHATGPT-1](#CHATGPT-1), [CHATGPT-2](#CHATGPT-2), [CHATGPT-3](#CHATGPT-3),
+  [CHATGPT-4](#CHATGPT-4), [CHATGPT-5](#CHATGPT-5), [CHATGPT-6](#CHATGPT-6), [CHATGPT-7](#CHATGPT-7),
+  [CHATGPT-8](#CHATGPT-8), [CHATGPT-9](#CHATGPT-9), [CHATGPT-11](#CHATGPT-11), [CHATGPT-12](#CHATGPT-12),
+  [CHATGPT-13](#CHATGPT-13) and [CHATGPT-14](#CHATGPT-14).
+- **Built in part,** naming what is not: [CHATGPT-10](#CHATGPT-10).
 
 A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
-`chatgpt` entry names, or where it names none, the models the serving host's listing offers. Once the sign-in
+`chatgpt` entry names, or where it names none, the models the serving host's listing offers, or where the
+listing cannot be read, the compiled names. Once the sign-in
 is stored the command asks the listing, as a picker does, and tells the person to pick a model in `/model` or
 to name one, that the account reaches no model, or that the listing could not be had.
 
@@ -858,20 +955,10 @@ These are a person's to decide, and no test can settle them.
   presents no other program's identifier. Whether ChatGPT's terms allow a third-party program to use a
   subscription this way, and whether OpenAI's registration accepts this program, has to be decided before
   this ships. If it does not, this should not land as written.
-- **Verifying the ID token.** [CHATGPT-5](#CHATGPT-5) verifies it with RS256 against OpenAI's key set, as
-  the program this is read from does. That needs a signature verifier and a request for the key set. Whether
-  the tree already holds a verifier that serves, or one is added, is a decision about a dependency
-  ([DEP-001](../best-practices/dependencies.md#DEP-001)). The alternative is to read no ID token, which
-  drops the `nonce` and the audience check and leaves the code exchange and PKCE to tie the sign-in to this
-  process. The command is built on that alternative until this is decided: the `nonce` is sent and not
-  checked, and the reply's `id_token` is dropped unread. The tree holds no RS256 verifier, so the other
-  choice adds a dependency.
-- **Compressing the body.** [CHATGPT-10](#CHATGPT-10) sends zstd. The tree holds no encoder, and adding
-  one is a decision about a dependency in the same way. The request is sent uncompressed until it is decided,
-  and a conversation whose body passes 1 MiB is shortened, where the service would take it compressed.
 - **The compiled list.** [CHATGPT-9](#CHATGPT-9) offers one where the listing cannot be read. Its contents
-  are a constant a release changes. The alternative is to offer nothing in that case and say to name the
-  models in the `chatgpt` entry.
+  are the fallback set of opencode's source, a constant a release changes, and none of its names is observed
+  against the service. The alternative is to offer nothing in that case and say to name the models in the
+  `chatgpt` entry.
 
 ## What the exchange has to record
 
@@ -931,10 +1018,19 @@ real ChatGPT account on this program's own build:
 - The key set on `auth.openai.com`, with its path in [CHATGPT-2](#CHATGPT-2).
 - That the authorization server accepts a redirect to `http://127.0.0.1:<port>/auth/callback` for any port.
   A port the operating system chose is accepted and no other is confirmed.
-- The `id_token` field of the code exchange's reply, which the command drops unread.
-- The ID token's algorithm, issuer, audience, required claims and the nonce match.
-- What the three session headers do for prompt-cache affinity, the zstd body, and that there is no native
-  compaction and no change of effort in a session.
+- The `id_token` field of the code exchange's reply, which the sign-in requires and verifies.
+- The ID token's algorithm, audience, required claims and the nonce match, and the `kid` and key types of the
+  key set.
+- The ID token's issuer. The sign-in compares it with the constant `https://auth.openai.com`, which is not
+  observed from the service: a real token that names another refuses every sign-in.
+- That each name of the compiled list ([CHATGPT-9](#CHATGPT-9)) is a model the service takes, and in
+  particular the names ending in `-fast`, which are names of the program the list is read from.
+- What the three session headers do for prompt-cache affinity, and that there is no native compaction and no
+  change of effort in a session.
+- That the service decodes a zstd body, which the program this is read from sends for every request to it.
+  The frames this program writes differ from the ones that program's `zlib` writes in having a checksum and
+  no content size, at a lower level. That the service takes such a frame, the size at which it rejects a
+  body, and whether that size is of the frame or of what it decodes to, are not observed.
 - The error codes that end the use of a subscription: `subscription_sharing_usage_limit_exceeded`,
   `subscription_sharing_user_not_eligible`, `subscription_sharing_unsupported_capability`,
   `subscription_sharing_route_not_supported`, `subscription_sharing_invalid_user`,
@@ -975,7 +1071,7 @@ work lands, in the same commit as the code.
   [BACKEND-22](backends.md#BACKEND-22), [BACKEND-31](backends.md#BACKEND-31) and
   [BACKEND-52](backends.md#BACKEND-52) with the Responses protocol. [BACKEND-20](backends.md#BACKEND-20)
   also gains the case that the effort level of a session is fixed when it starts, and the aichat client
-  gains a zstd body encoding.
+  gains a zstd body encoding, which [BACKEND-61](backends.md#BACKEND-61) states.
 - **The command line.** [CLI-18](cli.md#CLI-18) lists five ways and states `logout chatgpt`.
   [CLI-23](cli.md#CLI-23) takes `chatgpt` as a way.
 - **Incognito.** [INCOG-7](incognito.md#INCOG-7) refuses the sign-in, and
@@ -1027,8 +1123,13 @@ work lands, in the same commit as the code.
   system error or cause, so a full disk and a folder that cannot be written get the same advice.
 - A person on a machine with no browser forwards the listener's port, which changes at every sign-in, and
   no device-code route is available to this program.
-- The compiled list ([CHATGPT-9](#CHATGPT-9)) can name a model the account cannot reach, which the service
-  refuses at the first request.
+- Where the listing cannot be read the pickers list the compiled names ([CHATGPT-9](#CHATGPT-9)), and a
+  person who wants another types `chatgpt/<name>`. The names are another program's and none has been
+  observed against the service, so one may name a model the account cannot reach. The service refuses it
+  at the first request, and the turn says that the service rejected the request, without naming the model.
+- The egress layer reads at most 2 MiB of a reply, and the listing is about half a megabyte for nine rows,
+  so an account whose listing passes 2 MiB is read as one that cannot be read and is offered the compiled
+  names.
 - Where an entry names models ([CHATGPT-9](#CHATGPT-9)), a model named directly that the entry does not name
   has no row, so a turn on it compacts against the assumed window and not the one the listing would give.
   Stating the model in the entry, with its `limit`, gives it one.
@@ -1036,10 +1137,16 @@ work lands, in the same commit as the code.
 - A person whose gateway entry already has the id `chatgpt` renames it to sign in.
 - A reply that names another model than the one asked for is not reported as a substitution for the account,
   since whether the host answers under the name asked or under a dated one is not observed.
-- A turn on the account sends its body uncompressed and refuses one over 1 MiB, so a long conversation is
-  shortened sooner than the service would need, and the limit has not been observed.
-- Where the listing cannot be read no picker lists the account's models, so a person types `chatgpt/<name>`,
-  and a name the account cannot reach is refused at the first request.
+- The body is encoded at the one level `ruzstd` writes, which makes frames about 1.4 times the size of
+  libzstd's default level on request-shaped JSON (0.40 of the input against 0.27 to 0.29, measured on bodies
+  built from this repository's files), and a frame over 1 MiB is not sent. It matches a repeat only within
+  128 KiB, so a conversation that holds the same large text twice, far apart, gains nothing from the second
+  copy. A long conversation is shortened sooner than it would be by the program this is read from, and the
+  limit has not been observed.
+- The frame has a checksum and no content size, where the frames Node's `zlib` writes, which the program this
+  is read from calls, have a content size and no checksum. A service that needs the size before it reads the
+  frame refuses every body. The change that follows is the `zstd` crate, which writes the size, at the cost
+  of compiling its C library for each target.
 - A picker asks the serving host for the listing each time it opens, and the sign-in command asks it when the
   sign-in is stored, so the access token is sent to the serving host in requests that are not a turn.
 - A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,
@@ -1052,18 +1159,24 @@ work lands, in the same commit as the code.
   is replaced once, a 429 or a 5xx is asked for again, and the turn ends with the sentence of that status.
   The two codes that program retries (`subscription_sharing_usage_unavailable` and
   `subscription_sharing_user_unavailable`) are not in the list and are handled the same way.
-- A refusal that names the account carries no HTTP status and no wait, and is a refusal among the categories,
-  so the line the terminal and the desktop show for it is the refusal's. A usage limit that came as a 429
-  with a `Retry-After` showed the wait, and one that came as a refusal that names the account says that it
-  was rejected and nothing more.
-- The terminal and the desktop say why a turn failed from its category alone, so the sentences of
-  [CHATGPT-8](#CHATGPT-8) reach the one-shot run's report and not them. A turn that ended on a refusal that
-  names the account says there that the service rejected the request, whichever the code.
+- A refusal that names the account carries no HTTP status and no wait, so the line that says the usage limit
+  was reached does not say when it lifts. A usage limit sent as a 429 with a `Retry-After` shows its wait in
+  the terminal, and one sent as a refusal naming the account does not.
+- The sentences of [CHATGPT-8](#CHATGPT-8) are written in two places: the one-shot run's report and the
+  terminal's catalog, which a test holds equal to it. The desktop is sent the catalog's sentence and
+  keeps none. The eleven names are listed in `ui/docs/phase-0-rpc-protocol.md`.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
   the dead refresh token and is told the refresh failed, until the person signs in again.
-- The ID token is not verified, so the `nonce` and the audience are not checked
-  ([Decisions left open](#decisions-left-open)).
+- A code exchange whose reply holds no ID token ends the sign-in, so a server that stopped sending one, or
+  that named another issuer, would refuse every sign-in until a release changes the check. The expiry is
+  compared with the clock with no allowance, so a clock running ahead of the server's by more than the
+  token's lifetime refuses the sign-in.
+- The binary `cargo test -p bravebot-cli` builds, and one `cargo build --all-targets` builds, is a debug
+  build with the `test-hosts` feature, so in it `BRAVEBOT_TEST_CHATGPT_STAND_IN` sends the sign-in and its
+  tokens where it says. A person who runs that binary from `target/debug` as their own carries the seam.
+  `cargo test --workspace` gives the feature to every workspace binary it builds, and `cargo test --release`
+  and `cargo build --release --all-targets` stop at the guard that refuses a release build with it.
 - Whether a third-party program may use a subscription this way is not this spec's to settle
   ([Decisions left open](#decisions-left-open)). The design assumes a person is allowed to, and an answer of
   no ends it.

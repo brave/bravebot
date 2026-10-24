@@ -679,7 +679,8 @@ gateway is still read: what a gateway puts under `capabilities` is its own.
 
 **The ChatGPT account is asked as [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) says,** and only where a sign-in
 is stored. It is a roster beside the others, its rows are keyed by its own identifier, and a listing that cannot
-be had contributes nothing and takes nothing away from the rest.
+be had contributes the compiled names of [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) and takes nothing away from
+the rest. A listing refused in a code that names the account contributes nothing.
 
 `verified-by: bravebot_aichat::models::a_gateway_roster_is_offered_under_names_that_say_which_gateway_serves_them`
 `verified-by: bravebot_aichat::models::a_window_a_gateway_reports_is_taken_from_the_listing`
@@ -702,7 +703,7 @@ be had contributes nothing and takes nothing away from the rest.
 `verified-by: bravebot_tui::app::a_fetched_roster_leads_with_the_model_in_force`
 `verified-by: bravebot_tui::app::a_fetched_roster_nobody_has_chosen_from_is_still_sorted`
 `verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
-`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_and_a_failed_listing_adds_none`
+`verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
 
 <a id="BACKEND-20"></a>
 ### BACKEND-20: how hard to think is carried, never inferred
@@ -1712,6 +1713,13 @@ A reply stopped at its output ceiling reports that ceiling alongside the categor
 program's own configured figure rather than anything a service said, so it is not a detail taken
 from a reply, and without it the report names a limit and no way to change it.
 
+A failure of a ChatGPT account reports which one it was beside its category
+([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)): the step of the sign-in that failed, the refusal that
+names the account, or the class of a failed renewal. It is one of a closed set, chosen by a step or
+by the client that sent the request comparing a code with a closed list, and no text from a reply is
+in it. A failure of any other kind reports none. The planner is told the category and the request
+count and no more, as for every failure.
+
 `verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`
 `verified-by: bravebot_agent::backend::aws_refusing_the_credentials_it_was_signed_with_is_reported_as_unauthorized`
@@ -1719,6 +1727,9 @@ from a reply, and without it the report names a limit and no way to change it.
 `verified-by: bravebot_agent::backend::what_is_kept_about_a_failure_carries_nothing_the_service_or_the_setting_said`
 `verified-by: bravebot_agent::backend::a_reply_stopped_at_the_ceiling_reports_which_ceiling`
 `verified-by: bravebot_session::sessions::a_reply_stopped_at_a_ceiling_says_which_ceiling`
+`verified-by: bravebot_agent::backend::a_diagnosis_carries_which_failure_of_the_account_it_was`
+`verified-by: bravebot_agent::backend::a_failure_with_no_account_in_it_carries_no_account_value`
+`verified-by: bravebot_agent::conversation::the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else`
 `verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
 `verified-by: bravebot_agent::turn::a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status`
 `verified-by: bravebot_agent::turn::a_refusal_counts_the_cache_probe_as_a_second_request`
@@ -3124,6 +3135,10 @@ The body is built from the conversation as these fields:
   `instructions`, `input`, `tools`, `tool_choice`, `stream`, `store` and `previous_response_id`.
   The ChatGPT account carries no `options` ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
 
+The body is that JSON as it is built for every service but the ChatGPT account. A request to the account
+carries it as one zstd frame with `content-encoding: zstd`, and its size limit is the frame's
+([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). This program adds no `content-encoding` to a gateway's request.
+
 The reply's events are read as they arrive. Words come from the text deltas of an output item. A call
 comes from a `function_call` item, whose arguments arrive in pieces as the model writes them, so the count
 of [BACKEND-45](#BACKEND-45) moves with them. The reply is assembled from the items the stream completes,
@@ -3172,15 +3187,16 @@ and Gemini clients: the request, the events, calls and their results, usage, the
 of a stream, and the refusals, reached at the entry's `/responses` route with its key as a bearer token.
 
 **Not built:** an `npm` on a model, so the SDK an entry names decides for every model it lists; the ChatGPT
-account, which waits on the request path of [CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10) with its session
-headers and zstd body; a run's `--output-schema`, which the request does not carry; a document attachment,
-which is dropped ([#3121](https://github.com/brave/bravebot/issues/3121)); a refusal the model writes as a
+account's identifier for a session and its effort level held fixed for one, which wait on a session the agent
+holds ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)); a run's `--output-schema`, which the request does not
+carry; a document attachment, which is dropped
+([#3121](https://github.com/brave/bravebot/issues/3121)); a refusal the model writes as a
 content part of a reply that completes, which is read as no content
 ([#3120](https://github.com/brave/bravebot/issues/3120)); and [IMPORT-3](import.md#IMPORT-3) still leaves
 an `openai` entry that names `@ai-sdk/openai`.
 
-**Why.** The service decides the protocol, so the same body serves the ChatGPT account and a gateway that
-takes it, and a second encoding for either is a second place for one to drift. `store` is `false` because a
+**Why.** The service decides the protocol, so the same JSON serves the ChatGPT account and a gateway that
+takes it, and the account's frame is that JSON encoded at the last step, so there is no second body to drift. `store` is `false` because a
 request that asks a service to keep a conversation puts the conversation somewhere this program cannot delete
 it from, and because the session already holds all of it. The stream is always asked for because the host that
 serves the subscription refuses a request that is not, and a reply read as events is read the same way whoever
@@ -3216,6 +3232,8 @@ clause was written for.
 `verified-by: bravebot_aichat::client::a_responses_call_is_named_before_its_arguments_arrive_and_they_are_never_charged`
 `verified-by: bravebot_aichat::client::a_final_responses_event_in_a_shape_this_cannot_read_is_not_asked_for_again`
 `verified-by: bravebot_aichat::client::a_responses_reply_stopped_for_its_content_is_a_refusal_and_not_a_ceiling`
+`verified-by: bravebot_aichat::client::an_account_body_is_encoded_whatever_its_size`
+`verified-by: bravebot_aichat::client::a_gateways_body_is_plain_json_with_no_content_encoding`
 `verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
 `verified-by: bravebot_agent::backend::a_header_the_block_asked_for_reaches_the_request_whichever_protocol_it_answers_in`
 

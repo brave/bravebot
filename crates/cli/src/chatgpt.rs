@@ -184,6 +184,7 @@ fn said_of_listing(listing: &AccountModels) -> String {
     match listing {
         AccountModels::Offered(models) if models.is_empty() => t!(chatgpt_reaches_no_model).into(),
         AccountModels::Unreadable => t!(chatgpt_listing_unreadable).into(),
+        AccountModels::Compiled(_) => t!(chatgpt_listing_compiled).into(),
         AccountModels::Refused(refusal) => {
             t!(chatgpt_listing_refused, refusal = refusal.to_string())
         }
@@ -292,23 +293,23 @@ pub(crate) fn logout() -> ExitCode {
 /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)): the variants hold none, and a
 /// path and what the operating system said are all a store failure adds.
 fn said_of_sign_in(stopped: &SignInError) -> String {
+    let class = |class: &Class| match class {
+        Class::Refused => t!(chatgpt_class_refused),
+        Class::RateLimited => t!(chatgpt_class_rate_limited),
+        Class::Unavailable => t!(chatgpt_class_unavailable),
+        Class::Incomplete => t!(chatgpt_class_incomplete),
+        Class::Transport => t!(chatgpt_class_transport),
+    };
     match stopped {
         SignInError::Listener => t!(chatgpt_failed_listener).into(),
         SignInError::TimedOut => t!(chatgpt_failed_timed_out).into(),
         SignInError::NoCode => t!(chatgpt_failed_no_code).into(),
         SignInError::NoClient => t!(chatgpt_failed_no_client).into(),
         SignInError::ClientChanged => t!(chatgpt_failed_client_changed).into(),
-        SignInError::Exchange(class) => t!(
-            chatgpt_failed_exchange,
-            reason = match class {
-                Class::Refused => t!(chatgpt_class_refused),
-                Class::RateLimited => t!(chatgpt_class_rate_limited),
-                Class::Unavailable => t!(chatgpt_class_unavailable),
-                Class::Incomplete => t!(chatgpt_class_incomplete),
-                Class::Transport => t!(chatgpt_class_transport),
-            }
-        ),
+        SignInError::Exchange(failed) => t!(chatgpt_failed_exchange, reason = class(failed)),
         SignInError::NoUseScope => t!(chatgpt_failed_no_use_scope).into(),
+        SignInError::KeySet(failed) => t!(chatgpt_failed_key_set, reason = class(failed)),
+        SignInError::IdToken => t!(chatgpt_failed_id_token).into(),
         SignInError::Store(failure) => said_of_account(failure),
     }
 }
@@ -590,29 +591,49 @@ mod tests {
     /// CHATGPT-8, CHATGPT-9: once the sign-in is stored the command says what the account reaches,
     /// and each answer of the listing has its own sentence. An account that reaches no model is told
     /// as that and not as a failure, and a listing that could not be had is not told as the account
-    /// reaching none, since the person would then stop looking for a model the account has. A
-    /// refusal in a code that names the account is said in its own sentence and does not send the
-    /// person to sign in again. Only a listing with a model in it points at `/model` as the way to
-    /// pick one.
+    /// reaching none, since the person would then stop looking for a model the account has. Where
+    /// the compiled list stands in for it the sentence says so and that a row may be refused, and
+    /// where nothing is offered it says that. A refusal in a code that names the account is said in
+    /// its own sentence and does not send the person to sign in again. Only a listing with a model
+    /// in it points at `/model` as the way to pick one.
     #[test]
     fn each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker() {
         use bravebot_agent::chatgpt::{Model, Refusal};
 
         let reaches_none = said_of_listing(&AccountModels::Offered(Vec::new()));
         let unreadable = said_of_listing(&AccountModels::Unreadable);
+        let compiled = said_of_listing(&AccountModels::Compiled(vec![Model::automatic()]));
         let offered = said_of_listing(&AccountModels::Offered(vec![Model::automatic()]));
         assert_eq!(reaches_none, t!(chatgpt_reaches_no_model));
         assert_eq!(unreadable, t!(chatgpt_listing_unreadable));
+        assert_eq!(compiled, t!(chatgpt_listing_compiled));
         assert_eq!(offered, t!(chatgpt_use_by_name));
         assert_eq!(said_of_listing(&AccountModels::Absent), offered);
 
-        let mut distinct = vec![reaches_none.clone(), unreadable.clone(), offered.clone()];
+        let mut distinct = vec![
+            reaches_none.clone(),
+            unreadable.clone(),
+            compiled.clone(),
+            offered.clone(),
+        ];
         distinct.sort();
         distinct.dedup();
-        assert_eq!(distinct.len(), 3, "two answers share a sentence");
+        assert_eq!(distinct.len(), 4, "two answers share a sentence");
         assert!(
             unreadable.contains("--model chatgpt/<model>"),
             "no way out for an unreadable listing: {unreadable}"
+        );
+        assert!(
+            compiled.contains("built-in list") && compiled.contains("cannot reach"),
+            "the compiled list was not said to be one that may be refused: {compiled}"
+        );
+        assert!(
+            compiled.contains("--model chatgpt/<model>"),
+            "no way out for a model the account cannot reach: {compiled}"
+        );
+        assert!(
+            !compiled.contains("reaches no model") && !unreadable.contains("built-in"),
+            "an answer was told as another: {compiled} / {unreadable}"
         );
         assert!(
             !reaches_none.contains("could not"),
@@ -689,6 +710,9 @@ mod tests {
             SignInError::Exchange(Class::Unavailable),
             SignInError::Exchange(Class::Incomplete),
             SignInError::Exchange(Class::Transport),
+            SignInError::IdToken,
+            SignInError::KeySet(Class::Refused),
+            SignInError::KeySet(Class::Transport),
         ]
         .iter()
         .map(said_of_sign_in)
@@ -715,6 +739,16 @@ mod tests {
         assert!(sentences[6].contains("refused"), "{}", sentences[6]);
         assert!(sentences[7].contains("limiting"), "{}", sentences[7]);
         assert!(sentences[8].contains("unavailable"), "{}", sentences[8]);
+        assert!(
+            sentences[11].contains("bravebot auth login chatgpt"),
+            "{}",
+            sentences[11]
+        );
+        assert!(
+            sentences[13].contains("could not be reached"),
+            "{}",
+            sentences[13]
+        );
     }
 
     /// CHATGPT-8: a failure to store is worded with the path and what the system said, made safe to

@@ -317,6 +317,16 @@ impl Window {
         self.start(prompt);
         self.ended()
     }
+
+    /// A whole turn on `model`, which is its ending event.
+    fn turn_on(&mut self, model: &str, prompt: &str) -> Value {
+        let session = self.session.clone();
+        self.call(
+            "turn.send",
+            json!({"session": session, "prompt": prompt, "model": model}),
+        );
+        self.ended()
+    }
 }
 
 impl Drop for Window {
@@ -490,6 +500,74 @@ fn a_failed_turn_is_recorded_with_the_reason_the_interface_composed() {
         !saved.to_string().contains("BACKEND-WORDS"),
         "the record repeats the backend's words: {saved}"
     );
+}
+
+/// CHATGPT-8: a turn on the ChatGPT account where nobody signed in fails in the window naming the
+/// step, beside the category, with the catalog's sentence for it, which the window draws as sent.
+///
+/// The faults this rejects: a failure of the account that arrives as its category alone, and one
+/// whose sentence is composed from anything but the closed name.
+#[test]
+fn a_turn_on_the_account_with_no_sign_in_reaches_the_window_as_not_signed_in() {
+    let scratch = Scratch::new("bridge-account-not-signed-in");
+    let (endpoint, _) = stub_service(Chat::Answers);
+
+    let ended = Window::open(&scratch.home(), &scratch.project(), &endpoint, None)
+        .turn_on("chatgpt/gpt-test", "first question");
+
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+    assert_eq!(ended["data"]["kind"], "chat", "{ended}");
+    assert_eq!(ended["data"]["category"], "unauthorized", "{ended}");
+    assert_eq!(ended["data"]["account"], "not-signed-in", "{ended}");
+    assert_eq!(
+        ended["data"]["accountMessage"],
+        "Not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in",
+        "{ended}"
+    );
+    assert_eq!(ended["data"]["status"], Value::Null, "{ended}");
+}
+
+/// CHATGPT-8: a turn on the ChatGPT account where nobody signed in is recorded as failed with the
+/// sentence of that step, the one a terminal says for it, so a session reopened in either front
+/// end reads the command to run and not the words of the category.
+///
+/// The fault this rejects: recording the category's line, which says the service would not accept
+/// the credentials.
+#[test]
+fn a_turn_on_the_account_with_no_sign_in_is_recorded_in_the_sentence_of_its_step() {
+    let scratch = Scratch::new("bridge-account-recorded");
+    let (endpoint, _) = stub_service(Chat::Answers);
+
+    let ended = Window::open(&scratch.home(), &scratch.project(), &endpoint, None)
+        .turn_on("chatgpt/gpt-test", "first question");
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+
+    let saved = record(&scratch.home());
+    assert_eq!(
+        saved["history"][0]["outcome"],
+        json!({"kind": "failed",
+               "reason": "error: not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in"}),
+        "{saved}"
+    );
+}
+
+/// CHATGPT-8: a key a gateway refused is not the sign-in failing, so the window is sent no name of
+/// the account's, only the category and the status it carries.
+///
+/// The fault this rejects: a name sent for every failed turn, or for every failure of the
+/// `unauthorized` category.
+#[test]
+fn a_refused_key_in_the_window_is_sent_with_no_account_name() {
+    let scratch = Scratch::new("bridge-account-not-involved");
+    let (endpoint, _) = stub_service(Chat::Refuses);
+
+    let ended =
+        Window::open(&scratch.home(), &scratch.project(), &endpoint, None).turn("first question");
+
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+    assert_eq!(ended["data"]["category"], "unauthorized", "{ended}");
+    assert_eq!(ended["data"]["status"], 401, "{ended}");
+    assert_eq!(ended["data"]["account"], Value::Null, "{ended}");
 }
 
 /// A turn that failed after a tool call in the desktop leaves the planner a note that it failed,

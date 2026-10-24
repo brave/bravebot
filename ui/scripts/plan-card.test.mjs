@@ -162,6 +162,23 @@ test('a declined plan is said to be declined, read off the flag and not the sent
   assert.ok(failed.includes('The run stopped'), failed)
 })
 
+// CHATGPT-8: a run the ChatGPT account failed carries the same sentence a turn does, so the card does
+// not say "Authentication failed" to a person who never signed in.
+test('a run the ChatGPT account failed is worded from the sentence the agent sent', () => {
+  const signedOut = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', account: 'not-signed-in', accountMessage: 'Not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in' }))
+  assert.ok(signedOut.includes('Not signed in to a ChatGPT account'), signedOut)
+  assert.ok(!signedOut.includes('Authentication failed'), signedOut)
+
+  const limit = draw(ended({ kind: 'chat', message: 'refused', category: 'refused', account: 'usage-limit', accountMessage: 'OpenAI says this ChatGPT account has reached its usage limit' }))
+  assert.ok(limit.includes('OpenAI says this ChatGPT account has reached its usage limit'), limit)
+
+  // No sentence is the category's card.
+  for (const accountMessage of [null, undefined]) {
+    const plain = draw(ended({ kind: 'chat', message: 'unauthorized', category: 'unauthorized', accountMessage }))
+    assert.ok(plain.includes('Authentication failed'), plain)
+  }
+})
+
 test('a run the person stopped says so, and says it was not saved', () => {
   const markup = draw(ended({ stopped: true, record: null, problem: 'cancelled', attempt: { goal: null, proposed: null, plan: 'the plan', steps: ['1. [act] write NOTES.md: new file, 1 line'] } }))
 

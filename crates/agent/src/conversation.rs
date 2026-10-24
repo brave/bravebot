@@ -2358,6 +2358,8 @@ mod tests {
     #[test]
     fn the_note_about_a_failed_turn_holds_the_category_and_request_count_and_nothing_else() {
         use crate::outcome::Category;
+        use bravebot_aichat::AccountFailure;
+        use bravebot_aichat::responses::protocol::Refusal;
         let everything = Diagnosis::of(Category::RateLimited)
             .with_status(429)
             .after(3)
@@ -2387,6 +2389,17 @@ mod tests {
             before_egress
                 .ends_with("Failure category: unconfigured. Requests sent for the failed call: 0."),
             "{before_egress}"
+        );
+
+        // Which failure of the account it was is for the person's screen. The planner is told the
+        // category, as it is for every other failure.
+        let of_the_account = Diagnosis::of(Category::Refused)
+            .with_account(AccountFailure::Named(Refusal::UsageLimit))
+            .after(1);
+        assert_eq!(
+            failed_turn(of_the_account),
+            failed_turn(Diagnosis::of(Category::Refused).after(1)),
+            "the account's failure reached the planner"
         );
     }
 

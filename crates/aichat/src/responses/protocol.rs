@@ -487,7 +487,8 @@ pub enum Refusal {
     NotPermitted,
 }
 
-/// The sentence for what a refusal says, the one place it is worded
+/// The sentence for what a refusal says, as the one-shot run reports it. The terminal's catalog and the
+/// desktop's table repeat both
 /// ([CHATGPT-8](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Neither names signing in again as
 /// a remedy, and neither names a cause the six codes of the second do not say.
 impl std::fmt::Display for Refusal {

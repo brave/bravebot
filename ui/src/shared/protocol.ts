@@ -488,6 +488,16 @@ export interface TurnError {
   /** As on `TurnDone`. */
   rewind?: RewindPoint[]
   category?: string | null
+  /**
+   * Which failure of a ChatGPT account it was, by a fixed name from a closed set, and `null` for a
+   * failure that did not come from the account. Look it up and never draw it.
+   */
+  account?: string | null
+  /**
+   * The agent's sentence for that failure, capitalised, and `null` where `account` is. Drawn as
+   * sent: it is the terminal's catalog sentence and holds nothing a reply said.
+   */
+  accountMessage?: string | null
   attempts?: number | null
   status?: number | null
   /** Where the output ceiling ended the turn, and `null` otherwise. */
@@ -643,6 +653,10 @@ export interface ManifestError {
   kind: string
   message: string
   category: string | null
+  /** As on `TurnError`. */
+  account?: string | null
+  /** As on `TurnError`. */
+  accountMessage?: string | null
   attempts?: number | null
   status?: number | null
   /** Whether the person stopped it. A stopped run is not recorded. */

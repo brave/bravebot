@@ -210,7 +210,16 @@ impl BackendError {
                 BedrockError::Egress(egress) => return of_egress(egress),
             },
         };
-        Diagnosis::of(category)
+        match self {
+            // Beside the category, which is the class of the failure, for a front end that words
+            // it as the account's own sentence (CHATGPT-8). The value was chosen by the step that
+            // failed, or by the client that sent the request comparing a code with the closed
+            // list, so it is passed on and compared with nothing.
+            Self::Aichat(ChatError::Account(failure)) => {
+                Diagnosis::of(category).with_account(*failure)
+            }
+            _ => Diagnosis::of(category),
+        }
     }
 
     /// Whether the request never reached the service.
@@ -1944,6 +1953,70 @@ mod tests {
                 names_the_command,
                 "{failure:?}: {error}"
             );
+        }
+    }
+
+    /// CHATGPT-8: which of the account's failures it was travels with the category, so a front end
+    /// can say it in the sentence of that failure and not in the category's. Every value reaches
+    /// the diagnosis as itself, including where the call was counted, and the usage limit and the
+    /// refusal that says the account may not be used stay two values.
+    #[test]
+    fn a_diagnosis_carries_which_failure_of_the_account_it_was() {
+        let every = [
+            AccountFailure::NotSignedIn,
+            AccountFailure::Ended,
+            AccountFailure::Refused,
+            AccountFailure::Unusable,
+            AccountFailure::Named(Refusal::UsageLimit),
+            AccountFailure::Named(Refusal::NotPermitted),
+            AccountFailure::Renewal(RenewalFailure::Refused),
+            AccountFailure::Renewal(RenewalFailure::RateLimited),
+            AccountFailure::Renewal(RenewalFailure::Unavailable),
+            AccountFailure::Renewal(RenewalFailure::Incomplete),
+            AccountFailure::Renewal(RenewalFailure::Transport),
+        ];
+        for failure in every {
+            let error = BackendError::from(ChatError::Account(failure));
+            assert_eq!(error.diagnosis().account, Some(failure), "{failure:?}");
+            let counted = error.counted(2, None, None).diagnosis();
+            assert_eq!(counted.account, Some(failure), "{failure:?} counted");
+            assert_eq!(counted.attempts, Some(2), "{failure:?} counted");
+        }
+    }
+
+    /// A failure of any other kind carries no account value, so a front end says what its category
+    /// says: a gateway's refused key is not the sign-in failing, and a request the service refused
+    /// with a status is not a refusal that names the account.
+    #[test]
+    fn a_failure_with_no_account_in_it_carries_no_account_value() {
+        let status = |status: u16| {
+            BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://api.example.invalid/v1/responses".to_string(),
+                status,
+                retry_after: None,
+                body: None,
+            }))
+        };
+        let errors = [
+            status(401),
+            status(429),
+            status(503),
+            BackendError::from(ChatError::Subscription("none".to_string())),
+            BackendError::from(ChatError::BodyTooLarge { limit: 1 << 20 }),
+            BackendError::from(ChatError::NoContent),
+            BackendError::from(ChatError::Incomplete),
+            BackendError::from(ChatError::Cancelled),
+            BackendError::from(ChatError::Reported {
+                failure: Failure::Authentication,
+            }),
+            BackendError::NoGatewayToken {
+                provider: "a-gateway".to_string(),
+            },
+            BackendError::from(BedrockError::Incomplete),
+            status(401).counted(3, None, None),
+        ];
+        for error in errors {
+            assert_eq!(error.diagnosis().account, None, "{error}");
         }
     }
 

@@ -1218,9 +1218,12 @@ chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browse
 chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
 chatgpt-use-by-name = Pick one of the account's models in /model to use this sign-in, or name one, as in bravebot --model chatgpt/<model>
 # What the command says after the sign-in is stored when the account's listing answered with no model,
-# could not be had, or was refused in a code that names the account. The sign-in is stored in each.
+# could not be had, or was refused in a code that names the account. The sign-in is stored in each. Of the
+# two for a listing that could not be had, the second is for an account whose picker offers the built-in
+# list in its place.
 chatgpt-reaches-no-model = This ChatGPT account reaches no model through bravebot, so /model offers none. The sign-in stays stored.
 chatgpt-listing-unreadable = The account's models could not be listed, so /model offers none. Try /model later, or name one, as in bravebot --model chatgpt/<model>
+chatgpt-listing-compiled = The account's models could not be listed, so /model offers a built-in list that may name a model the account cannot reach. Try /model later, or name one, as in bravebot --model chatgpt/<model>
 chatgpt-listing-refused = The account's models could not be listed: { $refusal }
 chatgpt-forgotten =
     forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings
@@ -1239,6 +1242,9 @@ chatgpt-failed-client-changed =
     the browser returned a different client from the one stored, so the sign-in stopped and nothing was changed; run bravebot auth logout chatgpt and sign in again
 chatgpt-failed-no-use-scope =
     the sign-in did not allow bravebot to use the subscription's tokens, so nothing was stored; run bravebot auth login chatgpt and allow it, or use an API key with the openai gateway
+chatgpt-failed-id-token =
+    the ID token the authorization server returned did not verify, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-key-set = the keys that verify the sign-in could not be fetched: { $reason }; nothing was stored
 chatgpt-failed-exchange = the sign-in could not be completed: { $reason }; nothing was stored
 chatgpt-class-refused = the authorization server refused the request
 chatgpt-class-rate-limited = the authorization server is limiting requests; try again later
@@ -3239,10 +3245,13 @@ session-using-model-from = using { $model } from { $service }
 session-signing-in = signing in to AWS; follow the instructions below, and this returns when it is done
 session-context-budget = compacting above { $budget } tokens, as this model advertises
 session-models-unavailable = could not list models: { $problem }
-# Said when the picker opens with a ChatGPT sign-in stored and its listing could not be had. The second
-# is for a listing the service refused in a code that names the account, where signing in again is no
-# remedy.
+# Said when the picker opens with a ChatGPT sign-in stored and its listing could not be had. The first
+# is for a sign-in file that could not be read where a settings entry names the models, which offers no
+# row. The second is for a listing that could not be had, where the picker shows the built-in list. The
+# third is for a listing the service refused in a code that names the account, where signing in again
+# is no remedy.
 session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
+session-chatgpt-models-compiled = could not list the ChatGPT account's models, so /model shows a built-in list that may name a model the account cannot reach; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
 session-chatgpt-models-refused = could not list the ChatGPT account's models: { $refusal }
 session-theme-set = theme { $theme }
 session-no-such-theme = no theme named { $theme }; try /theme for the list
@@ -3401,6 +3410,19 @@ failure-internal = something went wrong here
 # is said the same way whatever went wrong.
 failure-with-status = { $what } (HTTP { $status })
 failure-with-attempts = { $what }, after { $attempts } attempts
+# A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot run
+# reports for it (CHATGPT-8). Each is the whole reason, so no status or count of tries is added.
+failure-account-not-signed-in = not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in
+failure-account-ended = the ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again
+failure-account-token-refused = OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login chatgpt` to sign in again
+failure-account-unusable = the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` to see why
+failure-account-usage-limit = OpenAI says this ChatGPT account has reached its usage limit
+failure-account-not-permitted = OpenAI does not allow this ChatGPT account to be used this way
+failure-account-renewal-refused = the ChatGPT sign-in could not be renewed: the request was refused
+failure-account-renewal-rate-limited = the ChatGPT sign-in could not be renewed: the request was rate-limited
+failure-account-renewal-unavailable = the ChatGPT sign-in could not be renewed: the request was met with an unavailable service
+failure-account-renewal-incomplete = the ChatGPT sign-in could not be renewed: the request was answered in a shape that could not be read
+failure-account-renewal-transport = the ChatGPT sign-in could not be renewed: the request was not completed
 
 
 ## Repeating a prompt

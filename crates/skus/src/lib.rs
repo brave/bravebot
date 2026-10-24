@@ -37,6 +37,11 @@
 
 #![deny(unsafe_code)]
 
+// The seam that points the ChatGPT sign-in at a stand-in exists for tests, and a release build that
+// turned it on, by `--all-features` or a manifest, would let a variable choose where a token goes.
+#[cfg(all(feature = "test-hosts", not(debug_assertions)))]
+compile_error!("the test-hosts feature is for tests and is refused in a release build");
+
 pub mod chatgpt;
 pub mod device;
 pub mod profile;

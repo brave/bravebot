@@ -695,6 +695,12 @@ pub fn failure_reason(
 ) -> String {
     use bravebot_agent::Category;
     use bravebot_aichat::OpenCall;
+    // A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot
+    // run reports (CHATGPT-8). It is the whole reason: its remedy ends it, so no status or count of
+    // tries follows, and the category beside it says only what class the failure was.
+    if let Some(account) = diagnosis.account {
+        return t!(session_error, problem = account_failure(account));
+    }
     let what: std::borrow::Cow<'_, str> = match diagnosis.category {
         Category::Unauthorized => t!(failure_unauthorized).into(),
         // The wait is a bounded number the network layer parsed, said in minutes rounded up so a
@@ -753,6 +759,36 @@ pub fn failure_reason(
         said = t!(failure_with_attempts, what = said, attempts = attempts);
     }
     t!(session_error, problem = said)
+}
+
+/// The sentence for a failure of a ChatGPT account, chosen from the closed value alone
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Nothing a reply said is in it.
+pub fn account_failure(failure: bravebot_aichat::AccountFailure) -> String {
+    use bravebot_aichat::responses::protocol::Refusal;
+    use bravebot_aichat::{AccountFailure, RenewalFailure};
+    match failure {
+        AccountFailure::NotSignedIn => t!(failure_account_not_signed_in).into(),
+        AccountFailure::Ended => t!(failure_account_ended).into(),
+        AccountFailure::Refused => t!(failure_account_token_refused).into(),
+        AccountFailure::Unusable => t!(failure_account_unusable).into(),
+        AccountFailure::Named(Refusal::UsageLimit) => t!(failure_account_usage_limit).into(),
+        AccountFailure::Named(Refusal::NotPermitted) => t!(failure_account_not_permitted).into(),
+        AccountFailure::Renewal(RenewalFailure::Refused) => {
+            t!(failure_account_renewal_refused).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::RateLimited) => {
+            t!(failure_account_renewal_rate_limited).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::Unavailable) => {
+            t!(failure_account_renewal_unavailable).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::Incomplete) => {
+            t!(failure_account_renewal_incomplete).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::Transport) => {
+            t!(failure_account_renewal_transport).into()
+        }
+    }
 }
 
 /// One point a rewind can go back to, as it is written down.
@@ -3637,6 +3673,152 @@ mod tests {
         assert!(said(Some(Duration::from_secs(121))).contains("about 3 minutes"));
         assert!(said(Some(Duration::from_secs(5))).contains("about 1 minute"));
         assert!(said(Some(Duration::from_secs(5))).contains("(HTTP 429)"));
+    }
+
+    /// CHATGPT-8: a failure of a ChatGPT account is said in the sentence of its own step, the one a
+    /// one-shot run reports for it, and in no sentence of another. Each of the eleven is a line of
+    /// its own, whatever category it belongs to, and none is given the status or the count of tries
+    /// that end a line for any other failure.
+    ///
+    /// The faults this rejects: the line of the category, which says a usage limit, a sign-in that
+    /// has ended and a request the service rejected in the same words, and a count of tries tacked
+    /// on after a remedy.
+    #[test]
+    fn a_failure_of_the_account_is_said_in_the_sentence_of_its_own_step() {
+        use bravebot_agent::backend::BackendError;
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure};
+
+        let sentences = [
+            (
+                AccountFailure::NotSignedIn,
+                "not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in",
+            ),
+            (
+                AccountFailure::Ended,
+                "the ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again",
+            ),
+            (
+                AccountFailure::Refused,
+                "OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login chatgpt` to sign in again",
+            ),
+            (
+                AccountFailure::Unusable,
+                "the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` to see why",
+            ),
+            (
+                AccountFailure::Named(Refusal::UsageLimit),
+                "OpenAI says this ChatGPT account has reached its usage limit",
+            ),
+            (
+                AccountFailure::Named(Refusal::NotPermitted),
+                "OpenAI does not allow this ChatGPT account to be used this way",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Refused),
+                "the ChatGPT sign-in could not be renewed: the request was refused",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::RateLimited),
+                "the ChatGPT sign-in could not be renewed: the request was rate-limited",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Unavailable),
+                "the ChatGPT sign-in could not be renewed: the request was met with an unavailable service",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Incomplete),
+                "the ChatGPT sign-in could not be renewed: the request was answered in a shape that could not be read",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Transport),
+                "the ChatGPT sign-in could not be renewed: the request was not completed",
+            ),
+        ];
+        let mut said = Vec::new();
+        for (failure, sentence) in sentences {
+            // The line a one-shot run reports is the same sentence, so the three places say one thing.
+            assert_eq!(failure.to_string(), sentence, "{failure:?}");
+
+            let error = BackendError::from(ChatError::Account(failure));
+            let line = failure_reason(error.diagnosis(), None);
+            assert_eq!(line, format!("error: {sentence}"), "{failure:?}");
+            said.push(line);
+
+            // A status or a count a caller put on the diagnosis is not added to it.
+            let counted = Diagnosis::of(Category::Unauthorized)
+                .with_status(401)
+                .after(3)
+                .with_account(failure);
+            assert_eq!(
+                failure_reason(counted, None),
+                format!("error: {sentence}"),
+                "{failure:?} with a status and a count"
+            );
+        }
+        said.sort_unstable();
+        said.dedup();
+        assert_eq!(said.len(), sentences.len(), "two failures share a line");
+    }
+
+    /// CHATGPT-8: a refusal that names the account says which of the two it was, the usage limit or
+    /// the account not being usable this way, and neither is the line of the `refused` category,
+    /// which says the service rejected the request. Neither sends the person to sign in again, since
+    /// signing in does not change either.
+    #[test]
+    fn a_refusal_naming_the_account_says_usage_limit_or_not_permitted_and_never_a_rejected_request()
+    {
+        use bravebot_agent::backend::BackendError;
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        let said = |refusal| {
+            let error = BackendError::from(ChatError::Account(AccountFailure::Named(refusal)));
+            let diagnosis = error.diagnosis();
+            assert_eq!(diagnosis.category, Category::Refused, "{refusal:?}");
+            failure_reason(diagnosis, None)
+        };
+        let limit = said(Refusal::UsageLimit);
+        let not_permitted = said(Refusal::NotPermitted);
+
+        assert!(limit.contains("usage limit"), "{limit}");
+        assert!(!not_permitted.contains("usage limit"), "{not_permitted}");
+        assert!(not_permitted.contains("does not allow"), "{not_permitted}");
+        let rejected = failure_reason(Diagnosis::of(Category::Refused), None);
+        assert!(rejected.contains("rejected the request"), "{rejected}");
+        for line in [&limit, &not_permitted] {
+            assert_ne!(line, &rejected);
+            assert!(!line.contains("rejected the request"), "{line}");
+            assert!(!line.contains("auth login"), "{line}");
+        }
+    }
+
+    /// CHATGPT-8: a failure that did not come from the account keeps the line of its category, with
+    /// the status and the count of tries after it, so a gateway's refused key is not read as the
+    /// sign-in failing.
+    #[test]
+    fn a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        assert_eq!(
+            failure_reason(
+                Diagnosis::of(Category::Unauthorized)
+                    .with_status(401)
+                    .after(3),
+                None
+            ),
+            "error: the service would not accept the credentials (HTTP 401), after 3 attempts"
+        );
+        assert_eq!(
+            failure_reason(Diagnosis::of(Category::Refused), None),
+            "error: the service rejected the request"
+        );
+        assert_eq!(
+            failure_reason(Diagnosis::of(Category::Transport).after(0), None),
+            "error: the request did not get through"
+        );
     }
 
     /// A reply stopped part way through a call and one stopped while it was thinking want
