@@ -1675,8 +1675,11 @@ This covers every way a record is resumed. `--resume <id>`, `--continue`, the li
 with no id, `--from-pr` and `/resume` refuse where the person chose, before a session is shown. A
 one-shot run given a task with `--resume` or `--continue` is refused before anything is sent, and
 holds the record until its turn is written. The desktop's `session.open` is refused as a bad request
-in the same words. `attach` and `reply` on a stopped session are refused before a process is
-started, so a terminal that resumed the record while the session was stopped keeps it.
+in the same words. A record the desktop's own bridge closed a moment before is not refused: the
+turn of the closed session may still be writing it, so `session.open` waits for that work, for up to
+two seconds, and opens from a fresh read of the record. `attach` and `reply` on a stopped session
+are refused before a process is started, so a terminal that resumed the record while the session
+was stopped keeps it.
 
 A record counts its writes in `revision`. A session remembers the revision it last read or wrote,
 and a save, a name, a link or a note that finds another revision on disk does not replace the
@@ -1710,5 +1713,6 @@ from fetched bytes ([TRUST-4](trust-map.md#TRUST-4)), after which the file reads
 `verified-by: bravebot_tui::resume::a_session_another_process_holds_cannot_be_picked_from_a_pull_requests_list`
 `verified-by: bravebot_tui::app::a_resume_of_a_record_another_process_holds_restores_nothing`
 `verified-by: bravebot_ui_bridge::attaching::a_record_another_window_holds_is_not_opened`
+`verified-by: bravebot_ui_bridge::attaching::a_session_opened_again_waits_for_what_is_still_writing_its_record`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_another_process_holds`
 `verified-by: bravebot_cli::running::a_record_a_terminal_holds_is_not_resumed_or_started_again`

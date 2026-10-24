@@ -344,7 +344,11 @@ fn a_reopened_session_keeps_its_checkout_and_numbers_the_next_after_it() {
     let id = session_id(&first);
 
     let settings = window.settings.clone();
-    // The first window closes, so the record it held is free to open again.
+    // The first window closes and waits for what it was still doing, so the record it held is free.
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
     drop(window);
     let mut reopened = Window::with_settings(settings);
     let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
@@ -387,7 +391,11 @@ fn a_reopened_session_keeps_a_checkout_it_cannot_place_in_the_record_and_numbers
     std::fs::remove_dir_all(standing(&project, "c1")).unwrap();
 
     let settings = window.settings.clone();
-    // The first window closes, so the record it held is free to open again.
+    // The first window closes and waits for what it was still doing, so the record it held is free.
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
     drop(window);
     let mut reopened = Window::with_settings(settings);
     let opened = reopened.call("session.open", json!({"directory": project, "id": id}));

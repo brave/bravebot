@@ -846,6 +846,10 @@ fn bridge_handoff(ending: &str) {
     assert!(full_fork.rewind.is_empty());
     // The desktop session is closed, and the terminal resumes the record it wrote.
     call(&mut bridge, "session.close", json!({"session":handle}));
+    assert!(
+        bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the desktop session's work did not end"
+    );
     let record = sessions::load(root, &id).unwrap();
     let mut stored = sessions::Handle::resuming(
         root,
