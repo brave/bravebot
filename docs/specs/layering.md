@@ -117,7 +117,9 @@ account ([PREM-7](premium-credentials.md#PREM-7), [CLI-18](cli.md#CLI-18)), and 
 tests point `HOME` at a scratch directory, and `bravebot-agent`, which asks Windows for its own
 version ([INSTR-9](instructions.md#INSTR-9)) in the one call a platform states that in, and
 `bravebot-ui-files`, whose Windows walk opens, renames and removes relative to a handle in calls
-only the native API offers. Taking `deny` where `forbid` would do is the way the rule
+only the native API offers. `bravebot-fuzz`, a workspace of its own that the tests below do not
+read, names one site: the counting allocator its `event_stream` target measures with
+([fuzzing.md](../development/fuzzing.md)). Taking `deny` where `forbid` would do is the way the rule
 is kept in letter and lost in substance, because `deny` is the one an `allow` added later reopens.
 
 `verified-by: bravebot_cli::unsafe_code::every_crate_root_says_what_it_does_about_unsafe`

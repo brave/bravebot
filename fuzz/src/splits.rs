@@ -1,5 +1,7 @@
 //! Cutting a byte stream into the reads a decoder is fed.
 
+#![forbid(unsafe_code)]
+
 /// `bytes` cut into reads. Each of `cuts` takes up to that many bytes modulo 32, so a read can be
 /// empty, and what is left after the last cut is one more read. The reads joined are `bytes`.
 pub fn pieces<'a>(bytes: &'a [u8], cuts: &[u8]) -> Vec<&'a [u8]> {
