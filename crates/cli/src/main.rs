@@ -1744,7 +1744,7 @@ fn run_task(
 /// were dropped.
 struct Prepared {
     workspace: bravebot_agent::Workspace,
-    continued: Option<bravebot_session::sessions::Record>,
+    continued: Option<continued::Continuing>,
     agent: Option<String>,
     /// Held because dropping it removes the run's scratch directory.
     _scratch: Option<bravebot_agent::SessionScratch>,
@@ -2319,7 +2319,7 @@ fn check_the_model_can_serve_the_run(
 fn run_and_report(
     prepared: &Prepared,
     task: &Task,
-    continued: Option<bravebot_session::sessions::Record>,
+    continued: Option<continued::Continuing>,
     lines: Option<&lines::Channel>,
     cancel: &Cancel,
 ) -> (ExitCode, Option<String>, bool) {
@@ -2716,7 +2716,7 @@ struct TurnRun<'a> {
 /// `take()`n and handed to `continued::keep`.
 fn run_turn<C: bravebot_agent::Confirmer + Send>(
     run: TurnRun<'_>,
-    mut continued: Option<bravebot_session::sessions::Record>,
+    mut continued: Option<continued::Continuing>,
     confirmer: &mut C,
     reporter: &mut progress::Progress<std::io::Stderr>,
     sink: &mut json::Streaming,
@@ -3059,6 +3059,17 @@ fn resume_named(
         // and two writers would be one conversation (BG-9).
         Some(record) if background::is_running(&record.id) => {
             background::refuse_to_resume(&record.id)
+        }
+        // Nor by a second process when another one holds the record: one process writes a record
+        // at a time, and the one that holds it may be a terminal (SESSION-38).
+        Some(record) if bravebot_session::sessions::is_open_elsewhere(&directory, &record.id) => {
+            fail(
+                Ending::Failed,
+                bravebot_session::sessions::Held::Open {
+                    id: record.id.clone(),
+                }
+                .refusal(),
+            )
         }
         Some(record) => interactive(
             bravebot_tui::app::Start::Resuming(Box::new(record)),

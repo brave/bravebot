@@ -929,6 +929,8 @@ fn only_a_run_is_read_as_a_run() {
 
     let read = front.record("manifest.read", &scratch, &conversation);
     assert_eq!(read["error"]["code"], "bad_request", "{read}");
+    // The session that wrote the record is closed, since one process holds a record at a time.
+    front.call("session.close", json!({"session": session}));
     let opened = front.record("session.open", &scratch, &conversation);
     assert!(
         opened.get("ok").is_some(),
@@ -1034,6 +1036,8 @@ fn ordinary_manifest_endings_keep_file_trust_in_the_bridge() {
                 .any(|rule| rule["path"] == TARGET && rule["integrity"] == "untrusted"),
             "{turn}"
         );
+        // The session that wrote the record is closed, since one process holds a record at a time.
+        front.call("session.close", json!({"session":session}));
         let opened = front.record("session.open", &scratch, id);
         let resumed = opened["ok"]["session"].as_str().expect("resumed session");
         front.send(

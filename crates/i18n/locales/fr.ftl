@@ -2364,6 +2364,7 @@ session-resume-nothing-else = aucune autre session à reprendre dans ce réperto
 session-resume-already-here = c'est la session déjà ouverte
 session-resume-no-such = aucune session avec cet identifiant dans ce répertoire
 session-resume-held-by-background = cette session est tenue par une session d'arrière-plan en cours, elle ne peut donc pas être reprise ici
+session-resume-held-by-another-process = cette session est ouverte dans un autre terminal ou une autre fenêtre, elle ne peut donc pas être reprise ici
 session-mention-added = { $chars } caractères de la session { $id } ajoutés au message
 session-mention-added-cut = les { $chars } derniers caractères de la session { $id } ajoutés au message, les tours plus anciens sont laissés de côté
 session-mention-no-such = aucune session { $id } dans ce répertoire, rien n'a donc été ajouté pour elle
@@ -3729,6 +3730,8 @@ bg-restart-needs-a-terminal = { $name } est arrêtée, et seul un terminal peut 
 bg-interrupted-needs-a-terminal = { $name } a été interrompue, et seul un terminal peut la redémarrer.
 bg-interrupted-not-repeated = { $name } a été interrompue au milieu d'un tour. La redémarrer ne répète pas ce tour.
 resume-held-by-background = { $name } est tenue par une session en arrière-plan en cours d'exécution. Rejoignez-la avec : bravebot attach { $id }
+resume-held-by-another-process = { $id } est ouverte dans un autre terminal ou une autre fenêtre, elle ne peut donc pas être reprise ici. Copiez-la avec : bravebot --fork { $id }
+resume-changed-while-opening = { $id } a été écrite par un autre processus pendant son ouverture. Reprenez-la.
 
 # `bravebot doctor --sandbox-check` : git, gh, make, cargo et les autres programmes courants, lancés
 # comme une session les lance. Une ligne est un flux de travail ; une ligne en échec dit où, quoi

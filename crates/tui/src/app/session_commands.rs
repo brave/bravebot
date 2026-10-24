@@ -490,7 +490,7 @@ pub(super) fn record_to_resume(
         }
         let chosen = crate::resume::choose_other(terminal, root, current);
         match chosen {
-            crate::resume::Choice::Resume(record) => crate::resume::continuable(record),
+            crate::resume::Choice::Resume(record) => crate::resume::continuable(root, record),
             // Leaving the picker, by Escape or by Ctrl-C, stays where the person is.
             crate::resume::Choice::Fresh | crate::resume::Choice::Quit => return None,
         }

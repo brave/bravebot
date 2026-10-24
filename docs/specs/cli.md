@@ -1438,11 +1438,10 @@ session's start is when the run began, not when its record was written.
 after a failure carries on the last turn that completed. What the failed turn did to the working
 directory is not in any record, and the result object of a failed run carries `null` for `session`.
 
-Nothing locks a record. Two processes continuing one id, or a one-shot run continuing a session an
-interactive process is writing, each write the record they read with their own turn added, and the
-later write wins. An interactive resume has the same property, and
-[background-sessions.md](background-sessions.md) refuses it only for a background session, where the
-process that holds the record is known.
+A record is written by one process at a time ([SESSION-38](sessions.md#SESSION-38)). A continuation
+holds the record from before the task is sent until its turn is written, and is refused before
+anything is sent, with exit status 2, where another process holds it: a terminal or window that
+resumed it, or a running background session ([BG-9](background-sessions.md#BG-9)).
 
 `verified-by: bravebot_cli::running::a_one_shot_run_is_written_down_and_names_its_session`
 `verified-by: bravebot_cli::running::a_one_shot_run_keeps_its_audit_trail_beside_the_record`
@@ -1454,6 +1453,7 @@ process that holds the record is known.
 `verified-by: bravebot_cli::running::a_task_that_cannot_carry_on_a_session_is_refused_before_anything_is_sent`
 `verified-by: bravebot_cli::running::a_task_naming_a_manifest_record_is_refused_before_anything_is_sent`
 `verified-by: bravebot_cli::running::a_record_a_running_session_holds_is_not_resumed`
+`verified-by: bravebot_cli::running::a_record_a_terminal_holds_is_not_resumed_or_started_again`
 `verified-by: bravebot_cli::main::a_resume_with_a_task_after_it_runs_the_task_and_one_without_opens_the_session`
 `verified-by: bravebot_cli::main::a_task_may_name_the_session_it_carries_on_before_or_after_it`
 `verified-by: bravebot_cli::main::a_resume_naming_no_session_is_refused`
@@ -1798,7 +1798,8 @@ UTF-8, which nothing here does yet.
 
 `bravebot sessions delete <id>` removes one session of this directory, and `bravebot sessions
 purge [--dry-run] [-y]` removes every one. Each removes what [SESSION-30](sessions.md#SESSION-30)
-removes, the record, the trail beside it and the index of what the session said, and nothing else:
+removes, the record, the trail beside it, the index of what the session said and the lock beside it
+where no process holds it, and nothing else:
 the prompt history is one file for every project and is left alone, as is any session of another
 directory. Neither reads a record's contents to decide what to delete.
 

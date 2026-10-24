@@ -13206,6 +13206,97 @@ fn a_record_a_running_session_holds_is_not_resumed() {
     let _ = host.wait();
 }
 
+/// SESSION-38, BG-9 and CLI-25: a record a terminal holds, which its process locks as long as it
+/// writes it, is not resumed, continued or started again. `--resume`, `--continue`, a one-shot run
+/// with a task, `attach` and `reply` each say the session is open in another terminal or window and how to
+/// copy it, and no process is started and nothing reaches the gateway.
+#[cfg(unix)]
+#[test]
+fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let work = a_stopped_session_with_one_turn(&home, &gateway);
+
+    // What another terminal's process holds: the lock beside the record it resumed.
+    let sessions = home.0.join(".bravebot/sessions");
+    let record_directory = std::fs::read_dir(&sessions)
+        .expect("the sessions directory")
+        .map(|entry| entry.expect("an entry").path())
+        .find(|project| project.join(format!("{SESSION_ID}.json")).is_file())
+        .expect("the record of the stopped session");
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(record_directory.join(format!("{SESSION_ID}.lock")))
+        .expect("the lock file");
+    holder.try_lock().expect("nothing holds the record yet");
+
+    for arguments in [&["--resume", SESSION_ID][..], &["--continue"][..]] {
+        let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
+        assert!(!output.status.success(), "{arguments:?}");
+        let err = said(&output).1;
+        assert!(
+            err.contains("is open in another terminal or window"),
+            "{arguments:?}: {err}"
+        );
+        assert!(
+            err.contains(&format!("bravebot --fork {SESSION_ID}")),
+            "{arguments:?}: {err}"
+        );
+    }
+
+    for arguments in [
+        &["-p", "next", "--resume", SESSION_ID][..],
+        &["-p", "next", "--continue"][..],
+    ] {
+        let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let err = said(&output).1;
+        assert!(
+            err.contains("is open in another terminal or window"),
+            "{arguments:?}: {err}"
+        );
+    }
+
+    for arguments in [
+        &["attach", "3f2a9c1e"][..],
+        &["reply", "3f2a9c1e", "go on"][..],
+    ] {
+        let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
+        assert!(!output.status.success(), "{arguments:?}");
+        let err = said(&output).1;
+        assert!(
+            err.contains("is open in another terminal or window"),
+            "{arguments:?}: {err}"
+        );
+    }
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(
+        listed.contains("stopped"),
+        "a process was started for a record a terminal holds: {listed}"
+    );
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a refused task reached the gateway"
+    );
+
+    // Once the holder has ended the record is free, and the same words are not said.
+    drop(holder);
+    let output = bravebot_started_in(
+        &home.0,
+        &work,
+        AT_A_GATEWAY,
+        &["-p", "next", "--resume", SESSION_ID],
+    );
+    assert!(
+        !said(&output)
+            .1
+            .contains("is open in another terminal or window"),
+        "{}",
+        said(&output).1
+    );
+}
+
 /// BG-2 and BG-8: a process started with a mode word, as `/bg` starts one, runs in that mode and
 /// lists it; a word that names no mode starts nothing.
 #[cfg(unix)]

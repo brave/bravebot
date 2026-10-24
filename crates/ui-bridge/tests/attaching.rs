@@ -270,7 +270,10 @@ fn a_pasted_picture_is_still_in_the_conversation_after_the_session_is_reopened()
         .expect("the record's id")
         .to_string();
 
-    let mut reopened = Window::with_settings(window.settings.clone());
+    let settings = window.settings.clone();
+    // The first window closes, so the record it held is free to open again.
+    drop(window);
+    let mut reopened = Window::with_settings(settings);
     let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
     let session = opened["session"].as_str().unwrap().to_string();
     // The record carries the trust map its person answered with, so the reopened session asks no

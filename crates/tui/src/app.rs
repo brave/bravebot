@@ -1461,8 +1461,9 @@ pub enum Ended {
         left: bravebot_session::sessions::Resumable,
         mode: bravebot_session::jobs::Mode,
     },
-    /// The session never began, because the definition it was started under was refused for this
-    /// reason. The caller prints it after the terminal is handed back, so it stays on the screen.
+    /// The session never began, because the definition it was started under was refused, or the
+    /// record to resume is held by another process, for this reason. The caller prints it after the
+    /// terminal is handed back, so it stays on the screen.
     Refused(String),
 }
 
@@ -2203,22 +2204,28 @@ struct Begun {
 ///
 /// Nothing here needs a terminal. The trust question follows it in `begin_session`, because the
 /// map it asks about comes from the record and the transcript is shown before anything is asked.
+///
+/// `Err` is a record another process holds, refused before the session shows or restores anything
+/// (SESSION-38).
 fn restore_resumed(
     session: &mut Session,
     config: &Config,
     workspace: &mut Workspace,
     record: &bravebot_session::sessions::Record,
-) -> (
-    Conversation,
-    bravebot_session::sessions::Handle,
-    TrustedPrograms,
-) {
+) -> Result<
+    (
+        Conversation,
+        bravebot_session::sessions::Handle,
+        TrustedPrograms,
+    ),
+    bravebot_session::sessions::Held,
+> {
     let mut handle = bravebot_session::sessions::Handle::resuming(
         workspace.root(),
         record,
         bravebot_session::sessions::Front::Terminal,
         bravebot_stamp::BUILD,
-    );
+    )?;
     let conversation = Conversation::restored(record.conversation.clone());
     // Shown before anything else, because a session that silently continues something
     // the user cannot see is one they will contradict without meaning to. The trail comes
@@ -2280,7 +2287,7 @@ fn restore_resumed(
     // transcript is worked out from it: a point is a turn number in the record and an
     // index in the session, and the list it indexes has to exist first.
     session.restore_rewind(record, workspace, &conversation);
-    (conversation, handle, vouched)
+    Ok((conversation, handle, vouched))
 }
 
 /// Put into force the settings a session reads once, before any turn. `asked_effort` is the level
@@ -2331,8 +2338,8 @@ fn adopt_settings(
 /// trust question, the scratch directory, the rules, the named directories and an addressed
 /// definition, in that order.
 ///
-/// `Err` is a session that ended before it began: the person left at one of the questions, or the
-/// definition it was started under was refused.
+/// `Err` is a session that ended before it began: the person left at one of the questions, the
+/// definition it was started under was refused, or the record to resume is held by another process.
 #[expect(
     clippy::too_many_arguments,
     reason = "`event_loop` forwards the arguments it was given, and `begin_session` has that one caller"
@@ -2448,7 +2455,12 @@ fn begin_session(
             // A session that was never asked vouches for nothing, exactly as with the map.
             TrustedPrograms::new(),
         ),
-        Start::Resuming(record) => restore_resumed(&mut session, config, &mut workspace, &record),
+        Start::Resuming(record) => {
+            match restore_resumed(&mut session, config, &mut workspace, &record) {
+                Ok(restored) => restored,
+                Err(held) => return Err(Ended::Refused(held.refusal())),
+            }
+        }
     };
 
     // Settled once, before any turn. Nothing means the user left at the question, and a session
@@ -16733,8 +16745,11 @@ mod tests {
         let record = sessions::load(&root, stored.id()).expect("the record");
         assert_eq!(record.skill_mode.as_deref(), Some("tdd-playbook"));
 
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(stored);
         let mut resumed = Session::new("none");
-        restore_resumed(&mut resumed, &config, &mut workspace, &record);
+        restore_resumed(&mut resumed, &config, &mut workspace, &record)
+            .expect("the record is free");
         assert_eq!(resumed.skill_mode(), Some("tdd-playbook"));
         assert!(
             resumed
@@ -17204,8 +17219,11 @@ mod tests {
             "the session's advisor was written to its record: {written}"
         );
 
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(stored);
         let mut resumed = Session::new("none");
-        restore_resumed(&mut resumed, &config, &mut workspace, &record);
+        restore_resumed(&mut resumed, &config, &mut workspace, &record)
+            .expect("the record is free");
         assert_eq!(resumed.advisor(), None, "a resume brought the advisor back");
         assert_eq!(
             with_session_advisor(Task::new("p"), &resumed).advisor,
@@ -33608,7 +33626,8 @@ mod tests {
         let config = a_config_needing_no_sign_in();
 
         let (conversation, handle, _programs) =
-            restore_resumed(&mut session, &config, &mut workspace, &record);
+            restore_resumed(&mut session, &config, &mut workspace, &record)
+                .expect("the record is free");
 
         assert_eq!(
             handle.id(),
@@ -33651,7 +33670,8 @@ mod tests {
         let mut session = Session::new("none");
         let config = a_config_needing_no_sign_in();
 
-        restore_resumed(&mut session, &config, &mut workspace, &record);
+        restore_resumed(&mut session, &config, &mut workspace, &record)
+            .expect("the record is free");
 
         let said = said_in_the_transcript(&session).join("\n");
         assert!(!said.contains("that session ran on bravebot"), "{said}");

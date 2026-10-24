@@ -9,12 +9,13 @@ description: What is kept between runs, how to pick a session back up, and what 
 A session belongs to the directory it ran in. Records live under `~/.bravebot/sessions`, one
 directory per working directory, so resuming in one project lists only that project's sessions.
 
-Each session is two files, named after a version 4 UUID:
+Each session is named after a version 4 UUID and keeps up to three files:
 
 | File | What it holds |
 |---|---|
 | `<id>.json` | the record: the conversation, what the picker shows, and what a resume needs |
 | `<id>.audit.jsonl` | the trail, appended a turn at a time: one JSON object per line |
+| `<id>.lock` | empty: the lock a process holds while it writes the record |
 
 **Both are private to you.** On Unix, session directories are created mode 0700 and records, trails
 and the temporary files beside them are written mode 0600, with anything already there tightened on
@@ -76,6 +77,15 @@ takes an id, and moves you onto that session without leaving the program.
 
 **Leaving a session prints the command that resumes it**, after the terminal is handed back, so it
 stays on the screen you are left looking at. A session that never wrote a record prints nothing.
+
+**A session is open in one place at a time.** The process running a session holds its record, so
+resuming it from a second terminal or window is refused, and the refusal names the session and says
+to copy it with `bravebot --fork <id>`. `--resume`, `--continue`, the `--resume` list, `/resume`, a
+one-shot run given a task, the desktop app and `attach` or `reply` on a stopped background session
+all refuse in the same way. Two processes that wrote one record would each replace the other's turns,
+and with them any file you had not trusted: the file would read as trusted afterwards. The hold ends
+when the session does, or when its process does, however it ends. A record that another process wrote
+after yours read it is not resumed either, and says to resume it again.
 
 ### Trying a second approach
 
@@ -416,7 +426,7 @@ socket requires. A confined stage cannot read that directory.
 `bravebot sessions delete <id>` removes one session of this directory, taking the id from
 `bravebot sessions list`. `bravebot sessions purge` removes all of them; it asks first, naming the
 directory and how many, unless you pass `-y`, and `--dry-run` prints what it would remove and
-removes nothing. Each deletes the record, its trail and its search index, and nothing else: your
+removes nothing. Each deletes the record, its trail, its search index and its lock, and nothing else: your
 prompt history is one file for every project and stays, and so do the sessions of other
 directories. A session running in the background is left until you stop it with
 `bravebot sessions stop`. A session open in another terminal is not seen, and its next save writes

@@ -22,13 +22,30 @@ pub enum Resume {
     Latest,
 }
 
-/// The record a run was asked to continue, or why nothing can be.
+/// A record a run continues, held for as long as the run takes, so that no other process writes it
+/// meanwhile (SESSION-38).
+///
+/// Reads as the record, and is what [`keep`] writes the turn back through.
+pub struct Continuing {
+    record: Record,
+    handle: Handle,
+}
+
+impl std::ops::Deref for Continuing {
+    type Target = Record;
+
+    fn deref(&self) -> &Record {
+        &self.record
+    }
+}
+
+/// The record a run was asked to continue, held, or why nothing can be.
 ///
 /// Refused rather than answered by starting a fresh conversation: a script that asked to carry on
 /// and was given an empty context would answer the follow-up as though nothing had come before it.
 /// A manifest run has no conversation to carry on from, and a session another process is running is
-/// written by that process, so neither is read (SESSION-10, BG-9).
-pub fn find(directory: &Path, asked: &Resume) -> Result<Record, String> {
+/// written by that process, so neither is read (SESSION-10, BG-9, SESSION-38).
+pub fn find(directory: &Path, asked: &Resume) -> Result<Continuing, String> {
     let id = match asked {
         Resume::Id(id) => id.clone(),
         Resume::Latest => bravebot_session::sessions::most_recent(directory)
@@ -43,7 +60,11 @@ pub fn find(directory: &Path, asked: &Resume) -> Result<Record, String> {
     if crate::background::is_running(&record.id) {
         return Err(crate::background::held_by_a_background_session(&record.id));
     }
-    Ok(record)
+    // Held from here to the end of the run, which is before anything is sent: a process that
+    // writes the record while the turn runs would have it replaced by the turn's copy.
+    let handle = Handle::resuming(directory, &record, Front::Terminal, bravebot_stamp::BUILD)
+        .map_err(|held| held.refusal())?;
+    Ok(Continuing { record, handle })
 }
 
 /// The points the continued turn can be rewound to: the record's own, and one opened for this turn
@@ -125,16 +146,14 @@ pub struct Finished<'a> {
 /// every other writer under the state directory.
 pub fn keep(
     root: &Path,
-    previous: Option<(Record, RewindStack)>,
+    previous: Option<(Continuing, RewindStack)>,
     turn: Finished<'_>,
 ) -> Option<String> {
     let snapshot = turn.conversation.snapshot();
     let ends = turn.conversation.recounted().len();
     match previous {
-        Some((record, rewind)) => {
+        Some((Continuing { record, mut handle }, rewind)) => {
             let turn_number = record.turns + 1;
-            let mut handle =
-                Handle::resuming(root, &record, Front::Terminal, bravebot_stamp::BUILD);
             handle.set_agent(turn.agent.map(str::to_string));
             let written = handle.save_continuation(
                 record,

@@ -408,7 +408,10 @@ impl Bridge {
             .remembered
             .is_some()
             .then(|| json!({ "known": true, "rules": rules_json(&opening.trust) }));
-        let state = State::resumed(&directory, &record, opening.trust);
+        // Held from here for as long as the session stays open, so a record a terminal holds is
+        // refused in the words the terminal uses (SESSION-38).
+        let state = State::resumed(&directory, &record, opening.trust)
+            .map_err(|held| Failure::bad_request(held.refusal()))?;
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(Open::opened(
@@ -3324,7 +3327,7 @@ mod coverage_tests {
         let key = root.join("deploy/key.pem");
         let mut trust = TrustStore::new(root);
         trust.trust("notes.md");
-        let mut parent_state = State::resumed(root, &record, trust);
+        let mut parent_state = State::resumed(root, &record, trust).expect("the record is free");
         parent_state.answers.programs.trust(command.clone());
         parent_state.answers.asked_about.record(command.clone());
         parent_state.answers.exposed.allow(".env");
@@ -3443,7 +3446,7 @@ mod coverage_tests {
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let parent = bridge.mint(Open::opened(
             root.to_path_buf(),
-            State::resumed(root, &record, TrustStore::new(root)),
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free"),
             true,
             None,
             false,
@@ -3490,7 +3493,8 @@ mod coverage_tests {
             "conversation": bravebot_agent::Conversation::new().snapshot()
         }))
         .unwrap();
-        let mut state = State::resumed(root, &record, TrustStore::new(root));
+        let mut state =
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
         assert!(state.rewind.is_empty());
         save(
             root,
