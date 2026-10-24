@@ -32,8 +32,9 @@ DEB_IMAGE = debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed
 RPM_IMAGE = fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814
 # Every file that states the version, which is what a bump rewrites and commits. The two under
 # ui/ are the desktop application's: it is packaged from its own manifest, so a version left
-# behind there is an app bundle naming a release that does not exist.
-VERSION_FILES = Cargo.toml Cargo.lock package.json ui/package.json
+# behind there is an app bundle naming a release that does not exist. The lock under fuzz/ records
+# the version of every bravebot crate the fuzz targets build, so `check-fuzz` fails on a stale one.
+VERSION_FILES = Cargo.toml Cargo.lock fuzz/Cargo.lock package.json ui/package.json
 
 # Forwarded into the cross-build container, which does not inherit the host environment.
 BUILD_ENV = SERVICES_KEY_AICHAT BRAVE_SERVICES_KEY_ID BRAVE_AI_CHAT_ENDPOINT \
@@ -70,6 +71,8 @@ help:
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             The npm package tests, the pnpm lockfiles in sync with their manifests, and their lint"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
+	@echo "  make check-fuzz            Lint, build, replay and briefly run every fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; needs the nightly toolchain and cargo-fuzz"
+	@echo "  make fuzz TARGET=<name>    Run one fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; the targets are $(FUZZ_TARGETS)"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
@@ -346,6 +349,84 @@ check-deps:
 		cargo install --quiet --locked cargo-deny@$(CARGO_DENY_VERSION) --root "$(CARGO_DENY_ROOT)"; \
 	}
 	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip
+
+# The fuzz targets in fuzz/, which is a package of its own with its own workspace and lockfile, so
+# nothing above compiles libFuzzer's C++.
+#
+# libFuzzer needs a nightly toolchain, and the date of the one the targets are built with is
+# written here and nowhere else. Moving to a newer one is an edit to this line, which
+# `make check-fuzz` then checks the targets still build with.
+#
+# Targets are built with debug assertions and overflow checks, which `-a` asks for by name so that
+# it does not depend on cargo-fuzz's default, and with AddressSanitizer. A release build of
+# bravebot sets no `overflow-checks`, so a sum that overflows there wraps and the function goes on
+# with a wrong number: built this way, an input that reaches one is reported instead.
+#
+# `-max_len` is the longest input the fuzzer makes. `diff` reads two texts, so it is given room
+# for both. bravebot-config's build script refuses to build without credentials unless told that a
+# binary configured at run time is acceptable, which is all a fuzz target needs.
+FUZZ_TOOLCHAIN = nightly-2026-10-01
+FUZZ_TARGETS = regex diff event_stream sse
+FUZZ_SECONDS = 20
+FUZZ_FLAGS = -timeout=10 -rss_limit_mb=2048
+FUZZ_ENV = BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1
+fuzz_max_len = $$([ "$(1)" = diff ] && echo 65536 || echo 4096)
+# cargo-fuzz does not read a dictionary by itself, so each target that has one is handed it.
+fuzz_dict = $$([ -f fuzz/dictionaries/$(1).dict ] && echo -dict=fuzz/dictionaries/$(1).dict)
+
+# The toolchain, for the commands in docs/development/fuzzing.md to name without writing its date.
+.PHONY: fuzz-toolchain
+fuzz-toolchain:
+	@echo $(FUZZ_TOOLCHAIN)
+
+.PHONY: fuzz-prerequisites
+fuzz-prerequisites:
+	@command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q '^$(FUZZ_TOOLCHAIN)' || { \
+		echo "fuzz: the $(FUZZ_TOOLCHAIN) toolchain is not installed: rustup toolchain install $(FUZZ_TOOLCHAIN) --profile minimal -c rustfmt -c clippy -c rust-src" >&2; \
+		exit 1; \
+	}
+	@cargo fuzz --version >/dev/null 2>&1 || { \
+		echo "fuzz: cargo-fuzz is not installed: cargo install cargo-fuzz --locked" >&2; \
+		exit 1; \
+	}
+	@[ "$$(cargo fuzz list | sort | tr '\n' ' ')" = "$$(printf '%s\n' $(FUZZ_TARGETS) | sort | tr '\n' ' ')" ] || { \
+		echo "fuzz: FUZZ_TARGETS in the Makefile ($(FUZZ_TARGETS)) differs from the [[bin]] entries in fuzz/Cargo.toml ($$(cargo fuzz list | tr '\n' ' '))" >&2; \
+		exit 1; \
+	}
+
+# One target, with the flags CI uses: make fuzz TARGET=regex [FUZZ_SECONDS=60]. New inputs go to
+# fuzz/corpus/<target>, which is not committed; the seeds and the reproducers of fixed crashes are
+# read from their own directories.
+.PHONY: fuzz
+fuzz: fuzz-prerequisites
+	@echo "$(FUZZ_TARGETS)" | tr ' ' '\n' | grep -qxF -- '$(TARGET)' || { \
+		echo "fuzz: name a target, as in make fuzz TARGET=regex. They are: $(FUZZ_TARGETS)" >&2; \
+		exit 1; \
+	}
+	@mkdir -p fuzz/corpus/$(TARGET)
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $(TARGET) fuzz/corpus/$(TARGET) fuzz/seeds/$(TARGET) fuzz/regressions/$(TARGET) -- \
+		-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$(TARGET)) $(call fuzz_dict,$(TARGET))
+
+# Formatting, clippy and the unit tests of the code the targets share, a build of every target, a
+# replay of the seeds and the reproducers of fixed crashes with -runs=0, and then each target for
+# FUZZ_SECONDS. Stops at the first failure.
+.PHONY: check-fuzz
+check-fuzz: fuzz-prerequisites
+	cargo +$(FUZZ_TOOLCHAIN) fmt --manifest-path fuzz/Cargo.toml -- --check
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) test --manifest-path fuzz/Cargo.toml --lib --locked
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz build -a
+	@set -e; for target in $(FUZZ_TARGETS); do \
+		echo "replay $$target"; \
+		$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $$target fuzz/seeds/$$target fuzz/regressions/$$target -- \
+			-runs=0 $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$$target); \
+	done
+	@set -e; for target in $(FUZZ_TARGETS); do \
+		echo "run $$target for $(FUZZ_SECONDS)s"; \
+		mkdir -p fuzz/corpus/$$target; \
+		$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $$target fuzz/corpus/$$target fuzz/seeds/$$target fuzz/regressions/$$target -- \
+			-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$$target) $(call fuzz_dict,$$target); \
+	done
 
 # The minimum-toolchain job. Built in a container pinned to the declared MSRV, because
 # rustup is not a given here and a Homebrew or distro Rust cannot switch toolchains.
@@ -1100,6 +1181,8 @@ bump-version:
 		exit 1; \
 	fi; \
 	cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null; \
+	cargo update --workspace --manifest-path fuzz/Cargo.toml --offline >/dev/null 2>&1 \
+		|| cargo update --workspace --manifest-path fuzz/Cargo.toml >/dev/null; \
 	python3 contrib/check-versions.py --set "$$next"; \
 	python3 contrib/check-versions.py; \
 	git commit -q -m "Bump version to $$next" -- $(VERSION_FILES); \

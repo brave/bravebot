@@ -362,6 +362,12 @@ cargo-deny is built. CI runs this same target on a pull request that touches a m
 lockfile or `deny.toml`, on main, and once a day, since an advisory arrives without a commit.
 `make check-reviewdog` is the [security scan](security-scan.md).
 
+`make check-fuzz` lints, builds, replays and briefly runs the fuzz targets in `fuzz/`, which is a package
+of its own with its own lockfile. It needs a nightly toolchain, whose date is `FUZZ_TOOLCHAIN` in the
+`Makefile`, and cargo-fuzz, so `make check-all` and `make check-affected` leave it out and no CI job runs
+it. Run it for a change to a function a target reads, or to `fuzz/`. `make fuzz TARGET=<name>` runs one
+target. [fuzzing.md](fuzzing.md) lists the targets and says what to do with a crash.
+
 `make check-windows` lints the target that ships to Windows, `x86_64-pc-windows-gnu`, over every
 target including the tests. Nothing else compiles the `#[cfg(windows)]` arms of this tree for a
 check: the cross-build produces the shipped binary and lints nothing, and compiles no test target

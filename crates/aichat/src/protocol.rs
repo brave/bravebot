@@ -1137,12 +1137,24 @@ impl SseDecoder {
         Self::default()
     }
 
-    fn with_limit(limit: usize) -> Self {
+    /// A decoder that ends at a line longer than `limit`.
+    ///
+    /// The `sse` fuzz target builds one with a small limit. At the real one, which is far above
+    /// what any input the fuzzer builds can reach, the bound would never be tested.
+    #[doc(hidden)]
+    pub fn with_limit(limit: usize) -> Self {
         Self {
             buffer: Vec::new(),
             limit,
             overrun: false,
         }
+    }
+
+    /// How many bytes are buffered waiting for their newline, which is at most the limit after any
+    /// call to [`SseDecoder::push`].
+    #[doc(hidden)]
+    pub fn held(&self) -> usize {
+        self.buffer.len()
     }
 
     /// Add bytes and take whatever complete `data:` payloads they finish.
@@ -1483,6 +1495,20 @@ mod tests {
         fn a_decoder_made_the_ordinary_way_is_bounded_by_the_constant() {
             assert_eq!(SseDecoder::new().limit, MAX_LINE_BYTES);
             assert_eq!(SseDecoder::default().limit, MAX_LINE_BYTES);
+        }
+
+        /// The fuzz target reads the buffer through `held`, so it has to be the bytes waiting for a
+        /// newline: not the limit, not the bytes ever received, and nothing once the decoding ended.
+        #[test]
+        fn held_counts_the_bytes_waiting_for_their_newline() {
+            let mut decoder = SseDecoder::with_limit(8);
+            assert_eq!(decoder.held(), 0);
+            decode(&mut decoder, "data: a");
+            assert_eq!(decoder.held(), 7);
+            decode(&mut decoder, "\n");
+            assert_eq!(decoder.held(), 0);
+            decode(&mut decoder, "data: 123456789");
+            assert_eq!(decoder.held(), 0, "an overrun lets go of what it held");
         }
 
         /// A service that never sends a newline must not be able to grow the buffer past the
