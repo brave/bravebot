@@ -8,7 +8,9 @@
 //!
 //! One renewer for the process. A renewal that could not be written is held in memory by the
 //! renewer for the rest of the process, so a second one made for each request would drop it, and
-//! the next request would present a refresh token the server has already replaced.
+//! the next request would present a refresh token the server has already replaced. The same holds
+//! for a sign-in the server ended: the renewal that found it removed the file, and a second renewer
+//! would find no file and say nothing was stored to the turn that asks after a picker's listing.
 
 use crate::report::Reporter;
 pub use bravebot_aichat::models::Model;
@@ -369,7 +371,8 @@ fn account_models_from<S: Sink, A: AccountAccess + AccountStored>(
         };
     }
     // Asked for before anything is sent, so a machine with no sign-in sends nothing. An ended
-    // sign-in was removed by the renewal that found it so, and is a missing one from here on.
+    // sign-in was removed by the renewal that found it so, so the picker offers nothing for it. The
+    // renewer says it ended to every later ask of the process, which the next turn's is.
     let compiled =
         || AccountModels::Compiled(bravebot_aichat::models::compiled_for_account(provider));
     let mut token = match access.access_token() {

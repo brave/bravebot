@@ -1,13 +1,18 @@
-//! CHATGPT-8 and CHATGPT-14 through the built binary, against the stand-in of
+//! CHATGPT-7, CHATGPT-8 and CHATGPT-14 through the built binary, against the stand-in of
 //! `crates/agent/test-support/chatgpt_stand_in.rs`, a stand-in for OpenAI's authorization server and
 //! serving host.
+//!
+//! The tests of CHATGPT-8 sign in, renew and fail in each front end that is a process of its own, which
+//! is a one-shot run, the session in lines and a background host, and hold every output of the run to
+//! every value it handled. The other tests are about a stored sign-in: an incognito session writes the
+//! renewal of one and removes one that has ended (CHATGPT-14), and a run that finds one ended says so
+//! (CHATGPT-7).
 //!
 //! The binary reaches the stand-in through the `test-hosts` seam of `bravebot-skus` and
 //! `bravebot-config`, which this crate's dev-dependencies turn on, so the binary `cargo test` builds
 //! has it and no release does ([CHATGPT-2]). The stand-in's module reads the variable from those
-//! crates, so this file does not compile where the seam is off, and each test checks that the
-//! stand-in answered (the first by the key set and the listing, the second by the renewal), so a seam
-//! that is off fails it.
+//! crates, so this file does not compile where the seam is off, and each test that runs the binary
+//! checks what the stand-in was asked, so a seam that is off fails it.
 //!
 //! The sign-in needs stderr to be a terminal, so it runs under `script`, whose arguments differ
 //! between the two systems this file runs on. Windows has no `script`, and these tests do not run
@@ -20,123 +25,31 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Output, Stdio};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod chatgpt_run;
 #[path = "../../agent/test-support/chatgpt_stand_in.rs"]
 mod chatgpt_stand_in;
 
+use chatgpt_run::{SIGN_IN_HOST, Scratch, Shown, bravebot, environment, in_a_terminal, said};
 use chatgpt_stand_in::{
     ACCESS_TWO, Asked, CLIENT, CODE, Fault, Handled, MODEL, REFRESH_ONE, REFRESH_TWO, Refresh,
-    STAND_IN, Serving, StandIn, USAGE_LIMIT, files_under, form, now, url_encoded,
+    Serving, StandIn, USAGE_LIMIT, files_under, form, now, url_encoded,
 };
 
-/// A directory a run takes as its home, removed when the test ends.
-struct Scratch {
-    path: PathBuf,
-}
-
-impl Scratch {
-    fn new(name: &str) -> Self {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(path.join(".bravebot")).expect("create scratch");
-        std::fs::create_dir_all(path.join("work")).expect("create the working directory");
-        std::fs::create_dir_all(path.join("no-programs")).expect("create an empty PATH");
-        Self {
-            path: path.canonicalize().expect("canonical scratch"),
-        }
-    }
-
-    /// A home whose path is short enough for a socket inside it, which a background session listens
-    /// on. `name` is told apart from another test's by the process.
-    fn short(name: &str) -> Self {
-        let path = PathBuf::from(format!("/tmp/bbcg-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
-        for directory in [".bravebot", "work", "no-programs"] {
-            std::fs::create_dir_all(path.join(directory)).expect("create the short home");
-        }
-        Self {
-            path: path.canonicalize().expect("canonical short home"),
-        }
-    }
-
-    fn account(&self) -> PathBuf {
-        self.path.join(".bravebot/chatgpt-account.json")
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
-/// The environment every run here gets: nothing inherited, the home, the stand-in, Brave's endpoint
-/// at a port nothing listens on, and a `PATH` with nothing in it, so no browser is opened.
-fn environment(command: &mut Command, home: &Scratch, stand_in: &StandIn) {
-    command
-        .env_clear()
-        .env("HOME", &home.path)
-        .env("PATH", home.path.join("no-programs"))
-        .env("BRAVEBOT_LOCALE", "en-US")
-        .env("OLLAMA_HOST", "127.0.0.1:1")
-        .env("BRAVEBOT_LM_STUDIO_HOST", "127.0.0.1:1")
-        .env("LLAMA_ARG_PORT", "1")
-        .env("SERVICES_KEY_AICHAT", "a-services-key")
-        .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
-        .env("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1")
-        .env(STAND_IN, &stand_in.base)
-        .current_dir(home.path.join("work"));
-}
-
-/// Run the binary with `arguments`, its stdin empty.
-fn bravebot(home: &Scratch, stand_in: &StandIn, arguments: &[&str]) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot"));
-    environment(&mut command, home, stand_in);
-    command
-        .args(arguments)
-        .stdin(Stdio::null())
-        .output()
-        .expect("the built binary runs")
-}
-
-/// What a run wrote to its two streams, as one text.
-fn said(output: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
+/// Store a sign-in whose access token is five seconds from its expiry, so the first request of a run
+/// renews it with [`REFRESH_ONE`].
+fn store_a_sign_in_nearly_expired(home: &Scratch) {
+    home.store_sign_in("PLACEHOLDER-ACCESS-NEARLY-EXPIRED", REFRESH_ONE, now() + 5);
 }
 
 /// `bravebot auth login chatgpt` in a terminal, with a browser that returns to the listener with
 /// [`CODE`] and [`CLIENT`]. Returns everything the terminal showed, the authorization URL and whether
 /// the command succeeded.
 fn sign_in(home: &Scratch, stand_in: &StandIn) -> (String, String, bool) {
-    let program = env!("CARGO_BIN_EXE_bravebot");
-    let mut command = Command::new("/usr/bin/script");
-    #[cfg(target_os = "macos")]
-    command.args([
-        "-q",
-        "/dev/null",
-        program,
-        "--log-level",
-        "debug",
-        "auth",
-        "login",
-        "chatgpt",
-    ]);
-    #[cfg(target_os = "linux")]
-    command.args([
-        "-qec",
-        &format!("'{program}' --log-level debug auth login chatgpt"),
-        "/dev/null",
-    ]);
+    let mut command = in_a_terminal(&["--log-level", "debug", "auth", "login", "chatgpt"]);
     environment(&mut command, home, stand_in);
     let mut child = command
         .stdin(Stdio::null())
@@ -144,29 +57,12 @@ fn sign_in(home: &Scratch, stand_in: &StandIn) -> (String, String, bool) {
         .stderr(Stdio::piped())
         .spawn()
         .expect("script runs the built binary in a terminal");
-
-    let shown = Arc::new(Mutex::new(Vec::new()));
-    let reading = std::thread::spawn({
-        let shown = Arc::clone(&shown);
-        let mut out = child.stdout.take().expect("the terminal");
-        move || {
-            let mut buffer = [0u8; 4096];
-            while let Ok(read) = out.read(&mut buffer) {
-                if read == 0 {
-                    break;
-                }
-                shown
-                    .lock()
-                    .expect("shown")
-                    .extend_from_slice(&buffer[..read]);
-            }
-        }
-    });
+    let shown = Shown::read(child.stdout.take().expect("the terminal"));
 
     let opened = format!("{}/authorize?", stand_in.base);
     let deadline = Instant::now() + Duration::from_secs(60);
     let url = loop {
-        let text = String::from_utf8_lossy(&shown.lock().expect("shown")).into_owned();
+        let text = shown.text();
         if let Some(start) = text.find("http://")
             && let Some(length) = text[start..].find(['\r', '\n'])
         {
@@ -222,8 +118,7 @@ fn sign_in(home: &Scratch, stand_in: &StandIn) -> (String, String, bool) {
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    reading.join().expect("the terminal was read");
-    let mut terminal = String::from_utf8_lossy(&shown.lock().expect("shown")).into_owned();
+    let mut terminal = shown.finished();
     if let Some(mut rest) = child.stderr.take() {
         let _ = rest.read_to_string(&mut terminal);
     }
@@ -236,29 +131,12 @@ fn sign_in(home: &Scratch, stand_in: &StandIn) -> (String, String, bool) {
 struct Typed {
     child: Child,
     typing: ChildStdin,
-    shown: Arc<Mutex<Vec<u8>>>,
-    reading: std::thread::JoinHandle<()>,
+    shown: Shown,
 }
 
 impl Typed {
     fn start(home: &Scratch, stand_in: &StandIn) -> Self {
-        let program = env!("CARGO_BIN_EXE_bravebot");
-        let mut command = Command::new("/usr/bin/script");
-        #[cfg(target_os = "macos")]
-        command.args([
-            "-q",
-            "/dev/null",
-            program,
-            "--log-level",
-            "debug",
-            "--plain",
-        ]);
-        #[cfg(target_os = "linux")]
-        command.args([
-            "-qec",
-            &format!("'{program}' --log-level debug --plain"),
-            "/dev/null",
-        ]);
+        let mut command = in_a_terminal(&["--log-level", "debug", "--plain"]);
         environment(&mut command, home, stand_in);
         let mut child = command
             .stdin(Stdio::piped())
@@ -266,34 +144,17 @@ impl Typed {
             .stderr(Stdio::null())
             .spawn()
             .expect("script runs the built binary in a terminal");
-        let shown = Arc::new(Mutex::new(Vec::new()));
-        let reading = std::thread::spawn({
-            let shown = Arc::clone(&shown);
-            let mut out = child.stdout.take().expect("the terminal");
-            move || {
-                let mut buffer = [0u8; 4096];
-                while let Ok(read) = out.read(&mut buffer) {
-                    if read == 0 {
-                        break;
-                    }
-                    shown
-                        .lock()
-                        .expect("shown")
-                        .extend_from_slice(&buffer[..read]);
-                }
-            }
-        });
+        let shown = Shown::read(child.stdout.take().expect("the terminal"));
         let typing = child.stdin.take().expect("the terminal takes lines");
         Self {
             child,
             typing,
             shown,
-            reading,
         }
     }
 
     fn shown(&self) -> String {
-        String::from_utf8_lossy(&self.shown.lock().expect("shown")).into_owned()
+        self.shown.text()
     }
 
     /// Wait until what the terminal shows satisfies `ready`, or fail saying what it was waiting for.
@@ -334,15 +195,11 @@ impl Typed {
             }
             if Instant::now() > deadline {
                 let _ = self.child.kill();
-                panic!(
-                    "the session did not end: {}",
-                    String::from_utf8_lossy(&self.shown.lock().expect("shown"))
-                );
+                panic!("the session did not end: {}", self.shown.text());
             }
             std::thread::sleep(Duration::from_millis(20));
         };
-        self.reading.join().expect("the terminal was read");
-        let shown = String::from_utf8_lossy(&self.shown.lock().expect("shown")).into_owned();
+        let shown = self.shown.finished();
         assert!(status.success(), "the session ended with {status}: {shown}");
         shown
     }
@@ -1374,20 +1231,7 @@ fn no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_record_of_a_backgro
 fn an_incognito_session_writes_the_renewal_of_its_sign_in() {
     let home = Scratch::new("cli-chatgpt-account-incognito-renewal");
     let stand_in = StandIn::new(vec![(REFRESH_ONE, ACCESS_TWO, REFRESH_TWO)]);
-    let host = "urn:uuid:placeholder-host-0000";
-    std::fs::write(
-        home.account(),
-        serde_json::json!({
-            "version": 1,
-            "access_token": "PLACEHOLDER-ACCESS-NEARLY-EXPIRED",
-            "refresh_token": REFRESH_ONE,
-            "expires_at": now() + 5,
-            "client_id": CLIENT,
-            "host_id": host,
-        })
-        .to_string(),
-    )
-    .expect("a stored sign-in");
+    store_a_sign_in_nearly_expired(&home);
 
     let output = bravebot(
         &home,
@@ -1429,7 +1273,7 @@ fn an_incognito_session_writes_the_renewal_of_its_sign_in() {
     );
     assert_eq!(stored["refresh_token"], REFRESH_TWO);
     assert_eq!(stored["client_id"], CLIENT);
-    assert_eq!(stored["host_id"], host);
+    assert_eq!(stored["host_id"], SIGN_IN_HOST);
     assert!(
         stored["expires_at"]
             .as_u64()
@@ -1449,19 +1293,7 @@ fn an_incognito_session_writes_the_renewal_of_its_sign_in() {
 fn an_incognito_session_removes_a_sign_in_whose_refresh_is_refused_as_ended() {
     let home = Scratch::new("cli-chatgpt-account-incognito-ended");
     let stand_in = StandIn::new(Vec::new());
-    std::fs::write(
-        home.account(),
-        serde_json::json!({
-            "version": 1,
-            "access_token": "PLACEHOLDER-ACCESS-NEARLY-EXPIRED",
-            "refresh_token": REFRESH_ONE,
-            "expires_at": now() + 5,
-            "client_id": CLIENT,
-            "host_id": "urn:uuid:placeholder-host-0000",
-        })
-        .to_string(),
-    )
-    .expect("a stored sign-in");
+    store_a_sign_in_nearly_expired(&home);
 
     let output = bravebot(
         &home,
@@ -1503,5 +1335,120 @@ fn an_incognito_session_removes_a_sign_in_whose_refresh_is_refused_as_ended() {
     assert!(
         asked.iter().all(|asked| asked.path != "/v1/responses"),
         "a request went to the serving host with a token that cannot work: {asked:?}"
+    );
+}
+
+/// CHATGPT-7: a one-shot run whose stored sign-in OpenAI has ended says the sign-in has ended, and
+/// not that nobody is signed in, whether or not it is incognito. The refresh is refused as no longer
+/// valid and removes the file, and whatever asks for the token afterwards in the run finds no file.
+/// A run that took the missing file for a sign-in nobody made would say so, which is true of the
+/// file and not of what happened. The token endpoint is asked once, and no request goes to the
+/// serving host with a token that cannot work.
+#[test]
+fn a_one_shot_run_whose_sign_in_ended_says_it_ended_and_asks_the_token_endpoint_once() {
+    for (name, mode) in [
+        ("cli-chatgpt-account-ended-said", &[][..]),
+        (
+            "cli-chatgpt-account-ended-said-incognito",
+            &["--incognito"][..],
+        ),
+    ] {
+        let home = Scratch::new(name);
+        let stand_in = StandIn::new(Vec::new());
+        store_a_sign_in_nearly_expired(&home);
+
+        let output = bravebot(
+            &home,
+            &stand_in,
+            &[
+                mode,
+                &["-p", "say something", "--model", MODEL, "--trust-workspace"],
+            ]
+            .concat(),
+        );
+
+        assert!(!output.status.success(), "{name}: {}", said(&output));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.matches("the ChatGPT sign-in has ended").count(),
+            1,
+            "{name}: the turn did not say the sign-in had ended, once: {}",
+            said(&output)
+        );
+        assert!(
+            stderr.contains("bravebot auth login chatgpt"),
+            "{name}: {}",
+            said(&output)
+        );
+        assert!(
+            !stderr.contains("not signed in"),
+            "{name}: the turn said nobody was signed in: {}",
+            said(&output)
+        );
+        assert!(!home.account().exists(), "{name}: the ended sign-in stayed");
+        let asked = stand_in.asked();
+        assert_eq!(
+            asked
+                .iter()
+                .filter(|asked| asked.method == "POST" && asked.path == "/token")
+                .count(),
+            1,
+            "{name}: {asked:?}"
+        );
+        assert!(
+            asked.iter().all(|asked| asked.path != "/v1/responses"),
+            "{name}: a request went to the serving host with a token that cannot work: {asked:?}"
+        );
+    }
+}
+
+/// CHATGPT-7: a session in lines whose stored sign-in OpenAI has ended says so to the turn that
+/// found it out and to each turn after it, in the same process. The first turn's refresh is refused
+/// as no longer valid and removes the file, so the second finds no file. An implementation that read
+/// the missing file as a sign-in nobody made would tell the second turn so, and a person who read the
+/// first line would be told the opposite one turn later. The token endpoint is asked once.
+#[test]
+fn a_session_in_lines_says_the_sign_in_ended_to_every_turn_after_it_ended() {
+    let home = Scratch::new("cli-chatgpt-account-ended-lines");
+    let stand_in = StandIn::new(Vec::new());
+    store_a_sign_in_nearly_expired(&home);
+    std::fs::write(
+        home.path.join(".bravebot/settings.json"),
+        serde_json::json!({"model": MODEL}).to_string(),
+    )
+    .expect("settings that name the account's model");
+
+    let mut session = Typed::start(&home, &stand_in);
+    session.wait_for("the question about trusting the directory", |shown| {
+        shown.contains("[y/N]")
+    });
+    session.type_line("y");
+    session.wait_for("the first prompt", |shown| Typed::prompts(shown) >= 1);
+    for turn in 1..=2 {
+        session.type_line("say something");
+        session.wait_for(&format!("the prompt after turn {turn}"), |shown| {
+            Typed::prompts(shown) > turn
+        });
+    }
+    let shown = session.finish();
+
+    assert_eq!(
+        shown.matches("the ChatGPT sign-in has ended").count(),
+        2,
+        "each turn was not told the sign-in had ended: {shown}"
+    );
+    assert!(
+        !shown.contains("not signed in"),
+        "a turn said nobody was signed in: {shown}"
+    );
+    assert!(!home.account().exists(), "the ended sign-in stayed");
+    let asked = stand_in.asked();
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|asked| asked.method == "POST" && asked.path == "/token")
+            .count(),
+        1,
+        "{asked:?}"
     );
 }

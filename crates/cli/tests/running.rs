@@ -28,6 +28,8 @@ use std::time::Duration;
 
 #[path = "../../aichat/test-support/refusal_codes.rs"]
 mod refusal_codes;
+#[path = "../../skus/test-support/stored_sign_in.rs"]
+mod stored_sign_in;
 
 /// A directory handed to a run as its own, removed when the test that made it ends.
 ///
@@ -8942,8 +8944,12 @@ const A_CHATGPT_HOST: &str = "urn:uuid:placeholder-chatgpt-host";
 /// The file `auth login chatgpt` stores, for an access token that expires `expires_at` seconds after
 /// 1970-01-01.
 fn a_chatgpt_sign_in(expires_at: u64) -> String {
-    format!(
-        r#"{{"version":1,"access_token":"{A_CHATGPT_ACCESS_TOKEN}","refresh_token":"{A_CHATGPT_REFRESH_TOKEN}","expires_at":{expires_at},"client_id":"{A_CHATGPT_CLIENT}","host_id":"{A_CHATGPT_HOST}"}}"#
+    stored_sign_in::stored_sign_in(
+        A_CHATGPT_ACCESS_TOKEN,
+        A_CHATGPT_REFRESH_TOKEN,
+        expires_at,
+        A_CHATGPT_CLIENT,
+        A_CHATGPT_HOST,
     )
 }
 

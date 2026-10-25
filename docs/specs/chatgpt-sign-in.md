@@ -588,6 +588,16 @@ and only if the file still holds the token this process replaced. A retry that f
 again, and one that succeeds clears the report, so a failure after it is reported. Where the file holds
 another token, or none, the tokens in memory are dropped.
 
+The renewer keeps that the sign-in ended for the rest of the process. Every later ask of it for a token,
+whether a turn's request, a summary, a goal check or the listing a picker makes, finds no file and says the
+sign-in has ended, and asks the token endpoint nothing, since a missing file does not say whether a sign-in
+was never made or ended. The end is read only where the file holds nothing. A file that holds a sign-in
+again is used as any stored sign-in is and the end is forgotten, so a sign-in removed after that is not
+stored. `bravebot auth login chatgpt` is the only place a sign-in is made. It runs before any session and
+asks the renewer for a token only after it has stored one, so no process holds an end and then signs in
+itself, and a sign-in made in another process is found by the file. A process that did not find the end,
+such as one that starts after it, finds no file and says no sign-in is stored.
+
 **Why.** An authorization server may replace the refresh token each time it is used, and then the copy a
 second process read before the first's reply is dead. A session, a background run and a one-shot run on one
 machine present it together as a matter of course, and the one that loses ends the sign-in for all of them.
@@ -597,7 +607,11 @@ first because a process that stops between receiving it and writing it has spent
 present again. This server replaces the refresh token on use, so the claim and the early write are
 required here. A server that did not replace it would lose nothing to them. Removing the file
 on an ended sign-in leaves `auth status` and the picker saying what is true, and stops every later turn
-from presenting a token that cannot work.
+from presenting a token that cannot work. The renewal that finds the end is often not a turn's: a one-shot
+run asks for the account's listing to learn its model's window before the turn is sent, and a picker asks
+for it when it opens. The file is gone when the turn asks, so without the renewer's memory of the end the
+turn would say that no sign-in was made, which is not what happened and sends a person to sign in as if
+they never had.
 
 A turn asks the renewal before every request (`Renewer::access_token`) and after a refusal of the token
 (`Renewer::replace_refused`), which gives a token other than the refused one and never the refused one back.
@@ -620,6 +634,11 @@ list ends the turn without a replacement.
 `verified-by: bravebot_skus::chatgpt::renew::a_write_that_fails_is_reported_and_tried_again_before_the_next_request`
 `verified-by: bravebot_skus::chatgpt::renew::tokens_held_in_memory_are_dropped_where_the_file_holds_another`
 `verified-by: bravebot_skus::chatgpt::renew::an_ended_sign_in_removes_the_file_that_holds_the_token_this_process_replaced`
+`verified-by: bravebot_skus::chatgpt::renew::a_renewer_that_found_the_sign_in_end_says_so_to_every_later_ask`
+`verified-by: bravebot_skus::chatgpt::renew::a_sign_in_stored_after_the_end_is_used_and_the_end_is_forgotten`
+`verified-by: bravebot_skus::chatgpt::a_sign_in_made_after_a_renewer_found_the_old_one_end_is_the_one_it_uses`
+`verified-by: bravebot_cli::chatgpt_account::a_one_shot_run_whose_sign_in_ended_says_it_ended_and_asks_the_token_endpoint_once`
+`verified-by: bravebot_cli::chatgpt_account::a_session_in_lines_says_the_sign_in_ended_to_every_turn_after_it_ended`
 `verified-by: bravebot_skus::chatgpt::renew::each_failure_is_named_by_its_step_and_class_alone`
 `verified-by: bravebot_skus::chatgpt::exchange::a_refresh_presents_the_refresh_token_under_the_client_and_the_resource`
 `verified-by: bravebot_skus::chatgpt::exchange::only_the_recorded_code_at_a_refusing_status_ends_the_sign_in`
@@ -646,7 +665,9 @@ of the backends spec's failure categories: refused, rate-limited, unavailable, i
 failure. The rest are these, each saying which it is:
 
 - **Signing in again is the remedy,** and the sentence names `bravebot auth login chatgpt`: not signed in,
-  the sign-in has ended, the service refused the token. A renewal that failed in any other way, refused,
+  the sign-in has ended, the service refused the token. Not signed in is said where no sign-in is stored and
+  this process has not found one end, and the sign-in has ended is said to every ask for a token that follows
+  the renewal that found it end ([CHATGPT-7](#CHATGPT-7)). A renewal that failed in any other way, refused,
   rate-limited, unavailable, incomplete or not completed, names no command in the terminal or the window:
   the file is left as it is and the next request asks again, so signing in again is not offered as the
   remedy for a failure that may pass. Whether signing in again would mend a renewal the server refuses in
@@ -916,6 +937,8 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_cli::running::a_goal_run_whose_judge_is_the_chatgpt_account_with_no_sign_in_says_the_sentence`
 `verified-by: bravebot_cli::running::a_manifest_run_whose_planner_is_the_chatgpt_account_with_no_sign_in_says_the_sentence`
 `verified-by: bravebot_cli::running::a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait_and_the_status`
+`verified-by: bravebot_cli::chatgpt_account::a_one_shot_run_whose_sign_in_ended_says_it_ended_and_asks_the_token_endpoint_once`
+`verified-by: bravebot_cli::chatgpt_account::a_session_in_lines_says_the_sign_in_ended_to_every_turn_after_it_ended`
 `verified-by: bravebot_tui::app::a_goal_check_that_failed_on_the_chatgpt_account_says_its_own_sentence`
 `verified-by: bravebot_tui::app::a_manifest_run_that_failed_on_the_chatgpt_account_says_its_own_sentence`
 `verified-by: bravebot_tui::app::a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence`
@@ -1625,7 +1648,8 @@ These are the places where another spec states something about this service, eac
 - A picker asks the serving host for the listing each time it opens, and the sign-in command asks it when the
   sign-in is stored, so the access token is sent to the serving host in requests that are not a turn.
 - A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,
-  since the renewal that finds it removes the file. The next turn on a `chatgpt/` model says so.
+  since the renewal that finds it removes the file. The next turn on a `chatgpt/` model in that process says
+  so ([CHATGPT-7](#CHATGPT-7)). A turn in another process finds no file and says no sign-in is stored.
 - A session resumed from a record, and a fork begun from one, carry an identifier of their own, so the first
   request after either does not find a cache the service still holds for the earlier session's requests.
 - A model of the account that refuses the level ends it for that model for the rest of the process, so a

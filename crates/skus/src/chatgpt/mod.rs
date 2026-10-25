@@ -577,6 +577,40 @@ mod tests {
         assert_eq!(stored.host_id, "urn:uuid:stored-host");
     }
 
+    /// A sign-in made in a process whose renewer found the earlier one end is the sign-in that
+    /// renewer then uses, and it is told nothing of the end. The sign-in is the real one, run
+    /// against its own server, and the renewer is the one that asked the refusing server first. A
+    /// renewer that answered the end without reading the file would refuse the person who just
+    /// signed in again. The token endpoint that refused is asked once.
+    #[test]
+    fn a_sign_in_made_after_a_renewer_found_the_old_one_end_is_the_one_it_uses() {
+        let path = scratch("ended-then-again");
+        let before = Account {
+            access_token: crate::Secret::new("old-access"),
+            refresh_token: crate::Secret::new("old-refresh"),
+            expires_at: 1,
+            client_id: "issued-client".to_string(),
+            host_id: "urn:uuid:stored-host".to_string(),
+        };
+        account::save_at(&path, &before).expect("a stored account");
+        let refusing = serve(vec![Reply::json(400, "{\"error\":\"invalid_grant\"}")]);
+        let mut renewer = Renewer::at(Hosts::at(&refusing.base), transport(), path.clone());
+        assert!(matches!(renewer.access_token(), Err(TokenError::Ended)));
+        assert!(!path.exists());
+
+        let (result, _, _) = signed_in(
+            &path,
+            granted,
+            Returns::With("code=the-code&client_id=issued-client"),
+            &brief(),
+        );
+        result.expect("a sign-in");
+        let access = renewer.access_token().expect("the new sign-in's token");
+
+        assert_eq!(access.token.expose(), "an-access");
+        assert_eq!(refusing.finish().len(), 1);
+    }
+
     /// A callback that names another client than the stored one ends the sign-in before anything is
     /// sent to the token endpoint and leaves the stored account as it was. The code would otherwise
     /// be presented under a client it was not issued to.

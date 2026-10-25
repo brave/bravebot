@@ -19,90 +19,23 @@
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use std::collections::VecDeque;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::sync::{Arc, Mutex};
+use std::io::Write;
+use std::process::Stdio;
 
 #[path = "../../aichat/test-support/account_body.rs"]
 mod account_body;
+mod chatgpt_run;
 #[path = "../../agent/test-support/chatgpt_stand_in.rs"]
 mod chatgpt_stand_in;
 
-use chatgpt_stand_in::{ACCESS_TWO, Asked, MODEL, REFRESH_TWO, STAND_IN, Serving, StandIn};
+use chatgpt_run::{Scratch, Shown, bravebot, environment, in_a_terminal, said};
+use chatgpt_stand_in::{ACCESS_TWO, Asked, MODEL, REFRESH_TWO, Serving, StandIn, now};
 
-/// A directory a run takes as its home, removed when the test ends.
-struct Scratch {
-    path: PathBuf,
-}
-
-impl Scratch {
-    fn new(name: &str) -> Self {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/test-scratch")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(path.join(".bravebot")).expect("create scratch");
-        std::fs::create_dir_all(path.join("work")).expect("create the working directory");
-        std::fs::create_dir_all(path.join("no-programs")).expect("create an empty PATH");
-        let path = path.canonicalize().expect("canonical scratch");
-        // Signed in, with a token that is good for an hour, so no run renews it.
-        let expires = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("a clock after 1970")
-            .as_secs()
-            + 3600;
-        std::fs::write(
-            path.join(".bravebot/chatgpt-account.json"),
-            serde_json::json!({
-                "version": 1,
-                "access_token": ACCESS_TWO,
-                "refresh_token": REFRESH_TWO,
-                "expires_at": expires,
-                "client_id": "placeholder-client",
-                "host_id": "urn:uuid:placeholder-host-0000",
-            })
-            .to_string(),
-        )
-        .expect("a stored sign-in");
-        Self { path }
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
-/// Run the binary in `home` against `stand_in` with `arguments`, its stdin empty.
-fn bravebot(home: &Scratch, stand_in: &StandIn, arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bravebot"))
-        .env_clear()
-        .env("HOME", &home.path)
-        .env("PATH", home.path.join("no-programs"))
-        .env("BRAVEBOT_LOCALE", "en-US")
-        .env("OLLAMA_HOST", "127.0.0.1:1")
-        .env("BRAVEBOT_LM_STUDIO_HOST", "127.0.0.1:1")
-        .env("LLAMA_ARG_PORT", "1")
-        .env("SERVICES_KEY_AICHAT", "a-services-key")
-        .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
-        .env("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1")
-        .env(STAND_IN, &stand_in.base)
-        .current_dir(home.path.join("work"))
-        .args(arguments)
-        .stdin(Stdio::null())
-        .output()
-        .expect("the built binary runs")
-}
-
-/// What a run wrote to its two streams, as one text.
-fn said(output: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
+/// A home that is signed in, with a token that is good for an hour, so no run renews it.
+fn signed_in_home(name: &str) -> Scratch {
+    let home = Scratch::new(name);
+    home.store_sign_in(ACCESS_TWO, REFRESH_TWO, now() + 3600);
+    home
 }
 
 /// A stand-in that answers the first session that makes a request with the first of `scripts`, the
@@ -150,57 +83,15 @@ fn level_of(asked: &Asked) -> Option<String> {
 /// A session in lines in `home`, which reads its prompts from a terminal, given each of `prompts`
 /// once the stand-in has answered the one before. Returns what the terminal showed.
 fn in_lines(home: &Scratch, stand_in: &StandIn, prompts: &[&str]) -> String {
-    let program = env!("CARGO_BIN_EXE_bravebot");
-    let mut command = Command::new("/usr/bin/script");
-    #[cfg(target_os = "macos")]
-    command.args([
-        "-q",
-        "/dev/null",
-        program,
-        "--plain",
-        "--dangerously-skip-permissions",
-    ]);
-    #[cfg(target_os = "linux")]
-    command.args([
-        "-qec",
-        &format!("'{program}' --plain --dangerously-skip-permissions"),
-        "/dev/null",
-    ]);
+    let mut command = in_a_terminal(&["--plain", "--dangerously-skip-permissions"]);
+    environment(&mut command, home, stand_in);
     let mut child = command
-        .env_clear()
-        .env("HOME", &home.path)
-        .env("PATH", home.path.join("no-programs"))
-        .env("BRAVEBOT_LOCALE", "en-US")
-        .env("OLLAMA_HOST", "127.0.0.1:1")
-        .env("BRAVEBOT_LM_STUDIO_HOST", "127.0.0.1:1")
-        .env("LLAMA_ARG_PORT", "1")
-        .env("SERVICES_KEY_AICHAT", "a-services-key")
-        .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
-        .env("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1")
-        .env(STAND_IN, &stand_in.base)
-        .current_dir(home.path.join("work"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("script runs the built binary in a terminal");
-    let shown = Arc::new(Mutex::new(Vec::new()));
-    let reading = std::thread::spawn({
-        let shown = Arc::clone(&shown);
-        let mut out = child.stdout.take().expect("the terminal");
-        move || {
-            let mut buffer = [0u8; 4096];
-            while let Ok(read) = out.read(&mut buffer) {
-                if read == 0 {
-                    break;
-                }
-                shown
-                    .lock()
-                    .expect("what was shown")
-                    .extend_from_slice(&buffer[..read]);
-            }
-        }
-    });
+    let shown = Shown::read(child.stdout.take().expect("the terminal"));
     let mut typed = child.stdin.take().expect("its stdin");
     for (at, prompt) in prompts.iter().enumerate() {
         writeln!(typed, "{prompt}").expect("a prompt");
@@ -224,8 +115,7 @@ fn in_lines(home: &Scratch, stand_in: &StandIn, prompts: &[&str]) -> String {
     };
     let _ = child.kill();
     let _ = child.wait();
-    let _ = reading.join();
-    let shown = String::from_utf8_lossy(&shown.lock().expect("what was shown")).to_string();
+    let shown = shown.finished();
     let status =
         ended.unwrap_or_else(|| panic!("the session did not end at the end of its input: {shown}"));
     assert!(status.success(), "the session ended with {status}: {shown}");
@@ -239,7 +129,7 @@ fn in_lines(home: &Scratch, stand_in: &StandIn, prompts: &[&str]) -> String {
 /// identifier other than the other two, and one identifier for the whole process.
 #[test]
 fn a_run_carries_one_identifier_in_all_three_headers_and_its_delegate_carries_another() {
-    let home = Scratch::new("cli-chatgpt-session-delegate");
+    let home = signed_in_home("cli-chatgpt-session-delegate");
     let stand_in = a_stand_in_answering(vec![
         vec![
             Serving::Calls(
@@ -292,7 +182,7 @@ fn a_run_carries_one_identifier_in_all_three_headers_and_its_delegate_carries_an
 /// what a check built with a session of its own would carry.
 #[test]
 fn the_rounds_and_the_checks_of_a_goal_run_carry_one_identifier() {
-    let home = Scratch::new("cli-chatgpt-session-goal");
+    let home = signed_in_home("cli-chatgpt-session-goal");
     let stand_in = a_stand_in_answering(vec![vec![
         Serving::Says("it is made"),
         Serving::Says("MET\nthe exchange says it is made"),
@@ -323,7 +213,7 @@ fn the_rounds_and_the_checks_of_a_goal_run_carry_one_identifier() {
 /// prompt, which is what a task built for each prompt and told nothing of its session does.
 #[test]
 fn a_session_in_lines_carries_one_identifier_through_every_prompt() {
-    let home = Scratch::new("cli-chatgpt-session-lines");
+    let home = signed_in_home("cli-chatgpt-session-lines");
     // The model the person last picked, which a session in lines opens on.
     std::fs::write(home.path.join(".bravebot/model"), format!("{MODEL}\n")).expect("a saved pick");
     let stand_in = StandIn::new(vec![]);
@@ -342,7 +232,7 @@ fn a_session_in_lines_carries_one_identifier_through_every_prompt() {
 /// and not only on one that asks for a level.
 #[test]
 fn a_one_shot_run_asks_for_the_level_it_was_started_with_and_a_check_of_its_goal_for_none() {
-    let home = Scratch::new("cli-chatgpt-session-level");
+    let home = signed_in_home("cli-chatgpt-session-level");
     let stand_in = a_stand_in_answering(vec![vec![
         Serving::Says("it is made"),
         Serving::Says("MET\nthe exchange says it is made"),
@@ -374,7 +264,7 @@ fn a_one_shot_run_asks_for_the_level_it_was_started_with_and_a_check_of_its_goal
 /// no level, which would send the account nothing whatever was chosen.
 #[test]
 fn a_session_in_lines_asks_for_the_level_chosen_in_every_prompt() {
-    let home = Scratch::new("cli-chatgpt-session-lines-level");
+    let home = signed_in_home("cli-chatgpt-session-lines-level");
     // The model and the level the person last chose, which a session in lines opens on.
     std::fs::write(home.path.join(".bravebot/model"), format!("{MODEL}\n")).expect("a saved pick");
     std::fs::write(home.path.join(".bravebot/effort"), "medium\n").expect("a saved level");
