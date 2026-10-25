@@ -29,7 +29,7 @@ guards:
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
       - crates/core/src/policy.rs: 121
-      - crates/core/src/slot.rs: 5
+      - crates/core/src/slot.rs: 6
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 3
       - crates/mcp/src/lib.rs: 1

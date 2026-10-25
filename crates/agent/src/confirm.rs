@@ -211,10 +211,10 @@ impl WriteRequest {
 
 /// A pipeline the model has asked to run.
 ///
-/// Carries the [`Pipeline`] itself rather than a rendering of it, because the whole point of an
-/// argv vector is that the boundaries between arguments are real: a reviewer is shown each
-/// argument as its own thing, and nothing has to trust a rendering to have got the boundaries
-/// right.
+/// Carries the [`Plan`](bravebot_core::command::Plan) itself rather than a rendering of it, because
+/// the whole point of an argv vector is that the boundaries between arguments are real: a reviewer
+/// is shown each argument as its own thing, and nothing has to trust a rendering to have got the
+/// boundaries right.
 ///
 /// There is no `needs_approval` field, and there is no variant of this that skips the prompt.
 /// Every run asks. See [`bravebot_core::policy::Policy::plan_needs_approval`] for why that has no

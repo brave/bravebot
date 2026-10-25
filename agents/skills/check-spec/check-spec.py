@@ -1484,6 +1484,18 @@ reading, in a type that offers no way to do the wrong thing. Take the refutation
 False findings on a spec check are expensive: they get somebody to weaken a guarantee that
 was already holding."""
 
+# The fields a reviewer fills in for a clause, as the JSON lines both prompts show.
+CLAUSE_FIELDS = """\
+      "verdict": "conforms | violation | untested | unclear",
+      "summary": "one sentence, only when the verdict is not conforms",
+      "severity": "error | warning",
+      "evidence": ["crates/.../file.rs:123 what is there"],
+      "failure": "input or state, path through the code, outcome the clause forbids",
+      "absent": "true only where nothing in the code attempts the behaviour; leave it out otherwise",
+      "fix": "what the implementation should do instead, in a sentence",
+      "screen": "how to reach the screen this shows up on, only where a person could look at it"
+""".rstrip("\n")
+
 PROMPT = """\
 # Conformance review: {spec_name}, clauses {clause_range}
 
@@ -1539,14 +1551,7 @@ Write JSON to `{results_file}` and nothing else to stdout:
   "clauses": [
     {{
       "clause": "{example_clause}",
-      "verdict": "conforms | violation | untested | unclear",
-      "summary": "one sentence, only when the verdict is not conforms",
-      "severity": "error | warning",
-      "evidence": ["crates/.../file.rs:123 what is there"],
-      "failure": "input or state, path through the code, outcome the clause forbids",
-      "absent": "true only where nothing in the code attempts the behaviour; leave it out otherwise",
-      "fix": "what the implementation should do instead, in a sentence",
-      "screen": "how to reach the screen this shows up on, only where a person could look at it"
+{clause_fields}
     }}
   ]
 }}
@@ -1637,14 +1642,7 @@ Write JSON to `{results_file}` and nothing else to stdout:
     {{
       "clause": "another clause in your scope",
       "holds": false,
-      "verdict": "conforms | violation | untested | unclear",
-      "summary": "one sentence, only when the verdict is not conforms",
-      "severity": "error | warning",
-      "evidence": ["crates/.../file.rs:123 what is there"],
-      "failure": "input or state, path through the code, outcome the clause forbids",
-      "absent": "true only where nothing in the code attempts the behaviour; leave it out otherwise",
-      "fix": "what the implementation should do instead, in a sentence",
-      "screen": "how to reach the screen this shows up on, only where a person could look at it"
+{clause_fields}
     }}
   ]
 }}
@@ -1699,7 +1697,15 @@ def instructions_hash():
     """What a reviewer is told, and the exceptions it is told to consult, as a number that moves
     when any of it does."""
     told = "\0".join(
-        [PROMPT, DIFF_PROMPT, GROUND_RULES, VERDICTS, VIOLATIONS, REFUTATION, known_costs()]
+        [
+            PROMPT.replace("{clause_fields}", CLAUSE_FIELDS),
+            DIFF_PROMPT.replace("{clause_fields}", CLAUSE_FIELDS),
+            GROUND_RULES,
+            VERDICTS,
+            VIOLATIONS,
+            REFUTATION,
+            known_costs(),
+        ]
     )
     return hashlib.sha256(told.encode("utf-8")).hexdigest()[:16]
 
@@ -1789,6 +1795,7 @@ def build_prompt(spec, clauses, guards, crates, index, results_file):
         verdicts=VERDICTS,
         violations=VIOLATIONS,
         refutation=REFUTATION,
+        clause_fields=CLAUSE_FIELDS,
         results_file=results_file,
         example_clause=ids[0],
     )
@@ -1831,6 +1838,7 @@ def build_diff_prompt(spec, clauses, records, change, diff_file, guards, crates,
         verdicts=VERDICTS,
         violations=VIOLATIONS,
         refutation=REFUTATION,
+        clause_fields=CLAUSE_FIELDS,
         results_file=results_file,
         example_clause=ids[0],
     )

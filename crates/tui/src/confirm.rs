@@ -419,16 +419,15 @@ mod tests {
     }
 
     fn a_run(private: bool) -> RunRequest {
-        let pipeline = bravebot_core::Pipeline::new(vec![
+        let mut pipeline = bravebot_core::Pipeline::new(vec![
             bravebot_core::Stage::new("git", vec!["log".into(), "--oneline".into()]),
             bravebot_core::Stage::new("sed", vec!["-n".into(), "1,10p".into()]),
         ]);
+        if private {
+            pipeline.stdin = Some(bravebot_core::label::Label::trusted_private());
+        }
         RunRequest::from_pipeline(
-            &if private {
-                pipeline.with_stdin(bravebot_core::label::Label::trusted_private())
-            } else {
-                pipeline
-            },
+            &pipeline,
             &["/usr/bin/git".into(), "/usr/bin/sed".into()],
             "/home/someone/project",
         )

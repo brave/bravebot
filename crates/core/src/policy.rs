@@ -1815,19 +1815,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.permissions.denies_any_read()
     }
 
-    /// Refuse a write a `deny` rule covers, and one outside the files this run's definition lets it
-    /// write (DELEGATE-28).
+    /// Refuse a write a `deny` rule covers, for a caller that asks the rules about each spelling
+    /// of a file and the definition's limit ([`Policy::refuse_write_outside_limits`]) about the
+    /// one it lands on.
     ///
     /// Both families of rule are consulted: a path nothing may read is a path nothing may replace
     /// either, so a `Read` deny rule stops a write to it. Claude Code does the same, and the reason
     /// is that a file whose contents are off limits is not protected if it can be overwritten.
-    pub fn before_write(&mut self, path: &str) -> Gated<()> {
-        self.refuse_denied_write(path)?;
-        self.refuse_write_outside_limits(path)
-    }
-
-    /// The `deny` half of [`Policy::before_write`], for a caller that asks the rules about each
-    /// spelling of a file and the definition's limit about the one it lands on.
     pub fn refuse_denied_write(&mut self, path: &str) -> Gated<()> {
         for subject in [
             crate::permissions::Subject::Edit,
@@ -4258,20 +4252,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// A delegate that reached its bound answers like one that did not, so the bound is what tells
     /// the two apart: a run at its bound was told it had no rounds left.
-    pub fn record_delegate_end(
-        &mut self,
-        id: crate::delegate::DelegateId,
-        bound: usize,
-        finish: crate::delegate::Finish,
-    ) {
-        self.record_delegate_end_within(id, bound, None, finish);
-    }
-
-    /// [`Policy::record_delegate_end`] for a delegate that also carried a token budget.
     ///
-    /// `spent` is that budget and the tokens the run reported, both counts the driver holds. A
-    /// run that reached it says so, beside the round limit where it reached that too, so the
-    /// trail names which bound ended the run (DELEGATE-29).
+    /// `spent` is the delegate's token budget and the tokens the run reported, both counts the
+    /// driver holds, or `None` for a delegate that carried no budget. A run that reached the budget
+    /// says so, beside the round limit where it reached that too, so the trail names which bound
+    /// ended the run (DELEGATE-29).
     pub fn record_delegate_end_within(
         &mut self,
         id: crate::delegate::DelegateId,
@@ -9739,10 +9724,7 @@ five
         )
         .unwrap();
 
-        let reader = store
-            .reader_for([slot.clone()], Label::untrusted_public())
-            .unwrap();
-        let content = reader.read(&slot).unwrap();
+        let content = store.take_for_effect(&slot).unwrap();
 
         // The body is accepted as content.
         assert!(
@@ -17043,6 +17025,13 @@ five
             Labelled::new(text.to_string(), Label::untrusted_public())
         }
 
+        /// A write the way a tool asks for one: refused where a `deny` rule covers the path, and
+        /// where the definition's limit on the files it may write (DELEGATE-28) does not.
+        fn before_write(policy: &mut Policy<'_, RecordingSink>, path: &str) -> Gated<()> {
+            policy.refuse_denied_write(path)?;
+            policy.refuse_write_outside_limits(path)
+        }
+
         /// A turn whose settings named `bound` as the most delegates it may have running at once.
         fn bounded_policy(sink: &mut RecordingSink, bound: u32) -> Policy<'_, RecordingSink> {
             open_policy(sink).with_delegate_bound(Some(bound))
@@ -18014,15 +18003,15 @@ five
 
             let mut sink = RecordingSink::new();
             let mut scribe = open_policy(&mut sink).within(&spec);
-            assert!(scribe.before_write("docs/guide/a.md").is_ok());
+            assert!(before_write(&mut scribe, "docs/guide/a.md").is_ok());
             for outside in ["src/main.rs", "docs-old/a.md", "docs/../src/main.rs"] {
                 assert!(
-                    scribe.before_write(outside).is_err(),
+                    before_write(&mut scribe, outside).is_err(),
                     "{outside} was written outside the limit"
                 );
             }
             assert!(
-                turn.before_write("src/main.rs").is_ok(),
+                before_write(&mut turn, "src/main.rs").is_ok(),
                 "the limit reached the turn that started the delegate"
             );
         }
@@ -18047,11 +18036,10 @@ five
             let mut scribe = open_policy(&mut sink)
                 .with_permissions(denying)
                 .within(&spec);
-            let err = scribe
-                .before_write("docs/private/key.md")
+            let err = before_write(&mut scribe, "docs/private/key.md")
                 .expect_err("a deny rule was lifted by the key");
             assert!(format!("{err}").contains("deny rule"), "{err}");
-            assert!(scribe.before_write("docs/public.md").is_ok());
+            assert!(before_write(&mut scribe, "docs/public.md").is_ok());
         }
 
         /// DELEGATE-28. A pattern nobody can read covers no file, and a line left with none leaves
@@ -18068,7 +18056,7 @@ five
             let mut scribe = open_policy(&mut sink).within(&spec);
             for path in ["docs/a.md", "src/main.rs", "a.md"] {
                 assert!(
-                    scribe.before_write(path).is_err(),
+                    before_write(&mut scribe, path).is_err(),
                     "{path} was written under a line with no readable pattern"
                 );
             }
@@ -18088,8 +18076,8 @@ five
                 .expect("a clean context may delegate");
             let mut sink = RecordingSink::new();
             let mut scribe = open_policy(&mut sink).within(&spec);
-            assert!(scribe.before_write("docs/a.md").is_ok());
-            assert!(scribe.before_write("src/main.rs").is_err());
+            assert!(before_write(&mut scribe, "docs/a.md").is_ok());
+            assert!(before_write(&mut scribe, "src/main.rs").is_err());
         }
 
         /// DELEGATE-28. A delegate that starts one of its own passes its limit down: the child's
@@ -18110,9 +18098,9 @@ five
 
             let mut child_sink = RecordingSink::new();
             let mut helper = open_policy(&mut child_sink).within(&child);
-            assert!(helper.before_write("docs/a.md").is_ok());
+            assert!(before_write(&mut helper, "docs/a.md").is_ok());
             assert!(
-                helper.before_write("src/main.rs").is_err(),
+                before_write(&mut helper, "src/main.rs").is_err(),
                 "a delegate's own delegate wrote where the delegate may not"
             );
         }
@@ -18579,19 +18567,20 @@ five
             let mut sink = RecordingSink::new();
             let mut turn = open_policy(&mut sink);
             let id = DelegateId::nth(1);
-            turn.record_delegate_end(id, 120, Finish::Answered { took, rounds: 7 });
-            turn.record_delegate_end(id, 120, Finish::Answered { took, rounds: 120 });
-            turn.record_delegate_end(id, 120, Finish::Stopped { took, rounds: 12 });
-            turn.record_delegate_end(
+            turn.record_delegate_end_within(id, 120, None, Finish::Answered { took, rounds: 7 });
+            turn.record_delegate_end_within(id, 120, None, Finish::Answered { took, rounds: 120 });
+            turn.record_delegate_end_within(id, 120, None, Finish::Stopped { took, rounds: 12 });
+            turn.record_delegate_end_within(
                 id,
                 120,
+                None,
                 Finish::Failed {
                     took,
                     rounds: 37,
                     why: "unavailable",
                 },
             );
-            turn.record_delegate_end(id, 120, Finish::Lost);
+            turn.record_delegate_end_within(id, 120, None, Finish::Lost);
             drop(turn);
             let recorded: Vec<&str> = sink
                 .events()

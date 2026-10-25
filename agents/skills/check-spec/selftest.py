@@ -1720,6 +1720,17 @@ def incremental_checks():
         "and is told to keep the earlier verdict by saying so",
         '"holds": true' in text and "Mark a clause `\"holds\": true` only when you have read the diff" in text,
     )
+    full_prompt = unrecorded.prompts[0] if len(unrecorded.prompts) == 1 else {}
+    full_text = unrecorded.texts.get(full_prompt.get("prompt_file"), "")
+    fields = check.CLAUSE_FIELDS.splitlines()
+    case(
+        "the full prompt and the diff prompt each show the reviewer every field of a clause's entry",
+        len(fields) == 8
+        and full_prompt.get("mode") == "full"
+        and prompt.get("mode") == "diff"
+        and all(line in full_text.splitlines() for line in fields)
+        and all(line in text.splitlines() for line in fields),
+    )
     git(root, "config", "color.ui", "always")
     git(root, "config", "diff.external", "false")
     coloured = plan_of(record)

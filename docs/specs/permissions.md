@@ -18,7 +18,7 @@ guards:
   - symbol: Policy::with_permissions
   - symbol: Policy::before_read
   - symbol: Policy::read_is_denied
-  - symbol: Policy::before_write
+  - symbol: Policy::refuse_denied_write
   - symbol: Policy::before_plan_rules
 documented-by:
   - docs/website/docs/customize/configuration.md
