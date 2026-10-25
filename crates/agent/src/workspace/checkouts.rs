@@ -178,8 +178,6 @@ pub struct CheckoutInfo {
     /// The workspace the delegate's parent had, which is where sources are read from
     /// (CHECKOUT-9).
     pub(super) source: Workspace,
-    pub(super) listed: Arc<Mutex<Vec<PathBuf>>>,
-    pub(super) session_checkouts: Arc<Mutex<Vec<Made>>>,
     /// What was carried into it from the working directory, set once by the call that gave the
     /// checkout to its delegate (CHECKOUT-23).
     pub(super) carried: std::sync::OnceLock<super::carry::Carried>,
@@ -340,8 +338,8 @@ impl CheckoutInfo {
         } else {
             match self.made.remove(
                 |key| authority.withdraw_beneath(key),
-                &self.listed,
-                &self.session_checkouts,
+                &self.source.kept.checkouts,
+                &self.source.kept.session_checkouts,
             ) {
                 Ok(()) => return Retired::Removed,
                 Err(_) => Retired::Stuck,
@@ -429,7 +427,7 @@ impl Workspace {
     /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21). One whose
     /// directory is gone, removed by hand or only half removed, is not among them.
     pub fn session_checkouts(&self) -> Vec<SessionCheckout> {
-        listed(&self.session_checkouts)
+        listed(&self.kept.session_checkouts)
     }
 
     /// The checkout the session keeps under `id` whose directory is still there. Where
@@ -438,7 +436,7 @@ impl Workspace {
     /// [`Workspace::written_since_checkout`] does not use it: a write recorded after a checkout
     /// was made is still a write once its directory has been removed by hand.
     pub(super) fn session_checkout(&self, id: &str) -> Option<Made> {
-        locked(&self.session_checkouts)
+        locked(&self.kept.session_checkouts)
             .iter()
             .find(|made| made.id == id && made.path.exists())
             .cloned()
@@ -466,8 +464,8 @@ impl Workspace {
         }
         made.remove(
             |key| trust.withdraw_beneath(key),
-            &self.checkouts,
-            &self.session_checkouts,
+            &self.kept.checkouts,
+            &self.kept.session_checkouts,
         )
         .map_err(|_| Unremoved::Stuck)
     }
@@ -478,14 +476,14 @@ impl Workspace {
     /// The driver's own record of its writes. Whether the file differs from the checkout's is a
     /// comparison of bytes, which is the person's to make from the difference they are shown.
     pub fn written_since_checkout(&self, id: &str, relative: &str) -> bool {
-        let Some(after) = locked(&self.session_checkouts)
+        let Some(after) = locked(&self.kept.session_checkouts)
             .iter()
             .find(|made| made.id == id)
             .map(|made| made.after)
         else {
             return false;
         };
-        locked(&self.working_writes)
+        locked(&self.kept.working_writes)
             .last
             .get(relative)
             .is_some_and(|last| *last > after)
@@ -533,7 +531,7 @@ impl Workspace {
                 }
                 _ => false,
             };
-            let mut held = locked(&self.session_checkouts);
+            let mut held = locked(&self.kept.session_checkouts);
             if !placed || held.iter().any(|made| made.id == one.id) {
                 if !held.iter().any(|made| made.id == one.id) {
                     unplaced.push(one.id.clone());
@@ -541,7 +539,8 @@ impl Workspace {
                 continue;
             }
             if let Some(number) = number {
-                self.checkout_numbers
+                self.kept
+                    .checkout_numbers
                     .fetch_max(number + 1, Ordering::SeqCst);
             }
             let record = Record {
@@ -560,7 +559,7 @@ impl Workspace {
                 after: 0,
                 _claim: crate::git::checkout::reclaim(&one.path),
             });
-            if let Ok(mut listed) = self.checkouts.lock() {
+            if let Ok(mut listed) = self.kept.checkouts.lock() {
                 listed.push(one.path.clone());
             }
         }
@@ -604,7 +603,7 @@ impl Workspace {
     /// For starting over inside one process: the session beginning here has made no checkout, so
     /// the list empties for every clone. The checkouts themselves stay on disk.
     pub fn forget_session_checkouts(&self) {
-        locked(&self.session_checkouts).clear();
+        locked(&self.kept.session_checkouts).clear();
     }
 
     /// The workspace instructions, skills and definitions are read from: this one, or the
@@ -640,7 +639,7 @@ impl Workspace {
         }
         let Some(checkout) = &self.checkout else {
             if let Some(relative) = typed.and_then(|typed| place_by_spelling(&self.root, typed)) {
-                let mut writes = locked(&self.working_writes);
+                let mut writes = locked(&self.kept.working_writes);
                 writes.count += 1;
                 let count = writes.count;
                 writes.last.insert(relative, count);

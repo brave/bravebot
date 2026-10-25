@@ -576,37 +576,18 @@ pub struct Workspace {
     rewind: Arc<Mutex<CoverageTracker>>,
     /// The checkout this workspace is the root of, where it is a delegate's (CHECKOUT-7).
     checkout: Option<Arc<CheckoutInfo>>,
-    /// The roots of the checkouts the session made whose rules a history answer meets
-    /// (CHECKOUT-12): those still there, and those removed with a rule that distrusts a path.
-    ///
-    /// Shared by every clone, since a delegate's workspace is a clone and its checkout is the
-    /// session's.
-    checkouts: Arc<Mutex<Vec<PathBuf>>>,
-    /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21). Shared for
-    /// the reason `checkouts` is.
-    session_checkouts: Arc<Mutex<Vec<Made>>>,
-    /// The number the next checkout takes, shared for the reason `checkouts` is.
-    checkout_numbers: Arc<AtomicU64>,
-    /// The directory checkouts are made in where the session has no state directory to put them
-    /// in, made when the first is asked for (CHECKOUT-6). Shared for the reason `checkouts` is,
-    /// so it goes with the last clone and not with the first delegate's.
-    temporary_checkouts: Arc<Mutex<Option<TemporaryCheckouts>>>,
-    /// The writes the session made to the working directory by a name the planner typed, in the
-    /// order they were made (CHECKOUT-14). Shared for the reason `checkouts` is.
-    working_writes: Arc<Mutex<WorkingWrites>>,
+    /// The handles a delegate's workspace, which is a clone, and the next turn's workspace share
+    /// with this one, since the checkout is the session's.
+    kept: KeptBetweenTurns,
     /// The paths the person let programs reach for this session, oldest first (SANDBOX-28).
     ///
     /// Held here and nowhere else: not in the trust map, not on disk, and not in `added`, because a
     /// path reached by a program is not a path the file tools open or a directory vouched for.
-    /// Shared for the reason `checkouts` is.
+    /// Shared for the reason `kept` is.
     path_reach: Arc<Mutex<Vec<PathReach>>>,
     /// The hosts the person let programs reach for this session beyond `allowedHosts`, and the
     /// ones they declined (SANDBOX-24). Held here and nowhere else, for the reason `path_reach` is.
     host_grants: Arc<Mutex<HostGrants>>,
-    /// What a file tool has read or written, and what the person named with `@`, each by the
-    /// spelling it was typed in (INSTR-14, INSTR-16). Shared for the reason `checkouts` is, so a
-    /// delegate's reads count.
-    touched: Arc<Mutex<Touched>>,
     /// The directories the person's own settings named, in alias order (REFER-3).
     ///
     /// Each is also in `added`, which is what makes it reachable, so a reference is exactly as
@@ -687,16 +668,39 @@ fn place_by_spelling(root: &Path, typed: &str) -> Option<String> {
 /// working directory's writes against the same record as the one it was taken from, as a
 /// delegate's clone does. Holding it keeps each checkout's lock and the temporary directory for as
 /// long as the session does, and not for one turn.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct KeptBetweenTurns {
+    /// The roots of the checkouts the session made whose rules a history answer meets
+    /// (CHECKOUT-12): those still there, and those removed with a rule that distrusts a path.
     checkouts: Arc<Mutex<Vec<PathBuf>>>,
+    /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21).
     session_checkouts: Arc<Mutex<Vec<Made>>>,
+    /// The number the next checkout takes.
     checkout_numbers: Arc<AtomicU64>,
+    /// The directory checkouts are made in where the session has no state directory to put them
+    /// in, made when the first is asked for (CHECKOUT-6), so it goes with the last clone and not
+    /// with the first delegate's.
     temporary_checkouts: Arc<Mutex<Option<TemporaryCheckouts>>>,
+    /// The writes the session made to the working directory by a name the planner typed, in the
+    /// order they were made (CHECKOUT-14).
     working_writes: Arc<Mutex<WorkingWrites>>,
-    /// What the session has touched, which INSTR-14 and INSTR-16 read: a workspace built for each
-    /// turn would start every turn with none.
+    /// What a file tool has read or written, and what the person named with `@`, each by the
+    /// spelling it was typed in (INSTR-14, INSTR-16): a workspace built for each turn would start
+    /// every turn with none, and a delegate's reads count.
     touched: Arc<Mutex<Touched>>,
+}
+
+impl Default for KeptBetweenTurns {
+    fn default() -> Self {
+        Self {
+            checkouts: Arc::default(),
+            session_checkouts: Arc::default(),
+            checkout_numbers: Arc::new(AtomicU64::new(1)),
+            temporary_checkouts: Arc::default(),
+            working_writes: Arc::default(),
+            touched: Arc::default(),
+        }
+    }
 }
 
 impl KeptBetweenTurns {
@@ -910,14 +914,9 @@ impl Workspace {
             backups: Arc::new(Mutex::new(Vec::new())),
             rewind: Arc::default(),
             checkout: None,
-            checkouts: Arc::default(),
-            session_checkouts: Arc::default(),
-            checkout_numbers: Arc::new(AtomicU64::new(1)),
-            temporary_checkouts: Arc::default(),
-            working_writes: Arc::default(),
+            kept: KeptBetweenTurns::default(),
             path_reach: Arc::default(),
             host_grants: Arc::default(),
-            touched: Arc::default(),
             references: Vec::new(),
             reference_problems: Vec::new(),
         })
@@ -4335,7 +4334,7 @@ impl Workspace {
                 .iter()
                 .map(|inside| self.trust_key(&spelled(inside)))
                 .collect();
-            let checkouts: Vec<String> = self.checkouts.lock().map_or_else(
+            let checkouts: Vec<String> = self.kept.checkouts.lock().map_or_else(
                 |_| Vec::new(),
                 |listed| {
                     listed
@@ -4736,25 +4735,13 @@ impl Workspace {
     /// What this workspace's checkouts are kept in, for the workspace of the next turn to be given
     /// by [`Workspace::with_kept_between_turns`] (CHECKOUT-16).
     pub fn kept_between_turns(&self) -> KeptBetweenTurns {
-        KeptBetweenTurns {
-            checkouts: self.checkouts.clone(),
-            session_checkouts: self.session_checkouts.clone(),
-            checkout_numbers: self.checkout_numbers.clone(),
-            temporary_checkouts: self.temporary_checkouts.clone(),
-            working_writes: self.working_writes.clone(),
-            touched: self.touched.clone(),
-        }
+        self.kept.clone()
     }
 
     /// Keep the checkouts in `kept`, taken from the workspace of an earlier turn, in place of this
     /// workspace's own (CHECKOUT-16).
     pub fn with_kept_between_turns(mut self, kept: &KeptBetweenTurns) -> Self {
-        self.checkouts = kept.checkouts.clone();
-        self.session_checkouts = kept.session_checkouts.clone();
-        self.checkout_numbers = kept.checkout_numbers.clone();
-        self.temporary_checkouts = kept.temporary_checkouts.clone();
-        self.working_writes = kept.working_writes.clone();
-        self.touched = kept.touched.clone();
+        self.kept = kept.clone();
         self
     }
 
@@ -4828,7 +4815,7 @@ impl Workspace {
                 .join("checkouts")
                 .join(crate::home::key_for(&self.root)),
             None => {
-                let mut held = locked(&self.temporary_checkouts);
+                let mut held = locked(&self.kept.temporary_checkouts);
                 if held.is_none() {
                     *held = Some(TemporaryCheckouts {
                         directory: crate::scratch::SessionScratch::for_checkouts()
@@ -4858,7 +4845,7 @@ impl Workspace {
         }
         let mut tries = 0;
         let (id, target, made) = loop {
-            let number = self.checkout_numbers.fetch_add(1, Ordering::SeqCst);
+            let number = self.kept.checkout_numbers.fetch_add(1, Ordering::SeqCst);
             let id = format!("c{number}");
             let target = made_directory.join(&id);
             match self.make_checkout(policy, &target, &id, crate::git::checkout::Bound::FIXED) {
@@ -4890,7 +4877,7 @@ impl Workspace {
 
         let key = self.trust_key(&target.to_string_lossy());
         policy.file_authority().copy_beneath("", &key);
-        if let Ok(mut listed) = self.checkouts.lock() {
+        if let Ok(mut listed) = self.kept.checkouts.lock() {
             listed.push(target.clone());
         }
         let entry = Made {
@@ -4901,10 +4888,10 @@ impl Workspace {
             delegate: made_for,
             git_dir: self.root.join(".git"),
             record: Arc::default(),
-            after: locked(&self.working_writes).count,
+            after: locked(&self.kept.working_writes).count,
             _claim: made.claim.clone(),
         };
-        locked(&self.session_checkouts).push(entry.clone());
+        locked(&self.kept.session_checkouts).push(entry.clone());
 
         let mut delegate = self.clone();
         delegate.added = Arc::new(Mutex::new(self.added_directories()));
@@ -4916,8 +4903,6 @@ impl Workspace {
             made: entry,
             left_out: made.left_out,
             source: self.clone(),
-            listed: self.checkouts.clone(),
-            session_checkouts: self.session_checkouts.clone(),
             carried: std::sync::OnceLock::new(),
         }));
         Ok(delegate)
@@ -4941,7 +4926,7 @@ impl Workspace {
         };
         let mut parts: Vec<&str> = relative.split('/').collect();
         parts.pop();
-        let mut touched = locked(&self.touched);
+        let mut touched = locked(&self.kept.touched);
         for end in 1..=parts.len() {
             if touched.directories.len() >= TOUCHED_LIMIT {
                 break;
@@ -4955,7 +4940,7 @@ impl Workspace {
     /// at [`TOUCHED_FILES_LIMIT`].
     pub(crate) fn record_file(&self, typed: &str) {
         if let Some(relative) = place_by_spelling(&self.root, typed) {
-            locked(&self.touched).insert_file(relative);
+            locked(&self.kept.touched).insert_file(relative);
         }
     }
 
@@ -4970,21 +4955,24 @@ impl Workspace {
             return;
         };
         if self.root.join(&relative).is_file() {
-            locked(&self.touched).insert_file(relative);
+            locked(&self.kept.touched).insert_file(relative);
         }
     }
 
     /// Whether the person is still owed being told that `rule` was added, and from now on they are
     /// not (INSTR-16). `rule` is its origin from INSTR-1's fixed set.
     pub fn take_telling(&self, rule: &str) -> bool {
-        locked(&self.touched).told.insert(rule.to_string())
+        locked(&self.kept.touched).told.insert(rule.to_string())
     }
 
     /// The directories below the root the session has read from or written to, `/`-joined and
     /// relative to it, shallowest first and in name order within a depth (INSTR-14).
     pub fn touched_directories(&self) -> Vec<String> {
-        let mut directories: Vec<String> =
-            locked(&self.touched).directories.iter().cloned().collect();
+        let mut directories: Vec<String> = locked(&self.kept.touched)
+            .directories
+            .iter()
+            .cloned()
+            .collect();
         directories.sort_by_key(|directory| directory.matches('/').count());
         directories
     }
@@ -4992,13 +4980,13 @@ impl Workspace {
     /// The files the session has read, written or been told of by `@`, `/`-joined and relative to
     /// the root, in the order each was first reached (INSTR-16).
     pub fn touched_files(&self) -> Vec<String> {
-        locked(&self.touched).files.clone()
+        locked(&self.kept.touched).files.clone()
     }
 
     /// The files [`Workspace::touched_files`] lists from the `from`th on, which is what has been
     /// reached since a caller that has compared the first `from` last looked.
     pub(crate) fn touched_files_from(&self, from: usize) -> Vec<String> {
-        locked(&self.touched)
+        locked(&self.kept.touched)
             .files
             .get(from..)
             .unwrap_or_default()
@@ -5007,14 +4995,14 @@ impl Workspace {
 
     /// The rule files added to a prompt, in the order they were (INSTR-16).
     pub(crate) fn rules_added(&self) -> Vec<String> {
-        locked(&self.touched).loaded.clone()
+        locked(&self.kept.touched).loaded.clone()
     }
 
     /// Record that the rule file at `origin` was added to a prompt. A turn that starts later adds
     /// the rules already recorded again, and a repeat keeps its first place, so the order stays the
     /// one the turn that first added them put them in (INSTR-16).
     pub(crate) fn note_rule_added(&self, origin: &str) {
-        let mut touched = locked(&self.touched);
+        let mut touched = locked(&self.kept.touched);
         if !touched.loaded.iter().any(|added| added == origin) {
             touched.loaded.push(origin.to_string());
         }
@@ -5654,7 +5642,7 @@ mod tests {
         let mut workspace = Workspace::new(&first).expect("workspace");
         workspace.record_write(Some("src/main.rs"));
         assert!(
-            locked(&workspace.working_writes)
+            locked(&workspace.kept.working_writes)
                 .last
                 .contains_key("src/main.rs"),
             "the write was not recorded, so this is not the case under test"
@@ -5665,7 +5653,7 @@ mod tests {
             .expect("moved");
 
         assert!(
-            locked(&workspace.working_writes).last.is_empty(),
+            locked(&workspace.kept.working_writes).last.is_empty(),
             "a name recorded under the old root was kept under the new one"
         );
     }
@@ -5968,7 +5956,7 @@ mod tests {
 
     /// Lists a checkout under `id` as kept at `path`, which need not exist.
     fn keep_checkout(workspace: &Workspace, id: &str, path: PathBuf) {
-        locked(&workspace.session_checkouts).push(Made {
+        locked(&workspace.kept.session_checkouts).push(Made {
             id: id.to_string(),
             path,
             key: String::new(),
