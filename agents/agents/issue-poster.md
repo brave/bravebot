@@ -43,6 +43,8 @@ Apply these and no others:
 - One `area/*` where the area is clear from the issue, and none where it is not. `infrastructure`
   for the build and the tracker.
 - When the issue is about the guarantee: `security`, `needs-security-review`, and a `severity/*`.
+- `flaky-test`, in addition to the labels above, when the issue is about a test whose outcome
+  changes between runs of the same build.
 - The axes `importance/*`, `urgency/*` and `size/*`, proposed from the scales in
   `labelling-issues.md`, when the task says a person asked for this issue. Never `urgency/p1`.
   Apply no axis to a security issue, or when the task says the issue is a finding nobody has read.
