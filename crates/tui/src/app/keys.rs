@@ -945,8 +945,8 @@ fn files_key(session: &mut Session, key: KeyEvent) -> Action {
         KeyCode::End | KeyCode::Char('G') => session.files_to_end(true),
         KeyCode::PageUp => session.files_scroll(-session.files_page()),
         KeyCode::PageDown => session.files_scroll(session.files_page()),
-        KeyCode::Char('[') => session.files_to_edit(false),
-        KeyCode::Char(']') => session.files_to_edit(true),
+        KeyCode::Left | KeyCode::Char('h') => session.files_to_edit(false),
+        KeyCode::Right | KeyCode::Char('l') => session.files_to_edit(true),
         _ => return Action::None,
     }
     Action::Redraw
@@ -1850,8 +1850,9 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
         }
         // A click on the panel's model, effort, context or MCP server row asks what `/model`,
         // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13), one on a file of the
-        // files state highlights it and one on its `x` ends it (MOUSE-18), and one on the
-        // permission mode under the box cycles it (MOUSE-14).
+        // files state highlights it, one on its `x` ends it and one on a control of its bar steps
+        // between the edits (MOUSE-18), and one on the permission mode under the box cycles it
+        // (MOUSE-14).
         MouseEventKind::Up(MouseButton::Left) if is_a_shortcut_click(session, mouse) => {
             click_shortcut(session, mouse)
         }
@@ -1908,6 +1909,14 @@ fn click_shortcut(session: &mut Session, mouse: MouseEvent) -> Action {
         }
         Some(crate::panel::Target::CloseFiles) => {
             session.close_files();
+            Action::Redraw
+        }
+        Some(crate::panel::Target::PreviousEdit) => {
+            session.files_to_edit(false);
+            Action::Redraw
+        }
+        Some(crate::panel::Target::NextEdit) => {
+            session.files_to_edit(true);
             Action::Redraw
         }
         None => {

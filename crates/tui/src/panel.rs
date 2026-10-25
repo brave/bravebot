@@ -253,6 +253,10 @@ pub enum Target {
     File(usize),
     /// The `x` in the heading row of the files state: the end of the state, as `q` is (MOUSE-18).
     CloseFiles,
+    /// The control for the previous edit in the bar of the files state: the key that goes to it.
+    PreviousEdit,
+    /// The control for the next edit in the bar of the files state.
+    NextEdit,
 }
 
 /// Where a click acts on the panel: a row, and the cells of it that count, or all of them where

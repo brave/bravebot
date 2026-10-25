@@ -108,11 +108,11 @@ edge a border as in [PANEL-6](info-panel.md#PANEL-6). Dragging the border does n
 was dragged to is kept for the ordinary state. It is drawn on a terminal of at least 100 columns,
 which leaves the transcript at least 40. None of the sections of [PANEL-9](info-panel.md#PANEL-9) is
 drawn while it is. Top to bottom it holds a heading row, the list (FILES-5), a rule, the highlighted
-file's name and edit count, and its edits (FILES-6) between the two rows that count the rows of them
-out of view. On a panel of 6 rows or fewer the edits have no row. The context reading and cache rate
-move to the hint line, as they do when the panel is not drawn ([PANEL-8](info-panel.md#PANEL-8)). A
-terminal narrowed below 100 columns while the state is open stops drawing it and draws it again when
-widened.
+file's name and edit count, the bar of FILES-6, and the edits (FILES-6) between the two rows that
+count the rows of them out of view. On a panel of 7 rows or fewer the edits have no row. The context
+reading and cache rate move to the hint line, as they do when the panel is not drawn
+([PANEL-8](info-panel.md#PANEL-8)). A terminal narrowed below 100 columns while the state is open
+stops drawing it and draws it again when widened.
 
 The heading row is `{n} files changed` with `+{added}` and `-{removed}` beside it, from the sums of
 FILES-2, and an `x` at its right end that ends the state (FILES-3).
@@ -140,7 +140,7 @@ each such character made visible, so it cannot read as another name.
 The state opens with the last file written highlighted. Up, Down, `k` and `j` move the highlight and
 stop at each end. Home and End, or `g` and `G`, go to the first and last. Where there are more files
 than rows, the rows drawn are the ones around the highlight, and the first and last rows say how many
-are left out above and below (`↑ 1 more above`, `↓ 8 more below`). On a panel of 13 rows or fewer
+are left out above and below (`↑ 1 more above`, `↓ 8 more below`). On a panel of 14 rows or fewer
 the list has room for fewer than three rows, and where there are more files than room it draws one
 row, the highlighted file or the one the wheel left first, and no count. Turning the wheel over the
 list moves the rows and not the highlight ([MOUSE-19](mouse.md#MOUSE-19)), and a click on a row
@@ -176,13 +176,25 @@ The edits open at their top. PageUp and PageDown scroll them, and so does the wh
 above those drawn and a row that counts those below, `↑ {n} rows above` and `↓ {n} rows below`, each
 blank where none is out of view. The counts are rows of the layout, and no code counts `Added` or
 `Removed` rows to make them (FILES-2). A count is a row of its own, so the row the edits are
-scrolled to is drawn under it. `[` and `]` move to the previous and next edit header.
+scrolled to is drawn under it.
+
+A bar under the file's name holds a control for the previous edit, `edit {i} of {n}` and a control
+for the next edit, and stays in place while the edits scroll under it. It names the last edit whose
+header is at or above the top row of the edits. Left and `h` put the header of the edit before that
+one at the top, Right and `l` put the header of the edit after it there, and a click on the control
+for the previous or the next edit does the same ([MOUSE-18](mouse.md#MOUSE-18)). A control with no
+edit to go to is drawn dim and does nothing, and each control keeps its columns whether it is dim or
+not, so the bar does not move as a person steps through. The edits can be scrolled as far as the
+last row that still fills the room, or to the row of the last edit's header where that is further.
 
 `verified-by: bravebot_tui::files_mode::the_edits_of_a_file_are_drawn_oldest_first_each_under_its_header`
 `verified-by: bravebot_tui::files_mode::every_change_of_an_edit_is_drawn_and_not_twelve`
 `verified-by: bravebot_tui::files_mode::the_gutter_holds_the_numbers_the_kernel_made`
 `verified-by: bravebot_tui::files_mode::a_long_line_wraps_to_the_panel_and_its_continuation_has_a_blank_gutter`
-`verified-by: bravebot_tui::files_mode::the_bracket_keys_move_between_edit_headers`
+`verified-by: bravebot_tui::files_mode::the_bar_names_the_edit_at_the_top_and_stepping_moves_it`
+`verified-by: bravebot_tui::files_mode::left_right_h_and_l_step_between_edits_as_the_clicks_do`
+`verified-by: bravebot_tui::files_mode::only_the_enabled_controls_of_the_bar_are_click_targets`
+`verified-by: bravebot_tui::files_mode::page_down_and_page_up_scroll_the_edits_and_stop_at_their_ends`
 `verified-by: bravebot_tui::files_mode::the_edits_count_the_rows_out_of_view_and_a_count_never_hides_the_top_row`
 
 <a id="FILES-7"></a>
@@ -213,9 +225,10 @@ last row of the list for a file not yet listed. The highlight and the scroll off
 reader put them, in the frame the edit arrives in, and so do the rows of the list where the wheel or
 a click left them. The totals update. The last row of a list longer than its room says how many
 files are below and how many of them arrived since the reader last pressed a key the state names,
-clicked a file or turned the wheel over the panel, as [SCROLL-8](scroller.md#SCROLL-8) does for the
-transcript. A turn starting, ending or being queued, a loop tick, a watch firing and a goal sending
-the work back leave the state open where it is ([WATCH-10](watching.md#WATCH-10)).
+clicked a file or a control of the bar, or turned the wheel over the panel, as
+[SCROLL-8](scroller.md#SCROLL-8) does for the transcript. A turn starting, ending or being queued, a
+loop tick, a watch firing and a goal sending the work back leave the state open where it is
+([WATCH-10](watching.md#WATCH-10)).
 
 `verified-by: bravebot_tui::files_mode::an_edit_arriving_leaves_the_highlight_and_the_scroll_where_they_were`
 `verified-by: bravebot_tui::files_mode::the_list_says_a_file_has_arrived_below`
@@ -230,7 +243,7 @@ While the state is open every key is answered by it, and a key it does not name 
 character does not reach the box, Enter sends nothing, and a paste or a drop does not reach the line,
 as in [SCROLL-2](scroller.md#SCROLL-2). The line keeps its text and caret and comes back as it was
 when the state ends. The box is drawn without its caret, and the hint line names the state's keys
-(`↑↓ file`, `PgUp PgDn scroll`, `[ ] edit`, `q back`) in the interface's own words. Ctrl-C ends the
+(`↑↓ file`, `←→ edit`, `PgUp PgDn scroll`, `q back`) in the interface's own words. Ctrl-C ends the
 state and does nothing else, so a turn in flight goes on.
 
 A click on a list row highlights it ([MOUSE-18](mouse.md#MOUSE-18)), as the keys that move the

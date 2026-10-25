@@ -2921,6 +2921,11 @@ files-rows-below = { $count ->
     }
 # Over each edit to the highlighted file: its place among them and the turn it was made in.
 files-edit-header = edit { $index } of { $total }, turn { $turn }
+# The bar above the edits: the control for the edit before the one at the top, the place of that
+# edit among them, and the control for the edit after it.
+files-previous-edit = ← previous
+files-edit-position = edit { $index } of { $total }
+files-next-edit = next →
 # After the highlighted file's name.
 files-edit-count = { $count ->
     [one] { $count } edit
@@ -2931,7 +2936,7 @@ files-nothing-written = no file has been written in this session yet
 # Left in the transcript by /diff on a terminal too narrow for the state.
 files-too-narrow = The files view needs a terminal at least { $columns } columns wide.
 # Said on the bottom line while the state is open, naming its keys.
-files-hint = ↑↓ file  ·  PgUp PgDn scroll  ·  [ ] edit  ·  q back
+files-hint = ↑↓ file  ·  ←→ edit  ·  PgUp PgDn scroll  ·  q back
 # The info panel's Files section: its heading, and how many files the session wrote.
 panel-files = Files
 panel-files-total = { $count ->

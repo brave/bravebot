@@ -11,7 +11,7 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, the permission mode under the box, the rows of the `/effort` and `/config` pickers, a place in the prompt box's text, a file of the list and the close control in the files state of the info panel, and the wheel over that state, is built. Clicking other things on the screen, a context menu, edge
+drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, the permission mode under the box, the rows of the `/effort` and `/config` pickers, a place in the prompt box's text, a file of the list, the close control and the edit bar in the files state of the info panel, and the wheel over that state, is built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
@@ -280,7 +280,7 @@ pickers opened while a turn runs are not covered.
 `verified-by: bravebot_tui::theme_prompt::a_press_outside_the_list_leaves_the_theme_alone`
 
 <a id="MOUSE-18"></a>
-### MOUSE-18: a click on a file's row or the `x` in the files state acts as the key does
+### MOUSE-18: a click on a file's row, the `x` or a control of the bar in the files state acts as the key does
 
 In the files state of the info panel ([FILES-4](files-mode.md#FILES-4)), a left click that sweeps
 nothing acts on what the layout drew under it:
@@ -292,15 +292,19 @@ nothing acts on what the layout drew under it:
 - On the `x` at the right end of the heading row, which is the `x` and the space on each side of it,
   it ends the state as `q` does, and the panel goes back to what it was before the state
   ([FILES-3](files-mode.md#FILES-3)).
+- On the control for the previous or the next edit in the bar under the file's name, which is the
+  control and the space on each side of it, it puts that edit's header at the top, as Left and Right
+  do ([FILES-6](files-mode.md#FILES-6)). Two quick clicks on one control take one step, since the
+  second press of a double click is a selection.
 
 Nothing else is a target: not the rows that count the files left out or the edit rows out of view,
-the rest of the heading, the rule, the edits, the border column, or a row the height of the panel is
-too short to draw. As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and the
-press is a single click, so a drag, a double click and a triple click are selections and copy as
-before, and a press that began elsewhere and was let go on a target is not a click on it. A press on
-a row whose file has left the list since the frame was drawn is ignored. A press is mapped by the
-rows the layout drew and never by a file's name or an edit's text
-([FILES-10](files-mode.md#FILES-10)). The keys stay the way to do it without a mouse.
+the rest of the heading, the rule, the edits, the position in the bar, a control that is dim, the
+border column, or a row the height of the panel is too short to draw. As for [MOUSE-12](#MOUSE-12),
+the press and the release are on one cell and the press is a single click, so a drag, a double click
+and a triple click are selections and copy as before, and a press that began elsewhere and was let
+go on a target is not a click on it. A press on a row whose file has left the list since the frame
+was drawn is ignored. A press is mapped by the rows the layout drew and never by a file's name or an
+edit's text ([FILES-10](files-mode.md#FILES-10)). The keys stay the way to do it without a mouse.
 
 `verified-by: bravebot_tui::files_mode::a_click_on_a_file_row_highlights_it_and_shows_its_edits_from_the_top`
 `verified-by: bravebot_tui::files_mode::a_drag_a_press_from_elsewhere_or_a_double_click_highlights_no_file`
@@ -313,6 +317,9 @@ rows the layout drew and never by a file's name or an edit's text
 `verified-by: bravebot_tui::files_mode::a_click_on_the_close_control_ends_the_state_as_q_does`
 `verified-by: bravebot_tui::files_mode::a_click_on_the_heading_beside_the_close_control_leaves_the_state_open`
 `verified-by: bravebot_tui::files_mode::the_close_control_ends_the_heading_row_beside_a_cut_note_about_earlier_edits`
+`verified-by: bravebot_tui::files_mode::the_bar_names_the_edit_at_the_top_and_stepping_moves_it`
+`verified-by: bravebot_tui::files_mode::left_right_h_and_l_step_between_edits_as_the_clicks_do`
+`verified-by: bravebot_tui::files_mode::only_the_enabled_controls_of_the_bar_are_click_targets`
 `verified-by: bravebot_tui::files_in_french::a_cut_note_leaves_the_close_control_at_the_end_of_the_heading_row_in_french`
 
 <a id="MOUSE-19"></a>

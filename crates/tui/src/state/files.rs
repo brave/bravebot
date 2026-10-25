@@ -78,21 +78,26 @@ impl Session {
             .map(|(_, rect)| *rect)
     }
 
-    /// The rows of the panel the edits have, and the rows the highlighted file's edits come to.
-    fn edit_room(&self) -> (usize, usize) {
+    /// How the highlighted file's edits are laid out in the panel the last frame drew: the rows of
+    /// it they have, the row each header is on, and the furthest they can be scrolled.
+    fn edit_layout(&self) -> EditLayout {
         let panel = self.panel_area();
         let (width, height) = panel.map_or((0, 0), |rect| (rect.width, rect.height));
         let written = self.written_files();
         let Some(state) = &self.files else {
-            return (0, 0);
+            return EditLayout::default();
         };
         let room = files_mode::Geometry::new(usize::from(height), written.len()).room;
-        let rows = written.get(state.selected).map_or(0, |file| {
-            files_mode::edit_rows(file, usize::from(width).saturating_sub(1).max(1))
-                .0
-                .len()
+        let (rows, headers) = written.get(state.selected).map_or((0, Vec::new()), |file| {
+            let (rows, headers) =
+                files_mode::edit_rows(file, usize::from(width).saturating_sub(1).max(1));
+            (rows.len(), headers)
         });
-        (room, rows)
+        EditLayout {
+            room,
+            furthest: files_mode::furthest_scroll(rows, room, &headers),
+            headers,
+        }
     }
 
     /// Move the highlight by `by` files, stopping at each end, and show the new file's edits from
@@ -195,58 +200,49 @@ impl Session {
         state.known = count;
     }
 
-    /// Scroll the edits by `by` rows, held between their top and the last row that still fills the
-    /// room.
+    /// Scroll the edits by `by` rows, held between their top and the furthest they can be scrolled.
     pub fn files_scroll(&mut self, by: isize) {
-        let (room, rows) = self.edit_room();
+        let furthest = self.edit_layout().furthest;
         let count = self.written_files().len();
         if let Some(state) = &mut self.files {
-            state.scroll = state
-                .scroll
-                .saturating_add_signed(by)
-                .min(rows.saturating_sub(room));
+            state.scroll = state.scroll.saturating_add_signed(by).min(furthest);
             state.known = count;
         }
     }
 
     /// The rows the edits are scrolled by one page: the room they have, less a row of overlap.
     pub fn files_page(&self) -> isize {
-        self.edit_room().0.saturating_sub(1).max(1) as isize
+        self.edit_layout().room.saturating_sub(1).max(1) as isize
     }
 
-    /// Scroll to the header of the previous or the next edit.
+    /// Scroll to the header of the edit before the one the bar names, or the one after it. Where
+    /// there is none, nothing moves.
     pub fn files_to_edit(&mut self, next: bool) {
-        let written = self.written_files();
-        let width = self
-            .laid
-            .panes
-            .iter()
-            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
-            .map_or(0, |(_, rect)| rect.width);
-        let count = written.len();
-        let (room, rows) = self.edit_room();
+        let count = self.written_files().len();
+        let layout = self.edit_layout();
         let Some(state) = &mut self.files else {
             return;
         };
-        let Some(file) = written.get(state.selected) else {
-            return;
-        };
-        let (_, headers) = files_mode::edit_rows(file, usize::from(width).saturating_sub(1).max(1));
+        let current = files_mode::current_edit(&layout.headers, state.scroll.min(layout.furthest));
         let to = if next {
-            headers
-                .iter()
-                .copied()
-                .find(|header| *header > state.scroll)
+            current.checked_add(1)
         } else {
-            headers
-                .iter()
-                .rev()
-                .copied()
-                .find(|header| *header < state.scroll)
+            current.checked_sub(1)
         };
-        if let Some(to) = to {
-            state.scroll = to.min(rows.saturating_sub(room));
+        if let Some(header) = to.and_then(|to| layout.headers.get(to)) {
+            state.scroll = (*header).min(layout.furthest);
         }
         state.known = count;
     }
+}
+
+/// How the edits are laid out in the panel (FILES-6).
+#[derive(Default)]
+struct EditLayout {
+    /// The rows of the panel the edits have.
+    room: usize,
+    /// The row of the edits each edit's header is on.
+    headers: Vec<usize>,
+    /// The furthest the edits can be scrolled.
+    furthest: usize,
 }

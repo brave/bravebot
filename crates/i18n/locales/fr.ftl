@@ -3654,6 +3654,11 @@ files-rows-below = { $count ->
     }
 # Au-dessus de chaque modification du fichier sélectionné : sa place parmi elles et le tour où elle a été faite.
 files-edit-header = modification { $index } sur { $total }, tour { $turn }
+# La barre au-dessus des modifications : le contrôle de la modification qui précède celle du haut, la
+# place de celle-ci parmi les autres, et le contrôle de la modification qui la suit.
+files-previous-edit = ← précédente
+files-edit-position = modification { $index } sur { $total }
+files-next-edit = suivante →
 # Après le nom du fichier sélectionné.
 files-edit-count = { $count ->
     [one] { $count } modification
@@ -3664,7 +3669,7 @@ files-nothing-written = aucun fichier n'a encore été écrit dans cette session
 # Laissé dans la transcription par /diff sur un terminal trop étroit pour cet état.
 files-too-narrow = La vue des fichiers demande un terminal d'au moins { $columns } colonnes de large.
 # Dit sur la dernière ligne tant que l'état est ouvert, avec ses touches.
-files-hint = ↑↓ fichier  ·  PgUp PgDn défiler  ·  [ ] modification  ·  q retour
+files-hint = ↑↓ fichier  ·  ←→ modification  ·  PgUp PgDn défiler  ·  q retour
 # La section Fichiers du panneau d'informations : son titre, et combien de fichiers la session a écrits.
 panel-files = Fichiers
 panel-files-total = { $count ->

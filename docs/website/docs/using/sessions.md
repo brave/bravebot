@@ -357,12 +357,15 @@ columns wide.
 | `↑` `↓`, `k` `j` | highlight the previous or next file |
 | `Home` `End`, `g` `G` | highlight the first or last file |
 | `PgUp` `PgDn` | scroll the edits |
-| `[` `]` | scroll to the previous or next edit |
+| `←` `→`, `h` `l` | scroll to the previous or next edit |
 | `q`, `Esc`, `/diff`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
 
-Clicking a file in the list highlights it and shows its edits from the top, and clicking the `x` at the
-right end of the heading row leaves the view as `q` does; a drag, a double click or a triple click still
-selects text. The wheel scrolls the pane the pointer is over: the list, without
+A bar under the file's name shows which edit is at the top of the edits, as `edit 2 of 3`, with a
+control either side to go to the previous or the next edit, which puts that edit's header at the top.
+A control with no edit to go to is dim and does nothing. Clicking a file in the list highlights it and
+shows its edits from the top, clicking a control of the bar steps between the edits, and clicking the
+`x` at the right end of the heading row leaves the view as `q` does; a drag, a double click or a triple
+click still selects text. The wheel scrolls the pane the pointer is over: the list, without
 moving the highlight, or the edits, by the number of rows `tui.wheelRows` names, and the transcript
 where the pointer is over it. A key that moves the highlight brings it back into view. The edits say
 how many of their rows are above and below the ones drawn. Every other key does nothing there, and the line in the box comes back as you left it. Edits that

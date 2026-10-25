@@ -32793,7 +32793,8 @@ mod tests {
         for code in [
             KeyCode::Tab,
             KeyCode::Char('?'),
-            KeyCode::Left,
+            KeyCode::Char('['),
+            KeyCode::Char(']'),
             KeyCode::Backspace,
             KeyCode::F(5),
         ] {
