@@ -10,7 +10,10 @@ governs:
   - crates/config/src/managed.rs
   - crates/agent/src/permissions.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/error.rs
+  - crates/agent/src/workspace/other_names.rs
   - crates/agent/src/workspace/reach.rs
+  - crates/agent/src/workspace/resolve.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/actions.rs

@@ -5,6 +5,8 @@ status: normative
 governs:
   - crates/agent/src/glob.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/error.rs
+  - crates/agent/src/workspace/results.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
 

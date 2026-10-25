@@ -3972,7 +3972,7 @@ def test_the_identity_lane_starts_from_the_calls_that_resolve_a_name():
     names = {(Path(s["path"]).name, s["function"]) for s in real}
     check(
         "the tree's own name-to-thing calls are listed, the workspace's hard-link check among them",
-        ("workspace.rs", "hard_links") in names and ("linux.rs", "opened_rows") in names,
+        ("other_names.rs", "hard_links") in names and ("linux.rs", "opened_rows") in names,
         str(sorted(names)[:8]),
     )
     rows = with_cwd(ROOT, lambda: audit.confinement_rows(audit.mechanics.load_sources()))
