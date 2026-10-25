@@ -326,8 +326,8 @@ Ghostty and foot change the pointer to a resize arrow over the border. It holds
   shows neither and a turn that only wrote to the cache shows the write alone. The cache figures update after each round of a turn in flight, including
   the first turn, and a round that reports nothing spent leaves the previous figures in place,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
-- the files the session has written, as a count with the lines added and removed and the command that
-  opens the files view below, once one has been written,
+- the files the session has written, as a count with the lines added and removed, once one has been
+  written. Clicking its heading or the count opens the files view below,
 - the plan, which stays after the turn ends. A task still pending or in progress is drawn with a
   filled `■` while a turn is running, and dim with a hollow `□` while none is, as after the turn
   that wrote the list has ended or in a resumed session. Where it runs past the bottom it keeps the
@@ -345,7 +345,7 @@ session's own counters, the servers you approved and where the session runs, and
 
 ### The files the session wrote
 
-Type `/files` and the panel lists every file the session's write calls changed, in the order each was
+Type `/diff`, or click the Files section of the panel, and the panel lists every file the session's write calls changed, in the order each was
 first written, with the lines added and removed at the right edge. Under the list are all the edits to
 the highlighted file, oldest first, each under a header with its place, its turn and its counts, with
 line numbers in a gutter and every change drawn, where the transcript draws the first twelve of each
@@ -357,8 +357,22 @@ columns wide.
 | `↑` `↓`, `k` `j` | highlight the previous or next file |
 | `Home` `End`, `g` `G` | highlight the first or last file |
 | `PgUp` `PgDn` | scroll the edits |
-| `[` `]` | scroll to the previous or next edit |
-| `q`, `Esc`, `/files`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
+| `←` `→`, `h` `l` | scroll to the previous or next edit |
+| `q`, `Esc`, `/diff`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
+
+A bar under the file's name shows which edit is at the top of the edits, as `edit 2 of 3`, with a
+control either side that puts the header of the previous or the next edit at the top. A control with
+no edit to go to is dim and does nothing. The edits say how many of their rows are above and below the
+ones drawn. The last row of the panel names these keys, and the hint line under the box keeps the
+context reading and the cache rate. Where the terminal is too narrow to draw the panel, the hint
+line names the keys as well.
+
+With the mouse, clicking a file in the list highlights it and shows its edits from the top, clicking
+a control of the bar steps between the edits, and clicking the `x` at the right end of the heading row
+leaves the view as `q` does. The wheel scrolls the pane the pointer is over: the list, without moving
+the highlight, or the edits, by the number of rows `tui.wheelRows` names, and the transcript where the
+pointer is over it. A key that moves the highlight brings it back into view. A drag, a double click or
+a triple click still selects text.
 
 Every other key does nothing there, and the line in the box comes back as you left it. Edits that
 finish while the view is open are added without moving the highlight or the scroll. The view lists

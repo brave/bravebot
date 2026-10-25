@@ -46,10 +46,12 @@ without checking the cause itself.
   verifier confirmed and the orchestrator checked, and, if any item has commits, the pull request is
   open and its checks have finished. A row still `unmet` after three rounds
   ([step 4](#4-work-each-group-in-its-own-worktree)) is reported as `unmet` at the top of the
-  report and never relabelled to hide it. Never end a turn while a gate, a subagent or a CI wait is
-  running. After a context summary, "continue" means carry on from the ledger. The only other stops
-  are a commit that will not sign, a pull request that someone merged or closed (step 7), and three
-  failed rounds of CI (step 8). A group that needs the person (a locked worktree, a declined call)
+  report and never relabelled to hide it. Never end a turn while a gate, a subagent, a CI wait or a
+  review wait is running. After a context summary, "continue" means carry on from the ledger. The
+  only other stops are a commit that will not sign, a pull request that someone merged or closed
+  (step 7), three failed rounds of CI, and the review limits in step 8. A pull request is not
+  finished while netzenbot-reviewer's review of the head asks for changes. A group that needs the
+  person (a locked worktree, a declined call)
   is blocked alone: record it and carry on with the rest.
 - **Decide, record, continue.** Do not stop to ask. Use the best reading of the code, the specs and
   the issue, and write down anything a maintainer could reasonably reverse
@@ -397,17 +399,75 @@ request.
 
 Mark the items `done`.
 
-## 8. Wait for the checks
+## 8. Wait for the checks and the review
 
-`... review <pr>` asks netzenbot-reviewer for a review, then `... ci <pr> --wait` with
+The pull request is not done when it is opened. It is done when the checks have finished and
+netzenbot-reviewer has reviewed the current head and asks for nothing, or a limit below ends the
+wait. A review fix is a push, so each one starts this step again.
+
+**Checks.** `... review <pr>` asks netzenbot-reviewer for a review, then `... ci <pr> --wait` with
 `deadline_seconds: 600`. On a failure, fix it as steps 3 and 5 of the pr-fix skill say, in the
-integration worktree, push with `... push <pr>`, and wait again. Stop after three rounds and report
-what is left. A failure that passes alone is load and is reported. One that also fails on the base
-is not this pull request's: it is filed and cited as step 6, item 9 says, and left.
+integration worktree, push with `... push <pr>`, ask for the review again (`... review <pr>`, since
+GitHub drops the reviewer from the request once it has reviewed) and wait again. Stop after three
+rounds and report what is left. A failure that passes alone is load and is reported. One that also
+fails on the base is not this pull request's: it is filed and cited as step 6, item 9 says, and
+left.
+
+**The verdict.** Read it for the current head with
+`gh pr view <pr> --repo brave/bravebot --json state,isDraft,headRefOid,reviews,reviewRequests`
+(`scopes: ["remote"]`). Only a review by netzenbot-reviewer made at `headRefOid` counts: a push makes
+every earlier review a review of different code, so the verdict after a push is pending until the
+reviewer looks again. Reviews in the `PENDING` (never submitted) or `DISMISSED` state say nothing
+about the code and are ignored.
+
+| Verdict | Meaning | What to do |
+| --- | --- | --- |
+| pending | no counted review at the head | request the review if the reviewer is not in `reviewRequests` (once), then poll |
+| approved | `APPROVED`, or `COMMENTED` with none of the reviewer's threads open in `... comments <pr>` | the review wait is over |
+| changes | `CHANGES_REQUESTED`, or `COMMENTED` with a thread of the reviewer's open | a fix round |
+| closed | the state is not `OPEN` | stop and report (step 7) |
+| draft | a draft nobody asked the reviewer to review | the review wait is over; say so in the report |
+
+Poll once a minute while the verdict is pending, for at most 120 minutes from the last push, with
+`sleep 60` between reads or one `run` call of up to 600 seconds. The reviewer answers on its own
+schedule and this skill does not run the review. When 120 minutes pass with no review of the head,
+stop waiting, leave the items `done`, and report that the review is still pending at that head.
+
+**A fix round.** When the verdict is changes, work the pull request as
+[After review comments](#after-review-comments) says, in the integration worktree:
+
+1. `... comments <pr>` prints each open thread and each review that asks for a change. Make exactly
+   the change each one asks for, and nothing beside it: no cleanup or rename the reviewer did not
+   mention. A comment that is mistaken, offers a choice that is the author's, or asks for something
+   outside the pull request's code and tests gets a reply and no change.
+2. Reproduce first and write the failing test first where the comment is about behaviour, as in
+   step 4. Commit as new commits on the branch, never an amend, with the message stating what is
+   true of the code.
+3. Run the checks the fix reaches (`... check <pr>`, and a gate from step 6 the fix voids, such as a
+   test demonstration it touches), not the whole suite. A test that fails under load is run alone
+   before anything is decided.
+4. `... push <pr>`, then post each reply with `... reply <pr> --thread <id> --body-file <file>`, naming
+   a commit the pull request holds. Never resolve a thread. Update the body (the item list, the
+   decisions and the test plan) when the state is open.
+5. `... review <pr>` to ask for the review of the new head, then `... ci <pr> --wait`, then read the
+   verdict again.
+
+**Limits.** Stop the loop, leaving the pull request as it is, and report what is left, when:
+
+- the reviewer has asked for changes five times, counting the first review (four fix rounds);
+- a fix round pushed nothing, because every comment was answered with a reply: the reviewer has
+  nothing new to look at;
+- the pull request was merged or closed.
+
+A review fix round does not count against the three rounds of CI failures, and a CI failure found
+during a fix round does not count against the five reviews. Record each round in the ledger: the
+head it reviewed, the verdict, the commits it added and the replies posted.
 
 ## After review comments
 
-Run [pr-fix](../pr-fix/SKILL.md) steps 1 to 7 on the pull request, from the main clone or any
+Step 8 runs this section for the reviewer's feedback on the pull request this run opened, and it
+also applies when a session starts with the number of a batch pull request. Run
+[pr-fix](../pr-fix/SKILL.md) steps 1 to 7 on the pull request, from the main clone or any
 worktree. Its `start` reuses the integration worktree, which has the branch checked out. For a
 batch pull request:
 
@@ -530,6 +590,9 @@ this order:
   skipped (with the pull request that covers it or why it is closed), or blocked (with the
   follow-up);
 - the decisions to confirm, numbered as in the body;
+- the review rounds: for each, the head reviewed, the reviewer's verdict, the commits that answered
+  it and the replies posted, and how the loop ended (approved, the review limit, a round that pushed
+  nothing, a timeout with the review still pending, or merged or closed);
 - the pull requests in the list that were left alone;
 - the gates that ran and the ones skipped, each flake named, and each test's evidence as
   demonstrated or reasoned only.

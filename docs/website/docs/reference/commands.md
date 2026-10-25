@@ -48,7 +48,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
-| `/files` | | List the files the session wrote and show every edit to the highlighted one |
+| `/diff` | | List the files the session wrote and show every edit to the highlighted one |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
@@ -762,13 +762,15 @@ the plan. It needs a terminal at least 100 columns wide, and says so on a narrow
 open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
 has the rest.
 
-## `/files`
+## `/diff`
 
 Draws the info panel in its files state, opening the panel if it is closed: a list of every file the
 session wrote, with the lines added and removed, and every edit to the highlighted one under it. `q`,
-Escape or `/files` again leave the state and put the panel back as it was. It needs a terminal at
+Escape or `/diff` again leave the state and put the panel back as it was. Clicking the Files section of
+the panel draws it too. It needs a terminal at
 least 100 columns wide, and says so on a narrower one. With no file written it says so and changes
-nothing. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
+nothing. It shows what the session's own write calls changed. A change another program made is not
+in it. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
 
 ## `/mcp [list | reconnect [alias] | disable <alias>]`
 
@@ -1426,7 +1428,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/panel`, `/files`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/panel`, `/diff`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
