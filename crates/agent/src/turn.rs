@@ -3808,47 +3808,15 @@ where
     });
     let conversation = &mut *channels.conversation;
     let reporter = &mut channels.reporter;
-    // Whatever way the rounds ended, a stop and a failed request included: each leaves the jobs
-    // to die with the turn, and the person is told which ones before they do.
-    //
-    // Except where the session keeps them: those are left running for the next turn to find, and
-    // are ended by the session ending (RUN-15).
-    if !state.jobs.is_kept() {
-        state.jobs.stop_all(policy, reporter);
-    }
-    *rounds_taken = state.steps;
-    *worked_out = state.worked;
-    // A ChatGPT sign-in renewed by a call that is not a round's request, such as the goal check or a
-    // processor, and not said yet (CHATGPT-7).
-    crate::chatgpt::say_an_unsaved_renewal(reporter);
-    state.spent.wall = began.elapsed();
-    reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
-        ..state.account
-    });
-
-    // Said to the person, not to the planner, which gets its own question while the turn is still
-    // going and can still act on it. They are the one about to act on a diff, and nothing the turn
-    // leaves behind distinguishes a change that was compiled from one that was never tried. Not a
-    // reproach: plenty of turns have nothing to build, and this says what happened rather than
-    // what should have.
-    //
-    // Above the unwrap, so a stop and a failed request say it too: either leaves the same changed
-    // files on disk as an answer does, and being stopped with none of it compiled is the state a
-    // person is least able to spot for themselves. Both are the round loop's own record, settled
-    // by whatever it and the delegates it took back did before it ended, and every delegate is
-    // taken back before the rounds return.
-    //
-    // Only where a run was possible, the state the planner's question is asked in. A definition
-    // or a delegate whose tools leave out `run` could not have built what it wrote, so the line
-    // would report something it had no way to do.
-    if may_run && state.worked.changed_at.is_some() && !state.worked.ran_a_program {
-        reporter.narration(
-            "files changed this turn and no command was run, so none of it has been \
-         built or tested"
-                .to_string(),
-        );
-    }
+    round_steps::close_the_rounds(
+        policy,
+        reporter,
+        &mut state,
+        began,
+        may_run,
+        rounds_taken,
+        worked_out,
+    );
 
     let completion = completion?;
 
