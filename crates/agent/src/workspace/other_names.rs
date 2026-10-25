@@ -5,6 +5,7 @@
 use super::Workspace;
 #[cfg(unix)]
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 
 /// The names a file has under the open directories, for a file with more than one.
