@@ -18,8 +18,10 @@ use bravebot_net::Egress;
 use std::time::Instant;
 
 use super::{
-    ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING, ReadOutputIs, State,
-    TOOL_BUDGET_SPENT, Task, TurnError, Worked, Working,
+    Inputs, Plan, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING, ReadOutputIs, State,
+    TOOL_BUDGET_SPENT, Task, TurnError, Worked, Working, collect_delegates, collect_jobs,
+    note_rules_added, rule_notices, show_what_running_jobs_have_printed, stopped_at,
+    take_session_messages, tell_of_kept_jobs, token_limit_reached,
 };
 use crate::backend::BackendError;
 use crate::confirm::Confirmer;
@@ -153,6 +155,196 @@ pub(super) fn after_a_ceiling_stop(
         "{TOOL_BUDGET_SPENT} Your last reply reached the output limit of {ceiling} tokens \
          {stopped}. {next}"
     )
+}
+
+/// What a round does before its request goes out: stop if the turn was stopped, say a change of
+/// mode, bring in a rule a file matched, take back what finished while the last round ran, hold
+/// to the budgets and the limits, and compact when the conversation is due for it.
+///
+/// Each step decides from the turn's own state or hands what it carries to an effect. The
+/// system prompt a rule grows stays in `grown`, which the caller reads to build the request.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the turn's inputs and plan, its state, and each collaborator the steps before a request lend to an effect"
+)]
+pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
+    inputs: Inputs<'_>,
+    plan: &Plan<'_>,
+    state: &mut State<'_>,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    reporter: &mut R,
+    confirmer: &mut C,
+    delegates: &mut Vec<Working<'_>>,
+    waits: &mut crate::timing::DelegateWait,
+    grown: &mut Option<(Prompt, String)>,
+) -> Result<(), TurnError> {
+    let Inputs {
+        config,
+        egress,
+        workspace,
+        task,
+        cancel,
+        hooks,
+        ..
+    } = inputs;
+    let read_output_is = || super::setup::read_output_is(task, plan.offers_read_output);
+    // Checked before each request rather than mid-flight: a request already on the wire has
+    // to finish, but nothing new needs to start.
+    if cancel.is_cancelled() {
+        return Err(TurnError::Cancelled { attempts: Some(0) });
+    }
+
+    // The mode the person last chose applies to this turn as it runs (MODE-8). The
+    // prompt was written in the one the turn started in, so a change that matters to
+    // the planner is said to it before the next request.
+    let chosen = task.permission_mode.get();
+    if let Some(notice) = state.told_mode.change_notice(chosen) {
+        conversation.push_composed_from(
+            Message::user(&notice),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+    }
+    state.told_mode = chosen;
+
+    // A file the last round read or wrote may match the paths of a rule held back. The rule is
+    // appended to the system prompt before this request goes out, after every byte the last
+    // one carried, and the person is told which file brought it (INSTR-16).
+    let loaded = state.held_rules.take_for(workspace);
+    if !loaded.is_empty() {
+        let (system, system_text) =
+            grown.get_or_insert_with(|| (plan.system.clone(), plan.system_text.clone()));
+        for loaded in &loaded {
+            for (provenance, text) in crate::preamble::rule_pieces(loaded) {
+                system.push(provenance, text);
+            }
+        }
+        *system_text = system.text();
+        for notice in rule_notices(workspace, task.delegate.is_none(), &loaded) {
+            reporter.notice(notice.message.clone());
+            state.notices.push(notice);
+        }
+        note_rules_added(workspace, &loaded);
+    }
+
+    // Whatever finished while the last round was running, before the planner is asked what to
+    // do next. Waiting for none of them: one that is still working is left working, which is
+    // the whole of what starting them separately buys.
+    collect_delegates(
+        delegates,
+        policy,
+        conversation,
+        reporter,
+        &mut state.account,
+        false,
+        waits,
+        &mut state.spent,
+        state.hook_notices,
+        &mut state.worked,
+        state.steps,
+    )?;
+
+    // After the collection above, which adds what a finished delegate spent, so a delegate
+    // whose child took it past its budget goes to the planner's next request without tools.
+    stop_at_token_budget(
+        &mut state.may_call_tools,
+        task,
+        state.account.tokens,
+        reporter,
+        conversation,
+    );
+
+    reporter.spent(crate::outcome::Spent {
+        timing: state.spent.finish(),
+
+        ..state.account
+    });
+
+    // And whatever exited while it was running, for the same reason and in the same place:
+    // the finish of a background job is news the turn is told rather than something the
+    // planner has to remember to ask about (CMDLINE-14).
+    collect_jobs(
+        state.jobs,
+        task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+        read_output_is(),
+        policy,
+        conversation,
+        reporter,
+    )?;
+
+    show_what_running_jobs_have_printed(state.jobs, policy, reporter);
+
+    // Once, after the finishes above, so what is left is what is still going: a job
+    // the session kept from an earlier turn is something the planner has no other way
+    // to know is there (RUN-15).
+    if !std::mem::replace(&mut state.told_of_kept_jobs, true) {
+        tell_of_kept_jobs(state.jobs, conversation);
+    }
+
+    // And whatever another session sent, in the same place and for the same reason: it
+    // reaches the planner at the start of a request, so a session with no turn running
+    // keeps it until a person starts one (MSG-6).
+    take_session_messages(task, policy, conversation, reporter)?;
+
+    // Before anything new is sent, compaction included, since a summary is a request that
+    // spends tokens (TURN-8). A delegate's own task carries no limit: what it spends
+    // reaches this total when it is collected, and the person is asked once, here.
+    {
+        let mut asking = crate::confirm::Timed::new(confirmer);
+        let held = crate::spend_limit::hold(
+            &task.spend_limit,
+            task.spent_before + state.account.tokens,
+            state.steps,
+            policy,
+            &mut asking,
+            reporter,
+        );
+        state.spent.stalled += asking.waited();
+        if held == crate::spend_limit::Held::Stop {
+            return Err(TurnError::Cancelled { attempts: Some(0) });
+        }
+    }
+
+    // The person's own limit on the run, which ends it where the session limit above asks
+    // (TURN-14). Nobody is asked: a run that has one has nobody to ask, and raising a limit
+    // the person set is theirs to do by running it again.
+    if let Some(reached) = token_limit_reached(task, state) {
+        return Err(stopped_at(policy, state.steps, reached));
+    }
+
+    compact_if_due(
+        config,
+        egress,
+        task.account_session(),
+        cancel,
+        policy,
+        conversation,
+        reporter,
+        state.subscription.as_mut(),
+        state.turn_model.as_deref(),
+        state.steps,
+        &mut state.account,
+        &mut state.spent,
+        &mut state.may_compact,
+        &mut state.retries,
+        // A delegate summarises a conversation of its own, which is not the session's (HOOK-2).
+        match task.delegate {
+            None => Some(AfterCompacting {
+                hooks,
+                workspace,
+                said: &mut *state.hook_notices,
+            }),
+            Some(_) => None,
+        },
+    )?;
+
+    // Again, because the summary a compaction asks for spends tokens of its own, and the
+    // request that follows it is the one this limit is meant to hold back (TURN-14).
+    if let Some(reached) = token_limit_reached(task, state) {
+        return Err(stopped_at(policy, state.steps, reached));
+    }
+    Ok(())
 }
 
 /// Whether the endpoint answered with a different model from the one this turn asked for.
