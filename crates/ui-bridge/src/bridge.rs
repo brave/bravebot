@@ -2122,7 +2122,10 @@ impl Bridge {
             open.project == project
                 && open
                     .state
-                    .lock()
+                    // A worker holds the lock for the whole of its turn and dispatch is one
+                    // thread, so a session mid-turn is skipped rather than waited for. It was
+                    // opened before this request, so its id is not the one just minted.
+                    .try_lock()
                     .ok()
                     .and_then(|state| state.handle.as_ref().map(|held| held.id() == id))
                     .unwrap_or(false)
@@ -3500,6 +3503,75 @@ mod coverage_tests {
             state.rewind.points()[0].coverage.gaps(),
             [CoverageGap::LanguageServer].into()
         );
+    }
+
+    /// A second session of the project that is mid-turn holds its state for the whole turn, and
+    /// dispatch is one thread: a fork that waited for that lock would leave the bridge unable to
+    /// read the answer the turn is blocked on.
+    #[test]
+    fn a_fork_does_not_wait_for_another_session_that_is_running_a_turn() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("fork-busy-sibling");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("work"));
+        let record: Record = serde_json::from_value(json!({
+            "id": "busy-parent", "directory": root, "title": "work",
+            "started": 1, "updated": 1,
+            "conversation": conversation.snapshot()
+        }))
+        .unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free"),
+            true,
+            None,
+            false,
+        ));
+        let sibling = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            State::fresh(TrustStore::new(root)),
+            true,
+            None,
+            false,
+        ));
+        let busy = Arc::clone(&bridge.open[&sibling].state);
+        let held = busy.lock().unwrap();
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.fork", "params": {
+                "session": parent, "prompt": 0, "text": "work"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+
+        let (done, answered) = mpsc::channel();
+        let dispatcher = thread::spawn(move || {
+            let reply = bridge.dispatch(&request);
+            let _ = done.send(reply.is_ok());
+            bridge
+        });
+        let outcome = answered.recv_timeout(Duration::from_secs(10));
+        // Released before anything can fail, so a hung dispatch still ends and the test reports it.
+        drop(held);
+        assert_eq!(
+            outcome,
+            Ok(true),
+            "the fork waited on a session that was running a turn"
+        );
+        let mut bridge = dispatcher.join().unwrap();
+        for child in bridge.open.values() {
+            if let Ok(mut state) = child.state.try_lock()
+                && let Some(handle) = state.handle.as_mut()
+            {
+                handle.discard_unwritten("");
+            }
+        }
+        drop(bridge.stop_all());
     }
 
     /// A fork cannot prove that server descendants from the parent stopped writing.
