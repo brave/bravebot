@@ -180,7 +180,7 @@ pub(crate) fn start(words: &[String]) -> ExitCode {
             );
         }
     };
-    if let Some(ended) = crate::import::before_the_session(&mut config) {
+    if let Some(ended) = crate::import::before_the_session(&mut config, None) {
         return ended;
     }
     let Some(roster) = Roster::writable() else {

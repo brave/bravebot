@@ -1994,7 +1994,11 @@ background process is started.
 The model decides, as it does everywhere here: a model a configured service serves is not this
 case, whatever the aichat fields hold. The model asked about is the one the run will actually
 request, which is a name given on the command line, then the one a session recorded unless
-[BACKEND-47](#BACKEND-47) sets it aside, then the configured default.
+[BACKEND-47](#BACKEND-47) sets it aside, then the configured default. A start by `bravebot`,
+`bravebot -i`, `bravebot --plain`, `bravebot --bg` or a one-shot run asks about that model, and the
+desktop window does not. `bravebot -i "<prompt>" --model chatgpt/<model>` therefore opens where a stored
+ChatGPT sign-in serves the model named, and is refused where nothing serves it, whichever model would be
+in force without the flag.
 
 An endpoint that is not one of Brave's own deployments is not this case either, development channel
 and production alike. That is somebody's own host, a local model server or a private deployment or
@@ -2088,6 +2092,8 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::a_stored_chatgpt_sign_in_is_a_service_configured_for_the_first_run`
 `verified-by: bravebot_cli::running::doctor_treats_a_stored_chatgpt_sign_in_as_a_service_configured`
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
+`verified-by: bravebot_cli::chatgpt_start::a_session_on_a_prompt_starts_on_the_model_the_command_line_names_where_the_account_serves_it`
+`verified-by: bravebot_cli::chatgpt_start::a_session_on_a_prompt_naming_a_model_nothing_serves_is_refused_whatever_the_record_serves`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable

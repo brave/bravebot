@@ -2217,20 +2217,16 @@ fn interactive(
     // Before the session opens, for the reason a one-shot run is stopped before the turn: a
     // transcript that began with nothing configured would read as the agent rather than as the
     // configuration, and this is the one moment somebody is looking for what to do next.
-    if let Some(ended) = import::before_the_session(&mut config) {
+    //
+    // Asked about the model `-i` was given, as a one-shot run's `--model` is, so one nothing serves
+    // or the machine-level layer refuses ends the start here, naming the file, rather than at the
+    // first turn, and one the account serves starts.
+    let named = match &start {
+        bravebot_tui::app::Start::Sending(_, asked) => asked.model.as_deref(),
+        _ => None,
+    };
+    if let Some(ended) = import::before_the_session(&mut config, named) {
         return ended;
-    }
-    // The model `-i` was given is asked about as a one-shot run's is, so one nothing serves or the
-    // machine-level layer refuses ends the start here, naming the file, rather than at the first turn.
-    if let bravebot_tui::app::Start::Sending(
-        _,
-        bravebot_tui::app::AskedFor {
-            model: Some(name), ..
-        },
-    ) = &start
-        && let Some(how) = nothing_serves(&config, &config.model_named(name))
-    {
-        return fail(Ending::Configuration, how);
     }
 
     let settings = bravebot_config::Settings::load();

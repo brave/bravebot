@@ -171,7 +171,7 @@ fn run(
     // Where nothing is configured at all, what Claude Code or opencode configured is offered first,
     // in lines, the way this session asks everything (IMPORT-1).
     if hosting.is_none()
-        && let Some(ended) = crate::import::before_the_session(&mut config)
+        && let Some(ended) = crate::import::before_the_session(&mut config, None)
     {
         return ended;
     }
