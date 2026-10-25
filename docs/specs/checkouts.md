@@ -26,6 +26,7 @@ governs:
   - crates/agent/src/workspace.rs
   - crates/agent/src/workspace/carry.rs
   - crates/agent/src/workspace/checkouts.rs
+  - crates/agent/src/workspace/error.rs
   - crates/agent/src/workspace/reach.rs
   - crates/agent/src/turn.rs
   - crates/agent/src/turn/delegate_end.rs

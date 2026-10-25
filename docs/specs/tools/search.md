@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/glob.rs
   - crates/agent/src/regex.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/results.rs
   - crates/config/src/settings.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
