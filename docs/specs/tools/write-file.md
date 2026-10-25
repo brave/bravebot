@@ -79,6 +79,19 @@ directory and are the only party who can say whether that file should be rewritt
 `verified-by: bravebot_agent::turn::a_write_through_a_reference_says_what_landed_and_that_it_is_done`
 `verified-by: bravebot_agent::turn::a_reference_write_is_reviewed_as_a_diff`
 
+**The exception.** A write whose `contents_ref` is a slot the driver filled from the very path being
+written puts the file back as it is, so nobody is asked and nothing is written. The result tells the
+planner that the path holds what the reference holds, and the trail has a `write` line saying so.
+The test is the driver's own record of which path filled the slot, compared as a name with the
+destination, and no byte of either side is read. A different path, `./` in front of the same path,
+a slot that no file filled (a processor's answer about the file included) and a slot that was not
+read yet are all asked about.
+
+`verified-by: bravebot_agent::turn::a_slot_written_back_to_the_file_it_was_read_from_asks_nobody_and_changes_nothing`
+`verified-by: bravebot_agent::turn::a_slot_written_to_another_path_or_another_spelling_of_its_file_is_asked_about`
+`verified-by: bravebot_agent::turn::a_processors_answer_written_to_the_file_it_was_about_is_asked_about`
+`verified-by: bravebot_core::policy::only_the_path_a_slot_was_read_from_is_a_write_that_changes_nothing`
+
 <a id="WRITE-5"></a>
 ### WRITE-5: the result says what a running language server found wrong
 

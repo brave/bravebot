@@ -9204,6 +9204,88 @@ five
         assert_eq!(err.principle, Principle::IntegrityGate);
     }
 
+    /// Writing a slot back to the file the kernel filled it from is the one write that needs no
+    /// question. Every other spelling of that file, every other path and a slot that was never
+    /// read from a file change something as far as the kernel's record can tell, so each is put
+    /// to the person. A comparison that normalised the spelling, or that treated an answer from a
+    /// processor as the file it was about, would skip a question the person has to be asked.
+    #[test]
+    fn only_the_path_a_slot_was_read_from_is_a_write_that_changes_nothing() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let read = SlotId::new("ref:0");
+        policy
+            .defer(
+                "read_file",
+                read.clone(),
+                "vendor/x.txt",
+                &Labelled::trusted("vendor/x.txt".to_string()),
+                10,
+                &mut slots,
+            )
+            .expect("a file may be reserved");
+
+        // Reserved and not yet read: nothing was filled from the file, so nothing is the same.
+        assert!(
+            policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot still waiting on its file was taken for the file"
+        );
+
+        policy
+            .materialise("write_file", &read, &mut slots, |_| {
+                Ok("payload".to_string())
+            })
+            .expect("the file is readable");
+
+        // The answer a processor gave about that file: it names the file it was about as its
+        // origin, but nothing filled it from the file.
+        let answer = SlotId::new("ref:1");
+        slots
+            .writer_for(answer.clone(), Label::untrusted_private())
+            .unwrap()
+            .write("payload")
+            .unwrap();
+
+        let asked_about = |sink: &RecordingSink| {
+            sink.events()
+                .iter()
+                .filter(|event| format!("{event:?}").contains("already holds what"))
+                .count()
+        };
+
+        for (path, slot) in [
+            ("vendor/y.txt", &read),
+            ("./vendor/x.txt", &read),
+            ("/work/vendor/x.txt", &read),
+            ("vendor/x.txt", &answer),
+        ] {
+            assert!(
+                policy.write_would_change(path, slot, &slots),
+                "{slot} written to {path} was taken for a write that changes nothing"
+            );
+        }
+        drop(policy);
+        assert_eq!(
+            asked_about(&sink),
+            0,
+            "a write that changes something was recorded as one that changes nothing"
+        );
+
+        let mut policy = open_policy(&mut sink);
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot written back to the file it was read from was put to the person"
+        );
+        drop(policy);
+        assert_eq!(
+            asked_about(&sink),
+            1,
+            "the write that changes nothing left no line in the trail"
+        );
+    }
+
     /// A path that stopped being trusted between the promise and the reading is read as
     /// untrusted. Anything else would launder bytes through a reference made earlier.
     #[test]

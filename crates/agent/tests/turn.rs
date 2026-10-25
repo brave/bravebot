@@ -14415,6 +14415,206 @@ fn a_file_a_processor_left_alone_stays_exactly_as_it_was() {
     );
 }
 
+/// What a turn left behind for the tests of a write that puts a slot back where it came from.
+struct WroteBack {
+    confirmer: RecordingConfirmer,
+    sink: RecordingSink,
+    bodies: Vec<String>,
+}
+
+/// Runs one turn over a workspace nobody vouched for any path of, so a write to a path nobody has
+/// written yet is put to the confirmer, with the replies the planner gives in order.
+fn run_over_files_nobody_vouched_for(
+    scratch: &Scratch,
+    task: &str,
+    replies: Vec<String>,
+) -> WroteBack {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new(task),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    WroteBack {
+        confirmer,
+        sink,
+        bodies: received.try_iter().collect(),
+    }
+}
+
+/// WRITE-4. The kernel's record of which file a slot was read from is compared with the
+/// destination as a name, and only an identical name is a write that changes nothing. A different
+/// path and the same file spelled with a leading `./` are each put to the person, who is the only
+/// party that sees which file is being rewritten. The same file spelled absolutely is refused by
+/// the workspace before any question, so it is neither asked about nor skipped.
+///
+/// Fails if the comparison is made on the file rather than the spelling (a normalised or resolved
+/// path), or if any destination is let through because the slot came from a file in the same
+/// directory.
+#[test]
+fn a_slot_written_to_another_path_or_another_spelling_of_its_file_is_asked_about() {
+    let scratch = Scratch::new("write-back-spellings");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/x.txt"), "vendor bytes\n").unwrap();
+    let absolute = scratch.path.canonicalize().unwrap().join("vendor/x.txt");
+
+    let done = run_over_files_nobody_vouched_for(
+        &scratch,
+        "copy vendor/x.txt around",
+        vec![
+            tool_request_2("read_file", r#"{"path":"vendor/x.txt"}"#),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"other.txt","contents_ref":"ref:1"}"#,
+            ),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"./vendor/x.txt","contents_ref":"ref:1"}"#,
+            ),
+            tool_request_2(
+                "write_file",
+                &serde_json::json!({
+                    "path": absolute.to_str().expect("a utf-8 scratch path"),
+                    "contents_ref": "ref:1",
+                })
+                .to_string(),
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert_eq!(
+        done.confirmer
+            .seen
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect::<Vec<_>>(),
+        ["other.txt", "./vendor/x.txt"],
+        "a write of a slot to a name other than its file's own was not put to the person"
+    );
+    assert!(
+        done.bodies
+            .last()
+            .is_some_and(|body| body.contains("refusing to touch it as typed")),
+        "the absolute spelling of a file inside the workspace was not refused"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("other.txt")).unwrap(),
+        "vendor bytes\n",
+        "the write the person agreed to did not land"
+    );
+    assert!(
+        !done
+            .bodies
+            .iter()
+            .any(|body| body.contains("holds what ref:1 holds")),
+        "a write was reported as already done"
+    );
+}
+
+/// WRITE-4. A processor's answer about X has no file it was read from, so writing it to X is a
+/// change like any other and is put to the person.
+///
+/// Fails if a slot counts as unchanged because the file it was an answer about is the destination.
+#[test]
+fn a_processors_answer_written_to_the_file_it_was_about_is_asked_about() {
+    let scratch = Scratch::new("write-back-processor-answer");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/x.txt"), "vendor bytes\n").unwrap();
+
+    let done = run_over_files_nobody_vouched_for(
+        &scratch,
+        "tidy vendor/x.txt",
+        vec![
+            tool_request("read_file", r#"{"path":"vendor/x.txt"}"#),
+            tool_request(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"return the whole file, tidied"}"#,
+            ),
+            processor_reply("PROCESSED CONTENTS"),
+            tool_request(
+                "write_file",
+                r#"{"path":"vendor/x.txt","contents_ref":"ref:3"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert_eq!(
+        done.confirmer.seen.len(),
+        1,
+        "a processor's answer was written over its file without a question"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("vendor/x.txt")).unwrap(),
+        "PROCESSED CONTENTS\n",
+        "the answer the person agreed to did not land"
+    );
+}
+
+/// WRITE-4. The exception: a slot the kernel filled from X, with X not written since, written to
+/// X is not put to anybody, leaves X byte for byte as it was, tells the planner what stands and
+/// leaves a `write` line in the trail saying so.
+///
+/// Fails if the shortcut is removed (the confirmer is asked about a diff with nothing in it), or
+/// if the skipped write still lands (the bytes change).
+#[test]
+fn a_slot_written_back_to_the_file_it_was_read_from_asks_nobody_and_changes_nothing() {
+    let scratch = Scratch::new("write-back-unchanged");
+    let original = "vendor bytes\r\nwith no final newline";
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/x.txt"), original).unwrap();
+
+    let done = run_over_files_nobody_vouched_for(
+        &scratch,
+        "put vendor/x.txt back as it is",
+        vec![
+            tool_request_2("read_file", r#"{"path":"vendor/x.txt"}"#),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"vendor/x.txt","contents_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert!(
+        done.confirmer.seen.is_empty(),
+        "a write that changes nothing was put to the user: {:?}",
+        done.confirmer.seen
+    );
+    assert_eq!(
+        std::fs::read(scratch.path.join("vendor/x.txt")).unwrap(),
+        original.as_bytes(),
+        "a write that changes nothing changed the file"
+    );
+    assert!(
+        done.bodies
+            .iter()
+            .any(|body| body.contains("holds what ref:1 holds")),
+        "the planner was not told the file already holds what the slot holds"
+    );
+    assert!(
+        done.sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "write", detail }
+                if detail.contains("vendor/x.txt already holds what ref:1 holds")
+        )),
+        "the trail has no write line saying the path already holds what the slot holds: {:?}",
+        done.sink.events()
+    );
+}
+
 /// A line saying "Read(index.html)" does not say whether the model can now read that file, and
 /// that difference is the whole design. Each result says where it went.
 #[test]
