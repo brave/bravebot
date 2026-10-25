@@ -90,6 +90,12 @@ pub struct Diagnosis {
     pub account: Option<AccountFailure>,
 }
 
+/// A wait a service asked for, in the minutes a person is told, rounded up so a limit that lifts in
+/// seconds is not read as one that has already lifted.
+pub fn minutes_to_wait(wait: std::time::Duration) -> u64 {
+    wait.as_secs().div_ceil(60).max(1)
+}
+
 impl Diagnosis {
     /// A failure of this kind, with nothing else known about it.
     pub fn of(category: Category) -> Self {

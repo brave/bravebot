@@ -626,11 +626,11 @@ test('a turn the output limit ended says the limit and what the reply was writin
   assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
 })
 
-// CHATGPT-8: a turn the ChatGPT account failed arrives with the agent's sentence for it beside the
-// category. Folded by the window's reducer and drawn through the real row, because the sentence
-// arriving on `turn.error` and going undrawn is the fault, and the card saying "Authentication
-// failed" to a person who never signed in has no command for them to run.
-test('a turn the ChatGPT account failed draws the sentence the agent sent', () => {
+// CHATGPT-8: a turn the ChatGPT account failed arrives with the bridge's sentence for it beside the
+// category and the command it names. Folded by the window's reducer and drawn through the real row,
+// because the sentence arriving on `turn.error` and going undrawn is the fault, and the card saying
+// "Authentication failed" to a person who never signed in has no command for them to run.
+test('a turn the ChatGPT account failed draws the sentence the bridge sent', () => {
   const React = require('react')
   const { renderToStaticMarkup } = require('react-dom/server')
   const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
@@ -640,33 +640,75 @@ test('a turn the ChatGPT account failed draws the sentence the agent sent', () =
 
   const session = liveSession()
   let turn = 0
-  const failed = (category, accountMessage) => {
+  const failed = (category, accountMessage, accountCommand) => {
     turn += 1
     session.send('turn.started', { turn })
-    session.send('turn.error', { kind: 'chat', message: category, category, accountMessage, turn, prompt: 0, contextTokens: 0 })
+    session.send('turn.error', { kind: 'chat', message: category, category, accountMessage, accountCommand, turn, prompt: 0, contextTokens: 0 })
     const entry = session.live.entries.at(-1)
     return renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
   }
 
-  const signedOut = failed('unauthorized', 'Not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in')
-  assert.match(signedOut, /Not signed in to a ChatGPT account\. Run `bravebot auth login chatgpt` to sign in/)
+  const command = 'bravebot auth login chatgpt'
+  const signedOut = failed('unauthorized', `You are not signed in to ChatGPT, so run ${command} in a terminal to sign in.`, command)
+  assert.match(signedOut, /You are not signed in to ChatGPT, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in\./)
   assert.doesNotMatch(signedOut, /Authentication failed/)
+  assert.doesNotMatch(signedOut, /`/)
 
   // Two refusals that name the account arrive in the same category and are drawn apart.
-  const limit = failed('refused', 'OpenAI says this ChatGPT account has reached its usage limit')
-  const barred = failed('refused', 'OpenAI does not allow this ChatGPT account to be used this way')
+  const limit = failed('refused', 'OpenAI says this ChatGPT account has reached its usage limit, so try again later.', null)
+  const barred = failed('refused', "OpenAI does not allow this ChatGPT account to be used this way, so use another account or another service's model.", null)
   assert.match(limit, /reached its usage limit/)
   assert.match(barred, /does not allow this ChatGPT account/)
   assert.doesNotMatch(barred, /usage limit/)
   assert.doesNotMatch(limit + barred, /The provider refused this request/)
+  assert.doesNotMatch(limit + barred, /<code>/)
 
-  // A failure with no sentence is drawn from its category.
-  assert.match(failed('unauthorized', null), /<span slot="title">Authentication failed<\/span>/)
+  // A failure with no sentence is drawn from its category, and a command with no sentence is not drawn.
+  assert.match(failed('unauthorized', null, command), /<span slot="title">Authentication failed<\/span>/)
   assert.match(failed('refused', undefined), /<span slot="title">The provider refused this request<\/span>/)
+  assert.doesNotMatch(failed('unauthorized', null, command), /<code>/)
 
   // The sentence is text and not markup.
   const hostile = '<b>sk-live-123</b>'
   assert.doesNotMatch(failed('refused', hostile), /<b>sk-live-123/)
+})
+
+// CHATGPT-8: a summary the ChatGPT account could not make arrives as narrations in the bridge's own
+// words, the second with the command it names beside it. Folded by the window's reducer and drawn
+// through the real row: the command is code and not backticks, a narration that names none is a
+// plain line, and what the model itself said between calls is text whatever it looks like.
+test('a narration that names a command draws it as code', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+
+  const session = liveSession()
+  session.send('turn.started', { turn: 1 })
+  const narrated = (data) => {
+    session.send('narration', data)
+    const entry = session.live.entries.at(-1)
+    return renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+  }
+
+  const command = 'bravebot auth login chatgpt'
+  const named = narrated({ text: `You are not signed in to ChatGPT, so run ${command} in a terminal to sign in.`, command })
+  assert.match(named, /<div class="narration">.*<span>You are not signed in to ChatGPT, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in\.<\/span><\/div>/)
+  assert.doesNotMatch(named, /`/)
+
+  const plain = narrated({ text: 'The conversation could not be summarised, so the turn goes on with the messages it has.', command: null })
+  assert.match(plain, /summarised, so the turn goes on with the messages it has\.<\/span>/)
+  assert.doesNotMatch(plain, /<code>/)
+
+  // What the model wrote between two calls arrives with no command, and a command-looking word in it
+  // is not drawn as code.
+  const said = narrated({ text: `I will run ${command} next` })
+  assert.doesNotMatch(said, /<code>/)
+
+  // Text is drawn as text.
+  assert.doesNotMatch(narrated({ text: '<b>x</b>', command: '<b>x</b>' }), /<b>x/)
 })
 
 test('Send is allowed once the trust question has been answered', () => {

@@ -1542,7 +1542,9 @@ mod tests {
     /// CHATGPT-9: a model an entry names is a row under the account's identifier, since a bare name
     /// would select the `openai` gateway's model of that name. It carries the window the entry
     /// stated and the assumed one where it stated none, which is the budget a turn compacts against,
-    /// and it is the account's own subscription and not Leo's.
+    /// and it is the account's own subscription and not Leo's. No listing describes it, so it is
+    /// not one that says it reads no effort level (BACKEND-22): a level goes out to be judged at the
+    /// far end.
     #[test]
     fn the_models_an_entry_names_are_rows_under_the_accounts_identifier_with_the_window_it_states()
     {
@@ -1568,6 +1570,11 @@ mod tests {
             assert_eq!(row.provider.as_deref(), Some("ChatGPT"));
             assert!(!row.premium, "the account's subscription is not Leo's");
             assert_eq!(row.advertised, Advertised::default());
+            assert!(
+                row.reads_effort,
+                "{} was taken to read no effort level, which no listing said of it",
+                row.key
+            );
         }
     }
 

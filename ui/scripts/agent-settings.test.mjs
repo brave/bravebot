@@ -91,12 +91,12 @@ test('stable failure categories do not depend on service wording', () => {
   assert.match(failureSummary('unknown-future-category').title, /could not finish/)
 })
 
-// CHATGPT-8: the agent sends the sentence for a failure of the ChatGPT account beside the category,
+// CHATGPT-8: the bridge sends the sentence for a failure of the ChatGPT account beside the category,
 // and the window draws it as the description under one title. The window keeps no table of the
 // sentences, so a category's card is replaced by the sentence and by nothing else.
-test('a failure of the ChatGPT account is worded from the sentence the agent sent', () => {
+test('a failure of the ChatGPT account is worded from the sentence the bridge sent', () => {
   const { failureSummary } = load('src/renderer/failure.ts')
-  const sentence = 'The ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again'
+  const sentence = 'The ChatGPT sign-in has ended, so run bravebot auth login chatgpt in a terminal to sign in again.'
   for (const category of ['unauthorized', 'refused', 'rate-limited', 'unavailable']) {
     const card = failureSummary(category, null, sentence)
     assert.equal(card.description, sentence, category)

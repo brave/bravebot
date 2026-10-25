@@ -487,20 +487,22 @@ pub enum Refusal {
     NotPermitted,
 }
 
-/// The sentence for what a refusal says, as the one-shot run reports it. The terminal's catalog and the
-/// desktop's table repeat both
-/// ([CHATGPT-8](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Neither names signing in again as
-/// a remedy, and neither names a cause the six codes of the second do not say.
+impl Refusal {
+    /// The fixed name of what the refusal says, which a front end words from and a log may print.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::UsageLimit => "usage-limit",
+            Self::NotPermitted => "not-permitted",
+        }
+    }
+}
+
+/// The name of what the refusal says and no sentence, for a log or an assertion. The sentence for
+/// each is in the message catalog and is chosen by the layer that shows it
+/// ([CHATGPT-8](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UsageLimit => {
-                f.write_str("OpenAI says this ChatGPT account has reached its usage limit")
-            }
-            Self::NotPermitted => {
-                f.write_str("OpenAI does not allow this ChatGPT account to be used this way")
-            }
-        }
+        f.write_str(self.name())
     }
 }
 
@@ -602,6 +604,10 @@ pub fn call_from(id: &str, name: &str, arguments: &str) -> ToolCall {
         extra_content: None,
     }
 }
+
+#[cfg(test)]
+#[path = "../../test-support/refusal_codes.rs"]
+mod refusal_codes;
 
 #[cfg(test)]
 mod tests {
@@ -927,9 +933,7 @@ mod tests {
         );
     }
 
-    const USAGE_LIMIT: &str = "subscription_sharing_usage_limit_exceeded";
-    const NOT_ELIGIBLE: &str = "subscription_sharing_user_not_eligible";
-    const INVALID_USER: &str = "subscription_sharing_invalid_user";
+    use super::refusal_codes::{INVALID_USER, NOT_ELIGIBLE, USAGE_LIMIT};
 
     /// CHATGPT-8: the codes that say something about the account are these seven, and the usage limit
     /// is told apart from the six that say it may not be used this way. The two codes the same

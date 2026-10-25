@@ -65,6 +65,11 @@ pub enum BackendError {
 impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            // The sentence is the catalog's, since the crate that names the condition has none. The
+            // status of a refusal is said after it, as the status of any other refusal is said.
+            Self::Aichat(ChatError::Account(failure)) => {
+                f.write_str(&crate::chatgpt::told_of_failure(*failure))
+            }
             Self::Aichat(e) => write!(f, "{e}"),
             Self::Bedrock(e) => write!(f, "{e}"),
             Self::NoGatewayToken { provider } => write!(
@@ -157,7 +162,7 @@ impl BackendError {
                     // used this way, which a new sign-in does not change, so it is no failure of the
                     // credential. A refusal is a category no fallback model is used for, and the
                     // account answers for every model it serves.
-                    AccountFailure::Named(_) => Category::Refused,
+                    AccountFailure::Named { .. } => Category::Refused,
                     AccountFailure::Renewal(class) => match class {
                         RenewalFailure::Refused => Category::Refused,
                         RenewalFailure::RateLimited => Category::RateLimited,
@@ -216,7 +221,18 @@ impl BackendError {
             // failed, or by the client that sent the request comparing a code with the closed
             // list, so it is passed on and compared with nothing.
             Self::Aichat(ChatError::Account(failure)) => {
-                Diagnosis::of(category).with_account(*failure)
+                let diagnosis = Diagnosis::of(category).with_account(*failure);
+                // A refusal that names the account keeps the status it came with and the wait it
+                // asked for, as any other refusal does, so every line that says a failure can say
+                // them. One that arrived as an event of a stream came with neither.
+                let diagnosis = match failure.status() {
+                    Some(status) => diagnosis.with_status(status),
+                    None => diagnosis,
+                };
+                match failure.wait() {
+                    Some(wait) => diagnosis.asking_for_a_wait_of(wait),
+                    None => diagnosis,
+                }
             }
             _ => Diagnosis::of(category),
         }
@@ -334,6 +350,9 @@ pub(crate) mod scripted {
             const { RefCell::new(None) };
         static ASKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static THOUGHT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static SESSIONS: RefCell<Vec<Option<String>>> = const { RefCell::new(Vec::new()) };
+        static LEVELS: RefCell<Vec<Option<Option<bravebot_aichat::protocol::Effort>>>> =
+            const { RefCell::new(Vec::new()) };
     }
 
     /// Answer the next requests on this thread with `replies`, and forget what was asked before.
@@ -341,6 +360,8 @@ pub(crate) mod scripted {
         REPLIES.with(|scripted| *scripted.borrow_mut() = Some(replies.into()));
         ASKED.with(|asked| asked.borrow_mut().clear());
         THOUGHT.with(|thought| thought.borrow_mut().clear());
+        SESSIONS.with(|sessions| sessions.borrow_mut().clear());
+        LEVELS.with(|levels| levels.borrow_mut().clear());
     }
 
     /// Report `pieces` as the thinking a service streamed, one report each, ahead of every scripted
@@ -353,6 +374,20 @@ pub(crate) mod scripted {
     /// The body of each request a scripted reply answered, in order.
     pub(crate) fn asked() -> Vec<String> {
         ASKED.with(|asked| asked.borrow().clone())
+    }
+
+    /// The identifier of the session each request a scripted reply answered would have carried to
+    /// the ChatGPT account, in order. `None` where the backend was not the account or the request
+    /// belonged to no session.
+    pub(crate) fn sessions() -> Vec<Option<String>> {
+        SESSIONS.with(|sessions| sessions.borrow().clone())
+    }
+
+    /// The effort level each request a scripted reply answered would have been held to, in order.
+    /// `None` where the backend was not the account or the request belonged to no session, and
+    /// `Some(None)` where the session began with no level.
+    pub(crate) fn levels() -> Vec<Option<Option<bravebot_aichat::protocol::Effort>>> {
+        LEVELS.with(|levels| levels.borrow().clone())
     }
 
     /// Stop answering from a script, so a test that fails part way leaves nothing for the next
@@ -379,13 +414,22 @@ pub(crate) mod scripted {
     /// The scripted reply to `request`, where this thread has a script. A script that has run out
     /// is a turn asking more than the test expected, which is a failure rather than a request to
     /// go and send.
-    pub(super) fn next(request: &ChatRequest) -> Option<Result<Completion, BackendError>> {
+    pub(super) fn next(
+        request: &ChatRequest,
+        session: Option<(String, Option<bravebot_aichat::protocol::Effort>)>,
+    ) -> Option<Result<Completion, BackendError>> {
         REPLIES.with(|scripted| {
             let mut scripted = scripted.borrow_mut();
             let replies = scripted.as_mut()?;
             let reply = replies
                 .pop_front()
                 .unwrap_or_else(|| panic!("asked once more than the script answers"));
+            let (identifier, level) = match session {
+                Some((identifier, level)) => (Some(identifier), Some(level)),
+                None => (None, None),
+            };
+            SESSIONS.with(|sessions| sessions.borrow_mut().push(identifier));
+            LEVELS.with(|levels| levels.borrow_mut().push(level));
             ASKED.with(|asked| {
                 asked
                     .borrow_mut()
@@ -489,6 +533,10 @@ pub enum Backend<'a> {
         wire_model: String,
         egress: &'a Egress,
         cancel: Option<Cancel>,
+        /// The session the request belongs to, whose identifier it carries
+        /// ([`Backend::in_session`]). `None` is a request of no session, which gets an identifier
+        /// of its own.
+        session: Option<crate::chatgpt::AccountSession>,
     },
 }
 
@@ -587,7 +635,16 @@ pub enum Serving {
         /// models and name no default, so the model in force stays the one this build baked in,
         /// which Brave's endpoint answers. Worth telling apart, because what that person has to do
         /// is name one of their own models rather than set a service up.
+        ///
+        /// A stored ChatGPT sign-in is such a service
+        /// ([BACKEND-39](../../../docs/specs/backends.md#BACKEND-39)).
         a_service_is_configured: bool,
+        /// What the ChatGPT sign-in file holds, which decides what the person is told: a sign-in
+        /// that is stored is the service configured, and one that cannot be read is said so.
+        ///
+        /// Not read where a Bedrock or gateway block is configured, and then `NotStored`, so a
+        /// stored sign-in is the whole of the service configured only where nothing else is.
+        chatgpt: crate::chatgpt::AccountFile,
     },
     /// The machine-level layer does not let this machine request the model (BACKEND-48).
     ///
@@ -610,9 +667,22 @@ pub enum Serving {
 /// [`Backend::spends_a_subscription`]'s question, asked here for the same reason
 /// [`crate::turn::discover_subscription`] asks it.
 ///
-/// The store is read only where nothing before it has answered, since it is a file in somebody's
-/// home directory and a read that cannot change the answer is a read for nothing.
+/// The store and the ChatGPT sign-in file are read only where nothing before them has answered, since
+/// each is a file in somebody's home directory and a read that cannot change the answer is a read
+/// for nothing.
 pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
+    serving_with(config, egress, model, crate::chatgpt::account_file)
+}
+
+/// [`serving`] with the sign-in file read by `chatgpt`, so a test is not answered by the file of
+/// whoever runs it. Called only where nothing before it has answered and no Bedrock or gateway
+/// block is configured, as the store is.
+fn serving_with(
+    config: &Config,
+    egress: &Egress,
+    model: &str,
+    chatgpt: impl FnOnce() -> crate::chatgpt::AccountFile,
+) -> Serving {
     // First, because it is the one answer no configuration changes: a model the machine-level layer
     // refuses is refused whichever service would have answered for it, and asking which service that
     // is would report a working Bedrock account for a request that is never sent (BACKEND-48).
@@ -645,12 +715,24 @@ pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
         return Serving::Configured;
     }
 
+    // A sign-in that is stored is a service configured for the models it names, and the model in
+    // force is not one of them. It is read only where no Bedrock or gateway block is configured:
+    // somebody who has one is told to name a model with the `model` key, and a sign-in beside it
+    // must not take that line from them. One that cannot be read configures nothing and is said.
+    let configured_elsewhere = config.bedrock.is_some() || !config.providers.is_empty();
+    let chatgpt = if configured_elsewhere {
+        crate::chatgpt::AccountFile::NotStored
+    } else {
+        chatgpt()
+    };
     Serving::NothingConfigured {
         subscription: stored
             .as_ref()
             .and_then(|found| found.complaint())
             .map(str::to_string),
-        a_service_is_configured: config.bedrock.is_some() || !config.providers.is_empty(),
+        a_service_is_configured: configured_elsewhere
+            || chatgpt == crate::chatgpt::AccountFile::Stored,
+        chatgpt,
     }
 }
 
@@ -862,6 +944,7 @@ impl<'a> Backend<'a> {
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
+                session: None,
             };
         }
         Self::Aichat {
@@ -1032,6 +1115,18 @@ impl<'a> Backend<'a> {
         self
     }
 
+    /// Make the requests this backend sends the ones of `session`, where it is the ChatGPT account
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Ignored by every other backend, which carries no session identifier. A request sent with no
+    /// session given carries an identifier of its own, so it shares no cache with another.
+    pub fn in_session(mut self, session: &crate::chatgpt::AccountSession) -> Self {
+        if let Self::Account { session: held, .. } = &mut self {
+            *held = Some(session.clone());
+        }
+        self
+    }
+
     /// Send a request and wait for the whole reply.
     pub fn complete<S: Sink>(
         &mut self,
@@ -1074,9 +1169,10 @@ impl<'a> Backend<'a> {
                 wire_model,
                 egress,
                 cancel,
+                session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in);
+                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
@@ -1093,7 +1189,16 @@ impl<'a> Backend<'a> {
         progress: impl FnMut(Progress),
     ) -> Result<Completion, BackendError> {
         #[cfg(test)]
-        if let Some(reply) = scripted::next(request) {
+        if let Some(reply) = scripted::next(
+            request,
+            match self {
+                Self::Account {
+                    session: Some(session),
+                    ..
+                } => Some((session.identifier().to_string(), session.effort())),
+                _ => None,
+            },
+        ) {
             scripted::report_thinking(progress);
             return reply;
         }
@@ -1133,9 +1238,10 @@ impl<'a> Backend<'a> {
                 wire_model,
                 egress,
                 cancel,
+                session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in);
+                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
@@ -1178,21 +1284,34 @@ fn bedrock_client<'a>(
 
 /// A client for the ChatGPT account, asking `sign_in` for a token before each request.
 ///
-/// The service, its protocol and its headers are constants, and the session identifier is the
-/// process's own ([`crate::chatgpt::session_id`]). Nothing a settings file, a variable or a gateway
-/// block says reaches it, so no key but the sign-in's is ever the account's.
+/// The service, its protocol and its headers are constants, and the session identifier is the one of
+/// `session`, or one of its own where the request belongs to none. A request that asks for an effort
+/// level is sent the level `session` began with, where it belongs to one
+/// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)). Nothing a settings file, a
+/// variable or a gateway block says reaches it, so no key but the sign-in's is ever the account's.
 fn account_client<'a>(
     wire_model: &str,
     egress: &'a Egress,
     sign_in: &'a mut crate::chatgpt::StoredSignIn,
+    session: Option<&crate::chatgpt::AccountSession>,
 ) -> GatewayClient<'a> {
-    GatewayClient::Responses(ResponsesClient::for_account(
+    let identifier = match session {
+        Some(session) => session.identifier().to_string(),
+        None => crate::chatgpt::AccountSession::begin()
+            .identifier()
+            .to_string(),
+    };
+    let client = ResponsesClient::for_account(
         egress,
         crate::chatgpt::account_provider(),
         wire_model,
         sign_in,
-        crate::chatgpt::session_id(),
-    ))
+        identifier,
+    );
+    GatewayClient::Responses(match session {
+        Some(session) => client.holding_the_level(session.effort()),
+        None => client,
+    })
 }
 
 /// A client pointed at `provider`, with its token resolved, in the protocol the provider speaks.
@@ -1336,6 +1455,7 @@ fn gateway_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chatgpt::AccountFile;
     use bravebot_aichat::responses::protocol::Refusal;
     use bravebot_config::DEFAULT_MODEL;
     use bravebot_config::env_var;
@@ -1512,12 +1632,107 @@ mod tests {
     fn braves_endpoint_with_nothing_beside_it_has_no_service_configured() {
         let egress = Egress::new();
         assert_eq!(
-            serving(&braves_endpoint_without_premium(), &egress, DEFAULT_MODEL),
+            serving_with(
+                &braves_endpoint_without_premium(),
+                &egress,
+                DEFAULT_MODEL,
+                || AccountFile::NotStored
+            ),
             Serving::NothingConfigured {
                 subscription: None,
                 a_service_is_configured: false,
+                chatgpt: AccountFile::NotStored,
             }
         );
+    }
+
+    /// BACKEND-39: a stored ChatGPT sign-in is a service configured, so a person who has just signed
+    /// in and still has Brave's model in force is told to name a model and not shown the routes
+    /// again. A file that cannot be read configures nothing and is said, and the sign-in is read
+    /// only where nothing before it has answered.
+    #[test]
+    fn a_stored_chatgpt_sign_in_is_a_service_configured_and_an_unreadable_one_is_not() {
+        let egress = Egress::new();
+        let config = braves_endpoint_without_premium();
+        for (found, configured) in [
+            (AccountFile::Stored, true),
+            (AccountFile::NotStored, false),
+            (AccountFile::Unreadable, false),
+        ] {
+            assert_eq!(
+                serving_with(&config, &egress, DEFAULT_MODEL, || found),
+                Serving::NothingConfigured {
+                    subscription: None,
+                    a_service_is_configured: configured,
+                    chatgpt: found,
+                },
+                "{found:?}"
+            );
+        }
+
+        // A model a configured service serves never asks about the file.
+        assert_eq!(
+            serving_with(
+                &braves_endpoint_with_a_gateway(),
+                &egress,
+                "z-ai/glm-4.6",
+                || panic!("the sign-in file was read for a model a gateway serves")
+            ),
+            Serving::Configured
+        );
+    }
+
+    /// BACKEND-39: a Bedrock or gateway block that is configured while Brave's own model is in force
+    /// keeps the line that names the `model` key, whatever else is stored, so the sign-in file is
+    /// not read and nothing it holds can replace that line. Reading it for them would tell a person
+    /// who set up an AWS account or a gateway and also signed in to ChatGPT to pick a model of the
+    /// account, and say nothing of the service they configured.
+    #[test]
+    fn a_configured_bedrock_or_gateway_block_keeps_its_line_whatever_a_sign_in_holds() {
+        let egress = Egress::new();
+        let tier_variables = Config::from_lookup(|key| {
+            match key {
+                env_var::SIGNING_KEY => Some("test-signing-key"),
+                env_var::KEY_ID => Some("test-key-id"),
+                env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.com"),
+                env_var::USE_BEDROCK => Some("1"),
+                env_var::AWS_REGION => Some("us-west-2"),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn"),
+                env_var::AWS_PROFILE => Some("a-profile-no-machine-has"),
+                _ => None,
+            }
+            .map(str::to_string)
+        })
+        .expect("configured");
+        assert!(tier_variables.bedrock.is_some());
+        let mut an_aws_block = braves_endpoint_without_premium();
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        an_aws_block.providers = bravebot_config::provider::Provider::all(&root);
+        for (config, configured) in [
+            (braves_endpoint_with_a_gateway(), "a gateway block"),
+            (tier_variables, "the Bedrock tier variables"),
+            (an_aws_block, "an AWS block"),
+        ] {
+            assert_eq!(
+                serving_with(&config, &egress, DEFAULT_MODEL, || panic!(
+                    "the sign-in file was read beside {configured}"
+                )),
+                Serving::NothingConfigured {
+                    subscription: None,
+                    a_service_is_configured: true,
+                    chatgpt: AccountFile::NotStored,
+                },
+                "{configured}"
+            );
+        }
     }
 
     /// A model a configured service serves has a service, whatever the aichat fields hold. The
@@ -1546,10 +1761,16 @@ mod tests {
     fn a_service_configured_while_the_model_is_braves_own_has_none_for_that_model() {
         let egress = Egress::new();
         assert_eq!(
-            serving(&braves_endpoint_with_a_gateway(), &egress, DEFAULT_MODEL),
+            serving_with(
+                &braves_endpoint_with_a_gateway(),
+                &egress,
+                DEFAULT_MODEL,
+                || AccountFile::NotStored
+            ),
             Serving::NothingConfigured {
                 subscription: None,
                 a_service_is_configured: true,
+                chatgpt: AccountFile::NotStored,
             }
         );
     }
@@ -1686,6 +1907,7 @@ mod tests {
         let refused = |subscription: Option<&str>| Serving::NothingConfigured {
             subscription: subscription.map(str::to_string),
             a_service_is_configured: true,
+            chatgpt: AccountFile::NotStored,
         };
         assert!(sets_aside(refused(None), || Serving::Configured));
         assert!(!sets_aside(
@@ -1852,6 +2074,132 @@ mod tests {
         assert_eq!(wire_model, "gpt-5.5");
     }
 
+    /// CHATGPT-9: a gateway of another id that lists a model named `chatgpt/gpt-5.5` does not take
+    /// that name from the account. The bare name selects the account and is sent as `gpt-5.5`, with
+    /// the account's token and not the gateway's key. The gateway's model is the one its row is
+    /// keyed by, `litellm/chatgpt/gpt-5.5`, which sends the gateway the name it lists, so the two
+    /// rows are two services and one conversation does not move between them. An entry that has the
+    /// account's id and states an endpoint keeps the name.
+    #[test]
+    fn a_gateway_listing_a_chatgpt_name_does_not_take_it_from_the_account() {
+        let config = with_providers(
+            r#"{"provider": {"litellm": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                "models": {"chatgpt/gpt-5.5": {}}
+            }}}"#,
+        );
+        let egress = Egress::new();
+
+        let Backend::Account { wire_model, .. } =
+            Backend::select(&config, &egress, "chatgpt/gpt-5.5")
+        else {
+            panic!("the gateway's listing took the account's name");
+        };
+        assert_eq!(wire_model, "gpt-5.5");
+        let Backend::Gateway {
+            provider,
+            wire_model,
+            ..
+        } = Backend::select(&config, &egress, "litellm/chatgpt/gpt-5.5")
+        else {
+            panic!("the gateway's own spelling did not reach the gateway");
+        };
+        assert_eq!(provider.id, "litellm");
+        assert_eq!(wire_model, "chatgpt/gpt-5.5");
+
+        assert!(!Backend::serves_both(
+            &config,
+            "chatgpt/gpt-5.5",
+            "litellm/chatgpt/gpt-5.5"
+        ));
+        assert_eq!(
+            Backend::name_as_asked(&config, "chatgpt/gpt-5.5"),
+            "gpt-5.5"
+        );
+        assert_eq!(
+            Backend::name_as_asked(&config, "litellm/chatgpt/gpt-5.5"),
+            "chatgpt/gpt-5.5"
+        );
+
+        let config = with_providers(
+            r#"{"provider": {
+                "litellm": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                    "models": {"chatgpt/gpt-5.5": {}}
+                },
+                "chatgpt": {
+                    "env": ["ANOTHER_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                    "models": {"gpt-5.5": {}}
+                }
+            }}"#,
+        );
+        let Backend::Gateway { provider, .. } =
+            Backend::select(&config, &egress, "chatgpt/gpt-5.5")
+        else {
+            panic!("the entry that holds the id did not keep the name");
+        };
+        assert_eq!(provider.id, "chatgpt");
+    }
+
+    /// CHATGPT-9: a Bedrock account that lists a model under the name `chatgpt/gpt-5.5`, in a block
+    /// or in a tier variable, does not take that name from the account either. The turn goes to the
+    /// account and not to AWS, asks for no AWS sign-in, and is no pair with a Bedrock model of
+    /// another name. The Bedrock model that has an ordinary id is still Bedrock's.
+    #[test]
+    fn a_bedrock_account_listing_a_chatgpt_name_does_not_take_it_from_the_account() {
+        let named_by_a_tier_variable = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".to_string()),
+            env_var::AWS_REGION => Some("us-west-2".to_string()),
+            env_var::BEDROCK_OPUS_MODEL => Some("chatgpt/gpt-5.5".to_string()),
+            env_var::AWS_PROFILE => Some("a-profile-no-machine-has".to_string()),
+            other => aichat_only(other),
+        })
+        .expect("configured");
+        let named_by_a_block = with_providers(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                "models": {"chatgpt/gpt-5.5": {}, "openai.gpt-5.6-sol": {}}
+            }}}"#,
+        );
+        let egress = Egress::new();
+
+        for (config, listed_by) in [
+            (named_by_a_tier_variable, "a tier variable"),
+            (named_by_a_block, "a block"),
+        ] {
+            let Backend::Account { wire_model, .. } =
+                Backend::select(&config, &egress, "chatgpt/gpt-5.5")
+            else {
+                panic!("the name {listed_by} lists was not the account's");
+            };
+            assert_eq!(wire_model, "gpt-5.5", "{listed_by}");
+            assert!(
+                !Backend::needs_sign_in(&config, "chatgpt/gpt-5.5"),
+                "{listed_by}: the account asked for an AWS sign-in"
+            );
+            assert!(
+                !Backend::serves_both(&config, "chatgpt/gpt-5.5", "openai.gpt-5.6-sol"),
+                "{listed_by}"
+            );
+        }
+        assert!(matches!(
+            Backend::select(
+                &with_providers(
+                    r#"{"provider": {"amazon-bedrock": {
+                    "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                    "models": {"chatgpt/gpt-5.5": {}, "openai.gpt-5.6-sol": {}}
+                }}}"#
+                ),
+                &egress,
+                "openai.gpt-5.6-sol"
+            ),
+            Backend::Bedrock { .. }
+        ));
+    }
+
     /// CHATGPT-9: the account answers for its own models alone. One conversation moves between two
     /// of them and no further, the name a reply reports is not compared with the qualified name, and
     /// the account spends no Leo credential and asks for no AWS sign-in.
@@ -1888,6 +2236,71 @@ mod tests {
         assert!(!Backend::needs_sign_in(&config, "chatgpt/gpt-5.5"));
     }
 
+    /// A refusal that names the account, with neither a status nor a wait, as one reported on a
+    /// stream is.
+    fn refused(refusal: Refusal) -> AccountFailure {
+        AccountFailure::Named {
+            refusal,
+            status: None,
+            retry_after: None,
+        }
+    }
+
+    /// CHATGPT-8: a refusal that names the account keeps the status it came with in the diagnosis,
+    /// and the wait it asked for where it came as a 429, so every line that says the failure can say
+    /// them as it does for any other refusal. The category is the refusal's whatever the status, so a
+    /// retry or a fallback is decided as before. A refusal reported on a stream came with neither,
+    /// and a wait that came with another status is not carried into the diagnosis.
+    ///
+    /// The regressions it rejects are a refusal that loses its status and its wait, which says only
+    /// that the account was refused where a usage limit that came as a 429 used to say when to ask
+    /// again, a wait carried for a status that did not ask for one, and a status invented for a
+    /// refusal that came on a stream.
+    #[test]
+    fn a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis() {
+        use std::time::Duration;
+        let named = |status, retry_after| AccountFailure::Named {
+            refusal: Refusal::UsageLimit,
+            status,
+            retry_after,
+        };
+        let ten_minutes = Some(Duration::from_secs(600));
+
+        let waiting = BackendError::from(ChatError::Account(named(Some(429), ten_minutes)))
+            .counted(3, None, None);
+        let diagnosis = waiting.diagnosis();
+        assert_eq!(diagnosis.category, Category::Refused);
+        assert_eq!(diagnosis.status, Some(429));
+        assert_eq!(diagnosis.retry_after, ten_minutes);
+        assert_eq!(diagnosis.attempts, Some(3));
+
+        // A wait that came with another status is carried by the failure and not said.
+        let forbidden = BackendError::from(ChatError::Account(named(Some(403), ten_minutes)));
+        assert_eq!(forbidden.diagnosis().status, Some(403));
+        assert_eq!(forbidden.diagnosis().retry_after, None);
+
+        // Neither status nor wait where the refusal came on a stream.
+        let streamed = BackendError::from(ChatError::Account(named(None, None)));
+        let diagnosis = streamed.diagnosis();
+        assert_eq!((diagnosis.status, diagnosis.retry_after), (None, None));
+
+        // No other failure of the account carries a status or a wait.
+        for other in [
+            AccountFailure::NotSignedIn,
+            AccountFailure::Ended,
+            AccountFailure::Refused,
+            AccountFailure::Unusable,
+            AccountFailure::Renewal(RenewalFailure::RateLimited),
+        ] {
+            let diagnosis = BackendError::from(ChatError::Account(other)).diagnosis();
+            assert_eq!(
+                (diagnosis.status, diagnosis.retry_after),
+                (None, None),
+                "{other:?}"
+            );
+        }
+    }
+
     /// CHATGPT-8: each failure of the sign-in is diagnosed from its step, and where signing in
     /// again is the remedy the sentence says which command to type. None holds text from a reply.
     #[test]
@@ -1897,16 +2310,8 @@ mod tests {
             (AccountFailure::Ended, Category::Unauthorized, true),
             (AccountFailure::Refused, Category::Unauthorized, true),
             (AccountFailure::Unusable, Category::Unauthorized, false),
-            (
-                AccountFailure::Named(Refusal::UsageLimit),
-                Category::Refused,
-                false,
-            ),
-            (
-                AccountFailure::Named(Refusal::NotPermitted),
-                Category::Refused,
-                false,
-            ),
+            (refused(Refusal::UsageLimit), Category::Refused, false),
+            (refused(Refusal::NotPermitted), Category::Refused, false),
             (
                 AccountFailure::Renewal(RenewalFailure::Refused),
                 Category::Refused,
@@ -1954,8 +2359,8 @@ mod tests {
             AccountFailure::Ended,
             AccountFailure::Refused,
             AccountFailure::Unusable,
-            AccountFailure::Named(Refusal::UsageLimit),
-            AccountFailure::Named(Refusal::NotPermitted),
+            refused(Refusal::UsageLimit),
+            refused(Refusal::NotPermitted),
             AccountFailure::Renewal(RenewalFailure::Refused),
             AccountFailure::Renewal(RenewalFailure::RateLimited),
             AccountFailure::Renewal(RenewalFailure::Unavailable),
@@ -2023,10 +2428,7 @@ mod tests {
     #[test]
     fn a_refusal_of_the_account_is_not_a_refusal_of_the_body() {
         let mut sentences = Vec::new();
-        for failure in [
-            AccountFailure::Named(Refusal::UsageLimit),
-            AccountFailure::Named(Refusal::NotPermitted),
-        ] {
+        for failure in [refused(Refusal::UsageLimit), refused(Refusal::NotPermitted)] {
             let error = BackendError::from(ChatError::Account(failure));
             assert!(!error.refused_the_body(), "{failure:?}");
             assert!(!error.is_unreachable(), "{failure:?}");
@@ -2036,6 +2438,39 @@ mod tests {
         assert_ne!(sentences[0], sentences[1]);
         assert!(sentences[0].contains("usage limit"), "{}", sentences[0]);
         assert!(!sentences[1].contains("usage limit"), "{}", sentences[1]);
+    }
+
+    /// CHATGPT-10: a request to the account that asks for a level is sent the one its session began
+    /// with, whatever it asks for, and one sent in no session is sent what it asks for. The
+    /// regressions it rejects are a client not told the session's level, and one told it by a
+    /// session that has none.
+    #[test]
+    fn a_request_to_the_account_is_held_to_the_level_the_session_began_with() {
+        use bravebot_aichat::protocol::Effort;
+        let egress = Egress::new();
+        let mut sign_in = crate::chatgpt::StoredSignIn;
+        let asks = ChatRequest::new("m", Vec::new()).with_effort(Some(Effort::High));
+        let mut sent = |session: Option<&crate::chatgpt::AccountSession>| {
+            let GatewayClient::Responses(client) =
+                account_client("m", &egress, &mut sign_in, session)
+            else {
+                panic!("the account is spoken to in the Responses protocol");
+            };
+            client.level_for(&asks)
+        };
+
+        assert_eq!(
+            sent(Some(&crate::chatgpt::AccountSession::begin_with(Some(
+                Effort::Low
+            )))),
+            Some(Effort::Low)
+        );
+        assert_eq!(
+            sent(Some(&crate::chatgpt::AccountSession::begin())),
+            None,
+            "a session that began with no level was sent the one a request asked for"
+        );
+        assert_eq!(sent(None), Some(Effort::High));
     }
 
     /// CHATGPT-8 and BACKEND-53: a refusal that names the account is a refusal among the failure
@@ -2057,10 +2492,7 @@ mod tests {
             Some(("chatgpt/gpt-b".to_string(), Category::RateLimited))
         );
 
-        for failure in [
-            AccountFailure::Named(Refusal::UsageLimit),
-            AccountFailure::Named(Refusal::NotPermitted),
-        ] {
+        for failure in [refused(Refusal::UsageLimit), refused(Refusal::NotPermitted)] {
             let refused = BackendError::from(ChatError::Account(failure));
             assert_eq!(
                 refused.diagnosis().category,

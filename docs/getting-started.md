@@ -155,7 +155,7 @@ There is one thing to set up before the first session, and it is which service a
 binary arrives with none configured, so rather than open a session with nothing set up to answer it,
 a first run says what to configure and stops.
 
-Configure one of these four. `bravebot doctor` reports what it will use once you have.
+Configure one of these five. `bravebot doctor` reports what it will use once you have.
 
 Each block below sets a top-level `model` key as well. A block on its own leaves the model in force
 the one the build came with, which is Brave's own, so the first run says the same thing again and
@@ -237,6 +237,20 @@ terminal shows this block, with the newest of your models that can call tools as
 whether to write it. A running LM Studio or llama-server is offered the same way, as a block of its
 own. `bravebot import-providers` asks the same at any time.
 
+### A ChatGPT account, if you have one
+
+```sh
+bravebot auth login chatgpt
+```
+
+This prints an address and opens it in a browser, where you sign in to OpenAI. The browser then returns
+to a port bravebot holds open on `127.0.0.1`, and the command waits five minutes for it. The sign-in is
+stored only where OpenAI's reply grants the scope that lets bravebot use the account's tokens. On a machine with no browser, open the printed address
+somewhere else and forward that port. Once the sign-in is stored, `/model` offers the models the account
+reaches, named `chatgpt/<model>`, and `--model chatgpt/<model>` names one. A `provider` block named
+`chatgpt` that states an endpoint is a gateway and keeps the name, and the sign-in is refused until
+it is renamed. The design is [specs/chatgpt-sign-in.md](specs/chatgpt-sign-in.md).
+
 ### Brave Leo Premium, if you already subscribe
 
 ```sh
@@ -248,7 +262,7 @@ its own and nothing it holds is spent. Run it on a machine where Brave is signed
 subscription.
 
 These models are reached through Brave's AI gateway, which has problems of its own still being
-worked on, so prefer one of the two above for now. It is the shortest route if you already
+worked on, so prefer one of the other routes for now. It is the shortest route if you already
 subscribe.
 
 ### Pointing it somewhere else entirely

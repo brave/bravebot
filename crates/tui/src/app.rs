@@ -157,6 +157,7 @@ fn status_report(
         agent_by_setting: session.standing_is_by_setting(),
         effort: session.effort(),
         model_reads_effort: session.model_reads_effort(),
+        account_effort: session.account_level(),
         served_model: session.served_model(),
         substituted_model: session.substituted_model(),
         premium: session.premium(),
@@ -2180,6 +2181,7 @@ impl RunSettings {
             .with_cache(bravebot_agent::home::cache())
             .with_model(session.model().map(str::to_string))
             .with_effort(session.effort_in_force())
+            .in_account_session(session.account_session().clone())
             .with_permissions(permissions.clone())
             .with_permission_mode(session.live_permission_mode())
             .with_attribution(self.attribution.clone())
@@ -2314,6 +2316,8 @@ fn adopt_settings(
         session.name_effort(level);
         say_if_unread(session);
     }
+    // After the level is settled, which is the level the ChatGPT account is sent for the session.
+    session.begin_account_session();
     session.adopt_limit(settings);
     // Settled here too, and once, for the reason the mode is read once per turn: what decides
     // whether somebody is asked must not change under a prompt already on the screen. The command
@@ -3071,6 +3075,7 @@ fn suggest_next(
     let config = config.clone();
     let trust = trust.clone();
     let session_model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     let (send, answer) = mpsc::channel();
     thread::spawn(move || {
         let egress = Egress::new();
@@ -3084,6 +3089,7 @@ fn suggest_next(
                     turn::aside(
                         &config,
                         &egress,
+                        &account,
                         asking,
                         Some(model.as_ref()),
                         &mut bravebot_agent::report::IgnoreReports,
@@ -3494,18 +3500,20 @@ fn fetch_models(config: &Config) -> Result<Vec<bravebot_aichat::models::Model>, 
 /// A block naming no credential at all is asked, unauthenticated. That is somebody saying the gateway
 /// wants none, and it is the block a local Ollama is configured with. That block lists no models
 /// either, so not asking leaves it offering nothing.
+///
+/// Why there is no roster is not told in the words of the error that says so, which belong to the
+/// service and to this process and are not for a picker's note: a listing that could not be read is
+/// said to the person, and a credential that is missing is not, since `doctor` says it.
 fn fetch_gateway_models(
     provider: &bravebot_config::provider::Provider,
-) -> Result<Vec<bravebot_aichat::models::Model>, String> {
+) -> Result<Vec<bravebot_aichat::models::Model>, Unlisted> {
     let token = match provider.credential(|name| std::env::var(name).ok()) {
         bravebot_config::provider::Credential::Token(token) => Some(token),
         bravebot_config::provider::Credential::NotNeeded => None,
         bravebot_config::provider::Credential::Absent if provider.compiled_roster().is_some() => {
             None
         }
-        bravebot_config::provider::Credential::Absent => {
-            return Err(format!("no credential for {}", provider.display_name()));
-        }
+        bravebot_config::provider::Credential::Absent => return Err(Unlisted::NoCredential),
     };
 
     let mut sink = Trail::new();
@@ -3528,12 +3536,22 @@ fn fetch_gateway_models(
         ]),
         &mut sink,
     )
-    .map_err(|denial| denial.to_string())
+    .map_err(|_| Unlisted::Unreadable)
     .and_then(|mut policy| {
         let token = token.as_ref().map(bravebot_config::Secret::expose);
         bravebot_aichat::models::list_from_gateway(&mut policy, provider, token, &headers, &egress)
-            .map_err(|error| error.to_string())
+            .map_err(|_| Unlisted::Unreadable)
     })
+}
+
+/// Why a gateway that names no models has none among the rows.
+#[derive(Debug, PartialEq, Eq)]
+enum Unlisted {
+    /// The block names a credential nothing holds, so the gateway was not asked.
+    NoCredential,
+    /// The gateway was asked and its listing could not be read: the request failed, or what answered
+    /// was not a listing.
+    Unreadable,
 }
 
 /// Where a session's opening trust map came from, which is what it says about it.
@@ -4555,6 +4573,7 @@ fn compact_animated(
     let worker_config = config.clone();
     let worker_trust = trust.clone();
     let model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     let focus = (!focus.is_empty()).then(|| focus.to_string());
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
@@ -4566,6 +4585,7 @@ fn compact_animated(
     let worker = thread::spawn(move || {
         summarise_on_a_worker(
             &worker_config,
+            &account,
             conversation,
             model.as_deref(),
             worker_trust,
@@ -4628,6 +4648,7 @@ fn compact_animated(
 )]
 fn summarise_on_a_worker(
     config: &Config,
+    account: &bravebot_agent::chatgpt::AccountSession,
     conversation: Conversation,
     model: Option<&str>,
     trust: TrustStore,
@@ -4650,6 +4671,7 @@ fn summarise_on_a_worker(
     let done = turn::compact(
         config,
         &egress,
+        account,
         &mut conversation,
         model,
         &mut reporter,
@@ -4659,7 +4681,7 @@ fn summarise_on_a_worker(
         cancel,
         Some(turn::Hooked { home, workspace }),
     )
-    .map_err(|error| error.category().name().to_string());
+    .map_err(|error| bravebot_agent::report::why_a_summary_failed(&error));
     (done, conversation, sink)
 }
 
@@ -4826,6 +4848,7 @@ fn ask_animated(
     let mut worker_trust = trust.clone();
     let worker_workspace = workspace.clone();
     let model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
@@ -4898,6 +4921,7 @@ fn ask_animated(
         let done = turn::aside(
             &worker_config,
             &egress,
+            &account,
             asking,
             model.as_deref(),
             &mut reporter,
@@ -4994,6 +5018,7 @@ fn commit_message_animated(
     let worker_workspace = workspace.clone();
     let asked = asked.clone();
     let model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
     session.begin_aside();
@@ -5007,6 +5032,7 @@ fn commit_message_animated(
         let done = turn::commit_message(
             &worker_config,
             &egress,
+            &account,
             &worker_workspace,
             &asked.source,
             asked.format.as_deref(),
@@ -5484,21 +5510,7 @@ fn manifest_animated(
 
     let recorded = run.complete(session, workspace.root(), &asked, &outcome, &cancel);
 
-    match &outcome {
-        Ok(finished) => {
-            // Released for a screen, exactly as a turn's reply is, and into the transcript rather
-            // than into the conversation: what this run said is not something a later turn holds.
-            // Nothing is said about that here. A reply that arrived is the run having worked, and a
-            // line under it announcing what did not happen reads as a complaint about the run.
-            session.narrate(finished.reply_for_display());
-        }
-        // Stopped by the person, so there is nothing to report. The transcript already holds the
-        // steps that ran, and a complaint about a run they turned off themselves is noise.
-        Err(_) if stopped_by_the_person => {}
-        Err(failure) => {
-            session.note(t!(manifest_failed, problem = failure.to_string()));
-        }
-    }
+    say_how_a_manifest_run_ended(session, &outcome, stopped_by_the_person);
     // Last, so it is the line under the reply or under what went wrong. The run's own record is
     // where the plan, the proposal and the steps are kept in full, and the id is the only way in:
     // the picker marks a run's row but refuses Enter on it, so naming the id on the command line is
@@ -5636,6 +5648,7 @@ fn goal_check_animated(
     let worker_config = config.clone();
     let worker_trust = trust.clone();
     let model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
     // the conversation. The conversation stays on this thread and is not touched again.
     let check = bravebot_agent::goal::Check::of(conversation, &condition);
@@ -5645,23 +5658,15 @@ fn goal_check_animated(
     session.begin_aside();
 
     let worker = thread::spawn(move || {
-        let mut sink = Trail::new();
-        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
-        let egress = Egress::new();
-        // Reduced to what a person can be told before it crosses back, since the error types are
-        // the kernel's and this thread is the only place they mean anything.
-        let done = turn::goal(
+        check_the_goal_on_a_worker(
             &worker_config,
-            &egress,
+            &account,
             check,
             model.as_deref(),
-            &mut reporter,
-            &mut sink,
             worker_trust,
             &worker_cancel,
+            to_main,
         )
-        .map_err(|e| e.to_string());
-        (done, sink)
     });
 
     loop {
@@ -5698,6 +5703,67 @@ fn goal_check_animated(
         goal_checked(session, done, cancel.is_cancelled()),
         sink.events().to_vec(),
     ))
+}
+
+/// What the transcript says of how a manifest run ended: its reply, nothing for a run the person
+/// stopped, and for a failure the sentence a person is told, which is the ChatGPT account's own
+/// sentence where it was that account's planner that failed and the category's name otherwise.
+///
+/// Apart from the loop that walks the run, which needs a terminal, so a test can say what a run
+/// ended with.
+fn say_how_a_manifest_run_ended(
+    session: &mut Session,
+    outcome: &Result<bravebot_agent::Outcome, bravebot_agent::TurnError>,
+    stopped_by_the_person: bool,
+) {
+    match outcome {
+        Ok(finished) => {
+            // Released for a screen, exactly as a turn's reply is, and into the transcript rather
+            // than into the conversation: what this run said is not something a later turn holds.
+            // Nothing is said about that here. A reply that arrived is the run having worked, and a
+            // line under it announcing what did not happen reads as a complaint about the run.
+            session.narrate(finished.reply_for_display());
+        }
+        // Stopped by the person, so there is nothing to report. The transcript already holds the
+        // steps that ran, and a complaint about a run they turned off themselves is noise.
+        Err(_) if stopped_by_the_person => {}
+        Err(failure) => {
+            session.note(t!(manifest_failed, problem = failure.to_string()));
+        }
+    }
+}
+
+/// The goal check, as the thread that runs it does it.
+///
+/// Apart from [`goal_check_animated`] so a test can run what the thread runs without a terminal. The
+/// failure is reduced to the sentence a person is told before it crosses back, since the error types
+/// are the kernel's and this thread is the only place they mean anything: the sentence of the ChatGPT
+/// account's failure where it was that account's, and the category's name otherwise.
+fn check_the_goal_on_a_worker(
+    config: &Config,
+    account: &bravebot_agent::chatgpt::AccountSession,
+    check: bravebot_agent::goal::Check,
+    model: Option<&str>,
+    trust: TrustStore,
+    cancel: &Cancel,
+    to_main: mpsc::Sender<crate::remote_confirm::ToMain>,
+) -> (Result<bravebot_agent::goal::Assessed, String>, Trail) {
+    let mut sink = Trail::new();
+    let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
+    let egress = Egress::new();
+    let done = turn::goal(
+        config,
+        &egress,
+        account,
+        check,
+        model,
+        &mut reporter,
+        &mut sink,
+        trust,
+        cancel,
+    )
+    .map_err(|e| e.to_string());
+    (done, sink)
 }
 
 /// Take what the goal check came back with, and give back the prompt that carries the work on
@@ -6084,6 +6150,15 @@ fn run_turn_animated(
         // A question that arrives once the work has been stopped is refused undrawn, by the
         // wrapper below; see [`drain_worker_until_stopped`].
         let mut handle = |message: crate::remote_confirm::ToMain| {
+            // What asks nothing is taken into the session, and what is left is a question.
+            let Some(message) = crate::from_worker::show_in_a_turn(
+                session,
+                message,
+                beside.config.context_budget,
+                beside.config.budget_is_guessed(),
+            ) else {
+                return;
+            };
             // Which prompt widget is open is the driver's own state, so a message that blocks the
             // worker on the person is what turns the title to waiting, and its answer turns it back.
             let asks = title_state_during(&message) == crate::title::State::Waiting;
@@ -6279,66 +6354,17 @@ fn run_turn_animated(
                     });
                     let _ = answer_tx.send(crate::remote_confirm::Reply::Ask(answers));
                 }
-                // No reply: each of these is recorded and the next redraw, one iteration away,
-                // shows it. That is what makes a long turn legible while it runs.
-                crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
-                crate::remote_confirm::ToMain::Spent(spent) => progress_of_a_turn(
-                    session,
-                    spent,
-                    beside.config.context_budget,
-                    beside.config.budget_is_guessed(),
-                ),
-                crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
-                crate::remote_confirm::ToMain::RequestBuilt(view) => {
-                    session.set_last_request(*view)
+                // What `show_in_a_turn` took above is not here. A question added to `ToMain` that no
+                // arm draws is refused, as in a manifest run, since the worker is blocked on it.
+                other => {
+                    if let Some(reply) = refusal(&other) {
+                        #[expect(
+                            clippy::let_underscore_must_use,
+                            reason = "the worker may have ended, and a refusal to nobody has no one to be told"
+                        )]
+                        let _ = answer_tx.send(reply);
+                    }
                 }
-                crate::remote_confirm::ToMain::Written(written) => session.set_written(written),
-                crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
-                crate::remote_confirm::ToMain::Narration(text) => session.narrate(text),
-                crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
-                crate::remote_confirm::ToMain::Streaming(text) => session.streaming(&text),
-                crate::remote_confirm::ToMain::Thinking(text) => session.thinking(&text),
-                crate::remote_confirm::ToMain::Composing(call) => session.composing(call),
-                crate::remote_confirm::ToMain::Started(activity) => {
-                    session.start_activity(activity)
-                }
-                crate::remote_confirm::ToMain::Finished(activity) => {
-                    session.finish_activity(activity)
-                }
-                crate::remote_confirm::ToMain::Movable(handoff) => session.movable(handoff),
-                crate::remote_confirm::ToMain::Job(event) => session.job(event),
-                crate::remote_confirm::ToMain::CheckStarted(checking) => session.checking(checking),
-                crate::remote_confirm::ToMain::CheckFinished => session.checked(),
-                crate::remote_confirm::ToMain::HookStarted(moment, program) => {
-                    session.hook_running(moment, program)
-                }
-                crate::remote_confirm::ToMain::HookFinished => session.hook_over(),
-                crate::remote_confirm::ToMain::Quarantined(shown) => session.show(shown),
-                crate::remote_confirm::ToMain::Printed(output) => session.command_printed(output),
-                crate::remote_confirm::ToMain::Returned(returned) => session.returned(returned),
-                crate::remote_confirm::ToMain::Landed(landing) => session.landed(landing),
-                // The turn has taken the oldest waiting prompt, so it stops being something waiting
-                // above the box and becomes something said. Which prompt is not named: the turn takes
-                // them in the order they were sent and this end hands them over in that order, so the
-                // oldest is the one that has gone.
-                crate::remote_confirm::ToMain::Interjected(_) => session.interjected(),
-                // Whose work the lines that follow are, as the driver said. Nothing here reads a line
-                // to find out: several delegates and the turn report at once.
-                crate::remote_confirm::ToMain::ReportingFor(delegate) => {
-                    session.reporting_for(delegate)
-                }
-                crate::remote_confirm::ToMain::DelegateWaiting(delegate) => {
-                    session.waiting_on_delegate(delegate)
-                }
-                crate::remote_confirm::ToMain::DelegateStarted(delegation) => {
-                    session.delegate_started(delegation)
-                }
-                crate::remote_confirm::ToMain::DelegateFinished {
-                    id,
-                    note,
-                    failed,
-                    reported,
-                } => session.delegate_finished(id, note, failed, reported),
             }
             if asks {
                 mark_title(terminal, crate::title::State::Working);
@@ -7004,7 +7030,7 @@ fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u
 /// waiting for the turn to end (INPUT-22, PANEL-8).
 ///
 /// A report with no request behind it yet leaves both where they were.
-fn progress_of_a_turn(
+pub(crate) fn progress_of_a_turn(
     session: &mut Session,
     spent: bravebot_agent::Spent,
     budget: u64,
@@ -7789,6 +7815,124 @@ mod tests {
         );
     }
 
+    /// CHATGPT-10: the model in force is the account's where the pick is one of its models, and
+    /// where nothing was picked and the configured default is one. The regressions it rejects are a
+    /// pick that is read as the default and a default that is not read at all.
+    #[test]
+    fn the_model_in_force_is_the_accounts_by_the_pick_or_else_by_the_default() {
+        let mut config = a_config_offering_three_tiers();
+        let mut session = Session::new("none");
+
+        note_whether_the_model_in_force_is_the_accounts(&mut session, &config);
+        assert!(!session.model_is_account());
+
+        config.default_model = "chatgpt/a-model".to_string();
+        note_whether_the_model_in_force_is_the_accounts(&mut session, &config);
+        assert!(session.model_is_account(), "the default was not read");
+
+        session.name_model("gpt-5.5".to_string());
+        note_whether_the_model_in_force_is_the_accounts(&mut session, &config);
+        assert!(
+            !session.model_is_account(),
+            "the default outranked the pick"
+        );
+
+        session.name_model("chatgpt/another-model".to_string());
+        config.default_model = "gpt-5.5".to_string();
+        note_whether_the_model_in_force_is_the_accounts(&mut session, &config);
+        assert!(session.model_is_account(), "the pick was not read");
+    }
+
+    /// CHATGPT-10: `/status` reads the session as it stands: on a model of the account it names the
+    /// level sent and the one chosen, and on any other it names the one chosen. The regression it
+    /// rejects is a report built from the choice alone, which would show the level in force as the
+    /// one the account is not sent.
+    #[test]
+    fn the_status_of_a_chatgpt_session_names_the_level_it_sends() {
+        use bravebot_aichat::protocol::Effort;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-status-account");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let stored = bravebot_session::sessions::Handle::begin(
+            &root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let config = a_config_offering_three_tiers();
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+        session.begin_account_session();
+        session.choose_effort(Some(Effort::High));
+        let shown = |session: &Session| {
+            status_report(session, &stored, &workspace, None, &config, None)
+                .lines
+                .into_iter()
+                .filter(|line| line.label == t!(status_effort))
+                .map(|line| format!("{} {}", line.value, line.note))
+                .collect::<String>()
+        };
+
+        session.note_model_is_account(true);
+        let on_the_account = shown(&session);
+        assert!(
+            on_the_account.starts_with("low ")
+                && on_the_account.contains("high was chosen with /effort"),
+            "{on_the_account}"
+        );
+
+        session.note_model_is_account(false);
+        let elsewhere = shown(&session);
+        assert!(
+            elsewhere.starts_with("high ") && elsewhere.contains("chosen with /effort"),
+            "{elsewhere}"
+        );
+    }
+
+    /// CHATGPT-10: moving to a model of the account, in a session whose chosen level is not the one it
+    /// began with, is sent the one it began with and says so, and moving away is sent the choice. The
+    /// regressions it rejects are an account model sent the chosen level, a switch that says nothing
+    /// of it, and the choice forgotten for the models that are not the account's.
+    #[test]
+    fn picking_a_chatgpt_model_says_which_level_it_is_sent_where_that_is_not_the_one_chosen() {
+        use bravebot_aichat::protocol::Effort;
+        let mut config = a_config_offering_three_tiers();
+        let mut session = Session::new("none");
+        session.name_effort(Effort::Low);
+        session.begin_account_session();
+        session.choose_effort(Some(Effort::High));
+        let mut account = provider_models(&gateway(r#"{"a-model": {}}"#)).remove(0);
+        account.key = "chatgpt/a-model".to_string();
+        account.provider = Some("ChatGPT".to_string());
+        let mut other = account.clone();
+        other.key = "openrouter/a-model".to_string();
+
+        model_picked(&mut session, &mut config, account);
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert!(
+            said.iter()
+                .any(|text| text.contains("keeps the effort level it began with, low")),
+            "{said:?}"
+        );
+        assert_eq!(session.effort_in_force(), Some(Effort::Low));
+
+        let before = session.transcript.len();
+        model_picked(&mut session, &mut config, other);
+        assert_eq!(
+            session.effort_in_force(),
+            Some(Effort::High),
+            "the choice was not sent to a model that is not the account's"
+        );
+        assert!(
+            session.transcript[before..]
+                .iter()
+                .all(|entry| !entry.text.contains("began with")),
+            "said of a model that is not the account's"
+        );
+    }
+
     /// Premium means a Leo subscription. A gateway reached with somebody's own bearer token does not
     /// involve one, and marking it premium would ask them to import a subscription to use what they
     /// already pay for.
@@ -8139,6 +8283,78 @@ mod tests {
         );
         assert_eq!(offered(&with("")), ["local/llama3"]);
         assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/v1/models"]);
+    }
+
+    /// BACKEND-19: a gateway that names no models and whose listing could not be read is said in the
+    /// picker, by the name its block gives it, with the way to name one of its models. A gateway
+    /// whose listing was read, one whose key is missing, which `doctor` says, and one that names its
+    /// models and so is not asked, are not mentioned, and each keeps the rows it has. The two ways a
+    /// listing is unreadable are both tried, a service that is not there and one that answers with
+    /// something that is not a listing. The regressions it rejects are a roster that fails silently,
+    /// a sentence for a gateway nobody could have asked, and one gateway's failure taking another's
+    /// rows with it.
+    #[test]
+    fn the_picker_says_which_gateway_could_not_be_listed_and_says_nothing_of_the_rest() {
+        use models::scripted_account::nobody_signed_in;
+        nobody_signed_in();
+        // Held, since a server whose receiver is gone stops answering.
+        let (readable, _asked_of_readable) = a_listing_server(r#"{"data": [{"id": "llama3"}]}"#);
+        let (garbled, _asked_of_garbled) = a_listing_server("this is not a listing");
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{
+                "readable": {{"name": "Readable Gateway", "options": {{"baseURL": "{readable}/v1"}}}},
+                "garbled": {{"name": "Garbled Gateway", "options": {{"baseURL": "{garbled}/v1"}}}},
+                "down": {{"name": "Down Gateway", "options": {{"baseURL": "http://127.0.0.1:1/v1"}}}},
+                "keyless": {{"name": "Keyless Gateway", "env": ["BRAVEBOT_TEST_UNSET_GATEWAY_KEY"],
+                             "options": {{"baseURL": "http://127.0.0.1:1/v1"}}}},
+                "named": {{"name": "Named Gateway", "options": {{"baseURL": "http://127.0.0.1:1/v1"}},
+                           "models": {{"m": {{}}}}}}
+            }}}}"#
+        ))
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 5, "a block configured no gateway");
+
+        let mut session = Session::new("none");
+        open_model_picker(&mut session, &config);
+
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        let rows: Vec<String> = picker.matching().iter().map(|m| m.key.clone()).collect();
+        let mut said: Vec<String> = session.transcript.iter().map(|e| e.text.clone()).collect();
+        said.sort();
+        let mut expected = vec![
+            t!(
+                session_gateway_models_unreadable,
+                gateway = "Down Gateway",
+                id = "down"
+            ),
+            t!(
+                session_gateway_models_unreadable,
+                gateway = "Garbled Gateway",
+                id = "garbled"
+            ),
+        ];
+        expected.sort();
+        assert_eq!(said, expected);
+        for (gateway, id) in [("Down Gateway", "down"), ("Garbled Gateway", "garbled")] {
+            let note = said.iter().find(|note| note.contains(gateway)).unwrap();
+            assert!(
+                note.contains(&format!("--model {id}/<model>")),
+                "no way to name a model of {gateway}: {note}"
+            );
+        }
+        for rows_of in ["readable/llama3", "named/m", "opus-arn"] {
+            assert!(rows.contains(&rows_of.to_string()), "{rows_of}: {rows:?}");
+        }
+        for silent in ["down/", "garbled/", "keyless/"] {
+            assert!(
+                !rows.iter().any(|key| key.starts_with(silent)),
+                "{silent} has rows: {rows:?}"
+            );
+        }
     }
 
     /// BACKEND-5, BACKEND-29: a model an AWS `provider` entry names is offered under a name the
@@ -8681,7 +8897,7 @@ mod tests {
                 said,
                 [t!(
                     session_chatgpt_models_refused,
-                    refusal = refusal.to_string()
+                    refusal = bravebot_agent::chatgpt::said_of_refusal(refusal)
                 )
                 .to_string()],
                 "{refusal:?}"
@@ -8741,7 +8957,7 @@ mod tests {
             account_problem_said(&AccountModels::Refused(Refusal::UsageLimit)),
             Some(t!(
                 session_chatgpt_models_refused,
-                refusal = Refusal::UsageLimit.to_string()
+                refusal = bravebot_agent::chatgpt::said_of_refusal(Refusal::UsageLimit)
             ))
         );
     }
@@ -17519,6 +17735,113 @@ mod tests {
         assert_eq!(session.spend_limit().credits(), 0);
     }
 
+    /// CHATGPT-10: every turn of a session is built in the session, so the requests of all of them
+    /// carry its identifier, and a second session of the process has its own. `/clear` begins a new
+    /// conversation and with it a new session, which shares no cache with the one that is gone. The
+    /// regressions it rejects are a task built with an identifier for the turn, one for the
+    /// process, and a cleared session that goes on with the old one.
+    #[test]
+    fn every_turn_of_a_session_is_built_in_it_and_clearing_begins_another() {
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let permissions = Permissions::new();
+        let mut session = Session::new("none");
+        let other = Session::new("none");
+
+        let first = run_settings.task("one", &session, &permissions);
+        let second = run_settings.task("two", &session, &permissions);
+        let elsewhere = run_settings.task("three", &other, &permissions);
+
+        let identifier = session.account_session().identifier().to_string();
+        assert_eq!(first.account_session().identifier(), identifier);
+        assert_eq!(second.account_session().identifier(), identifier);
+        assert_ne!(elsewhere.account_session().identifier(), identifier);
+
+        session.clear();
+        assert_ne!(session.account_session().identifier(), identifier);
+        assert_eq!(
+            run_settings
+                .task("four", &session, &permissions)
+                .account_session()
+                .identifier(),
+            session.account_session().identifier()
+        );
+    }
+
+    /// CHATGPT-10: the account is sent the level a session began with, whatever is chosen after, and
+    /// the person is told. The choice is kept for the next session and for every other model. The
+    /// regressions it rejects are a chosen level that reaches the account, a choice that is not kept,
+    /// a note said for a model that is not the account's or for a level the session began with, and
+    /// a cleared session that goes on with the level of the one before.
+    #[test]
+    fn a_chatgpt_session_keeps_the_level_it_began_with_and_says_so_when_another_is_chosen() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = Session::new("none");
+        adopt_settings(
+            &mut session,
+            &bravebot_config::Settings::default(),
+            Some(Effort::Low),
+        );
+        session.note_model_is_account(true);
+        assert_eq!(session.effort_in_force(), Some(Effort::Low));
+
+        set_effort(&mut session, "high");
+        assert_eq!(session.effort(), Some(Effort::High), "the choice was lost");
+        assert_eq!(
+            session.effort_in_force(),
+            Some(Effort::Low),
+            "the account was sent the level chosen since the session began"
+        );
+        assert_eq!(
+            last_note(&session),
+            t!(
+                session_effort_kept_for_account,
+                began = "low",
+                chosen = "high"
+            )
+            .to_string()
+        );
+        // What `/status` reads of it: the level sent, which is not the one chosen.
+        assert_eq!(session.account_level(), Some(Some(Effort::Low)));
+
+        // Giving the level up is a change too, and the account keeps the one it was begun with.
+        effort_picked(&mut session, None);
+        assert_eq!(session.effort_in_force(), Some(Effort::Low));
+        assert!(
+            last_note(&session).contains("began with, low, so default applies"),
+            "{}",
+            last_note(&session)
+        );
+
+        // The level it began with is no change, so nothing is said of one.
+        set_effort(&mut session, "low");
+        assert!(
+            !last_note(&session).contains("began with"),
+            "{}",
+            last_note(&session)
+        );
+
+        // Every other model is sent the choice, and a new conversation begins at it.
+        set_effort(&mut session, "high");
+        session.note_model_is_account(false);
+        assert_eq!(session.effort_in_force(), Some(Effort::High));
+        assert_eq!(
+            session.account_level(),
+            None,
+            "a level of the account's was reported for another model"
+        );
+        let before = session.transcript.len();
+        set_effort(&mut session, "medium");
+        assert!(
+            session.transcript[before..]
+                .iter()
+                .all(|entry| !entry.text.contains("began with")),
+            "said of a model that is not the account's"
+        );
+        session.note_model_is_account(true);
+        session.clear();
+        assert_eq!(session.effort_in_force(), Some(Effort::Medium));
+    }
+
     /// The turn holds the session's own handle, so a limit typed while it runs reaches its next
     /// request, and the figure the person gives at the question is the session's afterwards. It
     /// also carries what the session had spent, which the limit is read against.
@@ -18062,6 +18385,43 @@ mod tests {
             1,
             "a condition that holds for the rest of the session was said again"
         );
+    }
+
+    /// CHATGPT-10: the account is sent the level a session began with, and a model of it that refuses
+    /// that level is sent none from then on, which the person is told in the sentence every model
+    /// that refuses a level gets. What was chosen and what the session began with are both kept: the
+    /// first is the next session's, and the second is what a model that reads a level is sent. The
+    /// regressions it rejects are a refused level that goes on being offered to the account, one
+    /// taken away without a word, and a level chosen afterwards that is said to be kept by a session
+    /// that is sent none.
+    #[test]
+    fn a_level_the_account_refused_stops_being_sent_and_is_said() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = Session::new("none");
+        adopt_settings(
+            &mut session,
+            &bravebot_config::Settings::default(),
+            Some(Effort::Low),
+        );
+        session.note_model_is_account(true);
+        assert_eq!(session.effort_in_force(), Some(Effort::Low));
+
+        note_a_refused_level(&mut session, true);
+
+        assert_eq!(
+            session.effort_in_force(),
+            None,
+            "a level the account refused was still offered to its next request"
+        );
+        assert_eq!(session.effort(), Some(Effort::Low));
+        assert_eq!(session.account_session().effort(), Some(Effort::Low));
+        assert_eq!(last_note(&session), t!(session_effort_not_read).to_string());
+
+        // A level chosen after that is said to be read by none, and not to be the one a session
+        // keeps, since nothing is sent for it to differ from.
+        set_effort(&mut session, "high");
+        assert_eq!(session.effort(), Some(Effort::High));
+        assert_eq!(last_note(&session), t!(session_effort_not_read).to_string());
     }
 
     /// A turn that learned nothing is not the roster taking back what it said. The listing states
@@ -28064,6 +28424,7 @@ mod tests {
 
         let (done, shortened, _trail) = summarise_on_a_worker(
             &config,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
             conversation,
             None,
             TrustStore::new("/work"),
@@ -31557,6 +31918,34 @@ mod tests {
         answers.asked_about.record(make);
         answers.exposed.allow(".env");
         answers.servers = Some(LanguageServers::new(root, None));
+    }
+
+    /// CHATGPT-10: a branch goes on in the session it was made in, with the identifier its requests
+    /// to the ChatGPT account already carry. The copy shares the prefix the service has cached for
+    /// them, and the original is not asked anything more. The regression it rejects is a branch that
+    /// begins a session of its own, which would leave that cache unfound.
+    #[test]
+    fn branching_a_session_goes_on_with_the_identifier_of_the_conversation_it_copies() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-branch-account-session");
+        std::fs::create_dir_all(&root).expect("create");
+        let (workspace, mut session, mut stored, conversation, mut answers) =
+            a_session_to_branch(&root);
+        let identifier = session.account_session().identifier().to_string();
+
+        assert!(branch_session(
+            &mut session,
+            &mut stored,
+            &conversation,
+            &mut answers,
+            &workspace,
+            &[],
+            "",
+        ));
+
+        assert_eq!(session.account_session().identifier(), identifier);
     }
 
     /// SESSION-31: the session moves onto a marked copy of its record and says where the original
@@ -35096,12 +35485,30 @@ mod tests {
                 "the stored ChatGPT sign-in could not be read",
             ),
             (
-                AccountFailure::Named(Refusal::UsageLimit),
+                AccountFailure::Named {
+                    refusal: Refusal::UsageLimit,
+                    status: None,
+                    retry_after: None,
+                },
                 "has reached its usage limit",
             ),
             (
-                AccountFailure::Named(Refusal::NotPermitted),
+                AccountFailure::Named {
+                    refusal: Refusal::NotPermitted,
+                    status: None,
+                    retry_after: None,
+                },
                 "does not allow this ChatGPT account to be used this way",
+            ),
+            // A usage limit that arrived as a 429 with a wait says the wait and the status, after
+            // the sentence and before nothing: no count of the two tries follows.
+            (
+                AccountFailure::Named {
+                    refusal: Refusal::UsageLimit,
+                    status: Some(429),
+                    retry_after: Some(std::time::Duration::from_secs(600)),
+                },
+                "has reached its usage limit, and the service asked for a wait of about 10 minutes (HTTP 429)",
             ),
             (
                 AccountFailure::Renewal(RenewalFailure::Refused),
@@ -35150,6 +35557,263 @@ mod tests {
         lines.dedup();
         assert_eq!(lines.len(), said.len(), "two failures share a line");
     }
+    /// CHATGPT-8: a `/compact` that failed on the ChatGPT account says that failure's own sentence in
+    /// the line it leaves, which names the command that signs in again, and not the name of a
+    /// category, which cannot. The thread that summarises is the real one, on a model of the account
+    /// in a profile nobody signed in to, so nothing is sent. A failure of any other kind keeps the
+    /// category's name. The regression it rejects is the category's name for a failure of the account.
+    #[test]
+    fn a_compact_that_failed_on_the_chatgpt_account_says_its_own_sentence() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-compact-account");
+        std::fs::create_dir_all(&root).expect("a project");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let config = a_config_needing_no_sign_in();
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("port the parser to the new lexer", "started on it"),
+            ("what about the error type", "widened it"),
+            ("now the tests", "updated them"),
+            ("carry on", "carrying on"),
+        ] {
+            conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+            conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+        }
+        let (to_main, _from_worker) = mpsc::channel();
+
+        let (done, _unchanged, _trail) = summarise_on_a_worker(
+            &config,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            conversation,
+            Some("chatgpt/gpt-6-sol"),
+            TrustStore::new(&root),
+            None,
+            &Cancel::new(),
+            &workspace,
+            None,
+            to_main,
+        );
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        compact_ended(&mut session, 100_000, &done, false);
+        let said = last_note(&session);
+        assert!(
+            said.contains("not signed in to a ChatGPT account"),
+            "{said}"
+        );
+        assert!(said.contains("bravebot auth login chatgpt"), "{said}");
+        assert!(!said.contains("unauthorized"), "{said}");
+    }
+
+    /// CHATGPT-8: a `/compact` that the account refused as a 429 with a wait says the refusal's
+    /// sentence, which holds the wait, and has no status after it, which the terminal's line for a
+    /// failed turn has. The error is the one the thread that summarises hands back, which
+    /// `summarise_on_a_worker` makes with `why_a_summary_failed`, for either refusal.
+    ///
+    /// The regression it rejects is the status of the refusal put after the sentence.
+    #[test]
+    fn a_compact_the_account_refused_says_the_wait_and_no_status() {
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            let failure = AccountFailure::Named {
+                refusal,
+                status: Some(429),
+                retry_after: Some(std::time::Duration::from_secs(600)),
+            };
+            let error = bravebot_agent::compact::CompactError::Chat(
+                bravebot_agent::backend::BackendError::from(ChatError::Account(failure)),
+            );
+            let done = Err(bravebot_agent::report::why_a_summary_failed(&error));
+            let mut session = having_sent(&["first question"]);
+            session.begin_aside();
+
+            compact_ended(&mut session, 100_000, &done, false);
+
+            let said = last_note(&session);
+            assert!(
+                said.contains(&bravebot_agent::chatgpt::said_of_failure(failure)),
+                "{refusal:?}: {said}"
+            );
+            assert!(
+                said.contains("a wait of about 10 minutes"),
+                "{refusal:?}: {said}"
+            );
+            assert!(
+                !said.contains("HTTP") && !said.contains("429"),
+                "{refusal:?}: {said}"
+            );
+        }
+    }
+
+    /// CHATGPT-8: the terminal narrates a summary that failed on the ChatGPT account in the terminal's
+    /// own words, the lower case sentence that writes the command between backticks, and says that the
+    /// turn goes on. The turn is the real one, reporting through the channel the terminal's loop reads,
+    /// on a session whose summary model is the account in a profile nobody signed in to, so nothing is
+    /// sent. The window and an editor are told the same failure in the window's words, which
+    /// `bravebot_ui_bridge` tests.
+    ///
+    /// The regression it rejects is the window's wording reaching the terminal, and the category's
+    /// name in place of the sentence.
+    #[test]
+    fn the_terminal_narrates_a_summary_that_failed_on_the_account_in_the_terminals_words() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-narrated-summary");
+        std::fs::create_dir_all(&root).expect("a project");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let config = a_config_needing_no_sign_in();
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("port the parser to the new lexer", "started on it"),
+            ("what about the error type", "widened it"),
+            ("now the tests", "updated them"),
+            ("carry on", "carrying on"),
+        ] {
+            conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+            conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+        }
+        conversation.measured(50_000);
+        let (to_main, from_worker) = mpsc::channel();
+        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
+        let task = Task::new("finish").with_model(Some("chatgpt/gpt-6-sol".to_string()));
+
+        let ended = turn::resume(
+            &config,
+            &Egress::new(),
+            &workspace,
+            &task,
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut Trail::new(),
+            bravebot_agent::workspace::trust_store(workspace.root()),
+            TrustedPrograms::new(),
+            None,
+            &Cancel::new(),
+        )
+        .outcome;
+
+        assert!(ended.is_err(), "a turn with no sign-in went through");
+        let mut session = having_sent(&["first question"]);
+        for message in from_worker.try_iter() {
+            if let crate::remote_confirm::ToMain::Narration(text) = message {
+                session.narrate(text);
+            }
+        }
+        let said = notes_of(&session).join("\n");
+        assert!(
+            said.contains(
+                "the conversation could not be summarised: not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in; continuing with the existing context"
+            ),
+            "{said}"
+        );
+        assert!(!said.contains("You are not signed in"), "{said}");
+    }
+
+    /// CHATGPT-8: a goal check that failed on the ChatGPT account says that failure's own sentence in
+    /// the line the person is told, which names the command that signs in again, and not the name of
+    /// a category or of the condition. The check is the one the worker thread runs, on a model of the
+    /// account in a profile nobody signed in to, so nothing is sent. The regressions it rejects are
+    /// the category's name for a failure of the account, and the name of the condition shown as it
+    /// is.
+    #[test]
+    fn a_goal_check_that_failed_on_the_chatgpt_account_says_its_own_sentence() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-goal-account");
+        std::fs::create_dir_all(&root).expect("a project");
+        let config = a_config_needing_no_sign_in();
+        let mut conversation = Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("run the tests"));
+        conversation.push(bravebot_aichat::protocol::Message::assistant("they pass"));
+        let check = bravebot_agent::goal::Check::of(&conversation, "cargo test exits 0");
+        let (to_main, _from_worker) = mpsc::channel();
+
+        let (done, _trail) = check_the_goal_on_a_worker(
+            &config,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            check,
+            Some("chatgpt/gpt-6-sol"),
+            TrustStore::new(&root),
+            &Cancel::new(),
+            to_main,
+        );
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        session.start_goal("cargo test exits 0".to_string());
+        assert!(goal_checked(&mut session, done, false).is_none());
+        let said = last_note(&session);
+        assert!(
+            said.contains("not signed in to a ChatGPT account")
+                && said.contains("bravebot auth login chatgpt"),
+            "{said}"
+        );
+        assert!(
+            !said.contains("unauthorized") && !said.contains("ChatGPT account:"),
+            "{said}"
+        );
+    }
+
+    /// CHATGPT-8: a manifest run whose planner failed on the ChatGPT account says that failure's own
+    /// sentence in the line the transcript keeps, and a run the person stopped says nothing. The run
+    /// is the one the worker thread starts, on a model of the account in a profile nobody signed in
+    /// to, so it fails before anything is sent.
+    #[test]
+    fn a_manifest_run_that_failed_on_the_chatgpt_account_says_its_own_sentence() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-manifest-account");
+        std::fs::create_dir_all(&root).expect("a project");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let config = a_config_needing_no_sign_in();
+        let task = Task::new("read a.md").with_model(Some("chatgpt/gpt-6-sol".to_string()));
+        let mut trust = TrustStore::new(&root);
+
+        let outcome = bravebot_agent::manifest::run_recording(
+            &config,
+            &Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut bravebot_core::event::RecordingSink::new(),
+            &mut trust,
+            &Cancel::new(),
+        );
+
+        assert!(outcome.is_err(), "a run with no sign-in went through");
+        let mut session = having_sent(&["first question"]);
+        say_how_a_manifest_run_ended(&mut session, &outcome, false);
+        let said = last_note(&session);
+        assert!(
+            said.contains("not signed in to a ChatGPT account"),
+            "{said}"
+        );
+        assert!(said.contains("bravebot auth login chatgpt"), "{said}");
+        assert!(
+            !said.contains("unauthorized") && !said.contains("ChatGPT account:"),
+            "{said}"
+        );
+
+        let mut stopped = having_sent(&["first question"]);
+        let before = stopped.transcript.len();
+        say_how_a_manifest_run_ended(&mut stopped, &outcome, true);
+        assert_eq!(
+            stopped.transcript.len(),
+            before,
+            "a stopped run was reported"
+        );
+    }
+
     /// The stop arm the event loop reaches takes the prompt the turn began with, so it is the
     /// half that can hand it back to the box. An interjection the turn had already taken is part
     /// of the conversation it carries on with, so neither prompt moves: the opening one stays sent
@@ -36727,6 +37391,10 @@ mod tests {
 #[cfg(test)]
 #[path = "undo_tests.rs"]
 mod undo_tests;
+
+#[cfg(all(test, unix))]
+#[path = "chatgpt_failure_tests.rs"]
+mod chatgpt_failure_tests;
 
 #[cfg(test)]
 #[path = "credential_mode_tests.rs"]

@@ -1,20 +1,28 @@
 //! Which model a run or session asks for, and what is said where nothing serves it.
 
 use crate::import;
+use bravebot_agent::chatgpt::AccountFile;
 use bravebot_config::Config;
 use bravebot_i18n::t;
 use std::path::Path;
 
 /// What to say to somebody whose configuration names no service that can serve a turn.
 ///
-/// Three routes, each a line, in the order they are worth taking today. The two that reach a
-/// service directly lead; importing a Leo Premium subscription is last and says why, since those
-/// models are reached through Brave's AI gateway and it has open problems of its own. It is still
-/// the shortest route for somebody who already subscribes, which is why it is offered at all.
+/// Four routes, each a line, in the order they are worth taking today. The three that reach a
+/// service directly lead: AWS Bedrock, a gateway, and signing in with a ChatGPT account. Importing a
+/// Leo Premium subscription is last and says why, since those models are reached through Brave's AI
+/// gateway and it has open problems of its own. It is still the shortest route for somebody who
+/// already subscribes, which is why it is offered at all.
 ///
-/// `a_service_is_configured` replaces all three with one line. That person set a service up and
+/// `a_service_is_configured` replaces all four with one line. That person set a service up and
 /// left the model this build baked in, which a settings block copied out of another tool does by
-/// design, so what they need is the key that names one of their own models.
+/// design, so what they need is the key that names one of their own models. Where the service is a
+/// stored ChatGPT sign-in the line says to pick one of the account's models in `/model` or to name
+/// one, in the words the sign-in command ends with.
+///
+/// `chatgpt` is what the sign-in file holds. A file that cannot be read is said before the routes,
+/// with the remedy, since it is not a service and the person has to know why a sign-in they made is
+/// not used.
 ///
 /// `refused` is what was wrong with a stored subscription, where something was. It leads, because
 /// it changes what the person should do: a batch that could not be read is one import away.
@@ -33,11 +41,17 @@ use std::path::Path;
 pub(crate) fn how_to_configure_a_model(
     refused: Option<&str>,
     a_service_is_configured: bool,
+    chatgpt: AccountFile,
     looked: &import::Looked,
 ) -> String {
     let mut lines = vec![t!(onboarding_no_model).to_string()];
     if let Some(problem) = refused {
         lines.push(t!(onboarding_subscription_unusable, problem = problem));
+    }
+    if chatgpt == AccountFile::Unreadable
+        && let crate::chatgpt::Standing::Unusable(reason) = crate::chatgpt::standing()
+    {
+        lines.push(reason);
     }
     lines.push(String::new());
     if !looked.left().is_empty() {
@@ -49,16 +63,20 @@ pub(crate) fn how_to_configure_a_model(
         lines.push(String::new());
     }
 
-    // One line or three routes, never both. Somebody who has a service set up and only the wrong
-    // model in force is one settings key away, and three ways to set up a service is three things
+    // One line or the routes, never both. Somebody who has a service set up and only the wrong
+    // model in force is one settings key away, and four ways to set up a service is four things
     // to read past on the way to the one that applies.
-    if a_service_is_configured {
+    if a_service_is_configured && chatgpt == AccountFile::Stored {
+        lines.push(t!(onboarding_chatgpt_signed_in).to_string());
+        lines.push(t!(chatgpt_use_by_name).to_string());
+    } else if a_service_is_configured {
         lines.push(t!(onboarding_name_a_configured_model).to_string());
     } else {
         lines.push(t!(onboarding_pick_one).to_string());
         for route in [
             t!(onboarding_bedrock),
             t!(onboarding_openrouter),
+            t!(onboarding_chatgpt),
             t!(onboarding_leo),
         ] {
             lines.push(format!("  - {route}"));
@@ -81,9 +99,11 @@ pub(crate) fn nothing_serves(config: &Config, model: &str) -> Option<String> {
         bravebot_agent::backend::Serving::NothingConfigured {
             subscription,
             a_service_is_configured,
+            chatgpt,
         } => Some(how_to_configure_a_model(
             subscription.as_deref(),
             a_service_is_configured,
+            chatgpt,
             &import::looked(a_service_is_configured),
         )),
         bravebot_agent::backend::Serving::Refused { file, why } => {
@@ -214,4 +234,78 @@ pub(crate) fn model_not_served(asked: &str, comparable: bool, served: &str) -> O
         asked = asked,
         served = served
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BACKEND-39: each way to configure a service is named by what to type or write, the ChatGPT
+    /// sign-in among them, and Leo Premium comes last because its line tells the reader to prefer
+    /// the others. A list that left the sign-in out sends somebody who has the account to a gateway
+    /// they do not need.
+    #[test]
+    fn the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_leo_last() {
+        let said = how_to_configure_a_model(
+            None,
+            false,
+            AccountFile::NotStored,
+            &import::Looked::default(),
+        );
+        let at = |route: &str| {
+            said.find(route)
+                .unwrap_or_else(|| panic!("{route} is not a route: {said}"))
+        };
+        let routes = [
+            at("amazon-bedrock"),
+            at("OpenRouter"),
+            at("bravebot auth login chatgpt"),
+            at("bravebot auth login leo"),
+        ];
+        assert!(routes.is_sorted(), "{said}");
+    }
+
+    /// BACKEND-39: somebody who has a service set up and only the wrong model in force is told to
+    /// name a model, and is not sent to set up another service.
+    #[test]
+    fn a_configured_service_is_told_to_name_a_model_and_is_not_offered_the_routes() {
+        let said = how_to_configure_a_model(
+            None,
+            true,
+            AccountFile::NotStored,
+            &import::Looked::default(),
+        );
+        assert!(said.contains("`model` key"), "{said}");
+        for route in [
+            "amazon-bedrock",
+            "OpenRouter",
+            "bravebot auth login chatgpt",
+            "bravebot auth login leo",
+        ] {
+            assert!(!said.contains(route), "{route} was offered: {said}");
+        }
+    }
+
+    /// BACKEND-39: somebody whose ChatGPT sign-in is stored and whose model in force is Brave's own
+    /// is told to pick one of the account's models, in the words the sign-in command ends with, and
+    /// is not shown the routes they have just followed. A list that kept showing the routes would
+    /// send them to sign in again.
+    #[test]
+    fn a_stored_chatgpt_sign_in_is_told_to_name_one_of_the_accounts_models_and_not_offered_the_routes()
+     {
+        let said =
+            how_to_configure_a_model(None, true, AccountFile::Stored, &import::Looked::default());
+        assert!(said.contains(t!(onboarding_chatgpt_signed_in)), "{said}");
+        assert!(said.contains(t!(chatgpt_use_by_name)), "{said}");
+        assert!(said.contains("chatgpt/<model>"), "{said}");
+        for route in [
+            "amazon-bedrock",
+            "OpenRouter",
+            "bravebot auth login chatgpt",
+            "bravebot auth login leo",
+            "`model` key",
+        ] {
+            assert!(!said.contains(route), "{route} was offered: {said}");
+        }
+    }
 }

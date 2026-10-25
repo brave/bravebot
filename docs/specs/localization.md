@@ -132,6 +132,8 @@ sees is worth nothing if two people running it see different things.
 `verified-by: bravebot_i18n::lib::a_process_whose_environment_names_a_language_still_reads_the_reference_until_asked`
 `verified-by: bravebot_i18n::sizes_in_french::the_size_notes_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: bravebot_ui_bridge::history::a_failed_turn_on_the_account_is_sent_in_english_on_a_machine_set_to_french`
+`verified-by: bravebot_ui_bridge::history::the_narrations_for_a_summary_the_account_could_not_make_are_in_english_on_a_machine_set_to_french`
 
 <a id="LOCALE-8"></a>
 ### LOCALE-8: what the person said outranks the shell, and only their own file says it

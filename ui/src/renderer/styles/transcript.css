@@ -460,6 +460,8 @@
 .plan-ended { border: 1px solid var(--border-subtle); border-radius: var(--radius-card); margin: var(--leo-spacing-m) 0; padding: 10px 12px; }
 .plan-ended.failed { border-color: var(--removed); }
 .plan-ended p { margin: var(--leo-spacing-xs) 0; color: var(--ink-secondary); font: var(--type-caption); }
+/* A command in the sentence is code, in the code type role like the rest of the window's code. The rule names the sentence's paragraph, so the code in the saved run's line below it is not matched. */
+.plan-ended .plan-detail code { font: var(--type-code); overflow-wrap: anywhere; }
 .plan-ended summary { cursor: pointer; font: var(--type-caption); margin-top: 6px; }
 .plan-text { margin: var(--leo-spacing-xs) 0 0; font: var(--type-code); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 

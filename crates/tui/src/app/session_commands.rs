@@ -52,6 +52,7 @@ pub(super) fn effort_picked(
     session.choose_effort(level);
     session.note(said_of(level));
     say_if_unread(session);
+    say_if_kept_for_account(session);
 }
 
 /// Open the effort picker as a mode of the session, for a turn that is running.
@@ -100,6 +101,30 @@ pub(super) fn say_if_unread(session: &mut Session) {
     if session.effort().is_some() && !session.model_reads_effort() {
         session.note(t!(session_effort_not_read));
     }
+}
+
+/// Say that the model in force is the ChatGPT account's and is sent the level the session began
+/// with, where the level chosen is another.
+///
+/// The choice is kept either way: it is the level of the next session, and of every model but the
+/// account's. Said when the level is chosen and when a model of the account is picked, the two moves
+/// that can leave the choice and the level sent apart, so that what was asked for is not reported as
+/// what is sent (CHATGPT-10). Not said where the model reads no level, since nothing is sent then and
+/// [`say_if_unread`] has said so.
+pub(super) fn say_if_kept_for_account(session: &mut Session) {
+    let began = session.account_session().effort();
+    if !session.model_is_account() || !session.model_reads_effort() || session.effort() == began {
+        return;
+    }
+    let word = |level: Option<bravebot_aichat::protocol::Effort>| match level {
+        Some(level) => level.as_str().to_string(),
+        None => t!(effort_unset).to_string(),
+    };
+    session.note(t!(
+        session_effort_kept_for_account,
+        began = word(began),
+        chosen = word(session.effort())
+    ));
 }
 
 /// Take a level by name without opening the picker.

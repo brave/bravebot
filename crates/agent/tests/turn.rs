@@ -20372,6 +20372,7 @@ fn a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted() 
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -20449,6 +20450,7 @@ fn a_skill_from_an_untrusted_project_is_not_sent_again_when_the_conversation_is_
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35331,6 +35333,7 @@ fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35523,6 +35526,7 @@ fn compacting_on_request_an_untrusted_conversation_is_refused_and_leaves_no_line
     let outcome = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35784,6 +35788,7 @@ fn compacting_on_request_reaches_the_model_and_shortens_the_conversation() {
     let done = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35828,6 +35833,7 @@ fn a_stop_pressed_during_a_summary_reaches_the_request_and_leaves_the_conversati
     let error = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35889,6 +35895,7 @@ fn a_stop_pressed_while_a_summary_is_out_walks_away_from_the_request() {
     let outcome = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35933,6 +35940,7 @@ fn the_trail_says_what_a_compaction_gave_up_and_what_it_cost() {
     let done = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35993,6 +36001,7 @@ fn a_focus_typed_after_compact_reaches_the_summariser_after_the_exchange() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36033,6 +36042,7 @@ fn the_trail_records_that_a_focus_was_given_and_never_its_words() {
         turn::compact(
             &config,
             &egress,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
             &mut conversation,
             None,
             &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36121,6 +36131,7 @@ fn a_compaction_runs_on_the_summary_model_the_settings_name() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36155,6 +36166,7 @@ fn a_compaction_with_no_summary_model_runs_on_the_sessions_own() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36209,6 +36221,7 @@ fn a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conve
     let refused = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36261,6 +36274,7 @@ fn a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_co
     let refused = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36299,6 +36313,7 @@ fn a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_co
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36328,6 +36343,7 @@ fn a_check_runs_on_the_summary_model_the_settings_name() {
     turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36359,6 +36375,7 @@ fn a_check_with_no_summary_model_runs_on_the_sessions_own() {
     turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36403,6 +36420,7 @@ fn a_summary_model_needing_a_sign_in_sends_no_check() {
     let refused = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36449,6 +36467,7 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
     let refused = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36480,6 +36499,7 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
     turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36507,6 +36527,7 @@ fn a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_b
     let error = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36547,6 +36568,7 @@ fn a_goal_check_reaches_the_model_and_comes_back_as_a_verdict() {
     let assessed = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36603,6 +36625,7 @@ fn a_check_over_an_exchange_that_met_something_untrusted_comes_back_quarantined(
     let assessed = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36630,6 +36653,7 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &conversation,
             "why is the parser recursive?",
@@ -36686,6 +36710,7 @@ fn a_stop_pressed_during_a_question_reaches_the_request_and_nothing_is_answered(
     let error = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &conversation,
             "why is the parser recursive?",
@@ -36730,6 +36755,7 @@ fn a_recap_is_cut_to_its_limit_and_leaves_the_conversation_alone() {
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::recap(&conversation),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36786,6 +36812,7 @@ fn an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_the_conversati
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::enhance(&conversation, "fix the recursion"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36840,6 +36867,7 @@ fn an_enhancement_over_an_untrusted_exchange_is_not_offered_for_the_box() {
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::enhance(&conversation, "fix the parser"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36869,6 +36897,7 @@ fn a_picture_pasted_into_a_question_reaches_the_model_with_it() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "what is in [Image #1]?",
@@ -36925,6 +36954,7 @@ fn a_picture_dropped_onto_a_question_reaches_the_model_with_it() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "what is in [Image #1]?",
@@ -36967,6 +36997,7 @@ fn a_picture_pasted_into_a_question_is_named_in_the_audit_trail() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "what is in [Image #1]?",
@@ -37011,6 +37042,7 @@ fn the_judge_asks_for_no_cache_of_the_exchange_it_judges() {
     turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&an_exchange_to_ask_beside(), "a.txt exists"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -37036,6 +37068,7 @@ fn a_question_asked_beside_the_work_asks_for_no_cache_of_the_exchange() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "why recursive?",
@@ -37066,6 +37099,7 @@ fn an_answer_over_a_trusted_exchange_may_be_written_down() {
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "why recursive?",
@@ -37103,6 +37137,7 @@ fn an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down() {
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(&conversation, "why recursive?", Vec::new()),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -37180,6 +37215,7 @@ fn compacting_on_request_grants_itself_nothing_but_reaching_the_model() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut a_long_conversation(),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -54492,6 +54528,7 @@ fn a_hook_fires_when_a_person_compacts_the_conversation() {
     turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -54545,6 +54582,7 @@ fn a_compaction_runs_no_hook_that_was_written_for_another_moment() {
     turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -54661,6 +54699,7 @@ fn a_summary_a_person_asked_for_and_the_gate_refused_fires_no_hook() {
     let outcome = turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -54706,6 +54745,7 @@ fn a_conversation_with_nothing_to_cut_fires_no_hook() {
     let outcome = turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut asked_for,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -54840,6 +54880,7 @@ fn a_failing_hook_does_not_undo_a_compaction_a_person_asked_for() {
     let done = turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut reporter,
@@ -70940,6 +70981,7 @@ fn an_asides_cut_is_made_inside_the_kernel() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::recap(&conversation),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),

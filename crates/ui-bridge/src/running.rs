@@ -133,6 +133,14 @@ pub struct State {
     /// run reports into it, so the list lasts across them, and the window is sent the whole of it
     /// each time it changes (VIEW-35). Not saved: a reopened session and a fork start with none.
     pub roster: Arc<Mutex<bravebot_agent::roster::Roster>>,
+    /// What this session carries into its requests to the ChatGPT account: the identifier they carry
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Begun with the state, so a session opened, one resumed from a record and a fork each have an
+    /// identifier of their own, and a second session in the process never shares the first's. Held
+    /// here so that every turn and run of the session is built with the same one. Not saved: the
+    /// record holds nothing about which requests the account tied together.
+    pub account: bravebot_agent::chatgpt::AccountSession,
 }
 
 /// The session's own directory outside the project, or why it has none.
@@ -216,6 +224,7 @@ impl State {
             question_answers: Arc::default(),
             moments: None,
             roster: Arc::default(),
+            account: bravebot_agent::chatgpt::AccountSession::begin(),
         }
     }
 
@@ -263,6 +272,7 @@ impl State {
             question_answers: Arc::default(),
             moments: None,
             roster: Arc::default(),
+            account: bravebot_agent::chatgpt::AccountSession::begin(),
         })
     }
 
@@ -331,6 +341,7 @@ impl State {
             question_answers: Arc::default(),
             moments: None,
             roster: Arc::default(),
+            account: bravebot_agent::chatgpt::AccountSession::begin(),
         }
     }
 }
@@ -522,5 +533,48 @@ impl Running {
         // match arm accepts it. A `Write` sent at a waiting run would be discarded as
         // a mismatch and the turn would block until the channel dropped instead.
         let _ = self.answers.send(question.kind.refusal());
+    }
+}
+
+/// What the tests of the desktop's account sessions read: the identifier of the session each turn
+/// and each manifest run was built in, in the order they began.
+///
+/// Recorded by [`crate::bridge`]'s worker and [`crate::manifest`]'s walk at the point they hand the
+/// task they built to the agent, so a task built outside the session says so here. The agent sends
+/// the identifier to a host that is a constant, which no test of this crate can stand a server in
+/// for. A test that reads it runs in a process of its own (`in_isolated_profile`), so what it reads
+/// is what that test did.
+#[cfg(test)]
+pub(crate) mod built_in {
+    use std::sync::Mutex;
+
+    static SEEN: Mutex<Vec<(&'static str, String)>> = Mutex::new(Vec::new());
+
+    /// Note that a `kind` of work, `"turn"` or `"manifest"`, was built in the session `identifier`.
+    pub(crate) fn record(kind: &'static str, identifier: &str) {
+        if let Ok(mut seen) = SEEN.lock() {
+            seen.push((kind, identifier.to_string()));
+        }
+    }
+
+    /// Everything recorded so far.
+    pub(crate) fn seen() -> Vec<(&'static str, String)> {
+        SEEN.lock().map(|seen| seen.clone()).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CHATGPT-10: two sessions open in one process are two sessions to the account, so neither
+    /// takes the other's share of the service's cache. The regression it rejects is an identifier
+    /// for the process, which is what every session carried before it had one of its own.
+    #[test]
+    fn two_sessions_open_in_one_process_carry_identifiers_of_their_own() {
+        let first = State::fresh(TrustStore::new("/work"));
+        let second = State::fresh(TrustStore::new("/work"));
+
+        assert_ne!(first.account.identifier(), second.account.identifier());
     }
 }

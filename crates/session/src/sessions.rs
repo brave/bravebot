@@ -695,11 +695,15 @@ pub fn failure_reason(
 ) -> String {
     use bravebot_agent::Category;
     use bravebot_aichat::OpenCall;
-    // A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot
-    // run reports (CHATGPT-8). It is the whole reason: its remedy ends it, so no status or count of
-    // tries follows, and the category beside it says only what class the failure was.
+    // A failure of a ChatGPT account is said in the sentence of its own step (CHATGPT-8), with the
+    // status of a refusal that came with one after it, as the one-shot run says it: from the one
+    // function both call. No count of tries follows, since the sentence says what to do and the
+    // category beside it says only what class the failure was.
     if let Some(account) = diagnosis.account {
-        return t!(session_error, problem = account_failure(account));
+        return t!(
+            session_error,
+            problem = bravebot_agent::chatgpt::told_of_failure(account)
+        );
     }
     let what: std::borrow::Cow<'_, str> = match diagnosis.category {
         Category::Unauthorized => t!(failure_unauthorized).into(),
@@ -708,7 +712,7 @@ pub fn failure_reason(
         Category::RateLimited => match diagnosis.retry_after {
             Some(wait) => t!(
                 failure_rate_limited_for,
-                minutes = wait.as_secs().div_ceil(60).max(1)
+                minutes = bravebot_agent::outcome::minutes_to_wait(wait)
             )
             .into(),
             None => t!(failure_rate_limited).into(),
@@ -759,36 +763,6 @@ pub fn failure_reason(
         said = t!(failure_with_attempts, what = said, attempts = attempts);
     }
     t!(session_error, problem = said)
-}
-
-/// The sentence for a failure of a ChatGPT account, chosen from the closed value alone
-/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). Nothing a reply said is in it.
-pub fn account_failure(failure: bravebot_aichat::AccountFailure) -> String {
-    use bravebot_aichat::responses::protocol::Refusal;
-    use bravebot_aichat::{AccountFailure, RenewalFailure};
-    match failure {
-        AccountFailure::NotSignedIn => t!(failure_account_not_signed_in).into(),
-        AccountFailure::Ended => t!(failure_account_ended).into(),
-        AccountFailure::Refused => t!(failure_account_token_refused).into(),
-        AccountFailure::Unusable => t!(failure_account_unusable).into(),
-        AccountFailure::Named(Refusal::UsageLimit) => t!(failure_account_usage_limit).into(),
-        AccountFailure::Named(Refusal::NotPermitted) => t!(failure_account_not_permitted).into(),
-        AccountFailure::Renewal(RenewalFailure::Refused) => {
-            t!(failure_account_renewal_refused).into()
-        }
-        AccountFailure::Renewal(RenewalFailure::RateLimited) => {
-            t!(failure_account_renewal_rate_limited).into()
-        }
-        AccountFailure::Renewal(RenewalFailure::Unavailable) => {
-            t!(failure_account_renewal_unavailable).into()
-        }
-        AccountFailure::Renewal(RenewalFailure::Incomplete) => {
-            t!(failure_account_renewal_incomplete).into()
-        }
-        AccountFailure::Renewal(RenewalFailure::Transport) => {
-            t!(failure_account_renewal_transport).into()
-        }
-    }
 }
 
 /// One point a rewind can go back to, as it is written down.
@@ -3675,6 +3649,17 @@ mod tests {
         assert!(said(Some(Duration::from_secs(5))).contains("(HTTP 429)"));
     }
 
+    /// A refusal that names the account, with neither a status nor a wait.
+    fn refused(
+        refusal: bravebot_aichat::responses::protocol::Refusal,
+    ) -> bravebot_aichat::AccountFailure {
+        bravebot_aichat::AccountFailure::Named {
+            refusal,
+            status: None,
+            retry_after: None,
+        }
+    }
+
     /// CHATGPT-8: a failure of a ChatGPT account is said in the sentence of its own step, the one a
     /// one-shot run reports for it, and in no sentence of another. Each of the eleven is a line of
     /// its own, whatever category it belongs to, and none is given the status or the count of tries
@@ -3708,11 +3693,11 @@ mod tests {
                 "the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` to see why",
             ),
             (
-                AccountFailure::Named(Refusal::UsageLimit),
+                refused(Refusal::UsageLimit),
                 "OpenAI says this ChatGPT account has reached its usage limit",
             ),
             (
-                AccountFailure::Named(Refusal::NotPermitted),
+                refused(Refusal::NotPermitted),
                 "OpenAI does not allow this ChatGPT account to be used this way",
             ),
             (
@@ -3738,10 +3723,9 @@ mod tests {
         ];
         let mut said = Vec::new();
         for (failure, sentence) in sentences {
-            // The line a one-shot run reports is the same sentence, so the three places say one thing.
-            assert_eq!(failure.to_string(), sentence, "{failure:?}");
-
             let error = BackendError::from(ChatError::Account(failure));
+            // The line a one-shot run reports is the same sentence, so the two places say one thing.
+            assert_eq!(error.to_string(), sentence, "{failure:?}");
             let line = failure_reason(error.diagnosis(), None);
             assert_eq!(line, format!("error: {sentence}"), "{failure:?}");
             said.push(line);
@@ -3762,6 +3746,85 @@ mod tests {
         assert_eq!(said.len(), sentences.len(), "two failures share a line");
     }
 
+    /// CHATGPT-8: a usage limit that arrived as a 429 with a wait says the wait in its sentence, and
+    /// then the status, as any other refusal says its status. No count of tries follows it. The same
+    /// limit reported on a stream came with neither status nor wait and is the sentence alone, and a
+    /// wait that came with another status is carried and not said, since only a 429 asks for one.
+    ///
+    /// The regressions it rejects are a refusal that says only that it was refused, as the category
+    /// line of one that named the account did, a wait said for a refusal that did not ask for one,
+    /// the count of tries tacked on after a remedy, and the order of the parts.
+    #[test]
+    fn a_refusal_that_named_the_account_says_its_wait_and_its_status_and_no_count() {
+        use bravebot_agent::backend::BackendError;
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError};
+        use std::time::Duration;
+
+        let named = |refusal, status, retry_after| AccountFailure::Named {
+            refusal,
+            status,
+            retry_after,
+        };
+        let said = |failure, attempts| {
+            let error = BackendError::Attempted {
+                attempts,
+                usage: None,
+                context_tokens: None,
+                cause: Box::new(BackendError::from(ChatError::Account(failure))),
+            };
+            failure_reason(error.diagnosis(), None)
+        };
+
+        let limit = named(
+            Refusal::UsageLimit,
+            Some(429),
+            Some(Duration::from_secs(601)),
+        );
+        assert_eq!(
+            said(limit, 3),
+            "error: OpenAI says this ChatGPT account has reached its usage limit, and the service \
+             asked for a wait of about 11 minutes (HTTP 429)"
+        );
+        // A few seconds are one minute, in the singular.
+        assert_eq!(
+            said(
+                named(Refusal::UsageLimit, Some(429), Some(Duration::from_secs(5))),
+                1
+            ),
+            "error: OpenAI says this ChatGPT account has reached its usage limit, and the service \
+             asked for a wait of about 1 minute (HTTP 429)"
+        );
+        // The wait is said for either refusal, and only where the refusal came as a 429.
+        assert!(
+            said(
+                named(
+                    Refusal::NotPermitted,
+                    Some(429),
+                    Some(Duration::from_secs(60))
+                ),
+                1
+            )
+            .contains("a wait of about 1 minute (HTTP 429)")
+        );
+        assert_eq!(
+            said(
+                named(
+                    Refusal::NotPermitted,
+                    Some(403),
+                    Some(Duration::from_secs(600))
+                ),
+                1
+            ),
+            "error: OpenAI does not allow this ChatGPT account to be used this way (HTTP 403)"
+        );
+        // Reported on a stream, which was answered 200: neither.
+        assert_eq!(
+            said(named(Refusal::UsageLimit, None, None), 1),
+            "error: OpenAI says this ChatGPT account has reached its usage limit"
+        );
+    }
+
     /// CHATGPT-8: a refusal that names the account says which of the two it was, the usage limit or
     /// the account not being usable this way, and neither is the line of the `refused` category,
     /// which says the service rejected the request. Neither sends the person to sign in again, since
@@ -3771,11 +3834,11 @@ mod tests {
     {
         use bravebot_agent::backend::BackendError;
         use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::ChatError;
         use bravebot_aichat::responses::protocol::Refusal;
-        use bravebot_aichat::{AccountFailure, ChatError};
 
         let said = |refusal| {
-            let error = BackendError::from(ChatError::Account(AccountFailure::Named(refusal)));
+            let error = BackendError::from(ChatError::Account(refused(refusal)));
             let diagnosis = error.diagnosis();
             assert_eq!(diagnosis.category, Category::Refused, "{refusal:?}");
             failure_reason(diagnosis, None)

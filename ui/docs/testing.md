@@ -153,7 +153,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:columns` | Folding each side column, and what is remembered |
 | `pnpm run drive:panels` | The context panels, the row of buttons that turns them on and off, and the transcript's tool runs |
 | `pnpm run drive:markdown` | Markdown rendering, light and dark |
-| `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
+| `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. A warning of the model list, drawn with the command it names as code in the code type role, at the window's size and at its minimum. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
 | `pnpm run drive:run` | Approving a command from the window, end to end through a live turn |
 | `pnpm run drive:fetch` | Approving and refusing a fetch, and a redirect to another host, from the window, end to end, against a local model service and website |
 | `pnpm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |

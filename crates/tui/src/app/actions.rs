@@ -404,6 +404,9 @@ impl Held<'_> {
             .with_home(bravebot_agent::home::directory())
             .with_profile(bravebot_agent::home::profile())
             .with_cache(bravebot_agent::home::cache())
+            // No request is made here, and a task is in the session of the person that typed it all
+            // the same, so one that came to make a request would not be a session of its own.
+            .in_account_session(self.session.account_session().clone())
             .remembering(Some(self.stored.id().to_string()))
             .with_permissions(self.answers.rules.permissions.clone())
             .with_permission_mode(permission_mode.clone())

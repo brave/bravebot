@@ -308,6 +308,8 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn output_tokens(&mut self, written: u64);
         fn phase(&mut self, phase: Phase);
         fn narration(&mut self, text: String);
+        fn summary_failed(&mut self, why: crate::report::Why);
+        fn fell_back(&mut self, from: &str, to: &str, why: crate::report::Why);
         fn streaming(&mut self, text: String);
         fn thinking(&mut self, text: String);
         fn composing(&mut self, call: Option<&'static str>);

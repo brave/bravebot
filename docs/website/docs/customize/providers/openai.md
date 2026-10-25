@@ -69,5 +69,8 @@ The SDK decides for every model the entry lists, and the entry's `id` does not m
 a later request. Pictures are sent, and a document attachment is not. The effort level is sent as
 `reasoning.effort`, with a summary of the reasoning that `/thinking` shows.
 
-A model is named with the id in front, as `openai/<model id>`, in `--model` or the `model` key. Signing
-in with a ChatGPT account instead of a key is not supported.
+A model is named with the id in front, as `openai/<model id>`, in `--model` or the `model` key.
+
+Signing in with a ChatGPT account instead of a key is a different route, and its models are named
+`chatgpt/<model>`: see [ChatGPT](chatgpt.md). It does not use `OPENAI_API_KEY`, and an `openai/` model
+does not use the sign-in.

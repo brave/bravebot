@@ -421,17 +421,24 @@ onboarding-import-many =
 # where somebody following that route lands, and what they have to do is name one of their own.
 onboarding-name-a-configured-model =
     A service is configured, but the model in force is one of Brave's: name one of your own with the `model` key in ~/.bravebot/settings.json, or with --model on a one-shot run. `bravebot doctor` lists what each configured service offers.
+# Said instead of the routes where a ChatGPT sign-in is stored and the model in force is one of
+# Brave's. The sign-in is the service that is configured, so what is left is naming one of its
+# models, which chatgpt-use-by-name says on the line after.
+onboarding-chatgpt-signed-in = A ChatGPT sign-in is stored, but the model in force is one of Brave's.
 onboarding-pick-one = Configure one of these, then run bravebot again:
 onboarding-bedrock =
     AWS Bedrock, through your own account: put a `provider` block named `amazon-bedrock` in ~/.bravebot/settings.json, with its region and the models to offer.
 onboarding-openrouter =
     OpenRouter, or any other OpenAI-compatible gateway: put a `provider` block named for it in ~/.bravebot/settings.json, with the variable that holds its API key and the models to offer.
-# Last of the three, and said to be last, because these models are reached through Brave's AI
+# The ChatGPT route: a person types the command and signs in in the browser it opens.
+onboarding-chatgpt =
+    A ChatGPT Plus or Pro account, if you have one: run `bravebot auth login chatgpt` in a terminal and sign in in the browser it opens. Its models are then offered in /model as chatgpt/<model>.
+# Last of the four, and said to be last, because these models are reached through Brave's AI
 # gateway, which has open problems of its own. It is still the shortest route for somebody who
 # already subscribes, so it is offered rather than left out.
 onboarding-leo =
-    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the two above for now.
-# Said after either, so it reads after the three routes and after the one line alike.
+    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the three above for now.
+# Said after either, so it reads after the routes and after the one line alike.
 onboarding-where-to-read =
     There are worked examples in https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
@@ -973,6 +980,8 @@ repeated-call-refused = { $tool } was not run: the same call { $count } times in
 repeated-call-stopped = stopped at a repeated call: { $tool } made { $count } times in a row
 # Said when a turn's model kept failing and the person's fallbackModel takes over for the rest of it.
 fallback-model-in-use = { $from } failed as { $category }; this turn moves to { $to }
+# The same where the failure was the ChatGPT account's, which is said in its own sentence.
+fallback-model-in-use-account = { $from } failed ({ $problem }); this turn moves to { $to }
 # Said instead where the turn has no tools left, so the model is asked for an answer rather than
 # for the work.
 ceiling-stop-answer-now = the model reached its output limit of { $tokens } tokens; asking it for a shorter answer
@@ -1183,7 +1192,7 @@ auth-status-not-signed-in = not signed in: { $detail }
 auth-status-unusable = unusable: { $detail }
 auth-status-none-usable = no sign-in is usable
 auth-status-not-all-usable = a sign-in asked about is not usable
-auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock or gateway
+auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock, gateway or chatgpt
 auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
 auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
 # The instant is the one the access token expires, written as 2026-10-22T21:05:27Z. The token is
@@ -1244,6 +1253,8 @@ chatgpt-failed-no-use-scope =
     the sign-in did not allow bravebot to use the subscription's tokens, so nothing was stored; run bravebot auth login chatgpt and allow it, or use an API key with the openai gateway
 chatgpt-failed-id-token =
     the ID token the authorization server returned did not verify, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-clock =
+    the clock of this computer is set before 1970, so the sign-in cannot tell when the ID token expires and nothing was stored; set the clock, then run bravebot auth login chatgpt to try again
 chatgpt-failed-key-set = the keys that verify the sign-in could not be fetched: { $reason }; nothing was stored
 chatgpt-failed-exchange = the sign-in could not be completed: { $reason }; nothing was stored
 chatgpt-class-refused = the authorization server refused the request
@@ -2387,6 +2398,9 @@ status-effort = Effort
 status-effort-chosen = chosen with /effort
 status-effort-default = whatever the service does on its own
 status-effort-not-read = chosen with /effort, but this model reads none
+# The level shown is the one a ChatGPT session began with, which that account is sent for the whole
+# session. The level chosen since is a level word or the word for the default.
+status-effort-kept-for-account = the level this ChatGPT session began with; { $chosen } was chosen with /effort and applies from the next session
 status-theme = Theme
 status-theme-chosen = chosen with /theme
 status-served = Answered by
@@ -3261,6 +3275,9 @@ session-models-unavailable = could not list models: { $problem }
 session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
 session-chatgpt-models-compiled = could not list the ChatGPT account's models, so /model shows a built-in list that may name a model the account cannot reach; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
 session-chatgpt-models-refused = could not list the ChatGPT account's models: { $refusal }
+# Said when the picker opens and a gateway whose settings name no models could not be asked for its list,
+# so none of its models are offered. A gateway whose key is missing is not asked and is not said here.
+session-gateway-models-unreadable = could not read the list of models from { $gateway }, so none of its models are offered; try again, or name one, as in bravebot --model { $id }/<model>
 session-theme-set = theme { $theme }
 session-no-such-theme = no theme named { $theme }; try /theme for the list
 session-editing-vi = editing the way vi does; esc for commands, i to type
@@ -3269,6 +3286,9 @@ session-effort-set = thinking at { $effort }
 session-effort-unset = thinking as the service decides
 session-no-such-effort = no effort level named { $effort }; try /effort for the list
 session-effort-not-read = this model reads no effort level, so requests carry none
+# Said where the level chosen is not the one a session on a ChatGPT model began with, because that
+# account is sent one level for a whole session. Both are level words or the word for the default.
+session-effort-kept-for-account = a ChatGPT session keeps the effort level it began with, { $began }, so { $chosen } applies from the next session, which /clear begins
 session-language-in-use = the interface is in { $language }; catalogs: { $available }; /language <tag> saves a choice for the next start and /language auto drops it
 session-language-saved = saved choice: { $language }
 session-language-set = the interface will be in { $language } from the next start, unless BRAVEBOT_LOCALE is set, which answers first
@@ -3419,18 +3439,78 @@ failure-internal = something went wrong here
 failure-with-status = { $what } (HTTP { $status })
 failure-with-attempts = { $what }, after { $attempts } attempts
 # A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot run
-# reports for it (CHATGPT-8). Each is the whole reason, so no status or count of tries is added.
+# reports for it (CHATGPT-8). No count of tries is added, and a status follows only the sentence of a
+# refusal that came with one.
 failure-account-not-signed-in = not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in
 failure-account-ended = the ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again
 failure-account-token-refused = OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login chatgpt` to sign in again
 failure-account-unusable = the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` to see why
 failure-account-usage-limit = OpenAI says this ChatGPT account has reached its usage limit
 failure-account-not-permitted = OpenAI does not allow this ChatGPT account to be used this way
+# A refusal that came as a 429 with a wait it asked for says the wait after its sentence. The request is
+# not sent again, so the whole of the wait is ahead.
+failure-account-wait =
+    { $minutes ->
+        [one] { $what }, and the service asked for a wait of about 1 minute
+       *[other] { $what }, and the service asked for a wait of about { $minutes } minutes
+    }
 failure-account-renewal-refused = the ChatGPT sign-in could not be renewed: the request was refused
 failure-account-renewal-rate-limited = the ChatGPT sign-in could not be renewed: the request was rate-limited
 failure-account-renewal-unavailable = the ChatGPT sign-in could not be renewed: the request was met with an unavailable service
 failure-account-renewal-incomplete = the ChatGPT sign-in could not be renewed: the request was answered in a shape that could not be read
 failure-account-renewal-transport = the ChatGPT sign-in could not be renewed: the request was not completed
+
+
+## What the desktop window says of the ChatGPT account
+
+# One sentence each, in sentence case, saying what happened and what to do, for the window's error card,
+# its run card and the model picker. They are chosen from the step that failed and repeat nothing OpenAI,
+# the sign-in file or a settings file said. The window draws { $command } as code, so it is passed in and
+# sent beside the sentence and is not written into the words with backticks. The terminal's sentences for
+# the same failures are lower case and take the status of a refusal after them, which a card cannot.
+#
+# The window and an editor read the reference catalog whatever language the machine is set to
+# (`bravebot-rpc` chooses en-US, `bravebot-host` and `bravebot-acp` choose none), so no program reads the
+# French of these messages. They are kept so that both catalogs hold the same messages and
+# contrib/untranslated-messages.txt lists no gap.
+desktop-chatgpt-not-signed-in = You are not signed in to ChatGPT, so run { $command } in a terminal to sign in.
+desktop-chatgpt-ended = The ChatGPT sign-in has ended, so run { $command } in a terminal to sign in again.
+desktop-chatgpt-token-refused = OpenAI refused the ChatGPT sign-in's access token, so run { $command } in a terminal to sign in again.
+desktop-chatgpt-unusable = The stored ChatGPT sign-in could not be read, so run { $command } in a terminal to see why.
+desktop-chatgpt-renewal-refused = OpenAI refused to renew the ChatGPT sign-in, so try again later.
+desktop-chatgpt-renewal-rate-limited = The ChatGPT sign-in could not be renewed because OpenAI is limiting requests, so try again later.
+desktop-chatgpt-renewal-unavailable = The ChatGPT sign-in could not be renewed because OpenAI's sign-in service is unavailable, so try again later.
+desktop-chatgpt-renewal-incomplete = The ChatGPT sign-in could not be renewed because the reply from OpenAI was incomplete, so try again.
+desktop-chatgpt-renewal-transport = The ChatGPT sign-in could not be renewed because OpenAI could not be reached, so check the connection and try again.
+desktop-chatgpt-usage-limit = OpenAI says this ChatGPT account has reached its usage limit, so try again later.
+# Said where the refusal came as a 429 that asked for a wait, for either refusal, as the terminal says it.
+# The request is not sent again, so the whole of the wait is ahead.
+desktop-chatgpt-usage-limit-wait =
+    { $minutes ->
+        [one] OpenAI says this ChatGPT account has reached its usage limit, so try again in about 1 minute.
+       *[other] OpenAI says this ChatGPT account has reached its usage limit, so try again in about { $minutes } minutes.
+    }
+desktop-chatgpt-not-permitted = OpenAI does not allow this ChatGPT account to be used this way, so use another account or another service's model.
+desktop-chatgpt-not-permitted-wait =
+    { $minutes ->
+        [one] OpenAI does not allow this ChatGPT account to be used this way and asked for a wait of about 1 minute, so use another account or another service's model.
+       *[other] OpenAI does not allow this ChatGPT account to be used this way and asked for a wait of about { $minutes } minutes, so use another account or another service's model.
+    }
+# What the window narrates where a turn goes on or moves on after the account failed on the way: a summary
+# it could not make, and the model it moved off for the person's fallbackModel. The first is followed by the
+# account's sentence above, so each line is one sentence.
+desktop-compaction-failed = The conversation could not be summarised, so the turn goes on with the messages it has.
+desktop-chatgpt-fell-back-rate-limited = This turn moves from { $from } to { $to } because the ChatGPT sign-in could not be renewed while OpenAI is limiting requests.
+desktop-chatgpt-fell-back-unavailable = This turn moves from { $from } to { $to } because the ChatGPT sign-in could not be renewed while OpenAI's sign-in service is unavailable.
+desktop-chatgpt-fell-back = This turn moves from { $from } to { $to } because the ChatGPT account could not be used.
+# The model picker's warnings, one for each way the account's models could not be listed. The first is for a
+# sign-in file that could not be read where a settings entry names the models, which offers no row. The
+# second is for a listing that could not be read, where the picker shows the built-in list. The last two are
+# for a listing the service refused in a code that names the account, where signing in again is no remedy.
+desktop-chatgpt-models-unreadable = Could not load models from ChatGPT, so try again, or run { $command } in a terminal to sign in again.
+desktop-chatgpt-models-compiled = Could not load models from ChatGPT, so the list shown is built in and may name a model the account cannot reach; try again, or run { $command } in a terminal to sign in again.
+desktop-chatgpt-models-usage-limit = Could not load models from ChatGPT because the account has reached its usage limit, so try again later.
+desktop-chatgpt-models-not-permitted = Could not load models from ChatGPT because OpenAI does not allow this account to be used this way, so use another account or another service's model.
 
 
 ## Repeating a prompt
@@ -3747,6 +3827,8 @@ compact-done =
     summarised { $summarised } earlier messages, keeping the last { $kept } as they are
 compact-nothing-to-do = there is nothing to summarise yet
 compact-failed = the conversation could not be summarised: { $problem }
+# Said by a turn that asked for a summary and did not get one, which carries on with the history it has.
+compact-failed-and-continuing = the conversation could not be summarised: { $problem }; continuing with the existing context
 turn-ended-unexpectedly = the turn ended unexpectedly
 
 
@@ -4076,6 +4158,9 @@ turn-named-skill-not-shown = { $skill } was named but could not be shown to the 
 # they did not make.
 skill-asks-a-model = { $skill } asks the rest of this turn of { $model }
 skill-asks-an-effort = { $skill } asks the rest of this turn at { $effort } effort
+# The same skill on a ChatGPT model, whose account is sent the level the session began with for all
+# of it, so the turn goes on as it was. The skill and the level are its file's own words.
+skill-effort-kept-for-account = { $skill } asks the rest of this turn at { $effort } effort, but a ChatGPT session keeps the level it began with, so this turn does not change
 # The skill loads and the turn goes on as it was, rather than stopping: a skill is not the thing the
 # person asked for, so a model they cannot reach is a line of its file that does nothing.
 skill-model-needs-sign-in = { $skill } asks for { $model }, which needs a sign-in first, so its rounds keep this session's model

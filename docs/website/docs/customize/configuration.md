@@ -10,12 +10,13 @@ There is one thing to set up before the first session, and it is which service a
 released binary arrives pointed at Brave's own endpoint, which is not the same as having a service
 configured to do this work: no account was named, no gateway was written down, and no subscription
 was imported. So rather than open a session with nothing set up to answer it, a first run **says
-what to configure and stops**. It names three routes, each by the thing to type or write:
+what to configure and stops**. It names four routes, each by the thing to type or write:
 
 | Route | Where |
 |---|---|
 | your own AWS account | [Reaching a model through AWS Bedrock](#reaching-a-model-through-aws-bedrock) |
 | an OpenAI-compatible gateway, including a local one | [Reaching an OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway) |
+| a ChatGPT Plus or Pro account | [Reaching a model with a ChatGPT account](providers/chatgpt.md) |
 | a Leo Premium subscription you already have | [Leo Premium](premium.md) |
 
 `bravebot doctor` says the same thing and fails while it holds. A run whose model a configured
@@ -26,7 +27,11 @@ opens, so picking one of Brave's models from `/model` mid-session does not raise
 **If you have configured a service and still see this, you are one key from working.** A settings
 block copied out of another tool names its models and names no default, so the model in force is
 still the one the build came with. That case gets one line naming the [`model`](#model) key rather
-than the three routes.
+than the routes. A stored [ChatGPT sign-in](providers/chatgpt.md) is such a service where nothing else is
+configured: the line says to pick one of the account's models in `/model` or to name one as
+`--model chatgpt/<model>`. Beside a gateway or an AWS account the line is the one that names the
+`model` key. A sign-in file that cannot be read configures nothing, and a first run with nothing else
+configured says so, with what to run, before the routes.
 
 **If Claude Code or opencode already reaches a service on this machine, or Ollama, LM Studio or
 llama-server is running on it,** the first run offers to copy that setup instead, showing everything
@@ -677,8 +682,9 @@ A level recorded by `/effort` ranks as a recorded model does: it wins over the k
 wins, and the run asks for none. A blank or a value that is not a string names nothing, so the
 record answers, but it hides the key in a file below it: with nothing recorded, the run asks for no
 level. [`--effort`](../reference/cli.md#--effort-level) on a one-shot run, and a level
-picked in the session that is running, win over everything. Nothing bakes a level in and no
-variable names one.
+picked in the session that is running, win over everything. A session on a model of a ChatGPT account is
+the exception: it is sent the level it began with, so a level picked in it applies from the next session.
+Nothing bakes a level in and no variable names one.
 
 This is the way a **project** can ask for a level, and the way a machine where nobody ever opens the
 interactive interface gets one at all: `bravebot -p` and `bravebot --plain` read the key just as the

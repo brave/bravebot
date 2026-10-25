@@ -8,10 +8,13 @@
 //!
 //! One renewer for the process. A renewal that could not be written is held in memory by the
 //! renewer for the rest of the process, so a second one made for each request would drop it, and
-//! the next request would present a refresh token the server has already replaced.
+//! the next request would present a refresh token the server has already replaced. The same holds
+//! for a sign-in the server ended: the renewal that found it removed the file, and a second renewer
+//! would find no file and say nothing was stored to the turn that asks after a picker's listing.
 
 use crate::report::Reporter;
 pub use bravebot_aichat::models::Model;
+use bravebot_aichat::protocol::Effort;
 pub use bravebot_aichat::responses::protocol::Refusal;
 use bravebot_aichat::{AccountAccess, AccountFailure, ChatError, RenewalFailure};
 use bravebot_config::provider::Provider;
@@ -100,20 +103,125 @@ fn say_from(saving: &Mutex<Saving>, reporter: &mut (impl Reporter + ?Sized)) {
 
 /// The service a stored sign-in reaches: the one built from constants, shared by every request.
 pub(crate) fn account_provider() -> &'static Provider {
+    #[cfg(test)]
+    if let Some(host) = stand_in::host() {
+        return host;
+    }
     static PROVIDER: OnceLock<Provider> = OnceLock::new();
     PROVIDER.get_or_init(Provider::chatgpt_account)
 }
 
-/// The identifier every request of this process carries as its session, thread and client request
-/// identifiers.
+/// A server a test of this crate runs in place of the serving host, and a token in place of the
+/// stored sign-in, for the requests made on the thread that installed it.
 ///
-/// Generated here and from the operating system's random source, so it holds nothing a reply, a
-/// model or a settings file chose and nothing about the person or the account. One for the process:
-/// the service derives its prompt-cache affinity from it, so a value that changed between requests
-/// would be a cache that never hit.
-pub(crate) fn session_id() -> &'static str {
-    static SESSION: OnceLock<String> = OnceLock::new();
-    SESSION.get_or_init(bravebot_skus::new_request_id)
+/// Compiled into this crate's test build alone, so no flag, variable or file can reach it and the
+/// serving host is the one constant in every other build. It is a mechanism of its own, apart from
+/// the `test-hosts` feature, which points the built binary at a stand-in through a variable. It
+/// reaches the thread that asked for it and no other, which is where a turn's own rounds and a
+/// summary are made. It reads no stored sign-in and sends no real token anywhere.
+#[cfg(test)]
+pub(crate) mod stand_in {
+    use super::{Provider, Secret};
+    use std::cell::Cell;
+
+    /// The token the stand-in hands out, which no stored sign-in holds.
+    pub(super) const TOKEN: &str = "a-stand-in-token";
+
+    thread_local! {
+        static HOST: Cell<Option<&'static Provider>> = const { Cell::new(None) };
+    }
+
+    /// What ends the stand-in when it is dropped.
+    pub(crate) struct Installed;
+
+    impl Drop for Installed {
+        fn drop(&mut self) {
+            HOST.with(|host| host.set(None));
+        }
+    }
+
+    /// Send this thread's requests to the account to the server at `endpoint`.
+    pub(crate) fn at(endpoint: &str) -> Installed {
+        let text = format!(
+            r#"{{"provider": {{"chatgpt-stand-in": {{"name": "ChatGPT", "npm": "@ai-sdk/openai",
+                "options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#
+        );
+        let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+            panic!("not an object");
+        };
+        let provider = Provider::all(&root).pop().expect("one provider");
+        HOST.with(|host| host.set(Some(Box::leak(Box::new(provider)))));
+        Installed
+    }
+
+    pub(super) fn host() -> Option<&'static Provider> {
+        HOST.with(Cell::get)
+    }
+
+    pub(super) fn token() -> Option<Secret> {
+        host().map(|_| Secret::new(TOKEN))
+    }
+}
+
+/// What one session carries into the requests it makes to the ChatGPT account
+/// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)): the identifier those requests
+/// carry as their session, thread and client request identifiers, and the effort level the session
+/// began with.
+///
+/// Made when a session begins and held by whatever holds the session, so every request the session
+/// makes carries the same identifier, and a second session of the same process carries another. The
+/// service derives its prompt-cache affinity from the identifier, so one that changed between a
+/// session's requests would be a cache that never hit, and one two sessions shared would give them
+/// each other's cache. A delegate, a background session, a resumed session and a fork each begin
+/// their own: nothing here is stored in a session's record.
+///
+/// The effort level is the one in force when the session began, and it is the one the account is
+/// sent for the rest of it, whatever level is chosen afterwards: the service keeps the cache of a
+/// session only while its level stays the same. What the person chose is kept apart and applies to
+/// the sessions begun after it, and to every service but this one. A model that refuses a level
+/// outranks it: the client sends that model none from then on, for every session of the process
+/// ([BACKEND-22](../../../docs/specs/backends.md#BACKEND-22)).
+///
+/// Cloning gives another handle on the same session.
+#[derive(Debug, Clone)]
+pub struct AccountSession(std::sync::Arc<Begun>);
+
+#[derive(Debug)]
+struct Begun {
+    identifier: String,
+    effort: Option<Effort>,
+}
+
+impl AccountSession {
+    /// A new session that began asking for no effort level, which is what a front end that offers no
+    /// choice of one begins.
+    pub fn begin() -> Self {
+        Self::begin_with(None)
+    }
+
+    /// A new session that began with `effort` in force, where one was.
+    ///
+    /// The identifier is generated here and from the operating system's random source, so it holds
+    /// nothing a reply, a model or a settings file chose and nothing about the person, the account,
+    /// the project or what was asked.
+    pub fn begin_with(effort: Option<Effort>) -> Self {
+        Self(std::sync::Arc::new(Begun {
+            identifier: bravebot_skus::new_request_id(),
+            effort,
+        }))
+    }
+
+    /// The effort level the session began with, which is the level the account is sent for all of
+    /// it, except by a model that has refused a level and is sent none
+    /// ([BACKEND-22](../../../docs/specs/backends.md#BACKEND-22)).
+    pub fn effort(&self) -> Option<Effort> {
+        self.0.effort
+    }
+
+    /// The identifier the session's requests carry.
+    pub fn identifier(&self) -> &str {
+        &self.0.identifier
+    }
 }
 
 /// The access token of the stored sign-in, renewed where it is about to expire.
@@ -126,10 +234,18 @@ pub(crate) struct StoredSignIn;
 
 impl AccountAccess for StoredSignIn {
     fn access_token(&mut self) -> Result<Secret, AccountFailure> {
+        #[cfg(test)]
+        if let Some(token) = stand_in::token() {
+            return Ok(token);
+        }
         obtained(Renewer::access_token)
     }
 
     fn replace_refused(&mut self, refused: &Secret) -> Result<Secret, AccountFailure> {
+        #[cfg(test)]
+        if let Some(token) = stand_in::token() {
+            return Ok(token);
+        }
         let refused = bravebot_skus::Secret::new(refused.expose());
         obtained(|renewer| renewer.replace_refused(&refused))
     }
@@ -153,6 +269,34 @@ impl AccountStored for StoredSignIn {
             Ok(stored) => Ok(stored.is_some()),
             Err(_) => Err(AccountFailure::Unusable),
         }
+    }
+}
+
+/// What the file that keeps the ChatGPT sign-in holds, as far as telling a person what to configure
+/// needs it ([BACKEND-39](../../../docs/specs/backends.md#BACKEND-39)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountFile {
+    /// Nothing is stored, or this machine has nowhere to keep a sign-in.
+    NotStored,
+    /// A sign-in is stored and the file can be read. Its tokens are not looked at.
+    Stored,
+    /// The file exists and cannot be used, so it configures nothing and the person is told why.
+    Unreadable,
+}
+
+/// The sign-in file as it is on this machine. It is read and nothing is renewed or asked of the
+/// service, so it starts nothing.
+pub(crate) fn account_file() -> AccountFile {
+    file_of(&Account::load())
+}
+
+fn file_of(loaded: &Result<Option<Account>, bravebot_skus::chatgpt::AccountError>) -> AccountFile {
+    match loaded {
+        Ok(Some(_)) => AccountFile::Stored,
+        Ok(None) | Err(bravebot_skus::chatgpt::AccountError::Nowhere { .. }) => {
+            AccountFile::NotStored
+        }
+        Err(_) => AccountFile::Unreadable,
     }
 }
 
@@ -227,7 +371,8 @@ fn account_models_from<S: Sink, A: AccountAccess + AccountStored>(
         };
     }
     // Asked for before anything is sent, so a machine with no sign-in sends nothing. An ended
-    // sign-in was removed by the renewal that found it so, and is a missing one from here on.
+    // sign-in was removed by the renewal that found it so, so the picker offers nothing for it. The
+    // renewer says it ended to every later ask of the process, which the next turn's is.
     let compiled =
         || AccountModels::Compiled(bravebot_aichat::models::compiled_for_account(provider));
     let mut token = match access.access_token() {
@@ -267,11 +412,121 @@ fn account_models_from<S: Sink, A: AccountAccess + AccountStored>(
                     Err(_) => return compiled(),
                 };
             }
-            Err(ChatError::Account(AccountFailure::Named(refusal))) => {
+            Err(ChatError::Account(AccountFailure::Named { refusal, .. })) => {
                 return AccountModels::Refused(refusal);
             }
             Err(_) => return compiled(),
         }
+    }
+}
+
+/// The sentence for a failure of the account, from the message catalog
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+///
+/// The one place the failures are worded, for the terminal's line, the one-shot run's report, the line
+/// for a failed goal check and the line for a summary that could not be made. It is chosen from the
+/// condition alone, so it holds nothing a service, a file or a settings file said, and where signing in
+/// again is the remedy it names `bravebot auth login chatgpt`. A refusal that came as a 429 with a wait
+/// says the wait in it, in minutes rounded up. The status of a refusal is said after it by the layer that
+/// words the line, as that layer says the status of any other failure.
+pub fn said_of_failure(failure: AccountFailure) -> String {
+    match failure {
+        AccountFailure::NotSignedIn => t!(failure_account_not_signed_in).into(),
+        AccountFailure::Ended => t!(failure_account_ended).into(),
+        AccountFailure::Refused => t!(failure_account_token_refused).into(),
+        AccountFailure::Unusable => t!(failure_account_unusable).into(),
+        // The same words whatever the code, so both refusals are told when to ask again.
+        AccountFailure::Named { refusal, .. } => match failure.wait() {
+            Some(wait) => t!(
+                failure_account_wait,
+                what = said_of_refusal(refusal),
+                minutes = crate::outcome::minutes_to_wait(wait)
+            ),
+            None => said_of_refusal(refusal).into(),
+        },
+        AccountFailure::Renewal(RenewalFailure::Refused) => {
+            t!(failure_account_renewal_refused).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::RateLimited) => {
+            t!(failure_account_renewal_rate_limited).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::Unavailable) => {
+            t!(failure_account_renewal_unavailable).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::Incomplete) => {
+            t!(failure_account_renewal_incomplete).into()
+        }
+        AccountFailure::Renewal(RenewalFailure::Transport) => {
+            t!(failure_account_renewal_transport).into()
+        }
+    }
+}
+
+/// The command that is the remedy for a failure of the account or of its listing, where one is.
+/// Which conditions have one is decided here and nowhere else: the terminal's sentences name it, and
+/// the desktop bridge's sentences are passed it and send it beside the sentence
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Remedy {
+    /// Signing in again.
+    SignIn,
+    /// Asking why the stored sign-in cannot be read.
+    Status,
+}
+
+impl Remedy {
+    /// The command, which is run in a terminal and nowhere else
+    /// ([CHATGPT-1](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-1)).
+    pub fn command(self) -> &'static str {
+        match self {
+            Self::SignIn => "bravebot auth login chatgpt",
+            Self::Status => "bravebot auth status chatgpt",
+        }
+    }
+}
+
+/// The remedy for a failure of the account. A usage limit, a refusal that says the account may not
+/// be used this way and every failed renewal are not mended by signing in again.
+pub fn remedy_of_failure(failure: AccountFailure) -> Option<Remedy> {
+    match failure {
+        AccountFailure::NotSignedIn | AccountFailure::Ended | AccountFailure::Refused => {
+            Some(Remedy::SignIn)
+        }
+        AccountFailure::Unusable => Some(Remedy::Status),
+        AccountFailure::Named { .. } | AccountFailure::Renewal(_) => None,
+    }
+}
+
+/// The remedy for a listing of the account's models that could not be had, where a picker warns of
+/// one.
+pub fn remedy_of_listing(account: &AccountModels) -> Option<Remedy> {
+    match account {
+        AccountModels::Unreadable | AccountModels::Compiled(_) => Some(Remedy::SignIn),
+        AccountModels::Absent | AccountModels::Offered(_) | AccountModels::Refused(_) => None,
+    }
+}
+
+/// [`said_of_failure`] with the status of a refusal that came with one after it, as the terminal's
+/// line for a failed turn, the one-shot run's report and the record of a session say it
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). The lines for a summary that
+/// could not be made and for a move to the fallback model say [`said_of_failure`] alone.
+pub fn told_of_failure(failure: AccountFailure) -> String {
+    let said = said_of_failure(failure);
+    match failure.status() {
+        Some(status) => t!(failure_with_status, what = said, status = status),
+        None => said,
+    }
+}
+
+/// The sentence for what a refusal that names the account says, from the message catalog
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+///
+/// Neither names signing in again as a remedy, since a new sign-in does not change what either says,
+/// and neither names a cause the six codes of the second do not say.
+pub fn said_of_refusal(refusal: Refusal) -> &'static str {
+    match refusal {
+        Refusal::UsageLimit => t!(failure_account_usage_limit),
+        Refusal::NotPermitted => t!(failure_account_not_permitted),
     }
 }
 
@@ -360,13 +615,234 @@ mod tests {
         }
     }
 
-    /// CHATGPT-10: the three session headers carry one identifier for the whole process, so the
-    /// service can tie requests to one conversation's cache, and it is a fresh random value of the
-    /// shape of a version 4 identifier rather than anything about the person or the account.
+    /// BACKEND-39: a sign-in that is stored is the one state that configures a service. A machine
+    /// with none, and one with nowhere to keep it, configure nothing and are told nothing, and a
+    /// file that cannot be used configures nothing and is told apart from an absent one so that it
+    /// is said. A read that took an unreadable file for a stored sign-in would send the person to
+    /// name a model that no turn can reach, and one that took it for an absent one would not say
+    /// why a sign-in they made is not used.
     #[test]
-    fn the_session_identifier_is_one_random_value_for_the_process() {
-        let id = session_id();
-        assert_eq!(id, session_id());
+    fn a_stored_account_is_told_apart_from_an_absent_one_and_from_one_that_cannot_be_read() {
+        let stored = Account {
+            access_token: bravebot_skus::Secret::new("placeholder-access-token"),
+            refresh_token: bravebot_skus::Secret::new("placeholder-refresh-token"),
+            expires_at: 1,
+            client_id: "client".to_string(),
+            host_id: "urn:uuid:host".to_string(),
+        };
+        assert_eq!(file_of(&Ok(Some(stored))), AccountFile::Stored);
+        assert_eq!(file_of(&Ok(None)), AccountFile::NotStored);
+        assert_eq!(
+            file_of(&Err(AccountError::Nowhere {
+                detail: "a path".to_string()
+            })),
+            AccountFile::NotStored
+        );
+        for unusable in [
+            AccountError::Unusable {
+                detail: "a path".to_string(),
+            },
+            AccountError::Malformed(bravebot_skus::chatgpt::Defect::MissingField),
+        ] {
+            let shown = unusable.to_string();
+            assert_eq!(file_of(&Err(unusable)), AccountFile::Unreadable, "{shown}");
+        }
+    }
+
+    /// A refusal that names the account, with neither a status nor a wait, as one reported on a
+    /// stream is.
+    fn refused(refusal: Refusal) -> AccountFailure {
+        AccountFailure::Named {
+            refusal,
+            status: None,
+            retry_after: None,
+        }
+    }
+
+    /// Every failure of the account, with the command it names where signing in again, or looking
+    /// at the stored sign-in, is the remedy.
+    fn every_failure() -> [(AccountFailure, Option<&'static str>); 11] {
+        let login = Some("bravebot auth login chatgpt");
+        [
+            (AccountFailure::NotSignedIn, login),
+            (AccountFailure::Ended, login),
+            (AccountFailure::Refused, login),
+            (
+                AccountFailure::Unusable,
+                Some("bravebot auth status chatgpt"),
+            ),
+            (refused(Refusal::UsageLimit), None),
+            (refused(Refusal::NotPermitted), None),
+            (AccountFailure::Renewal(RenewalFailure::Refused), None),
+            (AccountFailure::Renewal(RenewalFailure::RateLimited), None),
+            (AccountFailure::Renewal(RenewalFailure::Unavailable), None),
+            (AccountFailure::Renewal(RenewalFailure::Incomplete), None),
+            (AccountFailure::Renewal(RenewalFailure::Transport), None),
+        ]
+    }
+
+    /// CHATGPT-8: each failure of the account has a sentence of its own, from the catalog and from
+    /// the condition alone. Where signing in again is the remedy it names the command, and nowhere
+    /// else does: a refusal that names the account sends nobody to sign in again, and only the usage
+    /// limit says so. A usage limit and a refusal that says the account may not be used are told
+    /// apart in the listing's sentence and in a turn's. The regressions it rejects are one sentence
+    /// for every failure, a command named where it is no remedy, and a condition left without a
+    /// sentence, which would show a person the category's line in its place.
+    #[test]
+    fn every_failure_of_the_account_has_its_own_sentence_and_names_the_command_only_as_a_remedy() {
+        let mut sentences = Vec::new();
+        for (failure, command) in every_failure() {
+            let said = said_of_failure(failure);
+            assert!(!said.trim().is_empty(), "{failure:?} has no sentence");
+            assert!(
+                !said.contains('{') && !said.contains('}'),
+                "{failure:?}: {said}"
+            );
+            assert_eq!(
+                remedy_of_failure(failure).map(Remedy::command),
+                command,
+                "{failure:?}"
+            );
+            match command {
+                Some(command) => assert!(said.contains(command), "{failure:?}: {said}"),
+                None => assert!(!said.contains("auth login"), "{failure:?}: {said}"),
+            }
+            assert_eq!(
+                said.contains("usage limit"),
+                failure == refused(Refusal::UsageLimit),
+                "{failure:?}: {said}"
+            );
+            if let AccountFailure::Renewal(_) = failure {
+                assert!(said.contains("could not be renewed"), "{said}");
+            }
+            sentences.push(said);
+        }
+        let mut distinct = sentences.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), sentences.len(), "{sentences:#?}");
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            assert_eq!(
+                said_of_refusal(refusal),
+                said_of_failure(refused(refusal)),
+                "a refusal is worded one way in the listing and in a turn"
+            );
+        }
+    }
+
+    /// CHATGPT-9: a picker's warning names signing in again where the listing could not be read, and
+    /// nowhere else, so a refusal that names the account and a listing that was read send nobody to
+    /// run a command.
+    #[test]
+    fn a_listing_names_the_sign_in_command_only_where_it_could_not_be_read() {
+        for account in [
+            AccountModels::Unreadable,
+            AccountModels::Compiled(Vec::new()),
+        ] {
+            let said = match &account {
+                AccountModels::Unreadable => t!(session_chatgpt_models_unreadable).to_string(),
+                _ => t!(session_chatgpt_models_compiled).to_string(),
+            };
+            let remedy = remedy_of_listing(&account).expect("a remedy");
+            assert!(said.contains(remedy.command()), "{account:?}: {said}");
+        }
+        for account in [
+            AccountModels::Absent,
+            AccountModels::Offered(Vec::new()),
+            AccountModels::Refused(Refusal::UsageLimit),
+            AccountModels::Refused(Refusal::NotPermitted),
+        ] {
+            assert_eq!(remedy_of_listing(&account), None, "{account:?}");
+        }
+    }
+
+    /// CHATGPT-8: a refusal that came as a 429 with a wait says the wait in its sentence, in minutes
+    /// rounded up and in the singular for one, whichever of the two refusals it is, and one that came
+    /// with another status or on a stream says none. The regression it rejects is a wait said where
+    /// the service did not ask for one, which would tell a person when to try a limit that has no
+    /// date.
+    #[test]
+    fn a_refusal_that_asked_for_a_wait_says_it_in_minutes_and_one_that_did_not_says_none() {
+        use std::time::Duration;
+        let named = |refusal, status, seconds: u64| AccountFailure::Named {
+            refusal,
+            status,
+            retry_after: Some(Duration::from_secs(seconds)),
+        };
+        let limit = said_of_refusal(Refusal::UsageLimit);
+        assert_eq!(
+            said_of_failure(named(Refusal::UsageLimit, Some(429), 601)),
+            format!("{limit}, and the service asked for a wait of about 11 minutes")
+        );
+        assert_eq!(
+            said_of_failure(named(Refusal::UsageLimit, Some(429), 5)),
+            format!("{limit}, and the service asked for a wait of about 1 minute")
+        );
+        assert!(
+            said_of_failure(named(Refusal::NotPermitted, Some(429), 60))
+                .contains("a wait of about 1 minute")
+        );
+        for status in [Some(403), Some(401), None] {
+            assert_eq!(
+                said_of_failure(named(Refusal::UsageLimit, status, 600)),
+                limit,
+                "{status:?}"
+            );
+        }
+        assert_eq!(said_of_failure(refused(Refusal::UsageLimit)), limit);
+    }
+
+    /// CHATGPT-8: everywhere a failed request is printed as the error that carries it, a turn, a goal
+    /// check, a compaction and an advisor's answer included, the account's failure reads as the
+    /// catalog's sentence and not as the name of its condition, and the status of a refusal that came
+    /// with one follows it. The one-shot run's report, the goal run's `unchecked` line and the
+    /// terminal's goal and manifest lines are made from these, and a layer that printed the name
+    /// would show a person the identifier.
+    #[test]
+    fn a_turn_a_goal_check_a_compaction_and_an_advice_print_the_accounts_sentence() {
+        let backend = |failure| crate::backend::BackendError::from(ChatError::Account(failure));
+        for (failure, _) in every_failure() {
+            let sentence = said_of_failure(failure);
+            assert_eq!(
+                crate::turn::TurnError::Chat(backend(failure)).to_string(),
+                sentence
+            );
+            assert_eq!(
+                crate::goal::GoalError::Chat(backend(failure)).to_string(),
+                sentence
+            );
+            assert_eq!(
+                crate::compact::CompactError::Chat(backend(failure)).to_string(),
+                sentence
+            );
+            assert_eq!(
+                crate::advisor::AdviceError::Chat(backend(failure)).to_string(),
+                sentence
+            );
+            assert!(!sentence.contains("ChatGPT account:"), "{sentence}");
+        }
+
+        let with_status = AccountFailure::Named {
+            refusal: Refusal::UsageLimit,
+            status: Some(429),
+            retry_after: None,
+        };
+        assert_eq!(
+            crate::turn::TurnError::Chat(backend(with_status)).to_string(),
+            format!("{} (HTTP 429)", said_of_failure(with_status))
+        );
+    }
+
+    /// CHATGPT-10: a session's identifier is a fresh random value of the shape of a version 4
+    /// identifier, and a handle on the session gives the identifier it was made with. The
+    /// regressions it rejects are an identifier built from anything but the random source, and a
+    /// clone that begins a session of its own.
+    #[test]
+    fn a_sessions_identifier_is_random_and_every_handle_on_it_gives_the_same_one() {
+        let session = AccountSession::begin();
+        let id = session.identifier();
+        assert_eq!(id, session.clone().identifier());
+        assert_ne!(id, AccountSession::begin().identifier());
         assert_ne!(id, bravebot_skus::new_request_id());
         let groups: Vec<usize> = id.split('-').map(str::len).collect();
         assert_eq!(groups, [8, 4, 4, 4, 12], "{id}");

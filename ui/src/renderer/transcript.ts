@@ -50,7 +50,8 @@ export type Entry = (
    */
   | { kind: 'user'; id: string; text: string; prompt?: number }
   | { kind: 'assistant'; id: string; text: string }
-  | { kind: 'narration'; id: string; text: string }
+  /** `command` is the words of `text` that are a command to run, where a notice names one. */
+  | { kind: 'narration'; id: string; text: string; command?: string | null }
   /**
    * A file that was put in front of the planner because somebody named it.
    *
@@ -189,7 +190,7 @@ export type Entry = (
   /** A manifest run that stopped: declined, stopped by the person, or failed. */
   | { kind: 'plan-ended'; id: string; ended: ManifestError }
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
-  | { kind: 'error'; id: string; text: string; category?: string | null; accountMessage?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
+  | { kind: 'error'; id: string; text: string; category?: string | null; accountMessage?: string | null; accountCommand?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
   /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
   | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
@@ -262,7 +263,7 @@ export function fromSaid(said: Said[]): Entry[] {
 
 export const userSaid = (text: string): Entry => ({ kind: 'user', id: nextId(), text })
 export const consolidating = (): Entry => ({ kind: 'consolidation', id: nextId() })
-export const narrated = (text: string): Entry => ({ kind: 'narration', id: nextId(), text })
+export const narrated = (text: string, command?: string | null): Entry => ({ kind: 'narration', id: nextId(), text, command })
 export const watchFired = (number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string): Entry => ({ kind: 'error', id: nextId(), text })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })

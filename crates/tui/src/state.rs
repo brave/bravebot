@@ -1332,6 +1332,22 @@ pub struct Session {
     /// True until a listing says otherwise, so a session that has never reached one sends what the
     /// person asked for rather than withholding it on a fact nobody established.
     model_reads_effort: bool,
+    /// Whether the model in force is one of the ChatGPT account's, as the configuration names it.
+    ///
+    /// What decides whether the level a turn sends is the one chosen or the one the session began
+    /// with, since the account is sent one level for a whole session, or none where its model has
+    /// refused a level.
+    model_is_account: bool,
+    /// What this session carries into its requests to the ChatGPT account: the identifier they carry
+    /// and the effort level the session began with
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Begun with the session, once its level is settled, and again where a new one begins, with
+    /// `/clear` or a handoff, at the level then chosen. A session picked up with `/resume` is a new
+    /// `Session`, so it begins one too, and nothing of it is written to the record. `/branch` moves
+    /// onto a copy of the conversation in this same session, so the copy goes on with the identifier
+    /// its source had, and the source is not asked anything more.
+    account: bravebot_agent::chatgpt::AccountSession,
     /// The model `/advisor` named for this session's planner to consult, resolved.
     ///
     /// Kept for the session only: the `advisorModel` setting is the saved route, and a turn that
@@ -1583,6 +1599,8 @@ impl Session {
             model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
+            model_is_account: false,
+            account: bravebot_agent::chatgpt::AccountSession::begin(),
             advisor: None,
             spend_limit: bravebot_agent::SpendLimit::default(),
             style: None,
@@ -1841,6 +1859,9 @@ impl Session {
     /// Deliberately not touching the input line, so a prompt half-typed when the user cleared is
     /// still there to send.
     pub fn clear(&mut self) {
+        // The service ties requests together by this, and a new conversation shares nothing with the
+        // one that is gone.
+        self.begin_account_session();
         // A new conversation has sent nothing yet, so Up starts from nothing of its own.
         self.history.forget_session();
         self.transcript.clear();

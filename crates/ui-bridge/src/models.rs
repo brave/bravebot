@@ -1,5 +1,6 @@
 //! Model discovery uses the agent's clients and egress policy, never renderer-supplied URLs.
 
+use crate::account_words::{self, Said};
 use bravebot_aichat::models::{self, Advertised, Model};
 use bravebot_config::provider::Credential;
 use bravebot_config::{Config, ModelRefusal};
@@ -34,7 +35,15 @@ pub fn adopt_window(config: &mut Config, model: Option<&str>) {
 
 /// The rows every service this window reaches offers, and what could not be asked of the ones that
 /// failed.
-fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<String>) {
+///
+/// The warnings for the ChatGPT account are catalog messages (`account_words`), since
+/// [CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8) and
+/// [CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9) word every sentence for that account
+/// that way, with its command as an argument. The warnings for a gateway and for Brave are English
+/// text built here. The window reads the reference catalog whatever language the machine is set to
+/// ([LOCALE-7](../../../docs/specs/localization.md#LOCALE-7)), so a person reads the same words from
+/// either.
+fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<Said>) {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     if let Some(bedrock) = &config.bedrock {
@@ -64,10 +73,10 @@ fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<String>) {
         // A compiled list asks nothing, so a missing key is said when a turn is sent, as it is for
         // a model a block names.
         if matches!(credential, Credential::Absent) && provider.compiled_roster().is_none() {
-            warnings.push(format!(
+            warnings.push(Said::plain(format!(
                 "No credential configured for {}.",
                 provider.display_name()
-            ));
+            )));
             continue;
         }
         let mut routing = Routing::new();
@@ -92,10 +101,10 @@ fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<String>) {
         });
         match result {
             Some(listed) => rows.extend(listed),
-            None => warnings.push(format!(
+            None => warnings.push(Said::plain(format!(
                 "Could not load models from {}. Try again.",
                 provider.display_name()
-            )),
+            ))),
         }
     }
     // Additive like a gateway: a stored ChatGPT sign-in adds its models and takes none away.
@@ -116,7 +125,7 @@ fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<String>) {
         .and_then(|mut policy| models::list(&mut policy, config, &Egress::new()).ok());
         match result {
             Some(listed) => rows.extend(listed),
-            None => warnings.push("Could not load Brave models. Try again.".into()),
+            None => warnings.push(Said::plain("Could not load Brave models. Try again.")),
         }
     }
     (rows, warnings)
@@ -147,29 +156,18 @@ fn ask_the_account(config: &Config) -> bravebot_agent::chatgpt::AccountModels {
 /// nothing about it, and a listing that could not be had adds the compiled list and says so.
 fn with_account(
     rows: &mut Vec<Model>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<Said>,
     account: bravebot_agent::chatgpt::AccountModels,
 ) {
+    // The warning is the window's own sentence, chosen from how the listing failed and not from
+    // anything the service said. A signed-out machine and a listing that was read have none.
+    warnings.extend(account_words::of_listing(&account));
     match account {
-        bravebot_agent::chatgpt::AccountModels::Offered(models) => rows.extend(models),
-        bravebot_agent::chatgpt::AccountModels::Compiled(models) => {
-            rows.extend(models);
-            // The terminal's sentence, so the two surfaces say the same thing (SHARE-001).
-            warnings.push(bravebot_i18n::t!(session_chatgpt_models_compiled).to_string());
-        }
-        bravebot_agent::chatgpt::AccountModels::Unreadable => {
-            warnings.push(
-                "Could not load models from ChatGPT. Try again, or sign in again with \
-                 `bravebot auth login chatgpt`."
-                    .into(),
-            );
-        }
-        // Said in the sentence of the refusal, which does not send the person to sign in again:
-        // a new sign-in is not what changes it.
-        bravebot_agent::chatgpt::AccountModels::Refused(refusal) => {
-            warnings.push(format!("Could not load models from ChatGPT: {refusal}."));
-        }
-        bravebot_agent::chatgpt::AccountModels::Absent => {}
+        bravebot_agent::chatgpt::AccountModels::Offered(models)
+        | bravebot_agent::chatgpt::AccountModels::Compiled(models) => rows.extend(models),
+        bravebot_agent::chatgpt::AccountModels::Unreadable
+        | bravebot_agent::chatgpt::AccountModels::Refused(_)
+        | bravebot_agent::chatgpt::AccountModels::Absent => {}
     }
 }
 
@@ -239,8 +237,8 @@ fn badges(advertised: &Advertised) -> Vec<&'static str> {
 /// (BACKEND-48).
 ///
 /// `None` for the model means the configured one, which is what a request naming none asks for. In
-/// English here rather than through a catalog, as every string in this crate is. The file is the only
-/// actionable thing in the sentence: nobody using this window can write it.
+/// English here rather than through a catalog, as the warnings of `roster` for a gateway and for Brave
+/// are. The file is the only actionable thing in the sentence: nobody using this window can write it.
 pub fn refused(config: &Config, model: Option<&str>) -> Option<String> {
     let asked = model.unwrap_or(&config.default_model);
     let (file, why) = config.model_refused(asked)?;
@@ -255,7 +253,7 @@ pub fn refused(config: &Config, model: Option<&str>) -> Option<String> {
     ))
 }
 
-fn catalogue(config: &Config, rows: Vec<Model>, warnings: Vec<String>) -> Value {
+fn catalogue(config: &Config, rows: Vec<Model>, warnings: Vec<Said>) -> Value {
     let default = config.default_model.as_str();
     // Dropped before the default is put back, so a refused configured model is not offered either: a
     // row this window cannot start a turn on is a row that fails on being picked (BACKEND-48).
@@ -296,7 +294,12 @@ fn catalogue(config: &Config, rows: Vec<Model>, warnings: Vec<String>) -> Value 
             "capabilities": badges(&row.advertised) })
         })
         .collect();
-    json!({ "models": rows, "defaultModel": default, "warnings": warnings })
+    // The sentences, and beside them the command each names, in the same order, so a window draws
+    // the words that are a command as code without reading a sentence for them.
+    let commands: Vec<Option<&str>> = warnings.iter().map(|said| said.command).collect();
+    let warnings: Vec<&str> = warnings.iter().map(|said| said.sentence.as_str()).collect();
+    json!({ "models": rows, "defaultModel": default, "warnings": warnings,
+        "warningCommands": commands })
 }
 
 /// A missing model keeps the configured default; malformed input must not silently select it.
@@ -487,6 +490,9 @@ mod tests {
         assert_eq!(row["provider"], "ChatGPT");
         assert_eq!(row["contextWindow"], 272_000);
 
+        // The warnings are the window's own sentences, in the catalog: one sentence in sentence case
+        // that says what happened and what to do, with the command beside it for the window to draw
+        // as code. Not the terminal's lower case sentence, which names `/model`.
         let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
         with_account(
             &mut rows,
@@ -495,42 +501,55 @@ mod tests {
         );
         let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
         assert_eq!(keys, ["openrouter/z-ai/glm-4.6", "chatgpt/gpt-5.5"]);
-        assert_eq!(warnings.len(), 1);
         assert_eq!(
-            warnings[0],
-            bravebot_i18n::t!(session_chatgpt_models_compiled).to_string(),
-            "the window did not say what the terminal says"
+            warnings,
+            [Said::naming(
+                "bravebot auth login chatgpt",
+                "Could not load models from ChatGPT, so the list shown is built in and may name a model the account cannot reach; try again, or run bravebot auth login chatgpt in a terminal to sign in again."
+            )]
         );
 
         let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
         with_account(&mut rows, &mut warnings, AccountModels::Unreadable);
         assert_eq!(rows, std::slice::from_ref(&elsewhere));
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].starts_with("Could not load models from ChatGPT."));
-        assert!(
-            !warnings[0].contains("built in"),
-            "no list was offered: {}",
-            warnings[0]
+        assert_eq!(
+            warnings,
+            [Said::naming(
+                "bravebot auth login chatgpt",
+                "Could not load models from ChatGPT, so try again, or run bravebot auth login chatgpt in a terminal to sign in again."
+            )],
+            "no list was offered, so none is said to be"
         );
 
-        // A listing refused for a code that names the account is told in the refusal's sentence, which
-        // is not the unreadable listing's and does not name signing in again.
+        // A listing refused for a code that names the account is told in the refusal's own sentence,
+        // which is not the unreadable listing's and does not name signing in again.
         use bravebot_aichat::responses::protocol::Refusal;
         for (refusal, said) in [
-            (Refusal::NotPermitted, "does not allow this ChatGPT account"),
-            (Refusal::UsageLimit, "has reached its usage limit"),
+            (
+                Refusal::NotPermitted,
+                "Could not load models from ChatGPT because OpenAI does not allow this account to be used this way, so use another account or another service's model.",
+            ),
+            (
+                Refusal::UsageLimit,
+                "Could not load models from ChatGPT because the account has reached its usage limit, so try again later.",
+            ),
         ] {
             let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
             with_account(&mut rows, &mut warnings, AccountModels::Refused(refusal));
             assert_eq!(rows, std::slice::from_ref(&elsewhere));
-            assert_eq!(warnings.len(), 1, "{refusal:?}");
-            assert!(warnings[0].contains(said), "{refusal:?}: {}", warnings[0]);
-            assert!(
-                !warnings[0].contains("sign in") && !warnings[0].contains("auth login"),
-                "{refusal:?}: {}",
-                warnings[0]
-            );
+            assert_eq!(warnings, [Said::plain(said)], "{refusal:?}");
         }
+
+        // The command each warning names reaches the window beside its sentence, in the same order.
+        let (mut rows, mut warnings) = (Vec::new(), Vec::new());
+        with_account(&mut rows, &mut warnings, AccountModels::Unreadable);
+        warnings.push(Said::plain("Could not load Brave models. Try again."));
+        let result = catalogue(&configured("the-configured-model", None), rows, warnings);
+        assert_eq!(result["warnings"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            result["warningCommands"],
+            json!(["bravebot auth login chatgpt", null])
+        );
 
         let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
         with_account(&mut rows, &mut warnings, AccountModels::Absent);
@@ -610,7 +629,7 @@ mod tests {
         let result = catalogue(
             &configured("openrouter/anthropic/claude-haiku-4.5", None),
             Vec::new(),
-            vec!["offline".into()],
+            vec![Said::plain("offline")],
         );
         assert_eq!(result["models"][0]["id"], result["defaultModel"]);
         assert_eq!(result["warnings"][0], "offline");
@@ -907,6 +926,58 @@ mod tests {
             list(&config)["warnings"],
             json!(["No credential configured for local."])
         );
+    }
+
+    /// BACKEND-19 in the window: a gateway that names no models and whose listing could not be read is
+    /// said by the name its block gives it, in a warning that means what the terminal's note for the
+    /// same gateway means, and a gateway whose key is missing is said as that and not as a listing
+    /// that could not be read. A gateway that names its models is not asked and is not mentioned. The
+    /// gateways are ports nothing listens on.
+    ///
+    /// The regressions it rejects are a warning that leaves out which gateway failed, one that tells
+    /// a missing key as a listing to try again, and one gateway's failure taking another's rows with
+    /// it.
+    #[test]
+    fn the_window_says_which_gateway_could_not_be_listed() {
+        let mut config = an_aws_account_and(|_| None);
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {
+                "down": {"name": "Down Gateway", "options": {"baseURL": "http://127.0.0.1:1/v1"}},
+                "keyless": {"name": "Keyless Gateway", "env": ["BRAVEBOT_TEST_UNSET_GATEWAY_KEY"],
+                            "options": {"baseURL": "http://127.0.0.1:1/v1"}},
+                "named": {"name": "Named Gateway", "options": {"baseURL": "http://127.0.0.1:1/v1"},
+                          "models": {"m": {}}}
+            }}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 3, "a block configured no gateway");
+
+        let listed = list(&config);
+        let mut warnings: Vec<&str> = listed["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .map(|warning| warning.as_str().expect("a sentence"))
+            .collect();
+        warnings.sort_unstable();
+
+        assert_eq!(
+            warnings,
+            [
+                "Could not load models from Down Gateway. Try again.",
+                "No credential configured for Keyless Gateway.",
+            ]
+        );
+        assert_eq!(listed["warningCommands"], json!([null, null]));
+        let ids: Vec<&str> = listed["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["id"].as_str().expect("an id"))
+            .collect();
+        assert!(ids.contains(&"named/m"), "{ids:?}");
+        assert!(ids.contains(&"opus-arn"), "{ids:?}");
     }
 
     #[test]

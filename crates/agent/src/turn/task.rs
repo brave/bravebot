@@ -217,6 +217,19 @@ pub struct Task {
     /// Supplied per turn for the reason `model` is: where the choice is kept is the caller's
     /// business.
     pub effort: Option<Effort>,
+    /// The session this turn belongs to, as far as the ChatGPT account is concerned: the identifier
+    /// its requests carry and the effort level they are held to
+    /// ([CHATGPT-10](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Said by a caller that keeps a session across turns, once when the session begins, so each
+    /// turn of it is built with the same one. Left unsaid, the task is a session of its own and
+    /// begins one the first time a request asks, at the level the task asks for: a one-shot run and
+    /// a delegate are that. Every clone of a task is in the session the task is in, whether it was
+    /// made before the session began or after, so the rounds of a goal run, which are made from
+    /// clones of its first task, are one session. A caller that builds a task for each turn of a
+    /// session and does not say would give each turn an identifier of its own, which the service
+    /// takes for a cache that never hits.
+    account: std::sync::Arc<std::sync::OnceLock<crate::chatgpt::AccountSession>>,
     /// The schema the person running this task supplied for its reply, sent with each of the
     /// planner's requests.
     ///
@@ -526,6 +539,7 @@ impl Task {
             courier: None,
             model: None,
             effort: None,
+            account: std::sync::Arc::default(),
             output_schema: None,
             tick: None,
             // No watches unless a caller says it keeps some, for the reason `rounds` is bounded
@@ -761,6 +775,23 @@ impl Task {
     pub fn with_effort(mut self, effort: Option<Effort>) -> Self {
         self.effort = effort;
         self
+    }
+
+    /// Make this turn one of `session`, whose identifier and effort level its requests to the ChatGPT
+    /// account carry.
+    ///
+    /// Said by a caller that holds a session between turns, once, when the session begins, so every
+    /// turn of it carries the same identifier.
+    pub fn in_account_session(mut self, session: crate::chatgpt::AccountSession) -> Self {
+        self.account = std::sync::Arc::new(session.into());
+        self
+    }
+
+    /// The session this turn belongs to for the ChatGPT account: the one it was given, and
+    /// otherwise a session begun for it by this first call, at the level the task asks for.
+    pub fn account_session(&self) -> &crate::chatgpt::AccountSession {
+        self.account
+            .get_or_init(|| crate::chatgpt::AccountSession::begin_with(self.effort))
     }
 
     /// Ask for a reply that matches a schema the person supplied.

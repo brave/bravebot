@@ -242,6 +242,7 @@ dependencies = [
  "bravebot-skus",
  "bravebot-stamp",
  "bravebot-tui",
+ "ruzstd",
  "serde_json",
 ]
 
@@ -402,6 +403,7 @@ dependencies = [
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-session",
+ "bravebot-skus",
  "bravebot-stamp",
  "bravebot-ui-bridge",
  "image",
@@ -431,6 +433,7 @@ dependencies = [
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-session",
+ "bravebot-skus",
  "bravebot-stamp",
  "libc",
  "rustix 1.1.4",

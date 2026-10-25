@@ -393,13 +393,16 @@ onboarding-import-many =
     { $sources } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
+onboarding-chatgpt-signed-in = Une connexion ChatGPT est enregistrée, mais le modèle en vigueur est l'un de ceux de Brave.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
 onboarding-bedrock =
     AWS Bedrock, via votre propre compte : ajoutez un bloc `provider` nommé `amazon-bedrock` dans ~/.bravebot/settings.json, avec sa région et les modèles à proposer.
 onboarding-openrouter =
     OpenRouter, ou toute autre passerelle compatible OpenAI : ajoutez un bloc `provider` à son nom dans ~/.bravebot/settings.json, avec la variable qui contient sa clé d'API et les modèles à proposer.
+onboarding-chatgpt =
+    Un compte ChatGPT Plus ou Pro, si vous en avez un : lancez `bravebot auth login chatgpt` dans un terminal et connectez-vous dans le navigateur qu'il ouvre. Ses modèles sont ensuite proposés dans /model sous la forme chatgpt/<modèle>.
 onboarding-leo =
-    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des deux options ci-dessus.
+    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des trois options ci-dessus.
 onboarding-where-to-read =
     Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
@@ -815,6 +818,8 @@ ceiling-stop-in-a-call = le modèle a atteint sa limite de sortie de { $tokens }
 ceiling-stop-thinking = le modèle a atteint sa limite de sortie de { $tokens } jetons en réfléchissant, avant d'avoir rien écrit ; il lui est redemandé
 ceiling-stop-silent = le modèle a atteint sa limite de sortie de { $tokens } jetons avant d'avoir rien écrit ; il lui est redemandé
 fallback-model-in-use = { $from } a échoué ({ $category }) ; ce tour passe à { $to }
+# Pareil quand l'échec est celui du compte ChatGPT, qui est dit dans sa propre phrase.
+fallback-model-in-use-account = { $from } a échoué ({ $problem }) ; ce tour passe à { $to }
 # Ce que compte une limite, sous la forme du nom que les phrases suivantes complètent.
 limit-unit-tokens = jetons
 limit-unit-credits = crédits
@@ -1004,7 +1009,7 @@ auth-status-not-signed-in = non connecté : { $detail }
 auth-status-unusable = inutilisable : { $detail }
 auth-status-none-usable = aucune connexion n'est utilisable
 auth-status-not-all-usable = une connexion demandée n'est pas utilisable
-auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock ou gateway
+auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock, gateway ou chatgpt
 auth-status-leo-none = aucun abonnement Leo n'est importé ; lancez bravebot auth login leo
 auth-status-leo-nowhere = cette machine n'a nulle part où garder des identifiants, donc aucun n'est importé
 # L'instant est celui où le jeton d'accès expire, écrit sous la forme 2026-10-22T21:05:27Z. Le jeton
@@ -1068,6 +1073,8 @@ chatgpt-failed-no-use-scope =
     la connexion n'a pas permis à bravebot d'utiliser les jetons de l'abonnement, donc rien n'a été enregistré ; lancez bravebot auth login chatgpt et autorisez-le, ou utilisez une clé d'API avec la passerelle openai
 chatgpt-failed-id-token =
     le jeton d'identité renvoyé par le serveur d'autorisation n'a pas pu être vérifié, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login chatgpt pour réessayer
+chatgpt-failed-clock =
+    l'horloge de cet ordinateur est réglée avant 1970, donc la connexion ne peut pas savoir quand le jeton d'identité expire et rien n'a été enregistré ; réglez l'horloge, puis lancez bravebot auth login chatgpt pour réessayer
 chatgpt-failed-key-set = les clés qui vérifient la connexion n'ont pas pu être obtenues : { $reason } ; rien n'a été enregistré
 chatgpt-failed-exchange = la connexion n'a pas pu aboutir : { $reason } ; rien n'a été enregistré
 chatgpt-class-refused = le serveur d'autorisation a refusé la requête
@@ -2144,6 +2151,7 @@ status-effort = Effort
 status-effort-chosen = choisi avec /effort
 status-effort-default = ce que le service fait de lui-même
 status-effort-not-read = choisi avec /effort, mais ce modèle n'en lit aucun
+status-effort-kept-for-account = le niveau avec lequel cette session ChatGPT a commencé ; { $chosen }, choisi avec /effort, s'applique à partir de la session suivante
 status-theme = Thème
 status-theme-chosen = choisi avec /theme
 status-served = Répondu par
@@ -2597,6 +2605,7 @@ skill-named-by-the-person = { $skill } est chargée parce que vous l'avez nommé
 turn-named-skill-not-shown = { $skill } a été nommée mais n'a pas pu être montrée au planificateur
 skill-asks-a-model = { $skill } demande { $model } pour le reste de ce tour
 skill-asks-an-effort = { $skill } demande l'effort { $effort } pour le reste de ce tour
+skill-effort-kept-for-account = { $skill } demande l'effort { $effort } pour le reste de ce tour, mais une session ChatGPT garde le niveau avec lequel elle a commencé, donc ce tour ne change pas
 skill-model-needs-sign-in = { $skill } demande { $model }, qui exige d'abord une connexion, donc ses tours gardent le modèle de cette session
 skill-model-refused = { $skill } demande { $model }, que cette machine ne demande pas, donc ses tours gardent le modèle de cette session : { $reason }
 skill-model-kept-for-definition = { $skill } demande { $model }, mais ce tour reste sur le modèle que { $definition } a désigné
@@ -2803,6 +2812,10 @@ session-models-unavailable = impossible de lister les modèles : { $problem }
 session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
 session-chatgpt-models-compiled = impossible de lister les modèles du compte ChatGPT, donc /model montre une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
 session-chatgpt-models-refused = impossible de lister les modèles du compte ChatGPT : { $refusal }
+# Dit à l'ouverture du sélecteur quand une passerelle dont les réglages ne nomment aucun modèle n'a pas pu
+# être interrogée sur sa liste, donc aucun de ses modèles n'est proposé. Une passerelle dont la clé manque
+# n'est pas interrogée et n'est pas signalée ici.
+session-gateway-models-unreadable = impossible de lire la liste des modèles de { $gateway }, donc aucun de ses modèles n'est proposé ; réessayez, ou nommez-en un, comme dans bravebot --model { $id }/<modèle>
 session-theme-set = thème { $theme }
 session-no-such-theme = aucun thème nommé { $theme } ; essayez /theme pour la liste
 session-editing-vi = édition à la manière de vi ; échap pour les commandes, i pour écrire
@@ -2817,6 +2830,7 @@ session-language-not-saved = cette session ne peut pas conserver de choix, la la
 session-no-such-language = aucun catalogue pour { $language } ; les catalogues sont { $available }
 session-no-such-effort = aucun niveau d'effort nommé { $effort } ; essayez /effort pour la liste
 session-effort-not-read = ce modèle ne lit aucun niveau d'effort ; les requêtes n'en portent pas
+session-effort-kept-for-account = une session ChatGPT garde le niveau d'effort avec lequel elle a commencé, { $began }, donc { $chosen } s'applique à partir de la session suivante, que /clear commence
 session-advisor-set = le planificateur peut consulter { $model } dès le prochain tour, ce qui dépense les jetons de ce modèle
 session-advisor-in-force = le planificateur peut consulter { $model }
 session-advisor-none = aucun conseiller ; essayez /advisor suivi d'un nom de modèle
@@ -2930,11 +2944,71 @@ failure-account-token-refused = OpenAI a refusé le jeton d'accès de la connexi
 failure-account-unusable = la connexion ChatGPT enregistrée n'a pas pu être lue. Lancez `bravebot auth status chatgpt` pour voir pourquoi
 failure-account-usage-limit = OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation
 failure-account-not-permitted = OpenAI n'autorise pas l'utilisation de ce compte ChatGPT de cette manière
+failure-account-wait =
+    { $minutes ->
+        [one] { $what }, et le service a demandé une attente d'environ 1 minute
+       *[other] { $what }, et le service a demandé une attente d'environ { $minutes } minutes
+    }
 failure-account-renewal-refused = la connexion ChatGPT n'a pas pu être renouvelée : la requête a été refusée
 failure-account-renewal-rate-limited = la connexion ChatGPT n'a pas pu être renouvelée : le service limite le nombre de requêtes
 failure-account-renewal-unavailable = la connexion ChatGPT n'a pas pu être renouvelée : la requête a rencontré un service indisponible
 failure-account-renewal-incomplete = la connexion ChatGPT n'a pas pu être renouvelée : la réponse à la requête avait une forme illisible
 failure-account-renewal-transport = la connexion ChatGPT n'a pas pu être renouvelée : la requête n'a pas abouti
+
+
+## Ce que la fenêtre du bureau dit du compte ChatGPT
+
+# Une phrase chacune, avec une majuscule initiale, qui dit ce qui s'est passé et quoi faire, pour la carte
+# d'erreur de la fenêtre, sa carte d'exécution et le sélecteur de modèle. Elles sont choisies d'après
+# l'étape qui a échoué et ne reprennent rien de ce que OpenAI, le fichier de connexion ou un fichier de
+# réglages a dit. La fenêtre affiche { $command } comme du code : il est transmis et envoyé à côté de la
+# phrase, et n'est pas écrit dans les mots entre apostrophes inversées. Les phrases du terminal pour les
+# mêmes échecs sont en minuscules et reçoivent le statut d'un refus après elles, ce qu'une carte ne peut
+# pas faire.
+#
+# La fenêtre et un éditeur lisent le catalogue de référence quelle que soit la langue de la machine
+# (`bravebot-rpc` choisit en-US, `bravebot-host` et `bravebot-acp` n'en choisissent aucune), donc aucun
+# programme ne lit le français de ces messages. Ils sont gardés pour que les deux catalogues contiennent les
+# mêmes messages et que contrib/untranslated-messages.txt ne liste aucun manque.
+desktop-chatgpt-not-signed-in = Vous n'êtes pas connecté à ChatGPT, donc lancez { $command } dans un terminal pour vous connecter.
+desktop-chatgpt-ended = La connexion ChatGPT a pris fin, donc lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-token-refused = OpenAI a refusé le jeton d'accès de la connexion ChatGPT, donc lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-unusable = La connexion ChatGPT enregistrée n'a pas pu être lue, donc lancez { $command } dans un terminal pour en voir la raison.
+desktop-chatgpt-renewal-refused = OpenAI a refusé de renouveler la connexion ChatGPT, donc réessayez plus tard.
+desktop-chatgpt-renewal-rate-limited = La connexion ChatGPT n'a pas pu être renouvelée parce qu'OpenAI limite les requêtes, donc réessayez plus tard.
+desktop-chatgpt-renewal-unavailable = La connexion ChatGPT n'a pas pu être renouvelée parce que le service de connexion d'OpenAI est indisponible, donc réessayez plus tard.
+desktop-chatgpt-renewal-incomplete = La connexion ChatGPT n'a pas pu être renouvelée parce que la réponse d'OpenAI était incomplète, donc réessayez.
+desktop-chatgpt-renewal-transport = La connexion ChatGPT n'a pas pu être renouvelée parce qu'OpenAI n'a pas pu être joint, donc vérifiez la connexion et réessayez.
+desktop-chatgpt-usage-limit = OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez plus tard.
+# Dit quand le refus est arrivé en 429 avec une attente demandée, pour l'un ou l'autre refus, comme le dit le
+# terminal. La requête n'est pas renvoyée, donc toute l'attente reste à venir.
+desktop-chatgpt-usage-limit-wait =
+    { $minutes ->
+        [one] OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez dans environ 1 minute.
+       *[other] OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez dans environ { $minutes } minutes.
+    }
+desktop-chatgpt-not-permitted = OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon, donc utilisez un autre compte ou un modèle d'un autre service.
+desktop-chatgpt-not-permitted-wait =
+    { $minutes ->
+        [one] OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon et a demandé une attente d'environ 1 minute, donc utilisez un autre compte ou un modèle d'un autre service.
+       *[other] OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon et a demandé une attente d'environ { $minutes } minutes, donc utilisez un autre compte ou un modèle d'un autre service.
+    }
+# Ce que la fenêtre raconte quand un tour continue ou change de modèle après un échec du compte en chemin :
+# un résumé qu'il n'a pas pu faire, et le modèle qu'il quitte pour le fallbackModel de la personne. Le premier
+# est suivi de la phrase du compte ci-dessus, donc chaque ligne est une seule phrase.
+desktop-compaction-failed = La conversation n'a pas pu être résumée, donc le tour continue avec les messages qu'il a.
+desktop-chatgpt-fell-back-rate-limited = Ce tour passe de { $from } à { $to } parce que la connexion ChatGPT n'a pas pu être renouvelée pendant qu'OpenAI limite les requêtes.
+desktop-chatgpt-fell-back-unavailable = Ce tour passe de { $from } à { $to } parce que la connexion ChatGPT n'a pas pu être renouvelée pendant que le service de connexion d'OpenAI est indisponible.
+desktop-chatgpt-fell-back = Ce tour passe de { $from } à { $to } parce que le compte ChatGPT n'a pas pu être utilisé.
+# Les avertissements du sélecteur de modèle, un pour chaque façon dont les modèles du compte n'ont pas pu
+# être listés. Le premier concerne un fichier de connexion illisible quand une entrée des réglages nomme les
+# modèles, ce qui n'offre aucune ligne. Le deuxième concerne une liste qui n'a pas pu être lue, où le
+# sélecteur montre la liste intégrée. Les deux derniers concernent une liste refusée par un code qui désigne
+# le compte, où se reconnecter ne change rien.
+desktop-chatgpt-models-unreadable = Impossible de charger les modèles de ChatGPT, donc réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-models-compiled = Impossible de charger les modèles de ChatGPT, donc la liste affichée est intégrée et peut nommer un modèle que le compte ne peut pas utiliser ; réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-models-usage-limit = Impossible de charger les modèles de ChatGPT parce que le compte a atteint sa limite d'utilisation, donc réessayez plus tard.
+desktop-chatgpt-models-not-permitted = Impossible de charger les modèles de ChatGPT parce qu'OpenAI n'autorise pas ce compte à être utilisé de cette façon, donc utilisez un autre compte ou un modèle d'un autre service.
 
 
 ## Répéter une consigne
@@ -3245,6 +3319,8 @@ compact-done =
     { $summarised } messages antérieurs résumés, les { $kept } derniers gardés tels quels
 compact-nothing-to-do = il n'y a encore rien à résumer
 compact-failed = la conversation n'a pas pu être résumée : { $problem }
+# Dit par un tour qui a demandé un résumé sans l'obtenir, et qui poursuit avec l'historique qu'il a.
+compact-failed-and-continuing = la conversation n'a pas pu être résumée : { $problem } ; poursuite avec le contexte existant
 turn-ended-unexpectedly = le tour s'est terminé de façon inattendue
 btw-needs-a-question = /btw prend la question à poser, que la conversation ne lira pas
 btw-stopped = la question a été arrêtée

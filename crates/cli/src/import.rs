@@ -73,7 +73,7 @@ impl Looked {
 /// refused, and the file that refused is not this person's to write (BACKEND-48).
 pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
     let model = crate::model::model_for_this_run(None, config);
-    let (subscription, a_service_is_configured) =
+    let (subscription, a_service_is_configured, chatgpt) =
         match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
             bravebot_agent::backend::Serving::Configured => return None,
             bravebot_agent::backend::Serving::Refused { file, why } => {
@@ -85,7 +85,8 @@ pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
             bravebot_agent::backend::Serving::NothingConfigured {
                 subscription,
                 a_service_is_configured,
-            } => (subscription, a_service_is_configured),
+                chatgpt,
+            } => (subscription, a_service_is_configured, chatgpt),
         };
     match at_the_start(a_service_is_configured) {
         Start::Serving(imported) => {
@@ -98,6 +99,7 @@ pub(crate) fn before_the_session(config: &mut Config) -> Option<ExitCode> {
             crate::model::how_to_configure_a_model(
                 subscription.as_deref(),
                 a_service_is_configured,
+                chatgpt,
                 &looked,
             ),
         )),
@@ -118,7 +120,7 @@ enum Start {
 ///
 /// Asked only where there is somebody to answer and somewhere to write: all three streams are
 /// terminals, since the questions go to stderr, the session is not incognito, and no service is
-/// configured, which is the three-route case. Anywhere else the refusal gains a line naming the
+/// configured, which is the case the routes answer. Anywhere else the refusal gains a line naming the
 /// command that asks, and nothing is read from stdin.
 fn at_the_start(a_service_is_configured: bool) -> Start {
     let asks = !a_service_is_configured
@@ -195,11 +197,13 @@ fn at_the_start(a_service_is_configured: bool) -> Start {
         bravebot_agent::backend::Serving::NothingConfigured {
             subscription,
             a_service_is_configured,
+            chatgpt,
         } => Start::Ended(fail(
             Ending::Configuration,
             crate::model::how_to_configure_a_model(
                 subscription.as_deref(),
                 a_service_is_configured,
+                chatgpt,
                 &Looked::default(),
             ),
         )),

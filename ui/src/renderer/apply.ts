@@ -56,7 +56,7 @@ export function apply(
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':
-        return { ...old, composing: null, thinking: '', entries: [...old.entries, t.narrated(message.data.text)] }
+        return { ...old, composing: null, thinking: '', entries: [...old.entries, t.narrated(message.data.text, message.data.command)] }
       case 'tool.started':
         return { ...old, composing: null, thinking: '', entries: [...old.entries, t.started(message.data)] }
       case 'tool.finished':
@@ -159,7 +159,7 @@ export function apply(
           hook: null,
           composing: null,
           thinking: '',
-          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, accountMessage: message.data.accountMessage, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
+          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, accountMessage: message.data.accountMessage, accountCommand: message.data.accountCommand, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
           awaitingOrdinal: null,
           queuePaused: true,
           rewind: message.data.rewind ?? [],

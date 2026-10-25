@@ -162,11 +162,33 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
+/// Seconds since 1970-01-01 at `time`, or `None` before it, where no instant here can be placed.
+pub(crate) fn clock_at(time: std::time::SystemTime) -> Option<u64> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|since| since.as_secs())
+}
+
+/// Seconds since 1970-01-01 now, or `None` for a clock set before it.
+///
+/// An expiry compared with a clock that reads no time would be later than it whatever it said, so
+/// the sign-in, which compares the ID token's, ends where the clock cannot be read.
+pub(crate) fn clock() -> Option<u64> {
+    clock_at(std::time::SystemTime::now())
+}
+
 /// Seconds since 1970-01-01 now, or 0 for a clock set before it.
+///
+/// For the renewal of a token, where a clock that reads 1970 makes every token look unexpired and a
+/// token the service then refuses is replaced as one is for a clock that runs behind
+/// ([CHATGPT-7](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-7)).
 pub(crate) fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
+    now_at(std::time::SystemTime::now())
+}
+
+/// Seconds since 1970-01-01 at `time`, or 0 before it: what [`now`] reads at that instant.
+pub(crate) fn now_at(time: std::time::SystemTime) -> u64 {
+    clock_at(time).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -281,6 +303,30 @@ mod tests {
         ] {
             assert_eq!(utc(seconds), expected, "{seconds}");
         }
+    }
+
+    /// A clock set before 1970 is no time, and 1970 itself and every instant after it are the
+    /// seconds since: a reading that fell back to zero would put every expiry later than it.
+    #[test]
+    fn a_clock_before_1970_reads_as_no_time_and_the_epoch_and_after_as_the_seconds_since() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        assert_eq!(clock_at(UNIX_EPOCH - Duration::from_secs(1)), None);
+        assert_eq!(
+            clock_at(UNIX_EPOCH - Duration::from_secs(10 * 365 * 86_400)),
+            None
+        );
+        assert_eq!(clock_at(UNIX_EPOCH), Some(0));
+        assert_eq!(clock_at(UNIX_EPOCH + Duration::from_secs(5)), Some(5));
+        assert_eq!(
+            clock_at(UNIX_EPOCH + Duration::from_millis(5_999)),
+            Some(5),
+            "a part of a second is not a second"
+        );
+        // The clock the process has is after 1970, so it reads, and the renewal's reading is it.
+        assert!(clock_at(SystemTime::now()).is_some_and(|seconds| seconds > 1_700_000_000));
+        assert!(clock().is_some_and(|seconds| seconds > 1_700_000_000));
+        assert!(now() > 1_700_000_000);
     }
 
     /// 32 random bytes encode to 43 characters, and two values are not the same: a value that was

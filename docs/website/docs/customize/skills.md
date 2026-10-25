@@ -51,7 +51,9 @@ choice stands.
 
 Both take effect from the moment the skill is loaded, for the rest of that turn, and **they replace
 a model you chose for the session**, including one picked with `/model`. The session says so when
-it happens, so you see when a skill moves a turn onto a dearer model.
+it happens, so you see when a skill moves a turn onto a dearer model. On a model of a ChatGPT account the
+skill's `effort` changes nothing, since a session there keeps the level it began with, and the session
+says so.
 
 A skill does not replace a model that a definition named. When you address a definition that names
 a model, or a delegate's definition names one, a skill loaded in that turn keeps the definition's

@@ -53,7 +53,11 @@ is two minutes or less, and when it is longer says `the service asked for fewer 
 about N minutes` so you know when to ask again. Where the status is known it is appended as
 `(HTTP 429)`, and where requests were sent it says `after 3 attempts`, counting retries and
 capability probes. A failure of a ChatGPT account is said in a sentence of its own that names the step
-and what to run, and no status or count follows it.
+and what to run, and no count of attempts follows it. A refusal that names the account says in that
+sentence how long the service asked you to wait, where it asked for one at a 429. The line a failed turn
+leaves in the terminal and the error a one-shot run prints put the status after it, as `(HTTP 429)`, and
+the line `/compact` leaves, the line a turn says when it could not summarise the conversation, the window
+and an editor say the sentence alone.
 
 | What it says | What it means |
 |---|---|

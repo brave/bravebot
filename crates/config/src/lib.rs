@@ -9,9 +9,13 @@
 #![forbid(unsafe_code)]
 
 // The seam that points the ChatGPT account's requests at a stand-in exists for tests, and a release
-// build that turned it on would let a variable choose where an access token goes.
-#[cfg(all(feature = "test-hosts", not(debug_assertions)))]
-compile_error!("the test-hosts feature is for tests and is refused in a release build");
+// build that turned it on would let a variable choose where an access token goes. The refusal reads
+// the two settings the release profile has and a test build does not, as `bravebot-skus` does for the
+// same reason.
+#[cfg(all(feature = "test-hosts", any(not(debug_assertions), panic = "abort")))]
+compile_error!(
+    "the test-hosts feature is for tests: it is refused where debug assertions are off or a panic aborts, as in a release build"
+);
 
 use bravebot_sandbox::swap::LockedText;
 use std::env;
@@ -1606,6 +1610,13 @@ impl Config {
     /// a bare name that two blocks both list resolves to the first of them while a qualified one
     /// cannot be ambiguous at all.
     ///
+    /// A name that begins with the ChatGPT account's id is not matched against a gateway's bare
+    /// listing, since `chatgpt/<name>` is the account's
+    /// ([`Config::chatgpt_model`], [CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+    /// A gateway of another id that lists such a model is reached by the spelling its row has,
+    /// `<id>/chatgpt/<name>`, and a `provider` entry that has the account's id and states an endpoint
+    /// is a gateway like any other and takes the name through the qualified form above.
+    ///
     /// The returned name is what goes on the wire. A gateway has never heard of the id this crate
     /// files it under, so returning them together is what stops the qualified form reaching it.
     pub fn provider_for<'name>(
@@ -1619,6 +1630,9 @@ impl Config {
                 .find(|provider| provider.id == id && provider.bedrock.is_none())
         {
             return Some((provider, wire));
+        }
+        if self.chatgpt_model(model).is_some() {
+            return None;
         }
         self.providers
             .iter()
@@ -1670,7 +1684,18 @@ impl Config {
     ///
     /// The tier variables are asked first, being the older way to name a Bedrock model and the one
     /// a tier word resolves against. A name neither offers belongs to some other service.
+    ///
+    /// A name that begins `chatgpt/` is never Bedrock's: it is the account's, or the gateway
+    /// entry's that has the account's id ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+    /// A Bedrock model is reached by the id as it stands, with no qualified spelling to be reached
+    /// by instead, so one listed under such a name is not asked about it.
     pub fn bedrock_for(&self, model: &str) -> Option<&bedrock::Bedrock> {
+        if model
+            .split_once('/')
+            .is_some_and(|(id, wire)| id == provider::CHATGPT_ID && !wire.is_empty())
+        {
+            return None;
+        }
         if let Some(bedrock) = self.bedrock.as_ref().filter(|it| it.offers(model)) {
             return Some(bedrock);
         }
@@ -3119,6 +3144,120 @@ mod tests {
         let (provider, wire) = config.provider_for("chatgpt/gpt-5").expect("the gateway");
         assert_eq!(provider.base_url, "https://gateway.example.invalid/v1");
         assert_eq!(wire, "gpt-5");
+    }
+
+    /// CHATGPT-9: a gateway of another id that lists a model whose own name begins `chatgpt/` does
+    /// not take the name from the account. `chatgpt/<name>` is the account's, and the gateway's
+    /// model is reached as its row is keyed, `<id>/chatgpt/<name>`, which sends the gateway the name
+    /// it lists. The gateway's bare listing is still found for every other name. Where an entry has
+    /// the account's id and states an endpoint, that entry keeps the name over a gateway that lists
+    /// it. A lookup that matched the bare listing before the account would send a signed-in
+    /// person's turn, and the gateway's key, to the gateway they did not choose.
+    #[test]
+    fn a_gateway_listing_a_name_that_begins_with_chatgpt_is_reached_by_its_qualified_name_alone() {
+        let config = with_a_gateway(r#"{"chatgpt/gpt-5.5": {}, "z-ai/glm-4.6": {}}"#);
+        assert!(config.offers_chatgpt_account());
+        assert_eq!(config.chatgpt_model("chatgpt/gpt-5.5"), Some("gpt-5.5"));
+        assert!(
+            config.provider_for("chatgpt/gpt-5.5").is_none(),
+            "the gateway's bare listing took a name that begins with the account's id"
+        );
+
+        let (provider, wire) = config
+            .provider_for("openrouter/chatgpt/gpt-5.5")
+            .expect("the gateway, by the name its row has");
+        assert_eq!(provider.id, "openrouter");
+        assert_eq!(wire, "chatgpt/gpt-5.5");
+        let (provider, wire) = config
+            .provider_for("z-ai/glm-4.6")
+            .expect("a bare name that does not begin with the account's id");
+        assert_eq!(provider.id, "openrouter");
+        assert_eq!(wire, "z-ai/glm-4.6");
+
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "litellm": {
+                    "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                    "models": {"chatgpt/gpt-5.5": {}}
+                },
+                "chatgpt": {
+                    "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                    "models": {"gpt-5.5": {}}
+                }
+            }}"#,
+        );
+        let mut config = Config::from_lookup(complete_env).expect("configured");
+        config.providers = settings.providers().to_vec();
+        assert!(!config.offers_chatgpt_account());
+        let (provider, wire) = config
+            .provider_for("chatgpt/gpt-5.5")
+            .expect("the entry that holds the id");
+        assert_eq!(provider.id, "chatgpt");
+        assert_eq!(wire, "gpt-5.5");
+    }
+
+    /// CHATGPT-9: a Bedrock account that lists a model under a name beginning `chatgpt/`, in a block
+    /// or in a tier variable, does not take the name from the account, as a gateway does not. Bedrock
+    /// is asked about every other name it lists, and a name that begins `chatgpt/` is the account's,
+    /// or that of the entry which has its id, whatever the account lists.
+    #[test]
+    fn a_bedrock_account_listing_a_name_that_begins_with_chatgpt_does_not_take_it_from_the_account()
+    {
+        let settings = Settings::parse(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2"},
+                "models": {"chatgpt/gpt-5.5": {}, "openai.gpt-5.6-sol": {}}
+            }}}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+        assert!(config.bedrock_for("openai.gpt-5.6-sol").is_some());
+        assert!(
+            config.bedrock_for("chatgpt/gpt-5.5").is_none(),
+            "a Bedrock block took a name that begins with the account's id"
+        );
+        assert_eq!(config.chatgpt_model("chatgpt/gpt-5.5"), Some("gpt-5.5"));
+
+        let config = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("chatgpt/gpt-5.5".into()),
+            other => complete_env(other),
+        })
+        .expect("configured");
+        assert!(
+            config
+                .bedrock
+                .as_ref()
+                .is_some_and(|it| it.offers("chatgpt/gpt-5.5")),
+            "the tier variable did not name the model, so this test holds nothing"
+        );
+        assert!(
+            config.bedrock_for("chatgpt/gpt-5.5").is_none(),
+            "a tier variable took a name that begins with the account's id"
+        );
+
+        let settings = Settings::parse(
+            r#"{"provider": {
+                "amazon-bedrock": {
+                    "options": {"region": "us-west-2"},
+                    "models": {"chatgpt/gpt-5.5": {}}
+                },
+                "chatgpt": {
+                    "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                    "models": {"gpt-5.5": {}}
+                }
+            }}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+        assert!(config.bedrock_for("chatgpt/gpt-5.5").is_none());
+        let (provider, _) = config
+            .provider_for("chatgpt/gpt-5.5")
+            .expect("the entry that holds the id");
+        assert_eq!(provider.id, "chatgpt");
     }
 
     /// CHATGPT-9: the models an entry with the account's id names, where it states no endpoint,

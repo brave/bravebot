@@ -464,12 +464,9 @@ pub(super) fn recover_from_failed_request<S: Sink, R: Reporter>(
         && let Some((to, category)) = crate::backend::fallback_after(config, model, error)
     {
         policy.record_model_fallback(steps, model, &to, category.name());
-        reporter.narration(t!(
-            fallback_model_in_use,
-            from = model,
-            to = to.as_str(),
-            category = category.name()
-        ));
+        // The reason is handed on as the closed value it is, so that where it is the ChatGPT
+        // account's the person is told that failure and not only its category.
+        reporter.fell_back(model, &to, crate::report::Why::of(error.diagnosis()));
         *turn_model = Some(to);
         retries.fell_back = true;
         return Ok(Recovery::Retry);
@@ -600,6 +597,7 @@ pub(super) struct AfterCompacting<'a> {
 pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     cancel: &Cancel,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
@@ -633,7 +631,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
     if retries.refused.is_some() || *may_compact && account.context_tokens >= config.context_budget
     {
         reporter.phase(Phase::Compacting);
-        let mut chat = crate::processor::Chat::new(config, egress)
+        let mut chat = crate::processor::Chat::new(config, egress, session)
             .spending(subscription)
             .on(turn_model)
             .stoppable_by(cancel);
@@ -697,11 +695,7 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
             }
             Err(error) => {
                 *may_compact = false;
-                let category = error.category();
-                reporter.narration(format!(
-                "the conversation could not be summarised ({}); continuing with the existing context",
-                category.name()
-            ));
+                reporter.summary_failed(crate::report::Why::of_summary(&error));
             }
         }
     }
@@ -714,4 +708,142 @@ pub(super) fn compact_if_due<S: Sink, R: Reporter, T: Subscription>(
         return Err(error.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::report::{RecordingReporter, Why};
+    use bravebot_aichat::responses::protocol::Refusal;
+    use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure};
+    use bravebot_core::capability::{Capability, CapabilitySet};
+    use bravebot_core::event::RecordingSink;
+    use bravebot_core::policy::{ReleasePlan, Routing};
+
+    /// A reporter that keeps the closed value a move to the fallback model is handed, which is what a
+    /// front end with words of its own for it is given.
+    #[derive(Default)]
+    struct Moves {
+        why: Vec<Why>,
+    }
+
+    impl Reporter for Moves {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn fell_back(&mut self, _from: &str, _to: &str, why: Why) {
+            self.why.push(why);
+        }
+    }
+
+    /// A turn on `chatgpt/gpt-a` whose request failed with `error`, in a configuration whose fallback
+    /// is `chatgpt/gpt-b`, and the model it is on afterwards and whether it asks again.
+    fn after_a_failure<R: Reporter>(
+        error: BackendError,
+        reporter: &mut R,
+    ) -> (Option<String>, bool) {
+        let mut config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9".into()),
+            _ => None,
+        })
+        .expect("config");
+        config.fallback_model = Some("chatgpt/gpt-b".to_string());
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "ask a model");
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("a policy");
+        let mut turn_model = Some("chatgpt/gpt-a".to_string());
+        let recovered = recover_from_failed_request(
+            Err(error),
+            &ChatRequest::new("chatgpt/gpt-a", vec![Message::user("hello")]),
+            &config,
+            &mut policy,
+            &mut Conversation::new(),
+            reporter,
+            0,
+            &mut turn_model,
+            &mut Retries::default(),
+            true,
+            false,
+            true,
+        );
+        (turn_model, matches!(recovered, Ok(Recovery::Retry)))
+    }
+
+    /// CHATGPT-8 and BACKEND-53: a renewal of the account's sign-in that was rate-limited or met an
+    /// unavailable service moves the turn to the fallback model, and the person is told that failure
+    /// in the account's sentence and not only as the name of its category. The front end is handed the
+    /// closed value, so the window can say it in its own words, and a front end with none of its own
+    /// narrates it in the terminal's.
+    ///
+    /// The regressions it rejects are the category's name for a failure of the account, the failure
+    /// handed on as a sentence, and a failure of any other service worded as the account's.
+    #[test]
+    fn a_move_to_the_fallback_after_the_accounts_failure_says_the_accounts_sentence() {
+        for (failure, said) in [
+            (
+                RenewalFailure::RateLimited,
+                "chatgpt/gpt-a failed (the ChatGPT sign-in could not be renewed: the request was rate-limited); this turn moves to chatgpt/gpt-b",
+            ),
+            (
+                RenewalFailure::Unavailable,
+                "chatgpt/gpt-a failed (the ChatGPT sign-in could not be renewed: the request was met with an unavailable service); this turn moves to chatgpt/gpt-b",
+            ),
+        ] {
+            let account = AccountFailure::Renewal(failure);
+            let error = || BackendError::from(ChatError::Account(account));
+
+            let mut terminal = RecordingReporter::default();
+            let (model, retried) = after_a_failure(error(), &mut terminal);
+            assert!(retried, "{failure:?}");
+            assert_eq!(model.as_deref(), Some("chatgpt/gpt-b"), "{failure:?}");
+            assert_eq!(terminal.narration, [said], "{failure:?}");
+
+            let mut window = Moves::default();
+            after_a_failure(error(), &mut window);
+            assert_eq!(window.why, [Why::Account(account)], "{failure:?}");
+        }
+
+        // A 503 from the service is not the account's own failure: the category says it, as before.
+        let mut terminal = RecordingReporter::default();
+        let (_, retried) = after_a_failure(
+            BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://api.example.invalid/v1/responses".to_string(),
+                status: 503,
+                retry_after: None,
+                body: None,
+            })),
+            &mut terminal,
+        );
+        assert!(retried);
+        assert_eq!(
+            terminal.narration,
+            ["chatgpt/gpt-a failed as unavailable; this turn moves to chatgpt/gpt-b"]
+        );
+
+        // A refusal that names the account is a category no fallback answers for, so no move is made
+        // and nothing is said of one.
+        let refusal = || {
+            BackendError::from(ChatError::Account(AccountFailure::Named {
+                refusal: Refusal::UsageLimit,
+                status: Some(429),
+                retry_after: None,
+            }))
+        };
+        let mut terminal = RecordingReporter::default();
+        let (model, retried) = after_a_failure(refusal(), &mut terminal);
+        assert!(!retried);
+        assert_eq!(model.as_deref(), Some("chatgpt/gpt-a"));
+        assert!(terminal.narration.is_empty());
+        let mut window = Moves::default();
+        after_a_failure(refusal(), &mut window);
+        assert!(window.why.is_empty());
+    }
 }

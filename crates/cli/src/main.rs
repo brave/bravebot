@@ -3319,6 +3319,35 @@ mod tests {
     use bravebot_tui::app::AskedFor;
     use std::path::PathBuf;
 
+    /// CHATGPT-10: a one-shot run is one session to the ChatGPT account, which begins with its first
+    /// request at the level the run asks for, and every clone of its task, which is what each round
+    /// of a goal run is made from, is in it whether the clone was made before the session began or
+    /// after. Another run is another. The regressions it rejects are a clone that begins a session
+    /// of its own, a run that carries the previous run's, and a run begun at no level.
+    #[test]
+    fn a_one_shot_run_is_a_session_its_clones_share_and_another_run_is_not() {
+        let settings = bravebot_config::Settings::default();
+        let run = task_from_the_settings(Task::new("a"), &settings, Some(Effort::Low));
+        let another = task_from_the_settings(Task::new("a"), &settings, Some(Effort::Low));
+
+        let before_the_session_began = run.clone();
+
+        assert_eq!(
+            before_the_session_began.account_session().identifier(),
+            run.account_session().identifier()
+        );
+        assert_eq!(
+            run.clone().account_session().identifier(),
+            run.account_session().identifier()
+        );
+        // At the level the run asks for, which the account is sent for all of it.
+        assert_eq!(run.account_session().effort(), Some(Effort::Low));
+        assert_ne!(
+            another.account_session().identifier(),
+            run.account_session().identifier()
+        );
+    }
+
     /// These commands start no session, so a flag that shapes one has nothing to shape. Taking it
     /// and ignoring it would read as honoured, which is the reason CLI-13 refuses it by name.
     #[test]

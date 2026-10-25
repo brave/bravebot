@@ -10,7 +10,7 @@ description: Start a session with --incognito so it adds nothing to ~/.bravebot,
 bravebot --incognito
 ```
 
-An incognito session runs like any other and adds nothing to `~/.bravebot`, apart from the two files
+An incognito session runs like any other and adds nothing to `~/.bravebot`, apart from the three files
 [below](#what-it-does-not-cover). No prompt reaches the history, no session record and no title are
 written, no audit trail is kept, and a model, theme or effort level chosen inside it applies for
 that session without being recorded. The sessions directory is not created either, since an empty
@@ -41,7 +41,7 @@ bare invocation alike. It cannot be turned off once the session has started.
 
 ## What it does not cover
 
-Nine things still reach the filesystem:
+Ten things still reach the filesystem:
 
 - **Your project.** `write_file` and `edit_file` go on editing it. Those edits are the work rather
   than a trace of it.
@@ -72,6 +72,13 @@ Nine things still reach the filesystem:
   fetched for the same subscription and written to the same file, rather than thrown away when you
   exit. What ends up in the file is credentials for a subscription you imported before the session
   and which of them are spent, and nothing about the project or what you asked.
+- **A ChatGPT sign-in whose access token was replaced.** A stored
+  [ChatGPT sign-in](../customize/providers/chatgpt.md) is used as in any session. When its access
+  token is replaced the new tokens are written to `chatgpt-account.json` under `~/.bravebot`, and a
+  sign-in OpenAI has ended is removed from it. OpenAI replaces the refresh token each time it is used,
+  so tokens that were not written would leave the file holding one that no longer works, and your next
+  session would find the sign-in ended. What ends up in the file is the tokens of a sign-in you made
+  before the session, and nothing about the project or what you asked.
 - **The copy of a picture you are asked to open.** When a [vetting](../security/vetting.md) prompt is
   about a picture, you are handed a copy to open in your own viewer. It is written to
   `bravebot/vetting` under your cache directory, readable by you alone, and removed when the prompt
@@ -84,4 +91,5 @@ Nine things still reach the filesystem:
 
 [`import-leo-creds`](../customize/premium.md) is refused rather than quietly skipped, since a
 credential that did not outlive the session would not be an import. `--forget` still works, because
-removing a stored secret leaves less behind rather than more.
+removing a stored secret leaves less behind rather than more. `bravebot auth login chatgpt` is refused
+the same way, before a browser opens, and `bravebot auth logout chatgpt` still works.

@@ -29,8 +29,8 @@ What bravebot reads from Claude Code's and opencode's configuration, and asks a 
 Studio or llama-server, when it starts with no service configured to answer. It also covers which
 of those settings may become bravebot's own configuration, how the person is asked, and what is
 written. Two of the five sources are files. The other three are servers running on this machine,
-each asked what it serves. The refusal a start gets with nothing configured, and the three routes
-it names, are [backends.md](backends.md)'s.
+each asked what it serves. The refusal a start gets with nothing configured, and the routes it names,
+are [backends.md](backends.md)'s.
 
 It covers model services only: the Bedrock account and the OpenAI-compatible gateways
 [backends.md](backends.md) already defines. It adds no new service.
@@ -54,7 +54,7 @@ The start looks for the [IMPORT-2](#IMPORT-2) sources before the session opens w
 hold:
 
 - the start would be refused for naming no model service;
-- no service is configured at all, which is the case the refusal answers with three routes, not
+- no service is configured at all, which is the case the refusal answers with the routes, not
   the one where a configured service lacks only a model name;
 - stdin, stdout and stderr are all terminals. The question is written to stderr and answered on
   stdin, and the session it leads to draws on stdout.
@@ -72,7 +72,7 @@ A decline is not recorded. The start is then refused as before, and the next sta
 because nothing on the machine has changed.
 
 **Why.** Somebody arriving from one of these tools has already written this configuration once. The
-three routes ask them to write it again by hand, in a shape bravebot borrowed from those same tools.
+routes ask them to write it again by hand, in a shape bravebot borrowed from those same tools.
 The offer comes only where the answer is "configure a service", because a start that already works
 should not open with a question about another program.
 
@@ -305,7 +305,7 @@ be imported, no question is asked, and these lines are said before the refusal's
 **Why.** A settings file may name a destination, never a permission or a command
 ([backends.md](backends.md)). An import writes a settings file, so it may carry no more than one
 could hold. The lines about what was left are there because a person who uses Claude Code with a
-bearer token or a host of their own would otherwise see the three routes and no sign that their
+bearer token or a host of their own would otherwise see the routes and no sign that their
 setup was looked at.
 
 `verified-by: bravebot_config::import::a_google_vertex_entry_naming_a_project_is_offered_with_its_project_and_location`
@@ -729,7 +729,7 @@ the owner's decision.
   not, because `serde_json` is built without `preserve_order`.
 - **A plaintext key.** A key approved under [IMPORT-6](#IMPORT-6) sits in plain text in
   `~/.bravebot/settings.json`, reached only by a question.
-- **Unsupported setups still get the three routes,** with the [IMPORT-4](#IMPORT-4) lines first:
+- **Unsupported setups still get the routes,** with the [IMPORT-4](#IMPORT-4) lines first:
   a Claude Code user on a claude.ai subscription, a bearer token or a host of their own, and an
   opencode user on a provider SDK other than an OpenAI-compatible one.
 - **A program that can write the other tool's files can name a host**, which the import then shows
