@@ -3,6 +3,7 @@
 //! opened and nothing is given a label.
 
 use super::Workspace;
+#[cfg(unix)]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

@@ -54,6 +54,7 @@ mod volume;
 
 use error::{ENDS_CHECKOUTS, io_detail};
 pub use error::{Remedy, WorkspaceError};
+#[cfg(unix)]
 use other_names::{LinkNames, directory_identity};
 pub(crate) use resolve::destination;
 use resolve::{expand_home, named_home, refuse_unkeyable, written_below};
