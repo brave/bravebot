@@ -1225,7 +1225,11 @@ chatgpt-replace = Replace it?
 chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
 chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
 chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
-chatgpt-use-by-name = Pick one of the account's models in /model to use this sign-in, or name one, as in bravebot --model chatgpt/<model>
+# What a refusal says. A refusal is also what a one-shot run, a start that names a model and `doctor` end
+# in, and none of those asks, so the last sentence says which start does: one on its own. Both commands
+# name a model together with the prompt or the task that starts something, since
+# `bravebot --model chatgpt/<model>` alone starts nothing. /model is reached once a session is open.
+chatgpt-use-by-name = Name one of the account's models, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`. Once a session is open, /model lists them. Started on its own, in a terminal outside an incognito session, bravebot asks which one to use when the account lists its models.
 # What the command says after the sign-in is stored when the account's listing answered with no model,
 # could not be had, or was refused in a code that names the account. The sign-in is stored in each. Of the
 # two for a listing that could not be had, the second is for an account whose picker offers the built-in

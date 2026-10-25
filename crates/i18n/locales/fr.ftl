@@ -1044,7 +1044,7 @@ chatgpt-replace = La remplacer ?
 chatgpt-open-this = Ouvrez cette adresse dans un navigateur pour vous connecter à ChatGPT :
 chatgpt-waiting = En attente du navigateur sur 127.0.0.1, port { $port }. Un navigateur sur une autre machine ne l'atteint que par un port redirigé.
 chatgpt-stored = connecté à ChatGPT ; le jeton d'accès expire le { $expires }. La connexion est enregistrée dans { $path }
-chatgpt-use-by-name = Choisissez l'un des modèles du compte avec /model pour utiliser cette connexion, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+chatgpt-use-by-name = Nommez l'un des modèles du compte, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`. Une fois une session ouverte, /model les liste. Lancé seul, dans un terminal hors d'une session incognito, bravebot demande lequel utiliser quand le compte liste ses modèles.
 # Ce que la commande dit une fois la connexion enregistrée quand la liste du compte ne contient aucun
 # modèle, n'a pas pu être obtenue, ou a été refusée par un code qui désigne le compte. La connexion est
 # enregistrée dans chaque cas. Des deux messages pour une liste qui n'a pas pu être obtenue, le second

@@ -322,11 +322,12 @@ fn a_first_run_names_the_chatgpt_sign_in_in_the_language_it_is_read_in() {
 }
 
 /// Somebody whose ChatGPT sign-in is stored and whose model in force is still Brave's own is
-/// one key from working, as one who wrote a gateway block is. The first run says to pick one of the
-/// account's models in the words the sign-in command ends with, and does not show the routes they
-/// have just followed, and with Claude Code set up on the machine it does not name an import either,
-/// since a service is configured. A stored sign-in that cannot be read is said first and is no
-/// service, so the routes stay. Nothing stored shows them, which the first-run tests above pin.
+/// one key from working, as one who wrote a gateway block is. The first run says to name one of the
+/// account's models in the commands that open a session or run a task on it, and does not show the
+/// routes they have just followed, and with Claude Code set up on the machine it does not name an
+/// import either, since a service is configured. A stored sign-in that cannot be read is said first
+/// and is no service, so the routes stay. Nothing stored shows them, which the first-run tests above
+/// pin.
 #[test]
 fn a_stored_chatgpt_sign_in_is_a_service_configured_for_the_first_run() {
     let stored = Scratch::new("cli-running-no-service-chatgpt-stored")
@@ -338,9 +339,13 @@ fn a_stored_chatgpt_sign_in_is_a_service_configured_for_the_first_run() {
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
         stderr.contains("A ChatGPT sign-in is stored")
-            && stderr.contains("Pick one of the account's models in /model")
-            && stderr.contains("bravebot --model chatgpt/<model>"),
+            && stderr.contains(r#"`bravebot -i "<prompt>" --model chatgpt/<model>`"#)
+            && stderr.contains(r#"`bravebot "<task>" --model chatgpt/<model>`"#),
         "the refusal did not say how to use the sign-in: {stderr}"
+    );
+    assert!(
+        !stderr.contains("`bravebot --model chatgpt/<model>`"),
+        "the refusal named a form that needs a task: {stderr}"
     );
     for offered in [
         "amazon-bedrock",
@@ -410,7 +415,7 @@ fn a_stored_chatgpt_sign_in_beside_a_configured_gateway_leaves_the_line_that_nam
     assert!(stderr.contains("`model` key"), "{stderr}");
     for replaced in [
         "A ChatGPT sign-in is stored",
-        "Pick one of the account's models",
+        "Name one of the account's models",
         "amazon-bedrock",
         "bravebot auth login leo",
     ] {
@@ -457,7 +462,8 @@ fn doctor_treats_a_stored_chatgpt_sign_in_as_a_service_configured() {
     assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
     assert!(
         stdout.contains("A ChatGPT sign-in is stored")
-            && stdout.contains("bravebot --model chatgpt/<model>"),
+            && stdout.contains(r#"`bravebot -i "<prompt>" --model chatgpt/<model>`"#)
+            && stdout.contains(r#"`bravebot "<task>" --model chatgpt/<model>`"#),
         "the report did not say how to use the sign-in: {stdout}"
     );
     for offered in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {

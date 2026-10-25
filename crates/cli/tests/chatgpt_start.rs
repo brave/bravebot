@@ -686,6 +686,176 @@ fn a_model_named_on_the_command_line_is_not_asked_about() {
     assert!(the_state_file(&home, "model").is_none());
 }
 
+/// The words of `line`, a double-quoted run of them kept as one word with its quotes taken off.
+fn words_of(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quoted = false;
+    for character in line.chars() {
+        match character {
+            '"' => quoted = !quoted,
+            ' ' if !quoted => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            }
+            other => word.push(other),
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// The commands `text` names, each as the arguments that follow `bravebot`, with a placeholder in
+/// angle brackets replaced by something that names a thing: a prompt, a task, and the account's model.
+fn commands_named_in(text: &str) -> Vec<Vec<String>> {
+    text.split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|span| span.starts_with("bravebot "))
+        .map(|span| {
+            words_of(span)
+                .into_iter()
+                .skip(1)
+                .map(|word| {
+                    word.replace("<prompt>", "hello")
+                        .replace("<task>", "hello")
+                        .replace("<model>", "gpt-placeholder")
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// BACKEND-39: every command the refusal names works as typed. The refusal of a start that nothing
+/// serves, where a sign-in is stored and nobody can be asked, names two commands, one that opens a
+/// session and one that runs a task, and each of them is run here as the refusal writes it, in the
+/// terminal or without one as it needs. `/model` is named only as what a session lists once it is
+/// open. The regression it rejects is advice for `bravebot --model chatgpt/<model>`, which is refused
+/// for want of a task, and advice that sends a person to `/model` before a session can open.
+#[test]
+fn every_command_the_refusal_names_works_as_typed() {
+    let home = signed_in_home("cli-chatgpt-start-advice");
+    let stand_in = StandIn::new(vec![]);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot"));
+    at_braves_hosts(&mut command, &home, &stand_in);
+    let refusal = command
+        .stdin(Stdio::null())
+        .output()
+        .expect("the built binary runs");
+    let said = chatgpt_run::said(&refusal);
+    assert_eq!(refusal.status.code(), Some(3), "{said}");
+    assert!(said.contains(THE_REFUSAL), "{said}");
+
+    let commands = commands_named_in(&said);
+    assert_eq!(
+        commands,
+        vec![
+            vec!["-i", "hello", "--model", MODEL],
+            vec!["hello", "--model", MODEL]
+        ],
+        "the refusal does not name a command that opens a session and one that runs a task: {said}"
+    );
+    assert!(
+        !said.contains("bravebot --model"),
+        "the refusal names a form that needs a task: {said}"
+    );
+    let at = |words: &str| {
+        said.find(words)
+            .unwrap_or_else(|| panic!("{words:?}: {said}"))
+    };
+    assert!(
+        at("/model") > at("session is open"),
+        "/model is named before a session can be open: {said}"
+    );
+
+    for arguments in &commands {
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        let turns_before = turns(&stand_in).len();
+        match arguments[0] {
+            "-i" => {
+                let mut command = in_a_sized_terminal(&arguments);
+                at_braves_hosts(&mut command, &home, &stand_in);
+                let terminal = Terminal::start(command);
+                let drawn = terminal.shows("\u{1b}[?1049h", Duration::from_secs(30));
+                let ran = terminal.finish(Duration::from_millis(200));
+                assert!(
+                    drawn && !ran.shown.contains("BB100"),
+                    "{arguments:?} did not open a session as typed: {}",
+                    ran.shown
+                );
+            }
+            _ => {
+                let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot"));
+                at_braves_hosts(&mut command, &home, &stand_in);
+                let output = command
+                    .args(&arguments)
+                    .stdin(Stdio::null())
+                    .output()
+                    .expect("the built binary runs");
+                assert!(
+                    output.status.success(),
+                    "{arguments:?} did not run as typed: {}",
+                    chatgpt_run::said(&output)
+                );
+                assert_eq!(
+                    turns(&stand_in).len(),
+                    turns_before + 1,
+                    "{arguments:?} sent no turn to the account: {}",
+                    chatgpt_run::said(&output)
+                );
+            }
+        }
+    }
+}
+
+/// BACKEND-39: the refusal says that `bravebot` started on its own asks which model to use, and it is
+/// also what a one-shot run, a start that names a model and `doctor` end in, none of which asks. The
+/// sentence is about the start that does, and the starts that show it are each run here with the
+/// account listing models: each ends in the refusal, with the sentence, and puts no question and asks
+/// the account nothing. The start the sentence is about asks. The regression it rejects is the
+/// sentence worded for every refusal as if it were a bare start's, which is false for the three.
+#[test]
+fn the_refusal_says_which_start_asks_and_the_starts_that_show_it_without_asking_say_so() {
+    let sentence = "Started on its own";
+    for (what, arguments) in [
+        ("a one-shot run", vec!["-p", "hello"]),
+        (
+            "a start that names a model",
+            vec!["-i", "hello", "--model", "automatic"],
+        ),
+        ("doctor", vec!["doctor"]),
+    ] {
+        let home = signed_in_home("cli-chatgpt-start-refusal-scope");
+        let stand_in = offering(THE_ACCOUNTS_MODELS);
+        let mut command = in_a_sized_terminal(&arguments);
+        at_braves_hosts(&mut command, &home, &stand_in);
+
+        let ran = Terminal::start(command).finish(Duration::from_secs(30));
+
+        assert_eq!(ran.code, Some(3), "{what}: {}", ran.shown);
+        assert!(ran.shown.contains(THE_REFUSAL), "{what}: {}", ran.shown);
+        assert!(ran.shown.contains(sentence), "{what}: {}", ran.shown);
+        assert!(!ran.shown.contains(THE_QUESTION), "{what}: {}", ran.shown);
+        assert!(
+            stand_in.asked().is_empty(),
+            "{what} asked the account: {:?}",
+            stand_in.asked()
+        );
+    }
+
+    let home = signed_in_home("cli-chatgpt-start-refusal-scope-bare");
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+    let mut command = in_a_sized_terminal(&["--dangerously-skip-permissions"]);
+    at_braves_hosts(&mut command, &home, &stand_in);
+    let terminal = Terminal::start(command);
+    let asked = terminal.shows(THE_QUESTION, Duration::from_secs(30));
+    let ran = terminal.finish(Duration::from_millis(100));
+    assert!(asked, "a start on its own did not ask: {}", ran.shown);
+}
+
 /// A name the store reads back as no choice, since a recorded name is read only up to 128 bytes: with
 /// `chatgpt/` ahead of it, the key of this row is longer.
 const A_NAME_TOO_LONG_TO_KEEP: &str = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";

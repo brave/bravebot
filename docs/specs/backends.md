@@ -2017,11 +2017,16 @@ Bedrock or gateway block that is configured keeps the line above whatever else i
 read, so a person who set up an AWS account or a gateway and also signed in to ChatGPT is told to name a
 model with the `model` key, and that line is not replaced by one about the account. A start whose model
 in force is Brave's own and that finds a sign-in stored and nothing else configured, and that is not
-asked which model to use (below) or declines, is told that a ChatGPT sign-in is stored, and to pick one
-of the account's models in `/model` or to name one as `--model chatgpt/<model>`, in the words the
-sign-in command ends with, which [What is built](chatgpt-sign-in.md#what-is-built) says. It is not
-shown the routes, and no import is offered, since a service is configured. A sign-in file that cannot
-be read configures nothing and is said first, with the remedy of
+asked which model to use (below) or declines, is told that a ChatGPT sign-in is stored, and to name one
+of the account's models in a command that works as typed: `bravebot -i "<prompt>" --model
+chatgpt/<model>` opens a session on it, and `bravebot "<task>" --model chatgpt/<model>` runs a task on
+it. `bravebot --model chatgpt/<model>` alone starts nothing, since a task is required, and is not named.
+`/model` is named only as what lists the account's models once a session is open. It says that
+`bravebot` started on its own asks which one to use, in a terminal outside an incognito session, where
+the account lists its models, because a one-shot run, a start that names a model and `doctor` end in the
+same refusal and ask nothing. It is not shown the routes, and no import is offered, since a service is
+configured. A sign-in file that cannot be read
+configures nothing and is said first, with the remedy of
 [CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11), above the routes. `doctor` says it once, in its own line
 for the sign-in. A model that a configured service serves does not read the file.
 
@@ -2136,6 +2141,8 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::chatgpt_start::nothing_is_asked_where_a_model_is_served_or_a_gateway_is_configured`
 `verified-by: bravebot_cli::chatgpt_start::a_model_named_on_the_command_line_is_not_asked_about`
 `verified-by: bravebot_cli::chatgpt_start::a_pick_the_start_cannot_read_back_is_not_said_to_be_remembered_and_ends_the_start`
+`verified-by: bravebot_cli::chatgpt_start::every_command_the_refusal_names_works_as_typed`
+`verified-by: bravebot_cli::chatgpt_start::the_refusal_says_which_start_asks_and_the_starts_that_show_it_without_asking_say_so`
 `verified-by: bravebot_cli::model::the_rows_are_numbered_from_one_in_the_order_given_and_the_number_typed_picks_its_row`
 `verified-by: bravebot_cli::model::an_answer_that_is_not_the_number_of_a_row_picks_none`
 `verified-by: bravebot_cli::model::a_name_the_service_gave_is_shown_without_its_control_characters`

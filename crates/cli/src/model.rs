@@ -20,8 +20,8 @@ use std::path::Path;
 /// `a_service_is_configured` replaces all four with one line. That person set a service up and
 /// left the model this build baked in, which a settings block copied out of another tool does by
 /// design, so what they need is the key that names one of their own models. Where the service is a
-/// stored ChatGPT sign-in the line says to pick one of the account's models in `/model` or to name
-/// one, in the words the sign-in command ends with.
+/// stored ChatGPT sign-in the line names the commands that open a session or run a task on one of the
+/// account's models.
 ///
 /// `chatgpt` is what the sign-in file holds. A file that cannot be read is said before the routes,
 /// with the remedy, since it is not a service and the person has to know why a sign-in they made is
@@ -506,9 +506,8 @@ mod tests {
     }
 
     /// BACKEND-39: somebody whose ChatGPT sign-in is stored and whose model in force is Brave's own
-    /// is told to pick one of the account's models, in the words the sign-in command ends with, and
-    /// is not shown the routes they have just followed. A list that kept showing the routes would
-    /// send them to sign in again.
+    /// is told to name one of the account's models, and is not shown the routes they have just
+    /// followed. A list that kept showing the routes would send them to sign in again.
     #[test]
     fn a_stored_chatgpt_sign_in_is_told_to_name_one_of_the_accounts_models_and_not_offered_the_routes()
      {
