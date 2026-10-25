@@ -1043,36 +1043,7 @@ impl<'a> AichatClient<'a> {
         )?;
         let label = stream.label();
 
-        // Read on a thread this one can walk away from.
-        //
-        // A read blocks for as long as the other end is quiet and cannot be interrupted, and the
-        // longest quiet in a turn is the one before the model's first word: a model thinking is a
-        // socket with nothing on it. Checked between chunks and no closer, a stop pressed then
-        // could not be noticed until the model started writing, which is the moment somebody is
-        // most likely to have pressed it.
-        //
-        // Nothing on this thread holds a policy, a workspace or a tool: it reads bytes and sends
-        // them on. So a request walked away from leaves a socket to be dropped when the server
-        // finishes or the connection times out, and nothing else.
-        let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
-        std::thread::spawn(move || {
-            let mut stream = stream;
-            loop {
-                match stream.next_chunk() {
-                    // A send that fails means the receiver is gone, which means the caller
-                    // stopped: there is nobody left to read for.
-                    Ok(Some(piece)) => {
-                        if chunks.send(Ok(Some(piece))).is_err() {
-                            return;
-                        }
-                    }
-                    end => {
-                        let _ = chunks.send(end);
-                        return;
-                    }
-                }
-            }
-        });
+        let arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut accumulated = StreamAccumulator::new();
@@ -1305,11 +1276,48 @@ pub fn reply_bound(ceiling: u64) -> Duration {
 /// a person cannot tell it from at once.
 const WAKE: Duration = Duration::from_millis(50);
 
-/// How many chunks may sit between the thread reading them and the one taking them apart.
+/// Read a streamed body on a thread of its own and hand each piece on as it arrives, unopened.
 ///
-/// Bounded, so a server faster than the decoder cannot pile a whole reply into a channel. Small,
-/// because the decoder has never been the slow end.
-const CHUNKS_AHEAD: usize = 16;
+/// A read blocks for as long as the other end is quiet and cannot be interrupted, and the longest
+/// quiet in a turn is the one before the model's first word: a model thinking is a socket with
+/// nothing on it. Checked between chunks and no closer, a stop pressed then could not be noticed
+/// until the model started writing, which is the moment somebody is most likely to have pressed
+/// it. So the read runs where the caller can walk away from it.
+///
+/// Nothing on the thread holds a policy, a workspace or a tool. It moves each result from
+/// [`bravebot_net::Streamed::next_chunk`] into the channel without opening a piece or touching its
+/// label, and the caller decodes what it receives. A request walked away from leaves a socket to be
+/// dropped when the server finishes or the connection times out, and nothing else.
+///
+/// The channel holds at most 16 pieces, so a server faster than the decoder cannot pile a whole
+/// reply into it. The decoder has never been the slow end, so the bound is small. The thread stops
+/// when the body ends, when a read fails, or when the receiver is dropped.
+pub fn read_in_background(
+    stream: bravebot_net::Streamed<'static>,
+) -> std::sync::mpsc::Receiver<Result<Option<Labelled<Vec<u8>>>, EgressError>> {
+    const CHUNKS_AHEAD: usize = 16;
+
+    let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
+    std::thread::spawn(move || {
+        let mut stream = stream;
+        loop {
+            match stream.next_chunk() {
+                // A send that fails means the receiver is gone, which means the caller
+                // stopped: there is nobody left to read for.
+                Ok(Some(piece)) => {
+                    if chunks.send(Ok(Some(piece))).is_err() {
+                        return;
+                    }
+                }
+                end => {
+                    let _ = chunks.send(end);
+                    return;
+                }
+            }
+        }
+    });
+    arriving
+}
 
 /// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
 ///

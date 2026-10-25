@@ -21,8 +21,8 @@ pub mod protocol;
 use crate::anthropic::what_was_written;
 use crate::protocol::{ChatRequest, SseDecoder, ToolCall, Usage};
 use crate::{
-    ATTEMPTS, BACKOFF, CHUNKS_AHEAD, ChatError, Completion, CutOff, Progress, Refusals, WAKE,
-    learned_key, log_retry, pause_before_retry, refuses_the_body, remember, remembered,
+    ATTEMPTS, BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, WAKE, learned_key,
+    log_retry, pause_before_retry, read_in_background, refuses_the_body, remember, remembered,
     reply_bound, worth_another_attempt,
 };
 use bravebot_config::Secret;
@@ -524,27 +524,7 @@ impl<'a> GenerateContentClient<'a> {
         )?;
         let label = stream.label();
 
-        // Read on a thread this one can walk away from, for the same reason the other backends do:
-        // a read blocks for as long as the service is quiet, and the longest quiet in a turn is the
-        // one before the model's first word. Nothing on this thread holds a policy, a workspace or
-        // a tool, so a request walked away from leaves only a socket to be dropped.
-        let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
-        std::thread::spawn(move || {
-            let mut stream = stream;
-            loop {
-                match stream.next_chunk() {
-                    Ok(Some(piece)) => {
-                        if chunks.send(Ok(Some(piece))).is_err() {
-                            return;
-                        }
-                    }
-                    end => {
-                        let _ = chunks.send(end);
-                        return;
-                    }
-                }
-            }
-        });
+        let arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut reply = Reply::default();

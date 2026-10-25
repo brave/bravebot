@@ -24,7 +24,7 @@ pub mod eventstream;
 pub mod protocol;
 
 use bravebot_aichat::protocol::{ChatRequest, Usage};
-use bravebot_aichat::{Completion, CutOff, OpenCall, Progress, reply_bound};
+use bravebot_aichat::{Completion, CutOff, OpenCall, Progress, read_in_background, reply_bound};
 use bravebot_config::bedrock::Bedrock;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -857,27 +857,7 @@ impl<'a> BedrockClient<'a> {
         )?;
         let label = stream.label();
 
-        // Read on a thread this one can walk away from, for the same reason the other backend does:
-        // a read blocks for as long as the service is quiet, and the longest quiet in a turn is the
-        // one before the model's first word. Nothing on this thread holds a policy, a workspace or a
-        // tool, so a request walked away from leaves only a socket to be dropped.
-        let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
-        std::thread::spawn(move || {
-            let mut stream = stream;
-            loop {
-                match stream.next_chunk() {
-                    Ok(Some(piece)) => {
-                        if chunks.send(Ok(Some(piece))).is_err() {
-                            return;
-                        }
-                    }
-                    end => {
-                        let _ = chunks.send(end);
-                        return;
-                    }
-                }
-            }
-        });
+        let arriving = read_in_background(stream);
 
         let mut decoder = FrameDecoder::new();
         let mut reply = Reply::default();
@@ -1342,9 +1322,6 @@ const BACKOFF: Duration = Duration::from_secs(1);
 
 /// How often a reply that has not started arriving looks up to see whether it should stop.
 const WAKE: Duration = Duration::from_millis(50);
-
-/// How many chunks may sit between the thread reading them and the one taking them apart.
-const CHUNKS_AHEAD: usize = 16;
 
 /// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
 ///
