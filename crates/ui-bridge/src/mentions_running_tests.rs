@@ -24,10 +24,10 @@ fn open_session(bridge: &mut Bridge, project: &Path) -> String {
 /// Dispatches `method` on a second thread while the session's state is held, and returns the
 /// answer, or `None` when the request was still waiting after `PATIENCE`.
 fn answered_while_held(method: &str, params: serde_json::Value) -> Option<Result<Value, Failure>> {
-    let directory = tempfile::tempdir().unwrap();
-    std::fs::write(directory.path().join("README.md"), "read me\n").unwrap();
+    // The crate's own directory holds files to name, so the test writes none.
+    let project = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut bridge = Bridge::new(Box::new(|_| {}));
-    let handle = open_session(&mut bridge, directory.path());
+    let handle = open_session(&mut bridge, project);
     let state = Arc::clone(&bridge.open[&handle].state);
     let held = state.lock().unwrap();
     let mut params = params;
@@ -46,7 +46,7 @@ fn answered_while_held(method: &str, params: serde_json::Value) -> Option<Result
 
 #[test]
 fn offering_rows_does_not_wait_for_a_turn_holding_the_session() {
-    let answer = answered_while_held("mentions.offer", json!({ "line": "read @R", "cursor": 7 }));
+    let answer = answered_while_held("mentions.offer", json!({ "line": "read @C", "cursor": 7 }));
     assert!(
         answer
             .expect("the request waited on the session's state")
@@ -57,7 +57,7 @@ fn offering_rows_does_not_wait_for_a_turn_holding_the_session() {
 
 #[test]
 fn naming_a_file_does_not_wait_for_a_turn_holding_the_session() {
-    let answer = answered_while_held("mentions.named", json!({ "prompt": "read @README.md" }));
+    let answer = answered_while_held("mentions.named", json!({ "prompt": "read @Cargo.toml" }));
     assert!(
         answer
             .expect("the request waited on the session's state")
