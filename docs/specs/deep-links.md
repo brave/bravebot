@@ -7,6 +7,8 @@ governs:
   - crates/cli/src/main.rs
   - crates/tui/src/app.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/editing.rs
   - crates/tui/src/render/hint.rs
   - crates/config/src/settings.rs

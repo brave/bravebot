@@ -25,6 +25,7 @@ governs:
   - crates/tui/src/app/terminal.rs
   - crates/tui/src/status.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/accounts.rs
   - crates/tui/src/state/settings.rs
   - crates/config/src/bedrock.rs
