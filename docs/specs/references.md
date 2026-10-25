@@ -12,6 +12,7 @@ governs:
   - crates/agent/src/skills.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
