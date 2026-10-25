@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// The byte offset `column` characters into `line`, or its end where it is shorter.
+///
+/// What keeps the caret roughly where it looked while moving between lines of unequal length.
+pub(super) fn along(line: &str, column: usize) -> usize {
+    line.char_indices()
+        .nth(column)
+        .map_or(line.len(), |(index, _)| index)
+}
+
 /// A readline kill, as it left the line.
 #[derive(Debug, Clone)]
 pub(super) struct Kill {

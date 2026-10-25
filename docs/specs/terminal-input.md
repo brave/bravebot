@@ -8,6 +8,8 @@ governs:
   - crates/tui/src/app/keys.rs
   - crates/tui/src/input.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/vi.rs
   - crates/tui/src/state/completion.rs
   - crates/tui/src/state/editing.rs

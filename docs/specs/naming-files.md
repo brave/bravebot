@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/mentions/src/lib.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/completion.rs
   - crates/cli/src/main.rs
   - crates/cli/src/flags.rs

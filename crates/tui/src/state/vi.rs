@@ -1,7 +1,41 @@
 //! vi's modal editing of the input box: its motions, operators, text objects, registers, the
 //! visual selection, `.` and undo, and REPLACE mode.
 
-use super::{Session, Spelled, UNDO_DEPTH, Yanked, along};
+use super::Session;
+use super::editing::along;
+
+/// How many changes back `u` reaches, which is vim's `undolevels` as it ships.
+///
+/// Each step is a copy of the line as it stood, so this is what bounds what undo holds: a thousand
+/// copies of a prompt, where a prompt is sentences rather than a file.
+pub(super) const UNDO_DEPTH: usize = 1000;
+
+/// What a yank or a delete took, and whether it was whole lines.
+///
+/// The distinction is what `p` needs: a yanked word goes back beside the caret, and a yanked line goes
+/// back as a line of its own. Without it, `yy` then `p` would splice a sentence into the middle of
+/// another one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Yanked {
+    pub(super) text: String,
+    pub(super) lines: bool,
+}
+
+/// A binding vi spells with a letter, which the key handler answers as though the key had arrived.
+///
+/// These reach past the line: at the ends of the input the row keys walk the prompt history and then
+/// scroll the transcript, and the search is a mode standing over the whole box. So the letter is
+/// translated and the existing arms answer it, rather than a second copy of that ladder being written
+/// for three letters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Spelled {
+    /// `k`, which is Up.
+    Up,
+    /// `j`, which is Down.
+    Down,
+    /// `/`, which is the chord that searches the prompts already sent.
+    SearchPrompts,
+}
 
 /// What kind of character one is, for working out where a word begins and ends.
 ///

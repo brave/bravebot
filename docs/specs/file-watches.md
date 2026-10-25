@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/watch_command.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/entry.rs
   - crates/tui/src/state/standing.rs
   - crates/tui/src/state/watching.rs

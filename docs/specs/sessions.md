@@ -12,6 +12,8 @@ governs:
   - crates/tui/src/hunks_command.rs
   - crates/agent/src/hunks.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/accounts.rs
   - crates/tui/src/state/completion.rs
   - crates/tui/src/state/watching.rs

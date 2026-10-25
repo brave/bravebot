@@ -5,6 +5,8 @@ status: normative
 governs:
   - crates/tui/src/clipboard.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/editing.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/keys.rs
