@@ -962,6 +962,10 @@ export interface EventMap {
   'check.finished': Record<string, never>
   'hook.started': Hook
   'hook.finished': Record<string, never>
+  /** A delegate began. `delegate` is the driver's spelling of its number; nothing it printed is sent (VIEW-35). */
+  'delegate.started': { delegate: string; kind: string; task: string }
+  /** A delegate ended, named because several run at once. Its note and report are not sent (VIEW-35). */
+  'delegate.finished': { delegate: string; failed: boolean }
   landed: { landing: Landing }
   quarantined: Shown
   todos: { rows: TodoRow[] }

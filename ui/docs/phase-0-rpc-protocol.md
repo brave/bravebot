@@ -963,6 +963,10 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `tool.finished` | `Activity` | `Reporter::tool_finished` |
 | `check.started` | `{ lines }` or `{ file }` | `Reporter::check_started` |
 | `check.finished` | `{}` | `Reporter::check_finished` |
+| `hook.started` | `{ moment, program }` | `Reporter::hook_started` |
+| `hook.finished` | `{}` | `Reporter::hook_finished` |
+| `delegate.started` | `{ delegate, kind, task }`, `delegate` as the driver spells the number (`d1`) | `Reporter::delegate_started`, **nothing the delegate printed** (VIEW-35) |
+| `delegate.finished` | `{ delegate, failed }` | `Reporter::delegate_finished`, **its note and report dropped** (VIEW-35) |
 | `landed` | `{ landing }` | `Reporter::landed` |
 | `quarantined` | `Shown` | `Reporter::quarantined` |
 | `todos` | `{ rows: [ { content, status } ] }` | `Reporter::todos` |

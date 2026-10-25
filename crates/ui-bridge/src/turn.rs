@@ -378,6 +378,39 @@ impl Reporter for BridgeReporter {
         self.say("hook.finished", json!({}));
     }
 
+    /// A delegate has begun, which the window counts and lists (VIEW-35).
+    ///
+    /// The driver's own spelling of its number, its kind, and the task the planner wrote, which the
+    /// window draws and never reads. None of what the delegate prints crosses, and neither does
+    /// the stop token: a window has no way to stop one.
+    fn delegate_started(&mut self, delegation: bravebot_agent::report::Delegation) {
+        self.say(
+            "delegate.started",
+            json!({
+                "delegate": delegation.id.to_string(),
+                "kind": delegation.kind,
+                "task": delegation.task,
+            }),
+        );
+    }
+
+    /// A delegate has finished, named by its number because several run at once.
+    ///
+    /// Whether it failed is the driver's own word. The note and what the delegate reported are not
+    /// sent: they are the delegate's findings, and the window has no screen for them (VIEW-35).
+    fn delegate_finished(
+        &mut self,
+        delegate: DelegateId,
+        _note: String,
+        failed: bool,
+        _reported: Option<bravebot_agent::report::Reported>,
+    ) {
+        self.say(
+            "delegate.finished",
+            json!({ "delegate": delegate.to_string(), "failed": failed }),
+        );
+    }
+
     fn quarantined(&mut self, shown: Shown) {
         self.say("quarantined", wire::shown(&shown));
     }

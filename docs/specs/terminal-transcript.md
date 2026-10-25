@@ -1089,6 +1089,29 @@ character gives up that character.
 `verified-by: bravebot_ui_bridge::reporting::the_models_thinking_is_reported_in_order_and_a_delegates_and_an_empty_one_are_not`
 `verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs drives the window's own event reducer with the bridge's events: the thinking is held apart from the transcript's entries, only its last 4,096 characters are kept and a cut through a character gives it up, a new round, a words event, a call, a new turn, a finished turn, a failed or stopped turn and a plan run starting, finishing or failing each clear it, the choice to show it outlives the round it was made in, and the button is offered from the first thinking sent and stays through every round's end; ui/scripts/marking.test.mjs renders the working row through react-dom and asserts that the last eight lines are drawn under one head, that markup in them is drawn as the characters it is and makes no element, attribute or request, that nothing is drawn with the toggle off or with nothing thought, and that the button is absent for a session sent no thinking and present for one that was, between rounds as well; make check-ui runs both)`
 
+<a id="VIEW-35"></a>
+### VIEW-35: the bridge tells the desktop window when a delegate starts and finishes, and nothing it printed
+
+The bridge sends `delegate.started` when the driver starts a delegate and `delegate.finished` when
+it ends one. The first carries `delegate`, the driver's own spelling of the delegate's number
+(`d1`, `d2.1`), `kind`, and `task`, the words the planner gave it. The second carries `delegate` and
+`failed`, the driver's word for whether it ended in failure. Several delegates run at once, so the
+finish names the one that ended and is not paired with a start by position.
+
+Neither event carries a line the delegate printed, a thought, a tool call, the note the driver wrote
+about how it ended, or what it reported back, and the stop token is not sent. What a delegate said
+reaches no screen of the window and is written to no record ([WATCH-12](watching.md#WATCH-12)). A
+window that counts or lists delegates does so from these two events and from nothing a delegate
+wrote.
+
+**Why.** A person watching a window has no other way to know that work is going on beside the turn,
+or how much. The terminal draws it from the same two reporter calls. The `task` is the planner's
+own line, and the planner holds no untrusted content, so it is words the driver already carries to
+a screen. What a delegate that met untrusted content printed is not, and no event here can carry it
+because the payload is built from the delegation's number, kind, task and the failed flag alone.
+
+`verified-by: bravebot_ui_bridge::reporting::a_delegate_crosses_as_a_start_and_a_finish_carrying_none_of_its_lines`
+
 ## Known costs
 
 - **The desktop window is sent the thinking whether or not it is shown.** Holding it is what lets

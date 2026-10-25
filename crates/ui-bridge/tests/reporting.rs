@@ -323,3 +323,57 @@ fn a_running_hook_crosses_as_a_pair_naming_the_moment_and_the_program() {
     );
     assert_eq!(events[1].data, serde_json::json!({}));
 }
+
+/// VIEW-35: a delegate crosses as a start and a finish, each naming the delegate by the driver's
+/// own spelling of its number. The start carries its kind and the task the planner gave it, the
+/// finish carries whether it failed, and neither carries the driver's note, what the delegate
+/// reported, or anything it printed. A delegate finishing before an earlier one is named, not
+/// paired by position.
+#[test]
+fn a_delegate_crosses_as_a_start_and_a_finish_carrying_none_of_its_lines() {
+    use bravebot_agent::report::{Delegation, Reported};
+    use bravebot_core::cancel::DelegateStop;
+    use bravebot_core::delegate::DelegateId;
+
+    let (mut reporter, events) = harness();
+    let delegation = |n: u32, kind: &str, task: &str| Delegation {
+        id: DelegateId::nth(n),
+        kind: kind.to_string(),
+        task: task.to_string(),
+        stop: DelegateStop::new(),
+    };
+
+    reporter.delegate_started(delegation(1, "checker", "run the tests"));
+    reporter.delegate_started(delegation(2, "reader", "read the spec"));
+    reporter.reporting_for(Some(DelegateId::nth(2)));
+    reporter.delegate_finished(
+        DelegateId::nth(2),
+        "d2 finished: a note".into(),
+        false,
+        Some(Reported::Said("a report the planner reads".into())),
+    );
+    reporter.reporting_for(None);
+    reporter.delegate_finished(DelegateId::nth(1), "d1 failed".into(), true, None);
+
+    assert_eq!(
+        names(&events),
+        vec![
+            "delegate.started",
+            "delegate.started",
+            "delegate.finished",
+            "delegate.finished"
+        ]
+    );
+    let events = events.lock().expect("not poisoned");
+    let sent: Vec<&serde_json::Value> = events.iter().map(|e| &e.data).collect();
+    assert_eq!(
+        sent,
+        vec![
+            &serde_json::json!({ "delegate": "d1", "kind": "checker", "task": "run the tests" }),
+            &serde_json::json!({ "delegate": "d2", "kind": "reader", "task": "read the spec" }),
+            &serde_json::json!({ "delegate": "d2", "failed": false }),
+            &serde_json::json!({ "delegate": "d1", "failed": true }),
+        ],
+        "a delegate event named the wrong delegate, or carried more than its id, kind, task and outcome"
+    );
+}
