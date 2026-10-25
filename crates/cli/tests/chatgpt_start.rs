@@ -16,6 +16,7 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -25,7 +26,10 @@ mod chatgpt_run;
 mod chatgpt_stand_in;
 
 use chatgpt_run::{Scratch, Shown, environment};
-use chatgpt_stand_in::{ACCESS_TWO, Asked, MODEL, REFRESH_TWO, StandIn, now};
+use chatgpt_stand_in::{
+    ACCESS_TWO, Asked, MODEL, NOT_ELIGIBLE, REFRESH_ONE, REFRESH_TWO, Refresh, Serving, StandIn,
+    USAGE_LIMIT, now,
+};
 
 /// A home that is signed in and holds nothing else: no gateway, no Bedrock block, no Leo batch, no
 /// settings and no remembered model.
@@ -86,44 +90,87 @@ struct Ran {
     code: Option<i32>,
 }
 
-/// Run `command` in a terminal until it ends, `until` says from what it has shown that it has done
-/// what the test looks for, or `bound` passes. A session that opened is still waiting for a person
-/// and is stopped.
-fn run_in_a_terminal(mut command: Command, bound: Duration, until: impl Fn(&str) -> bool) -> Ran {
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("script runs the built binary in a terminal");
-    let shown = Shown::read(child.stdout.take().expect("the terminal"));
-    let _typed = child.stdin.take().expect("its stdin");
-    let stop = Instant::now() + bound;
-    let code = loop {
-        if let Some(status) = child.try_wait().expect("the terminal") {
-            break status.code();
+/// A run of the built binary in a terminal, which a person types lines at.
+struct Terminal {
+    child: std::process::Child,
+    shown: Shown,
+    typed: Option<std::process::ChildStdin>,
+}
+
+impl Terminal {
+    fn start(mut command: Command) -> Self {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("script runs the built binary in a terminal");
+        let shown = Shown::read(child.stdout.take().expect("the terminal"));
+        let typed = child.stdin.take();
+        Self {
+            child,
+            shown,
+            typed,
         }
-        if until(&shown.text()) || Instant::now() >= stop {
-            break None;
+    }
+
+    /// Whether the terminal has shown `words` before `bound` passes.
+    fn shows(&self, words: &str, bound: Duration) -> bool {
+        let stop = Instant::now() + bound;
+        while Instant::now() < stop {
+            if self.shown.text().contains(words) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(25));
         }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    let _ = child.kill();
-    let _ = child.wait();
-    Ran {
-        shown: shown.finished(),
-        code,
+        false
+    }
+
+    /// Type `line` and a return.
+    fn type_line(&mut self, line: &str) {
+        let typed = self.typed.as_mut().expect("the input is still open");
+        writeln!(typed, "{line}").expect("a line typed");
+    }
+
+    /// The end of the input, which ends a session in lines.
+    fn end_input(&mut self) {
+        self.typed = None;
+    }
+
+    /// What the run showed once it ended, or when `bound` passed and it was stopped.
+    fn finish(mut self, bound: Duration) -> Ran {
+        let stop = Instant::now() + bound;
+        let code = loop {
+            if let Some(status) = self.child.try_wait().expect("the terminal") {
+                break status.code();
+            }
+            if Instant::now() >= stop {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        Ran {
+            shown: self.shown.finished(),
+            code,
+        }
     }
 }
 
 /// Run the built binary with `arguments` in `home`, in a terminal, until the stand-in has taken a
-/// turn or the run has ended.
+/// turn, the run has ended or a minute has passed.
 fn started(home: &Scratch, stand_in: &StandIn, arguments: &[&str]) -> Ran {
     let mut command = in_a_sized_terminal(arguments);
     at_braves_hosts(&mut command, home, stand_in);
-    run_in_a_terminal(command, Duration::from_secs(60), |_| {
-        !turns(stand_in).is_empty()
-    })
+    let terminal = Terminal::start(command);
+    let stop = Instant::now() + Duration::from_secs(60);
+    while turns(stand_in).is_empty() && Instant::now() < stop {
+        if terminal.shows("BB1003", Duration::from_millis(50)) {
+            break;
+        }
+    }
+    terminal.finish(Duration::from_millis(200))
 }
 
 fn the_state_file(home: &Scratch, name: &str) -> Option<String> {
@@ -204,4 +251,474 @@ fn a_session_on_a_prompt_naming_a_model_nothing_serves_is_refused_whatever_the_r
         Some(format!("{MODEL}\n").as_str()),
         "the record was changed"
     );
+}
+
+/// The words the question about the account's models ends in.
+const THE_QUESTION: &str = "Which one will bravebot use?";
+
+/// What the account lists, in the order the service gives them. The picker lists them by name, so
+/// the first row a person is shown is `gpt-a`, which the service gave second.
+const THE_ACCOUNTS_MODELS: &[&str] = &["gpt-b", "gpt-a", "gpt-c"];
+
+/// A stand-in whose listing answers with `names` each time it is asked, which is once for the
+/// question and once more for the session that opens on the pick.
+fn offering(names: &'static [&'static str]) -> StandIn {
+    let stand_in = StandIn::new(vec![]);
+    for _ in 0..8 {
+        stand_in.state().listing.push_back(Serving::Lists(names));
+    }
+    stand_in
+}
+
+/// A session in lines, started in `home` from a terminal. Nothing is asked of its person beyond what
+/// a start asks, so its first prompt is the end of its input.
+fn plain_session(home: &Scratch, stand_in: &StandIn, flags: &[&str]) -> Terminal {
+    let mut arguments = vec!["--plain", "--dangerously-skip-permissions"];
+    arguments.extend_from_slice(flags);
+    let mut command = in_a_sized_terminal(&arguments);
+    at_braves_hosts(&mut command, home, stand_in);
+    Terminal::start(command)
+}
+
+/// How a session in lines names the model it opens on.
+fn opening_on(model: &str) -> String {
+    format!("in lines, {model}.")
+}
+
+const THE_REFUSAL: &str = "no model service is configured yet";
+
+/// BACKEND-39: a start that nothing serves, with a ChatGPT sign-in stored and the account listing
+/// models, shows the rows by number, takes a number, records the pick as `/model` records one, and
+/// opens on it. The next start has the pick in force and asks nothing.
+///
+/// The service lists `gpt-b` first and the picker lists the rows by name, so a number is the row it
+/// numbers in the order shown. The regressions it rejects are a pick recorded for the row the
+/// service listed at that place, a pick recorded anywhere but the file `/model` writes, a session
+/// that opens on Brave's model after the pick, and a next start that asks again.
+#[test]
+fn a_start_with_only_a_sign_in_asks_which_model_and_the_pick_is_what_the_session_and_the_next_start_open_on()
+ {
+    let home = signed_in_home("cli-chatgpt-start-asks");
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+
+    let mut terminal = plain_session(&home, &stand_in, &[]);
+    assert!(
+        terminal.shows(THE_QUESTION, Duration::from_secs(30)),
+        "nothing was asked: {}",
+        terminal.shown.text()
+    );
+    terminal.type_line("2");
+    let opened = terminal.shows(&opening_on("chatgpt/gpt-b"), Duration::from_secs(30));
+    terminal.end_input();
+    let ran = terminal.finish(Duration::from_secs(30));
+
+    assert!(
+        opened,
+        "the session did not open on the pick: {}",
+        ran.shown
+    );
+    assert_eq!(ran.code, Some(0), "{}", ran.shown);
+    let row = |number: usize, name: &str| format!("  {number}. Named {name} (chatgpt/{name})");
+    let rows = [row(1, "gpt-a"), row(2, "gpt-b"), row(3, "gpt-c")];
+    let positions: Vec<usize> = rows
+        .iter()
+        .map(|row| {
+            ran.shown
+                .find(row.as_str())
+                .unwrap_or_else(|| panic!("{row} was not shown: {}", ran.shown))
+        })
+        .collect();
+    assert!(
+        positions.is_sorted(),
+        "the rows came in another order: {}",
+        ran.shown
+    );
+    assert!(
+        positions[2] < ran.shown.find(THE_QUESTION).expect("the question"),
+        "a row was shown after the question: {}",
+        ran.shown
+    );
+    assert!(!ran.shown.contains(THE_REFUSAL), "{}", ran.shown);
+    assert!(
+        ran.shown.contains("Using Named gpt-b. It is remembered"),
+        "the pick was not said to be remembered: {}",
+        ran.shown
+    );
+    assert_eq!(
+        the_state_file(&home, "model").as_deref(),
+        Some("chatgpt/gpt-b\n"),
+        "the pick was not recorded as /model records one"
+    );
+
+    // The next start has a model in force, so it asks nothing and opens on the pick.
+    let mut terminal = plain_session(&home, &stand_in, &[]);
+    let opened = terminal.shows(&opening_on("chatgpt/gpt-b"), Duration::from_secs(30));
+    terminal.end_input();
+    let ran = terminal.finish(Duration::from_secs(30));
+    assert!(
+        opened,
+        "the next start did not open on the pick: {}",
+        ran.shown
+    );
+    assert!(
+        !ran.shown.contains(THE_QUESTION),
+        "the next start asked: {}",
+        ran.shown
+    );
+    assert_eq!(ran.code, Some(0), "{}", ran.shown);
+}
+
+/// BACKEND-39: the interface that draws asks the same question at the same moment, and goes on to
+/// draw its screen once a row is picked. The regression it rejects is a start that asks only in the
+/// session in lines, which is the one of the two the person does not meet first.
+#[test]
+fn the_interface_that_draws_asks_the_same_question_and_draws_once_a_row_is_picked() {
+    let home = signed_in_home("cli-chatgpt-start-asks-screen");
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+    let mut command = in_a_sized_terminal(&["--dangerously-skip-permissions"]);
+    at_braves_hosts(&mut command, &home, &stand_in);
+
+    let mut terminal = Terminal::start(command);
+    assert!(
+        terminal.shows(THE_QUESTION, Duration::from_secs(30)),
+        "nothing was asked: {}",
+        terminal.shown.text()
+    );
+    assert!(
+        !terminal.shown.text().contains("\u{1b}[?1049h"),
+        "the screen was drawn before the question was answered"
+    );
+    terminal.type_line("1");
+    let drawn = terminal.shows("\u{1b}[?1049h", Duration::from_secs(30));
+    let ran = terminal.finish(Duration::from_millis(200));
+
+    assert!(drawn, "no screen was drawn after the pick: {}", ran.shown);
+    assert_eq!(
+        the_state_file(&home, "model").as_deref(),
+        Some("chatgpt/gpt-a\n")
+    );
+}
+
+/// BACKEND-39: an answer that is not the number of a row, an empty answer and the end of the input
+/// are each a decline. The start is refused as it is where nothing could be asked, and nothing is
+/// recorded. The regressions it rejects are a number past the last row clamped to it, zero read as
+/// the last row, a sign or a second word read as a number, an empty answer taken as the first row,
+/// and a decline that records the first row.
+#[test]
+fn an_answer_that_is_not_the_number_of_a_row_declines_and_records_nothing() {
+    for answer in [
+        Some(""),
+        Some("0"),
+        Some("4"),
+        Some("-1"),
+        Some("+1"),
+        Some("1 2"),
+        Some("gpt-a"),
+        None,
+    ] {
+        let home = signed_in_home("cli-chatgpt-start-declined");
+        let stand_in = offering(THE_ACCOUNTS_MODELS);
+
+        let mut terminal = plain_session(&home, &stand_in, &[]);
+        assert!(
+            terminal.shows(THE_QUESTION, Duration::from_secs(30)),
+            "{answer:?}: nothing was asked: {}",
+            terminal.shown.text()
+        );
+        match answer {
+            Some(typed) => terminal.type_line(typed),
+            None => terminal.end_input(),
+        }
+        let ran = terminal.finish(Duration::from_secs(30));
+
+        assert_eq!(ran.code, Some(3), "{answer:?}: {}", ran.shown);
+        assert!(
+            ran.shown.contains(THE_REFUSAL),
+            "{answer:?} was not a decline: {}",
+            ran.shown
+        );
+        assert!(
+            the_state_file(&home, "model").is_none(),
+            "{answer:?} recorded a model"
+        );
+    }
+}
+
+/// BACKEND-39: nothing is asked where the account offers nothing to choose from: a listing the
+/// service refused, a listing that could not be had and the compiled names that stand in for one in
+/// a picker, and a listing that was read and is empty. The start is refused, and the refusal says why in
+/// the sentence the sign-in command says it in, above the line that says a sign-in is stored, which is
+/// true of each: the file is as it was. The regressions it rejects are a question over the compiled
+/// names, which would choose for a person a model the account may refuse, and a refusal that drops
+/// the reason, which leaves a person who was never asked wondering why.
+#[test]
+fn nothing_is_asked_where_the_account_lists_no_model_and_the_refusal_says_why() {
+    let nothing: &'static [&'static str] = &[];
+    let refused_with = |status, code| {
+        let stand_in = StandIn::new(vec![]);
+        stand_in
+            .state()
+            .listing
+            .push_back(Serving::RefusesWithCode(status, code));
+        stand_in
+    };
+    for (what, stand_in, said) in [
+        (
+            "a listing that could not be had",
+            StandIn::new(vec![]),
+            "could not be listed",
+        ),
+        (
+            "a listing that is empty",
+            offering(nothing),
+            "reaches no model",
+        ),
+        (
+            "a listing refused for the usage limit",
+            refused_with(429, USAGE_LIMIT),
+            "usage limit",
+        ),
+        (
+            "a listing refused for the account's standing",
+            refused_with(403, NOT_ELIGIBLE),
+            "does not allow",
+        ),
+    ] {
+        let home = signed_in_home("cli-chatgpt-start-no-rows");
+
+        let terminal = plain_session(&home, &stand_in, &[]);
+        let ran = terminal.finish(Duration::from_secs(30));
+
+        assert_eq!(ran.code, Some(3), "{what}: {}", ran.shown);
+        assert!(ran.shown.contains(THE_REFUSAL), "{what}: {}", ran.shown);
+        assert!(!ran.shown.contains(THE_QUESTION), "{what}: {}", ran.shown);
+        let at = |words: &str| {
+            ran.shown
+                .find(words)
+                .unwrap_or_else(|| panic!("{what}: {words:?} was not said: {}", ran.shown))
+        };
+        assert!(
+            at(said) < at("A ChatGPT sign-in is stored"),
+            "{what}: the reason does not come first: {}",
+            ran.shown
+        );
+        assert!(the_state_file(&home, "model").is_none(), "{what}");
+    }
+}
+
+/// BACKEND-39: a sign-in that has ended is found by asking for the listing, which removes the file. The
+/// refusal that follows is built from the sign-in as it is then: it says the sign-in has ended, and the
+/// routes, and does not say a sign-in is stored. The access token is past its expiry and the refresh
+/// token is refused as no longer valid. The regression it rejects is the refusal built from the sign-in
+/// as it was before the listing, which names a file that was removed a moment earlier.
+#[test]
+fn a_sign_in_that_ended_while_the_listing_was_asked_for_is_not_said_to_be_stored() {
+    let home = Scratch::new("cli-chatgpt-start-ended");
+    home.store_sign_in(ACCESS_TWO, REFRESH_ONE, 1);
+    let stand_in = StandIn::new(vec![]);
+    stand_in.state().refreshing.push_back(Refresh::Ended);
+
+    let terminal = plain_session(&home, &stand_in, &[]);
+    let ran = terminal.finish(Duration::from_secs(30));
+
+    assert_eq!(ran.code, Some(3), "{}", ran.shown);
+    assert!(ran.shown.contains("has ended"), "{}", ran.shown);
+    assert!(
+        ran.shown.contains("bravebot auth login chatgpt") && ran.shown.contains("amazon-bedrock"),
+        "the routes were not said: {}",
+        ran.shown
+    );
+    assert!(
+        !ran.shown.contains("A ChatGPT sign-in is stored"),
+        "a sign-in that was removed was said to be stored: {}",
+        ran.shown
+    );
+    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
+    assert!(!home.account().exists(), "the ended sign-in was left");
+}
+
+/// BACKEND-39: `bravebot --bg` asks in the terminal that typed it, as a start does, and a decline ends
+/// it with the refusal before any background process is started. A decline is the one answer that
+/// starts nothing, so the test needs no process left running. The regression it rejects is a start in
+/// the background that does not ask, which sends its prompt to Brave's endpoint with nothing configured.
+#[test]
+fn a_background_start_asks_in_the_terminal_and_a_decline_ends_it() {
+    let home = signed_in_home("cli-chatgpt-start-background");
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+    let mut command = in_a_sized_terminal(&["--bg", "hello"]);
+    at_braves_hosts(&mut command, &home, &stand_in);
+
+    let mut terminal = Terminal::start(command);
+    assert!(
+        terminal.shows(THE_QUESTION, Duration::from_secs(30)),
+        "a background start did not ask: {}",
+        terminal.shown.text()
+    );
+    terminal.type_line("");
+    let ran = terminal.finish(Duration::from_secs(30));
+
+    assert_eq!(ran.code, Some(3), "{}", ran.shown);
+    assert!(ran.shown.contains(THE_REFUSAL), "{}", ran.shown);
+    assert!(the_state_file(&home, "model").is_none());
+}
+
+/// BACKEND-39: where stdin, stdout and stderr are not all terminals the start asks nothing and reads
+/// nothing, and does not ask the account either. A line piped in is not an answer. The regressions it
+/// rejects are a question put to a pipe, which a script would answer without knowing, and a listing
+/// fetched with the sign-in for a start that cannot use it.
+#[test]
+fn a_start_that_is_not_in_a_terminal_asks_nothing_reads_nothing_and_does_not_ask_the_account() {
+    let home = signed_in_home("cli-chatgpt-start-no-terminal");
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot"));
+    at_braves_hosts(&mut command, &home, &stand_in);
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the built binary runs");
+    writeln!(child.stdin.take().expect("its stdin"), "2").expect("a line piped in");
+    let output = child.wait_with_output().expect("the run ends");
+
+    let said = chatgpt_run::said(&output);
+    assert_eq!(output.status.code(), Some(3), "{said}");
+    assert!(said.contains(THE_REFUSAL), "{said}");
+    assert!(!said.contains(THE_QUESTION), "{said}");
+    assert!(the_state_file(&home, "model").is_none(), "a pipe answered");
+    assert!(
+        stand_in.asked().is_empty(),
+        "the account was asked for a start that cannot use the answer: {:?}",
+        stand_in.asked()
+    );
+}
+
+/// BACKEND-39, INCOG-8: an incognito session asks nothing and records nothing, and does not ask the
+/// account. The regression it rejects is a question in the one mode that leaves nothing on the
+/// machine, which would write the pick.
+#[test]
+fn an_incognito_start_asks_nothing_and_records_nothing() {
+    let home = signed_in_home("cli-chatgpt-start-incognito");
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+
+    let terminal = plain_session(&home, &stand_in, &["--incognito"]);
+    let ran = terminal.finish(Duration::from_secs(30));
+
+    assert_eq!(ran.code, Some(3), "{}", ran.shown);
+    assert!(ran.shown.contains(THE_REFUSAL), "{}", ran.shown);
+    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
+    assert!(the_state_file(&home, "model").is_none());
+    assert!(
+        stand_in.asked().is_empty(),
+        "the account was asked in an incognito start: {:?}",
+        stand_in.asked()
+    );
+}
+
+/// BACKEND-39: a start whose model in force is served asks nothing, and so does one where a gateway
+/// block is configured, whose refusal names the `model` key and is not replaced by a question about
+/// an account. The regressions it rejects are a question at every start of a person who has signed
+/// in, and a question where a service other than the account is configured.
+#[test]
+fn nothing_is_asked_where_a_model_is_served_or_a_gateway_is_configured() {
+    let home = signed_in_home("cli-chatgpt-start-served");
+    std::fs::write(
+        home.path.join(".bravebot/settings.json"),
+        format!(r#"{{"model": "{MODEL}"}}"#),
+    )
+    .expect("a settings file");
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+    let mut terminal = plain_session(&home, &stand_in, &[]);
+    let opened = terminal.shows(&opening_on(MODEL), Duration::from_secs(30));
+    terminal.end_input();
+    let ran = terminal.finish(Duration::from_secs(30));
+    assert!(opened, "{}", ran.shown);
+    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
+    assert!(the_state_file(&home, "model").is_none());
+
+    let home = signed_in_home("cli-chatgpt-start-gateway");
+    std::fs::write(
+        home.path.join(".bravebot/settings.json"),
+        r#"{"provider": {"openrouter": {
+            "env": ["OPENROUTER_API_KEY"],
+            "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+            "models": {"z-ai/glm-4.6": {}}
+        }}}"#,
+    )
+    .expect("a settings file");
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+    let terminal = plain_session(&home, &stand_in, &[]);
+    let ran = terminal.finish(Duration::from_secs(30));
+    assert_eq!(ran.code, Some(3), "{}", ran.shown);
+    assert!(ran.shown.contains("`model` key"), "{}", ran.shown);
+    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
+    assert!(
+        stand_in.asked().is_empty(),
+        "the account was asked beside a configured gateway: {:?}",
+        stand_in.asked()
+    );
+}
+
+/// BACKEND-39: a model named on the command line is not replaced by a question. The flag outranks a
+/// recorded pick, so a pick made at a start that named a model nothing serves would change nothing,
+/// and the person named the model. The regression it rejects is a question asked over a `--model`.
+#[test]
+fn a_model_named_on_the_command_line_is_not_asked_about() {
+    let home = signed_in_home("cli-chatgpt-start-named-not-asked");
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+
+    let terminal = {
+        let mut command = in_a_sized_terminal(&[
+            "-i",
+            "hello",
+            "--model",
+            "automatic",
+            "--dangerously-skip-permissions",
+        ]);
+        at_braves_hosts(&mut command, &home, &stand_in);
+        Terminal::start(command)
+    };
+    let ran = terminal.finish(Duration::from_secs(30));
+
+    assert_eq!(ran.code, Some(3), "{}", ran.shown);
+    assert!(ran.shown.contains(THE_REFUSAL), "{}", ran.shown);
+    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
+    assert!(the_state_file(&home, "model").is_none());
+}
+
+/// A name the store reads back as no choice, since a recorded name is read only up to 128 bytes: with
+/// `chatgpt/` ahead of it, the key of this row is longer.
+const A_NAME_TOO_LONG_TO_KEEP: &str = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
+/// BACKEND-39: the start says a pick is remembered only where what it reads back is that name. A key
+/// the store will not read back is written and read as no choice, so the start would go on to the
+/// refusal; it says that the name could not be remembered, does not say it is using it, and ends as a
+/// decline does. The regression it rejects is the start saying it is using a model and remembering it
+/// and then refusing for want of a model.
+#[test]
+fn a_pick_the_start_cannot_read_back_is_not_said_to_be_remembered_and_ends_the_start() {
+    let home = signed_in_home("cli-chatgpt-start-not-remembered");
+    let stand_in = offering(&[A_NAME_TOO_LONG_TO_KEEP]);
+
+    let mut terminal = plain_session(&home, &stand_in, &[]);
+    assert!(
+        terminal.shows(THE_QUESTION, Duration::from_secs(30)),
+        "nothing was asked: {}",
+        terminal.shown.text()
+    );
+    terminal.type_line("1");
+    let ran = terminal.finish(Duration::from_secs(30));
+
+    assert_eq!(ran.code, Some(3), "{}", ran.shown);
+    assert!(
+        ran.shown.contains("Could not remember Named"),
+        "the start did not say the name could not be kept: {}",
+        ran.shown
+    );
+    assert!(
+        !ran.shown.contains("Using ") && !ran.shown.contains("remembered for the next start"),
+        "the start said it was using a model it could not keep: {}",
+        ran.shown
+    );
+    assert!(ran.shown.contains(THE_REFUSAL), "{}", ran.shown);
 }

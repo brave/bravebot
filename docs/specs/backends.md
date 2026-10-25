@@ -2016,14 +2016,38 @@ block, a gateway block and a stored Leo batch, and is read only where none of th
 Bedrock or gateway block that is configured keeps the line above whatever else is stored: the file is not
 read, so a person who set up an AWS account or a gateway and also signed in to ChatGPT is told to name a
 model with the `model` key, and that line is not replaced by one about the account. A start whose model
-in force is Brave's own and that finds a sign-in stored and nothing else configured is told that a
-ChatGPT sign-in is stored, and to pick one of the account's models in `/model` or to name one as
-`--model chatgpt/<model>`, in the words the sign-in command ends with, which
-[What is built](chatgpt-sign-in.md#what-is-built) says. It is not shown the routes, and no import is
-offered, since a service is configured. A sign-in file that cannot be read configures nothing and is
-said first, with the remedy of [CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11), above the routes. `doctor`
-says it once, in its own line for the sign-in. A model that a configured service serves does not read
-the file.
+in force is Brave's own and that finds a sign-in stored and nothing else configured, and that is not
+asked which model to use (below) or declines, is told that a ChatGPT sign-in is stored, and to pick one
+of the account's models in `/model` or to name one as `--model chatgpt/<model>`, in the words the
+sign-in command ends with, which [What is built](chatgpt-sign-in.md#what-is-built) says. It is not
+shown the routes, and no import is offered, since a service is configured. A sign-in file that cannot
+be read configures nothing and is said first, with the remedy of
+[CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11), above the routes. `doctor` says it once, in its own line
+for the sign-in. A model that a configured service serves does not read the file.
+
+**A start with that sign-in asks which of the account's models to use before it refuses.** Where the
+start would be refused for the stored sign-in alone, no model was named on the command line, the
+account lists at least one model, stdin, stdout and stderr are all terminals and the session is not
+incognito, the account's rows are shown as numbered lines, in the order and without the models the
+pickers leave out, and the start asks which to use. The question goes to stderr and is read from
+stdin a line at a time, as the question about an import is ([import.md](import.md)). A number picks
+its row. The pick is recorded as a `/model` pick is, and the start goes on and opens on it, so the next
+start has it in force and asks nothing. The start says the pick is remembered only where what it reads
+back is that name. Where it is not, because the name is too long to keep or the write failed, it says
+it could not remember the name, does not say it is using it, and is refused as a decline is. An empty
+answer, the end of the input and an answer that is not the number of a row decline, and a decline
+records nothing: the start is refused as it is where nothing can be asked. Nothing is asked, and
+nothing is read from stdin, where a person cannot be asked or a model was named on the command line.
+The start never chooses a model for the person.
+
+The account is asked for its listing only where a person can be asked, and that may renew the access
+token and write the sign-in file, as any turn does ([CHATGPT-14](chatgpt-sign-in.md#CHATGPT-14)), or
+remove it where the sign-in has ended. Where the account offers no row, because the listing could not
+be had, was refused with a code that names the account, is empty, or the sign-in ended while it was
+asked for, nothing is asked and the refusal says why, under its first line, in the sentence the
+sign-in command says it in. The compiled names that stand in for a listing in a picker are not rows
+here. The refusal is built from the sign-in as it stands after the listing, so a sign-in the listing
+found ended is said to have ended, with the routes, and is not said to be stored.
 
 The refusal is the configuration ending of [CLI-6](cli.md#CLI-6) rather than a status of its own.
 Where a subscription is stored and could not be read, what the store said about it is said first.
@@ -2054,6 +2078,12 @@ somebody who already subscribes, which is why it is offered rather than left out
 sign-in comes before it, since it reaches OpenAI's own service and not Brave's gateway, and says the
 command to type because a session never starts that sign-in itself
 ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
+
+A person who has only signed in has no model name to give. The names are known from the account's
+listing, and a session that would show the listing does not open until a model is served. Asking at the
+start puts the listing in front of the person at the moment the start would be refused, and the answer
+applies at once, to a sign-in made earlier as well as to one made now. A model named on the command
+line is left alone because it outranks a recorded pick, so a pick made there would change nothing.
 
 Telling the configured case apart is the same argument in the other direction. Somebody there is
 one settings key from working, and four ways to set up a service would be four things to read
@@ -2094,6 +2124,23 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn`
 `verified-by: bravebot_cli::chatgpt_start::a_session_on_a_prompt_starts_on_the_model_the_command_line_names_where_the_account_serves_it`
 `verified-by: bravebot_cli::chatgpt_start::a_session_on_a_prompt_naming_a_model_nothing_serves_is_refused_whatever_the_record_serves`
+`verified-by: bravebot_cli::chatgpt_start::a_start_with_only_a_sign_in_asks_which_model_and_the_pick_is_what_the_session_and_the_next_start_open_on`
+`verified-by: bravebot_cli::chatgpt_start::the_interface_that_draws_asks_the_same_question_and_draws_once_a_row_is_picked`
+`verified-by: bravebot_cli::chatgpt_start::an_answer_that_is_not_the_number_of_a_row_declines_and_records_nothing`
+`verified-by: bravebot_cli::chatgpt_start::nothing_is_asked_where_the_account_lists_no_model_and_the_refusal_says_why`
+`verified-by: bravebot_cli::chatgpt_start::a_sign_in_that_ended_while_the_listing_was_asked_for_is_not_said_to_be_stored`
+`verified-by: bravebot_cli::chatgpt_start::a_background_start_asks_in_the_terminal_and_a_decline_ends_it`
+`verified-by: bravebot_cli::plain::a_typed_number_picks_the_row_it_numbers_and_nothing_else`
+`verified-by: bravebot_cli::chatgpt_start::a_start_that_is_not_in_a_terminal_asks_nothing_reads_nothing_and_does_not_ask_the_account`
+`verified-by: bravebot_cli::chatgpt_start::an_incognito_start_asks_nothing_and_records_nothing`
+`verified-by: bravebot_cli::chatgpt_start::nothing_is_asked_where_a_model_is_served_or_a_gateway_is_configured`
+`verified-by: bravebot_cli::chatgpt_start::a_model_named_on_the_command_line_is_not_asked_about`
+`verified-by: bravebot_cli::chatgpt_start::a_pick_the_start_cannot_read_back_is_not_said_to_be_remembered_and_ends_the_start`
+`verified-by: bravebot_cli::model::the_rows_are_numbered_from_one_in_the_order_given_and_the_number_typed_picks_its_row`
+`verified-by: bravebot_cli::model::an_answer_that_is_not_the_number_of_a_row_picks_none`
+`verified-by: bravebot_cli::model::a_name_the_service_gave_is_shown_without_its_control_characters`
+`verified-by: bravebot_tui::app::a_start_is_offered_what_the_account_listed_in_the_pickers_order_and_nothing_else`
+`verified-by: bravebot_tui::app::a_start_is_not_offered_a_model_the_machine_level_layer_refuses`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable

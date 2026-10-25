@@ -4502,3 +4502,17 @@ deep-link-started-in-home = The link named { $dir }, which is not a directory yo
 # Under the box while the words an outside link put there are still in it.
 deep-link-banner = Prompt from an external link, not sent yet  ·  read it, then Enter sends it
 deep-link-banner-long = Prompt from an external link, { $count } characters, not sent  ·  scroll and review it all first
+
+## Choosing one of a ChatGPT account's models at a start that nothing serves
+
+# Said above the numbered rows at a start where a ChatGPT sign-in is stored, the model in force is one of
+# Brave's and the account lists models.
+chatgpt-start-heading = A ChatGPT sign-in is stored, and the account offers these models:
+# One row: the name the service shows and the name to give --model. Both are the service's text.
+chatgpt-start-row = { $name } ({ $key })
+chatgpt-start-question = Which one will bravebot use? Type its number, or nothing to stop:
+# Said after the pick is recorded. The name is the service's text.
+chatgpt-start-chosen = Using { $name }. It is remembered for the next start, and /model changes it.
+# Said instead where what the start reads back is not the pick: the name is one that is not kept or the write
+# failed. The start is then refused as it is where nothing is picked.
+chatgpt-start-not-remembered = Could not remember { $name }, so no model is chosen.

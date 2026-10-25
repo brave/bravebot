@@ -180,7 +180,7 @@ fn finish(
 /// A listing that was read and is empty is the service's answer, and is not told as a failure. One
 /// refused in a code that names the account is said in that clause's sentence, which does not send
 /// the person to sign in again.
-fn said_of_listing(listing: &AccountModels) -> String {
+pub(crate) fn said_of_listing(listing: &AccountModels) -> String {
     match listing {
         AccountModels::Offered(models) if models.is_empty() => t!(chatgpt_reaches_no_model).into(),
         AccountModels::Unreadable => t!(chatgpt_listing_unreadable).into(),

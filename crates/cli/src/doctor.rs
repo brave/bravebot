@@ -898,6 +898,7 @@ fn report_serving(config: &Config, ending: &mut Ending) {
                     a_service_is_configured,
                     chatgpt,
                     &import::looked(a_service_is_configured),
+                    None,
                 )
             );
         }

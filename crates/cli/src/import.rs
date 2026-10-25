@@ -76,21 +76,39 @@ impl Looked {
 /// refused, and the file that refused is not this person's to write (BACKEND-48).
 pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Option<ExitCode> {
     let model = crate::model::model_for_this_run(named, config);
-    let (subscription, a_service_is_configured, chatgpt) =
-        match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
-            bravebot_agent::backend::Serving::Configured => return None,
-            bravebot_agent::backend::Serving::Refused { file, why } => {
-                return Some(fail(
-                    Ending::Configuration,
-                    crate::model::managed_refusal(&model, &file, why),
-                ));
+    let egress = bravebot_net::Egress::new();
+    let mut serving = bravebot_agent::backend::serving(config, &egress, &model);
+    // Asked before an import is offered, which a stored sign-in leaves out in any case, and only
+    // where no model was named: the flag outranks a recorded pick, so a pick made here would leave
+    // the model this start requests as it is. Where nothing is picked, or the pick is not the model the
+    // start reads back, the start goes on to the refusal.
+    let mut why_no_model_was_offered = None;
+    if crate::model::asks_which_of_the_accounts_models(&serving, named) {
+        match crate::model::ask_which_of_the_accounts_models(config) {
+            crate::model::Asked::InForce => return None,
+            // Asking for the listing removes a sign-in that has ended, so what the refusal says about
+            // the sign-in is read again, and says why the account offered no model.
+            crate::model::Asked::NothingOffered(why) => {
+                serving = bravebot_agent::backend::serving(config, &egress, &model);
+                why_no_model_was_offered = Some(why);
             }
-            bravebot_agent::backend::Serving::NothingConfigured {
-                subscription,
-                a_service_is_configured,
-                chatgpt,
-            } => (subscription, a_service_is_configured, chatgpt),
-        };
+            crate::model::Asked::Nobody | crate::model::Asked::Declined => {}
+        }
+    }
+    let (subscription, a_service_is_configured, chatgpt) = match serving {
+        bravebot_agent::backend::Serving::Configured => return None,
+        bravebot_agent::backend::Serving::Refused { file, why } => {
+            return Some(fail(
+                Ending::Configuration,
+                crate::model::managed_refusal(&model, &file, why),
+            ));
+        }
+        bravebot_agent::backend::Serving::NothingConfigured {
+            subscription,
+            a_service_is_configured,
+            chatgpt,
+        } => (subscription, a_service_is_configured, chatgpt),
+    };
     match at_the_start(a_service_is_configured, named) {
         Start::Serving(imported) => {
             *config = *imported;
@@ -104,6 +122,7 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
                 a_service_is_configured,
                 chatgpt,
                 &looked,
+                why_no_model_was_offered.as_deref(),
             ),
         )),
     }
@@ -129,11 +148,7 @@ enum Start {
 /// `named` is the model the command line named. The configuration read back after an import is asked
 /// about that model as the first read was.
 fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
-    let asks = !a_service_is_configured
-        && !bravebot_core::incognito::engaged()
-        && std::io::stdin().is_terminal()
-        && std::io::stdout().is_terminal()
-        && std::io::stderr().is_terminal();
+    let asks = !a_service_is_configured && a_person_can_be_asked();
     if !asks {
         return Start::Refuse(looked(a_service_is_configured));
     }
@@ -211,6 +226,7 @@ fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
                 a_service_is_configured,
                 chatgpt,
                 &Looked::default(),
+                None,
             ),
         )),
         // An import can put a model in force that the layer refuses, the entry it wrote naming one,
@@ -222,6 +238,16 @@ fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
         )),
         bravebot_agent::backend::Serving::Configured => Start::Serving(Box::new(config)),
     }
+}
+
+/// Whether a start may put a question: all three streams are terminals, since a question goes to
+/// stderr, is answered on stdin and leads to a session that draws on stdout, and the session is not
+/// incognito, which leaves nothing to answer a question with.
+pub(crate) fn a_person_can_be_asked() -> bool {
+    !bravebot_core::incognito::engaged()
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && std::io::stderr().is_terminal()
 }
 
 /// What the sources hold, where nobody is asked.

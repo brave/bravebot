@@ -72,7 +72,7 @@ pub use keys::{Action, handle_key, handle_key_while_working, handle_mouse};
 mod models;
 use models::*;
 // Public for the CLI, which names them as `bravebot_tui::app::..`.
-pub use models::{adopt_listing_for_model, reads_structured_output};
+pub use models::{account_models_to_start_on, adopt_listing_for_model, reads_structured_output};
 
 mod opening;
 use opening::*;
@@ -4829,6 +4829,107 @@ mod tests {
             keys.contains(&"opus-arn"),
             "a row already there was taken away: {keys:?}"
         );
+    }
+
+    /// BACKEND-39: a start that nothing serves offers the rows the account listed, in the order the
+    /// picker lists them, and none where the service listed none, with the listing that gave none so the
+    /// start can say why. The compiled names that stand in for a listing in the picker are not offered,
+    /// nor is anything where the listing was refused, the sign-in file could not be read, the sign-in
+    /// ended while the listing was asked for or the listing was read and is empty. The regressions it
+    /// rejects are the service's order in place of the picker's, which would number a row differently
+    /// from the `/model` the person meets next, a question over names the account may refuse, and a
+    /// listing that gave none reported as another.
+    #[test]
+    fn a_start_is_offered_what_the_account_listed_in_the_pickers_order_and_nothing_else() {
+        use bravebot_agent::chatgpt::AccountModels;
+        use bravebot_aichat::responses::protocol::Refusal;
+        use models::scripted_account::{
+            fail_to_list, fail_to_read_the_file, nobody_signed_in, offer, refuse,
+        };
+        let config = a_config_with_a_named_roster();
+        let keys = |config: &Config| -> Vec<String> {
+            account_models_to_start_on(config)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        offer(vec![
+            listed("chatgpt/gpt-b", None),
+            listed("chatgpt/gpt-c", None),
+            listed("chatgpt/gpt-a", None),
+        ]);
+        assert_eq!(
+            keys(&config),
+            ["chatgpt/gpt-a", "chatgpt/gpt-b", "chatgpt/gpt-c"]
+        );
+
+        offer(Vec::new());
+        assert_eq!(
+            account_models_to_start_on(&config),
+            Err(AccountModels::Offered(Vec::new())),
+            "a listing with no row offered one, or was not said to be empty"
+        );
+        fail_to_list();
+        assert!(
+            matches!(
+                account_models_to_start_on(&config),
+                Err(AccountModels::Compiled(_))
+            ),
+            "the compiled names were offered for a listing that could not be had"
+        );
+        fail_to_read_the_file();
+        assert_eq!(
+            account_models_to_start_on(&config),
+            Err(AccountModels::Unreadable),
+            "an unreadable sign-in offered rows"
+        );
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            refuse(refusal);
+            assert_eq!(
+                account_models_to_start_on(&config),
+                Err(AccountModels::Refused(refusal)),
+                "{refusal:?} offered rows"
+            );
+        }
+        nobody_signed_in();
+        assert_eq!(
+            account_models_to_start_on(&config),
+            Err(AccountModels::Absent),
+            "a sign-in that ended while the listing was asked for offered rows"
+        );
+    }
+
+    /// BACKEND-48: a start does not offer a model this machine may not request, as the picker does
+    /// not, so a person is not refused after choosing it.
+    #[test]
+    fn a_start_is_not_offered_a_model_the_machine_level_layer_refuses() {
+        use models::scripted_account::offer;
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join("tui-start-models-refused");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let path = scratch.join("managed.json");
+        std::fs::write(&path, r#"{"models": {"deny": ["chatgpt/gpt-b"]}}"#)
+            .expect("a managed file");
+        let mut config = a_config_with_a_named_roster();
+        let keys = |config: &Config| -> Vec<String> {
+            account_models_to_start_on(config)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        offer(vec![
+            listed("chatgpt/gpt-a", None),
+            listed("chatgpt/gpt-b", None),
+        ]);
+        assert_eq!(keys(&config), ["chatgpt/gpt-a", "chatgpt/gpt-b"]);
+
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        assert_eq!(keys(&config), ["chatgpt/gpt-a"]);
     }
 
     /// CHATGPT-9: a person who signed in to ChatGPT and whose listing could not be had is told why, in

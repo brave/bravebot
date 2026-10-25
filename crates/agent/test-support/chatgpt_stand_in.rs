@@ -121,6 +121,9 @@ pub enum Serving {
     /// A turn is answered with one call of the tool `name` with the JSON `arguments`, as the model
     /// would ask for it, and ends there.
     Calls(&'static str, &'static str),
+    /// A listing is answered with a row for each of these names, each shown to a person and
+    /// reachable through the API. A turn is answered in the text `all done`.
+    Lists(&'static [&'static str]),
 }
 
 /// One request the stand-in took.
@@ -537,8 +540,29 @@ impl Serving {
             Self::RefusesTheToken => refusal(state, 401),
             Self::Refuses(status) => refusal(state, status),
             Self::RefusesWithCode(status, code) => refusal_with_code(state, status, code),
+            Self::Lists(names) => (200, "application/json", listing_of(names)),
         }
     }
+}
+
+/// The listing of the serving host with a row for each of `names`: the fields the program reads and
+/// no others, with the window of a model that reads images and a level.
+fn listing_of(names: &[&str]) -> String {
+    let rows: Vec<serde_json::Value> = names
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "slug": name,
+                "display_name": format!("Named {name}"),
+                "visibility": "list",
+                "supported_in_api": true,
+                "context_window": 272_000,
+                "input_modalities": ["text", "image"],
+                "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}],
+            })
+        })
+        .collect();
+    serde_json::json!({ "models": rows }).to_string()
 }
 
 /// Answer one request.

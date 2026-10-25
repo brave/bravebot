@@ -421,6 +421,15 @@ pub fn save_model(model: &str) {
     let _ = bravebot_agent::home::replace(&dir.join(MODEL_FILE), format!("{model}\n").as_bytes());
 }
 
+/// Record the model the user chose, as `config` says it is to be recorded: the tier word where a tier
+/// variable named the model, so the record follows the variable when an inference-profile ARN is
+/// replaced ([BACKEND-47](../../../docs/specs/backends.md#BACKEND-47)).
+///
+/// The one way a pick is written, for the picker and for the start that asks which model to use.
+pub fn record_model(config: &bravebot_config::Config, model: &str) {
+    save_model(config.name_to_record(model));
+}
+
 /// The theme the user chose, or `None` if they never have.
 ///
 /// Global rather than per-directory: which inks the interface draws in is not a property of a

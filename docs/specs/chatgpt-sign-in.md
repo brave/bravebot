@@ -590,8 +590,9 @@ backends spec's failure categories it was. A write of the reply that fails is re
 as a notice of the turn, in a sentence that names no path and quotes nothing the file or the system said. The
 notice is given after the request that renewed it, and when the turn ends if it has not been given, so a
 renewal made by a call that is not a round's request, such as the goal check or a processor, is reported in
-the turn it was made in. A renewal made outside a turn, for a picker's listing, the sign-in command or a
-compaction at rest, is reported by the next turn that makes a request. The new tokens are used from memory
+the turn it was made in. A renewal made outside a turn, for a picker's listing, the listing a start asks
+for before it asks which model to use, the sign-in command or a compaction at rest, is reported by the
+next turn that makes a request. The new tokens are used from memory
 for the rest of the process, and the process tries the write again before each later request, under the claim,
 and only if the file still holds the token this process replaced. A retry that fails again is not reported
 again, and one that succeeds clears the report, so a failure after it is reported. Where the file holds
@@ -1066,7 +1067,8 @@ An account whose listing is empty, where the entry names no model, is signed in.
 says the account reaches no model, and the picker has no row for it. Nothing is invented for a tier nobody named.
 
 The roster is asked of the one function both pickers call, so the terminal and the desktop offer the same
-rows. It is asked each time a picker opens, and otherwise only for the window of a model in force that is the
+rows. It is asked each time a picker opens, for the start that asks which of the account's models to use
+([BACKEND-39](backends.md#BACKEND-39)), and otherwise only for the window of a model in force that is the
 account's, so a session on another model sends the stored token nowhere. No row is offered where no sign-in is
 stored, and nothing is asked of the service then. A stored sign-in whose token cannot be had, or whose listing
 cannot be read, is offered the compiled list, except that the models an entry names need neither the token
@@ -1429,7 +1431,9 @@ turn and each side request it makes.
 
 A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and the pickers list the models a
 `chatgpt` entry names, or where it names none, the models the serving host's listing offers, or where the
-listing cannot be read, the compiled names. Once the sign-in
+listing cannot be read, the compiled names. A start that nothing serves, with the sign-in stored, asks which
+of the models the listing offers to use and records the answer as `/model` does
+([BACKEND-39](backends.md#BACKEND-39)). Once the sign-in
 is stored the command asks the listing, as a picker does, and tells the person to pick a model in `/model` or
 to name one, that the account reaches no model, or that the listing could not be had.
 
@@ -1801,11 +1805,13 @@ These are the places where another spec states something about this service, eac
   is read from calls, have a content size and no checksum. A service that needs the size before it reads the
   frame refuses every body. The change that follows is the `zstd` crate, which writes the size, at the cost
   of compiling its C library for each target.
-- A picker asks the serving host for the listing each time it opens, and the sign-in command asks it when the
-  sign-in is stored, so the access token is sent to the serving host in requests that are not a turn.
+- A picker asks the serving host for the listing each time it opens, the sign-in command asks it when the
+  sign-in is stored, and a start that nothing serves asks it before it asks which model to use, so the
+  access token is sent to the serving host in requests that are not a turn.
 - A sign-in that ended while no picker was open is found when the picker opens, which says nothing about it,
   since the renewal that finds it removes the file. The next turn on a `chatgpt/` model in that process says
-  so ([CHATGPT-7](#CHATGPT-7)). A turn in another process finds no file and says no sign-in is stored.
+  so ([CHATGPT-7](#CHATGPT-7)). A start that asks which model to use finds it as well, and says it has
+  ended. A turn in another process finds no file and says no sign-in is stored.
 - A session resumed from a record, and a fork begun from one, carry an identifier of their own, so the first
   request after either does not find a cache the service still holds for the earlier session's requests.
 - A model of the account that refuses the level ends it for that model for the rest of the process, so a

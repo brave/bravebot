@@ -1233,6 +1233,16 @@ impl<R: BufRead, W: Write> bravebot_agent::servers::Asker for Attached<'_, R, W>
     }
 }
 
+/// The row a typed answer numbers, counting from one, or `None` where the answer is not a whole number
+/// in range: digits and nothing else, so a sign, a fraction or a second word names no row.
+///
+/// What the questions that list rows and take a number read an answer with.
+pub(crate) fn numbered_row<'a, T>(answer: &str, rows: &'a [T]) -> Option<&'a T> {
+    let digits = !answer.is_empty() && answer.bytes().all(|byte| byte.is_ascii_digit());
+    let number = answer.parse::<usize>().ok().filter(|_| digits)?;
+    rows.get(number.checked_sub(1)?)
+}
+
 /// What a line is being waited for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Waiting {
@@ -1735,6 +1745,43 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
 
 #[cfg(test)]
 mod tests {
+    /// CLI-14: a typed number picks the row it numbers, counting from one, and nothing else picks one.
+    /// The questions that list rows and take a number read an answer through it. The regressions it
+    /// rejects are a count from zero, a number past the last row clamped to it, zero or a negative
+    /// number wrapped round to a row, and a sign, a fraction or a second word read as part of a number.
+    #[test]
+    fn a_typed_number_picks_the_row_it_numbers_and_nothing_else() {
+        let rows = ["first", "second", "third"];
+
+        for (answer, picked) in [
+            ("1", "first"),
+            ("2", "second"),
+            ("3", "third"),
+            ("03", "third"),
+        ] {
+            assert_eq!(numbered_row(answer, &rows), Some(&picked), "{answer:?}");
+        }
+        for answer in [
+            "",
+            " ",
+            "0",
+            "4",
+            "-1",
+            "+1",
+            "1 2",
+            "1.0",
+            "one",
+            "99999999999999999999999",
+        ] {
+            assert_eq!(numbered_row(answer, &rows), None, "{answer:?}");
+        }
+        assert_eq!(
+            numbered_row("1", &Vec::<&str>::new()),
+            None,
+            "a row of no rows"
+        );
+    }
+
     use super::*;
 
     #[test]

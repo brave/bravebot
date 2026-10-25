@@ -268,6 +268,32 @@ pub(super) fn account_problem_said(
     }
 }
 
+/// The rows of the ChatGPT account that a start nothing serves offers to choose a model from
+/// ([BACKEND-39](../../../../docs/specs/backends.md#BACKEND-39)): the account's rows as the picker
+/// lists them, in the picker's order and without the models the machine-level layer refuses. Where
+/// there is none, the listing that gave none, so the start can say why.
+///
+/// Only rows the service listed. Where the listing could not be had, the picker offers the compiled
+/// names beside what it says, and a start that did the same would choose a model the account may
+/// refuse for a person who has not yet seen a turn. A listing that was refused, that cannot be read
+/// from the sign-in file, that was read and is empty, and an account whose sign-in ended while it was
+/// asked for, are no rows at all.
+pub fn account_models_to_start_on(
+    config: &Config,
+) -> Result<Vec<bravebot_aichat::models::Model>, bravebot_agent::chatgpt::AccountModels> {
+    match ask_the_account(config) {
+        listed @ bravebot_agent::chatgpt::AccountModels::Offered(_) => {
+            match requestable(config, account_rows(listed, &config.default_model)) {
+                rows if rows.is_empty() => {
+                    Err(bravebot_agent::chatgpt::AccountModels::Offered(Vec::new()))
+                }
+                rows => Ok(rows),
+            }
+        }
+        none => Err(none),
+    }
+}
+
 /// The roster without the models the machine-level layer refuses (BACKEND-48).
 ///
 /// Here rather than at the moment a pick is recorded, because refusing after somebody has read a row
