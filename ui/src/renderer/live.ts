@@ -70,6 +70,8 @@ export interface Live {
    * as the last `agents` event listed them. Never a line a delegate printed.
    */
   agents: AgentEntry[]
+  /** How many of those the bridge counted as started and as working, as that event sent them. */
+  agentCounts: { started: number; working: number }
   /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
   composing: string | null
   /**
@@ -206,7 +208,7 @@ export function cameFrom(
 export const NEW_CHAT = 'New Chat'
 
 /** The fields every new `Live` starts with, whichever answer it is built from. */
-type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'agents' | 'composing' | 'thinking' | 'tokens' | 'running'
+type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'agents' | 'agentCounts' | 'composing' | 'thinking' | 'tokens' | 'running'
 
 /**
  * A session as the window first holds it: what the bridge's answer says, and nothing yet said,
@@ -221,6 +223,7 @@ export function newLive(fields: Omit<Live, Starting>): Live {
     checking: null,
     hook: null,
     agents: [],
+    agentCounts: { started: 0, working: 0 },
     composing: null,
     thinking: '',
     tokens: 0,

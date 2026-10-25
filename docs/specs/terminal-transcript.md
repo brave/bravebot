@@ -33,7 +33,6 @@ governs:
   - ui/src/renderer/thinking.ts
   - ui/src/renderer/apply.ts
   - ui/src/renderer/live.ts
-  - ui/src/renderer/agents.ts
   - ui/src/renderer/components/Agents.tsx
   - ui/src/renderer/components/Sidebar.tsx
   - ui/src/renderer/App.tsx
@@ -1142,13 +1141,13 @@ finished or did not finish. The list says so when there are none, and its Done c
 returns focus to the entry.
 
 The window draws the list and counts VIEW-35 sends and keeps no rule of its own for when an agent
-starts, ends or is counted: its number, kind and task, and its state, are the bridge's. A new
+starts, ends or is counted, and counts none itself: its number, kind and task, and its state, are the bridge's. A new
 conversation starts with none. Nothing a delegate printed is kept
 or drawn here, as the watching spec says.
 
 The accelerator that focuses the composer is not changed by this entry.
 
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agents.test.mjs pins it: it folds the agents event through the window's own event reducer and asserts that the list it carries replaces the window's, that a number sent twice is two rows, that no turn.done, turn.error, manifest.done or manifest.error changes an agent, that the sidebar counts follow the list, and that a new conversation starts with none; it renders the real Agents view and sidebar foot through react-dom and asserts the rows, the empty sentence, the Done control, the label alone for none started, the count, and the count of those working; make check-ui runs it)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agents.test.mjs pins it: it folds the agents event through the window's own event reducer and asserts that the list it carries replaces the window's, that a number sent twice is two rows, that no turn.done, turn.error, manifest.done or manifest.error changes an agent, that the sidebar counts are the two the bridge sent, and that a new conversation starts with none; it renders the real Agents view and sidebar foot through react-dom and asserts the rows, the empty sentence, the Done control, the label alone for none started, the count, and the count of those working; make check-ui runs it)`
 
 ## Known costs
 

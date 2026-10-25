@@ -52,7 +52,7 @@ export function apply(
         return { ...old, hook: null }
       // The whole list, which replaces the window's: the bridge ends a delegate before it ends a turn.
       case 'agents':
-        return { ...old, agents: message.data.agents }
+        return { ...old, agents: message.data.agents, agentCounts: { started: message.data.started, working: message.data.working } }
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':

@@ -21,7 +21,6 @@ import type {
 import { nextPermissionMode } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
 import { Agents } from './components/Agents'
-import { tally } from './agents'
 import { SessionInfo, firstChat } from './components/Sessions'
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
@@ -1075,7 +1074,6 @@ export function App(): React.JSX.Element {
   const stableOpenBot = useEvent(openBot)
   const openSettings = useEvent(() => openSettingsPage())
   const openAgents = useEvent(() => setAgentsOpen(true))
-  const agentTally = tally(live?.agents ?? [])
   const stableSwitchProject = useEvent((choice: ProjectChoice) => { void switchProject(choice) })
 
   // A bot's own page, while no conversation is open over it.
@@ -1152,8 +1150,8 @@ export function App(): React.JSX.Element {
         onRemoveBot={removeBot}
         build={build}
         onSettings={openSettings}
-        agentsStarted={agentTally.started}
-        agentsWorking={agentTally.working}
+        agentsStarted={live?.agentCounts.started ?? 0}
+        agentsWorking={live?.agentCounts.working ?? 0}
         onAgents={openAgents}
       /></SessionInfo.Provider>
       <Gutter

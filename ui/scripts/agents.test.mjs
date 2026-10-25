@@ -104,14 +104,13 @@ test('a new conversation starts with no agents', () => {
   assert.notEqual(newLive({ ...live }).agents, live.agents, 'two conversations share one list')
 })
 
-test('the counts the sidebar draws follow the list the window holds', () => {
-  const { tally } = load('src/renderer/agents.ts')
-  assert.deepEqual(tally([]), { started: 0, working: 0 })
-  const sent = listing(agent('d1', 'reader', 'a', 'working'), agent('d1', 'reader', 'b', 'working'), agent('d2', 'checker', 'c', 'failed'), agent('d3', 'worker', 'd', 'finished'))
+test('the counts the window holds are the two the bridge sent, not a count of the list', () => {
   const s = session()
-  s.send('agents', sent)
-  assert.deepEqual(tally(s.live.agents), { started: sent.started, working: sent.working })
-  assert.deepEqual(tally(s.live.agents), { started: 4, working: 2 })
+  assert.deepEqual(s.live.agentCounts, { started: 0, working: 0 })
+  const sent = listing(agent('d1', 'reader', 'a', 'working'), agent('d2', 'checker', 'c', 'failed'))
+  s.send('agents', { ...sent, started: 7, working: 5 })
+  assert.deepEqual(s.live.agentCounts, { started: 7, working: 5 })
+  assert.equal(s.live.agents.length, 2)
 })
 
 const inPlaceModal = {

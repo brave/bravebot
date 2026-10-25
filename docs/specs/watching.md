@@ -165,7 +165,7 @@ The agents are the delegates and the questions asked beside the work. A command'
 agent and is not in the list Ctrl-L opens, however many commands a session ran. What commands
 printed is a list of its own, opened by `/outputs` and by the `outputs` chord (Alt-L by default),
 over the same mode: the keys, the footer and the way out are the ones the agents have, and a row in
-it is opened by the clauses below as it was before. The chord and the command take one path, so
+it is opened by the clauses below. The chord and the command take one path, so
 they open the same list and say the same thing where there is nothing to open.
 
 The list is the way in where the list holds more than one row, and where it holds one that row's
@@ -192,9 +192,9 @@ the transcript stays drawn behind it. A delegate's own lines take the screen. Wh
 delegates than the panel is tall, the rows drawn are the ones around the highlight.
 
 **Why.** A delegate is work somebody handed on and a command's output is what a program printed.
-They are read for different reasons, and a list holding both put the build that passed beside the
-agent that did the work. Opening command output used to be one key, and a person who wants a
-build's output mid-turn should not have to type a command to read it. Every Ctrl letter is
+They are read for different reasons, and a list holding both puts the build that passed beside the
+agent that did the work. A person who wants a build's output mid-turn should not have to type a
+command to read it. Every Ctrl letter is
 taken, so the chord is an Alt letter, and it is an action a settings file can move
 ([INPUT-32](terminal-input.md#INPUT-32)) because a terminal may use Alt-L itself.
 
