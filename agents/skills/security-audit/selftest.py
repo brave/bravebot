@@ -3874,8 +3874,8 @@ def test_a_mark_is_one_start_with_a_reason():
 def test_a_test_attribute_covers_only_what_it_is_attached_to():
     """A `#[cfg(test)]` on a field, a `use` or a statement leaves the code after it in the list.
 
-    `test_regions` reads the next `{` after the attribute as the item's, so a test-only field above
-    an `impl` hid the whole `impl` from every start list. Each shape below sits above code that has
+    Reading the next `{` after the attribute as the item's made a test-only field above
+    an `impl` hide the whole `impl` from every start list. Each shape below sits above code that has
     to stay listed.
     """
     lines = [
@@ -3904,7 +3904,7 @@ def test_a_test_attribute_covers_only_what_it_is_attached_to():
         "}",                                        # 23
         "fn after() { canonicalize(d); }",          # 24
     ]
-    covered = audit.test_only_lines(lines)
+    covered = audit.test_lines(lines)
     check(
         "a test-only field, use and statement cover their own line and nothing after them",
         {3, 7, 11} <= covered and not covered & {4, 8, 9, 12, 13, 14},
@@ -3920,13 +3920,83 @@ def test_a_test_attribute_covers_only_what_it_is_attached_to():
     ]
     check(
         "a brace in a string or a character literal does not move the end of a test module",
-        audit.test_only_lines(literals) == {1, 2, 3, 4, 5},
-        str(sorted(audit.test_only_lines(literals))),
+        audit.test_lines(literals) == {1, 2, 3, 4, 5},
+        str(sorted(audit.test_lines(literals))),
     )
     check(
         "a test module and a generic test function are covered to their closing brace",
         set(range(16, 19)) <= covered and set(range(20, 24)) <= covered and 24 not in covered,
         str(sorted(covered)),
+    )
+
+
+def test_one_answer_to_which_lines_are_test_code():
+    """Every check that skips tests asks `test_lines`, so a shape it reads right is right everywhere."""
+    field_above_impl = declaring(
+        {
+            Path("crates/agent/src/confine.rs"): [
+                "pub struct Confinement {",
+                "    #[cfg(test)]",
+                "    seen: Vec<String>,",
+                "}",
+                "impl Confinement {",
+                "    fn holds(&self, step: &Step) -> bool {",
+                "        length_prefixed_path(out, &step.resolved);",
+                "        length_prefixed(out, &step.args);",
+                "        true",
+                "    }",
+                "}",
+            ]
+        }
+    )
+    found = list(audit.check_key_sites_exhaustive([FakeSpec([])], field_above_impl))
+    check(
+        "a test-only field above an impl does not hide the impl's functions from the key check",
+        kinds(found) == ["key-site-not-exhaustive"],
+        str(kinds(found)),
+    )
+
+    def site(path, number):
+        return {"path": path, "line": number, "core": False, "test_file": False}
+
+    path = Path("crates/agent/src/turn.rs")
+    on_a_statement = {
+        path: [
+            "fn collect() {",
+            "    #[cfg(test)]",
+            "    if let Some(x) = probe() { note(x); }",
+            "    policy.present(a);",
+            "}",
+        ]
+    }
+    kept = audit.outside_the_kernel([site(str(path), 3), site(str(path), 4)], on_a_statement)
+    check(
+        "a test-only statement hides only itself, so the production call after it stays listed",
+        [one["line"] for one in kept] == [4],
+        str(kept),
+    )
+
+    in_a_module = {
+        path: [
+            "#[cfg(test)]",
+            "mod tests {",
+            "    impl Fixture {",
+            "        fn new() {}",
+            "    }",
+            "    fn helper() {",
+            "        policy.present(a);",
+            "    }",
+            "}",
+            "fn live() {",
+            "    policy.present(b);",
+            "}",
+        ]
+    }
+    kept = audit.outside_the_kernel([site(str(path), 7), site(str(path), 11)], in_a_module)
+    check(
+        "a non-pub helper after an impl inside a test module is still test code",
+        [one["line"] for one in kept] == [11],
+        str(kept),
     )
 
 
@@ -5127,6 +5197,7 @@ TESTS = (
     test_construction_pinned,
     test_gates_pinned,
     test_key_sites_exhaustive,
+    test_one_answer_to_which_lines_are_test_code,
     test_key_steps_join_no_names,
     test_guarantee_specs_are_read,
     test_declassify_counts_match_the_spec,

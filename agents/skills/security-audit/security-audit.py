@@ -642,27 +642,11 @@ def sites_for(symbol, sources):
                 "text": text.strip()[:200],
                 "count": count,
                 "function": enclosing(sources[Path(path)], number),
-                "test_file": "/tests/" in path or path.endswith("_test.rs"),
+                "test_file": is_test_path(path),
                 "core": path.startswith("crates/core/"),
             }
         )
     return found
-
-
-def in_test_module(sources, path, line):
-    """Whether a line sits under a `#[cfg(test)]`, so a count can exclude the tests.
-
-    The tests hold the largest concentration of both primitives and are supposed to: a test that
-    proves an untrusted value cannot be read has to build one. Counting them with the rest would
-    bury the sites that matter.
-    """
-    for index in range(min(line, len(sources[path])) - 1, -1, -1):
-        stripped = sources[path][index].strip()
-        if stripped.startswith("#[cfg(test)]"):
-            return True
-        if stripped.startswith("impl ") or (stripped.startswith("pub fn ") and index < line - 1):
-            return False
-    return False
 
 
 def check_exception_counts():
@@ -1119,11 +1103,7 @@ def start_mark_findings(sources, marked):
             number = text.count("\n", 0, around[0]) + 1
             shown = [f"{path}:{number} {' '.join(attribute.split())[:160]}"]
             inner = attribute.startswith("#![")
-            test_only = (
-                bool(TEST_ONLY.match(attribute))
-                or "tests" in path.parts
-                or "test-support" in path.parts
-            )
+            test_only = bool(TEST_ONLY.match(attribute)) or is_test_path(path)
             rest = text[around[1] :]
             while following := re.match(r"\s*#\[[^\]]*\]", rest):
                 rest = rest[following.end() :]
@@ -1413,7 +1393,7 @@ def check_exhaustive_reader_docs(sources):
             for other, text in enumerate(stripped, start=1):
                 if other == number or not reads.search(text):
                     continue
-                if in_test_module(sources, path, other):
+                if other in test_lines(sources[path]):
                     continue
                 inside = enclosing(stripped, other)
                 if inside not in named:
@@ -1577,7 +1557,7 @@ def outside_the_kernel(sites, sources):
         for site in sites
         if not site["core"]
         and not site["test_file"]
-        and not in_test_module(sources, Path(site["path"]), site["line"])
+        and site["line"] not in test_lines(sources[Path(site["path"])])
     ]
 
 
@@ -1831,35 +1811,6 @@ def check_gates_pinned(specs, sources):
             )
 
 
-def test_regions(lines):
-    """The line ranges under a `#[cfg(test)]`, by brace depth.
-
-    `in_test_module` walks back to the nearest marker and gives up at an `impl`, which is right for
-    a call site inside an inherent method and wrong for a function inside a test module that holds
-    one. A key check reports a function rather than a call, so it needs the module's extent.
-    """
-    spans = []
-    depth = None
-    counter = 0
-    armed = False
-    for number, raw in enumerate(lines, start=1):
-        if depth is None and raw.strip().startswith(("#[cfg(test)]", "#[cfg(all(test")):
-            armed = True
-        opens = raw.count("{")
-        closes = raw.count("}")
-        if armed and opens:
-            depth = counter
-            armed = False
-            start = number
-        counter += opens - closes
-        if depth is not None and counter <= depth:
-            spans.append((start, number))
-            depth = None
-    if depth is not None:
-        spans.append((start, len(lines)))
-    return spans
-
-
 def carries_the_guarantee(spec):
     """Whether a spec is one the guarantee rests on, by its path under `docs/specs`.
 
@@ -1937,12 +1888,12 @@ def check_key_sites_exhaustive(specs, sources):
     reads = {}
     destructures = set()
     for path, lines in sources.items():
-        if "/tests/" in str(path):
+        if is_test_path(path):
             continue
-        spans = test_regions(lines)
+        inside = test_lines(lines)
         stripped = mechanics.strip_comments(lines)
         for number, raw in enumerate(stripped, start=1):
-            if any(start <= number <= end for start, end in spans):
+            if number in inside:
                 continue
             if STEP_DESTRUCTURE.search(raw):
                 destructures.add(f"{path}::{enclosing(lines, number)}")
@@ -2022,12 +1973,12 @@ def braced_spans(lines, name):
     The signature is found as the rest of the tree finds one (`definition_of`), generics included.
     """
     code = blanked(lines)
-    tests = test_regions(code)
+    tests = test_lines(lines)
     declaration = mechanics.definition_of(name)
     spans = []
     for index, raw in enumerate(code):
         number = index + 1
-        if not declaration.search(raw) or any(start <= number <= end for start, end in tests):
+        if not declaration.search(raw) or number in tests:
             continue
         depth = 0
         opened = False
@@ -3758,14 +3709,29 @@ def is_test_path(path):
     )
 
 
-def test_only_lines(lines):
+_TEST_LINES = {}
+
+
+def test_lines(lines):
     """The numbers of the lines a `#[cfg(test)]` covers, whatever it is attached to.
 
-    `test_regions` reads the next `{` after the attribute as the item's, which is right for a module
-    and wrong for a field, a `use` or a statement: the attribute then covers the next block in the
-    file, and every site in it drops out of a list. Here a module, function, impl or trait runs to
-    its closing brace, and anything else to the end of its own statement or field.
+    A module, function, impl or trait runs to its closing brace, and anything else (a field, a
+    `use`, a statement) to the end of its own statement or field, so the attribute never covers the
+    next block in the file. This is the one answer to which lines are test code: a caller that
+    needs a function's extent or a site's line asks it rather than walking the file itself.
+
+    The result is computed once per file. It is kept against the list object, which the entry holds
+    alive, so a second file with the same path and other content is not answered from the first.
     """
+    cached = _TEST_LINES.get(id(lines))
+    if cached is not None and cached[0] is lines:
+        return cached[1]
+    covered = _test_lines(lines)
+    _TEST_LINES[id(lines)] = (lines, covered)
+    return covered
+
+
+def _test_lines(lines):
     covered = set()
     lines = mechanics.strip_comments(lines)
     block = re.compile(r"\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+|async\s+|const\s+)*(?:mod|fn|impl|trait)\b")
@@ -3801,7 +3767,7 @@ def test_only_lines(lines):
 def code_lines(lines):
     """`(number, text)` for each line of a Rust file that is neither comment nor test-only, with the
     comments blanked as `strip_comments` does."""
-    inside = test_only_lines(lines)
+    inside = test_lines(lines)
     for number, raw in enumerate(mechanics.strip_comments(lines), start=1):
         if number not in inside:
             yield number, raw
