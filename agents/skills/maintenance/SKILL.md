@@ -194,12 +194,35 @@ over GitHub's 256-character cap as needing a shorter one, which is a person's jo
 The table from step 5 is what the user chooses from. Ask which drafts to post, post those and no
 others, and never post one the backlog already has, open or closed.
 
+Several lanes can find the same code, so two drafts can propose one change. Before the user
+chooses, say which drafts name the same function or the same lines, so that the user is not asked to
+choose between a draft and its copy.
+
 Hand each chosen draft to the [issue-poster](../../agents/issue-poster.md) definition, which
 searches the backlog for the symbol or path the title names, applies the labels and posts. Give
 it the title, the body file, the labels the draft names, the assignee `netzenbot` (or the login
-the user names instead), and this instruction: the issue is a finding nobody has read, so apply no
-`importance`, `urgency` or `size`. Those are the [triage-issues skill](../triage-issues/SKILL.md)'s
-to judge.
+the user names instead), and this brief, with `{commit}` and `{moved}` filled in from the manifest
+and from that draft's lines in the output of `verify`, or `none`:
+
+```text
+Use the title as given. If you think it is inaccurate, post it as given and say so in your report.
+Apply no importance, urgency or size: the issue is a finding a reviewer wrote and nobody has read,
+and the triage-issues skill judges those.
+File exactly this one issue and no other. Where the body names a case it leaves undone, cite an
+existing issue for it where one exists. File none for a case that has no issue: list it in your
+report, because the user decides.
+The reviewers read commit {commit}. These places the body cites have moved since, or are in code
+that changed: {moved}. Correct only those line numbers in the posted body, to the places named for
+the moved ones and by reading the code for the others, and list each correction in your report.
+Change nothing else in the body.
+Search open and closed issues for the symbol or path the title names before filing. If an issue
+already covers it, cite it and do not file.
+```
+
+The poster's own procedure files an issue for each case a body leaves undone unless the task says
+to file none, and an issue it files was never a draft, so nobody has chosen it. The brief says to
+file none, and keeps the poster from retitling a draft or changing a line number it was not told
+about.
 
 Where the table said a title needs shortening, rewrite it before posting rather than posting a
 title GitHub will refuse.
