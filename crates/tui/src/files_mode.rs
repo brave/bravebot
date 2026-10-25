@@ -3242,6 +3242,26 @@ mod tests {
         );
     }
 
+    /// FILES-10: a rewind that takes the highlighted last file while others remain leaves the last
+    /// remaining file highlighted, and the edits drawn are that file's.
+    #[test]
+    fn a_rewind_taking_the_highlighted_file_highlights_the_last_one_left() {
+        let mut session = session_with(&["a.rs", "b.rs"]);
+        let kept = session.transcript.len();
+        prompt(&mut session, "more");
+        wrote(&mut session, write("c.rs", "x\n", "y\n"));
+        opened(&mut session);
+        assert_eq!(session.files_state().map(|s| s.selected), Some(2));
+
+        session.transcript.truncate(kept);
+        session.end_files_if_nothing_written();
+        assert!(session.files_open());
+        let panel = panel_of(&mut session, 120, 30);
+        let marked: Vec<&String> = panel.iter().filter(|row| row.contains('▸')).collect();
+        assert_eq!(marked.len(), 1, "{panel:#?}");
+        assert!(marked[0].contains("b.rs"), "{panel:#?}");
+    }
+
     /// FILES-10: a resumed session holds its earlier calls as lines with no changes, so it lists only
     /// the edits made since, and the heading says earlier edits are not kept.
     #[test]

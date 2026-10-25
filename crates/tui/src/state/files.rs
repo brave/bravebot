@@ -63,9 +63,19 @@ impl Session {
     }
 
     /// End the state where no edit is left to draw, after a rewind took the calls that held them.
+    /// Where files remain, hold the highlight to the last of them, so a highlighted file the rewind
+    /// took does not leave the index past the list.
     pub fn end_files_if_nothing_written(&mut self) {
-        if self.files.is_some() && self.written_files().is_empty() {
+        if self.files.is_none() {
+            return;
+        }
+        let count = self.written_files().len();
+        if count == 0 {
             self.files = None;
+        } else if let Some(state) = &mut self.files
+            && state.selected >= count
+        {
+            Self::highlight(state, count - 1, count);
         }
     }
 
