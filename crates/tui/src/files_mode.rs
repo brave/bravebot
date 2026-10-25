@@ -1522,6 +1522,112 @@ mod tests {
         );
     }
 
+    /// The ordinary panel of a session with two files written, drawn at 120 by 30 and open.
+    fn ordinary_panel_with_two_files() -> Session {
+        let mut session = session_with(&["a.rs", "b.rs"]);
+        screen(&mut session, 120, 30);
+        session.toggle_panel();
+        screen(&mut session, 120, 30);
+        assert!(session.panel_open() && !session.files_open());
+        session
+    }
+
+    /// MOUSE-20: a click that sweeps nothing on the Files heading or the row under it does what
+    /// `/diff` does, and `q` puts the ordinary panel back.
+    #[test]
+    fn a_click_on_the_files_heading_or_the_row_under_it_opens_the_state() {
+        let mut by_command = ordinary_panel_with_two_files();
+        by_command.toggle_files();
+        let expected = by_command.files_state().cloned();
+        assert!(expected.is_some(), "the command did not open the state");
+        for needle in ["Files", "2 files"] {
+            let mut session = ordinary_panel_with_two_files();
+            let (row, column) = cell_of(&mut session, 120, 30, needle);
+            assert_eq!(click(&mut session, row, column), Action::Redraw);
+            assert!(
+                session.files_open(),
+                "a click on {needle:?} did not open the state"
+            );
+            assert_eq!(session.files_state().cloned(), expected, "{needle:?}");
+            press(&mut session, KeyCode::Char('q'));
+            assert!(!session.files_open() && session.panel_open());
+        }
+    }
+
+    /// MOUSE-20: a drag, a press from elsewhere and the second press of a double click on the Files
+    /// section are selections, and a click over the scroller or a history search asks for nothing.
+    #[test]
+    fn a_drag_a_double_click_or_a_click_over_the_scroller_or_a_search_opens_no_state() {
+        let mut session = ordinary_panel_with_two_files();
+        let (row, column) = cell_of(&mut session, 120, 30, "Files");
+
+        mouse(
+            &mut session,
+            MouseEventKind::Down(MouseButton::Left),
+            row,
+            column,
+        );
+        mouse(
+            &mut session,
+            MouseEventKind::Drag(MouseButton::Left),
+            row + 1,
+            column,
+        );
+        let up = mouse(
+            &mut session,
+            MouseEventKind::Up(MouseButton::Left),
+            row + 1,
+            column,
+        );
+        assert_eq!(up, Action::Copy);
+        assert!(
+            !session.files_open(),
+            "a drag down the section opened the state"
+        );
+
+        mouse(&mut session, MouseEventKind::Down(MouseButton::Left), 0, 0);
+        let up = mouse(
+            &mut session,
+            MouseEventKind::Up(MouseButton::Left),
+            row,
+            column,
+        );
+        assert_eq!(up, Action::Copy);
+        assert!(
+            !session.files_open(),
+            "a press from elsewhere opened the state"
+        );
+
+        session.last_click = None;
+        click(&mut session, row, column);
+        assert!(session.files_open());
+        press(&mut session, KeyCode::Char('q'));
+        assert_eq!(click(&mut session, row, column), Action::Copy);
+        assert!(!session.files_open(), "a double click opened the state");
+
+        let mut scrolling = ordinary_panel_with_two_files();
+        let (row, column) = cell_of(&mut scrolling, 120, 30, "Files");
+        scrolling.open_scroller();
+        click(&mut scrolling, row, column);
+        assert!(
+            !scrolling.files_open(),
+            "a click over the scroller opened the state"
+        );
+
+        let mut searching = ordinary_panel_with_two_files();
+        let (row, column) = cell_of(&mut searching, 120, 30, "Files");
+        searching.history =
+            crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
+                "old one", None,
+            )]);
+        assert!(searching.open_history_search(), "no search opened");
+        click(&mut searching, row, column);
+        assert!(
+            !searching.files_open(),
+            "a click over a search opened the state"
+        );
+    }
+
     /// MOUSE-18: a click on the `x` at the right end of the heading row ends the state as `q` does,
     /// and the panel goes back to what it was before the state: closed if it was closed, ordinary
     /// if it was open.
