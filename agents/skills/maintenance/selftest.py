@@ -1493,5 +1493,157 @@ class Reading(unittest.TestCase):
         self.assertIn("crates/a/src/lib.rs:5 moved to 9", out)
 
 
+class ClaimCheck(unittest.TestCase):
+    """The step between drafting and posting: readers check each draft's claim at HEAD."""
+
+    FILES = {"crates/a/src/lib.rs": unused(8), "crates/b/src/lib.rs": unused(8), ".gitignore": ".work\n"}
+
+    def drafted(self, root, count=7, interleave=False):
+        """Prepare, draft one finding per candidate that cites a file, and return the work directory
+        and the slugs in the order the drafts were made."""
+        work = root / ".work"
+        _, path = m.prepare(root, ("unreferenced",), (), work)
+        manifest = json.loads(Path(path).read_text())
+        prompts = manifest["lanes"][0]["reviewer_prompts"]
+        ids = [i for prompt in prompts for i in prompt["candidates"]]
+        asked = [{"id": i, "verdict": "cleanup"} for i in ids]
+        cited = [manifest["candidates"][i] for i in ids]
+        findings = [
+            {"candidates": [c["id"]], "summary": f"Delete {c['id']}", "fix": "Delete it.",
+             "evidence": [f"{c['path']}:{c['line']} the function"]}
+            for c in cited
+        ][:count]
+        if interleave:
+            half = len(findings) // 2
+            findings = [f for pair in zip(findings[:half], findings[half:]) for f in pair]
+        for prompt in prompts:
+            mine = [f for f in findings if f["candidates"][0] in prompt["candidates"]]
+            Path(prompt["results_file"]).write_text(json.dumps({"candidates": asked, "findings": mine}))
+        _, out, _ = quiet(m.main, ["draft", "--work-dir", str(work), "--json"])
+        return work, [d["slug"] for d in json.loads(out)["drafts"]]
+
+    def readers(self, work):
+        code, out, _ = quiet(m.main, ["claims-prepare", "--work-dir", str(work)])
+        self.assertEqual(code, 0)
+        return json.loads(out)
+
+    def answer(self, index, verdicts):
+        """Have each reader write `verdicts`, a dict of slug to the entry, for the slugs it was given."""
+        for reader in index["readers"]:
+            entries = [dict(verdicts[s], draft=s) for s in reader["drafts"] if s in verdicts]
+            Path(reader["results_file"]).write_text(json.dumps({"drafts": entries}))
+
+    def test_drafts_are_split_among_readers_five_at_a_time_in_file_order(self):
+        with committed(self.FILES) as root:
+            work, slugs = self.drafted(root, count=16)
+            index = self.readers(work)
+        self.assertEqual([len(r["drafts"]) for r in index["readers"]], [5, 5, 5, 1])
+        self.assertEqual(sorted(s for r in index["readers"] for s in r["drafts"]), sorted(slugs))
+
+    def test_the_drafts_about_one_file_go_to_one_reader_whatever_order_they_were_drafted_in(self):
+        with committed(self.FILES) as root:
+            work, slugs = self.drafted(root, count=16, interleave=True)
+            index = self.readers(work)
+            bodies = {d["slug"]: Path(d["body_file"]).read_text() for d in json.loads((work / "issues/drafts.json").read_text())}
+        cited = [
+            re.search(r"crates/(\w)/", bodies[slug]).group(1) for reader in index["readers"] for slug in reader["drafts"]
+        ]
+        self.assertEqual(cited, sorted(cited))
+        self.assertEqual(set(cited), {"a", "b"})
+
+    def test_a_reader_is_given_head_the_rule_and_the_drafts_and_nothing_the_reviewers_wrote(self):
+        with committed(self.FILES) as root:
+            work, slugs = self.drafted(root, count=2)
+            (root / "crates/c").mkdir()
+            (root / "crates/c/new.rs").write_text("// added after the reviewers read\n")
+            commit_all(root, "later")
+            index = self.readers(work)
+            prompt = Path(index["readers"][0]["prompt_file"]).read_text()
+            tree = Path(index["tree"])
+            moved = (tree / "crates/c/new.rs").exists()
+            expected = head(root)
+        self.assertEqual(index["commit"], expected)
+        self.assertTrue(moved)
+        self.assertIn(f"commit `{expected}`", prompt)
+        self.assertIn("never have untrusted content", prompt)
+        self.assertIn("Do not edit any file", prompt)
+        self.assertIn("written without a path", prompt)
+        self.assertIn(f"`{slugs[0]}`", prompt)
+        self.assertNotIn("Maintenance review", prompt)
+
+    def test_claims_prepare_before_draft_says_so_and_writes_nothing(self):
+        with committed(self.FILES) as root:
+            m.prepare(root, ("unreferenced",), (), root / ".work")
+            code, _, err = quiet(m.main, ["claims-prepare", "--work-dir", str(root / ".work")])
+            wrote = (root / ".work" / "claims").exists()
+        self.assertEqual(code, 2)
+        self.assertIn("run draft first", err)
+        self.assertFalse(wrote)
+
+    def test_a_rejected_draft_is_marked_in_the_table_with_the_reason_and_a_held_one_is_not(self):
+        with committed(self.FILES) as root:
+            work, slugs = self.drafted(root, count=2)
+            index = self.readers(work)
+            self.answer(index, {
+                slugs[0]: {"verdict": "rejected", "reason": "issue #12 excluded this move", "corrections": []},
+                slugs[1]: {"verdict": "holds", "reason": "", "corrections": [
+                    {"written": "lines 8-9", "now": "crates/a/src/lib.rs:11-12"}]},
+            })
+            code, out, err = quiet(m.main, ["claims-collect", "--work-dir", str(work)])
+            _, again, _ = quiet(m.main, ["draft", "--work-dir", str(work)])
+        self.assertEqual(code, 0, err)
+        rows = out.split("\n")
+        rejected = next(i for i, line in enumerate(rows) if "Delete" in line and "REJECTED" in rows[i + 2])
+        self.assertIn("REJECTED by the claim check: issue #12 excluded this move", rows[rejected + 2])
+        self.assertEqual(out.count("REJECTED"), 1)
+        self.assertIn("line numbers: lines 8-9 is crates/a/src/lib.rs:11-12 at HEAD", out)
+        self.assertEqual(again.count("REJECTED"), 1)
+
+    def test_a_draft_no_reader_gave_a_verdict_for_is_unchecked_and_the_exit_is_nonzero(self):
+        with committed(self.FILES) as root:
+            work, slugs = self.drafted(root, count=3)
+            index = self.readers(work)
+            self.answer(index, {slugs[0]: {"verdict": "holds"}, slugs[1]: {"verdict": "bogus"}})
+            code, out, err = quiet(m.main, ["claims-collect", "--work-dir", str(work)])
+        self.assertEqual(code, 1)
+        self.assertEqual(out.count("claim not checked"), 2)
+        self.assertIn(f"no verdict for {slugs[1]}", err)
+        self.assertIn(f"no verdict for {slugs[2]}", err)
+
+    def test_a_reader_with_no_result_or_an_unreadable_one_leaves_its_drafts_unchecked(self):
+        with committed(self.FILES) as root:
+            work, slugs = self.drafted(root, count=7)
+            index = self.readers(work)
+            Path(index["readers"][1]["results_file"]).write_text("not json")
+            self.answer({"readers": index["readers"][:1]}, {s: {"verdict": "holds"} for s in slugs})
+            code, out, err = quiet(m.main, ["claims-collect", "--work-dir", str(work)])
+        self.assertEqual(code, 1)
+        self.assertIn("could not be read", err)
+        self.assertEqual(out.count("claim not checked"), 2)
+
+    def test_a_rejection_or_doubt_with_no_reason_is_not_a_verdict(self):
+        with committed(self.FILES) as root:
+            work, slugs = self.drafted(root, count=2)
+            index = self.readers(work)
+            self.answer(index, {slugs[0]: {"verdict": "rejected"}, slugs[1]: {"verdict": "unclear", "reason": " "}})
+            code, _, err = quiet(m.main, ["claims-collect", "--work-dir", str(work)])
+        self.assertEqual(code, 1)
+        self.assertIn("with no reason", err)
+
+    def test_clean_removes_the_readers_checkout_too(self):
+        with committed(self.FILES) as root:
+            work, _ = self.drafted(root, count=2)
+            checkout = Path(self.readers(work)["tree"])
+            existed = checkout.exists()
+            code, _, _ = quiet(m.main, ["clean", "--work-dir", str(work)])
+            listed = subprocess.run(
+                ["git", "-C", str(root), "worktree", "list"], check=True, capture_output=True, text=True
+            ).stdout
+        self.assertTrue(existed)
+        self.assertEqual(code, 0)
+        self.assertFalse(checkout.exists())
+        self.assertNotIn(str(checkout), listed)
+
+
 if __name__ == "__main__":
     unittest.main()
