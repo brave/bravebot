@@ -20,7 +20,8 @@ use the subscription's tokens and holds an ID token that verifies, and otherwise
 saying which.
 
 Several values here, such as the names in the built-in model list, are read from another program's source
-and have not been checked against OpenAI's service.
+and have not been checked against OpenAI's service. Others are stated in OpenAI's documentation, and have
+not been checked against the service either.
 [What has been observed](#what-has-been-observed) and [What the documents state](#what-the-documents-state)
 say which.
 
@@ -132,9 +133,10 @@ A token OpenAI turns away early is replaced once and the request sent again.
 If OpenAI refuses the refresh token as no longer valid, the stored copy is removed and the turn says the
 sign-in has ended: run `bravebot auth login chatgpt` again. bravebot reads that from the error code the
 OAuth standard names for it, which this server has not been seen to send, so a sign-in it ends in another
-way leaves the file in place and each turn is told the renewal failed until you sign in again. If the
-renewed tokens could not be saved, the turn says so once, and they last until bravebot exits. A sign-in is
-used in an incognito session as in any other, and a renewal is still written to the file there.
+way leaves the file in place and each turn is told the renewal failed until you sign in again. OpenAI's
+documentation lists five other codes for a refresh token that cannot be used, which bravebot does not read.
+If the renewed tokens could not be saved, the turn says so once, and they last until bravebot exits. A
+sign-in is used in an incognito session as in any other, and a renewal is still written to the file there.
 
 A turn that fails on the account says which failure it was in a sentence of its own, with what to run
 where a command is the remedy, and no count of attempts after it. A refusal that carries one of seven
@@ -143,9 +145,9 @@ the others say it may not be used this way. Where the refusal came as a 429 that
 sentence says how long, in minutes rounded up. The line a failed turn leaves in the terminal and the error
 a one-shot run prints add the status after the sentence, as `(HTTP 429)`. `/compact`, the line a turn says
 when it could not summarise the conversation, the window and an editor give the sentence alone
-([Troubleshooting](../../troubleshooting.md)). The codes are read from another program's source
-and have not been seen from this service, so a refusal that says the same in another code is handled by
-its status alone. A refusal with one of them is not repeated, and no
+([Troubleshooting](../../troubleshooting.md)). The codes are read from another program's source, are listed
+in OpenAI's documentation, and have not been seen from this service, so a refusal that says the same in
+another code is handled by its status alone. A refusal with one of them is not repeated, and no
 [fallback model](../configuration.md#fallbackmodel) is tried, since the account answers for every model it
 serves.
 
@@ -166,8 +168,9 @@ and where the file cannot be read it says so and the report fails.
 bravebot auth logout chatgpt
 ```
 
-removes the stored copy, and is allowed in an incognito session. It ends nothing at OpenAI. bravebot's
-record is that signing out of the ChatGPT account, or removing bravebot's access in the account's
+removes the stored copy, and is allowed in an incognito session. It ends nothing at OpenAI. OpenAI's
+documentation describes a revocation call a client can make at sign-out, which bravebot does not make.
+bravebot's record is that signing out of the ChatGPT account, or removing bravebot's access in the account's
 settings, ends the sign-in there. That has not been observed, and an access token already issued may run
 to its own expiry.
 
@@ -190,30 +193,39 @@ a client, the scopes and fields the requests carry, the replacement of the refre
 listing's fields, and the events of a text turn, a tool call and a reasoning turn.
 
 These are read from another program's source, opencode's, and have not been observed against the service.
-[What the documents state](#what-the-documents-state) says what OpenAI's key set and discovery document add
-to some of them:
+[What the documents state](#what-the-documents-state) says what OpenAI's own documents add to some of them:
 
 - the algorithm and the issuer of a real ID token. OpenAI's discovery document states both as bravebot
-  expects them, and this page records no ID token's header or claims. A real token that names another issuer
-  would make every sign-in fail;
+  expects them, OpenAI's documentation gives the same issuer, and this page records no ID token's header or
+  claims. A real token that names another issuer would make every sign-in fail;
 - that the authorization server accepts a redirect to any loopback port, where only a port the operating
-  system chose has been tried;
+  system chose has been tried. OpenAI's documentation says only the port may vary at later sign-ins;
 - the names in the built-in model list, and in particular the ones ending in `-fast`;
 - what the three identifiers do for the service's prompt cache;
 - that the service accepts the zstd frames bravebot writes and the size at which it refuses a body, and
   whether that size is of the frame or of what it decodes to;
-- the seven error codes that name the account, and where a refusal writes them.
+- the seven error codes that name the account, and where a refusal writes them. OpenAI's documentation gives
+  the seven with their statuses and names no `error` event.
 
-Whether an access token issued before a sign-out keeps working, and what a refused refresh or a refused
-access token returns, are in no source bravebot was written from.
+Whether an access token issued before a sign-out keeps working is in no source bravebot was written from.
+OpenAI's documentation lists the codes of a refused refresh without a status, and does not say what an
+expired or revoked access token returns.
 
 ## What the documents state
 
-OpenAI's key set and its discovery document, which anyone can read, were read with no account on 2026-10-25.
-The key set is at the address bravebot uses and holds four RSA keys for RS256 signatures, each with a
-2048-bit modulus. The discovery document names the authorization, token and key set addresses bravebot uses,
-states the issuer bravebot compares an ID token with, says ID tokens are signed with RS256 and that `S256`
-is the only challenge method, lists a revocation endpoint, and advertises no way to bind a token to the
-program that holds it. Neither document shows what a real ID token holds.
+OpenAI's key set and its discovery document, which anyone can read, were read with no account on
+2026-10-25. The key set is at the address bravebot uses and holds four RSA keys for RS256 signatures, each
+with a 2048-bit modulus. The discovery document names the authorization, token and key set addresses
+bravebot uses, states the issuer bravebot compares an ID token with, says ID tokens are signed with RS256
+and that `S256` is the only challenge method, lists a revocation endpoint, and advertises no way to bind a
+token to the program that holds it. Neither document shows what a real ID token holds.
+
+OpenAI also publishes documentation of this sign-in, which was read on 2026-10-25. It states the redirect
+rule, the checks a client makes on an ID token, the seven error codes that name the account and two more that
+mean try again later, six error codes for a refresh token that cannot be used, and the revocation call a
+client makes at sign-out. These are statements of the documentation and show nothing about what the service
+did for bravebot. bravebot differs from it in several places. Among others, it reads one of the six refresh
+codes, it forgets its client and host identifier when you sign out, it keeps no ID token, and it makes no
+revocation call at sign-out.
 
 The design is [specs/chatgpt-sign-in.md](https://github.com/brave/bravebot/blob/main/docs/specs/chatgpt-sign-in.md).

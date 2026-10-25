@@ -65,9 +65,10 @@ Reaching OpenAI with a pay-per-token API key is a different route, the `openai` 
 The command is built: `auth login chatgpt` signs in and stores the tokens, `auth logout chatgpt` forgets
 them, and `auth status` and the list of ways report them. [What is built](#what-is-built) says where the code
 is and that every clause is built whole. [What the exchange has to record](#what-the-exchange-has-to-record)
-lists what a sign-in made with a real account has observed, what the service's public documents state, and
-what has not been observed. The points where this spec changes another spec are named in
-[What this changes elsewhere](#what-this-changes-elsewhere), and each of those specs holds the change.
+lists what a sign-in made with a real account has observed, what the service's public documents and OpenAI's
+documentation state, and what has not been observed. The points where this spec changes another spec are
+named in [What this changes elsewhere](#what-this-changes-elsewhere), and each of those specs holds the
+change.
 
 The hosts, parameters, field names and headers the clauses state are read from opencode's source
 (`packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`), which is another program's code.
@@ -1449,11 +1450,12 @@ while the first of them is open, although every clause is built.
 ## What the exchange has to record
 
 A sign-in made with a real ChatGPT Plus or Pro account, with the requests it makes observed, has to
-establish each of the following before a clause states it as observed. The key set and the discovery
-document, which the service publishes to anyone, were read with no account, and what they state is recorded
-in a separate list. A clause that cites it states what the documents say and no more. What is recorded is a
-name, a shape, a status, a duration or a host. A token, code, state, nonce, challenge, verifier, client or
-host identifier or claim value is never recorded, in this repository or in the tracker.
+establish each of the following before a clause states it as observed. What a document states is recorded in
+separate lists: the key set and the discovery document, which the service publishes to anyone and which were
+read with no account, and OpenAI's documentation of this sign-in. A clause that cites one states what the
+document says and no more. What is recorded is a name, a shape, a status, a duration or a host. A token,
+code, state, nonce, challenge, verifier, client or host identifier or claim value is never recorded, in this
+repository or in the tracker.
 
 **Observed against the real service**, as a name, a shape, a status or a size taken from a sign-in made with a
 real ChatGPT account on this program's own build:
@@ -1522,8 +1524,9 @@ code or a reply to a request that carried one:
   `code` as the only response type, `authorization_code` and `refresh_token` as the grant types, and
   `client_secret_basic`, `client_secret_post` and `none` as the token endpoint authentication methods.
   RS256 is the algorithm the verifier accepts, `S256` is the method the sign-in sends, and the two grant
-  types are the two requests the sign-in makes. The document advertises `none` as a method. The method the
-  client registered for this program uses is not observed.
+  types are the two requests the sign-in makes. The document advertises `none` as a method, and the list of
+  OpenAI's documentation below records that OpenAI states this direct flow needs no client secret. The
+  method the client registered for this program uses is not observed.
 - Its `scopes_supported` is `openid`, `profile`, `email` and `offline_access`. It does not list
   `resource.invoke` or `chatgpt.tokens.use.direct`, which the sign-in asks for, so it neither supports nor
   contradicts them. What the service accepted of them is in the list above.
@@ -1540,18 +1543,116 @@ code or a reply to a request that carried one:
   metadata of an authorization server, is answered 200 as `text/html`, about 57 KB, with a page that holds
   no metadata.
 
+**Stated in OpenAI's documentation of this sign-in, read on 2026-10-25.** The documentation is the pages of
+`developers.openai.com/siwc` named "Registration and sign-in", "Accounts and sessions", "Token reference",
+"Errors and recovery", "Models and inference" and "Preview limitations". "Registration and sign-in" names a
+seventh page, "On your website", for the signature check of an ID token. Each item is what a page states,
+and a statement shows nothing about what the service does for this program's build. Where this program
+differs from a statement, the item or an entry of [Known costs](#known-costs) says so:
+
+- Issuer. "Registration and sign-in" holds `https://auth.openai.com` as the `issuer` of its example
+  credential record, beside the validated subject. "On your website" says to require the ID token's `iss`
+  claim to match exactly the issuer returned by discovery, and lists the production issuer, authorization
+  endpoint, token endpoint and key set address. The last three are the addresses of [CHATGPT-2](#CHATGPT-2),
+  and the issuer is the one the discovery document states. "Token reference" gives `iss` as
+  `https://auth.openai.com` in production for the claims of the access token, which is a different token
+  from the ID token. An ID token's `iss` is therefore documented to equal the issuer of the discovery
+  document, and no page records the `iss` of a real ID token.
+- What a client checks. "Registration and sign-in" says to verify the ID token's signature against OpenAI's
+  published key set and to check the issuer, the audience against the issued client, the expiration and the
+  nonce saved for the attempt, and to use the validated `sub` as the account identity. For a returning
+  account it says to confirm that the new ID token's verified identity matches the selected account before
+  credentials are replaced. "On your website" shows the same checks in an example that also requires the
+  claims `sub`, `exp` and `iat` to be present, allows a clock tolerance of five seconds, and says to refresh
+  the key set when an unfamiliar `kid` appears. [CHATGPT-5](#CHATGPT-5) compares the signature, issuer,
+  audience, expiry and nonce, which are the same checks, and reads `sub` only as a string that is not empty.
+  Known costs says where it differs from the rest.
+- Redirect. "Registration and sign-in" says the redirect URI is an HTTP loopback address on `127.0.0.1` from
+  initial registration onward, with the path `/auth/callback`. Its example names a port. It says later
+  sign-ins may use another available port, that the scheme, host and path stay unchanged, and that
+  `localhost` is not substituted. It does not say whether registration accepts a port other than its
+  example's. The list above from a sign-in records only that a port the operating system chose was accepted
+  at a first sign-in.
+- Client authentication. "Registration and sign-in" says this direct flow is a public client and needs
+  neither a client secret nor a partner API key. "On your website" says an identity-only public client
+  authenticates at the token endpoint with `none`.
+- Tokens. "Token reference" lists the fields of the token response as `access_token`, `refresh_token`,
+  `id_token`, `token_type`, `expires_in`, `scope` and `earliest_refresh_at`. It gives an access token one
+  hour (`expires_in` 3600) and a refresh token 30 days. It says a successful code exchange is answered 200,
+  and so is a successful refresh, with a new access token and a replacement refresh token that has a fresh
+  30 days. The example credential record of "Registration and sign-in" gives the token type as `Bearer`, and
+  "Models and inference" sends the access token as `Authorization: Bearer`. No page mentions a
+  sender-constrained token form.
+- Sign-out. "Accounts and sessions" describes a revocation call for sign-out: a form-encoded `POST` to the
+  `revocation_endpoint` of the discovery document with `token` the refresh token, `token_type_hint`
+  `refresh_token` and the issued client. An empty 200 is its success reply, including for a token that is
+  already invalid. It says to retry on a network failure or a 5xx, to clear the tokens locally and tell the
+  person that remote revocation was not confirmed if sign-out finishes without confirmation, and that a
+  person can disconnect the app in ChatGPT Settings. It says nothing of an access token already issued.
+- Error codes. "Errors and recovery" lists seven codes, each with the HTTP status it gives:
+  `subscription_sharing_user_not_eligible` 403, `subscription_sharing_usage_limit_exceeded` 429,
+  `subscription_sharing_unsupported_capability` 400, `subscription_sharing_route_not_supported` 403,
+  `subscription_sharing_invalid_user` 401, and `chatpass_v2_scope_not_authorized` and
+  `chatpass_v2_invalid_authorization_context` 403. It lists two more,
+  `subscription_sharing_usage_unavailable` and `subscription_sharing_user_unavailable`, each 503 with a
+  retry under a bounded backoff. The list of [CHATGPT-8](#CHATGPT-8) leaves both out, and Known costs says
+  how this program reads them. It says a Responses-layer error object carries a code as `error.code` and a
+  parameter as `error.param`. It says direct-route admission can return a body such as `{"detail": "..."}`
+  before a stream opens, with 401, 403 or 503, and that its message is diagnostic text and no stable code. A
+  401 there means the required signed identity or direct permission was not accepted, and the page does not
+  say whether that covers an expired or revoked access token. The prose of "Models and inference" says a
+  usage-limit error can arrive after streaming has begun as `response.failed`, with
+  `subscription_sharing_usage_limit_exceeded` or `subscription_sharing_usage_unavailable`, and its Python
+  example reads the code as `event.response.error.code`. No page names an `error` event, so `code` in an
+  `error` event, which [CHATGPT-8](#CHATGPT-8) reads, is stated by no documentation.
+- Refresh errors. "Errors and recovery" lists `invalid_grant` on refresh, `invalid_refresh_token`,
+  `token_expired`, `refresh_token_expired`, `refresh_token_invalidated` and `refresh_token_reused` as an
+  unusable refresh token, and says to clear the tokens and repeat OAuth with the saved client. It lists
+  `invalid_client` as a fault in the client's configuration. It gives no HTTP status for any of these codes.
+- Requests and streams. "Preview limitations" says a request sets `store` to false and `stream` to true,
+  sends `input` as an array, and uses `instructions` or developer messages, since explicit system-role
+  message items are rejected. It lists fifteen fields to omit: `background`, `conversation`,
+  `max_output_tokens`, `max_tool_calls`, `metadata`, `moderation`, `multi_agent`, `prompt`,
+  `prompt_cache_retention`, `safety_identifier`, `temperature`, `top_logprobs`, `top_p`, `truncation` and
+  `user`. It says text, images and files are supported when the selected model accepts them, and this
+  program drops a document attachment from a Responses request, as [BACKEND-61](backends.md#BACKEND-61) says
+  ([#3121](https://github.com/brave/bravebot/issues/3121)). "Models and inference" says to treat inference
+  as successful only after `response.completed`, and to handle `response.incomplete`, explicit errors and
+  interrupted streams apart from it. It does not say when the host sends `response.incomplete` or ends a
+  stream early.
+- Model listing. "Models and inference" says to request the account's model catalog with the same access
+  token that inference uses, and that the response contains a `models` array. Its example is a `GET` of
+  `/v1/models` that keeps the rows whose `visibility` is `list`. It says to show `display_name`, to pass the
+  selected `slug` as `model`, and to refresh the choices when the person switches accounts. This matches the
+  listing of [CHATGPT-9](#CHATGPT-9) and the list above from a sign-in, except that the example keeps a row
+  on `visibility` alone, where CHATGPT-9 also requires `supported_in_api`. Nothing there says how dependable
+  the listing is.
+- Host identifier and client. "Registration and sign-in" says to save the issued client with the
+  registration for the account and reuse it at later sign-ins, and to send the same host identifier for the
+  same host. At reauthorization it says to omit `agent_name_hint`, to send the ID token retained from the
+  account's previous successful sign-in as `id_token_hint` and to omit it after signing out or if none was
+  retained, and that the email saved from the validated ID token may be sent as `login_hint`. "Accounts and
+  sessions" says signing out or switching back to a saved account does not create a new client. It says to
+  clear the selected account's access, refresh and ID tokens at sign-out, to retain its account and client
+  mapping and the host's identifier for a later sign-in, and that revoking a session does not delete the
+  registered client.
+
 **Stated by the clauses from opencode's source, to confirm:**
 
 - That the authorization server accepts a redirect to `http://127.0.0.1:<port>/auth/callback` for any port.
-  A port the operating system chose is accepted and no other is confirmed.
-- The `id_token` field of the code exchange's reply, which the sign-in requires and verifies.
+  A port the operating system chose is accepted and no other is confirmed. OpenAI's documentation states a
+  redirect rule, which is listed above and confirms no port.
+- The `id_token` field of the code exchange's reply, which the sign-in requires and verifies. OpenAI's
+  documentation lists it among the fields of the token response.
 - The ID token's algorithm, audience, required claims and the nonce match, as a real token holds them, and
   that the `kid` a real token names is in the key set. The service advertises RS256 for an ID token and
-  publishes RSA keys for RS256 signatures, which are the algorithm and key types the verifier accepts. No ID
-  token's header or claims are recorded in this spec.
+  publishes RSA keys for RS256 signatures, which are the algorithm and key types the verifier accepts, and
+  OpenAI's documentation states what a client checks in an ID token. No ID token's header or claims are
+  recorded in this spec.
 - The ID token's issuer, as a real token holds it. The sign-in compares it with the constant
-  `https://auth.openai.com`, which equals the `issuer` the discovery document states and has not been seen
-  in a token: a real token that names another refuses every sign-in.
+  `https://auth.openai.com`, which equals the `issuer` the discovery document states and the issuer
+  OpenAI's documentation gives, and is recorded from no token: a real token that names another refuses every
+  sign-in.
 - That each name of the compiled list ([CHATGPT-9](#CHATGPT-9)) is a model the service takes, and in
   particular the names ending in `-fast`, which are names of the program the list is read from.
 - What the three session headers do for prompt-cache affinity, and that there is no native compaction and no
@@ -1565,12 +1666,14 @@ code or a reply to a request that carried one:
   `subscription_sharing_route_not_supported`, `subscription_sharing_invalid_user`,
   `chatpass_v2_scope_not_authorized` and `chatpass_v2_invalid_authorization_context`, and where they are
   written: `error.code` in the body of a refusal, as opencode's tests have it for a 429,
-  `response.error.code` in a `response.failed` event and `code` in an `error` event.
+  `response.error.code` in a `response.failed` event and `code` in an `error` event. OpenAI's documentation
+  lists the seven with their statuses, and no documentation states `code` in an `error` event.
 
-**Not in any source this spec was written from:**
+**Not observed, and stated by no source in full:**
 
 - What a refused refresh and a refused access token return: the status and the error code. The renewal reads
-  `invalid_grant` at a 400 or 401 as ending the sign-in, from RFC 6749 and not from this server.
+  `invalid_grant` at a 400 or 401 as ending the sign-in, from RFC 6749. OpenAI's documentation also lists
+  `invalid_grant` for a refresh, and it has not been observed from this server.
 - Whether a request to the token endpoint is ever answered with a redirect.
 - What an account with no subscription reaches.
 - Whether an access token minted before a revocation survives it, and whether the service issues a
@@ -1718,12 +1821,29 @@ These are the places where another spec states something about this service, eac
   on a model that reads no level was begun at the level chosen all the same, and the account is sent it.
 - A skill's file that asks for a level changes nothing where the account answers, in every front end, and
   the desktop is told so in the notice a skill gets although it offers no way to choose a level.
-- The codes that say the account has reached its usage limit or may not be used this way, and the fields of a
-  refusal and of a failed event that hold them, are read from another program's source and have not been seen
-  from this service. A refusal that says it in another code or another field is handled as its status: a 401
-  is replaced once, a 429 or a 5xx is asked for again, and the turn ends with the sentence of that status.
-  The two codes that program retries (`subscription_sharing_usage_unavailable` and
-  `subscription_sharing_user_unavailable`) are not in the list and are handled the same way.
+- The codes that say the account has reached its usage limit or may not be used this way, and the fields of
+  a refusal and of a failed event that hold them, are read from another program's source, are listed with
+  their statuses in OpenAI's documentation, and have not been seen from this service. A refusal in a reply
+  that says it in another code or another field is handled as its status: a 401 is replaced once, a 429 or a
+  5xx is asked for again, and the turn ends with the sentence of that status. The two codes that program
+  retries (`subscription_sharing_usage_unavailable` and `subscription_sharing_user_unavailable`) are not in
+  the list. OpenAI's documentation lists both with the status 503 and a retry under a bounded backoff. A 503
+  reply is sent again, up to three requests in all with a pause that doubles from one second. A failed event
+  of a stream answered 200 has no status, and either code in one is read as an unknown failure, which is not
+  asked for again and is reported in the incomplete category with nothing of what the service said. The
+  documentation says a usage-limit error can arrive that way after streaming has begun. It names no `error`
+  event, so the `code` this program reads in one is stated by no documentation.
+- "Errors and recovery" gives six of the seven codes different recoveries. For
+  `subscription_sharing_unsupported_capability` it says to inspect `error.param`, remove the unsupported
+  input, tool, execution feature, model or service-tier override, and not retry the same body. For
+  `subscription_sharing_route_not_supported` it says to check the exact HTTP method and endpoint. For
+  `subscription_sharing_invalid_user` it says to keep the request ID and diagnose the credential failure,
+  and to ask the person to sign in again after a confirmed revocation or a terminal refresh error. For
+  `subscription_sharing_user_not_eligible` it says to explain the restriction and not to repeat the same
+  request or loop through OAuth. For the two `chatpass_v2` codes it says to check the client and grant
+  configuration and not to retry or change billing. [CHATGPT-8](#CHATGPT-8) gives the six one sentence, that
+  the account may not be used this way, which names no cause, does not name signing in again as the remedy
+  and shows nothing from `error.param`.
 - The sentences of [CHATGPT-8](#CHATGPT-8) are written in two sets in the catalog: the terminal's, which the
   one-shot run and the goal and manifest runs say too, and the window's. A change to what a failure says is
   made in both, and no test holds the wording equal since the two differ in form. A test holds that the
@@ -1732,11 +1852,22 @@ These are the places where another spec states something about this service, eac
   own. The eleven names are listed in `ui/docs/phase-0-rpc-protocol.md`.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
-  the dead refresh token and is told the refresh failed, until the person signs in again.
+  the dead refresh token and is told the refresh failed, until the person signs in again. OpenAI's
+  documentation lists `invalid_grant` on refresh and five more codes for an unusable refresh token:
+  `invalid_refresh_token`, `token_expired`, `refresh_token_expired`, `refresh_token_invalidated` and
+  `refresh_token_reused`. The renewal reads only `invalid_grant`, and only at a 400 or 401, which the
+  documentation gives for no code. A refresh refused with any of the five, or with `invalid_grant` at another
+  status, is the case this entry describes. The documentation lists `invalid_client` for a fault in the
+  client's configuration, which the renewal treats as any other refusal.
 - A code exchange whose reply holds no ID token ends the sign-in, so a server that stopped sending one, or
   that named another issuer, would refuse every sign-in until a release changes the check. The expiry is
   compared with the clock with no allowance, so a clock running ahead of the server's by more than the
-  token's lifetime refuses the sign-in.
+  token's lifetime refuses the sign-in. The example in OpenAI's documentation that verifies an ID token allows
+  a clock tolerance of five seconds.
+- The example in OpenAI's documentation that verifies an ID token requires the claims `sub`, `exp` and `iat`
+  to be present, and refreshes the key set when it meets a `kid` it does not hold. The verifier of
+  [CHATGPT-5](#CHATGPT-5) reads no `iat` and fetches the key set once per sign-in, so an ID token whose
+  `kid` the set does not hold is refused.
 - The binary `cargo test -p bravebot-cli` builds, and one `cargo build --all-targets` builds, is a debug
   build with the `test-hosts` feature, so in it `BRAVEBOT_TEST_CHATGPT_STAND_IN` sends the sign-in and its
   tokens where it says. A person who runs that binary from `target/debug` as their own carries the seam.
@@ -1753,6 +1884,47 @@ These are the places where another spec states something about this service, eac
   Nobody has built one. The guards run with the Rust checks. A change to a file they name and count lines in
   (`contrib/affected-checks.py` lists them) runs those checks whatever else it is, and a command added to a
   file they only scan, in a change that touches no Rust, is found when the Rust checks next run.
+- A request to the account carries none of the fifteen fields OpenAI's documentation lists to omit. It is
+  built from `model`, `input`, `stream` and `store`, with `instructions`, `tools`, `tool_choice` and
+  `reasoning` where they apply. The request type can carry `max_output_tokens` for another service where a
+  ceiling is stated for the model, and none is stated for the account: its provider names no model and holds
+  no budget, and [CHATGPT-9](#CHATGPT-9) reads no output ceiling from the `chatgpt` entry. The list from a
+  sign-in above records `max_output_tokens` accepted, so the documentation and that list differ on it, and a
+  person cannot set a ceiling for a model of the account whichever is right.
+  [BACKEND-41](backends.md#BACKEND-41) says one exported figure states a ceiling for every model this build
+  reaches. The figure does not reach the account's models, since it is applied to the providers a `provider`
+  block lists and to Bedrock and the account's provider is built with none, so the account is an exception
+  that [backends.md](backends.md) does not state.
+- OpenAI's documentation says to keep the issued client and the host identifier for an account across a
+  sign-out and reuse them at the next sign-in, to send an ID token as `id_token_hint` only while one is
+  retained from a previous sign-in and not after a sign-out, that the saved email may be sent as
+  `login_hint`, and to confirm that a returning account's new ID token names the account selected. This
+  program keeps the client and the host identifier in the sign-in file and presents both at a sign-in over a
+  stored one ([CHATGPT-3](#CHATGPT-3)). `auth logout chatgpt` removes the file ([CHATGPT-11](#CHATGPT-11)),
+  so the next sign-in generates a new host identifier and asks OpenAI to register a client. It stores no ID
+  token and no subject ([CHATGPT-6](#CHATGPT-6), [CHATGPT-5](#CHATGPT-5)), sends neither hint, and makes no
+  comparison of a returning account's ID token with an earlier one. Whether OpenAI limits the clients
+  registered for one host identifier is not stated.
+- OpenAI's documentation describes a revocation call a client makes at sign-out, which revokes the refresh
+  token. This program makes no such call. `auth logout chatgpt` removes the copy here and ends nothing at
+  OpenAI ([CHATGPT-11](#CHATGPT-11)). [CHATGPT-6](#CHATGPT-6) records two ways to end the credential at
+  OpenAI, and the program does neither for the person. The documented revocation call is a third way that
+  CHATGPT-6 does not record. The documentation says nothing of an access token already issued, so whether
+  one survives a revocation is not observed.
+- Four more statements of the documentation describe what this program does otherwise. "Errors and recovery"
+  says a valid ID token without `chatgpt.tokens.use.direct` is to be kept, with ChatGPT plan usage marked
+  disabled and a way offered to enable it or to use another billing path. A reply without the scope ends the
+  sign-in before anything is stored, and the command ends with a sentence that names signing in again and
+  the `openai` gateway ([CHATGPT-8](#CHATGPT-8)). For `subscription_sharing_usage_limit_exceeded` the page
+  says not to assume the whole plan is empty or to infer a reset time, since an app-specific limit can also
+  apply, and to link to ChatGPT settings, Usage. This program's sentence says the account has reached its
+  usage limit, gives a wait only where a 429 reply asked for one, and links to no usage page. "Preview
+  limitations" says to group function and custom tools in namespaces or supply them as `additional_tools`
+  input items. This program sends each tool as a flat `function` object in `tools`, and the list from a
+  sign-in above records a turn that calls a function answered 200 on the two models tried. The
+  documentation's example credential record keeps `email`, `scopes` and the ID token among other fields, and
+  this program's sign-in file holds a version, the two tokens, the expiry, the client and the host
+  identifier and no other field ([CHATGPT-6](#CHATGPT-6)).
 - Whether a third-party program may use a subscription this way is not this spec's to settle
   ([Decisions left open](#decisions-left-open)). The design assumes a person is allowed to, and an answer of
   no ends it.
