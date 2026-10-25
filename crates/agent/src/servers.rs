@@ -1610,7 +1610,7 @@ pub fn record(
     approvals.approve(alias, declaration.digest());
     approvals.keep_only(declarations);
     let path = mcp::approvals_file(directory);
-    crate::mcp::replace(&path, approvals.to_text()).map_err(|error| {
+    crate::home::replace(&path, approvals.to_text()).map_err(|error| {
         t!(
             mcp_not_written,
             path = path.display().to_string(),
@@ -1646,7 +1646,7 @@ fn keep(
     }
     if let Some(project) = project {
         let recorded = projects.add(project)
-            && crate::mcp::replace(&mcp::projects_file(directory), projects.to_text()).is_ok();
+            && crate::home::replace(&mcp::projects_file(directory), projects.to_text()).is_ok();
         if !recorded {
             unkept.push(t!(
                 servers_project_not_kept,

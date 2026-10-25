@@ -121,6 +121,58 @@ fn a_recorded_choice_is_readable_only_by_its_owner() {
     assert_eq!(scratch.mode_of(""), 0o700, "the directory holding them");
 }
 
+/// A choice that cannot be written, because something else stands where its file belongs, must not
+/// leave the file it staged beside it. A directory in the way makes the rename fail after the
+/// staged file was written, which is the case a fixed `<name>.tmp` left behind for good.
+#[test]
+fn a_choice_that_cannot_be_written_leaves_no_staged_file() {
+    let scratch = Scratch::new("blocked");
+    let dir = scratch.own_directory();
+    for file in [
+        "model",
+        "theme",
+        "editor-mode",
+        "vetting",
+        "panel",
+        "panel-width",
+        "caffeinate",
+    ] {
+        std::fs::create_dir_all(dir.join(file).join("held")).expect("block the name");
+    }
+
+    store::save_model("claude-sonnet-4-5");
+    store::save_theme("nord");
+    store::save_editing(bravebot_tui::vim::Editing::Vi.as_str());
+    store::save_vetting(true);
+    store::save_panel(true);
+    store::save_panel_width(40);
+    store::save_caffeinate_confirmed();
+
+    let mut left: Vec<String> = std::fs::read_dir(&dir)
+        .expect("listed")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        [
+            "caffeinate",
+            "editor-mode",
+            "model",
+            "panel",
+            "panel-width",
+            "theme",
+            "vetting"
+        ]
+    );
+}
+
 /// A machine that has already run an older build has the directory and its files at whatever the
 /// umask gave them. Creating a directory that is already there does not touch its mode, so
 /// without tightening, the machines that most need this fix would never get it.

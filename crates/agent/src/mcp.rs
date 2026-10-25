@@ -752,7 +752,7 @@ impl Session {
         if !standing.add(alias, tool, &project) {
             return Err(std::io::Error::other(t!(mcp_call_path_not_one_line)));
         }
-        replace(&records::tools_file(directory), standing.to_text())
+        crate::home::replace(&records::tools_file(directory), standing.to_text())
     }
 
     /// The server this session reached under `alias`.
@@ -961,11 +961,11 @@ pub fn record_a_move(
     declarations.insert(alias, to);
     approvals.keep_only(&declarations);
     approvals.approve(alias, to.digest());
-    replace(
+    crate::home::replace(
         &records::declarations_file(directory),
         declarations.to_text(),
     )
-    .and_then(|()| replace(&records::approvals_file(directory), approvals.to_text()))
+    .and_then(|()| crate::home::replace(&records::approvals_file(directory), approvals.to_text()))
     .map_err(|error| Unmoved::NotWritten(error.to_string()))
 }
 
@@ -1043,26 +1043,6 @@ fn listed(alias: &str, text: &str) -> Vec<ListedTool> {
             description: drawn.description,
         })
         .collect()
-}
-
-/// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
-/// file as it was.
-/// Write a record whole, through a file of its own so a reader never sees half of it.
-///
-/// The temporary file is named for this process and this write, since two sessions answering at
-/// once would otherwise write into one file and rename whatever the pair of them left there.
-pub fn replace(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<()> {
-    static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(format!(".{}.{write}.tmp", std::process::id()));
-    let temporary = PathBuf::from(temporary);
-    let written = crate::home::write_file(&temporary, text.as_ref())
-        .and_then(|()| std::fs::rename(&temporary, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    written
 }
 
 /// Why a record read to be written back was left as it is.

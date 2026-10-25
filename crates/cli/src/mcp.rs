@@ -1584,7 +1584,7 @@ fn save(
 /// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
 /// file as it was rather than half of it.
 pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
-    bravebot_agent::mcp::replace(path, text).map_err(|error| {
+    bravebot_agent::home::replace(path, text).map_err(|error| {
         (
             Ending::Failed,
             t!(

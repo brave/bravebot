@@ -375,10 +375,7 @@ fn write_history(dir: &std::path::Path, entries: &[Entry]) {
         .map(|entry| format!("{}\n", encode(entry)))
         .collect();
 
-    let temporary = dir.join("history.tmp");
-    if bravebot_agent::home::write_file(&temporary, body.as_bytes()).is_ok() {
-        let _ = std::fs::rename(&temporary, dir.join(HISTORY_FILE));
-    }
+    let _ = bravebot_agent::home::replace(&dir.join(HISTORY_FILE), body.as_bytes());
 }
 
 /// The model the user chose, or `None` if they never have.
@@ -421,10 +418,7 @@ pub fn save_model(model: &str) {
         return;
     }
 
-    let temporary = dir.join("model.tmp");
-    if bravebot_agent::home::write_file(&temporary, format!("{model}\n").as_bytes()).is_ok() {
-        let _ = std::fs::rename(&temporary, dir.join(MODEL_FILE));
-    }
+    let _ = bravebot_agent::home::replace(&dir.join(MODEL_FILE), format!("{model}\n").as_bytes());
 }
 
 /// The theme the user chose, or `None` if they never have.
@@ -460,10 +454,7 @@ pub fn save_theme(theme: &str) {
         return;
     }
 
-    let temporary = dir.join("theme.tmp");
-    if bravebot_agent::home::write_file(&temporary, format!("{theme}\n").as_bytes()).is_ok() {
-        let _ = std::fs::rename(&temporary, dir.join(THEME_FILE));
-    }
+    let _ = bravebot_agent::home::replace(&dir.join(THEME_FILE), format!("{theme}\n").as_bytes());
 }
 
 /// The effort level the user chose, or `None` if they never have.
@@ -536,12 +527,10 @@ pub fn save_effort(effort: Option<Effort>) {
         return;
     };
 
-    let temporary = dir.join("effort.tmp");
-    if bravebot_agent::home::write_file(&temporary, format!("{}\n", effort.as_str()).as_bytes())
-        .is_ok()
-    {
-        let _ = std::fs::rename(&temporary, dir.join(EFFORT_FILE));
-    }
+    let _ = bravebot_agent::home::replace(
+        &dir.join(EFFORT_FILE),
+        format!("{}\n", effort.as_str()).as_bytes(),
+    );
 }
 
 /// The word naming the style of editing the user chose, or `None` if they never chose one.
@@ -587,10 +576,7 @@ pub fn save_editing(word: &str) {
         return;
     }
 
-    let temporary = dir.join("editor-mode.tmp");
-    if bravebot_agent::home::write_file(&temporary, format!("{word}\n").as_bytes()).is_ok() {
-        let _ = std::fs::rename(&temporary, dir.join(EDITING_FILE));
-    }
+    let _ = bravebot_agent::home::replace(&dir.join(EDITING_FILE), format!("{word}\n").as_bytes());
 }
 
 /// The language tag the person chose with `/language`, or `None` if they never have.
@@ -655,9 +641,7 @@ pub fn save_language(tag: Option<&str>) -> bool {
         };
     };
 
-    let temporary = dir.join("language.tmp");
-    bravebot_agent::home::write_file(&temporary, format!("{tag}\n").as_bytes()).is_ok()
-        && std::fs::rename(&temporary, dir.join(LANGUAGE_FILE)).is_ok()
+    bravebot_agent::home::replace(&dir.join(LANGUAGE_FILE), format!("{tag}\n").as_bytes()).is_ok()
 }
 
 /// The standing answer about auto-vetting, or `None` where nobody has recorded one.
@@ -707,10 +691,7 @@ pub fn save_vetting(auto: bool) {
         true => "on",
         false => "off",
     };
-    let temporary = dir.join("vetting.tmp");
-    if bravebot_agent::home::write_file(&temporary, format!("{word}\n").as_bytes()).is_ok() {
-        let _ = std::fs::rename(&temporary, dir.join(VETTING_FILE));
-    }
+    let _ = bravebot_agent::home::replace(&dir.join(VETTING_FILE), format!("{word}\n").as_bytes());
 }
 
 /// Whether the person last left the info panel open, or `None` where they never pressed its key.
@@ -750,10 +731,7 @@ pub fn save_panel(open: bool) {
         true => "open",
         false => "closed",
     };
-    let temporary = dir.join("panel.tmp");
-    if bravebot_agent::home::write_file(&temporary, format!("{word}\n").as_bytes()).is_ok() {
-        let _ = std::fs::rename(&temporary, dir.join(PANEL_FILE));
-    }
+    let _ = bravebot_agent::home::replace(&dir.join(PANEL_FILE), format!("{word}\n").as_bytes());
 }
 
 /// The width the person last dragged the info panel to, or `None` where they never did.
@@ -790,10 +768,8 @@ pub fn save_panel_width(width: u16) {
         return;
     }
 
-    let temporary = dir.join("panel-width.tmp");
-    if bravebot_agent::home::write_file(&temporary, format!("{width}\n").as_bytes()).is_ok() {
-        let _ = std::fs::rename(&temporary, dir.join(PANEL_WIDTH_FILE));
-    }
+    let _ =
+        bravebot_agent::home::replace(&dir.join(PANEL_WIDTH_FILE), format!("{width}\n").as_bytes());
 }
 
 /// Whether the person has agreed to `/caffeinate` before, so it turns on without the explanation.
@@ -824,10 +800,7 @@ pub fn save_caffeinate_confirmed() {
     if bravebot_agent::home::create_directory(&dir).is_err() {
         return;
     }
-    let temporary = dir.join("caffeinate.tmp");
-    if bravebot_agent::home::write_file(&temporary, b"confirmed\n").is_ok() {
-        let _ = std::fs::rename(&temporary, dir.join(CAFFEINATE_FILE));
-    }
+    let _ = bravebot_agent::home::replace(&dir.join(CAFFEINATE_FILE), b"confirmed\n");
 }
 
 /// Encode a prompt as one line.
