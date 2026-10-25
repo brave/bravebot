@@ -34,6 +34,11 @@ A repeat run does not read what an earlier run decided. `docs/maintenance-review
 verdict, and a candidate in it is left out until a file it names changes, so each run reaches the
 candidates past every lane's cap. `--fresh` reads them again.
 
+[kept-in-place.md](kept-in-place.md) records what an earlier split of a file said stays where it is.
+`prepare` adds the entry for a candidate's file to that candidate's lines in the `size`,
+`complexity` and `coupling` prompts, and the reviewer calls `keep` anything an entry covers unless
+it can say what changed since. When a split issue says something stays, add an entry.
+
 [smells.md](smells.md) says which smell each lane covers, which a compiler or clippy lint already
 refuses, and which has no tool.
 

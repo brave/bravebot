@@ -1955,22 +1955,55 @@ LANE_NOTES = {
 }
 
 
-def render_candidate(candidate):
+KEPT_IN_PLACE = Path("agents/skills/maintenance/kept-in-place.md")
+
+# The lanes whose candidates are code a reviewer may propose to move or split.
+KEPT_LANES = ("size", "complexity", "coupling")
+
+KEPT_RULE = """\
+`kept in place` lists what an earlier split of the candidate's file said stays where it is, and why.
+Those sentences are in closed issues you cannot see. Call `keep` anything an entry covers, unless
+you can say what changed since the issue was written, and say it in the reason.
+
+"""
+
+
+def read_kept(root):
+    """The entries of `kept-in-place.md` in `root`, as `{path: [text, ...]}`. A heading is `## path`;
+    its text runs to the next heading. Where the file is absent there are none."""
+    try:
+        text = (Path(root) / KEPT_IN_PLACE).read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    entries = {}
+    for section in re.split(r"^## +", text, flags=re.MULTILINE)[1:]:
+        heading, _, body = section.partition("\n")
+        body = " ".join(body.split())
+        if heading.strip() and body:
+            entries.setdefault(heading.strip().strip("`"), []).append(body)
+    return entries
+
+
+def render_candidate(candidate, kept=None):
     lines = [f"- **{candidate['id']}** `{candidate['path']}:{candidate['line']}` {candidate['detail']}"]
     for name in ("specs", "guards"):
         if candidate.get(name):
             lines.append(f"  - {name}: " + ", ".join(f"`{v}`" for v in candidate[name]))
+    for entry in (kept or {}).get(candidate["path"], []):
+        lines.append(f"  - kept in place: {entry}")
     return "\n".join(lines)
 
 
-def build_prompt(lane, chunk, results_file, reading):
+def build_prompt(lane, chunk, results_file, reading, kept=None):
+    kept = kept if lane in KEPT_LANES else {}
+    told = any(c["path"] in kept for c in chunk)
     return PROMPT.format(
         lane=lane,
         first=chunk[0]["id"],
         last=chunk[-1]["id"],
         question=QUESTION[lane],
-        candidates="\n".join(render_candidate(c) for c in chunk),
-        lane_notes=LANE_NOTES[lane],
+        candidates="\n".join(render_candidate(c, kept) for c in chunk),
+        lane_notes=(KEPT_RULE if told else "") + LANE_NOTES[lane],
         results_file=results_file,
         areas=", ".join(f"`{a}`" for a in (*AREAS, INFRASTRUCTURE)),
         reading=reading,
@@ -2037,6 +2070,7 @@ def prepare(root, lanes, prefixes, work_dir, **options):
     problem = make_snapshot(root, commit, work_dir / "tree") if commit is not None else None
     tree = work_dir / "tree" if commit is not None and problem is None else None
     reading = reading_for(root, tree, commit)
+    kept = read_kept(root)
     manifest = {
         "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "root": str(root),
@@ -2069,7 +2103,7 @@ def prepare(root, lanes, prefixes, work_dir, **options):
             number = start // size + 1
             prompt_file = work_dir / f"{lane}-{number}_prompt.md"
             results_file = work_dir / f"{lane}-{number}_results.json"
-            prompt_file.write_text(build_prompt(lane, chunk, results_file, reading), encoding="utf-8")
+            prompt_file.write_text(build_prompt(lane, chunk, results_file, reading, kept), encoding="utf-8")
             prompts.append(
                 {
                     "prompt_file": str(prompt_file),
