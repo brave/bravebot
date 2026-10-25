@@ -3812,6 +3812,19 @@ def test_a_mark_is_one_start_with_a_reason():
             str([one["summary"] for one in found]),
         )
 
+    for name in ("testutil.rs", "test_support.rs", "helpers_tests.rs"):
+        found = audit_starts(
+            {
+                "clippy.toml": LISTED,
+                f"crates/cli/src/{name}": "fn go() {}\n#![allow(clippy::disallowed_methods)]\n",
+            }
+        )
+        check(
+            f"a crate-wide allow in {name} is still too wide, since only a directory exempts it",
+            "process-start-mark-too-wide" in kinds(found),
+            str(kinds(found)),
+        )
+
     found = marks("#![allow(clippy::disallowed_methods)]")
     check(
         "a crate-wide allow with no reason is both too wide and unexplained",

@@ -1103,7 +1103,11 @@ def start_mark_findings(sources, marked):
             number = text.count("\n", 0, around[0]) + 1
             shown = [f"{path}:{number} {' '.join(attribute.split())[:160]}"]
             inner = attribute.startswith("#![")
-            test_only = bool(TEST_ONLY.match(attribute)) or is_test_path(path)
+            test_only = (
+                bool(TEST_ONLY.match(attribute))
+                or "tests" in path.parts
+                or "test-support" in path.parts
+            )
             rest = text[around[1] :]
             while following := re.match(r"\s*#\[[^\]]*\]", rest):
                 rest = rest[following.end() :]
