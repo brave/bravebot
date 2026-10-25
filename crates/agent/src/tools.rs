@@ -7883,6 +7883,108 @@ fn requests_refusals(
     causes
 }
 
+/// The checks a compiled `run` plan meets before the person is asked about it, in the order a
+/// refusal is owed: a name Windows reads as another file, a redirection leaving the workspace, a
+/// write the sandbox mode forbids, the rules written in advance, and then those rules again under
+/// the names a redirection's files are held by (PERM-7).
+///
+/// Hands back whether a redirection may leave the workspace on this line, which the run checks
+/// again at each open. A refusal comes back as the result of the call. Everything checked is the
+/// plan's own structure and the session's settings; no output of a program is read.
+fn check_the_plan_before_asking<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    plan: &bravebot_core::command::Plan,
+    unconfined: bool,
+) -> Result<bool, Box<Produced>> {
+    // A read as well as a write. The rules below are matched against the spelling, and a name
+    // Windows reads as another file would have them judge one file while the run opens the other.
+    // Before the confinement, which cannot say where a stream or a device lands. `> NUL` is how
+    // output is discarded on Windows, so a refused write names the one spelling a line may use for
+    // that; a read has none, since `/dev/null` discards only output.
+    let discard = ". If this was meant to discard output, redirect it to /dev/null instead";
+    for (paths, hint) in [(&plan.writes, discard), (&plan.reads, "")] {
+        for path in paths {
+            if let Err(misleading) = tools.workspace.refuse_misleading(path) {
+                let target = path.display().to_string();
+                return Err(Box::new(Produced::problem(format!(
+                    "refused: {}{hint}",
+                    workspace_failure(policy, "run", "command", &misleading, &target)
+                ))));
+            }
+        }
+    }
+
+    // A redirection names a file the run opens itself, so the confinement every other write goes
+    // through is applied here to the path, and again immediately before the run opens it. Not for a
+    // line whose programs start with no profile: there is nothing for the target to get past, and
+    // the person is shown the file before the line runs (CMDLINE-5).
+    let reaches_anywhere = redirections_may_leave_the_workspace(unconfined, tools);
+    for path in &plan.writes {
+        if !reaches_anywhere && let Err(escape) = tools.workspace.confines(path) {
+            let target = path.display().to_string();
+            let way_out = match escape {
+                crate::workspace::WorkspaceError::Escapes { .. } => {
+                    unconfined_way_out(policy, tools)
+                }
+                _ => "",
+            };
+            return Err(Box::new(Produced::problem(format!(
+                "refused: {}{way_out}",
+                workspace_failure(policy, "run", "command", &escape, &target)
+            ))));
+        }
+    }
+    // Every path the loop above lets through is in a directory the session was opened on, and this
+    // process opens it rather than the confined stage, so the profile `read-only` starts the stage
+    // under does not hold it back (SANDBOX-22). Refused here, before anybody is asked, as a file
+    // tool's write is. The null device is not in the write set.
+    if !plan.writes.is_empty() && sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
+        policy.refuse_write_in_sandbox("run", tools.sandbox.name());
+        return Err(Box::new(Produced::problem(
+            "refused: the sandbox mode is read-only, and this line redirects output into a file, \
+             which would write the session's files; nothing ran and nothing was asked. Leave the \
+             redirection out, redirect to /dev/null to discard the output, or have a program open \
+             the file itself, where the sandbox profile decides whether it may.",
+        )));
+    }
+
+    // Before the person is asked. A rule refusing something is a statement that it does not run,
+    // and there is nothing to show or approve once it has been made.
+    if let Err(denial) = policy.before_plan_rules(plan) {
+        return Err(Box::new(refused_by_a_rule(&denial)));
+    }
+
+    // The plan holds a redirection's target as an absolute path, and a project-relative rule such
+    // as `Edit(.env)` does not cover one. Asked again under the name the file tools hold the file
+    // by, and under the name it lands on, so the rule refuses the redirection as it refuses the
+    // same file named in a call (PERM-7).
+    for (paths, purpose) in [
+        (&plan.writes, Purpose::Effect),
+        (&plan.reads, Purpose::Read),
+    ] {
+        for path in paths {
+            let named = tools.workspace.relative_display(path);
+            if let Err(refusal) = refuse_denied_path(policy, tools.workspace, purpose, &named) {
+                return Err(Box::new(Produced::problem(refusal)));
+            }
+            // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
+            // from a `directory`), which no rule's segments match across and which the landing
+            // asked about above does not resolve, so the file's other names are asked about too.
+            for reached in tools.workspace.names_reached(path) {
+                if reached != named
+                    && let Err(refusal) =
+                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &named)
+                {
+                    return Err(Box::new(Produced::problem(refusal)));
+                }
+            }
+        }
+    }
+
+    Ok(reaches_anywhere)
+}
+
 /// What a `run` call asks for beyond the command line, read from its arguments.
 struct RunCall {
     /// The deadline, clamped to the bounds the turn holds.
@@ -8373,90 +8475,10 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         Err(crate::cmdline::Stopped::Rule(denial)) => return refused_by_a_rule(&denial),
     };
 
-    // A read as well as a write. The rules below are matched against the spelling, and a name
-    // Windows reads as another file would have them judge one file while the run opens the other.
-    // Before the confinement, which cannot say where a stream or a device lands. `> NUL` is how
-    // output is discarded on Windows, so a refused write names the one spelling a line may use for
-    // that; a read has none, since `/dev/null` discards only output.
-    let discard = ". If this was meant to discard output, redirect it to /dev/null instead";
-    for (paths, hint) in [(&plan.writes, discard), (&plan.reads, "")] {
-        for path in paths {
-            if let Err(misleading) = tools.workspace.refuse_misleading(path) {
-                let target = path.display().to_string();
-                return Produced::problem(format!(
-                    "refused: {}{hint}",
-                    workspace_failure(policy, "run", "command", &misleading, &target)
-                ));
-            }
-        }
-    }
-
-    // A redirection names a file the run opens itself, so the confinement every other write goes
-    // through is applied here to the path, and again immediately before the run opens it. Not for a
-    // line whose programs start with no profile: there is nothing for the target to get past, and
-    // the person is shown the file before the line runs (CMDLINE-5).
-    let reaches_anywhere = redirections_may_leave_the_workspace(unconfined, tools);
-    for path in &plan.writes {
-        if !reaches_anywhere && let Err(escape) = tools.workspace.confines(path) {
-            let target = path.display().to_string();
-            let way_out = match escape {
-                crate::workspace::WorkspaceError::Escapes { .. } => {
-                    unconfined_way_out(policy, tools)
-                }
-                _ => "",
-            };
-            return Produced::problem(format!(
-                "refused: {}{way_out}",
-                workspace_failure(policy, "run", "command", &escape, &target)
-            ));
-        }
-    }
-    // Every path the loop above lets through is in a directory the session was opened on, and this
-    // process opens it rather than the confined stage, so the profile `read-only` starts the stage
-    // under does not hold it back (SANDBOX-22). Refused here, before anybody is asked, as a file
-    // tool's write is. The null device is not in the write set.
-    if !plan.writes.is_empty() && sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
-        policy.refuse_write_in_sandbox("run", tools.sandbox.name());
-        return Produced::problem(
-            "refused: the sandbox mode is read-only, and this line redirects output into a file, \
-             which would write the session's files; nothing ran and nothing was asked. Leave the \
-             redirection out, redirect to /dev/null to discard the output, or have a program open \
-             the file itself, where the sandbox profile decides whether it may.",
-        );
-    }
-
-    // Before the person is asked. A rule refusing something is a statement that it does not run,
-    // and there is nothing to show or approve once it has been made.
-    if let Err(denial) = policy.before_plan_rules(&plan) {
-        return refused_by_a_rule(&denial);
-    }
-
-    // The plan holds a redirection's target as an absolute path, and a project-relative rule such
-    // as `Edit(.env)` does not cover one. Asked again under the name the file tools hold the file
-    // by, and under the name it lands on, so the rule refuses the redirection as it refuses the
-    // same file named in a call (PERM-7).
-    for (paths, purpose) in [
-        (&plan.writes, Purpose::Effect),
-        (&plan.reads, Purpose::Read),
-    ] {
-        for path in paths {
-            let named = tools.workspace.relative_display(path);
-            if let Err(refusal) = refuse_denied_path(policy, tools.workspace, purpose, &named) {
-                return Produced::problem(refusal);
-            }
-            // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
-            // from a `directory`), which no rule's segments match across and which the landing
-            // asked about above does not resolve, so the file's other names are asked about too.
-            for reached in tools.workspace.names_reached(path) {
-                if reached != named
-                    && let Err(refusal) =
-                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &named)
-                {
-                    return Produced::problem(refusal);
-                }
-            }
-        }
-    }
+    let reaches_anywhere = match check_the_plan_before_asking(policy, tools, &plan, unconfined) {
+        Ok(reaches_anywhere) => reaches_anywhere,
+        Err(produced) => return *produced,
+    };
 
     // What the planner named for standard input, turned into bytes and a label before anybody is
     // asked. Three gates, as a write's `contents_ref` has: the name is accepted as a reference
