@@ -683,7 +683,7 @@ test('Send is allowed once the trust question has been answered', () => {
 })
 
 test('submit and the run-plan callback list every field they test', () => {
-  const source = readFileSync('src/renderer/App.tsx', 'utf8')
+  const source = readFileSync('src/renderer/use-turn.ts', 'utf8')
   for (const name of ['submit', 'submitPlan']) {
     const body = source.slice(source.indexOf(`const ${name} = useCallback(`))
     const deps = body.slice(0, body.indexOf('\n  }, [')+ 200).match(/\n  \}, \[([^\]]*)\]/)[1]
@@ -714,6 +714,20 @@ test('a new session starts with the nine starting values and keeps every field i
   for (const [key, value] of Object.entries(fields)) assert.deepEqual(live[key], value, `${key} lands unchanged`)
   assert.notEqual(newLive(fields).turns, live.turns, 'two sessions do not share one turns object')
   assert.notEqual(newLive(fields).quarantine, live.quarantine, 'or one quarantine list')
+})
+
+test('settledBy lands each field the bridge settled unchanged, and gives null for an absent optional', () => {
+  const { settledBy } = load('src/renderer/live.ts')
+  const kept = { at: 5, path: '/d', shownPath: '/d' }
+  const rules = [{ path: '/d', integrity: 'high' }]
+  assert.deepEqual(
+    settledBy({ remembered: kept, keeping: '/k', shownKeeping: '~/k', confinedLines: 'also', autoVetting: true, permissionMode: 'plan', sandboxMode: 'off', settingsRules: rules }),
+    { keepingTrust: '/k', shownKeepingTrust: '~/k', confinedLinesNotice: 'also', trustRemembered: kept, autoVetting: true, permissionMode: 'plan', sandboxMode: 'off', rules },
+  )
+  assert.deepEqual(
+    settledBy({ autoVetting: false, permissionMode: 'ask', sandboxMode: 'on' }),
+    { keepingTrust: null, shownKeepingTrust: null, confinedLinesNotice: null, trustRemembered: null, autoVetting: false, permissionMode: 'ask', sandboxMode: 'on', rules: null },
+  )
 })
 
 test('a session is keyed by its record id once it has one, and by its draft or handle before', () => {

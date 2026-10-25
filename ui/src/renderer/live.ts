@@ -17,7 +17,7 @@ import { conversationKey } from '../shared/experience'
 import { type Fork, forkOf } from '../shared/forks'
 import type { Entry } from './transcript'
 import type { Turns } from './turn-details'
-import type { AgentEntry } from '../shared/protocol'
+import type { AgentEntry, SessionSettled } from '../shared/protocol'
 import { conversationPreferences, setConversation } from './experience'
 
 /** A message waiting for the turn to end, and the grants it was written with. */
@@ -228,6 +228,20 @@ export function newLive(fields: Omit<Live, Starting>): Live {
     thinking: '',
     tokens: 0,
     running: false,
+  }
+}
+
+/** What a bridge's answer settles about a session, in the names `Live` holds it under. */
+export function settledBy(answer: SessionSettled) {
+  return {
+    keepingTrust: answer.keeping ?? null,
+    shownKeepingTrust: answer.shownKeeping ?? null,
+    confinedLinesNotice: answer.confinedLines ?? null,
+    trustRemembered: answer.remembered ?? null,
+    autoVetting: answer.autoVetting,
+    permissionMode: answer.permissionMode,
+    sandboxMode: answer.sandboxMode,
+    rules: answer.settingsRules ?? null,
   }
 }
 

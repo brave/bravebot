@@ -223,7 +223,35 @@ export interface RewindPoint {
   gaps: string[]
 }
 
-export interface OpenedSession {
+/**
+ * What a bridge answer says about a session just opened, made or forked, beyond its transcript.
+ *
+ * The same eight fields in all three answers, so a window reads them one way (`settledBy`).
+ */
+export interface SessionSettled {
+  /** The yes that was kept about this directory, where it and not `trust` settled the question (TRUST-23). */
+  remembered?: KeptTrust | null
+  /** Where a yes would be kept, where the question is asked and the answer may be kept. */
+  keeping?: string | null
+  shownKeeping?: string | null
+  /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
+  confinedLines?: string | null
+  /**
+   * Whether a check that finds nothing reads quarantined content to the model with nobody asked.
+   *
+   * Settled by the agent when the session opened and not changed while it is open, so a window
+   * says it once at the top of the transcript and goes on showing it (CHECK-11).
+   */
+  autoVetting: boolean
+  /** Always `ask`: a mode is not read from the record (MODE-10), and a fork opens as any session does (MODE-11). */
+  permissionMode: PermissionMode
+  /** What the settings give a session before its window has chosen: never `off` (SANDBOX-22). */
+  sandboxMode: SandboxMode
+  /** Absent from an older bridge, which read no rules. */
+  settingsRules?: SettingsRules | null
+}
+
+export interface OpenedSession extends SessionSettled {
   /** Absent from an older bridge, which kept no rewind points. Newest first. */
   rewind?: RewindPoint[]
   contextTokens?: number
@@ -234,15 +262,8 @@ export interface OpenedSession {
   context: string
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
-  /** The yes that was kept about this directory, where it and not `trust` settled the question (TRUST-23). */
-  remembered?: KeptTrust | null
-  /** Where a yes would be kept, where the question is asked and the answer may be kept. */
-  keeping?: string | null
   /** `record.directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
   shownDirectory: string
-  shownKeeping?: string | null
-  /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
-  confinedLines?: string | null
   branchNote: string | null
   buildNote: string | null
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
@@ -255,19 +276,6 @@ export interface OpenedSession {
    * said again when this has gone up since it last looked.
    */
   archived: number
-  /**
-   * Whether a check that finds nothing reads quarantined content to the model with nobody asked.
-   *
-   * Settled by the agent when the session opened and not changed while it is open, so a window
-   * says it once at the top of the transcript and goes on showing it (CHECK-11).
-   */
-  autoVetting: boolean
-  /** Always `ask`: a mode is not read from the record (MODE-10). */
-  permissionMode: PermissionMode
-  /** What the settings give a session before its window has chosen: never `off` (SANDBOX-22). */
-  sandboxMode: SandboxMode
-  /** Absent from an older bridge, which read no rules. */
-  settingsRules?: SettingsRules | null
 }
 
 /**
@@ -343,7 +351,7 @@ export interface ModelCatalogue {
  * `prefill` is the prompt it was cut in front of — handed back rather than kept, because the
  * point of forking is to ask it differently.
  */
-export interface ForkedSession {
+export interface ForkedSession extends SessionSettled {
   contextTokens?: number
   session: string
   /** The child's durable id. Real from here, though its record waits for the first turn. */
@@ -356,20 +364,8 @@ export interface ForkedSession {
   turns: number
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
-  remembered?: KeptTrust | null
-  keeping?: string | null
   /** `directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
   shownDirectory: string
-  shownKeeping?: string | null
-  confinedLines?: string | null
-  /** The parent's, as it opened: the child carries on its conversation. */
-  autoVetting: boolean
-  /** Always `ask`, whatever the parent was in: a fork opens as any session does (MODE-11). */
-  permissionMode: PermissionMode
-  /** What the settings give, whatever the parent chose: a fork opens as any session does. */
-  sandboxMode: SandboxMode
-  /** Absent from an older bridge, which read no rules. */
-  settingsRules?: SettingsRules | null
   parent: {
     id: string
     directory: string
