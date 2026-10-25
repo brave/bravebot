@@ -22,8 +22,9 @@
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { SIDEBAR_TAB } from '../../drive-support.mjs'
+import { BOT_NAME, botRow } from '../bots.mjs'
 
-const NAME = 'Harbour Watch'
+const NAME = BOT_NAME
 const PURPOSE =
   'You look after the harbour-lights checkout. Keep an eye on what changes in it, ' +
   'and say what you would want to be told about it a week from now.'
@@ -107,9 +108,7 @@ export default {
     await s.click(form.locator('.bot-save'))
     await page.waitForTimeout(1200)
 
-    const row = page
-      .locator('.bot')
-      .filter({ has: page.locator('.bot-name', { hasText: new RegExp(`^${NAME}$`) }) })
+    const row = botRow(page, NAME)
     if (!(await row.count())) s.skip('the bot was not added to the list')
 
     await s.say('And there it is', 'No conversations yet, a bot writes no session until it has something to say.', 2.6)

@@ -26,13 +26,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { COMPOSER_INPUT, SIDEBAR_TAB } from '../drive-support.mjs'
-
-/// A pattern matching exactly this name, with every metacharacter in it taken literally.
-///
-/// A bot name is display text rather than a pattern, so a name holding a `.` or a bracket would
-/// otherwise match a row it does not name.
-// nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
-const exactly = (name) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+import { exactly } from './bots.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 

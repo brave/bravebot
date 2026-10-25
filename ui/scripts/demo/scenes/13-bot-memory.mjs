@@ -1,4 +1,5 @@
 import { COMPOSER_INPUT, SIDEBAR_TAB } from '../../drive-support.mjs'
+import { BOT_NAME, botRow, openBotsTab } from '../bots.mjs'
 // A bot, working — which is the only way to show the part that matters.
 //
 // `12-bots` can show the tab, the faces and the form without spending a token. It cannot show the
@@ -26,7 +27,6 @@ import { COMPOSER_INPUT, SIDEBAR_TAB } from '../../drive-support.mjs'
 //
 // It leaves a session behind — the bot's own, which is the point of a bot — in the demo world
 // rather than on anybody's machine.
-const NAME = 'Harbour Watch'
 
 export default {
   id: '13-bot-memory',
@@ -36,15 +36,10 @@ export default {
   async run(s) {
     const { page } = s
 
-    const tab = page.locator(SIDEBAR_TAB).nth(1)
-    if (!(await tab.count())) s.skip('this build has no bots tab')
-    await s.click(tab)
-    await page.waitForTimeout(600)
+    await openBotsTab(s)
 
-    const row = page
-      .locator('.bot')
-      .filter({ has: page.locator('.bot-name', { hasText: new RegExp(`^${NAME}$`) }) })
-    if (!(await row.count())) s.skip(`"${NAME}" is not in the list — 12-bots makes it`)
+    const row = botRow(page, BOT_NAME)
+    if (!(await row.count())) s.skip(`"${BOT_NAME}" is not in the list — 12-bots makes it`)
 
     await s.say('Open it', 'Its page lists its conversations and starts a new one from the composer.', 2.4)
     await s.click(row.locator('.bot-open-button'))
@@ -182,7 +177,7 @@ export default {
     await s.shot('13-bot-resumed')
     await s.beat(1.0)
 
-    console.log(`   note: this take left a session on "${NAME}" in the demo world`)
+    console.log(`   note: this take left a session on "${BOT_NAME}" in the demo world`)
   },
 }
 
