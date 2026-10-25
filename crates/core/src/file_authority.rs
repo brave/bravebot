@@ -430,8 +430,8 @@ mod tests {
     /// the trust of the one file written into it.
     ///
     /// Through the effect a live write completes, which is the route every write in the workspace
-    /// takes. `Policy::reconcile_after_write` is the other route, over a snapshot, and is pinned
-    /// in `policy`.
+    /// takes. The rows of TRUST-4's table that agree with the tree are pinned in `policy`, through
+    /// the same effect.
     #[test]
     fn a_completed_write_records_the_file_and_no_directory_above_it() {
         for (tree, written) in [

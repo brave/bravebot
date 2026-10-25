@@ -5738,8 +5738,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// confidentiality that stops content crossing a bridge is not in play here.
     ///
     /// Integrity is untouched, and integrity is what decides what the write means afterwards:
-    /// [`Policy::reconcile_after_write`] records a path holding untrusted bytes as untrusted,
-    /// so nothing written this way can be read back as trusted.
+    /// completing the file effect that writes them records a path holding untrusted bytes as
+    /// untrusted, so nothing written this way can be read back as trusted.
     ///
     /// Never for a network body, a command line, or a message to someone. Those leave, and
     /// [`Policy::before_action`] refusing them is exactly right.
@@ -5799,8 +5799,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The bytes were read out of the workspace's own repository and go back into it, so the
     /// confidentiality that stops content crossing a bridge is not in play. Integrity is untouched:
-    /// the label is the one the checkout's path has, and [`Policy::reconcile_after_write`] records
-    /// the destination as untrusted where the bytes are.
+    /// the label is the one the checkout's path has, and completing the file effect that
+    /// writes them records the destination as untrusted where the bytes are.
     pub fn declassify_checkout_into_workspace(
         &mut self,
         checkout_path: &str,
@@ -6204,46 +6204,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "{}: the user agreed to writes creating a credential in it for this session",
                 file.display()
             ),
-        );
-    }
-
-    /// Reconcile a completed write in a non-overlapping snapshot.
-    ///
-    /// Live filesystem callers must use `FileAuthority::capture` and its effect reservation
-    /// before writing. Calling this after I/O cannot order reads against that write.
-    ///
-    /// The invariant: a path's effective trust equals the integrity of the data in it. A rule
-    /// is recorded only when the write disagrees with the rule already covering the path, so a
-    /// write that agrees with it leaves the map alone.
-    ///
-    /// Untrusted data landing in a trusted tree *must* mark that path untrusted, or reading it
-    /// back would return it as trusted and launder it. That is the loop this closes.
-    ///
-    /// Always the exact path, never its parent: one untrusted file must not distrust its
-    /// siblings. Most-specific-wins then resolves the two rules correctly.
-    pub fn reconcile_after_write(&mut self, path: &str, written: Label) {
-        let effective = self.integrity_in_force(path);
-        let actual = written.integrity;
-
-        if effective == Some(actual) {
-            return;
-        }
-
-        let recorded = match actual {
-            Integrity::Trusted => "trusted",
-            Integrity::Untrusted => "untrusted",
-        };
-        if !self.trust.publish(path, actual) {
-            self.allow(
-                "trust",
-                format!("{path} left as it was: a file effect on it is still active"),
-            );
-            return;
-        }
-
-        self.allow(
-            "trust",
-            format!("{path} recorded as {recorded} to match what was written"),
         );
     }
 
@@ -9277,9 +9237,9 @@ five
             "it was reserved from a trusted path"
         );
 
-        // Something wrote untrusted data there in the meantime, which is what
-        // `reconcile_after_write` records.
-        policy.reconcile_after_write("src/main.rs", Label::untrusted_private());
+        // Something wrote untrusted data there in the meantime, which is what completing
+        // the write's file effect records.
+        record_write(&mut policy, "src/main.rs", Label::untrusted_private());
 
         policy
             .materialise("process", &slot, &mut slots, |_| Ok("payload".to_string()))
@@ -15000,9 +14960,19 @@ five
         .with_trust(store)
     }
 
-    /// Row 1: trusted data to a trusted path. Silent, and the map is untouched.
+    /// A write recorded the way the workspace records one: the path is reserved under the file
+    /// authority, and completing the effect publishes the trust of what was written.
+    fn record_write(policy: &mut Policy<'_, RecordingSink>, path: &str, written: Label) {
+        policy
+            .capture_files(|_, capture| capture.begin(path))
+            .expect("the path is free")
+            .complete(written.integrity);
+    }
+
+    /// Row 1: trusted data to a trusted path. Silent, and the effective trust is unchanged. The
+    /// write is recorded all the same: a rule at the exact path, which a write always leaves.
     #[test]
-    fn trusted_data_into_a_trusted_path_is_silent_and_changes_nothing() {
+    fn trusted_data_into_a_trusted_path_is_silent_and_records_the_path_as_it_was() {
         let mut sink = RecordingSink::new();
         let mut policy = policy_trusting(&mut sink, &["."]);
 
@@ -15013,8 +14983,12 @@ five
         ));
 
         let before = policy.trust().rules().count();
-        policy.reconcile_after_write("src/a.rs", Label::trusted_public());
-        assert_eq!(policy.trust().rules().count(), before, "the map changed");
+        record_write(&mut policy, "src/a.rs", Label::trusted_public());
+        assert_eq!(
+            policy.trust().rules().count(),
+            before + 1,
+            "a started write was not recorded at its exact path"
+        );
         assert!(policy.trust().is_trusted("src/a.rs"));
     }
 
@@ -15030,7 +15004,7 @@ five
             Destination::Named
         ));
 
-        policy.reconcile_after_write("src/a.rs", Label::untrusted_public());
+        record_write(&mut policy, "src/a.rs", Label::untrusted_public());
         assert!(!policy.trust().is_trusted("src/a.rs"));
         // Only that path: its siblings keep the directory's trust.
         assert!(policy.trust().is_trusted("src/b.rs"));
@@ -15058,15 +15032,15 @@ five
             Destination::Named
         ));
 
-        policy.reconcile_after_write("vendor/ours.js", Label::trusted_public());
+        record_write(&mut policy, "vendor/ours.js", Label::trusted_public());
         assert!(policy.trust().is_trusted("vendor/ours.js"));
         assert!(!policy.trust().is_trusted("vendor/theirs.js"));
     }
 
-    /// Untrusted data into an already untrusted path: silent, map unchanged. The path is
-    /// already untrusted, so nothing is lost and nothing changes.
+    /// Untrusted data into an already untrusted path: silent, and the effective trust is
+    /// unchanged. The write is recorded as a rule at the exact path.
     #[test]
-    fn untrusted_data_into_an_untrusted_path_is_silent_and_changes_nothing() {
+    fn untrusted_data_into_an_untrusted_path_is_silent_and_records_the_path_as_it_was() {
         let mut sink = RecordingSink::new();
         let mut store = TrustStore::new("/work");
         store.distrust("vendor");
@@ -15086,8 +15060,13 @@ five
         ));
 
         let before = policy.trust().rules().count();
-        policy.reconcile_after_write("vendor/x.js", Label::untrusted_public());
-        assert_eq!(policy.trust().rules().count(), before);
+        record_write(&mut policy, "vendor/x.js", Label::untrusted_public());
+        assert_eq!(
+            policy.trust().rules().count(),
+            before + 1,
+            "a started write was not recorded at its exact path"
+        );
+        assert!(!policy.trust().is_trusted("vendor/x.js"));
     }
 
     /// A path nobody has mentioned is not the same as one deliberately marked untrusted: there
@@ -15207,7 +15186,7 @@ five
             .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
 
         let fetched = "/tmp/bravebot-scratch-1/fetched.json";
-        policy.reconcile_after_write(fetched, Label::untrusted_public());
+        record_write(&mut policy, fetched, Label::untrusted_public());
 
         assert!(
             policy.read_is_quarantined(fetched),
@@ -15678,7 +15657,7 @@ five
         let mut sink = RecordingSink::new();
         let mut policy = policy_trusting(&mut sink, &["."]);
 
-        policy.reconcile_after_write("src/fetched.json", Label::untrusted_public());
+        record_write(&mut policy, "src/fetched.json", Label::untrusted_public());
 
         let label = policy
             .observe_path(Capability::FileRead, "src/fetched.json")
@@ -15699,7 +15678,7 @@ five
         let mut sink = RecordingSink::new();
         let mut policy = policy_trusting(&mut sink, &["."]);
 
-        policy.reconcile_after_write("src/fetched.json", Label::untrusted_public());
+        record_write(&mut policy, "src/fetched.json", Label::untrusted_public());
 
         let label = policy
             .observe_path(Capability::FileRead, "src/./fetched.json")
@@ -19046,7 +19025,10 @@ five
             let mut child_sink = RecordingSink::new();
             let mut child =
                 open_policy(&mut child_sink).with_file_authority(policy.file_authority());
-            child.reconcile_after_write("vendor/generated", Label::untrusted_public());
+            child
+                .capture_files(|_, capture| capture.begin("vendor/generated"))
+                .expect("the path is free")
+                .complete(Label::untrusted_public().integrity);
             let answered = child.vouched();
             policy.adopt_from_delegate(&seeded, &answered);
             assert_eq!(
