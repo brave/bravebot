@@ -2470,10 +2470,7 @@ impl Session {
         if self.status != Status::Idle || !self.input.trim().is_empty() {
             return;
         }
-        self.history.leave();
-        self.set_input(prompt);
-        self.shell = false;
-        self.completion = 0;
+        self.replace_the_box(prompt, false);
     }
 
     /// Put the brief `/handoff` wrote in the box for the person to read and edit.
@@ -2486,12 +2483,7 @@ impl Session {
         if self.status != Status::Idle {
             return;
         }
-        if !self.input.trim().is_empty() {
-            self.history.keep_draft(self.input.clone());
-        }
-        self.history.leave();
-        self.set_input(brief);
-        self.shell = false;
+        self.replace_the_box(brief, true);
         self.handoff = true;
     }
 
@@ -2511,12 +2503,7 @@ impl Session {
         if removed > 0 {
             self.note(t!(paste_invisible_removed, count = removed));
         }
-        if !self.input.trim().is_empty() {
-            self.history.keep_draft(self.input.clone());
-        }
-        self.history.leave();
-        self.set_input(crate::commit_message_command::box_text(&message));
-        self.shell = false;
+        self.replace_the_box(crate::commit_message_command::box_text(&message), true);
     }
 
     /// Whether Enter on the box starts a new session from it.
@@ -2625,9 +2612,7 @@ impl Session {
         // The oldest line, so enhancing an enhancement and pressing Escape lands on what the person
         // wrote and not on the rewrite before this one.
         let original = self.enhanced.clone().unwrap_or_else(|| line.to_string());
-        self.history.leave();
-        self.set_input(text);
-        self.shell = false;
+        self.replace_the_box(text, false);
         self.enhanced = Some(original);
         true
     }
@@ -2661,12 +2646,7 @@ impl Session {
         let Some(original) = self.enhanced.take() else {
             return;
         };
-        if !self.input.trim().is_empty() {
-            self.history.keep_draft(self.input.clone());
-        }
-        self.history.leave();
-        self.set_input(original);
-        self.shell = false;
+        self.replace_the_box(original, true);
     }
 
     /// Hold the prompt the session beginning now is to open with.

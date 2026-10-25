@@ -15,7 +15,7 @@
 // with the click added, because here the item is the thing being tested.
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { checker, launchLive, COMPOSER_INPUT } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE } from './drive-support.mjs'
 
 const OUT = '/tmp/bravebot-ui'
 mkdirSync(OUT, { recursive: true })
@@ -105,7 +105,7 @@ check(
   `a prompt offers copying and forking (${ids.join(', ')})`,
 )
 
-const reply = page.locator('.bubble.assistant').first()
+const reply = page.locator(ASSISTANT_BUBBLE).first()
 if (await reply.isVisible().catch(() => false)) {
   await reply.click({ button: 'right' })
   await page.waitForTimeout(350)
@@ -167,7 +167,7 @@ const forkOpacity = (nth) =>
 
 check((await page.locator('.bubble.user .fork-here').count()) > 0, 'every prompt carries a fork')
 check(
-  (await page.locator('.bubble.assistant .fork-here').count()) === 0,
+  (await page.locator(`${ASSISTANT_BUBBLE} .fork-here`).count()) === 0,
   'and nothing else does — a reply is not a place a fork can be cut',
 )
 check(Number(await forkOpacity(0)) === 0, 'it stays out of the way until the row is under the pointer')

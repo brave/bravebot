@@ -2,9 +2,10 @@
 //! that build each of its sections.
 
 use crate::exit::{Ending, fail};
+use crate::flags::sandbox_refusal;
 use crate::model::{how_to_configure_a_model, managed_refusal, model_for_this_run};
 use crate::workspace::{confinement_name, current_workspace, unattended_trust_with};
-use crate::{auth, import, mcp, progress, sandbox_refusal};
+use crate::{auth, import, mcp, progress};
 use bravebot_agent::Workspace;
 use bravebot_agent::chatgpt::AccountFile;
 use bravebot_config::{Config, Managed, env_var};

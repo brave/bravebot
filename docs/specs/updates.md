@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/update.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/opening.rs
   - crates/config/src/install.rs
   - npm/bin/bravebot.js
   - install.sh

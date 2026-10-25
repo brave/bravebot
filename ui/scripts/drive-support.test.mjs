@@ -8,7 +8,19 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { COMPOSER_IDLE, COMPOSER_INPUT, SIDEBAR_TAB, checker, launchLive, showSessions } from './drive-support.mjs'
+import {
+  ASSISTANT_BUBBLE,
+  BOT_OPEN_BUTTON,
+  COMPOSER_IDLE,
+  COMPOSER_INPUT,
+  COMPOSER_NAME,
+  COMPOSER_SEND,
+  SIDEBAR_TAB,
+  TRUST_APPROVE,
+  checker,
+  launchLive,
+  showSessions,
+} from './drive-support.mjs'
 
 // A page that records what it was asked, in order, and answers every wait and click with the
 // outcome the test gives it.
@@ -129,4 +141,19 @@ test('the selector constants name the classes the renderer owns', () => {
   assert.equal(COMPOSER_INPUT, '.composer textarea')
   assert.equal(COMPOSER_IDLE, `${COMPOSER_INPUT}:not([disabled])`)
   assert.equal(SIDEBAR_TAB, '.sidebar-tabs [role="option"]')
+})
+
+test('the send, name, reply, bot and trust constants name what the renderer draws', () => {
+  const read = (file) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'components', file), 'utf8')
+  // `.composer .send`: the footer carries `composer` (pinned above) and the button carries `send`.
+  assert.match(read('Composer.tsx'), /className=\{running \? 'send stop' : 'send'\}/)
+  assert.match(read('Composer.tsx'), /aria-label="Message the agent"/)
+  assert.match(read('Transcript.tsx'), /<div className="bubble assistant">/)
+  assert.match(read('Bots.tsx'), /<button type="button" className="bot-open-button"/)
+  assert.match(read('TrustPrompt.tsx'), /data-test="trust-approve"/)
+  assert.equal(COMPOSER_SEND, '.composer .send')
+  assert.equal(COMPOSER_NAME, 'Message the agent')
+  assert.equal(ASSISTANT_BUBBLE, '.bubble.assistant')
+  assert.equal(BOT_OPEN_BUTTON, '.bot-open-button')
+  assert.equal(TRUST_APPROVE, '[data-test="trust-approve"]')
 })

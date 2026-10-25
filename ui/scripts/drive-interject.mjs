@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_NAME } from './drive-support.mjs'
 
 let waiting = []
 const t0 = Date.now()
@@ -41,7 +42,7 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1200, height: 800 } }))
   await openProject(page, app, project)
 
-  const composer = page.getByRole('textbox', { name: 'Message the agent' })
+  const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
   const stop = page.locator('.composer .stop')
   const sent = page.locator('[data-test="interjected-messages"]')
   const queued = page.locator('.queued-messages')

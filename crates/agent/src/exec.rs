@@ -62,7 +62,7 @@ use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
 use std::io::{Read, Write};
-use std::process::{Child, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -600,55 +600,7 @@ impl<'a> Running<'a> {
         let last = steps.len() - 1;
 
         for (index, step) in steps.iter().enumerate() {
-            // Exhaustive so that a field added to `Step` stops the build here. This is where a step
-            // becomes a real process, so a field this applies that no standing answer's key holds
-            // would be a line running differently from the one somebody was shown ([RUN-8]).
-            //
-            // [RUN-8]: ../../../docs/specs/tools/run.md
-            let Step {
-                program: _,
-                resolved: _,
-                started_as,
-                args: _,
-                environment: _,
-                routes: _,
-            } = step;
-            // Started by the path the name was found by, which some programs read
-            // ([`Step::started_as`]). A second lookup here would let a `$PATH` changed since the
-            // question decide what runs.
-            //
-            // Every step, not only the first, is started without this agent's own credentials. One
-            // is as reachable from the middle of a pipeline as from the front, and one step spared
-            // would be the whole of the hole.
-            let withheld = bravebot_config::scrub::withheld();
-            let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
-            let mut command = bravebot_sandbox::programs::start(
-                &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
-                inherits,
-                bravebot_sandbox::programs::SearchPath::Inherited,
-            );
-            // The vector, never a string. Nothing here builds a command line, so nothing has to
-            // unbuild one.
-            command.args(&step.args).current_dir(self.directory);
-            // Where to put an intermediate file, so a line can name one without having been told
-            // the path first. Before the step's own assignments, so a line that sets the name
-            // itself wins, which is what the same assignment in front of a program does in a
-            // shell.
-            if let Some(directory) = self.scratch {
-                command.env(bravebot_config::env_var::SCRATCH_DIR, directory);
-            } else {
-                // Removed rather than left as it arrived. Whatever an outer environment set the
-                // name to is another session's directory or none, and a program that tests the
-                // name would find one that has already been removed.
-                command.env_remove(bravebot_config::env_var::SCRATCH_DIR);
-            }
-            // Written in front of this step's own program, so it reaches this step and no other.
-            for (name, value) in &step.environment {
-                command.env(name, value);
-            }
-            // Withheld again, since the line is the planner's and a name it assigns is not the
-            // person's own: `run.scrubEnv` lists what their commands may not be handed.
-            inherits.withhold(&mut command);
+            let command = command_for(step, self.directory, self.scratch);
             // Decided before a redirection's file is opened, so a step the platform will not
             // confine is refused ahead of every effect its line has.
             let launching = crate::confine::begin(self.confinement, command, step, self.directory)?;
@@ -1565,6 +1517,66 @@ impl fmt::Debug for Background {
     }
 }
 
+/// The process a step becomes, before it is confined or given its descriptors. The foreground
+/// pipeline and a background job both build every step here, so the scrub of this agent's own
+/// credentials is one implementation for both.
+fn command_for(
+    step: &Step,
+    directory: &std::path::Path,
+    scratch: Option<&std::path::Path>,
+) -> Command {
+    // Exhaustive so that a field added to `Step` stops the build here. This is where a step
+    // becomes a real process, so a field this applies that no standing answer's key holds
+    // would be a line running differently from the one somebody was shown ([RUN-8]).
+    //
+    // [RUN-8]: ../../../docs/specs/tools/run.md
+    let Step {
+        program: _,
+        resolved: _,
+        started_as,
+        args: _,
+        environment: _,
+        routes: _,
+    } = step;
+    // Started by the path the name was found by, which some programs read
+    // ([`Step::started_as`]). A second lookup here would let a `$PATH` changed since the
+    // question decide what runs.
+    //
+    // Every step, not only the first, is started without this agent's own credentials. One
+    // is as reachable from the middle of a pipeline as from the front, and one step spared
+    // would be the whole of the hole.
+    let withheld = bravebot_config::scrub::withheld();
+    let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+        inherits,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    );
+    // The vector, never a string. Nothing here builds a command line, so nothing has to
+    // unbuild one.
+    command.args(&step.args).current_dir(directory);
+    // Where to put an intermediate file, so a line can name one without having been told
+    // the path first. Before the step's own assignments, so a line that sets the name
+    // itself wins, which is what the same assignment in front of a program does in a
+    // shell.
+    if let Some(scratch) = scratch {
+        command.env(bravebot_config::env_var::SCRATCH_DIR, scratch);
+    } else {
+        // Removed rather than left as it arrived. Whatever an outer environment set the
+        // name to is another session's directory or none, and a program that tests the
+        // name would find one that has already been removed.
+        command.env_remove(bravebot_config::env_var::SCRATCH_DIR);
+    }
+    // Written in front of this step's own program, so it reaches this step and no other.
+    for (name, value) in &step.environment {
+        command.env(name, value);
+    }
+    // Withheld again, since the line is the planner's and a name it assigns is not the
+    // person's own: `run.scrubEnv` lists what their commands may not be handed.
+    inherits.withhold(&mut command);
+    command
+}
+
 /// Start the steps of a compiled plan and leave them running. Every step is started, chained the
 /// same way, and given the same scrubbed environment and empty stdin as in the foreground; what
 /// differs is that nothing waits for them.
@@ -1592,38 +1604,7 @@ pub fn start_steps(
     let last = steps.len() - 1;
 
     for (index, step) in steps.iter().enumerate() {
-        // Exhaustive for the reason it is in the foreground.
-        let Step {
-            program: _,
-            resolved: _,
-            started_as,
-            args: _,
-            environment: _,
-            routes: _,
-        } = step;
-        // Without this agent's own credentials on every step, as in the foreground: one is as
-        // reachable from the middle of a pipeline as from the front, and one spared would be the
-        // whole of the hole.
-        let withheld = bravebot_config::scrub::withheld();
-        let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
-        let mut command = bravebot_sandbox::programs::start(
-            &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
-            inherits,
-            bravebot_sandbox::programs::SearchPath::Inherited,
-        );
-        command.args(&step.args).current_dir(directory);
-        // In front of the step's own assignments, as in the foreground.
-        if let Some(directory) = scratch {
-            command.env(bravebot_config::env_var::SCRATCH_DIR, directory);
-        } else {
-            // Removed rather than left, as in the foreground.
-            command.env_remove(bravebot_config::env_var::SCRATCH_DIR);
-        }
-        for (name, value) in &step.environment {
-            command.env(name, value);
-        }
-        // Withheld again after the line's own assignments, as in the foreground.
-        inherits.withhold(&mut command);
+        let command = command_for(step, directory, scratch);
         let launching = match crate::confine::begin(confinement, command, step, directory) {
             Ok(launching) => launching,
             Err(error) => {

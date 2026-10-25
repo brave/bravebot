@@ -10,6 +10,8 @@ governs:
   - crates/cli/src/session_search.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/hunks_command.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/agent/src/hunks.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
@@ -20,6 +22,7 @@ governs:
   - crates/tui/src/history.rs
   - crates/session/src/store.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/workspace.rs
   - crates/cli/src/background.rs

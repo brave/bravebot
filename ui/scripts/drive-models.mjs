@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
-import { COMPOSER_INPUT } from './drive-support.mjs'
+import { COMPOSER_INPUT, BOT_OPEN_BUTTON, COMPOSER_SEND } from './drive-support.mjs'
 
 // What `models.list` says of a service whose models could not be listed: a sentence, and the command
 // it names beside it, which the picker draws as code (CHATGPT-9).
@@ -66,7 +66,7 @@ try {
   const triggerBox = await trigger.boundingBox()
   const entryBox = await page.locator(COMPOSER_INPUT).boundingBox()
   assert(triggerBox.y >= entryBox.y + entryBox.height, 'model picker is below the text entry');
-  const sendBox = await page.locator('.composer .send').boundingBox();
+  const sendBox = await page.locator(COMPOSER_SEND).boundingBox();
   assert(Math.abs(triggerBox.y + triggerBox.height / 2 - sendBox.y - sendBox.height / 2) < 2,
     'model picker and Send align in the composer toolbar');
   assert.equal(await page.locator('.conversation-toolbar .export-open').count(), 1,
@@ -211,7 +211,7 @@ try {
   assert.equal(stored.model, null)
   assert.equal(await botRow.locator('[data-avatar]').getAttribute('data-avatar'), chosenFace)
   // The bot's own page has a composer that starts its next conversation, and picks the bot's model.
-  await botRow.locator('.bot-open-button').click()
+  await botRow.locator(BOT_OPEN_BUTTON).click()
   await page.locator('[data-test="bot-page"]').waitFor()
   const botTrigger = page.locator('.composer .model-trigger')
   await botTrigger.click()
@@ -228,11 +228,11 @@ try {
   await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.model?.includes('haiku'))
   await page.reload()
   await page.locator('[data-test="sidebar-tabs"]').getByText('Bots', { exact: true }).click()
-  await botRow.locator('.bot-open-button').click()
+  await botRow.locator(BOT_OPEN_BUTTON).click()
   await page.locator('[data-test="bot-page"]').waitFor()
   await page.waitForFunction(() => /haiku/.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
   await page.locator(COMPOSER_INPUT).fill('Use the saved bot model')
-  await page.locator('.composer .send').click()
+  await page.locator(COMPOSER_SEND).click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
   await page.getByRole('dialog').waitFor({state:'hidden'})
   await page.waitForFunction(() => document.querySelector('.composer .model-trigger')?.shadowRoot?.querySelector('button')?.disabled)

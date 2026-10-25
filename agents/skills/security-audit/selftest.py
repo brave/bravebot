@@ -4055,7 +4055,7 @@ def test_the_identity_lane_starts_from_the_calls_that_resolve_a_name():
     names = {(Path(s["path"]).name, s["function"]) for s in real}
     check(
         "the tree's own name-to-thing calls are listed, the workspace's hard-link check among them",
-        ("workspace.rs", "hard_links") in names and ("linux.rs", "opened_rows") in names,
+        ("other_names.rs", "hard_links") in names and ("linux.rs", "opened_rows") in names,
         str(sorted(names)[:8]),
     )
     rows = with_cwd(ROOT, lambda: audit.confinement_rows(audit.mechanics.load_sources()))
@@ -4582,21 +4582,26 @@ def test_no_name_in_the_enumerator_is_bound_twice():
     """
     import ast
 
-    tree = ast.parse((HERE / "security-audit.py").read_text(encoding="utf-8"))
     seen, twice = {}, []
-    for node in tree.body:
-        bound = (
-            [target.id for target in node.targets if isinstance(target, ast.Name)]
-            if isinstance(node, ast.Assign)
-            else [node.name]
-            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
-            else []
-        )
-        for name in bound:
-            if name in seen:
-                twice.append(f"{name} (lines {seen[name]} and {node.lineno})")
-            seen.setdefault(name, node.lineno)
-    check("every module-level name in security-audit.py is bound once", not twice, ", ".join(twice))
+    for file in ("security-audit.py", "findings.py", "workflow_checks.py"):
+        tree = ast.parse((HERE / file).read_text(encoding="utf-8"))
+        for node in tree.body:
+            bound = (
+                [target.id for target in node.targets if isinstance(target, ast.Name)]
+                if isinstance(node, ast.Assign)
+                else [node.name]
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                else []
+            )
+            for name in bound:
+                if name in seen:
+                    twice.append(f"{name} ({seen[name]} and {file}:{node.lineno})")
+                seen.setdefault(name, f"{file}:{node.lineno}")
+    check(
+        "every module-level name in security-audit.py, findings.py and workflow_checks.py is bound once",
+        not twice,
+        ", ".join(twice),
+    )
 
 
 def test_every_lane_has_its_file_and_its_row():

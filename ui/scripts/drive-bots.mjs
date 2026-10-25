@@ -26,7 +26,7 @@
 // Like the other drivers this perturbs `bravebot-ui.json`, and it puts its own key back: the bots
 // list is this driver's to write and the rest of that file is somebody's arrangement of the window.
 
-import { checker, launch, SIDEBAR_TAB } from './drive-support.mjs'
+import { checker, launch, SIDEBAR_TAB, BOT_OPEN_BUTTON } from './drive-support.mjs'
 import { appState, locateProfile } from './drive-profile.mjs'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -85,7 +85,7 @@ const makeBot = (page, name, purpose) =>
 
 /** Open a bot's own page, where its details are edited and it is archived. */
 const openBot = async (page, row) => {
-  await row.locator('.bot-open-button').click()
+  await row.locator(BOT_OPEN_BUTTON).click()
   await page.locator('[data-test="bot-details"]').waitFor()
 }
 

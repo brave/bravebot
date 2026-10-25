@@ -5,7 +5,10 @@ status: normative
 governs:
   - crates/cli/src/deep_link.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/invocation.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/opening.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/queue.rs

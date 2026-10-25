@@ -637,9 +637,6 @@ impl Session {
     /// What a release at this cell acts on in the info panel, if the panel drew a row there. Read
     /// against the panel's rectangle as the last frame recorded it.
     pub fn panel_target_at(&self, row: u16, column: u16) -> Option<crate::panel::Target> {
-        if self.files.is_some() {
-            return None;
-        }
         let (_, area) = self
             .laid
             .panes

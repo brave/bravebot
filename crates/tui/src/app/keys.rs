@@ -945,8 +945,8 @@ fn files_key(session: &mut Session, key: KeyEvent) -> Action {
         KeyCode::End | KeyCode::Char('G') => session.files_to_end(true),
         KeyCode::PageUp => session.files_scroll(-session.files_page()),
         KeyCode::PageDown => session.files_scroll(session.files_page()),
-        KeyCode::Char('[') => session.files_to_edit(false),
-        KeyCode::Char(']') => session.files_to_edit(true),
+        KeyCode::Left | KeyCode::Char('h') => session.files_to_edit(false),
+        KeyCode::Right | KeyCode::Char('l') => session.files_to_edit(true),
         _ => return Action::None,
     }
     Action::Redraw
@@ -1772,6 +1772,14 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.scroller_on(session.wheel_rows());
             Action::Redraw
         }
+        // Over the panel in the files state the wheel scrolls the pane under the pointer, and
+        // over the transcript it scrolls the transcript (MOUSE-19).
+        MouseEventKind::ScrollUp if session.files_wheel(mouse.row, mouse.column, true) => {
+            Action::Redraw
+        }
+        MouseEventKind::ScrollDown if session.files_wheel(mouse.row, mouse.column, false) => {
+            Action::Redraw
+        }
         MouseEventKind::ScrollUp => {
             session.scroll_up(session.wheel_rows());
             Action::Redraw
@@ -1841,8 +1849,10 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             Action::Redraw
         }
         // A click on the panel's model, effort, context or MCP server row asks what `/model`,
-        // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13), and one on the
-        // permission mode under the box cycles it (MOUSE-14).
+        // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13), one on the Files
+        // section asks what `/diff` asks (MOUSE-20), one on a file of the files state highlights
+        // it, one on its `x` ends it and one on a control of its bar steps between the edits
+        // (MOUSE-18), and one on the permission mode under the box cycles it (MOUSE-14).
         MouseEventKind::Up(MouseButton::Left) if is_a_shortcut_click(session, mouse) => {
             click_shortcut(session, mouse)
         }
@@ -1893,6 +1903,26 @@ fn click_shortcut(session: &mut Session, mouse: MouseEvent) -> Action {
             Action::Redraw
         }
         Some(crate::panel::Target::Servers) => Action::Mcp(String::new()),
+        Some(crate::panel::Target::File(index)) => {
+            session.files_select(index);
+            Action::Redraw
+        }
+        Some(crate::panel::Target::CloseFiles) => {
+            session.close_files();
+            Action::Redraw
+        }
+        Some(crate::panel::Target::PreviousEdit) => {
+            session.files_to_edit(false);
+            Action::Redraw
+        }
+        Some(crate::panel::Target::NextEdit) => {
+            session.files_to_edit(true);
+            Action::Redraw
+        }
+        Some(crate::panel::Target::Files) => {
+            session.toggle_files();
+            Action::Redraw
+        }
         None => {
             session.cycle_permission_mode();
             Action::Redraw

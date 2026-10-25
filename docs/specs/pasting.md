@@ -9,6 +9,8 @@ governs:
   - crates/tui/src/state/queue.rs
   - crates/tui/src/state/editing.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/invisible.rs
   - crates/ui-bridge/src/attached.rs

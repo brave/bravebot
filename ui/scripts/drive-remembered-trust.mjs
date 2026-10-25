@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inheritedEnv, launchWorld } from './drive-world.mjs'
+import { TRUST_APPROVE } from './drive-support.mjs'
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-remembered-')))
 const home = join(root, 'home'), project = join(root, 'project '), profile = join(root, 'profile')
@@ -45,7 +46,7 @@ try {
     const asked = trust(page)
     const yes = asked.getByRole('button', { name: 'Trust and remember', exact: true })
     await yes.waitFor()
-    assert.equal(await asked.locator('[data-test="trust-approve"]').innerText(), 'Trust and remember', 'the yes is the one that keeps')
+    assert.equal(await asked.locator(TRUST_APPROVE).innerText(), 'Trust and remember', 'the yes is the one that keeps')
     assert.equal(await asked.locator('[data-test="trust-remember"]').count(), 0, 'there is no separate answer to remember')
     assert.equal(await asked.locator('code.path').innerText(), spelledProject, 'the question draws the directory as spelled')
     record = (await asked.locator('.aside code').innerText()).trim()

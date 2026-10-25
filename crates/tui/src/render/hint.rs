@@ -436,11 +436,18 @@ pub(super) fn hint_spans(
 /// Gives the cells the permission mode is drawn in, when it is drawn: what a click on it acts on
 /// (MOUSE-14).
 pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) -> Option<Rect> {
-    // The files state names its own keys and keeps the figures the panel has no section for
-    // (FILES-4, FILES-9). Every other key does nothing there, so nothing else on the line applies.
+    // The files state names its keys in the panel and keeps the figures the panel has no section
+    // for (FILES-4, FILES-9). Where the panel is not drawn nothing else shows the keys, so the line
+    // names them, as it keeps a figure the panel does not draw (PANEL-8). Every other key does
+    // nothing there, so nothing else on the line applies.
     if session.files_open() {
+        let keys = if crate::panel::drawn(session, area.width) {
+            String::new()
+        } else {
+            t!(files_keys).to_string()
+        };
         let parts = [
-            t!(files_hint).to_string(),
+            keys,
             context_reading(session),
             cache_hit_rate(session).unwrap_or_default(),
         ];

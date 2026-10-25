@@ -6,12 +6,14 @@
 //! from the blocks of `one_turn` that read context files and present a tool's result.
 
 use bravebot_aichat::protocol::Tool;
+use bravebot_core::capability::Capability;
 use bravebot_core::delegate::{ADDRESSED, Addressed, Definitions};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::{Denial, Policy, Routing};
 use bravebot_i18n::t;
 
-use super::{FOR_A_PERSON, OPENING, PLANNING, ReadOutputIs, Task, TurnError};
+use super::{FOR_A_PERSON, Inputs, OPENING, PLANNING, ReadOutputIs, Task, TurnError, held};
+use crate::confirm::Confirmer;
 use crate::report::Reporter;
 use crate::request_view::{Prompt, Provenance};
 use crate::styles::{self, Style};
@@ -435,4 +437,77 @@ pub(super) fn system_prompt(
     // After everything else, so a rule a round adds later is appended to what was sent (INSTR-16).
     system.extend(preamble.rules.clone());
     system
+}
+
+/// The lists of the servers this session reached, settled at the start of a turn somebody asked
+/// for, a tick of their loop included, which is where there is a person to put a list to
+/// (SERVERS-8). A delegate settles none, since it puts no question to a person (DELEGATE-12),
+/// and is offered what its parent's turn already settled. Every run is offered the tools of the
+/// servers it holds a grant for and no other, and is put the lists of those alone, so a run
+/// of a definition that holds no servers is offered none and asked about none either
+/// (ADDRESS-7).
+///
+/// The offer with what settling it spent, which is this turn's since this turn is what asked.
+/// Adding the offer's tools to the turn's own is the caller's.
+pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
+    inputs: Inputs<'_>,
+    addressed: Option<&Addressed>,
+    policy: &mut Policy<'_, S>,
+    confirmer: &mut C,
+    reporter: &mut R,
+    subscription: &mut Option<crate::shared::Spending<'_>>,
+    notices: &mut Vec<crate::skills::Notice>,
+) -> Option<(crate::mcp::Offer, bravebot_aichat::protocol::Usage)> {
+    let Inputs {
+        config,
+        egress,
+        task,
+        cancel,
+        ..
+    } = inputs;
+    let holding = match (&task.delegate, addressed) {
+        (Some(spec), _) => spec.capabilities().clone(),
+        (None, Some(addressed)) => addressed.capabilities().clone(),
+        (None, None) => held(task),
+    };
+    let holds_a_server = holding
+        .iter()
+        .any(|capability| matches!(capability, Capability::McpCall(_)));
+    let mut mcp = match (&task.delegate, &task.mcp) {
+        (_, Some(_)) if !holds_a_server => None,
+        // `--tools` names this program's own tools, so a server's are not among them, and no
+        // list is put to the person for a server whose tools would not be offered.
+        (_, Some(_)) if bravebot_core::tool_set::names_only() => None,
+        (Some(_), Some(session)) => Some((
+            session.offer().holding(&holding),
+            bravebot_aichat::protocol::Usage::default(),
+        )),
+        (None, Some(session)) => {
+            let settled = session.settle(
+                policy,
+                &mut crate::processor::Chat::new(config, egress, task.account_session())
+                    .spending(subscription.as_mut())
+                    .on(task.model.as_deref())
+                    .stoppable_by(cancel),
+                confirmer,
+                reporter,
+                task.permission_mode.get(),
+                &holding,
+            );
+            notices.extend(
+                settled
+                    .notices
+                    .into_iter()
+                    .map(crate::skills::Notice::from_message),
+            );
+            Some((session.offer().holding(&holding), settled.usage))
+        }
+        (_, None) => None,
+    };
+    // Past the size the settings name, the tools are offered by name under one `load_tool`
+    // and a definition joins `offered` when the planner loads it (SERVERS-16).
+    if let (Some((offer, _)), Some(threshold)) = (&mut mcp, config.defer_mcp_tools_above) {
+        *offer = offer.clone().deferring_above(threshold);
+    }
+    mcp
 }

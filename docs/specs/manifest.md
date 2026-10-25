@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/manifest.rs
   - crates/agent/src/mode.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/finish.rs
   - crates/cli/src/one_shot.rs
@@ -17,6 +18,7 @@ governs:
   - crates/tui/src/confirm/grants.rs
   - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/manifest_run.rs
   - crates/ui-bridge/src/manifest.rs

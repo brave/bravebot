@@ -114,9 +114,9 @@ Each end is a stop rather than a count that keeps going: neither direction moves
 or the last, so a held key comes to rest somewhere the next press can move away from.
 
 One wheel event moves the number of rows `tui.wheelRows` names, and three where no settings file
-names one. The same distance at rest and in the scroller, the wheel being one of the keys here: a
-transcript that moved by one figure and a scroller by another would be two movements under one
-gesture.
+names one. The same distance at rest, in the scroller (the wheel being one of the keys here) and in the
+two panes of the info panel's files state ([MOUSE-19](mouse.md#MOUSE-19)): a transcript that moved
+by one figure and a scroller by another would be two movements under one gesture.
 
 The count is read once when the session opens, from the settings files as any other key of its kind
 is read: the home layer, a checkout's `.bravebot/settings.json` and `settings.local.json`, and a
@@ -188,6 +188,8 @@ that the Known costs below do not already admit.
 `verified-by: bravebot_tui::app::the_wheel_moves_three_rows_where_nothing_names_a_number`
 `verified-by: bravebot_tui::app::a_wheel_count_outside_the_range_is_held_to_it`
 `verified-by: bravebot_tui::app::a_configured_wheel_still_stops_at_the_ends_and_still_drops_a_count`
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_edits_scrolls_them_by_the_rows_a_wheel_event_moves`
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_list_scrolls_its_rows_and_moves_nothing_else`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_far_the_wheel_moves_the_view`
 `verified-by: bravebot_tui::app::a_count_moves_the_view_that_many_times_as_far`
 `verified-by: bravebot_tui::app::a_count_stops_at_the_ends_of_the_transcript`

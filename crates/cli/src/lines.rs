@@ -18,6 +18,7 @@
 //! cannot cost more memory than its own length.
 
 use crate::json;
+use bravebot_agent::interjections::Interjections;
 use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::cancel::Cancel;
 use std::collections::VecDeque;
@@ -559,7 +560,7 @@ struct State {
     /// Words each waiting to start a turn, oldest first.
     prompts: VecDeque<String>,
     /// Words for the turn that is running, which it takes at a round boundary.
-    steers: VecDeque<String>,
+    steers: Interjections,
     /// The bytes held in the two queues, which the cap bounds.
     waiting: usize,
     /// The token of the turn that is running, `None` between turns.
@@ -597,9 +598,9 @@ impl State {
             return Err(Refused::TooMuchWaiting);
         }
         self.waiting += words.len();
-        match for_the_running_turn {
-            true => self.steers.push_back(words),
-            false => self.prompts.push_back(words),
+        // A line for a turn that is not reading is a prompt, which waits for a turn of its own.
+        if let Err(words) = self.steers.offer(for_the_running_turn, words) {
+            self.prompts.push_back(words);
         }
         Ok(())
     }
@@ -608,14 +609,16 @@ impl State {
 /// What the thread reading the lines hands to the run, and the run to the confirmer.
 ///
 /// What INPUT-10 and INPUT-36 settle inside a turn is the agent's, and is reused rather than held
-/// here: a steer reaches the planner through [`bravebot_agent::Confirmer::interjection`], which the
+/// here: the steers wait in [`bravebot_agent::interjections::Interjections`], the buffer the
+/// terminal and the desktop bridge use, and a line it does not take is made a prompt by the same
+/// rule. A steer reaches the planner through [`bravebot_agent::Confirmer::interjection`], which the
 /// turn drains at a round boundary in the order sent, and a stop sets the [`Cancel`] the turn
 /// carries, as the terminal and the desktop bridge do. What is kept here is the lines protocol's
 /// own: a queue of prompts that each wait for a turn of their own, where the interface sends a line
 /// typed mid-turn into the turn, the bytes waiting, and the question waiting for its answer. The
 /// terminal holds a line sent mid-turn as screen state, with its files and marks, and the desktop
-/// bridge leaves a line the turn did not take to the window that sent it, so neither has a module
-/// for this to call.
+/// bridge leaves a line the turn did not take to the window that sent it, so neither shares the
+/// queue of prompts.
 #[derive(Clone)]
 pub(crate) struct Channel {
     shared: Arc<Shared>,
@@ -785,7 +788,7 @@ impl Channel {
     pub(crate) fn idle(&self) {
         let mut state = self.lock();
         state.running = None;
-        let left = std::mem::take(&mut state.steers);
+        let left = state.steers.drain();
         state.prompts.extend(left);
         self.shared.changed.notify_all();
     }
@@ -795,7 +798,7 @@ impl Channel {
     /// not while one runs.
     pub(crate) fn steer(&self) -> Option<String> {
         let mut state = self.lock();
-        let words = state.steers.pop_front()?;
+        let words = state.steers.take()?;
         state.waiting -= words.len();
         Some(words)
     }

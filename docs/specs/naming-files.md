@@ -8,6 +8,7 @@ governs:
   - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/completion.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/workspace.rs
   - crates/ui-bridge/src/mentions.rs

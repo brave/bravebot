@@ -187,6 +187,18 @@ impl Session {
         self.ordinary_run_open = false;
     }
 
+    /// Put a line that arrived whole in the box: leave the history cursor, replace the line as
+    /// [`Session::set_input`] does and drop shell mode, which is for a command and not for what
+    /// arrives. With `keep_draft`, a line already in the box is kept as the draft Up brings back.
+    pub(super) fn replace_the_box(&mut self, line: impl Into<String>, keep_draft: bool) {
+        if keep_draft && !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(line);
+        self.shell = false;
+    }
+
     /// Replace the line as [`Session::set_input`] does, keeping what `u` can take back.
     ///
     /// For a completion, which finishes the line being typed rather than bringing another.
@@ -642,15 +654,9 @@ impl Session {
     /// mid-turn would mean the field the user returns to is not the one they left.
     pub fn clear_input(&mut self) {
         if self.status == Status::Idle {
-            if !self.history.on_a_sent_prompt() && !self.input.trim().is_empty() {
-                self.history.keep_draft(self.input.clone());
-            }
-            self.history.leave();
-            self.set_input(String::new());
             // The mode goes with the line. Escape means "never mind this", and leaving the marker
-            // behind would arm the next thing typed as a command. The list of keys goes with the
-            // line too, which is settled where the line is written.
-            self.shell = false;
+            // behind would arm the next thing typed as a command.
+            self.replace_the_box(String::new(), !self.history.on_a_sent_prompt());
         }
     }
 

@@ -16,7 +16,8 @@ use crate::secret::Document;
 use ring::signature::{RSA_PKCS1_2048_8192_SHA256, RsaPublicKeyComponents};
 
 /// The issuer an ID token of this server names. A constant of the source, read from the program the
-/// spec was written from, and not observed from the service.
+/// spec was written from. It equals the `issuer` of the service's discovery document, and no ID
+/// token's `iss` is recorded.
 const ISSUER: &str = "https://auth.openai.com";
 
 /// The one algorithm accepted.
@@ -472,6 +473,63 @@ mod tests {
         assert!(
             elsewhere.finish().is_empty(),
             "a place the header named was asked for"
+        );
+    }
+
+    /// The key set the service publishes holds several keys, and some entries carry an `x5c` list that
+    /// no check reads. A token names one entry by its `kid`. That entry is the key used, whatever its
+    /// place in the list and whatever else it holds, and a header that names another entry is checked
+    /// against that entry's key. The older tests give the reader one key, or keys that share a modulus,
+    /// with exactly the fields it reads. This test rejects a reader that refuses an entry for a field it
+    /// does not read, which would refuse every sign-in. It rejects a reader that takes the modulus of an
+    /// entry other than the named one, which would verify under the wrong key. It rejects a reader that
+    /// accepts a signature from any key of the set, which would accept a token under a key its header
+    /// does not name.
+    #[test]
+    fn a_key_set_of_several_keys_some_with_an_x5c_list_gives_the_key_the_kid_names_and_no_other() {
+        let (n, e) = public();
+        let (other_n, other_e) = another_public();
+        let entry = |kid: &str, n: &[u8], e: &[u8]| {
+            json!({
+                "kty": "RSA",
+                "use": "sig",
+                "alg": "RS256",
+                "kid": kid,
+                "n": base64url(n),
+                "e": base64url(e),
+            })
+        };
+        let mut keys = vec![
+            entry("first-other-key", &other_n, &other_e),
+            entry(KID, &n, &e),
+            entry("second-other-key", &other_n, &other_e),
+            entry("third-other-key", &other_n, &other_e),
+        ];
+        for listed in &mut keys[..2] {
+            listed["x5c"] = json!([standard(b"not a certificate", true)]);
+        }
+        let set = set_of(&keys);
+        assert_eq!(key(&set, KID), Some((n, e)), "the entry the kid names");
+        assert_eq!(
+            key(&set, "second-other-key"),
+            Some((other_n, other_e)),
+            "the entry a header that names another key points at"
+        );
+
+        let served = set.to_string();
+        assert_eq!(
+            checked_at(&with(&claims()), &served, NOW),
+            (Ok(()), 1),
+            "a token signed with the key its kid names"
+        );
+        let names_another = signed(
+            &json!({"alg": "RS256", "kid": "second-other-key", "typ": "JWT"}),
+            &claims(),
+        );
+        assert_eq!(
+            checked_at(&names_another, &served, NOW),
+            (Err(Failed::Token), 1),
+            "a token signed with a key of the set that its header does not name"
         );
     }
 

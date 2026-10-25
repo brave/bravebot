@@ -4,6 +4,7 @@ title: read_file
 status: normative
 governs:
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/results.rs
   - crates/agent/src/notebook.rs
   - crates/agent/src/conversation.rs
   - crates/filetype/src/lib.rs
