@@ -2900,6 +2900,8 @@ files-heading = { $count ->
     [one] { $count } file changed
    *[other] { $count } files changed
     }
+# The control at the right end of that heading, which ends the state.
+files-close = x
 # Beside that heading after a resume, since the session record holds no write's changes.
 files-earlier-not-kept = earlier edits are not kept
 # The first and last rows of a list longer than its room, counting the files left out.

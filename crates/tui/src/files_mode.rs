@@ -5,7 +5,7 @@
 //! from disk, run or sent to a model, and nothing is kept in a second place, so a bound on those
 //! entries is a bound here.
 
-use crate::panel::Target;
+use crate::panel::{Place, Target};
 use crate::state::{Entry, Speaker};
 use crate::theme;
 use bravebot_agent::diff::{Change, Numbered};
@@ -301,9 +301,19 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
         .sum()
 }
 
+/// The control at the right end of the heading row, which ends the state (MOUSE-18): the catalogue's
+/// word for it with a space on each side.
+fn close_control() -> Span<'static> {
+    Span::styled(
+        format!(" {} ", t!(files_close)),
+        Style::default().fg(theme::accent()),
+    )
+}
+
 /// The heading row: how many files changed and the totals, with a note where the session was
-/// resumed and earlier edits are not kept.
-fn heading(files: &[File], earlier: bool, width: usize) -> Line<'static> {
+/// resumed and earlier edits are not kept, and the close control at its right end. With it come the
+/// columns of the row the control is drawn in.
+fn heading(files: &[File], earlier: bool, width: usize) -> (Line<'static>, std::ops::Range<usize>) {
     let added: usize = files.iter().map(File::added).sum();
     let removed: usize = files.iter().map(File::removed).sum();
     let mut spans = vec![Span::styled(
@@ -317,13 +327,19 @@ fn heading(files: &[File], earlier: bool, width: usize) -> Line<'static> {
         spans.push(Span::raw("  "));
         spans.extend(totals);
     }
+    let close = close_control();
+    let close_width = spans_width(std::slice::from_ref(&close));
     if earlier {
         let used = spans_width(&spans);
         let note = format!("  {}", t!(files_earlier_not_kept));
-        let room = width.saturating_sub(used);
+        let room = width.saturating_sub(used + close_width);
         spans.push(Span::styled(crate::status::cut(&note, room), dim()));
     }
-    Line::from(spans)
+    let used = spans_width(&spans);
+    let gap = width.saturating_sub(used + close_width);
+    spans.push(Span::raw(" ".repeat(gap)));
+    spans.push(close);
+    (Line::from(spans), used + gap..used + gap + close_width)
 }
 
 /// One row of the list: the path cut from the left to the room the counts leave, then the counts at
@@ -489,22 +505,24 @@ pub fn rows(
     earlier: bool,
     width: u16,
     height: u16,
-) -> (Vec<Line<'static>>, Vec<(usize, Target)>) {
+) -> (Vec<Line<'static>>, Vec<Place>) {
     let height = usize::from(height);
     // The border takes a column.
     let width = usize::from(width).saturating_sub(1).max(1);
     let Geometry { list, room } = Geometry::new(height, files.len());
-    let mut body = vec![heading(files, earlier, width)];
+    let (heading, close) = heading(files, earlier, width);
+    let mut body = vec![heading];
     let shown = window(files.len(), list, state.selected, state.top);
     // The list begins under the heading row.
-    let mut targets: Vec<(usize, Target)> = shown
+    let mut targets: Vec<Place> = shown
         .iter()
         .enumerate()
         .filter_map(|(at, row)| match *row {
-            Row::File(index) => Some((1 + at, Target::File(index))),
+            Row::File(index) => Some(Place::on_row(1 + at, Target::File(index))),
             Row::Above(_) | Row::Below(_) => None,
         })
         .collect();
+    targets.push(Place::on_cells(0, close, Target::CloseFiles));
     body.extend(list_rows(files, state, &shown, width));
     body.push(Line::from(Span::styled("─".repeat(width), dim())));
     let selected = state.selected.min(files.len().saturating_sub(1));
@@ -537,7 +555,7 @@ pub fn rows(
         }));
     }
     // A row the panel is too short to draw is not a target.
-    targets.retain(|(row, _)| *row < height);
+    targets.retain(|place| place.row < height);
     body.truncate(height);
     body.resize(height, Line::raw(""));
     (body, targets)
@@ -1304,6 +1322,95 @@ mod tests {
         );
     }
 
+    /// MOUSE-18: a click on the `x` at the right end of the heading row ends the state as `q` does,
+    /// and the panel goes back to what it was before the state: closed if it was closed, ordinary
+    /// if it was open.
+    #[test]
+    fn a_click_on_the_close_control_ends_the_state_as_q_does() {
+        for panel_was_open in [false, true] {
+            let ended = |by_click: bool| {
+                let mut session = session_with(&["a.rs", "b.rs"]);
+                screen(&mut session, 120, 30);
+                if panel_was_open {
+                    session.toggle_panel();
+                }
+                session.toggle_files();
+                assert!(session.files_open(), "the state did not open");
+                let panel = panel_of(&mut session, 120, 30);
+                assert!(
+                    panel[0].trim_end().ends_with('x'),
+                    "no control at the end of the heading: {panel:#?}"
+                );
+                if by_click {
+                    let (row, column) = cell_of(&mut session, 120, 30, "x");
+                    assert_eq!(row, 0, "the control is not on the heading row");
+                    assert_eq!(click(&mut session, row, column), Action::Redraw);
+                } else {
+                    press(&mut session, KeyCode::Char('q'));
+                }
+                (session.files_open(), session.panel_open())
+            };
+            assert_eq!(ended(true), (false, panel_was_open), "a click on the x");
+            assert_eq!(ended(false), (false, panel_was_open), "q");
+        }
+    }
+
+    /// MOUSE-18: the `x` is the last cell of the heading row beside the note about earlier edits,
+    /// which is cut to the room the control leaves, and a click on it ends the state.
+    #[test]
+    fn the_close_control_ends_the_heading_row_beside_a_cut_note_about_earlier_edits() {
+        let mut session = Session::new("none");
+        prompt(&mut session, "before the resume");
+        session
+            .transcript
+            .push(Entry::recalled_tool("Update(old.rs)", ""));
+        prompt(&mut session, "after the resume");
+        wrote(&mut session, write("new.rs", "x\n", "y\n"));
+        assert!(session.has_earlier_calls());
+        let files = session.written_files();
+        // Too narrow for the note beside the totals and the control.
+        let (line, close) = heading(&files, true, 40);
+        let text = line.to_string();
+        assert_eq!(crate::wrap::display_width(&text), 40, "{text:?}");
+        assert!(text.contains('…'), "the note was not cut: {text:?}");
+        assert!(text.ends_with(" x "), "{text:?}");
+        assert_eq!(close, 37..40);
+
+        // At the width of the panel the note is whole, and the control still ends the row.
+        opened(&mut session);
+        let panel = panel_of(&mut session, 120, 30);
+        assert!(
+            panel[0].contains(&*t!(files_earlier_not_kept)),
+            "{panel:#?}"
+        );
+        assert!(panel[0].ends_with('x'), "{panel:#?}");
+        let (row, column) = cell_of(&mut session, 120, 30, "x");
+        assert_eq!(row, 0);
+        click(&mut session, row, column);
+        assert!(
+            !session.files_open(),
+            "a click on the control did not end the state"
+        );
+    }
+
+    /// MOUSE-18: a click on the heading's words, which is the same row as the control, leaves the
+    /// state open.
+    #[test]
+    fn a_click_on_the_heading_beside_the_close_control_leaves_the_state_open() {
+        let mut session = session_with(&["a.rs", "b.rs"]);
+        opened(&mut session);
+        let (row, column) = cell_of(&mut session, 120, 30, "files changed");
+        let (_, control) = cell_of(&mut session, 120, 30, "x");
+        click(&mut session, row, column);
+        click(&mut session, row, control - 2);
+        assert!(
+            session.files_open(),
+            "a click beside the control ended the state"
+        );
+        click(&mut session, row, control);
+        assert!(!session.files_open());
+    }
+
     /// MOUSE-18: a press on a row whose file has since left the list, which is an index past the last
     /// file, selects nothing.
     #[test]
@@ -1368,6 +1475,28 @@ mod tests {
             }
             let border = crate::panel::target_at(&session, area, area.y + 1, area.x);
             assert_eq!(border, None, "the border column is the resize handle");
+
+            // The heading row is a target only where the close control is drawn: an `x` with a
+            // space either side, at the end of the row.
+            let heading = screen(&mut session, 120, height).swap_remove(0);
+            assert_eq!(
+                heading.chars().nth(usize::from(area.right() - 2)),
+                Some('x'),
+                "the control is not at the end of the heading row: {heading:?}"
+            );
+            for (column, expected) in [
+                (area.right() - 1, Some(Target::CloseFiles)),
+                (area.right() - 2, Some(Target::CloseFiles)),
+                (area.right() - 3, Some(Target::CloseFiles)),
+                (area.right() - 4, None),
+                (area.x + 4, None),
+            ] {
+                let target = crate::panel::target_at(&session, area, area.y, column);
+                assert_eq!(
+                    target, expected,
+                    "heading row, column {column}: {heading:?}"
+                );
+            }
         }
     }
 
@@ -1428,7 +1557,7 @@ mod tests {
                             return None;
                         }
                         if row == 0 {
-                            return None;
+                            return (column >= area.right() - 3).then_some(Target::CloseFiles);
                         }
                         if row < list_end {
                             return file_of(&panel[row]).map(Target::File);
@@ -2363,6 +2492,7 @@ mod tests {
     fn the_state_draws_only_catalogue_words() {
         for message in [
             t!(files_heading, count = 2).to_string(),
+            t!(files_close).to_string(),
             t!(files_more_above, count = 3).to_string(),
             t!(files_more_below, count = 3).to_string(),
             t!(files_rows_above, count = 3).to_string(),

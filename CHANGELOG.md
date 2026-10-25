@@ -8,6 +8,7 @@
  - Added clicking a file in the list of `/diff` to highlight it and show its edits. ([#3259](https://github.com/brave/bravebot/issues/3259))
  - Added the mouse wheel to `/diff`: over the list it scrolls the files, over the edits it scrolls the edits. ([#3259](https://github.com/brave/bravebot/issues/3259))
  - Added counts of the rows above and below the rows of an edit that `/diff` draws, so a long edit shows that it continues. ([#3259](https://github.com/brave/bravebot/issues/3259))
+ - Added an `x` at the right end of the heading row of `/diff`, which leaves the view. ([#3259](https://github.com/brave/bravebot/issues/3259))
  - Changed Ctrl-L to list delegates and asides only, and added `/outputs` and an `outputs` key (Alt-L, movable in `keybindings`), which open what the commands a session ran printed, background jobs included, with the same keys, marks and read status. The row beneath the box counts what each opens. A `keybindings` block that already put an action on `alt-l` loses that mapping, because the new `outputs` default contests the key and the request falls back to its default: move `outputs` to another key, or move the other action. ([#3207](https://github.com/brave/bravebot/issues/3207))
  - Changed `/files` to `/diff`. `/files` is no longer a command, so a line that is only `/files` is sent as a prompt. ([#3259](https://github.com/brave/bravebot/issues/3259))
 

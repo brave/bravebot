@@ -3633,6 +3633,8 @@ files-heading = { $count ->
     [one] { $count } fichier modifié
    *[other] { $count } fichiers modifiés
     }
+# Le contrôle à l'extrémité droite de ce titre, qui met fin à l'état.
+files-close = x
 # À côté de ce titre après une reprise, puisque l'enregistrement de la session ne garde aucune modification.
 files-earlier-not-kept = les modifications antérieures ne sont pas conservées
 # La première et la dernière ligne d'une liste plus longue que sa place, avec les fichiers omis.

@@ -236,12 +236,7 @@ pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
 
 /// The rows of the panel, where the links are, which rows continue on the row below, and which rows
 /// a click acts on.
-type Body = (
-    Vec<Line<'static>>,
-    Vec<Link>,
-    Vec<usize>,
-    Vec<(usize, Target)>,
-);
+type Body = (Vec<Line<'static>>, Vec<Link>, Vec<usize>, Vec<Place>);
 
 /// What a click on a row of the panel acts on (MOUSE-11, MOUSE-18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,9 +251,40 @@ pub enum Target {
     Servers,
     /// A file's row in the list of the files state: the highlight the keys move (MOUSE-18).
     File(usize),
+    /// The `x` in the heading row of the files state: the end of the state, as `q` is (MOUSE-18).
+    CloseFiles,
 }
 
-/// The target a press on screen row `row` of a panel drawn over `area` lands on, if any.
+/// Where a click acts on the panel: a row, and the cells of it that count, or all of them where
+/// `columns` is `None`. Columns are counted from the first one inside the border.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    pub row: usize,
+    pub columns: Option<std::ops::Range<usize>>,
+    pub target: Target,
+}
+
+impl Place {
+    /// A target that every cell of the row belongs to.
+    pub fn on_row(row: usize, target: Target) -> Self {
+        Place {
+            row,
+            columns: None,
+            target,
+        }
+    }
+
+    /// A target that the cells `columns` of the row belong to.
+    pub fn on_cells(row: usize, columns: std::ops::Range<usize>, target: Target) -> Self {
+        Place {
+            row,
+            columns: Some(columns),
+            target,
+        }
+    }
+}
+
+/// The target a press on screen cell (`row`, `column`) of a panel drawn over `area` lands on, if any.
 ///
 /// Read from the rows [`draw`] draws, so a row that is not drawn, or is cut for want of room, is
 /// not a target. The border column is the panel's handle and is never one (PANEL-6).
@@ -267,10 +293,19 @@ pub fn target_at(session: &Session, area: Rect, row: u16, column: u16) -> Option
         return None;
     }
     let at = usize::from(row - area.y);
+    // The border is the first column of the area.
+    let cell = usize::from(column - area.x - 1);
     laid_out(session, area.width, area.height)
         .3
         .into_iter()
-        .find_map(|(drawn, target)| (drawn == at).then_some(target))
+        .find_map(|place| {
+            let on_it = place.row == at
+                && place
+                    .columns
+                    .as_ref()
+                    .is_none_or(|columns| columns.contains(&cell));
+            on_it.then_some(place.target)
+        })
 }
 
 /// The rows [`lines`] gives, where among them the links are, which of them continue on the row
@@ -318,7 +353,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
         let count = rows.len();
         section(&mut body, t!(panel_mcp_servers).to_string(), rows);
         let first = body.len() - count;
-        targets.extend((first..first + count).map(|row| (row, Target::Servers)));
+        targets.extend((first..first + count).map(|row| Place::on_row(row, Target::Servers)));
     }
 
     // Left out until a file has been written, and ahead of the plan so that the plan takes the rows
@@ -363,7 +398,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     ));
     links.retain(|link| link.row < height - 1);
     continued.retain(|row| *row < height - 1);
-    targets.retain(|(row, _)| *row < height - 1);
+    targets.retain(|place| place.row < height - 1);
     (body, links, continued, targets)
 }
 
@@ -475,7 +510,7 @@ fn head(session: &Session, text: usize) -> Body {
         targets.extend(
             model_targets
                 .into_iter()
-                .map(|(row, target)| (first + row, target)),
+                .map(|(row, target)| Place::on_row(first + row, target)),
         );
     }
 
@@ -554,7 +589,7 @@ fn head(session: &Session, text: usize) -> Body {
     }
     let count = context.len();
     section(&mut body, t!(panel_context).to_string(), context);
-    targets.push((body.len() - count, Target::Context));
+    targets.push(Place::on_row(body.len() - count, Target::Context));
     (body, links, continued, targets)
 }
 

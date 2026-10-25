@@ -80,7 +80,8 @@ kernel.
 ### FILES-3: `/diff` enters the state and leaves it
 
 `/diff` draws the panel in its files state and opens the panel if it was closed. While the state is
-open, `/diff`, `q` and Escape end it. Ending it returns the panel to what it was before: closed if
+open, `/diff`, `q` and Escape end it, and so does a click on the `x` at the right end of its heading
+row ([MOUSE-18](mouse.md#MOUSE-18)). Ending it returns the panel to what it was before: closed if
 it was closed, in its ordinary state if it was open. Entering and leaving write nothing to
 `~/.bravebot/panel` ([PANEL-5](info-panel.md#PANEL-5)). The `panel` chord hides the panel from either
 state and ends the state with it. The state is not kept across a start or a resume.
@@ -94,6 +95,7 @@ the state (FILES-4) it answers with a note saying how wide the terminal has to b
 `verified-by: bravebot_tui::app::leaving_the_state_closes_a_panel_it_opened`
 `verified-by: bravebot_tui::app::entering_and_leaving_the_state_writes_no_panel_choice`
 `verified-by: bravebot_tui::app::the_panel_chord_ends_the_state_with_the_panel`
+`verified-by: bravebot_tui::files_mode::a_click_on_the_close_control_ends_the_state_as_q_does`
 `verified-by: bravebot_tui::app::diff_with_nothing_written_answers_with_a_note`
 `verified-by: bravebot_tui::app::diff_is_the_command_and_files_is_not_one`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
@@ -113,13 +115,15 @@ terminal narrowed below 100 columns while the state is open stops drawing it and
 widened.
 
 The heading row is `{n} files changed` with `+{added}` and `-{removed}` beside it, from the sums of
-FILES-2.
+FILES-2, and an `x` at its right end that ends the state (FILES-3).
 
 `verified-by: bravebot_tui::files_mode::the_state_is_half_the_columns_between_sixty_and_a_hundred`
 `verified-by: bravebot_tui::files_mode::the_state_is_not_drawn_below_a_hundred_columns_and_comes_back_when_widened`
 `verified-by: bravebot_tui::files_mode::dragging_the_border_does_nothing_in_the_state_and_keeps_the_dragged_width`
 `verified-by: bravebot_tui::files_mode::the_geometry_places_each_row_where_rows_draws_it`
 `verified-by: bravebot_tui::files_mode::no_ordinary_section_is_drawn_in_the_state`
+`verified-by: bravebot_tui::files_mode::the_close_control_ends_the_heading_row_beside_a_cut_note_about_earlier_edits`
+`verified-by: bravebot_tui::files_in_french::a_cut_note_leaves_the_close_control_at_the_end_of_the_heading_row_in_french`
 `verified-by: bravebot_tui::files_mode::the_hint_line_has_the_context_reading_while_the_state_is_open`
 
 <a id="FILES-5"></a>
