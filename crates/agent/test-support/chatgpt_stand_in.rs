@@ -184,7 +184,7 @@ pub struct State {
     pub first_lifetime: u64,
     /// The ID token it issued.
     pub id_token: Option<String>,
-    /// The `session-id` of each request that carried one, which every process makes for itself.
+    /// The `session-id` of each request that carried one, which each session makes for itself.
     pub sessions: Vec<String>,
     pub asked: Vec<Asked>,
 }
