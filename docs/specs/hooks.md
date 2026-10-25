@@ -14,6 +14,8 @@ governs:
   - crates/agent/src/turn/sentences.rs
   - crates/agent/src/delegate.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/side_requests.rs
