@@ -287,15 +287,16 @@ mod tests {
         assert!(buffer.drain().is_empty());
     }
 
-    /// Forgetting takes the newest line wherever it is. Rejects a forget that prefers the readable
-    /// run, which would drop an older line and leave the one the person pressed Up on.
+    /// Forgetting takes the newest line wherever it is, held lines included. Rejects a forget that
+    /// looks only at the readable run, which would report nothing to take back and leave the held
+    /// line the person pressed Up on to be sent, and one that drops the oldest line instead.
     #[test]
     fn forget_last_drops_a_held_line_before_a_readable_one() {
         let buffer = Interjections::new();
         buffer.push_behind("now".into());
         buffer.begin_turn(0, true);
         buffer.push_behind("later".into());
-        assert!(buffer.forget_last());
+        assert!(buffer.forget_last(), "the held line was not found");
         assert_eq!(buffer.held(), 1);
         buffer.begin_turn(0, false);
         assert_eq!(buffer.take().as_deref(), Some("now"));
@@ -304,19 +305,22 @@ mod tests {
 
     /// Beginning a turn removes the oldest lines whichever run they are in and keeps the rest in
     /// order, held or readable as asked. Rejects a begin that drops only readable lines, which would
-    /// leave a copy to reach the planner twice, and one that reorders the rest.
+    /// leave a copy to reach the planner twice, one that drops the newest lines, and one that
+    /// reorders the rest.
     #[test]
     fn beginning_a_turn_removes_the_oldest_lines_and_keeps_the_rest_in_order() {
         let buffer = Interjections::new();
-        buffer.push_behind("a".into());
-        buffer.push_behind("b".into());
-        buffer.push_behind("c".into());
-        buffer.begin_turn(2, true);
-        assert_eq!(buffer.held(), 1);
+        for line in ["a", "b", "c", "d"] {
+            buffer.push_behind(line.into());
+        }
+        buffer.begin_turn(0, true);
+        assert_eq!(buffer.held(), 4);
+        buffer.begin_turn(1, true);
+        assert_eq!(buffer.held(), 3, "the oldest held line was not removed");
         assert_eq!(buffer.take(), None);
         buffer.begin_turn(0, false);
         assert_eq!(buffer.held(), 0);
-        assert_eq!(buffer.drain(), vec!["c"]);
+        assert_eq!(buffer.drain(), vec!["b", "c", "d"]);
     }
 
     /// A line for a turn that is not reading comes back unread and does not enter the buffer.

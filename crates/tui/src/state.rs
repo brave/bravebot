@@ -815,11 +815,18 @@ pub struct Session {
     ///
     /// With the moment it was offered, which is the moment the command started.
     movable: Option<(bravebot_core::cancel::Handoff, Instant)>,
-    /// Prompts typed and sent while a turn was running, in the order they were typed.
+    /// Prompts, commands and command lines typed and sent while a turn was running, in the order
+    /// they were typed.
     ///
     /// Not in the transcript: they have not happened. They are drawn under the box as waiting,
     /// and each moves into the transcript at the moment it reaches the planner, whether that is
     /// inside the running turn or as a turn of its own.
+    ///
+    /// Beside [`Session::pending`] rather than in it, because the shared buffer holds only the
+    /// resolved words of the prompts. This keeps what it cannot express: commands and command
+    /// lines, the line as typed, what each line named, and the hurried flag. Whether the turn has
+    /// taken a prompt and which prompts are held back from it are read from the buffer, never
+    /// counted here (INPUT-10, "The queue and the shared buffer are two containers").
     pub queued: Vec<Queued>,
     /// Whether the working state is a turn, rather than a summary, an aside, a plan or a goal check.
     ///
@@ -894,18 +901,21 @@ pub struct Session {
     /// Set when `/init`, `/review` or `/help` hands back its prompt, so the turn that sends it says
     /// the driver wrote it.
     driver_prompt_pending: bool,
-    /// The same prompts, resolved, for the turn in flight to take between rounds.
+    /// The resolved words of the prompts in `queued`, for the turn in flight to take between rounds.
     ///
     /// Shared with the worker rather than sent down a channel, because a queued prompt can be
     /// taken back: a line already posted into a channel is gone, and Up would appear to retrieve
     /// a prompt that then arrived anyway. Both ends holding one buffer makes taking it back mean
     /// what it says.
     ///
-    /// Holds a copy of every prompt in `queued` that the turn has not taken. The newest copies are
-    /// held back from the turn in flight where Ctrl-Enter began a turn for the prompts it hurried,
-    /// behind a command, and for what was typed after the press, because they belong to a later
-    /// turn: left where the turn reads, it would take them at its first round boundary ahead of the
-    /// command. The buffer keeps the held run itself, so the two cannot disagree about it.
+    /// Holds a copy of every prompt in `queued` that the turn has not taken, and none of the
+    /// commands or command lines. The newest copies are held back from the turn in flight where
+    /// Ctrl-Enter began a turn for the prompts it hurried, behind a command, and for what was typed
+    /// after the press, because they belong to a later turn: left where the turn reads, it would
+    /// take them at its first round boundary ahead of the command. The buffer keeps the held run
+    /// itself, so `queued` does not and the two cannot disagree about it. The rest of what `queued`
+    /// keeps beside the buffer is in INPUT-10, "The queue and the shared buffer are two
+    /// containers".
     pending: crate::remote_confirm::Interjections,
     /// The reply the model is writing right now, as far as it has got.
     ///
@@ -12349,7 +12359,9 @@ mod tests {
 
     /// The held copies are kept by the shared buffer, so the count of prompts held back from the turn
     /// in flight is read from the one place and cannot drift from what the buffer will hand over.
-    /// Rejects a second container beside the buffer that counts held prompts apart from it.
+    /// Rejects a `send_queued` that leaves the prompts behind a hurried batch readable, which would
+    /// let the turn it begins take them ahead of the command, and a `where_it_goes` that does not
+    /// read the buffer's count.
     #[test]
     fn prompts_held_back_from_the_turn_are_counted_by_the_shared_buffer() {
         let mut s = session();
