@@ -2907,6 +2907,16 @@ files-more-above = ↑ { $count } more above
 files-more-below = ↓ { $count } more below
 # The last row of that list when files arrived after the reader last pressed a key.
 files-more-below-new = ↓ { $count } more below, { $new } new
+# The row above the edits when some of their rows are scrolled out of view above, and the row below
+# them for those out of view below.
+files-rows-above = { $count ->
+    [one] ↑ { $count } row above
+   *[other] ↑ { $count } rows above
+    }
+files-rows-below = { $count ->
+    [one] ↓ { $count } row below
+   *[other] ↓ { $count } rows below
+    }
 # Over each edit to the highlighted file: its place among them and the turn it was made in.
 files-edit-header = edit { $index } of { $total }, turn { $turn }
 # After the highlighted file's name.

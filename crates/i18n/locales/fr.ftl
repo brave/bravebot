@@ -3640,6 +3640,16 @@ files-more-above = ↑ { $count } de plus au-dessus
 files-more-below = ↓ { $count } de plus en dessous
 # La dernière ligne de cette liste quand des fichiers sont arrivés depuis la dernière touche.
 files-more-below-new = ↓ { $count } de plus en dessous, dont { $new } nouveaux
+# La ligne au-dessus des modifications quand certaines de leurs lignes ont défilé hors de vue en haut,
+# et la ligne en dessous pour celles qui sont hors de vue en bas.
+files-rows-above = { $count ->
+    [one] ↑ { $count } ligne au-dessus
+   *[other] ↑ { $count } lignes au-dessus
+    }
+files-rows-below = { $count ->
+    [one] ↓ { $count } ligne en dessous
+   *[other] ↓ { $count } lignes en dessous
+    }
 # Au-dessus de chaque modification du fichier sélectionné : sa place parmi elles et le tour où elle a été faite.
 files-edit-header = modification { $index } sur { $total }, tour { $turn }
 # Après le nom du fichier sélectionné.

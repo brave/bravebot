@@ -361,7 +361,10 @@ columns wide.
 | `q`, `Esc`, `/diff`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
 
 Clicking a file in the list highlights it and shows its edits from the top; a drag, a double click or
-a triple click still selects text. Every other key does nothing there, and the line in the box comes back as you left it. Edits that
+a triple click still selects text. The wheel scrolls the pane the pointer is over: the list, without
+moving the highlight, or the edits, by the number of rows `tui.wheelRows` names, and the transcript
+where the pointer is over it. A key that moves the highlight brings it back into view. The edits say
+how many of their rows are above and below the ones drawn. Every other key does nothing there, and the line in the box comes back as you left it. Edits that
 finish while the view is open are added without moving the highlight or the scroll. The view lists
 what the session's own `write_file` and `edit_file` calls and manifest write steps changed. A file a
 program changed, a file you edited, and a write a delegate made are not listed. The session record

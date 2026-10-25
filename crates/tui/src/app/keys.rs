@@ -1772,6 +1772,14 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.scroller_on(session.wheel_rows());
             Action::Redraw
         }
+        // Over the panel in the files state the wheel scrolls the pane under the pointer, and
+        // over the transcript it scrolls the transcript (MOUSE-19).
+        MouseEventKind::ScrollUp if session.files_wheel(mouse.row, mouse.column, true) => {
+            Action::Redraw
+        }
+        MouseEventKind::ScrollDown if session.files_wheel(mouse.row, mouse.column, false) => {
+            Action::Redraw
+        }
         MouseEventKind::ScrollUp => {
             session.scroll_up(session.wheel_rows());
             Action::Redraw

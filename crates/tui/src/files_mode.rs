@@ -141,21 +141,56 @@ pub fn has_earlier_calls<'a>(transcript: impl IntoIterator<Item = &'a Entry>) ->
 pub struct State {
     /// The highlighted file, as an index into [`collect`]'s list.
     pub selected: usize,
+    /// The file the list's first row stands for where the wheel or a click left it, or `None`
+    /// where the list is drawn around the highlight (FILES-5). A key that moves the highlight
+    /// clears it, which brings the highlight back into view.
+    pub top: Option<usize>,
     /// The first row of the highlighted file's edits that is drawn.
     pub scroll: usize,
-    /// How many files the list held when the reader last pressed a key or clicked a file, so that a
-    /// file arriving after it is said to have arrived (FILES-8).
+    /// How many files the list held when the reader last pressed a key, clicked or turned the wheel
+    /// over the panel, so that a file arriving after it is said to have arrived (FILES-8).
     pub known: usize,
 }
 
-/// The rows each region of a panel `height` rows tall has: the list, and the edits under it.
+/// Rows that are neither the list nor the edits: the heading, the rule, the highlighted file's name,
+/// and the two rows that count the edit rows above and below those drawn.
+const FIXED_ROWS: usize = 5;
+
+/// The rows each region of a panel `height` rows tall has.
 ///
-/// A heading row, a rule and the highlighted file's name take three rows, and the list takes at most
-/// a third of what is left, so a long list leaves the edits most of the room.
-pub fn regions(height: usize, files: usize) -> (usize, usize) {
-    let left = height.saturating_sub(3);
-    let list = files.min((left / 3).max(1));
-    (list, left.saturating_sub(list))
+/// Top to bottom the panel holds a heading row, the list, a rule, the highlighted file's name, a
+/// row that counts the edit rows above those drawn, the edits, and a row that counts those below.
+/// The list is given at most a third of what is left and has the rows `window` draws in that room.
+/// They are fewer where the room is under three rows and there are more files than it: one file is
+/// drawn, and the row the list does not draw goes to the edits. The rule, the places a click acts
+/// on and the boundary of the wheel's panes are placed from those rows, so they are where the rows
+/// are drawn. The count rows are always there, empty where nothing is out of view, so the edits do
+/// not move when a count appears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Geometry {
+    /// Rows of the list, from the row under the heading.
+    pub list: usize,
+    /// Rows of the edits that scroll.
+    pub room: usize,
+}
+
+impl Geometry {
+    pub fn new(height: usize, files: usize) -> Self {
+        let left = height.saturating_sub(FIXED_ROWS);
+        // Counted by `window`, which decides the rows the list draws, so that what is placed under
+        // them lines up with what `rows` draws.
+        let list = window(files, files.min((left / 3).max(1)), 0, None).len();
+        Geometry {
+            list,
+            room: left.saturating_sub(list),
+        }
+    }
+
+    /// The row of the rule under the list. The heading and the list are above it, and the name and
+    /// the edits below.
+    pub fn rule(&self) -> usize {
+        1 + self.list
+    }
 }
 
 /// The rows of a list `files` long drawn in `room` rows around the highlight `at`: for each row,
@@ -169,21 +204,19 @@ pub enum Row {
     Below(usize),
 }
 
-/// The rows of the list. Where there are more files than rows, the ones around the highlight, with
-/// the first and last rows saying how many are left out (FILES-5).
-pub fn window(files: usize, room: usize, at: usize) -> Vec<Row> {
-    if room == 0 || files == 0 {
-        return Vec::new();
+/// The file the first row of the list stands for. Where the wheel held the list, that is where it
+/// left it, and otherwise the rows around the highlight, with the highlight kept off the rows that
+/// give way to a count (FILES-5). Needs more files than `room`.
+pub fn list_start(files: usize, room: usize, at: usize, held: Option<usize>) -> usize {
+    let furthest = furthest_top(files, room);
+    if let Some(top) = held {
+        return top.min(furthest);
     }
-    let at = at.min(files - 1);
-    if files <= room {
-        return (0..files).map(Row::File).collect();
-    }
+    let at = at.min(files.saturating_sub(1));
     if room < 3 {
-        return vec![Row::File(at)];
+        return at;
     }
-    // The highlight stays off the rows that give way to a count.
-    let mut start = at.saturating_sub(room / 2).min(files - room);
+    let mut start = at.saturating_sub(room / 2).min(furthest);
     loop {
         let end = start + room;
         if start > 0 && at == start {
@@ -191,8 +224,33 @@ pub fn window(files: usize, room: usize, at: usize) -> Vec<Row> {
         } else if end < files && at + 1 == end {
             start += 1;
         } else {
-            break;
+            return start;
         }
+    }
+}
+
+/// The last file the first row of a list of `room` rows may stand for: the one that leaves the rows
+/// below it full.
+pub fn furthest_top(files: usize, room: usize) -> usize {
+    if room < 3 {
+        files.saturating_sub(1)
+    } else {
+        files.saturating_sub(room)
+    }
+}
+
+/// The rows of the list. Where there are more files than rows, the ones from [`list_start`], with
+/// the first and last rows saying how many are left out (FILES-5).
+pub fn window(files: usize, room: usize, at: usize, held: Option<usize>) -> Vec<Row> {
+    if room == 0 || files == 0 {
+        return Vec::new();
+    }
+    if files <= room {
+        return (0..files).map(Row::File).collect();
+    }
+    let start = list_start(files, room, at, held);
+    if room < 3 {
+        return vec![Row::File(start)];
     }
     let end = start + room;
     (start..end)
@@ -413,6 +471,15 @@ fn style_of(sign: &str) -> Style {
     }
 }
 
+/// The row that counts the edit rows out of view on one side, which is blank where there are none.
+/// `count` is a number of rows of the layout (FILES-6), so nothing is read from the edits' content.
+fn count_row(count: usize, said: impl Fn(usize) -> String) -> Line<'static> {
+    if count == 0 {
+        return Line::raw("");
+    }
+    Line::from(Span::styled(format!(" {}", said(count)), dim()))
+}
+
 /// The state's rows: the heading, the list, a rule, the highlighted file's name and edit count, and
 /// its edits, `height` rows in all (FILES-4). With them go the rows a click acts on: each row of the
 /// list that holds a file, which the rows that count the files left out do not (MOUSE-18).
@@ -426,9 +493,9 @@ pub fn rows(
     let height = usize::from(height);
     // The border takes a column.
     let width = usize::from(width).saturating_sub(1).max(1);
-    let (list, room) = regions(height, files.len());
+    let Geometry { list, room } = Geometry::new(height, files.len());
     let mut body = vec![heading(files, earlier, width)];
-    let shown = window(files.len(), list, state.selected);
+    let shown = window(files.len(), list, state.selected, state.top);
     // The list begins under the heading row.
     let mut targets: Vec<(usize, Target)> = shown
         .iter()
@@ -458,7 +525,16 @@ pub fn rows(
         ]));
         let (edits, _) = edit_rows(file, width);
         let first = state.scroll.min(edits.len().saturating_sub(room));
-        body.extend(edits.into_iter().skip(first).take(room));
+        let below = edits.len().saturating_sub(first + room);
+        body.push(count_row(first, |count| {
+            t!(files_rows_above, count = count)
+        }));
+        let mut shown: Vec<Line<'static>> = edits.into_iter().skip(first).take(room).collect();
+        shown.resize(room, Line::raw(""));
+        body.extend(shown);
+        body.push(count_row(below, |count| {
+            t!(files_rows_below, count = count)
+        }));
     }
     // A row the panel is too short to draw is not a target.
     targets.retain(|(row, _)| *row < height);
@@ -598,6 +674,38 @@ mod tests {
                 })
             })
             .unwrap_or_else(|| panic!("the panel does not read {needle:?}"))
+    }
+
+    /// One turn of the wheel with the pointer on one cell.
+    fn wheel(session: &mut Session, back: bool, row: u16, column: u16) -> Action {
+        let kind = if back {
+            MouseEventKind::ScrollUp
+        } else {
+            MouseEventKind::ScrollDown
+        };
+        mouse(session, kind, row, column)
+    }
+
+    /// The rows of the list in a panel read by `panel_of`: those under the heading and above the
+    /// rule.
+    fn list_of(panel: &[String]) -> &[String] {
+        let rule = panel
+            .iter()
+            .position(|row| row.starts_with('─'))
+            .expect("a rule under the list");
+        &panel[1..rule]
+    }
+
+    /// A session with `count` files named `f01.rs` on, each with an edit of forty lines, laid out
+    /// at 120 by 18 with the state open, which leaves the list four rows.
+    fn long_list(count: usize) -> Session {
+        let paths: Vec<String> = (1..=count).map(|n| format!("f{n:02}.rs")).collect();
+        let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let mut session = session_with_bodies(&names);
+        screen(&mut session, 120, 18);
+        session.toggle_files();
+        screen(&mut session, 120, 18);
+        session
     }
 
     /// The rectangle the last frame drew the panel in.
@@ -1166,7 +1274,7 @@ mod tests {
         let paths: Vec<String> = (1..=12).map(|n| format!("f{n:02}.rs")).collect();
         let names: Vec<&str> = paths.iter().map(String::as_str).collect();
         let mut session = session_with_bodies(&names);
-        screen(&mut session, 120, 16);
+        screen(&mut session, 120, 18);
         session.toggle_files();
         let held = session.files_state().cloned();
         assert_eq!(highlighted(&session), Some(11));
@@ -1174,10 +1282,10 @@ mod tests {
             "more above",
             "files changed",
             "────",
-            "f12.rs  ",
+            "1 edit",
             "edit 1 of 1",
         ] {
-            let (row, column) = cell_of(&mut session, 120, 16, needle);
+            let (row, column) = cell_of(&mut session, 120, 18, needle);
             click(&mut session, row, column);
             assert_eq!(
                 session.files_state().cloned(),
@@ -1187,7 +1295,7 @@ mod tests {
         }
         press(&mut session, KeyCode::Home);
         let held = session.files_state().cloned();
-        let (row, column) = cell_of(&mut session, 120, 16, "more below");
+        let (row, column) = cell_of(&mut session, 120, 18, "more below");
         click(&mut session, row, column);
         assert_eq!(
             session.files_state().cloned(),
@@ -1228,7 +1336,7 @@ mod tests {
     fn only_the_drawn_file_rows_are_click_targets() {
         let paths: Vec<String> = (1..=12).map(|n| format!("f{n:02}.rs")).collect();
         let names: Vec<&str> = paths.iter().map(String::as_str).collect();
-        for (files, height) in [(&names[..3], 30), (&names[..], 16)] {
+        for (files, height) in [(&names[..3], 30), (&names[..], 18)] {
             let mut session = session_with(files);
             screen(&mut session, 120, height);
             session.toggle_files();
@@ -1373,6 +1481,588 @@ mod tests {
         }
     }
 
+    /// MOUSE-19: the wheel scrolls the list with the pointer on the heading, on a row of the list or on
+    /// the rule, and the edits with it on any row under the rule, on every row of every frame at every
+    /// height of the panel from one row to forty-five, with one file to forty and at two widths, and
+    /// it moves nothing else: not the highlight, not the pane the pointer was not over and not the
+    /// transcript.
+    #[test]
+    fn the_wheel_scrolls_the_pane_under_the_pointer_on_every_row_of_every_frame() {
+        let paths: Vec<String> = (1..=40).map(|n| format!("f{n:02}.rs")).collect();
+        // The highlighted file's last edit is long, so the edits scroll both ways wherever they start.
+        let long: String = (0..70).map(|n| format!("line {n}\n")).collect();
+        for columns in [100, 140] {
+            for files in [1, 2, 3, 4, 5, 13, 40] {
+                // The wider panel is read with a few counts of files, since it has the same rows.
+                if columns > 100 && ![1, 5, 13].contains(&files) {
+                    continue;
+                }
+                let names: Vec<&str> = paths[..files].iter().map(String::as_str).collect();
+                let mut session = session_with(&names);
+                wrote(&mut session, write(names[files - 1], "x\n", &long));
+                screen(&mut session, columns, 50);
+                session.toggle_files();
+                screen(&mut session, columns, 50);
+                for rows_high in 1..=45u16 {
+                    let panel = panel_of(&mut session, columns, rows_high + 1);
+                    let area = panel_rect(&session);
+                    let rows = usize::from(rows_high);
+                    let keys: Option<usize> = None;
+                    let rule = (1..rows).find(|row| panel[*row].starts_with('─'));
+                    for row in 0..rows {
+                        let at = format!(
+                            "{columns} columns, {files} files, {rows_high} rows, row {row}: {panel:#?}"
+                        );
+                        // The heading, the list and the rule are the list's, and what is under the rule
+                        // is the edits'. Where the rule is not drawn, so is nothing under it.
+                        let over_the_list =
+                            Some(row) != keys && rule.is_none_or(|rule| row <= rule);
+                        session.files_to_end(true);
+                        let scrolled = session.files_state().map_or(0, |state| state.scroll);
+                        session.files_scroll(20 - scrolled as isize);
+                        // The list holds a place only where it has more files than rows to draw them in.
+                        let scrolls = files > Geometry::new(rows, files).list;
+                        // A turn back and then a turn on, each from where the last left the panes.
+                        let step = usize::from(session.wheel_rows());
+                        for back in [true, false] {
+                            let before = session.files_state().cloned().expect("the state is open");
+                            assert_eq!(before.selected, files - 1, "{at}");
+                            let action = wheel(&mut session, back, area.y + row as u16, area.x + 5);
+                            assert_eq!(action, Action::Redraw, "{at}");
+                            let after = session.files_state().cloned().expect("the state is open");
+                            let by = if back {
+                                before.scroll - step
+                            } else {
+                                before.scroll + step
+                            };
+                            let (list_moved, edits) = if over_the_list {
+                                (
+                                    after.top.is_some() == scrolls,
+                                    after.scroll == before.scroll,
+                                )
+                            } else {
+                                (after.top == before.top, after.scroll == by)
+                            };
+                            assert!(
+                                list_moved && edits,
+                                "{} went {}, {before:?} to {after:?}: {at}",
+                                if over_the_list {
+                                    "the list"
+                                } else {
+                                    "the edits"
+                                },
+                                if back { "back" } else { "on" }
+                            );
+                            assert_eq!(after.selected, files - 1, "the highlight moved: {at}");
+                            assert_eq!(session.scroll, 0, "the transcript scrolled: {at}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// MOUSE-18, MOUSE-19: `Geometry` and `rows` agree, for every height of the panel and every count of
+    /// files: the rule and the first edit's header are on the rows `Geometry` gives them, and
+    /// every row the panel has belongs to the list, which has the rows `window` draws, or to the
+    /// edits. The clicks and the wheel are placed from `Geometry`, so a row drawn elsewhere would
+    /// take a press meant for another.
+    #[test]
+    fn the_geometry_places_each_row_where_rows_draws_it() {
+        for count in 1..=40 {
+            let paths: Vec<String> = (1..=count).map(|n| format!("f{n:02}.rs")).collect();
+            let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+            let session = session_with(&names);
+            let files = session.written_files();
+            let state = State {
+                selected: count - 1,
+                ..State::default()
+            };
+            for height in 1..=60u16 {
+                let (lines, _) = rows(&files, &state, false, 60, height);
+                let text = text_of(&lines);
+                let geometry = Geometry::new(usize::from(height), count);
+                let at = format!("{count} files, {height} rows: {text:#?}");
+                assert_eq!(text.len(), usize::from(height), "{at}");
+                let drawn = usize::from(height);
+                if geometry.rule() < drawn {
+                    assert!(text[geometry.rule()].starts_with('─'), "the rule: {at}");
+                }
+                // The edits have no row on a panel one row taller than the rows that are neither the
+                // list nor the edits, and the list draws one row where its room is under three rows
+                // and it has more files than that.
+                assert_eq!(
+                    geometry.room == 0,
+                    usize::from(height) <= FIXED_ROWS + 1,
+                    "{at}"
+                );
+                if count >= 3 {
+                    let small = usize::from(height) <= FIXED_ROWS + 8;
+                    assert_eq!(geometry.list < 3, small, "{at}");
+                    if small {
+                        assert_eq!(geometry.list, 1, "{at}");
+                    }
+                }
+                let header = geometry.rule() + 3;
+                if header < drawn && geometry.room > 0 {
+                    assert!(text[header].contains("edit 1 of 1"), "the first edit: {at}");
+                }
+                // Every row the panel has is the list's or the edits': the count under the edits
+                // is the last row.
+                let below = header + geometry.room;
+                if usize::from(height) > FIXED_ROWS {
+                    assert_eq!(below + 1, usize::from(height), "{at}");
+                    assert!(
+                        text[below].is_empty() || text[below].contains("below"),
+                        "the count under the edits: {at}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// MOUSE-19: a turn of the wheel over a list that fits its rows has nothing to scroll and holds no
+    /// first row, so a file that arrives afterwards is drawn with the highlight among the rows and not
+    /// under a count.
+    #[test]
+    fn a_wheel_turn_over_a_list_that_fits_leaves_it_following_the_highlight() {
+        let mut session = long_list(4);
+        let (row, column) = cell_of(&mut session, 120, 18, "f03.rs");
+        wheel(&mut session, true, row, column);
+        wheel(&mut session, false, row, column);
+        assert_eq!(session.files_state().and_then(|state| state.top), None);
+
+        wrote(&mut session, write("f05.rs", "x\n", "y\n"));
+        let panel = panel_of(&mut session, 120, 18);
+        assert!(
+            list_of(&panel)
+                .iter()
+                .any(|row| row.contains('▸') && row.contains("f04.rs")),
+            "the highlighted file is not drawn as a row of the list: {panel:#?}"
+        );
+    }
+
+    /// MOUSE-19: with the state open on a terminal too narrow to draw the panel, a turn of the wheel
+    /// scrolls the transcript and moves nothing in the state.
+    #[test]
+    fn a_wheel_turn_with_the_panel_not_drawn_scrolls_the_transcript_and_nothing_else() {
+        let mut session = long_list(12);
+        let before = session.files_state().cloned();
+        screen(&mut session, 99, 18);
+        assert!(session.files_open());
+        assert!(
+            !session
+                .laid
+                .panes
+                .iter()
+                .any(|(pane, _)| *pane == crate::select::Pane::Panel),
+            "the panel was drawn on 99 columns"
+        );
+        assert_eq!(wheel(&mut session, true, 5, 90), Action::Redraw);
+        assert_eq!(
+            session.scroll,
+            session.wheel_rows(),
+            "the transcript did not scroll"
+        );
+        assert_eq!(
+            session.files_state().cloned(),
+            before,
+            "the wheel moved the state"
+        );
+    }
+
+    /// FILES-8: a turn of the wheel over either pane and a click on a file each count the listed files
+    /// as seen, so the list stops saying how many have arrived.
+    #[test]
+    fn the_list_stops_saying_files_arrived_once_the_reader_acts_over_the_panel() {
+        let mut session = long_list(12);
+        let (row, column) = cell_of(&mut session, 120, 18, "f11.rs");
+        wheel(&mut session, true, row, column);
+        let says_new = |session: &mut Session| {
+            list_of(&panel_of(session, 120, 18))
+                .iter()
+                .any(|row| row.contains(" new"))
+        };
+        // A file arrives and the list says so, until the reader does something over the panel.
+        let arrive = |session: &mut Session, name: &str| {
+            wrote(session, write(name, "x\n", "y\n"));
+            assert!(says_new(session), "the list did not say {name} had arrived");
+        };
+        arrive(&mut session, "late1.rs");
+        let (edits, edits_column) = cell_of(&mut session, 120, 18, "line 3");
+        wheel(&mut session, false, edits, edits_column);
+        assert!(
+            !says_new(&mut session),
+            "a wheel turn over the edits left files unseen"
+        );
+
+        arrive(&mut session, "late2.rs");
+        wheel(&mut session, true, row, column);
+        assert!(
+            !says_new(&mut session),
+            "a wheel turn over the list left files unseen"
+        );
+
+        arrive(&mut session, "late3.rs");
+        let (file, file_column) = cell_of(&mut session, 120, 18, "f04.rs");
+        session.last_click = None;
+        click(&mut session, file, file_column);
+        assert!(
+            !says_new(&mut session),
+            "a click on a file left files unseen"
+        );
+    }
+
+    /// FILES-5, MOUSE-19: where the list has one row, the row is the highlighted file's, a turn of the
+    /// wheel over it moves the row by `tui.wheelRows` files without moving the highlight and stops at
+    /// the last file, and a key that moves the highlight brings the highlighted file back.
+    #[test]
+    fn a_list_of_one_row_draws_the_highlighted_file_and_the_wheel_moves_the_row() {
+        // The panel is the rows around a list of one row and one more, and the frame has the hint
+        // line under it.
+        let height = u16::try_from(FIXED_ROWS + 3).expect("a small panel");
+        for count in 3..=6usize {
+            let paths: Vec<String> = (1..=count).map(|n| format!("f{n:02}.rs")).collect();
+            let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+            let mut session = session_with(&names);
+            screen(&mut session, 120, height);
+            session.toggle_files();
+            press(&mut session, KeyCode::Home);
+            let highlight = count / 2;
+            for _ in 0..highlight {
+                press(&mut session, KeyCode::Down);
+            }
+            let step = usize::from(session.wheel_rows());
+            let shown = |session: &mut Session| -> (Vec<String>, usize) {
+                let panel = panel_of(session, 120, height);
+                (
+                    list_of(&panel).to_vec(),
+                    highlighted(session).expect("open"),
+                )
+            };
+            let (rows, at) = shown(&mut session);
+            assert_eq!(
+                rows.len(),
+                1,
+                "{count} files: the list is not one row: {rows:?}"
+            );
+            assert_eq!(at, highlight);
+            assert!(
+                rows[0].contains('▸') && rows[0].contains(&paths[highlight]),
+                "{count} files: the row is not the highlighted file's: {rows:?}"
+            );
+
+            // The row follows the wheel, a step at a time and no further than the last file.
+            let mut row = highlight;
+            for back in [true, false, false, false] {
+                let (line, column) = cell_of(&mut session, 120, height, &paths[row]);
+                wheel(&mut session, back, line, column);
+                row = if back {
+                    row.saturating_sub(step)
+                } else {
+                    (row + step).min(count - 1)
+                };
+                let (rows, at) = shown(&mut session);
+                assert_eq!(
+                    at, highlight,
+                    "{count} files: the wheel moved the highlight"
+                );
+                assert_eq!(rows.len(), 1, "{count} files: {rows:?}");
+                assert!(
+                    rows[0].contains(&paths[row]) && rows[0].contains('▸') == (row == highlight),
+                    "{count} files: the row is not file {row}: {rows:?}"
+                );
+            }
+
+            // A key that moves the highlight draws the highlighted file again.
+            press(&mut session, KeyCode::Down);
+            let (rows, at) = shown(&mut session);
+            assert_eq!(at, highlight + 1);
+            assert!(
+                rows[0].contains('▸') && rows[0].contains(&paths[highlight + 1]),
+                "{count} files: Down did not bring the highlighted file back: {rows:?}"
+            );
+        }
+    }
+
+    /// MOUSE-19, SCROLL-3: the wheel over the list scrolls its rows by the rows one wheel event moves,
+    /// stops at each end, and moves nothing else going either way: the highlight, the scroll of the
+    /// edits, which start scrolled with room to move both ways, and the transcript stay.
+    #[test]
+    fn the_wheel_over_the_list_scrolls_its_rows_and_moves_nothing_else() {
+        let mut session = long_list(12);
+        session.adopt_wheel_rows(Some(5));
+        session.files_scroll(10);
+        let at = |session: &Session| {
+            session
+                .files_state()
+                .map(|state| (state.selected, state.scroll))
+        };
+        assert_eq!(at(&session), Some((11, 10)));
+        let (row, column) = cell_of(&mut session, 120, 18, "f11.rs");
+        let (heading, heading_column) = cell_of(&mut session, 120, 18, "files changed");
+        let unmoved = |session: &Session, turn: &str| {
+            assert_eq!(
+                at(session),
+                Some((11, 10)),
+                "{turn}: the wheel moved the highlight or the edits"
+            );
+            assert_eq!(
+                session.scroll, 0,
+                "{turn}: the wheel scrolled the transcript"
+            );
+        };
+
+        // Five rows back, as `tui.wheelRows` says: the first row stands for the third file and
+        // the highlight, the last file, is out of view.
+        assert_eq!(wheel(&mut session, true, row, column), Action::Redraw);
+        let panel = panel_of(&mut session, 120, 18);
+        let list = list_of(&panel);
+        assert!(list[0].contains("↑ 4 more above"), "{panel:#?}");
+        assert!(
+            list[1].contains("f05.rs") && list[2].contains("f06.rs"),
+            "{panel:#?}"
+        );
+        assert!(list[3].contains("↓ 6 more below"), "{panel:#?}");
+        assert!(
+            !list.iter().any(|row| row.contains('▸')),
+            "the highlight is in view: {panel:#?}"
+        );
+        unmoved(&session, "back over a row");
+
+        // Five rows on is the end of the list, where the highlight is.
+        assert_eq!(wheel(&mut session, false, row, column), Action::Redraw);
+        let panel = panel_of(&mut session, 120, 18);
+        let list = list_of(&panel);
+        assert!(
+            list[0].contains("↑ 9 more above") && list[1].contains("f10.rs"),
+            "{panel:#?}"
+        );
+        assert!(
+            list[3].contains('▸') && list[3].contains("f12.rs"),
+            "{panel:#?}"
+        );
+        assert!(!list.iter().any(|row| row.contains("below")), "{panel:#?}");
+        unmoved(&session, "on over a row");
+
+        // The heading is over the list as well, and the first file is a stop.
+        wheel(&mut session, true, heading, heading_column);
+        wheel(&mut session, true, heading, heading_column);
+        let panel = panel_of(&mut session, 120, 18);
+        let list = list_of(&panel);
+        assert!(
+            list[0].contains("f01.rs") && list[3].contains("↓ 9 more below"),
+            "{panel:#?}"
+        );
+        assert!(!list.iter().any(|row| row.contains("above")), "{panel:#?}");
+        unmoved(&session, "back over the heading");
+    }
+
+    /// MOUSE-18: a click on a row highlights it and leaves the rows of the list where they were
+    /// drawn, so the row does not move away from under the pointer.
+    #[test]
+    fn a_click_on_a_row_leaves_the_rows_of_the_list_where_they_were_drawn() {
+        let mut session = long_list(12);
+        let (row, column) = cell_of(&mut session, 120, 18, "f11.rs");
+        wheel(&mut session, true, row, column);
+        let before = panel_of(&mut session, 120, 18);
+        assert!(list_of(&before)[1].contains("f07.rs"), "{before:#?}");
+
+        let (row, column) = cell_of(&mut session, 120, 18, "f07.rs");
+        click(&mut session, row, column);
+        assert_eq!(highlighted(&session), Some(6));
+        let after = panel_of(&mut session, 120, 18);
+        let names = |panel: &[String]| -> Vec<String> {
+            list_of(panel)
+                .iter()
+                .map(|row| {
+                    row.trim_start_matches([' ', '▸'])
+                        .split_whitespace()
+                        .take(3)
+                        .collect()
+                })
+                .collect()
+        };
+        assert_eq!(
+            names(&after),
+            names(&before),
+            "the rows moved under the click"
+        );
+        assert!(list_of(&after)[1].contains('▸'), "{after:#?}");
+    }
+
+    /// FILES-5: a key that moves the highlight brings it back into view, from where the wheel had
+    /// scrolled the list away, whether or not the highlight moved.
+    #[test]
+    fn a_key_that_moves_the_highlight_brings_it_back_into_view() {
+        for (key, shown) in [
+            (KeyCode::Up, "f11.rs"),
+            (KeyCode::Char('k'), "f11.rs"),
+            (KeyCode::Down, "f12.rs"),
+            (KeyCode::Char('j'), "f12.rs"),
+            (KeyCode::Home, "f01.rs"),
+            (KeyCode::Char('g'), "f01.rs"),
+            (KeyCode::End, "f12.rs"),
+            (KeyCode::Char('G'), "f12.rs"),
+        ] {
+            let mut session = long_list(12);
+            let (row, column) = cell_of(&mut session, 120, 18, "f11.rs");
+            wheel(&mut session, true, row, column);
+            assert!(
+                !list_of(&panel_of(&mut session, 120, 18))
+                    .iter()
+                    .any(|row| row.contains('▸')),
+                "the wheel left the highlight in view"
+            );
+            press(&mut session, key);
+            let panel = panel_of(&mut session, 120, 18);
+            let marked = list_of(&panel).iter().find(|row| row.contains('▸'));
+            assert!(
+                marked.is_some_and(|row| row.contains(shown)),
+                "{key:?} did not bring {shown} into view: {panel:#?}"
+            );
+        }
+    }
+
+    /// MOUSE-19, SCROLL-3: the wheel over the edits scrolls them by `tui.wheelRows` rows, from the
+    /// name of the file down to the last row of the panel the edits own, stops at each end, and moves
+    /// nothing else.
+    #[test]
+    fn the_wheel_over_the_edits_scrolls_them_by_the_rows_a_wheel_event_moves() {
+        let mut session = long_list(12);
+        session.adopt_wheel_rows(Some(5));
+        let (row, column) = cell_of(&mut session, 120, 18, "line 3");
+        let scroll = |session: &Session| session.files_state().map(|state| state.scroll);
+
+        wheel(&mut session, false, row, column);
+        assert_eq!(scroll(&session), Some(5));
+        wheel(&mut session, false, row, column);
+        assert_eq!(scroll(&session), Some(10));
+        wheel(&mut session, true, row, column);
+        wheel(&mut session, true, row, column);
+        wheel(&mut session, true, row, column);
+        assert_eq!(
+            scroll(&session),
+            Some(0),
+            "the edits scrolled past their top"
+        );
+
+        // On the file's name, which is under the rule, the wheel is over the edits too.
+        let (name, name_column) = cell_of(&mut session, 120, 18, "1 edit");
+        wheel(&mut session, false, name, name_column);
+        assert_eq!(scroll(&session), Some(5));
+
+        for _ in 0..20 {
+            wheel(&mut session, false, row, column);
+        }
+        let panel = panel_of(&mut session, 120, 18);
+        assert!(
+            panel[panel.len() - 2].contains("f12.rs line 39"),
+            "{panel:#?}"
+        );
+        assert!(
+            !panel.last().is_some_and(|row| row.contains("below")),
+            "{panel:#?}"
+        );
+
+        let held = session.files_state().cloned().expect("open");
+        assert_eq!(
+            (held.selected, held.top),
+            (11, None),
+            "the wheel moved the list"
+        );
+        assert_eq!(session.scroll, 0, "the wheel scrolled the transcript");
+    }
+
+    /// MOUSE-19: with the pointer over the transcript the wheel scrolls the transcript, and the files
+    /// state keeps its place.
+    #[test]
+    fn the_wheel_over_the_transcript_scrolls_the_transcript_and_not_the_panel() {
+        let mut session = long_list(12);
+        let held = session.files_state().cloned();
+        assert_eq!(session.scroll, 0);
+
+        assert_eq!(wheel(&mut session, true, 5, 5), Action::Redraw);
+        assert_eq!(
+            session.scroll,
+            session.wheel_rows(),
+            "the transcript did not scroll"
+        );
+        assert_eq!(session.files_state().cloned(), held, "the panel scrolled");
+        wheel(&mut session, false, 5, 5);
+        assert_eq!(session.scroll, 0);
+        assert_eq!(session.files_state().cloned(), held, "the panel scrolled");
+    }
+
+    /// FILES-6: the edits are drawn between a row that counts the rows above and one that counts the
+    /// rows below, each blank where nothing is out of view. The counts are rows of the layout, so
+    /// the rows above, the rows drawn and the rows below make the rows there are. A count row is
+    /// its own row, so the row the edits are scrolled to is drawn under it and not hidden by it.
+    #[test]
+    fn the_edits_count_the_rows_out_of_view_and_a_count_never_hides_the_top_row() {
+        let mut session = Session::new("none");
+        prompt(&mut session, "go");
+        for edit in ["one", "two", "three"] {
+            let body: String = (0..20).map(|n| format!("{edit} line {n}\n")).collect();
+            wrote(&mut session, write("a.rs", "", &body));
+        }
+        opened(&mut session);
+        // Three headers and sixty changes.
+        let rows = 63;
+        let counted = |panel: &[String]| -> (usize, usize, Vec<String>) {
+            let name = panel
+                .iter()
+                .position(|row| row.contains("3 edits"))
+                .expect("the file's name");
+            let number = |row: &str| -> usize {
+                row.split_whitespace()
+                    .find_map(|word| word.parse().ok())
+                    .unwrap_or(0)
+            };
+            let last = panel.len() - 1;
+            (
+                number(&panel[name + 1]),
+                number(&panel[last]),
+                panel[name + 2..last].to_vec(),
+            )
+        };
+
+        let panel = panel_of(&mut session, 120, 30);
+        let (above, below, drawn) = counted(&panel);
+        assert_eq!(above, 0, "{panel:#?}");
+        assert!(!panel.join("\n").contains("rows above"), "{panel:#?}");
+        assert!(below > 0 && panel[panel.len() - 1].contains(&format!("↓ {below} rows below")));
+        assert_eq!(above + drawn.len() + below, rows, "{panel:#?}");
+
+        let (row, column) = cell_of(&mut session, 120, 30, "one line 3");
+        wheel(&mut session, false, row, column);
+        let panel = panel_of(&mut session, 120, 30);
+        let (above, below, drawn) = counted(&panel);
+        assert_eq!(above, 3, "{panel:#?}");
+        assert_eq!(above + drawn.len() + below, rows, "{panel:#?}");
+        assert!(
+            drawn[0].contains("one line 2"),
+            "the top row was hidden: {panel:#?}"
+        );
+
+        // Scrolled to a header, the header is the first row drawn of the edits.
+        press(&mut session, KeyCode::Char(']'));
+        let panel = panel_of(&mut session, 120, 30);
+        let (above, _, drawn) = counted(&panel);
+        assert_eq!(above, 21, "{panel:#?}");
+        assert!(
+            drawn[0].contains("edit 2 of 3"),
+            "the header was hidden: {panel:#?}"
+        );
+
+        press(&mut session, KeyCode::PageDown);
+        let panel = panel_of(&mut session, 120, 30);
+        let (above, below, drawn) = counted(&panel);
+        assert_eq!(below, 0, "{panel:#?}");
+        assert!(!panel.join("\n").contains("rows below"), "{panel:#?}");
+        assert_eq!(above + drawn.len(), rows, "{panel:#?}");
+    }
+
     /// FILES-5: with more files than rows the rows drawn are the ones around the highlight, and the
     /// first and last say how many are left out above and below.
     #[test]
@@ -1380,18 +2070,19 @@ mod tests {
         let paths: Vec<String> = (1..=12).map(|n| format!("f{n:02}.rs")).collect();
         let names: Vec<&str> = paths.iter().map(String::as_str).collect();
         let mut session = session_with(&names);
-        // Room for a list of four rows: a heading, a rule and a name take three more.
-        screen(&mut session, 120, 16);
+        // Room for a list of four rows: a heading, a rule, a name and two count rows take five
+        // more.
+        screen(&mut session, 120, 18);
         session.toggle_files();
-        screen(&mut session, 120, 16);
-        let at_end = panel_of(&mut session, 120, 16).join("\n");
+        screen(&mut session, 120, 18);
+        let at_end = panel_of(&mut session, 120, 18).join("\n");
         assert!(
             at_end.contains("f12.rs") && at_end.contains("↑ 9 more above"),
             "{at_end}"
         );
         assert!(!at_end.contains("below"), "{at_end}");
         press(&mut session, KeyCode::Home);
-        let at_start = panel_of(&mut session, 120, 16).join("\n");
+        let at_start = panel_of(&mut session, 120, 18).join("\n");
         assert!(
             at_start.contains("f01.rs") && at_start.contains("↓ 9 more below"),
             "{at_start}"
@@ -1400,7 +2091,7 @@ mod tests {
         for _ in 0..5 {
             press(&mut session, KeyCode::Down);
         }
-        let middle = panel_of(&mut session, 120, 16).join("\n");
+        let middle = panel_of(&mut session, 120, 18).join("\n");
         let marked = middle
             .lines()
             .find(|row| row.contains('▸'))
@@ -1418,53 +2109,15 @@ mod tests {
         let paths: Vec<String> = (1..=12).map(|n| format!("f{n:02}.rs")).collect();
         let names: Vec<&str> = paths.iter().map(String::as_str).collect();
         let mut session = session_with(&names);
-        screen(&mut session, 120, 16);
+        screen(&mut session, 120, 18);
         session.toggle_files();
         press(&mut session, KeyCode::Home);
-        assert!(!panel_of(&mut session, 120, 16).join("\n").contains("new"));
+        assert!(!panel_of(&mut session, 120, 18).join("\n").contains("new"));
         wrote(&mut session, write("late.rs", "x\n", "y\n"));
-        let panel = panel_of(&mut session, 120, 16).join("\n");
+        let panel = panel_of(&mut session, 120, 18).join("\n");
         assert!(panel.contains("↓ 10 more below, 1 new"), "{panel}");
         let held = session.files_state().cloned().expect("open");
         assert_eq!(held.selected, 0, "the highlight moved for the arrival");
-    }
-
-    /// FILES-8: a click on a file counts the listed files as seen, so the list stops saying how many
-    /// have arrived.
-    #[test]
-    fn the_list_stops_saying_files_arrived_once_the_reader_acts_over_the_panel() {
-        let paths: Vec<String> = (1..=12).map(|n| format!("f{n:02}.rs")).collect();
-        let names: Vec<&str> = paths.iter().map(String::as_str).collect();
-        let mut session = session_with(&names);
-        screen(&mut session, 120, 20);
-        session.toggle_files();
-        press(&mut session, KeyCode::Home);
-        let says_new = |session: &mut Session| {
-            panel_of(session, 120, 20)
-                .join(
-                    "
-",
-                )
-                .contains(" new")
-        };
-        wrote(
-            &mut session,
-            write(
-                "late.rs", "x
-", "y
-",
-            ),
-        );
-        assert!(
-            says_new(&mut session),
-            "the list did not say a file had arrived"
-        );
-        let (row, column) = cell_of(&mut session, 120, 20, "f02.rs");
-        click(&mut session, row, column);
-        assert!(
-            !says_new(&mut session),
-            "a click on a file left files unseen"
-        );
     }
 
     /// FILES-6: the edits of the highlighted file are drawn oldest first, each under a header that
@@ -1575,7 +2228,7 @@ mod tests {
         press(&mut session, KeyCode::Char(']'));
         assert_eq!(scroll(&session), 21, "] did not reach the second header");
         let panel = panel_of(&mut session, 120, 30);
-        assert!(panel[4].contains("edit 2 of 3"), "{panel:#?}");
+        assert!(panel[5].contains("edit 2 of 3"), "{panel:#?}");
         press(&mut session, KeyCode::Char('['));
         assert_eq!(scroll(&session), 0);
         press(&mut session, KeyCode::Char('['));
@@ -1588,10 +2241,9 @@ mod tests {
             press(&mut session, KeyCode::PageDown);
         }
         let panel = panel_of(&mut session, 120, 30);
+        // The last row counts the rows below, and the one above it is the last row of the edits.
         assert!(
-            panel
-                .last()
-                .is_some_and(|row| row.contains("edit 2 of 3") || row.contains("line 19")),
+            panel[panel.len() - 2].contains("line 19"),
             "scrolling past the end left the edits: {panel:#?}"
         );
     }
@@ -1713,6 +2365,8 @@ mod tests {
             t!(files_heading, count = 2).to_string(),
             t!(files_more_above, count = 3).to_string(),
             t!(files_more_below, count = 3).to_string(),
+            t!(files_rows_above, count = 3).to_string(),
+            t!(files_rows_below, count = 3).to_string(),
             t!(files_edit_header, index = 1, total = 2, turn = 3).to_string(),
             t!(files_edit_count, count = 2).to_string(),
             t!(files_nothing_written).to_string(),
@@ -1727,6 +2381,8 @@ mod tests {
             "files changed",
             "more above",
             "more below",
+            "rows above",
+            "rows below",
             "unchanged lines",
             "edit {",
         ] {
@@ -1764,6 +2420,59 @@ mod tests {
         let files = session.written_files();
         assert_eq!(files[0].edits.len(), 3, "the edit was not added at the end");
         assert_eq!(files[2].path, "c.rs", "a new file was not a new last row");
+    }
+
+    /// FILES-8: a file written while the rows of the list are where the wheel or a click left them
+    /// leaves them there, and the list says the file has arrived.
+    #[test]
+    fn a_file_arriving_leaves_the_rows_of_the_list_where_the_wheel_or_a_click_left_them() {
+        let mut session = long_list(12);
+        let (row, column) = cell_of(&mut session, 120, 18, "f11.rs");
+        wheel(&mut session, true, row, column);
+        let files_shown = |session: &mut Session| -> Vec<String> {
+            list_of(&panel_of(session, 120, 18))
+                .iter()
+                .filter(|row| row.contains(".rs"))
+                .map(|row| {
+                    row.trim_start_matches([' ', '▸'])
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .collect()
+        };
+        let held = session.files_state().and_then(|state| state.top);
+        assert_eq!(held, Some(5));
+        let shown = files_shown(&mut session);
+        assert_eq!(shown, ["f07.rs", "f08.rs"]);
+
+        wrote(&mut session, write("late.rs", "x\n", "y\n"));
+        assert_eq!(
+            files_shown(&mut session),
+            shown,
+            "an arrival moved the rows"
+        );
+        let panel = panel_of(&mut session, 120, 18);
+        assert!(
+            list_of(&panel)[3].contains("↓ 5 more below, 1 new"),
+            "{panel:#?}"
+        );
+        let now = session.files_state().cloned().expect("open");
+        assert_eq!((now.selected, now.top), (11, held));
+
+        // A click pins the rows as drawn, and another arrival leaves them there too.
+        let (row, column) = cell_of(&mut session, 120, 18, "f08.rs");
+        session.last_click = None;
+        click(&mut session, row, column);
+        assert_eq!(highlighted(&session), Some(7));
+        wrote(&mut session, write("later.rs", "x\n", "y\n"));
+        assert_eq!(
+            files_shown(&mut session),
+            shown,
+            "an arrival moved the rows"
+        );
+        assert_eq!(session.files_state().and_then(|state| state.top), held);
     }
 
     /// FILES-8: a turn starting, a call starting and finishing, and a turn ending leave the state

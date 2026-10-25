@@ -51,6 +51,7 @@ impl Session {
         }
         self.files = Some(files_mode::State {
             selected: written.len() - 1,
+            top: None,
             scroll: 0,
             known: written.len(),
         });
@@ -68,20 +69,24 @@ impl Session {
         }
     }
 
-    /// The rows of the panel the edits have, and the rows the highlighted file's edits come to.
-    fn edit_room(&self) -> (usize, usize) {
-        let panel = self
-            .laid
+    /// The rectangle the panel was drawn in by the last frame.
+    fn panel_area(&self) -> Option<ratatui::layout::Rect> {
+        self.laid
             .panes
             .iter()
             .find(|(pane, _)| *pane == crate::select::Pane::Panel)
-            .map(|(_, rect)| *rect);
+            .map(|(_, rect)| *rect)
+    }
+
+    /// The rows of the panel the edits have, and the rows the highlighted file's edits come to.
+    fn edit_room(&self) -> (usize, usize) {
+        let panel = self.panel_area();
         let (width, height) = panel.map_or((0, 0), |rect| (rect.width, rect.height));
         let written = self.written_files();
         let Some(state) = &self.files else {
             return (0, 0);
         };
-        let (_, room) = files_mode::regions(usize::from(height), written.len());
+        let room = files_mode::Geometry::new(usize::from(height), written.len()).room;
         let rows = written.get(state.selected).map_or(0, |file| {
             files_mode::edit_rows(file, usize::from(width).saturating_sub(1).max(1))
                 .0
@@ -103,12 +108,69 @@ impl Session {
 
     /// Highlight the file at `index`, as the keys do when they land on it: its edits open at their
     /// top. An index past the last file is ignored.
+    ///
+    /// The rows of the list stay where they were drawn, so the row that was clicked does not move
+    /// under the pointer.
     pub fn files_select(&mut self, index: usize) {
         let count = self.written_totals().0;
+        let room = self.list_room(count);
         if let Some(state) = &mut self.files
             && index < count
         {
+            let drawn = (count > room)
+                .then(|| files_mode::list_start(count, room, state.selected, state.top));
             Self::highlight(state, index, count);
+            state.top = drawn;
+        }
+    }
+
+    /// The rows the list has in the panel as the last frame drew it.
+    fn list_room(&self, files: usize) -> usize {
+        let height = self.panel_area().map_or(0, |rect| rect.height);
+        files_mode::Geometry::new(usize::from(height), files).list
+    }
+
+    /// Carry out one turn of the wheel with the pointer at (`row`, `column`) while the state is
+    /// drawn, and say whether the pointer was over the panel. Over the list it scrolls the list and
+    /// leaves the highlight where it is, and over the edits it scrolls them, by the rows one wheel
+    /// event moves anywhere (SCROLL-3). Where the pointer is not over the panel, the transcript
+    /// is the pane and nothing is done here.
+    pub fn files_wheel(&mut self, row: u16, column: u16, back: bool) -> bool {
+        if self.files.is_none() {
+            return false;
+        }
+        let Some((crate::select::Pane::Panel, area)) =
+            crate::select::pane_at(&self.laid.panes, row, column)
+        else {
+            return false;
+        };
+        let rule =
+            files_mode::Geometry::new(usize::from(area.height), self.written_totals().0).rule();
+        let rows = isize::try_from(self.wheel_rows()).unwrap_or(isize::MAX);
+        let by = if back { -rows } else { rows };
+        // The heading and the list are above the rule, and the file's name and its edits below.
+        if usize::from(row - area.y) <= rule {
+            self.files_scroll_list(by);
+        } else {
+            self.files_scroll(by);
+        }
+        true
+    }
+
+    /// Scroll the rows of the list by `by`, held between the first file and the last row that
+    /// still fills the room, without moving the highlight.
+    fn files_scroll_list(&mut self, by: isize) {
+        let count = self.written_totals().0;
+        let room = self.list_room(count);
+        if let Some(state) = &mut self.files {
+            // A list that fits its rows has nothing to scroll. Holding a first row for it would hide
+            // the highlight under a count once a file arrives (FILES-5).
+            if count > room {
+                let start = files_mode::list_start(count, room, state.selected, state.top);
+                let furthest = files_mode::furthest_top(count, room);
+                state.top = Some(start.saturating_add_signed(by).min(furthest));
+            }
+            state.known = count;
         }
     }
 
@@ -122,11 +184,14 @@ impl Session {
         }
     }
 
+    /// Move the highlight to `to`, which brings it back into view where the wheel had scrolled the
+    /// list away from it.
     fn highlight(state: &mut files_mode::State, to: usize, count: usize) {
         if state.selected != to {
             state.scroll = 0;
         }
         state.selected = to;
+        state.top = None;
         state.known = count;
     }
 

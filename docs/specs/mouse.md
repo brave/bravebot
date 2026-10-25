@@ -11,7 +11,7 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, the permission mode under the box, the rows of the `/effort` and `/config` pickers, a place in the prompt box's text, and a file of the list in the files state of the info panel, is built. Clicking other things on the screen, a context menu, edge
+drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, the permission mode under the box, the rows of the `/effort` and `/config` pickers, a place in the prompt box's text, a file of the list in the files state of the info panel, and the wheel over that state, is built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
@@ -290,14 +290,14 @@ nothing acts on what the layout drew under it:
   the file that is highlighted leaves its edits where they are scrolled to. The rows of the list
   stay where they were drawn.
 
-Nothing else is a target: not the rows that count the files left out, the heading, the rule, the
-edits, the border column, or a row the height of the panel is too short to draw. As for
-[MOUSE-12](#MOUSE-12), the press and the release are on one cell and the press is a single click, so
-a drag, a double click and a triple click are selections and copy as before, and a press that began
-elsewhere and was let go on a target is not a click on it. A press on a row whose file has left the
-list since the frame was drawn is ignored. A press is mapped by the rows the layout drew and never
-by a file's name or an edit's text ([FILES-10](files-mode.md#FILES-10)). The keys stay the way to do
-it without a mouse.
+Nothing else is a target: not the rows that count the files left out or the edit rows out of view,
+the heading, the rule, the edits, the border column, or a row the height of the panel is too short
+to draw. As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and the press is a
+single click, so a drag, a double click and a triple click are selections and copy as before, and a
+press that began elsewhere and was let go on a target is not a click on it. A press on a row whose
+file has left the list since the frame was drawn is ignored. A press is mapped by the rows the
+layout drew and never by a file's name or an edit's text ([FILES-10](files-mode.md#FILES-10)). The
+keys stay the way to do it without a mouse.
 
 `verified-by: bravebot_tui::files_mode::a_click_on_a_file_row_highlights_it_and_shows_its_edits_from_the_top`
 `verified-by: bravebot_tui::files_mode::a_drag_a_press_from_elsewhere_or_a_double_click_highlights_no_file`
@@ -305,3 +305,26 @@ it without a mouse.
 `verified-by: bravebot_tui::files_mode::a_click_on_a_file_that_has_left_the_list_selects_nothing`
 `verified-by: bravebot_tui::files_mode::only_the_drawn_file_rows_are_click_targets`
 `verified-by: bravebot_tui::files_mode::the_click_targets_of_every_frame_are_exactly_the_controls_it_drew`
+`verified-by: bravebot_tui::files_mode::a_click_on_a_row_leaves_the_rows_of_the_list_where_they_were_drawn`
+`verified-by: bravebot_tui::files_mode::the_geometry_places_each_row_where_rows_draws_it`
+
+<a id="MOUSE-19"></a>
+### MOUSE-19: the wheel scrolls the pane of the files state under the pointer
+
+With the pointer over the panel in the files state ([FILES-4](files-mode.md#FILES-4)), a turn of the
+wheel scrolls the pane under it: over the heading, the list and the rule it scrolls the rows of the
+list, and over every row under the rule it scrolls the edits. One turn moves the rows
+`tui.wheelRows` names ([SCROLL-3](scroller.md#SCROLL-3)), and each pane stops at its ends. Scrolling
+the list does not move the highlight, and a key that moves the highlight brings it back into view. A
+list that fits its rows has nothing to scroll and stays drawn around the highlight. Over the
+transcript, or where the panel is not drawn, the wheel scrolls the transcript. Which pane the
+pointer is over is read from the rows the layout drew.
+
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_list_scrolls_its_rows_and_moves_nothing_else`
+`verified-by: bravebot_tui::files_mode::a_key_that_moves_the_highlight_brings_it_back_into_view`
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_edits_scrolls_them_by_the_rows_a_wheel_event_moves`
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_transcript_scrolls_the_transcript_and_not_the_panel`
+`verified-by: bravebot_tui::files_mode::the_wheel_scrolls_the_pane_under_the_pointer_on_every_row_of_every_frame`
+`verified-by: bravebot_tui::files_mode::the_geometry_places_each_row_where_rows_draws_it`
+`verified-by: bravebot_tui::files_mode::a_wheel_turn_over_a_list_that_fits_leaves_it_following_the_highlight`
+`verified-by: bravebot_tui::files_mode::a_wheel_turn_with_the_panel_not_drawn_scrolls_the_transcript_and_nothing_else`

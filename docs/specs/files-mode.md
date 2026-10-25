@@ -106,9 +106,11 @@ edge a border as in [PANEL-6](info-panel.md#PANEL-6). Dragging the border does n
 was dragged to is kept for the ordinary state. It is drawn on a terminal of at least 100 columns,
 which leaves the transcript at least 40. None of the sections of [PANEL-9](info-panel.md#PANEL-9) is
 drawn while it is. Top to bottom it holds a heading row, the list (FILES-5), a rule, the highlighted
-file's name and edit count, and its edits (FILES-6). The context reading and cache rate move to the
-hint line, as they do when the panel is not drawn ([PANEL-8](info-panel.md#PANEL-8)). A terminal
-narrowed below 100 columns while the state is open stops drawing it and draws it again when widened.
+file's name and edit count, and its edits (FILES-6) between the two rows that count the rows of them
+out of view. On a panel of 6 rows or fewer the edits have no row. The context reading and cache rate
+move to the hint line, as they do when the panel is not drawn ([PANEL-8](info-panel.md#PANEL-8)). A
+terminal narrowed below 100 columns while the state is open stops drawing it and draws it again when
+widened.
 
 The heading row is `{n} files changed` with `+{added}` and `-{removed}` beside it, from the sums of
 FILES-2.
@@ -116,6 +118,7 @@ FILES-2.
 `verified-by: bravebot_tui::files_mode::the_state_is_half_the_columns_between_sixty_and_a_hundred`
 `verified-by: bravebot_tui::files_mode::the_state_is_not_drawn_below_a_hundred_columns_and_comes_back_when_widened`
 `verified-by: bravebot_tui::files_mode::dragging_the_border_does_nothing_in_the_state_and_keeps_the_dragged_width`
+`verified-by: bravebot_tui::files_mode::the_geometry_places_each_row_where_rows_draws_it`
 `verified-by: bravebot_tui::files_mode::no_ordinary_section_is_drawn_in_the_state`
 `verified-by: bravebot_tui::files_mode::the_hint_line_has_the_context_reading_while_the_state_is_open`
 
@@ -133,7 +136,13 @@ each such character made visible, so it cannot read as another name.
 The state opens with the last file written highlighted. Up, Down, `k` and `j` move the highlight and
 stop at each end. Home and End, or `g` and `G`, go to the first and last. Where there are more files
 than rows, the rows drawn are the ones around the highlight, and the first and last rows say how many
-are left out above and below (`↑ 1 more above`, `↓ 8 more below`).
+are left out above and below (`↑ 1 more above`, `↓ 8 more below`). On a panel of 13 rows or fewer
+the list has room for fewer than three rows, and where there are more files than room it draws one
+row, the highlighted file or the one the wheel left first, and no count. Turning the wheel over the
+list moves the rows and not the highlight ([MOUSE-19](mouse.md#MOUSE-19)), and a click on a row
+leaves them where they were drawn ([MOUSE-18](mouse.md#MOUSE-18)). A key that moves the highlight
+draws the rows around it again, so the highlight is in view after it, even where it stopped at an
+end.
 
 `verified-by: bravebot_tui::files_mode::a_row_has_the_path_and_the_counts_of_its_edits`
 `verified-by: bravebot_tui::files_mode::a_name_that_ends_in_a_space_is_listed_spelled`
@@ -142,6 +151,9 @@ are left out above and below (`↑ 1 more above`, `↓ 8 more below`).
 `verified-by: bravebot_tui::files_mode::the_state_opens_on_the_last_file_written`
 `verified-by: bravebot_tui::files_mode::the_highlight_stops_at_each_end`
 `verified-by: bravebot_tui::files_mode::a_long_list_keeps_the_highlight_on_screen_and_counts_each_side`
+`verified-by: bravebot_tui::files_mode::a_key_that_moves_the_highlight_brings_it_back_into_view`
+`verified-by: bravebot_tui::files_mode::the_geometry_places_each_row_where_rows_draws_it`
+`verified-by: bravebot_tui::files_mode::a_list_of_one_row_draws_the_highlighted_file_and_the_wheel_moves_the_row`
 
 <a id="FILES-6"></a>
 ### FILES-6: the edits of the highlighted file are drawn in order
@@ -155,14 +167,19 @@ gutter holds the line numbers of FILES-2: the number after the edit on a kept or
 number before it on a removed row. A line longer than the panel wraps to its width, and a
 continuation row has a blank gutter and sign.
 
-The edits open at their top. PageUp and PageDown scroll them. `[` and `]` move to the previous and
-next edit header.
+The edits open at their top. PageUp and PageDown scroll them, and so does the wheel
+([MOUSE-19](mouse.md#MOUSE-19)). They are drawn between a row that counts the rows of the edits
+above those drawn and a row that counts those below, `↑ {n} rows above` and `↓ {n} rows below`, each
+blank where none is out of view. The counts are rows of the layout, and no code counts `Added` or
+`Removed` rows to make them (FILES-2). A count is a row of its own, so the row the edits are
+scrolled to is drawn under it. `[` and `]` move to the previous and next edit header.
 
 `verified-by: bravebot_tui::files_mode::the_edits_of_a_file_are_drawn_oldest_first_each_under_its_header`
 `verified-by: bravebot_tui::files_mode::every_change_of_an_edit_is_drawn_and_not_twelve`
 `verified-by: bravebot_tui::files_mode::the_gutter_holds_the_numbers_the_kernel_made`
 `verified-by: bravebot_tui::files_mode::a_long_line_wraps_to_the_panel_and_its_continuation_has_a_blank_gutter`
 `verified-by: bravebot_tui::files_mode::the_bracket_keys_move_between_edit_headers`
+`verified-by: bravebot_tui::files_mode::the_edits_count_the_rows_out_of_view_and_a_count_never_hides_the_top_row`
 
 <a id="FILES-7"></a>
 ### FILES-7: each edit keeps its own marking, and no combined change is drawn
@@ -189,15 +206,17 @@ contents that need not share a label, which only `Policy::render_pair_in_place` 
 
 An edit that finishes while the state is open is added at the end of its file's edits, or as a new
 last row of the list for a file not yet listed. The highlight and the scroll offset stay where the
-reader put them, in the frame the edit arrives in. The totals update. The last row of a list longer
-than its room says how many files are below and how many of them arrived since the reader last
-pressed a key the state names or clicked a file, as [SCROLL-8](scroller.md#SCROLL-8) does for the
+reader put them, in the frame the edit arrives in, and so do the rows of the list where the wheel or
+a click left them. The totals update. The last row of a list longer than its room says how many
+files are below and how many of them arrived since the reader last pressed a key the state names,
+clicked a file or turned the wheel over the panel, as [SCROLL-8](scroller.md#SCROLL-8) does for the
 transcript. A turn starting, ending or being queued, a loop tick, a watch firing and a goal sending
 the work back leave the state open where it is ([WATCH-10](watching.md#WATCH-10)).
 
 `verified-by: bravebot_tui::files_mode::an_edit_arriving_leaves_the_highlight_and_the_scroll_where_they_were`
 `verified-by: bravebot_tui::files_mode::the_list_says_a_file_has_arrived_below`
 `verified-by: bravebot_tui::files_mode::what_starts_without_a_press_leaves_the_files_state_where_its_reader_put_it`
+`verified-by: bravebot_tui::files_mode::a_file_arriving_leaves_the_rows_of_the_list_where_the_wheel_or_a_click_left_them`
 `verified-by: bravebot_tui::files_mode::the_list_stops_saying_files_arrived_once_the_reader_acts_over_the_panel`
 
 <a id="FILES-9"></a>
@@ -211,8 +230,8 @@ when the state ends. The box is drawn without its caret, and the hint line names
 state and does nothing else, so a turn in flight goes on.
 
 A click on a list row highlights it ([MOUSE-18](mouse.md#MOUSE-18)), as the keys that move the
-highlight do. The wheel scrolling the edits is not built until
-[#2685](https://github.com/brave/bravebot/issues/2685) adds it to the terminal.
+highlight do. The wheel scrolls the edits as PageUp and PageDown do, and scrolls the list without
+moving the highlight, which no key does ([MOUSE-19](mouse.md#MOUSE-19)).
 
 `verified-by: bravebot_tui::app::a_typed_character_does_not_reach_the_box_while_the_files_state_is_open`
 `verified-by: bravebot_tui::app::a_key_the_state_does_not_name_does_nothing`
