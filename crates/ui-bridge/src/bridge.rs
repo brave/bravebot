@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
@@ -245,7 +245,7 @@ impl Bridge {
                     || {
                         let settings =
                             crate::settings::layers(Some(&open.project), self.settings.as_deref());
-                        Ok(session_workspace(open, &settings)?.reference_sources())
+                        Ok(session_workspace_unless_running(open, &settings)?.reference_sources())
                     },
                 )
             }
@@ -256,7 +256,7 @@ impl Bridge {
                     .ok_or_else(Failure::no_such_session)?;
                 let settings =
                     crate::settings::layers(Some(&open.project), self.settings.as_deref());
-                let workspace = session_workspace(open, &settings)?;
+                let workspace = session_workspace_unless_running(open, &settings)?;
                 let files = crate::mentions::named(&workspace, &request.string("prompt")?)?;
                 Ok(json!({ "files": files }))
             }
@@ -2229,15 +2229,33 @@ pub fn turn_workspace(
 /// The session's own directory outside the project, made as the session opened, is set by the
 /// code that holds it, so a turn cannot widen its own reach (TRUST-14).
 fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Failure> {
+    workspace_of(open, settings, |state| state.lock().ok())
+}
+
+/// `session_workspace` for a request answered while a turn may be running, which never waits for
+/// the session's state. The worker holds it for the length of a turn, dispatch is one thread, and
+/// a request that waited would stop the bridge reading the `confirm.reply` or `turn.cancel` the
+/// turn is blocked on. A turn holding it leaves out the directories the session added and its
+/// scratch directory, the same fallback a poisoned lock gets.
+fn session_workspace_unless_running(
+    open: &Open,
+    settings: &Settings,
+) -> Result<Workspace, Failure> {
+    workspace_of(open, settings, |state| state.try_lock().ok())
+}
+
+fn workspace_of(
+    open: &Open,
+    settings: &Settings,
+    take: impl for<'a> FnOnce(&'a Mutex<State>) -> Option<MutexGuard<'a, State>>,
+) -> Result<Workspace, Failure> {
     let mut workspace = turn_workspace(
         open.project.clone(),
         settings,
         &bravebot_config::Managed::load(),
     )
     .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
-    let (directories, scratch) = open
-        .state
-        .lock()
+    let (directories, scratch) = take(&open.state)
         .map(|s| (s.directories.clone(), s.scratch.directory()))
         .unwrap_or((Vec::new(), None));
     workspace.open_scratch(scratch);
@@ -3991,6 +4009,10 @@ mod completion_tests;
 #[cfg(test)]
 #[path = "closing_tests.rs"]
 mod closing_tests;
+
+#[cfg(test)]
+#[path = "mentions_running_tests.rs"]
+mod mentions_running_tests;
 
 #[cfg(all(test, unix))]
 #[path = "../tests/ending/worker.rs"]
