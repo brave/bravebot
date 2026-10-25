@@ -3818,7 +3818,7 @@ where
         cancel,
         hooks,
         prompt_notices,
-        advisor,
+        advisor: _,
         lent_wallet: _,
     } = inputs;
     let (confirming, reporting, recording) =
@@ -3827,18 +3827,13 @@ where
     let reporter = &mut channels.reporter;
     let confirmer = &mut channels.confirmer;
     let Spawned { delegates, waits } = spawned;
-    let (may_write, may_run, running, may_fall_back) = (
-        plan.may_write,
-        plan.may_run,
-        plan.running,
-        plan.may_fall_back,
-    );
-    let (scheduling, arming, wallet) = (plan.scheduling, plan.arming, plan.wallet);
+    let (may_write, may_run, may_fall_back) = (plan.may_write, plan.may_run, plan.may_fall_back);
+    let wallet = plan.wallet;
     let pinned_by = &plan.pinned_by;
     // What the turn began with, copied once a round brings a rule in, which is appended to it
     // (INSTR-16).
     let mut grown: Option<(crate::request_view::Prompt, String)> = None;
-    let (catalogue, addressed) = (&plan.catalogue, &plan.addressed);
+    let addressed = &plan.addressed;
     let read_output_is = || setup::read_output_is(task, plan.offers_read_output);
     let completion = loop {
         round_steps::before_a_request(
@@ -4164,58 +4159,14 @@ where
                 Some(refused) => refused,
                 None => tools::dispatch_with(
                     policy,
-                    &mut tools::Tools {
-                        workspace,
-                        output_cap: task.output_cap.unwrap_or(tools::OUTPUT_CAP),
-                        download_cap: task.download_cap.unwrap_or(tools::DOWNLOAD_CAP),
-                        deadlines: task.deadlines,
-                        skills: catalogue,
-                        slots: quarantine,
+                    &mut round_steps::tools_for_a_call(
+                        inputs,
+                        plan,
+                        &mut *state,
+                        quarantine,
                         reads,
-                        chat: crate::processor::Chat::new(config, egress, task.account_session())
-                            .spending(state.subscription.as_mut())
-                            .on(state.turn_model.as_deref())
-                            .stoppable_by(cancel),
-                        cancel,
-                        scheduling,
-                        arming,
-                        running,
-                        armed: &mut state.armed,
-                        home: task.home.as_deref(),
-                        profile: task.profile.as_deref(),
-                        cache: task.cache.as_deref(),
-                        remembering: task.remembering.as_deref(),
-                        budget_left: task
-                            .delegate
-                            .as_ref()
-                            .and_then(bravebot_core::delegate::DelegateSpec::budget)
-                            .map(|budget| budget.saturating_sub(state.account.tokens)),
-                        advising: advisor.map(|model| crate::advisor::Advising {
-                            model,
-                            context: &request.messages,
-                            asked: &mut state.advice_asked,
-                        }),
-                        messaging: task
-                            .courier
-                            .as_deref()
-                            .filter(|_| task.delegate.is_none())
-                            .map(|courier| crate::messages::Messaging {
-                                courier,
-                                ledger: &mut state.messages_sent,
-                            }),
-                        delegated: task.delegate.is_some(),
-                        confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
-                        servers: state.servers.as_deref_mut(),
-                        mcp: state.mcp.as_ref().map(|(offer, _)| offer),
-                        jobs: &mut *state.jobs,
-                        permission_mode: task.permission_mode.clone(),
-                        auto_vetting: task.auto_vetting,
-                        run_directory: &mut state.run_directory,
-                        confined_failures: &mut state.confined_failures,
-                        confine_runs: task.confine_runs,
-                        sandbox: task.sandbox,
-                        asks_about_unconfined: task.asks_about_unconfined,
-                    },
+                        &request.messages,
+                    ),
                     &mut asking,
                     reporter,
                     call,

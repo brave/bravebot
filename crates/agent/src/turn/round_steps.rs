@@ -1316,6 +1316,82 @@ pub(super) fn note_substituted_models<R: Reporter>(
     }
 }
 
+/// Everything a tool works with for one call of a round: the turn's inputs, what the plan settled,
+/// the counters and handles the tools change, and the conversation's quarantine and shown reads.
+///
+/// Every field comes from the turn's own settings, plan and state. `messages` is the request the
+/// advisor is shown. No result is read.
+pub(super) fn tools_for_a_call<'a>(
+    inputs: Inputs<'a>,
+    plan: &'a Plan<'_>,
+    state: &'a mut State<'_>,
+    quarantine: &'a mut bravebot_core::slot::SlotStore,
+    reads: &'a mut crate::conversation::ShownReads,
+    messages: &'a [Message],
+) -> tools::Tools<'a> {
+    let Inputs {
+        config,
+        egress,
+        workspace,
+        task,
+        cancel,
+        advisor,
+        ..
+    } = inputs;
+    tools::Tools {
+        workspace,
+        output_cap: task.output_cap.unwrap_or(tools::OUTPUT_CAP),
+        download_cap: task.download_cap.unwrap_or(tools::DOWNLOAD_CAP),
+        deadlines: task.deadlines,
+        skills: &plan.catalogue,
+        slots: quarantine,
+        reads,
+        chat: crate::processor::Chat::new(config, egress, task.account_session())
+            .spending(state.subscription.as_mut())
+            .on(state.turn_model.as_deref())
+            .stoppable_by(cancel),
+        cancel,
+        scheduling: plan.scheduling,
+        arming: plan.arming,
+        running: plan.running,
+        armed: &mut state.armed,
+        home: task.home.as_deref(),
+        profile: task.profile.as_deref(),
+        cache: task.cache.as_deref(),
+        remembering: task.remembering.as_deref(),
+        budget_left: task
+            .delegate
+            .as_ref()
+            .and_then(bravebot_core::delegate::DelegateSpec::budget)
+            .map(|budget| budget.saturating_sub(state.account.tokens)),
+        advising: advisor.map(|model| crate::advisor::Advising {
+            model,
+            context: messages,
+            asked: &mut state.advice_asked,
+        }),
+        messaging: task
+            .courier
+            .as_deref()
+            .filter(|_| task.delegate.is_none())
+            .map(|courier| crate::messages::Messaging {
+                courier,
+                ledger: &mut state.messages_sent,
+            }),
+        delegated: task.delegate.is_some(),
+        confined_to: plan.addressed.as_ref().map(|addressed| addressed.tools()),
+        servers: state.servers.as_deref_mut(),
+        mcp: state.mcp.as_ref().map(|(offer, _)| offer),
+        jobs: &mut *state.jobs,
+        permission_mode: task.permission_mode.clone(),
+        auto_vetting: task.auto_vetting,
+        run_directory: &mut state.run_directory,
+        confined_failures: &mut state.confined_failures,
+        confine_runs: task.confine_runs,
+        sandbox: task.sandbox,
+        asks_about_unconfined: task.asks_about_unconfined,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
