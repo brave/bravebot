@@ -3388,8 +3388,8 @@ The body is built from the conversation as these fields:
   The ChatGPT account carries no `options` ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
 
 The body is that JSON as it is built for every service but the ChatGPT account. A request to the account
-carries it as one zstd frame with `content-encoding: zstd`, and its size limit is the frame's
-([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). This program adds no `content-encoding` to a gateway's request.
+carries it as one zstd frame with `content-encoding: zstd`, whatever its size, and this program sets no limit on
+the frame ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). It adds no `content-encoding` to a gateway's request.
 
 The reply's events are read as they arrive. Words come from the text deltas of an output item. A call
 comes from a `function_call` item, whose arguments arrive in pieces as the model writes them, so the count

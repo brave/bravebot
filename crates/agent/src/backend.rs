@@ -152,7 +152,6 @@ impl BackendError {
                 // Callers handle cancellation separately; its fallback diagnosis stays internal.
                 ChatError::Encode(_) | ChatError::Cancelled => Category::Internal,
                 ChatError::Subscription(_) => Category::Unauthorized,
-                ChatError::BodyTooLarge { .. } => Category::Refused,
                 ChatError::Account(failure) => match failure {
                     AccountFailure::NotSignedIn
                     | AccountFailure::Ended
@@ -296,9 +295,6 @@ impl BackendError {
             Self::Aichat(ChatError::Reported {
                 failure: Failure::ContextFull,
             }) => true,
-            // Not sent for its size: the same remedy as a body the service refused, and the
-            // service was not asked.
-            Self::Aichat(ChatError::BodyTooLarge { .. }) => true,
             Self::Attempted { cause, .. } => cause.refused_the_body(),
             _ => false,
         }
@@ -2401,7 +2397,6 @@ mod tests {
             status(429),
             status(503),
             BackendError::from(ChatError::Subscription("none".to_string())),
-            BackendError::from(ChatError::BodyTooLarge { limit: 1 << 20 }),
             BackendError::from(ChatError::NoContent),
             BackendError::from(ChatError::Incomplete),
             BackendError::from(ChatError::Cancelled),
@@ -2417,17 +2412,6 @@ mod tests {
         for error in errors {
             assert_eq!(error.diagnosis().account, None, "{error}");
         }
-    }
-
-    /// CHATGPT-10: a body not sent for its size is refused as the body is where a service refuses
-    /// it, so the turn shortens the conversation once, and it is no failure of the sign-in.
-    #[test]
-    fn a_body_not_sent_for_its_size_is_a_refusal_of_the_body_and_no_failure_of_the_sign_in() {
-        let error = BackendError::from(ChatError::BodyTooLarge { limit: 1 << 20 });
-        assert!(error.refused_the_body());
-        assert_eq!(error.diagnosis().category, Category::Refused);
-        assert!(!error.to_string().contains("auth login"), "{error}");
-        assert!(!BackendError::from(ChatError::Account(AccountFailure::Ended)).refused_the_body());
     }
 
     /// CHATGPT-8: a refusal that says something about the account, and a refusal of a model the

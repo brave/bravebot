@@ -1209,13 +1209,14 @@ The access token is sent as a bearer token in `authorization`. The request carri
 `session-id`, `thread-id` and `x-client-request-id` each hold the identifier of the session that makes
 the request, which this program generated, and the service derives its prompt-cache affinity from
 `session-id`. The fourth is `content-encoding: zstd`: the body is the JSON of [BACKEND-61](backends.md#BACKEND-61)
-compressed with zstd into one frame, whatever its size, since the service rejects an uncompressed body over
-about 1 MiB and decodes zstd. The frame is what is sent: the length the request states and every check on
-the body's size are the frame's. A frame over 1 MiB is not sent: the turn is told the body is too large,
-spends no token on it, and shortens the conversation as it does where a service refuses the body. A body
-over 1 MiB as it is built and under it as a frame is sent. The limit is the one the program this is read
-from states for an uncompressed body, and whether it applies to the frame or to what the frame decodes to
-has not been observed. This program adds a `content-encoding` to the request of no other service. Compaction of a
+compressed with zstd into one frame, whatever its size, as the program this is read from does and as the
+service decodes. The frame is what is sent, and this program sets no limit on its size: a body is sent as it
+is built, so a conversation that holds a picture of several megabytes is sent. What the service refuses for
+size is the service's to say. It refused a text field of 16 MiB and over, whose message states a maximum
+length of 10485760, with a 400, whether the body was sent plain or as a frame. A refusal like that is
+reported as any refusal of the service is, by its status, which a turn answers by shortening the
+conversation once ([COMPACT-14](compaction.md#COMPACT-14)). This program adds a
+`content-encoding` to the request of no other service. Compaction of a
 conversation for this service is by summary ([compaction.md](compaction.md)), as it is for every service,
 and the service offers no native compaction to use instead.
 
@@ -1263,11 +1264,12 @@ work for the next. A header a settings file could add would be a way to put a va
 on a request this clause promises carries only the token, the session's identifiers and the encoding.
 Headers built only
 from constants and from values this program generated cannot carry a line break or a length a reply chose.
-A body the service refuses for its size would fail a long conversation at the point a person has the most
-to lose, so the encoding is not left to a setting, and it is applied to every body so that no size is sent
-in a form the others are not. The program this is read from compresses every body of this service, with no
-size above which it starts, and sends a body to another service as it is unless a person asked for an
-encoding. The encoder is `ruzstd`, which is Rust with no build script and no native code, where the `zstd`
+The service decodes the frames this program writes, so the encoding is not left to a setting, and it is
+applied to every body so that no size is sent in a form the others are not. The program this is read from
+compresses every body of this service, with no size above which it starts, and sends a body to another
+service as it is unless a person asked for an encoding. The size of a body is left to the service, which
+accepted frames of 12.6 MiB, so no limit of this program's own stops a conversation that holds a picture of a
+few megabytes. The encoder is `ruzstd`, which is Rust with no build script and no native code, where the `zstd`
 crate would compile the C library into each target this program is built for. libzstd decodes the frames
 `ruzstd` writes, through its command line tool at 1.5.7, Node 24's `zlib` and Python 3.15's
 `compression.zstd`, for bodies from empty to 8 MiB and for ones that do not compress, and no other decoder
@@ -1283,12 +1285,10 @@ The sentences say which level is sent, since a level shown as in force that is n
 sent would mislead a person about what the session costs.
 
 `verified-by: bravebot_aichat::client::an_account_request_carries_the_token_the_three_session_headers_and_the_zstd_encoding_and_nothing_a_gateway_would`
-`verified-by: bravebot_aichat::client::a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_built`
-`verified-by: bravebot_aichat::client::a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token`
+`verified-by: bravebot_aichat::client::a_frame_past_the_largest_the_service_took_is_sent_and_decodes_to_the_bytes_built`
 `verified-by: bravebot_aichat::client::an_account_body_is_encoded_whatever_its_size`
 `verified-by: bravebot_aichat::client::a_gateways_body_is_plain_json_with_no_content_encoding`
 `verified-by: bravebot_aichat::client::a_gateways_refused_key_is_not_reported_as_the_chatgpt_sign_in_failing`
-`verified-by: bravebot_agent::backend::a_body_not_sent_for_its_size_is_a_refusal_of_the_body_and_no_failure_of_the_sign_in`
 `verified-by: bravebot_agent::chatgpt::a_sessions_identifier_is_random_and_every_handle_on_it_gives_the_same_one`
 `verified-by: bravebot_agent::turn::every_round_of_a_turn_on_the_account_carries_the_identifier_of_its_session`
 `verified-by: bravebot_agent::turn::turns_of_one_session_carry_one_identifier_and_another_session_carries_its_own`
@@ -1556,6 +1556,18 @@ real ChatGPT account on this program's own build:
   both sentences naming the model and saying it is not supported with a ChatGPT account.
 - `service_tier` `priority` was accepted and `fast` was refused with 400 and a `detail` sentence. The rows of
   the listing carry `service_tiers` and `additional_speed_tiers` fields. This program sends no service tier.
+- Sizes of a request. Plain bodies of 0.1 to 8 MiB with a field the service does not take reached validation
+  and were refused with 400 and a `detail` sentence, and valid plain bodies of 1.2, 4 and 8 MiB were answered
+  200. A single text field of 16, 32 and 64 MiB was refused with 400 and the `error.code`
+  `string_above_max_length`, with the field as `error.param` and a `message` stating the maximum length,
+  10485760, and so was the same text sent as a zstd frame decoding to that size. The service therefore
+  decodes the frame to its full size and applies the limit to the decoded text. No limit on the size of a
+  request below that was seen, and the limit of about 1 MiB for an uncompressed body that opencode states
+  was not seen. Incompressible images were accepted in frames of 1.0, 2.9,
+  5.6, 6.9, 8.8 and 12.6 MiB, the last holding a data URL of 16.8 MiB.
+- The frames this program writes, with the frame's checksum and no content size in its header, were accepted
+  on every turn made through it: a text turn, a turn that calls a function, a turn at an effort level and the
+  summary of `/compact`.
 - A request without `session-id`, `thread-id` or `x-client-request-id` is accepted.
 
 **Stated by the service's public documents, read with no account on 2026-10-25**, as a name, a shape, a
@@ -1710,10 +1722,6 @@ differs from a statement, the item or an entry of [Known costs](#known-costs) sa
   sign-in.
 - What the three session headers do for prompt-cache affinity, and that there is no native compaction and no
   change of effort in a session.
-- That the service decodes a zstd body, which the program this is read from sends for every request to it.
-  The frames this program writes differ from the ones that program's `zlib` writes in having a checksum and
-  no content size, at a lower level. That the service takes such a frame, the size at which it rejects a
-  body, and whether that size is of the frame or of what it decodes to, are not observed.
 - The error codes that end the use of a subscription: `subscription_sharing_usage_limit_exceeded`,
   `subscription_sharing_user_not_eligible`, `subscription_sharing_unsupported_capability`,
   `subscription_sharing_route_not_supported`, `subscription_sharing_invalid_user`,
@@ -1851,10 +1859,8 @@ These are the places where another spec states something about this service, eac
   since whether the host answers under the name asked or under a dated one is not observed.
 - The body is encoded at the one level `ruzstd` writes, which makes frames about 1.4 times the size of
   libzstd's default level on request-shaped JSON (0.40 of the input against 0.27 to 0.29, measured on bodies
-  built from this repository's files), and a frame over 1 MiB is not sent. It matches a repeat only within
-  128 KiB, so a conversation that holds the same large text twice, far apart, gains nothing from the second
-  copy. A long conversation is shortened sooner than it would be by the program this is read from, and the
-  limit has not been observed.
+  built from this repository's files). It matches a repeat only within 128 KiB, so a conversation that holds
+  the same large text twice, far apart, gains nothing from the second copy.
 - The frame has a checksum and no content size, where the frames Node's `zlib` writes, which the program this
   is read from calls, have a content size and no checksum. A service that needs the size before it reads the
   frame refuses every body. The change that follows is the `zstd` crate, which writes the size, at the cost

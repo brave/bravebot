@@ -7708,20 +7708,16 @@ fn a_reply_that_is_not_the_accounts_listing_cannot_be_read_and_an_empty_one_can(
     assert!(models.is_empty());
 }
 
-/// CHATGPT-10: the body is sent as the zstd frame it is encoded to, and the limit is on that frame.
-/// A conversation whose body is over a mebibyte as it is built and under it once encoded is sent,
-/// with one request and one token asked for, and decodes to the bytes a gateway is sent for the same
-/// conversation. A limit applied to the body as it is built refuses it, and a frame that did not
-/// decode to what was built changes the conversation the service answers.
+/// CHATGPT-10: the body is sent as the zstd frame it is encoded to, with no size above which this
+/// program refuses to send it. A conversation holding a picture, which no encoder shrinks, is a frame
+/// of more than 13 MiB here, past 12.6 MiB, the largest frame the service was seen to accept. It is
+/// sent in one request with one token asked for, and decodes to the bytes a gateway is sent for the
+/// same conversation. A ceiling on the frame at or below that size sends nothing and ends the turn,
+/// and a frame that did not decode to what was built changes the conversation the service answers.
 #[test]
-fn a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_built() {
-    let words = compressible_text(2 << 20);
-    let built = built_body(&account_request(&words));
-    assert!(
-        built.len() > 1 << 20,
-        "{} bytes are not over the limit",
-        built.len()
-    );
+fn a_frame_past_the_largest_the_service_took_is_sent_and_decodes_to_the_bytes_built() {
+    let picture = incompressible_text(20 << 20);
+    let built = built_body(&account_request(&picture));
 
     let (endpoint, received) = serve_stream(text_reply(&["ok"]));
     let provider = responses_at(&endpoint);
@@ -7731,16 +7727,15 @@ fn a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_
     let mut sign_in = StoredSignIn::default();
     let mut client = account_client(&egress, &provider, &mut sign_in);
     client
-        .complete(&mut policy, &account_request(&words))
-        .expect("a body that encodes under the limit is sent");
+        .complete(&mut policy, &account_request(&picture))
+        .expect("a frame of any size is sent");
 
     let sent = received.recv().expect("the request arrived");
     assert_eq!(sent.header("content-encoding"), Some("zstd"));
     assert!(
-        sent.raw.len() <= 1 << 20 && sent.raw.len() < built.len(),
-        "{} bytes were sent for a body of {}",
-        sent.raw.len(),
-        built.len()
+        sent.raw.len() > 13 << 20,
+        "{} bytes are not over 13 MiB, so the body does not stand for the case",
+        sent.raw.len()
     );
     assert!(
         frame_checksum(&sent).is_some(),
@@ -7752,38 +7747,6 @@ fn a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_
     );
     assert_eq!(client.attempts(), 1);
     assert_eq!(sign_in.asked, 1);
-    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
-}
-
-/// CHATGPT-10: a body still over the limit once encoded is not sent, spends no token and is reported
-/// as too large, which a turn answers by shortening the conversation. Text with no pattern to find
-/// is over a mebibyte as it is built and as it is encoded, and encoding does not stand in for a
-/// shorter conversation. An implementation with no check sends it.
-#[test]
-fn a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token() {
-    let egress = Egress::new();
-
-    let (endpoint, received) = serve_stream(text_reply(&["never asked for"]));
-    let provider = responses_at(&endpoint);
-    let mut sink = RecordingSink::new();
-    let mut policy = open_policy(&mut sink);
-    let mut sign_in = StoredSignIn::default();
-    let mut client = account_client(&egress, &provider, &mut sign_in);
-    let error = client
-        .complete(
-            &mut policy,
-            &account_request(&incompressible_text(1_700_000)),
-        )
-        .expect_err("too large to send");
-    assert!(
-        matches!(error, ChatError::BodyTooLarge { limit } if limit == 1 << 20),
-        "{error:?}"
-    );
-    assert_eq!(client.attempts(), 0);
-    assert_eq!(
-        sign_in.asked, 0,
-        "a token was asked for a request that was not sent"
-    );
     assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
 }
 

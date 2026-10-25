@@ -125,11 +125,12 @@ second and to no other.
 A request to the account is made in the Responses protocol, as an [`openai` entry that names
 `@ai-sdk/openai`](openai.md#the-responses-api) is, and nothing is asked to be kept at OpenAI. It carries the
 access token, three headers that hold an identifier bravebot generated, and `content-encoding: zstd`, and
-nothing a settings file or a reply adds. The body is compressed into one zstd frame whatever its size,
-because the service refuses an uncompressed body over about 1 MiB. A frame over 1 MiB is not sent, no
-token is spent on it, and the turn is told the body is too large and shortens the conversation.
-`OPENAI_API_KEY` and a gateway's key are not looked for, and the account's tokens are never sent to a
-gateway.
+nothing a settings file or a reply adds. The body is compressed into one zstd frame whatever its size.
+bravebot sets no limit on how large a request may be, so a conversation holding a picture of several
+megabytes is sent. OpenAI decides what it takes: it refused a text field of 16 MiB and over, with a message
+that states a maximum length of 10485760, and a turn answers a refusal like that, as it answers any request
+OpenAI refuses as written, by shortening the conversation once and sending it again. `OPENAI_API_KEY` and a
+gateway's key are not looked for, and the account's tokens are never sent to a gateway.
 
 ## Staying signed in
 

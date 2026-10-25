@@ -74,12 +74,6 @@ pub enum ChatError {
     ///
     /// Fails the request rather than falling back: see [`AichatClient::route`].
     Subscription(String),
-    /// The body, as the form it is sent in, is larger than the service takes, so it was not sent
-    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
-    ///
-    /// Sent nowhere and no token spent on it. A caller that can shorten the conversation does, as
-    /// it does where a service refuses the body.
-    BodyTooLarge { limit: usize },
     /// The ChatGPT account's access token could not be had or was refused twice, or the serving host
     /// refused a request in a code that names the account
     /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
@@ -146,11 +140,6 @@ impl fmt::Display for ChatError {
                 }
                 f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
             }
-            Self::BodyTooLarge { limit } => write!(
-                f,
-                "the request body is larger than the {limit} bytes the service takes, even compressed, \
-                 so it was not sent. Shorten the conversation"
-            ),
             Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
             Self::Subscription(detail) => write!(
                 f,
