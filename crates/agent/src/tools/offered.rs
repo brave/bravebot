@@ -1310,7 +1310,13 @@ fn table(
                     },
                     "task": {
                         "type": "string",
-                        "description": "What it has to do, in your own words, as the whole of                                         what it will know. It cannot see this conversation, your                                         references, the user's prompt or anything you have read,                                         and it cannot come back for more, so name the paths, the                                         commands, the symptom and what a finished answer has to                                         contain. Say what you want reported, not just what you                                         want done."
+                        "description": "What it has to do, in your own words, as the whole of what \
+                                        it will know. It cannot see this conversation, your \
+                                        references, the user's prompt or anything you have read, \
+                                        and it cannot come back for more, so name the paths, the \
+                                        commands, the symptom and what a finished answer has to \
+                                        contain. Say what you want reported, not just what you \
+                                        want done."
                     },
                     "each": {
                         "type": "array",

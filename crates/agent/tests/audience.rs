@@ -61,6 +61,27 @@ fn what_the_planner_reads_is_not_taken_from_a_catalog() {
     }
 }
 
+/// A description written across source lines ends each one with a backslash, which drops the next
+/// line's indentation. One written without it keeps that indentation as text, and the planner is
+/// sent runs of spaces in the middle of a sentence.
+#[test]
+fn a_tool_description_holds_no_run_of_spaces() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools/offered.rs");
+    let source = std::fs::read_to_string(&path).expect("read the tool table");
+    for (number, line) in source.lines().enumerate() {
+        let Some((_, text)) = line.split_once("\"description\": \"") else {
+            continue;
+        };
+        assert!(
+            !text.contains("  "),
+            "src/tools/offered.rs:{} has a run of spaces inside a description. End each source \
+             line of a multi-line description with a backslash so the next line's indentation \
+             is dropped.\n{line}",
+            number + 1
+        );
+    }
+}
+
 /// Whether the line calls the catalog lookup, as opposed to merely ending a longer macro name
 /// with the same three characters, which `format!(` and `assert!(` both do. The lookup written
 /// with its crate path, `bravebot_i18n::t!(`, is a lookup too.
