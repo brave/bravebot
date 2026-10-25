@@ -25,7 +25,7 @@ function load(path) {
 function session() {
   const { apply } = load('src/renderer/apply.ts')
   const state = {
-    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null, agents: [] },
+    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null, agents: [], agentCounts: { started: 0, working: 0 } },
   }
   state.send = (event, data) => apply({ event, data }, (update) => { state.live = update(state.live) }, () => {}, () => {})
   return state

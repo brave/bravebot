@@ -465,8 +465,8 @@ entitled to the rest: "12 lines, quarantined" does not tell them what their agen
 the same reason a delegate has a view, so it is the same mode rather than a second one to learn.
 
 **Why a list of its own.** What a program printed is read as a log and an agent's work is read as
-a conversation, and one list put them side by side. Keeping the mode and moving the rows means the
-keys, the footer and the marks are one implementation.
+a conversation, and a list holding both puts a log beside a conversation. One mode keeps the keys,
+the footer and the marks in one implementation.
 
 **Why oldest first.** A row's place is what somebody steps through, and a list ordered by when
 things happened would move the row under them every time a command finished.
