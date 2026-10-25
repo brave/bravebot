@@ -129,6 +129,10 @@ pub struct State {
     /// state so that the end waits for the turn that is running, which holds the state for as long as
     /// it runs. Not saved: a reopened session and a fork begin their own.
     pub moments: Option<bravebot_agent::hooks::SessionMoments>,
+    /// The agents this session has started and where each stands. The reporter of every turn and
+    /// run reports into it, so the list lasts across them, and the window is sent the whole of it
+    /// each time it changes (VIEW-35). Not saved: a reopened session and a fork start with none.
+    pub roster: Arc<Mutex<bravebot_agent::roster::Roster>>,
 }
 
 /// The session's own directory outside the project, or why it has none.
@@ -211,6 +215,7 @@ impl State {
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
             moments: None,
+            roster: Arc::default(),
         }
     }
 
@@ -257,6 +262,7 @@ impl State {
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
             moments: None,
+            roster: Arc::default(),
         })
     }
 
@@ -324,6 +330,7 @@ impl State {
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
             moments: None,
+            roster: Arc::default(),
         }
     }
 }

@@ -2450,7 +2450,8 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
-    let mut reporter = BridgeReporter::new(emitter.clone(), &session);
+    let mut reporter =
+        BridgeReporter::new(emitter.clone(), &session).sharing(Arc::clone(&state.roster));
 
     // The session begins with its first turn (HOOK-10), here on the worker so the request that
     // sent the turn is answered at once, and before anything else the turn does, so a hook that
@@ -2763,6 +2764,9 @@ fn work(work: Work) {
     if let Ok(mut watches) = watches.lock() {
         watches.turn_ended(std::time::Instant::now());
     }
+    // An agent does not outlive its turn (DELEGATE-17). Said before the event that ends the turn,
+    // so the window has the list it is to draw when it hears the end (VIEW-35).
+    reporter.turn_ended();
     drop(state);
     emitter.finish(event, &finished);
 }

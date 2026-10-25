@@ -202,6 +202,10 @@ pub struct BridgeReporter {
     prompt_at: Option<usize>,
     /// The task list as the turn last wrote it, kept for the record (SESSION-23).
     task_list: Vec<Row>,
+    /// The agents the conversation has started, which the rules for are
+    /// [`bravebot_agent::roster::Roster`]'s and the terminal uses as well. Shared with the session
+    /// so the list lasts across turns (VIEW-35).
+    roster: Arc<Mutex<bravebot_agent::roster::Roster>>,
 }
 
 impl BridgeReporter {
@@ -215,7 +219,56 @@ impl BridgeReporter {
             reporting_for: None,
             prompt_at: None,
             task_list: Vec::new(),
+            roster: Arc::default(),
         }
+    }
+
+    /// Report into the session's own list of agents and not a fresh one.
+    pub fn sharing(mut self, roster: Arc<Mutex<bravebot_agent::roster::Roster>>) -> Self {
+        self.roster = roster;
+        self
+    }
+
+    /// The turn or run is over, so an agent still working is marked as not finished
+    /// (DELEGATE-17) and the list is sent again if that changed one.
+    ///
+    /// Called before the event that ends the turn or the run, whichever way it ended, so a window
+    /// has the list it is to draw when it hears the end (VIEW-35).
+    pub fn turn_ended(&mut self) {
+        let mut roster = self
+            .roster
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !roster.turn_ended().is_empty() {
+            self.announce_agents(&roster);
+        }
+    }
+
+    /// The whole list and its counts, for a window to store and draw. The kind and the task are
+    /// carried as the driver was given them and nothing here reads them (VIEW-35).
+    fn announce_agents(&self, roster: &bravebot_agent::roster::Roster) {
+        use bravebot_agent::roster::AgentState;
+        let listed: Vec<Value> = roster
+            .agents()
+            .iter()
+            .map(|agent| {
+                json!({
+                    "id": agent.id.to_string(),
+                    "kind": agent.kind,
+                    "task": agent.task,
+                    "state": match agent.state {
+                        AgentState::Working => "working",
+                        AgentState::Finished => "finished",
+                        AgentState::Failed => "failed",
+                    },
+                })
+            })
+            .collect();
+        let counts = roster.counts();
+        self.say(
+            "agents",
+            json!({ "agents": listed, "started": counts.started, "working": counts.working }),
+        );
     }
 
     /// The latest cumulative measurements, retained for manifest storage on failure.
@@ -384,14 +437,12 @@ impl Reporter for BridgeReporter {
     /// window draws and never reads. None of what the delegate prints crosses, and neither does
     /// the stop token: a window has no way to stop one.
     fn delegate_started(&mut self, delegation: bravebot_agent::report::Delegation) {
-        self.say(
-            "delegate.started",
-            json!({
-                "delegate": delegation.id.to_string(),
-                "kind": delegation.kind,
-                "task": delegation.task,
-            }),
-        );
+        let mut roster = self
+            .roster
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        roster.start(delegation.id, delegation.kind, delegation.task);
+        self.announce_agents(&roster);
     }
 
     /// A delegate has finished, named by its number because several run at once.
@@ -405,10 +456,13 @@ impl Reporter for BridgeReporter {
         failed: bool,
         _reported: Option<bravebot_agent::report::Reported>,
     ) {
-        self.say(
-            "delegate.finished",
-            json!({ "delegate": delegate.to_string(), "failed": failed }),
-        );
+        let mut roster = self
+            .roster
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if roster.finish(delegate, failed).is_some() {
+            self.announce_agents(&roster);
+        }
     }
 
     fn quarantined(&mut self, shown: Shown) {
