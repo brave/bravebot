@@ -1503,7 +1503,9 @@ session is open.
 ## Decisions left open
 
 These are a person's to decide, and no test can settle them. The front matter's `status` stays `proposed`
-while the first of them is open, although every clause is built.
+while the first of them is open. Every clause is built, and the command has been exercised against a real
+ChatGPT account, whose observations and the items still unobserved are listed in
+[What the exchange has to record](#what-the-exchange-has-to-record), so that decision is what holds it.
 
 - **Whether OpenAI's terms allow this.** The sign-in registers a client of its own, named `bravebot`, and
   presents no other program's identifier. Whether ChatGPT's terms allow a third-party program to use a
