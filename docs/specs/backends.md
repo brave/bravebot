@@ -969,6 +969,8 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_aichat::call::a_probe_that_answered_remembers_the_refusal`
 `verified-by: bravebot_aichat::call::a_probe_that_failed_as_well_remembers_nothing_and_goes_back`
 `verified-by: bravebot_aichat::call::a_request_that_probed_nothing_settles_nothing`
+`verified-by: bravebot_aichat::call::the_order_fields_are_given_up_in_is_the_callers`
+`verified-by: bravebot_aichat::call::a_probe_that_failed_as_well_remembers_nothing_and_restores_what_was_known`
 `verified-by: bravebot_aichat::lib::a_model_whose_service_refused_a_level_is_reported_as_reading_none`
 `verified-by: bravebot_aichat::models::a_row_whose_service_refused_a_level_reads_none_however_silent_the_roster`
 `verified-by: bravebot_aichat::models::a_row_the_service_refused_reads_none_however_loudly_the_roster_advertises_it`
@@ -1859,6 +1861,8 @@ and the request count and no more, as for every failure.
 `verified-by: bravebot_bedrock::lib::framed_service_exceptions_keep_their_kind_and_request_count`
 `verified-by: bravebot_bedrock::lib::a_reply_that_went_quiet_after_it_began_is_reported_as_stopping_and_asked_for_again`
 `verified-by: bravebot_aichat::call::beginning_an_attempt_keeps_what_the_earlier_ones_were_billed`
+`verified-by: bravebot_aichat::call::a_stop_that_lands_between_attempts_is_answered_before_the_next_is_sent`
+`verified-by: bravebot_aichat::call::attempts_are_capped_and_a_concession_is_not_one`
 `verified-by: bravebot_aichat::call::beginning_a_call_clears_the_count_and_both_usages`
 `verified-by: bravebot_aichat::call::a_wait_ends_early_and_says_so_when_a_stop_lands_in_the_middle_of_it`
 `verified-by: bravebot_aichat::call::a_wait_nobody_stops_finishes_and_says_so`
@@ -2131,6 +2135,7 @@ would understate the cost; charging an unfinished reply would claim a cost not y
 `verified-by: bravebot_aichat::call::a_measured_zero_stays_known_and_nothing_measured_stays_unknown`
 `verified-by: bravebot_aichat::call::an_attempt_that_reports_nothing_replaces_the_one_before_it_with_nothing`
 `verified-by: bravebot_aichat::call::billing_adds_the_earlier_attempts_to_the_reply`
+`verified-by: bravebot_aichat::call::usage_of_the_earlier_attempts_is_carried_into_the_reply`
 
 <a id="BACKEND-41"></a>
 ### BACKEND-41: how long a reply may run belongs to the model, and an exported figure outranks it
@@ -2777,6 +2782,7 @@ that lifts in an hour gives the person nothing to act on. The status decides whe
 parsed number only how long.
 
 `verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_for_as_long_as_the_service_asked`
+`verified-by: bravebot_aichat::call::a_rate_limit_is_waited_out_and_announced_before_the_wait`
 `verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_before_a_whole_reply_is_asked_for_again`
 `verified-by: bravebot_aichat::client::a_wait_past_the_ceiling_fails_at_once_and_carries_the_figure`
 `verified-by: bravebot_aichat::client::a_retry_after_that_does_not_parse_falls_back_to_the_backoff`

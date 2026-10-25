@@ -24,7 +24,7 @@
 
 pub mod protocol;
 
-use crate::call::{Pace, Spent};
+use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, SseDecoder, Usage};
 use crate::{
     ATTEMPTS, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals, WAKE,
@@ -82,34 +82,80 @@ pub struct AnthropicClient<'a> {
     token: Option<Secret>,
     /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
     headers: Vec<(String, Secret)>,
-    /// Whether requests still carry cache breakpoints.
+    /// What this model has refused so far in the call in progress, loaded and settled by
+    /// [`call::drive`].
     ///
-    /// True until a model refuses one, which is the only way to find out that it does not do
-    /// prompt caching: nothing in the listing says which models read a breakpoint.
-    breakpoints: bool,
-    /// Whether requests still carry the cache lifetime the settings chose.
-    ///
-    /// True until a model refuses it, which is the only way to find out that it reads breakpoints
-    /// and not a lifetime on them.
-    cache_ttl: bool,
-    /// Whether requests still carry the effort level a turn was given.
-    ///
-    /// True until a model refuses the field. The listing says which models read one, and a request
-    /// is sent without it for a model it says reads none, so this is for a roster that was not
-    /// asked or is out of date.
-    effort: bool,
-    /// Whether streamed requests that offer tools still ask for arguments as they are written.
-    arguments_as_written: bool,
-    /// Whether requests to a model nobody stated a ceiling for still carry the assumed one.
-    ///
-    /// True until a model refuses it, after which they carry the fallback.
-    ceiling: bool,
-    /// What that model was known to refuse before this request, which a probe that settled nothing
-    /// puts back.
-    recalled: Refusals,
+    /// Nothing is refused until a model says so, which is the only way to find out: nothing in the
+    /// listing says which models read a breakpoint, a lifetime on one, or a level. The listing says
+    /// which models read a level, and a request is sent without one for a model it says reads none,
+    /// so a level is only refused here for a roster that was not asked or is out of date. A model
+    /// that refuses the assumed ceiling is sent the fallback.
+    refusals: Refusals,
     /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
     /// unless a test shortens it.
     pace: Pace,
+}
+
+impl Driven for AnthropicClient<'_> {
+    type Error = ChatError;
+
+    fn cancelled() -> ChatError {
+        ChatError::Cancelled
+    }
+
+    fn spent_mut(&mut self) -> &mut Spent {
+        &mut self.spent
+    }
+
+    fn pace(&self) -> &Pace {
+        &self.pace
+    }
+
+    fn refusals(&self) -> &Refusals {
+        &self.refusals
+    }
+
+    fn refusals_mut(&mut self) -> &mut Refusals {
+        &mut self.refusals
+    }
+
+    fn recall(&self, key: &str) -> Refusals {
+        remembered(key)
+    }
+
+    fn remember(&self, key: &str, found: Refusals) {
+        remember(key, found);
+    }
+
+    /// Only a refusal of the body is answered by giving something up, and only where the request
+    /// carried what would be given up: a request without a level was not refused for it, and
+    /// giving it up there would record a refusal nobody saw. The ceiling only where it was the
+    /// assumed one, a figure somebody stated being their statement about the model and quietly
+    /// sending less cutting replies short that they said could run. The lifetime only while
+    /// breakpoints are sent and a lifetime was chosen.
+    fn refused(&self, request: &ChatRequest, concession: Concession, error: &ChatError) -> bool {
+        refuses_the_body(error)
+            && match concession {
+                Concession::Effort => request.effort.is_some(),
+                Concession::Ceiling => self.stated_ceiling().is_none(),
+                Concession::CacheTtl => !self.refusals.caching && self.cache_ttl_asked().is_some(),
+                Concession::Breakpoints => true,
+                Concession::ArgumentsAsWritten => self.streams_arguments(request, true),
+                Concession::ThinkingShown => false,
+            }
+    }
+
+    fn asks_again(&self, attempt: u32, error: &ChatError) -> bool {
+        worth_asking_again(self.attempts_allowed(), attempt, error)
+    }
+
+    fn pause(&self, failures: u32, error: &ChatError) -> Duration {
+        pause_before_retry(self.pace.backoff, failures, error)
+    }
+
+    fn log_retry(&self, attempt: u32, pause: Duration) {
+        log_retry(attempt, pause);
+    }
 }
 
 impl<'a> AnthropicClient<'a> {
@@ -134,12 +180,7 @@ impl<'a> AnthropicClient<'a> {
             model: model.into(),
             token,
             headers: Vec::new(),
-            breakpoints: true,
-            cache_ttl: true,
-            effort: true,
-            arguments_as_written: true,
-            ceiling: true,
-            recalled: Refusals::default(),
+            refusals: Refusals::default(),
             pace: Pace::new(BACKOFF),
         }
     }
@@ -196,100 +237,34 @@ impl<'a> AnthropicClient<'a> {
         learned_key(&self.provider.completion_url(), &self.model)
     }
 
-    /// Start a request from what this model has already been found to refuse.
-    ///
-    /// Without this every turn re-learns it, at the cost of one refused request per concession per
-    /// turn, and the interface is never told either.
-    fn recall(&mut self) {
-        let refusals = remembered(&self.refusal_key());
-        self.breakpoints = !refusals.caching;
-        self.cache_ttl = !refusals.cache_ttl;
-        self.effort = !refusals.effort;
-        self.arguments_as_written = !refusals.arguments_as_written;
-        self.ceiling = !refusals.ceiling;
-        self.recalled = refusals;
-    }
+    /// The order a refusal of the body is answered in by [`AnthropicClient::complete`]: the level,
+    /// which models released before it refuse; the reply ceiling, which models with a lower
+    /// maximum refuse; the cache lifetime, ahead of the breakpoints that carry it so that a model
+    /// reading a breakpoint and refusing a lifetime keeps its caching at its own default; and the
+    /// breakpoints.
+    const CONCESSIONS: [Concession; 4] = [
+        Concession::Effort,
+        Concession::Ceiling,
+        Concession::CacheTtl,
+        Concession::Breakpoints,
+    ];
 
-    /// Settle what a probe found, once the request it was part of has finished one way or the other.
-    ///
-    /// A probe that answered leaves what it gave up dropped, which is the model saying it does not
-    /// read it. A probe that failed as well says none of it was what the service refused, so each
-    /// goes back to what was known before the request: a request can be refused on its contents for
-    /// reasons that have nothing to do with them, and a session that gave the breakpoints up for
-    /// one of those pays full price for a prefix the service would have read once, every round.
-    fn probe_settled(&mut self, probed: bool, failed: bool) {
-        if !probed {
-            return;
-        }
-        if failed {
-            self.breakpoints = !self.recalled.caching;
-            self.cache_ttl = !self.recalled.cache_ttl;
-            self.effort = !self.recalled.effort;
-            self.arguments_as_written = !self.recalled.arguments_as_written;
-            self.ceiling = !self.recalled.ceiling;
-            return;
-        }
-        remember(
-            &self.refusal_key(),
-            Refusals {
-                caching: !self.breakpoints,
-                cache_ttl: !self.cache_ttl,
-                effort: !self.effort,
-                arguments_as_written: !self.arguments_as_written,
-                ceiling: !self.ceiling,
-            },
-        );
-    }
+    /// The same for [`AnthropicClient::complete_streaming`], with the ask for arguments as they
+    /// are written last: the thing a refusal is least likely to be about.
+    const STREAMING_CONCESSIONS: [Concession; 5] = [
+        Concession::Effort,
+        Concession::Ceiling,
+        Concession::CacheTtl,
+        Concession::Breakpoints,
+        Concession::ArgumentsAsWritten,
+    ];
 
     /// The cache lifetime a request asks for: the one the settings chose, for a model that has not
     /// refused it.
     fn cache_ttl_asked(&self) -> Option<CacheTtl> {
-        self.config.prompt_cache_ttl.filter(|_| self.cache_ttl)
-    }
-
-    /// Whether this failure is worth sending the same request again without the cache lifetime.
-    ///
-    /// Tried ahead of the breakpoints, which carry it: a model that reads a breakpoint and refuses a
-    /// lifetime on it keeps its caching at its own default, where the other order would give up the
-    /// caching for the sake of a lifetime. Only where a request carried one, and after the level and
-    /// the ceiling, which this API refuses more often.
-    fn worth_dropping_cache_ttl(&self, error: &ChatError) -> bool {
-        self.breakpoints && self.cache_ttl_asked().is_some() && refuses_the_body(error)
-    }
-
-    /// Whether this failure is worth sending the same request again without its cache breakpoints.
-    ///
-    /// Only where there are breakpoints to drop, so a service that answers this status for its own
-    /// reasons cannot make a retry loop out of it.
-    fn worth_dropping_breakpoints(&self, error: &ChatError) -> bool {
-        self.breakpoints && refuses_the_body(error)
-    }
-
-    /// Whether this failure is worth sending the same request again without its effort level.
-    ///
-    /// Only where the request carried one: a request without a level was not refused for it, and
-    /// giving it up there would record a refusal nobody saw.
-    fn worth_dropping_effort(&self, request: &ChatRequest, error: &ChatError) -> bool {
-        self.effort && request.effort.is_some() && refuses_the_body(error)
-    }
-
-    /// Whether this failure is worth sending the same request again with the fallback ceiling.
-    ///
-    /// Only where the ceiling sent was the assumed one: a figure somebody stated is their statement
-    /// about the model, and quietly sending less would cut replies short that they said could run.
-    fn worth_lowering_ceiling(&self, error: &ChatError) -> bool {
-        self.ceiling && self.stated_ceiling().is_none() && refuses_the_body(error)
-    }
-
-    /// Whether this failure is worth sending the same streamed request again without the ask for
-    /// arguments as they are written. The last thing a refusal can be about, and only where the
-    /// request carried it.
-    fn worth_dropping_arguments_as_written(
-        &self,
-        request: &ChatRequest,
-        error: &ChatError,
-    ) -> bool {
-        self.streams_arguments(request, true) && refuses_the_body(error)
+        self.config
+            .prompt_cache_ttl
+            .filter(|_| !self.refusals.cache_ttl)
     }
 
     /// Whether this request asks for tool arguments as they are written.
@@ -299,7 +274,7 @@ impl<'a> AnthropicClient<'a> {
     /// that an argument parses.
     fn streams_arguments(&self, request: &ChatRequest, streaming: bool) -> bool {
         streaming
-            && self.arguments_as_written
+            && !self.refusals.arguments_as_written
             && request
                 .tools
                 .as_deref()
@@ -313,10 +288,10 @@ impl<'a> AnthropicClient<'a> {
 
     /// The ceiling a request to this model carries.
     fn ceiling_for(&self) -> u64 {
-        self.stated_ceiling().unwrap_or(if self.ceiling {
-            bravebot_config::bedrock::OUTPUT_LIMIT
-        } else {
+        self.stated_ceiling().unwrap_or(if self.refusals.ceiling {
             bravebot_config::bedrock::OUTPUT_LIMIT_FALLBACK
+        } else {
+            bravebot_config::bedrock::OUTPUT_LIMIT
         })
     }
 
@@ -328,7 +303,7 @@ impl<'a> AnthropicClient<'a> {
         let messages =
             protocol::request_from(&self.model, &request.messages, request.tools.as_deref())
                 .with_ceiling(self.ceiling_for())
-                .with_effort(request.effort.filter(|_| self.effort))
+                .with_effort(request.effort.filter(|_| !self.refusals.effort))
                 .with_cache_ttl(self.cache_ttl_asked());
         let messages = if self.streams_arguments(request, streaming) {
             messages.with_arguments_as_written()
@@ -345,10 +320,10 @@ impl<'a> AnthropicClient<'a> {
         } else {
             messages.without_the_conversation_breakpoint()
         };
-        if self.breakpoints {
-            messages
-        } else {
+        if self.refusals.caching {
             messages.without_breakpoints()
+        } else {
+            messages
         }
     }
 
@@ -415,46 +390,19 @@ impl<'a> AnthropicClient<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
         self.spent.begin_call();
-        self.recall();
-        let mut attempt = 1;
-        let mut probed = false;
-        loop {
-            match self.complete_once(policy, request) {
-                // Sent again immediately rather than after a wait: nothing is busy, the request was
-                // simply carrying something this model does not take.
-                Err(error) if self.worth_dropping_effort(request, &error) => {
-                    self.effort = false;
-                    probed = true;
-                }
-                Err(error) if self.worth_lowering_ceiling(&error) => {
-                    self.ceiling = false;
-                    probed = true;
-                }
-                Err(error) if self.worth_dropping_cache_ttl(&error) => {
-                    self.cache_ttl = false;
-                    probed = true;
-                }
-                Err(error) if self.worth_dropping_breakpoints(&error) => {
-                    self.breakpoints = false;
-                    probed = true;
-                }
-                Err(error) if worth_asking_again(self.attempts_allowed(), attempt, &error) => {
-                    let pause = pause_before_retry(self.pace.backoff, attempt, &error);
-                    log_retry(attempt + 1, pause);
-                    if !self.pace.wait(pause) {
-                        return Err(ChatError::Cancelled);
-                    }
-                    attempt += 1;
-                }
-                result => {
-                    self.probe_settled(probed, result.is_err());
-                    return result.map(|mut completion| {
-                        self.spent.bill(&mut completion);
-                        completion
-                    });
-                }
-            }
-        }
+        let key = self.refusal_key();
+        let plan = Plan {
+            key: &key,
+            order: &Self::CONCESSIONS,
+        };
+        drive(
+            self,
+            request,
+            plan,
+            policy,
+            |client, policy, _| client.complete_once(policy, request),
+            |_, _| {},
+        )
     }
 
     fn complete_once<S: Sink>(
@@ -462,12 +410,6 @@ impl<'a> AnthropicClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
-        // what the call has been billed so far is kept apart from it.
-        self.spent.begin_attempt();
-        if self.pace.cancelled() {
-            return Err(ChatError::Cancelled);
-        }
         let http = self.build(request, false)?;
         self.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
@@ -561,58 +503,30 @@ impl<'a> AnthropicClient<'a> {
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
         self.spent.begin_call();
-        self.recall();
-        let mut attempt = 1;
-        let mut probed = false;
-        loop {
-            match self.stream_once(policy, request, attempt, &mut progress) {
-                Err(error) if self.worth_dropping_effort(request, &error) => {
-                    self.effort = false;
-                    probed = true;
-                }
-                Err(error) if self.worth_lowering_ceiling(&error) => {
-                    self.ceiling = false;
-                    probed = true;
-                }
-                Err(error) if self.worth_dropping_cache_ttl(&error) => {
-                    self.cache_ttl = false;
-                    probed = true;
-                }
-                Err(error) if self.worth_dropping_breakpoints(&error) => {
-                    self.breakpoints = false;
-                    probed = true;
-                }
-                Err(error) if self.worth_dropping_arguments_as_written(request, &error) => {
-                    self.arguments_as_written = false;
-                    probed = true;
-                }
-                Err(error) if worth_asking_again(self.attempts_allowed(), attempt, &error) => {
-                    attempt += 1;
-                    let pause = pause_before_retry(self.pace.backoff, attempt - 1, &error);
-                    log_retry(attempt, pause);
-                    // Announced before the wait rather than after it, so the pause is explained
-                    // while it is happening. Reply progress resets; completed costs remain charged.
-                    progress(Progress {
-                        written: Labelled::new("", Label::untrusted_public()),
-                        output_tokens: 0,
-                        calling: None,
-                        thinking: Labelled::new("", Label::untrusted_public()),
-                        counted_by_server: false,
-                        attempt,
-                    });
-                    if !self.pace.wait(pause) {
-                        return Err(ChatError::Cancelled);
-                    }
-                }
-                result => {
-                    self.probe_settled(probed, result.is_err());
-                    return result.map(|mut completion| {
-                        self.spent.bill(&mut completion);
-                        completion
-                    });
-                }
-            }
-        }
+        let key = self.refusal_key();
+        let plan = Plan {
+            key: &key,
+            order: &Self::STREAMING_CONCESSIONS,
+        };
+        drive(
+            self,
+            request,
+            plan,
+            &mut progress,
+            |client, progress, attempt| client.stream_once(policy, request, attempt, progress),
+            |progress, attempt| {
+                // Announced before the wait rather than after it, so the pause is explained
+                // while it is happening. Reply progress resets; completed costs remain charged.
+                progress(Progress {
+                    written: Labelled::new("", Label::untrusted_public()),
+                    output_tokens: 0,
+                    calling: None,
+                    thinking: Labelled::new("", Label::untrusted_public()),
+                    counted_by_server: false,
+                    attempt,
+                });
+            },
+        )
     }
 
     fn stream_once<S: Sink>(
@@ -622,15 +536,6 @@ impl<'a> AnthropicClient<'a> {
         attempt: u32,
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
-        // what the call has been billed so far is kept apart from it.
-        self.spent.begin_attempt();
-        // Before the request is built, let alone sent. A stop that landed while the last attempt was
-        // failing is still a stop.
-        if self.pace.cancelled() {
-            return Err(ChatError::Cancelled);
-        }
-
         let http = self
             .build(request, true)?
             .header("accept", "text/event-stream");
