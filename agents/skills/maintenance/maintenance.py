@@ -2,6 +2,7 @@
 """Find code to clean up, have reviewers decide which of it is worth an issue, and draft those.
 
     python3 agents/skills/maintenance/maintenance.py [lane ...] [path ...] [--mechanical-only]
+    python3 agents/skills/maintenance/maintenance.py status --work-dir DIR
     python3 agents/skills/maintenance/maintenance.py collect --work-dir DIR
     python3 agents/skills/maintenance/maintenance.py draft --work-dir DIR
     python3 agents/skills/maintenance/maintenance.py clean --work-dir DIR
@@ -2080,8 +2081,13 @@ def prepare(root, lanes, prefixes, work_dir, **options):
     return result, path
 
 
-def incomplete(lane, ids, summary, evidence):
-    return {"lane": lane, "kind": "review-incomplete", "candidates": ids, "summary": summary, "evidence": [evidence]}
+def incomplete(lane, ids, summary, evidence, waiting=False):
+    """A gap in a review. `waiting` marks the gaps that mean the reviewer has not finished: no result,
+    or one that does not give a verdict for every candidate it was asked about."""
+    return {
+        "lane": lane, "kind": "review-incomplete", "candidates": ids, "summary": summary,
+        "evidence": [evidence], "waiting": waiting,
+    }
 
 
 def load_reviews(manifest):
@@ -2093,7 +2099,9 @@ def load_reviews(manifest):
             path = Path(prompt["results_file"])
             asked = list(prompt["candidates"])
             if not path.exists():
-                problems.append(incomplete(lane, asked, "no reviewer result: these candidates were never read", str(path)))
+                problems.append(
+                    incomplete(lane, asked, "no reviewer result: these candidates were never read", str(path), True)
+                )
                 continue
             try:
                 result = json.loads(path.read_text(encoding="utf-8"))
@@ -2101,13 +2109,15 @@ def load_reviews(manifest):
                 written = [f for f in result.get("findings", []) if isinstance(f, dict)]
             except (json.JSONDecodeError, OSError, AttributeError, TypeError, KeyError) as problem:
                 problems.append(
-                    {"lane": lane, "kind": "review-unreadable", "candidates": asked,
+                    {"lane": lane, "kind": "review-unreadable", "candidates": asked, "waiting": True,
                      "summary": f"reviewer result could not be read: {problem}", "evidence": [str(path)]}
                 )
                 continue
             missing = [i for i in asked if i not in given]
             if missing:
-                problems.append(incomplete(lane, missing, "the reviewer returned no verdict for these candidates", str(path)))
+                problems.append(
+                    incomplete(lane, missing, "the reviewer returned no verdict for these candidates", str(path), True)
+                )
             covered = set()
             for finding in written:
                 named = [i for i in finding.get("candidates", []) if i in asked]
@@ -2291,6 +2301,27 @@ def record(manifest, verdicts, today=None):
     return write_ledger(root, entries), added
 
 
+def reviewer_status(manifest, problems):
+    """One `(reviewer, why it is not done or None)` row per reviewer, from the gaps `load_reviews`
+    found. A reviewer is done when its result parses and gives a verdict for every candidate it was
+    asked about. Whether the findings are complete is for `collect` to say."""
+    waiting = {p["evidence"][0]: p["summary"] for p in problems if p.get("waiting")}
+    return [
+        (Path(prompt["results_file"]).name.removesuffix("_results.json"), waiting.get(prompt["results_file"]))
+        for entry in manifest["lanes"]
+        for prompt in entry["reviewer_prompts"]
+    ]
+
+
+def render_status(rows):
+    done = sum(1 for _, why in rows if why is None)
+    if done == len(rows):
+        return f"every reviewer has written a readable result ({done} of {len(rows)})"
+    lines = [f"{done} of {len(rows)} reviewers have written a readable result"]
+    lines += [f"  waiting: {name} ({why})" for name, why in rows if why is not None]
+    return "\n".join(lines)
+
+
 def clean(manifest, work_dir):
     """Remove the checkout the reviewers read. Returns whether none is left. Only `work_dir/tree`
     is removed, whatever the manifest names."""
@@ -2302,7 +2333,7 @@ def clean(manifest, work_dir):
     return remove_snapshot(manifest["root"], Path(tree))
 
 
-COMMANDS = ("prepare", "collect", "draft", "record", "clean")
+COMMANDS = ("prepare", "collect", "draft", "record", "clean", "status")
 
 
 def main(argv=None):
@@ -2350,6 +2381,10 @@ def main(argv=None):
         print("the reviewers' checkout is removed" if removed else f"did not remove {manifest['tree']}")
         return 0 if removed else 1
     findings, verdicts, problems = load_reviews(manifest)
+    if command == "status":
+        rows = reviewer_status(manifest, problems)
+        print(render_status(rows))
+        return 1 if any(why is not None for _, why in rows) else 0
     if command == "collect":
         if args.json:
             print(json.dumps({"findings": findings, "verdicts": verdicts, "problems": problems}, indent=2))

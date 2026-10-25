@@ -559,6 +559,43 @@ class Pipeline(unittest.TestCase):
         self.assertIn("0 findings", out)
         self.assertIn("U2 unclear", out)
 
+    def test_status_names_the_reviewers_that_are_not_done_and_exits_zero_once_every_one_is(self):
+        def verdicts(ids):
+            return {"candidates": [{"id": f"U{i}", "verdict": "keep"} for i in ids]}
+
+        with tree({"crates/a/src/lib.rs": unused(17)}) as root:
+            manifest, work = self.prepared(root)
+            first, second = manifest["lanes"][0]["reviewer_prompts"]
+            status = ["status", "--work-dir", str(work)]
+            self.write(first, verdicts(range(1, 16)))
+            absent = quiet(m.main, status)
+            self.write(second, "not json")
+            unreadable = quiet(m.main, status)
+            self.write(second, verdicts([16]))
+            partial = quiet(m.main, status)
+            self.write(second, verdicts([16, 17]))
+            done = quiet(m.main, status)
+        self.assertEqual(absent[0], 1)
+        self.assertIn("1 of 2 reviewers", absent[1])
+        self.assertIn("waiting: unreferenced-2 (no reviewer result", absent[1])
+        self.assertEqual(unreadable[0], 1)
+        self.assertIn("unreferenced-2 (reviewer result could not be read", unreadable[1])
+        self.assertEqual(partial[0], 1)
+        self.assertIn("unreferenced-2 (the reviewer returned no verdict", partial[1])
+        self.assertNotIn("unreferenced-1", partial[1])
+        self.assertEqual(done[0], 0)
+        self.assertIn("every reviewer has written a readable result (2 of 2)", done[1])
+
+    def test_status_counts_a_reviewer_as_done_when_its_findings_are_incomplete(self):
+        with tree({"crates/a/src/lib.rs": unused(2)}) as root:
+            manifest, work = self.prepared(root)
+            (prompt,) = manifest["lanes"][0]["reviewer_prompts"]
+            self.write(prompt, {"candidates": [{"id": "U1", "verdict": "cleanup"}, {"id": "U2", "verdict": "keep"}]})
+            status, _, _ = quiet(m.main, ["status", "--work-dir", str(work)])
+            collect, _, _ = quiet(m.main, ["collect", "--work-dir", str(work)])
+        self.assertEqual(status, 0)
+        self.assertEqual(collect, 1)
+
     def test_drafts_use_refactor_for_cleanup_bug_for_defects_and_keep_area_and_assignee(self):
         files = {"crates/a/src/lib.rs": unused(1), "contrib/tool.py": "def unused_tool():\n    pass\n"}
         with tree(files) as root:

@@ -134,7 +134,20 @@ Write your results JSON to the results file the instructions specify. Do not edi
 a group with no reviewer becomes a `review-incomplete` gap, which is the correct outcome but a
 wasted run.
 
-Wait for all of them.
+**A reviewer's result is the file it writes.** Do not message, resume or wait on a reviewer, and do
+not go by the agent list. A reviewer that started a command which then ran in the background stays
+listed as running after it has finished, its notification can say the result may be interim, and a
+message sent to a finished reviewer starts a new turn it has no context for. Each time a reviewer
+reports, run:
+
+```bash
+python3 agents/skills/maintenance/maintenance.py status --work-dir "$WORK_DIR"
+```
+
+It says how many reviewers have written a result that parses and gives a verdict for every
+candidate they were asked about, and names the rest. Go to step 4 when it exits 0. If the others
+have finished and one has no result, say which, and let the user decide whether to launch it again;
+the collector records the gap either way.
 
 **Never write findings yourself.** You have not read the code; the reviewers have. Do not add,
 merge, reword, or drop a finding, and do not decide a reviewer was wrong. If a reviewer's result
