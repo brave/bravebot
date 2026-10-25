@@ -14,6 +14,11 @@ governs:
   - crates/tui/src/render.rs
   - crates/tui/src/render/hint.rs
   - crates/tui/src/command_table.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 guards:
   - symbol: Session::start_loop
   - symbol: Session::watch_again

@@ -6,7 +6,12 @@ governs:
   - crates/agent/src/shell.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/directories.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
   - crates/tui/src/render/transcript.rs
   - crates/tui/src/state.rs
 guards:

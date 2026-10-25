@@ -42,6 +42,11 @@ governs:
   - crates/config/src/provider.rs
   - crates/config/src/settings.rs
   - crates/ui-bridge/src/models.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/customize/providers/anthropic.md

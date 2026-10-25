@@ -42,6 +42,11 @@ governs:
   - crates/tui/src/app/actions.rs
   - crates/tui/src/checkouts_command.rs
   - crates/tui/src/status.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 documented-by:
   - docs/website/docs/customize/agents.md
   - none (gap: a page on a spawn asking for a checkout, bringing its work back and removing it, owed until the design is built)

@@ -18,6 +18,11 @@ governs:
   - crates/tui/src/commit_message_command.rs
   - crates/tui/src/help_command.rs
   - crates/tui/src/prompt_files.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 guards:
   - symbol: commands
 documented-by:

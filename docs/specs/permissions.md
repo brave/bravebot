@@ -14,6 +14,11 @@ governs:
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 guards:
   - symbol: Policy::with_permissions
   - symbol: Policy::before_read

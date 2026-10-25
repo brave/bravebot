@@ -13,6 +13,11 @@ governs:
   - ui/src/preload/index.ts
   - ui/src/renderer/staging.ts
   - ui/src/shared/drops.ts
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 documented-by: docs/website/docs/using/context.md
 ---
 

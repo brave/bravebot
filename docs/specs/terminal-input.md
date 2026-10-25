@@ -24,6 +24,11 @@ governs:
   - crates/tui/src/command_table.rs
   - crates/ui-bridge/src/running.rs
   - ui/src/renderer/interjecting.ts
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 documented-by:
   - docs/website/docs/using/interactive-mode.md
   - docs/website/docs/using/vi-mode.md

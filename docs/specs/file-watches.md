@@ -16,6 +16,11 @@ governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
   - crates/agent/src/workspace.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 documented-by: docs/website/docs/using/watches.md
 ---
 

@@ -16,6 +16,11 @@ governs:
   - crates/tui/src/resume.rs
   - crates/tui/src/status.rs
   - crates/ui-bridge/src/bridge.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 documented-by:
   - none (gap: a page on starting a session in a worktree, resuming it and removing it, owed until the design is built)
 ---

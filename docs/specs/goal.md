@@ -12,6 +12,11 @@ governs:
   - crates/tui/src/state.rs
   - crates/tui/src/state/entry.rs
   - crates/tui/src/command_table.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 guards:
   - symbol: Session::start_goal
   - symbol: Session::goal_not_met

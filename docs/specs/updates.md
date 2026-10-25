@@ -9,6 +9,11 @@ governs:
   - npm/bin/bravebot.js
   - install.sh
   - install.ps1
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 documented-by:
   - docs/website/docs/quickstart.md
   - docs/website/docs/install.md

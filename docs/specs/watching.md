@@ -17,6 +17,11 @@ governs:
   - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/agent/src/aside.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 documented-by: docs/website/docs/using/interactive-mode.md
 ---
 

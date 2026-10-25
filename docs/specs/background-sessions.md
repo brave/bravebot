@@ -12,6 +12,11 @@ governs:
   - crates/tui/src/command_table.rs
   - crates/cli/src/supervisor.rs
   - crates/tui/src/sessions_view.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
 documented-by:
   - none (gap: a page on starting a session in the background, listing, attaching to and replying to one, owed until the design is built)
 ---
