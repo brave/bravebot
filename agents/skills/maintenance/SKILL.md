@@ -172,6 +172,19 @@ Print its output. One body per finding is now on disk: what is wrong, the code a
 it names, every `file:line` the reviewer cited, the specs a change there has to keep true, and the
 fix. Read none of them.
 
+The code a body quotes is read from the reviewers' checkout, and its "Where it is" heading names
+that commit. `main` can move between the reading and the posting, so compare the cited lines with
+`HEAD`:
+
+```bash
+python3 agents/skills/maintenance/maintenance.py verify --work-dir "$WORK_DIR"
+```
+
+For each draft it lists the places it cites that moved, with where each is now, that are in code
+that has changed since, or whose file is gone. Exit code 1 means some are in changed code or gone,
+and a person has to look at them. It does not check a line number written without a path. Keep the
+output for step 6.
+
 The table names each draft's labels: `refactor`, or `bug` where the reviewer found a defect
 rather than a cleanup, and an `area/*` or `infrastructure` where one is clear. It marks any title
 over GitHub's 256-character cap as needing a shorter one, which is a person's job in step 6.

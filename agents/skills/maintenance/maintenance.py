@@ -5,6 +5,7 @@
     python3 agents/skills/maintenance/maintenance.py status --work-dir DIR
     python3 agents/skills/maintenance/maintenance.py collect --work-dir DIR
     python3 agents/skills/maintenance/maintenance.py draft --work-dir DIR
+    python3 agents/skills/maintenance/maintenance.py verify --work-dir DIR
     python3 agents/skills/maintenance/maintenance.py clean --work-dir DIR
 
 The scan reads every tracked source file and lists candidates in fourteen lanes: public items
@@ -21,7 +22,7 @@ the candidates past each lane's cap instead of reading the first ones again.
 
 Where the repository has a commit, `prepare` checks it out in the work directory and the reviewers
 read that checkout, so the lines they cite are lines of one commit while the working tree moves.
-`clean` removes it.
+`clean` removes it. `verify` lists the lines the drafts cite that have moved since that commit.
 
 Nothing here edits source or posts anything. `--mechanical-only` prints the candidates and exits,
 which is what `make check-maintenance` runs. Standard library only, like the other checks.
@@ -2207,7 +2208,9 @@ def body_for(finding, manifest):
     if path is not None:
         lines += drafting.code_at(path, line)
     if items:
-        lines += ["Where it is:", ""] + [drafting.as_bullet(item) for item in items] + [""]
+        commit = manifest.get("commit")
+        heading = f"Where it is, in commit `{commit[:12]}`:" if commit else "Where it is:"
+        lines += [heading, ""] + [drafting.as_bullet(item) for item in items] + [""]
     governing = sorted({s for c in candidates for s in c.get("specs", [])})
     guarded = sorted({g for c in candidates for g in c.get("guards", [])})
     if governing:
@@ -2273,6 +2276,87 @@ def render_drafts(drafts, out):
     return "\n".join(lines)
 
 
+CITE = re.compile(r"((?:[\w.@-]+/)+[\w.@-]+\.\w+):(\d+)(?:-(\d+))?")
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@", re.MULTILINE)
+
+
+def hunk_count(text):
+    return int(text) if text else 1
+
+
+def changes_to(root, commit, path):
+    """How `path` changed from `commit` to HEAD, as `(first old line, old lines, new lines)` for each
+    hunk, or None where the file is gone. A file that did not change has no hunks."""
+    if git(root, "cat-file", "-e", f"HEAD:{path}").returncode != 0:
+        return None
+    diff = git(root, "diff", "--no-renames", "-U0", commit, "HEAD", "--", path).stdout
+    return [(int(old), hunk_count(count), hunk_count(new)) for old, count, new in HUNK.findall(diff)]
+
+
+def line_after(hunks, line):
+    """Where an old line is after `hunks`, or None where the line is one of those they changed."""
+    offset = 0
+    for old, count, new in hunks:
+        first = old if count else old + 1
+        if count and first <= line < first + count:
+            return None
+        if line < first:
+            break
+        offset += new - count
+    return line + offset
+
+
+def verify(manifest, out):
+    """The places the drafts in `out` cite whose lines differ between the commit the reviewers read
+    and HEAD: moved to a line that is known, in code that changed, or in a file that is gone. None
+    where the manifest names no commit."""
+    root, commit = manifest["root"], manifest.get("commit")
+    if commit is None:
+        return None
+    known, drafts = {}, []
+    for body in sorted(Path(out).glob("*.md")):
+        cites, placed = [], set()
+        for path, first, last in CITE.findall(body.read_text(encoding="utf-8")):
+            place = f"{path}:{first}" + (f"-{last}" if last else "")
+            if place in placed:
+                continue
+            placed.add(place)
+            if path not in known:
+                exists = git(root, "cat-file", "-e", f"{commit}:{path}").returncode == 0
+                known[path] = changes_to(root, commit, path) if exists else False
+            hunks = known[path]
+            if hunks is False or hunks == []:
+                continue
+            if hunks is None:
+                cites.append({"place": place, "state": "gone"})
+                continue
+            now = [line_after(hunks, int(n)) for n in (first, last or first)]
+            if None in now:
+                cites.append({"place": place, "state": "changed"})
+            elif now != [int(first), int(last or first)]:
+                cites.append({"place": place, "state": "moved", "now": f"{now[0]}" + (f"-{now[1]}" if last else "")})
+        if cites:
+            drafts.append({"draft": body.name, "cites": cites})
+    return drafts
+
+
+def render_verify(manifest, moved):
+    commit = manifest.get("commit")
+    if commit is None:
+        return "the manifest names no commit, so there is nothing to compare the cited lines with"
+    head = read_commit(manifest["root"])
+    lines = [f"lines cited from commit {commit[:12]}, compared with {head[:12] if head else 'HEAD'}"]
+    if not moved:
+        lines.append("every cited line stands")
+    for entry in moved:
+        lines.append(entry["draft"])
+        for cite in entry["cites"]:
+            what = {"moved": f"moved to {cite.get('now')}", "changed": "is in changed code", "gone": "is gone"}
+            lines.append(f"    {cite['place']} {what[cite['state']]}")
+    lines.append("Line numbers written without a path are not checked.")
+    return "\n".join(lines)
+
+
 def record(manifest, verdicts, today=None):
     """Write the verdicts reviewers gave to the ledger, and drop the entries whose files have
     changed or gone, since those are reviewed again anyway. Returns the path and how many verdicts
@@ -2333,7 +2417,7 @@ def clean(manifest, work_dir):
     return remove_snapshot(manifest["root"], Path(tree))
 
 
-COMMANDS = ("prepare", "collect", "draft", "record", "clean", "status")
+COMMANDS = ("prepare", "collect", "draft", "verify", "record", "clean", "status")
 
 
 def main(argv=None):
@@ -2375,7 +2459,12 @@ def main(argv=None):
     manifest = workdir.read_manifest(args.work_dir)
     if manifest is None:
         return 2
+    out = Path(args.out).resolve() if args.out else Path(args.work_dir).resolve() / "issues"
     os.chdir(manifest["root"])
+    if command == "verify":
+        moved = verify(manifest, out)
+        print(json.dumps(moved, indent=2) if args.json else render_verify(manifest, moved))
+        return 1 if any(c["state"] != "moved" for d in moved or [] for c in d["cites"]) else 0
     if command == "clean":
         removed = clean(manifest, args.work_dir)
         print("the reviewers' checkout is removed" if removed else f"did not remove {manifest['tree']}")
@@ -2395,7 +2484,9 @@ def main(argv=None):
         path, added = record(manifest, verdicts)
         print(f"{added} verdicts written to {path}. Nothing has been committed.")
         return 0
-    out = Path(args.out) if args.out else Path(args.work_dir) / "issues"
+    # The reviewers cited lines of their checkout, so the code a body quotes is read from it too.
+    if manifest.get("tree") and Path(manifest["tree"]).is_dir():
+        os.chdir(manifest["tree"])
     drafts = draft(manifest, findings, out)
     if args.json:
         print(json.dumps({"drafts": drafts, "out": str(out)}, indent=2))

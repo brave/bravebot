@@ -1242,6 +1242,96 @@ class Reading(unittest.TestCase):
         self.assertIn("did not remove", out)
         self.assertTrue(kept)
 
+    def drafted(self, root, finding):
+        """Prepare, have the one reviewer give `finding`, and draft it. Returns the work directory
+        and the body of the draft."""
+        work = root / ".work"
+        manifest, _ = self.prepared(root, work)
+        (prompt,) = manifest["lanes"][0]["reviewer_prompts"]
+        asked = [{"id": i, "verdict": "cleanup"} for i in prompt["candidates"]]
+        Path(prompt["results_file"]).write_text(json.dumps({"candidates": asked, "findings": [finding]}))
+        _, out, _ = quiet(m.main, ["draft", "--work-dir", str(work), "--json"])
+        return work, Path(json.loads(out)["drafts"][0]["body_file"]).read_text()
+
+    def test_a_draft_quotes_the_commit_the_reviewers_read_and_says_which_it_is(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+                   "evidence": ["crates/a/src/lib.rs:3 the function"]}
+        with committed({"crates/a/src/lib.rs": unused(4), ".gitignore": ".work\n"}) as root:
+            work, _ = self.drafted(root, finding)
+            (root / "crates/a/src/lib.rs").write_text("// shifted\n" * 3 + unused(4))
+            _, out, _ = quiet(m.main, ["draft", "--work-dir", str(work), "--json"])
+            body = Path(json.loads(out)["drafts"][0]["body_file"]).read_text()
+            expected = head(root)
+        self.assertIn("3 | pub fn unused_number_2() {}", body)
+        self.assertNotIn("// shifted", body)
+        self.assertIn(f"Where it is, in commit `{expected[:12]}`:", body)
+
+    def test_a_draft_from_a_repository_without_a_commit_names_no_commit(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+                   "evidence": ["crates/a/src/lib.rs:3 the function"]}
+        with tree({"crates/a/src/lib.rs": unused(4)}) as root:
+            work, body = self.drafted(root, finding)
+            code, out, _ = quiet(m.main, ["verify", "--work-dir", str(work)])
+        self.assertIn("Where it is:\n", body)
+        self.assertNotIn("in commit", body)
+        self.assertEqual(code, 0)
+        self.assertIn("nothing to compare", out)
+
+    def test_verify_says_every_line_stands_while_head_is_the_commit_the_reviewers_read(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+                   "evidence": ["crates/a/src/lib.rs:3 the function"]}
+        with committed({"crates/a/src/lib.rs": unused(4), ".gitignore": ".work\n"}) as root:
+            work, _ = self.drafted(root, finding)
+            code, out, _ = quiet(m.main, ["verify", "--work-dir", str(work)])
+        self.assertEqual(code, 0)
+        self.assertIn("every cited line stands", out)
+
+    def test_verify_reports_the_cited_lines_that_moved_changed_or_went(self):
+        a, b, c, d = (f"crates/{name}/src/lib.rs" for name in "abcd")
+        finding = {
+            "candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+            "evidence": [
+                f"{a}:5-6 shifted", f"{b}:3 edited", f"{b}:4 next to the edit", f"{c}:2 deleted", f"{d}:2 untouched file"
+            ],
+        }
+        def padded(name):
+            """Eight lines of which only the first is a candidate, so one reviewer reads the lot."""
+            return f"pub fn unused_{name}() {{}}\n" + "".join(f"fn {name}_{i}() {{}}\n" for i in range(1, 8))
+
+        files = {a: padded("first"), b: padded("second"), c: padded("third"), d: padded("fourth"), ".gitignore": ".work\n"}
+        with committed(files) as root:
+            work, _ = self.drafted(root, finding)
+            (root / a).write_text("// added\n" * 4 + (root / a).read_text())
+            lines = (root / b).read_text().split("\n")
+            lines[2] = "pub fn edited() {}"
+            (root / b).write_text("\n".join(lines))
+            (root / c).unlink()
+            commit_all(root, "move, edit and delete")
+            code, out, _ = quiet(m.main, ["verify", "--work-dir", str(work)])
+            _, data, _ = quiet(m.main, ["verify", "--work-dir", str(work), "--json"])
+        self.assertEqual(code, 1)
+        self.assertIn(f"{a}:5-6 moved to 9-10", out)
+        self.assertIn(f"{a}:5 moved to 9", out)
+        self.assertIn(f"{b}:3 is in changed code", out)
+        self.assertIn(f"{c}:2 is gone", out)
+        self.assertNotIn(f"{b}:4", out)
+        self.assertNotIn(d, out)
+        states = {cite["place"]: cite["state"] for cite in json.loads(data)[0]["cites"]}
+        self.assertEqual(states[f"{a}:5-6"], "moved")
+        self.assertEqual(states[f"{b}:3"], "changed")
+        self.assertEqual(states[f"{c}:2"], "gone")
+
+    def test_verify_exits_zero_when_every_cited_line_that_moved_has_a_known_new_place(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+                   "evidence": ["crates/a/src/lib.rs:5 the function"]}
+        with committed({"crates/a/src/lib.rs": unused(8), ".gitignore": ".work\n"}) as root:
+            work, _ = self.drafted(root, finding)
+            (root / "crates/a/src/lib.rs").write_text("// added\n" * 4 + (root / "crates/a/src/lib.rs").read_text())
+            commit_all(root, "shift")
+            code, out, _ = quiet(m.main, ["verify", "--work-dir", str(work)])
+        self.assertEqual(code, 0)
+        self.assertIn("crates/a/src/lib.rs:5 moved to 9", out)
+
 
 if __name__ == "__main__":
     unittest.main()
