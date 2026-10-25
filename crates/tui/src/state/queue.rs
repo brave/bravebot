@@ -217,10 +217,9 @@ impl Session {
         // Behind a copy being held back it is held too: the turn taking it ahead of the older one
         // would send what was typed last first.
         if waiting.is_sent() {
-            if self.held.is_empty() {
-                self.pending.push(resolved);
-            } else {
-                self.held.push_back(resolved);
+            // A line the buffer is not taking yet is held, and goes in when the next turn starts.
+            if let Err(held) = self.pending.offer(self.held.is_empty(), resolved) {
+                self.held.push_back(held);
             }
         }
         self.queued.push(Queued {
