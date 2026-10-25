@@ -81,17 +81,28 @@ directory and are the only party who can say whether that file should be rewritt
 
 **The exception.** A write whose `contents_ref` is a slot the driver filled from the very path being
 written puts the file back as it is, so nobody is asked and nothing is written, provided nothing
-has written the file since the slot was read. The result tells the planner that the path holds what
-the reference holds, and the trail has a `write` line saying so. The test is the driver's own
-record of which path filled the slot and of the file authority's revision for that path at that
-moment, compared with the destination as a name and with the path's revision now as a number. No
-byte of either side is read. A different path, `./` in front of the same path, a slot that no file
-filled (a processor's answer about the file included), a slot that was not read yet, and a slot
-whose file was written after the slot was read are all asked about.
+has written the file since the slot was read, and no `run` line has started since. The result
+tells the planner that the path holds what the reference holds, and the trail has a `write` line
+saying so. The test is the driver's own record of which path filled the slot, of the file
+authority's revision for that path, and of how many `run` lines had started, all at the moment the
+slot was read. They are compared with the destination as a name, with the path's revision now and
+with the count now, as numbers. No byte of either side is read. A different path, `./` in front of
+the same path, a slot that no file filled (a processor's answer about the file included), a slot
+that was not read yet, a slot whose file was written after the slot was read, and a slot read
+before any `run` line that has started since are all asked about.
+
+The count is of lines, not of files. A program opens files the line does not name (`cp a X`,
+`sed -i X`, a script), so the authority is told of no write to them, and a redirection is the only
+form that names its destination. Any line started since the read therefore ends the exception for
+every slot read earlier, including a line that wrote nothing. The cost is one question about a
+write-back that would have changed nothing, after a `run` line, and the count moves no revision,
+so the output of other running commands keeps its label.
 
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_the_file_it_was_read_from_asks_nobody_and_changes_nothing`
 `verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_the_file_was_rewritten_is_asked_about_and_restores_it`
+`verified-by: bravebot_agent::turn::a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_is_asked_about_and_restores_it`
 `verified-by: bravebot_core::policy::a_slot_is_not_a_copy_of_its_file_once_the_file_was_written`
+`verified-by: bravebot_core::policy::a_slot_is_not_a_copy_of_its_file_once_a_program_started_after_it_was_read`
 `verified-by: bravebot_agent::turn::a_slot_written_to_another_path_or_another_spelling_of_its_file_is_asked_about`
 `verified-by: bravebot_agent::turn::a_processors_answer_written_to_the_file_it_was_about_is_asked_about`
 `verified-by: bravebot_core::policy::only_the_path_a_slot_was_read_from_is_a_write_that_changes_nothing`

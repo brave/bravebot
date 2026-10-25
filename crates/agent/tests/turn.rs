@@ -4161,9 +4161,18 @@ struct RecordingConfirmer {
     /// A mode the person "chooses" while the first question is on screen, for the tests about a
     /// mode that changes in the middle of a turn.
     switching: Option<(bravebot_agent::LiveMode, bravebot_agent::PermissionMode)>,
+    /// Whether a `run` line is approved, for the tests where a program rewrites a file between two
+    /// writes. Refused unless a test asked.
+    runs_approved: bool,
 }
 
 impl RecordingConfirmer {
+    /// Also approves every `run` line it is asked about.
+    fn and_approving_runs(mut self) -> Self {
+        self.runs_approved = true;
+        self
+    }
+
     /// Approves, and changes the live mode to `to` while it is being asked, as a key pressed over a
     /// prompt would.
     fn approving_while_the_mode_changes(
@@ -4182,6 +4191,7 @@ impl RecordingConfirmer {
             decision: bravebot_agent::WriteDecision::approve(),
             later: None,
             switching: None,
+            runs_approved: false,
         }
     }
 
@@ -4191,6 +4201,7 @@ impl RecordingConfirmer {
             decision: bravebot_agent::WriteDecision::reject(),
             later: None,
             switching: None,
+            runs_approved: false,
         }
     }
 
@@ -4202,6 +4213,7 @@ impl RecordingConfirmer {
             decision: bravebot_agent::WriteDecision::approve(),
             later: Some(bravebot_agent::WriteDecision::reject()),
             switching: None,
+            runs_approved: false,
         }
     }
 }
@@ -4239,7 +4251,10 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         if let Some((live, to)) = &self.switching {
             live.set(*to);
         }
-        bravebot_agent::RunDecision::reject()
+        match self.runs_approved {
+            true => bravebot_agent::RunDecision::approve(),
+            false => bravebot_agent::RunDecision::reject(),
+        }
     }
 
     fn confirm_read_output(
@@ -14429,12 +14444,26 @@ fn run_over_files_nobody_vouched_for(
     task: &str,
     replies: Vec<String>,
 ) -> WroteBack {
+    run_over_files_nobody_vouched_for_asking(
+        scratch,
+        task,
+        replies,
+        RecordingConfirmer::approving(),
+    )
+}
+
+/// [`run_over_files_nobody_vouched_for`] with the person's answers given by `confirmer`.
+fn run_over_files_nobody_vouched_for_asking(
+    scratch: &Scratch,
+    task: &str,
+    replies: Vec<String>,
+    mut confirmer: RecordingConfirmer,
+) -> WroteBack {
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(replies);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
-    let mut confirmer = RecordingConfirmer::approving();
     turns::run_with_trust(
         &config,
         &egress,
@@ -14579,6 +14608,83 @@ fn a_slot_written_back_to_its_file_after_the_file_was_rewritten_is_asked_about_a
             .any(|body| body.contains("holds what ref:1 holds")),
         "the planner was told a rewritten file held what the slot held"
     );
+}
+
+/// WRITE-4. The same as the test above, with the file rewritten by a `run` line instead of by
+/// `write_file`: by a redirection the line names, and by a program that opens the file itself
+/// (`cp`, `sed -i`), which no part of the line names as a destination. Either way the slot is no
+/// longer a copy of the file, so writing it back is put to the person and restores the bytes.
+///
+/// Fails if the write is dropped on the strength of where the slot was read from alone after a
+/// program rewrote the file.
+#[test]
+fn a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_is_asked_about_and_restores_it()
+ {
+    for (name, command) in [
+        ("redirection", "echo changed > vendor/x.txt"),
+        ("cp", "cp other.txt vendor/x.txt"),
+        ("sed", "sed -i.bak s/vendor/changed/ vendor/x.txt"),
+    ] {
+        let scratch = Scratch::new(&format!("write-back-after-run-{name}"));
+        std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+        let original = "vendor bytes\n";
+        std::fs::write(scratch.path.join("vendor/x.txt"), original).unwrap();
+        std::fs::write(scratch.path.join("other.txt"), "other bytes\n").unwrap();
+
+        let done = run_over_files_nobody_vouched_for_asking(
+            &scratch,
+            "rewrite vendor/x.txt with a program, then put back what it held",
+            vec![
+                tool_request_2("read_file", r#"{"path":"vendor/x.txt"}"#),
+                tool_request_2(
+                    "write_file",
+                    r#"{"path":"copy.txt","contents_ref":"ref:1"}"#,
+                ),
+                tool_request_2(
+                    "run",
+                    &serde_json::json!({ "command": command }).to_string(),
+                ),
+                tool_request_2(
+                    "write_file",
+                    r#"{"path":"vendor/x.txt","contents_ref":"ref:1"}"#,
+                ),
+                reply_with("done"),
+            ],
+            RecordingConfirmer::approving().and_approving_runs(),
+        );
+
+        // Whether the person was asked is not asserted. A program that rewrites a file leaves it
+        // untrusted, and the trust map asks nothing about untrusted bytes written to an already
+        // untrusted path, so the table decides that and not the shortcut. What the shortcut must
+        // not do is drop the write, which the checks below pin: the file holds the bytes read,
+        // the planner is told the file was replaced, and the trail has no line saying the path
+        // already held what the slot holds.
+        assert!(
+            !done
+                .bodies
+                .iter()
+                .any(|body| body.contains("holds what ref:1 holds")),
+            "{name}: the planner was told a file a program rewrote held what the slot held"
+        );
+        assert!(
+            !done.sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed { gate: "write", detail } if detail.contains("already holds")
+            )),
+            "{name}: the trail says the path already held what the slot holds"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("vendor/x.txt")).unwrap(),
+            original,
+            "{name}: the file does not hold the bytes the slot was read as"
+        );
+        assert!(
+            done.bodies
+                .iter()
+                .any(|body| body.contains("replaced vendor/x.txt, which was already there")),
+            "{name}: the restoring write was not carried out"
+        );
+    }
 }
 
 /// WRITE-4. A processor's answer about X has no file it was read from, so writing it to X is a

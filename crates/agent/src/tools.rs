@@ -8841,6 +8841,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.record_requested_scopes(detail);
     }
 
+    // A program opens files the line never names, so nothing tells the authority which it rewrites.
+    // Counted for every line that gets this far, started or not, so a slot read before it is no
+    // longer taken for a copy of whatever file it was read from. A number, never what ran.
+    authority.note_program_started();
+
     if in_the_background {
         // What has to be refused is what start_steps cannot honour, and it honours no route at
         // all, including `2>&1`, which names nothing for anybody to endorse.

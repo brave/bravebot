@@ -3366,7 +3366,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         // The path's revision before the bytes are taken, so that a write landing while the file
         // is read leaves the slot older than the file and not the other way round.
-        let revision = self.trust.revision_of(&path);
+        let revision = self.trust.stamp_of(&path);
         let text = read(&path).map_err(|detail| Denial {
             principle: Principle::Confinement,
             message: format!("{tool}: {slot} could not be read: {detail}"),
@@ -5688,8 +5688,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Whether writing this slot to this path would change the file.
     ///
     /// `false` only where the kernel filled the slot from that very path and nothing has
-    /// rewritten it since. No byte of either side is read: what decides is which file the slot
-    /// was filled from, which is the kernel's own record, and the destination, which is routing.
+    /// rewritten it since, which also requires that no `run` line has started since. No byte of
+    /// either side is read: what decides is which file the slot was filled from, which is the
+    /// kernel's own record, the destination, which is routing, and two numbers.
     ///
     /// A write that changes nothing is worth recognising because the alternative is asking a
     /// person to approve a diff with nothing in it, once per file that turned out not to need
@@ -5703,7 +5704,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ) -> bool {
         let unchanged = slots
             .verbatim_of(slot, &PathAuthority::mint())
-            .is_some_and(|(read_from, at)| read_from == path && self.trust.revision_of(path) == at);
+            .is_some_and(|(read_from, at)| read_from == path && self.trust.stamp_of(path) == at);
         if unchanged {
             self.allow(
                 "write",
@@ -9343,6 +9344,60 @@ five
         assert!(
             policy.write_would_change("vendor/x.txt", &read, &slots),
             "a slot written back after its file was rewritten was taken for no change"
+        );
+    }
+
+    /// A program rewrites files the line never names, so the authority is told of no write to
+    /// them. A slot read before such a line started is no longer taken for a copy of its file
+    /// once one has, and one read after it is.
+    ///
+    /// Fails if a path alone, or the path's revision alone, decides, since a program's write
+    /// moves neither.
+    #[test]
+    fn a_slot_is_not_a_copy_of_its_file_once_a_program_started_after_it_was_read() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let read_a_file = |policy: &mut Policy<'_, RecordingSink>, slots: &mut SlotStore, id| {
+            let slot = SlotId::new(id);
+            policy
+                .defer(
+                    "read_file",
+                    slot.clone(),
+                    "vendor/x.txt",
+                    &Labelled::trusted("vendor/x.txt".to_string()),
+                    10,
+                    slots,
+                )
+                .expect("a file may be reserved");
+            policy
+                .materialise("write_file", &slot, slots, |_| Ok("payload".to_string()))
+                .expect("the file is readable");
+            slot
+        };
+        let before = read_a_file(&mut policy, &mut slots, "ref:0");
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &before, &slots),
+            "a slot written back to an untouched file was put to the person"
+        );
+
+        let authority = policy.file_authority();
+        authority.note_program_started();
+        assert!(
+            policy.write_would_change("vendor/x.txt", &before, &slots),
+            "a slot read before a program started was taken for a copy of the file"
+        );
+        assert_eq!(
+            authority.revision_of("vendor/x.txt"),
+            0,
+            "starting a program moved a path's revision, which would quarantine its neighbours"
+        );
+
+        let after = read_a_file(&mut policy, &mut slots, "ref:1");
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &after, &slots),
+            "a slot read after the last program started was put to the person"
         );
     }
 
