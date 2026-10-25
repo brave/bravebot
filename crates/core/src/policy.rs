@@ -9739,10 +9739,7 @@ five
         )
         .unwrap();
 
-        let reader = store
-            .reader_for([slot.clone()], Label::untrusted_public())
-            .unwrap();
-        let content = reader.read(&slot).unwrap();
+        let content = store.take_for_effect(&slot).unwrap();
 
         // The body is accepted as content.
         assert!(
