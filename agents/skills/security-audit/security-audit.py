@@ -47,6 +47,7 @@ import sys
 import tempfile
 import tomllib
 import unicodedata
+from functools import partial
 from itertools import zip_longest
 from pathlib import Path
 
@@ -1057,6 +1058,14 @@ def check_process_starts_are_marked(sources):
     `bravebot_sandbox::programs::start`, which takes a `Resolved` that a lookup or a named
     constructor builds, so a new spawn is that call and no mark.
     """
+    marked = {}
+    yield from start_refusal_findings()
+    yield from start_mark_findings(sources, marked)
+    yield from start_allowance_findings(sources, marked)
+
+
+def start_refusal_findings():
+    """The clippy configuration that refuses a program start is still in place."""
     missing = [call for call in START_CALLS if call not in refused_calls()]
     if missing:
         yield finding(
@@ -1086,7 +1095,13 @@ def check_process_starts_are_marked(sources):
             fix="move its settings into the `clippy.toml` at the root and remove it",
             gain="a crate whose spawns no lint reads",
         )
-    marked = {}
+
+
+def start_mark_findings(sources, marked):
+    """Each mark beside a start: what it covers, where it is, whether it says why.
+
+    Counts the marks in production code per file into `marked`.
+    """
     for path in sorted(sources):
         raw = "\n".join(sources[path])
         if START_LINT not in raw and not WIDE_ALLOW.search(raw):
@@ -1170,6 +1185,10 @@ def check_process_starts_are_marked(sources):
                 "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
                 gain="a mark nobody has to justify, which is how a spawn goes unreviewed",
             )
+
+
+def start_allowance_findings(sources, marked):
+    """Each file `START_MARKS_ALLOWED` lists holds as many marks as it admits."""
     for allowed, (expected, why) in START_MARKS_ALLOWED.items():
         if Path(allowed) not in sources:
             continue
@@ -3226,27 +3245,56 @@ def check_answers_registered(specs, sources):
     question the terminal's trust prompts ask is listed against the row it lands in, or as keeping
     nothing, and every row names the tests that pin it or the Known cost that accepts it.
     """
+    inputs = yield from register_inputs(specs, sources)
+    if inputs is None:
+        return
+    spec, columns, rows, declared, entries = inputs
+    yield from register_row_findings(spec, columns, rows)
+    yield from register_evidence_findings(spec, columns, rows)
+    listed = yield from kept_in_findings(spec, entries, declared, [row[0] for row in rows])
+    yield from unlisted_member_findings(spec, declared, listed)
+
+
+def unreadable_finding(kind, title, summary, fix, gain=None):
+    """A table a check reads could not be read, so what it holds to is no longer held."""
+    return finding(ERROR, kind, title, summary, "trust", "medium", fix=fix, gain=gain)
+
+
+register_unreadable = partial(
+    unreadable_finding,
+    "register-unreadable",
+    "the register of kept answers could not be read, so nothing checks what one is kept under",
+    gain="nothing directly. It removes the check that makes a new prompt or a new "
+    "remembered set say what its answer is kept under before it lands",
+)
+
+
+def known_costs_section_exists(spec, target):
+    """Whether the file a spec links for an accepted cost has a Known costs section."""
+    linked = spec.path.parent / target
+    return linked.is_file() and any(
+        line.strip() == KNOWN_COSTS for line in linked.read_text(encoding="utf-8").split("\n")
+    )
+
+
+def resolve_cited(index, reference):
+    """The (status, detail) a cited test resolves to, or None where it is a test there."""
+    status, detail = index.resolve(reference)
+    return None if status == "ok" else (status, detail)
+
+
+def register_inputs(specs, sources):
+    """The register's spec, columns, rows, what each kept answer's name declares, and the entries.
+
+    Returns None after yielding the finding that says what could not be read.
+    """
     spec, header, rows, entries = register_of(specs)
-
-    def unreadable(summary, fix):
-        return finding(
-            ERROR,
-            "register-unreadable",
-            "the register of kept answers could not be read, so nothing checks what one is kept under",
-            summary,
-            "trust",
-            "medium",
-            fix=fix,
-            gain="nothing directly. It removes the check that makes a new prompt or a new "
-            "remembered set say what its answer is kept under before it lands",
-        )
-
     if spec is None:
-        yield unreadable(
+        yield register_unreadable(
             f"no spec under `docs/specs` has the id `{PROMPT_SPEC}`, which is where the register is",
             f"restore the id, or update `PROMPT_SPEC` here to the spec the register moved to",
         )
-        return
+        return None
     for other in specs:
         if other is not spec and KEPT_IN in other.front:
             yield finding(
@@ -3262,24 +3310,26 @@ def check_answers_registered(specs, sources):
                 fix=f"move the entries into `{KEPT_IN}:` in `{spec.rel}`",
             )
     if not header or not rows:
-        yield unreadable(
+        yield register_unreadable(
             f"`{spec.rel}` has no table under {REGISTER}",
             f"restore the table under {REGISTER}, or update `REGISTER` here to the clause it moved to",
         )
-        return
+        return None
     declared = {}
     for name, declaration in REGISTERED.items():
         members = declared_members(sources, declaration)
         if not members:
-            yield unreadable(
+            yield register_unreadable(
                 f"`{declaration[0]}` has no `{name}` member this check can read",
                 f"update `REGISTERED` here to where `{name}` moved to",
             )
-            return
+            return None
         declared[name] = members
+    return spec, header[0], rows, declared, entries
 
-    columns = header[0]
-    named_rows = [row[0] for row in rows]
+
+def register_row_findings(spec, columns, rows):
+    """A row of the register whose cells do not fill its columns."""
     for row in rows:
         unsaid = [
             column or "(no column)"
@@ -3301,9 +3351,12 @@ def check_answers_registered(specs, sources):
                 fix="say it in the cell; an empty cell reads as decided when nobody decided it",
             )
 
+
+def register_evidence_findings(spec, columns, rows):
+    """A row that cites no test and no Known cost, or one that does not resolve."""
     evidence_at = columns.index(EVIDENCE) if EVIDENCE in columns else None
     if evidence_at is None:
-        yield unreadable(
+        yield register_unreadable(
             f"`{spec.rel}` {REGISTER}'s table has no `{EVIDENCE}` column",
             f"restore the `{EVIDENCE}` column, or update `EVIDENCE` here to what it is called now",
         )
@@ -3328,8 +3381,9 @@ def check_answers_registered(specs, sources):
                 "`accepted` with a link to the Known costs entry that admits it",
             )
         for reference in cited:
-            status, detail = index.resolve(reference)
-            if status != "ok":
+            unresolved = resolve_cited(index, reference)
+            if unresolved:
+                status, detail = unresolved
                 yield finding(
                     ERROR,
                     "register-test-missing",
@@ -3343,12 +3397,7 @@ def check_answers_registered(specs, sources):
                     fix="correct the name to the test as it is now, or cite the test that replaced it",
                 )
         for target in accepted:
-            linked = spec.path.parent / target
-            headed = linked.is_file() and any(
-                line.strip() == KNOWN_COSTS
-                for line in linked.read_text(encoding="utf-8").split("\n")
-            )
-            if not headed:
+            if not known_costs_section_exists(spec, target):
                 yield finding(
                     ERROR,
                     "register-cost-missing",
@@ -3361,6 +3410,9 @@ def check_answers_registered(specs, sources):
                     fix="link the spec whose Known costs admit it, or write the entry there",
                 )
 
+
+def kept_in_findings(spec, entries, declared, named_rows):
+    """Each `kept-in` entry is readable, unique, declared and lands in a row. Returns what is listed."""
     listed = {}
     for entry in entries:
         parsed = KEPT_ENTRY.match(entry)
@@ -3430,7 +3482,11 @@ def check_answers_registered(specs, sources):
                     fix=f"name a row as its first cell spells it, add the row, or write "
                     f"`{KEEPS_NOTHING}` if the answer is kept nowhere",
                 )
+    return listed
 
+
+def unlisted_member_findings(spec, declared, listed):
+    """A declared member that no entry lists."""
     for name, members in declared.items():
         path = REGISTERED[name][0]
         for member in members:
@@ -3468,35 +3524,45 @@ def check_changes_under_a_yes(specs, sources):
     spec, _, rows, _ = register_of(specs)
     if spec is None or not rows:
         return
+    body = yield from changes_table(spec, rows)
+    if body is None:
+        return
+    yield from change_row_findings(spec, rows, body)
+    cited_cases, cases = yield from change_cell_findings(spec, body, sources)
+    yield from unlisted_case_findings(spec, cases, cited_cases)
+
+
+changes_unreadable = partial(
+    unreadable_finding,
+    "changes-unreadable",
+    "the register's table of what changes do to a kept answer could not be read, so nothing "
+    "checks that each answer says what a change to the world does to it",
+)
+
+
+def changes_table(spec, rows):
+    """The rows of the second table after the register, or None after yielding why not."""
     found = tables(clause_body(spec.lines, REGISTER))
     matrix = found[1] if len(found) > 1 else None
 
-    def unreadable(summary, fix):
-        return finding(
-            ERROR,
-            "changes-unreadable",
-            "the register's table of what changes do to a kept answer could not be read, so nothing "
-            "checks that each answer says what a change to the world does to it",
-            summary,
-            "trust",
-            "medium",
-            fix=fix,
-        )
-
     if not matrix or len(matrix) < 2:
-        yield unreadable(
+        yield changes_unreadable(
             f"`{spec.rel}` {REGISTER} has no second table after the register",
             "restore the table, one row for each row of the register",
         )
-        return
+        return None
     header, body = matrix[0], matrix[1:]
     if tuple(header[1:]) != CHANGES:
-        yield unreadable(
+        yield changes_unreadable(
             f"the columns of that table are {header[1:]}, and the check reads {list(CHANGES)}",
             "restore the columns, or update `CHANGES` here to the ones the table has now",
         )
-        return
+        return None
+    return body
 
+
+def change_row_findings(spec, rows, body):
+    """A row of the changes table that is duplicated or unknown, and a register row it lacks."""
     named_rows = [row[0] for row in rows]
     seen = set()
     for row in body:
@@ -3541,6 +3607,12 @@ def check_changes_under_a_yes(specs, sources):
                 "is how a yes comes to cover something the person was never shown",
             )
 
+
+def change_cell_findings(spec, body, sources):
+    """Each cell of the changes table says what happens and cites what pins it.
+
+    Returns the (row, change) pairs cited as the table test and the cases that test runs.
+    """
     index = mechanics.TestIndex()
     cases = set()
     table_source = sources.get(CHANGES_TABLE_FILE)
@@ -3597,12 +3669,7 @@ def check_changes_under_a_yes(specs, sources):
                 cited = CITED_TEST.findall(statement)
                 if leader == "accepted":
                     for target in ACCEPTED.findall(statement):
-                        linked = spec.path.parent / target
-                        headed = linked.is_file() and any(
-                            line.strip() == KNOWN_COSTS
-                            for line in linked.read_text(encoding="utf-8").split("\n")
-                        )
-                        if not headed:
+                        if not known_costs_section_exists(spec, target):
                             yield cell_finding(
                                 "changes-cost-missing",
                                 name,
@@ -3648,8 +3715,9 @@ def check_changes_under_a_yes(specs, sources):
                                 "for that row and change",
                                 "add the case, or cite the test that pins it",
                             )
-                    status, detail = index.resolve(reference)
-                    if status != "ok":
+                    unresolved = resolve_cited(index, reference)
+                    if unresolved:
+                        status, detail = unresolved
                         yield cell_finding(
                             "changes-test-missing",
                             name,
@@ -3659,6 +3727,11 @@ def check_changes_under_a_yes(specs, sources):
                             + ")",
                             "correct the name to the test as it is now",
                         )
+    return cited_cases, cases
+
+
+def unlisted_case_findings(spec, cases, cited_cases):
+    """A case the table test runs that no cell cites."""
     for name, change in sorted(cases - cited_cases):
         yield finding(
             ERROR,
