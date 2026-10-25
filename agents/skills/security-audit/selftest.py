@@ -4499,21 +4499,26 @@ def test_no_name_in_the_enumerator_is_bound_twice():
     """
     import ast
 
-    tree = ast.parse((HERE / "security-audit.py").read_text(encoding="utf-8"))
     seen, twice = {}, []
-    for node in tree.body:
-        bound = (
-            [target.id for target in node.targets if isinstance(target, ast.Name)]
-            if isinstance(node, ast.Assign)
-            else [node.name]
-            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
-            else []
-        )
-        for name in bound:
-            if name in seen:
-                twice.append(f"{name} (lines {seen[name]} and {node.lineno})")
-            seen.setdefault(name, node.lineno)
-    check("every module-level name in security-audit.py is bound once", not twice, ", ".join(twice))
+    for file in ("security-audit.py", "findings.py", "workflow_checks.py"):
+        tree = ast.parse((HERE / file).read_text(encoding="utf-8"))
+        for node in tree.body:
+            bound = (
+                [target.id for target in node.targets if isinstance(target, ast.Name)]
+                if isinstance(node, ast.Assign)
+                else [node.name]
+                if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                else []
+            )
+            for name in bound:
+                if name in seen:
+                    twice.append(f"{name} ({seen[name]} and {file}:{node.lineno})")
+                seen.setdefault(name, f"{file}:{node.lineno}")
+    check(
+        "every module-level name in security-audit.py, findings.py and workflow_checks.py is bound once",
+        not twice,
+        ", ".join(twice),
+    )
 
 
 def test_every_lane_has_its_file_and_its_row():
