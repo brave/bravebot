@@ -1923,6 +1923,10 @@ fn click_shortcut(session: &mut Session, mouse: MouseEvent) -> Action {
             session.toggle_files();
             Action::Redraw
         }
+        Some(crate::panel::Target::Hide) => {
+            session.toggle_panel();
+            Action::Redraw
+        }
         None => {
             session.cycle_permission_mode();
             Action::Redraw

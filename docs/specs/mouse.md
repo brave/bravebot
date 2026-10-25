@@ -12,7 +12,7 @@ documented-by: docs/website/docs/using/transcript.md
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
 drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort,
-context, MCP server and Files rows of the info panel, the permission mode under the box, the rows of
+context, MCP server and Files rows of the info panel, the permission mode under the box, the panel's hide row, the rows of
 the `/effort` and `/config` pickers, a place in the prompt box's text, a file of the list, the close
 control and the edit bar in the files state of the info panel, and the wheel over that state, is
 built. Clicking other things on the screen, a context menu, edge
@@ -364,3 +364,18 @@ write calls changed ([FILES-10](files-mode.md#FILES-10)).
 `verified-by: bravebot_tui::files_mode::a_click_on_the_files_heading_or_the_row_under_it_opens_the_state`
 `verified-by: bravebot_tui::files_mode::a_drag_a_double_click_or_a_click_over_the_scroller_or_a_search_opens_no_state`
 `verified-by: bravebot_tui::panel::only_the_files_heading_and_its_totals_row_are_click_targets`
+
+<a id="MOUSE-21"></a>
+### MOUSE-21: a click on the panel's hide row hides the panel
+
+In the ordinary state of the info panel, a left click that sweeps nothing on the row that names the
+key hiding the panel hides it, as the key does ([PANEL-5](info-panel.md#PANEL-5),
+[PANEL-7](info-panel.md#PANEL-7)). As for [MOUSE-12](#MOUSE-12), the press and the release are on one
+cell and the press is a single click, so a drag, a double click and a triple click are selections,
+and a click over the scroller or a history search does nothing. The border column is the resize
+handle, no other row is a target for this, and the files state has none
+([MOUSE-18](#MOUSE-18)). The key stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_on_the_panels_hide_row_hides_the_panel`
+`verified-by: bravebot_tui::app::a_drag_over_the_hide_row_or_a_click_in_the_scroller_leaves_the_panel_open`
+`verified-by: bravebot_tui::panel::only_the_hide_row_is_a_hide_target`

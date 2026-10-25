@@ -260,6 +260,8 @@ pub enum Target {
     /// The heading of the Files section and the row under it: the same question `/diff` asks
     /// (MOUSE-20).
     Files,
+    /// The row that names the key hiding the panel: the same thing that key does (MOUSE-21).
+    Hide,
 }
 
 /// Where a click acts on the panel: a row, and the cells of it that count, or all of them where
@@ -409,6 +411,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     links.retain(|link| link.row < height - 1);
     continued.retain(|row| *row < height - 1);
     targets.retain(|place| place.row < height - 1);
+    targets.push(Place::on_row(height - 1, Target::Hide));
     (body, links, continued, targets)
 }
 
@@ -840,6 +843,22 @@ mod tests {
         let short = Rect::new(area.x, 0, WIDTH, at("notes"));
         assert_eq!(
             target_at(&session, short, short.y + at("notes"), inside),
+            None
+        );
+    }
+
+    /// MOUSE-21. Rejects: a target on any row but the last, which names the key, and one on the
+    /// border column.
+    #[test]
+    fn only_the_hide_row_is_a_hide_target() {
+        let session = Session::new("none");
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let inside = area.x + 3;
+        let target = |row: u16| target_at(&session, area, area.y + row, inside);
+        assert_eq!(target(area.height - 1), Some(Target::Hide));
+        assert_eq!(target(area.height - 2), None);
+        assert_eq!(
+            target_at(&session, area, area.y + area.height - 1, area.x),
             None
         );
     }
@@ -2201,12 +2220,16 @@ mod tests {
             target_at(&session, area, row, inside)
         };
         assert_eq!(target(heading + 2, heading), Some(Target::Files));
-        assert_eq!(
+        assert_ne!(
             target(heading + 2, heading + 1),
-            None,
+            Some(Target::Files),
             "the totals row is cut"
         );
-        assert_eq!(target(heading + 1, heading), None, "the heading is cut");
+        assert_ne!(
+            target(heading + 1, heading),
+            Some(Target::Files),
+            "the heading is cut"
+        );
 
         // A session that has written nothing has no section to click.
         let bare = working_on(plan(&rows));
