@@ -901,16 +901,12 @@ pub struct Session {
     /// a prompt that then arrived anyway. Both ends holding one buffer makes taking it back mean
     /// what it says.
     ///
-    /// Mirrors `queued`, minus whatever the turn has already taken.
+    /// Holds a copy of every prompt in `queued` that the turn has not taken. The newest copies are
+    /// held back from the turn in flight where Ctrl-Enter began a turn for the prompts it hurried,
+    /// behind a command, and for what was typed after the press, because they belong to a later
+    /// turn: left where the turn reads, it would take them at its first round boundary ahead of the
+    /// command. The buffer keeps the held run itself, so the two cannot disagree about it.
     pending: crate::remote_confirm::Interjections,
-    /// The resolved copies of the newest waiting prompts, kept out of `pending` while the turn in
-    /// flight must not take them.
-    ///
-    /// Where Ctrl-Enter began a turn for the prompts it hurried, what waits behind a command, and
-    /// what was typed after the press, belongs to a later turn: left in `pending`, the turn begun
-    /// now would take it at its first round boundary ahead of the command. Oldest first, and always
-    /// the tail of the prompts waiting, so `pending` plus this mirrors `queued`.
-    held: std::collections::VecDeque<String>,
     /// The reply the model is writing right now, as far as it has got.
     ///
     /// Not in the transcript, because it is not a thing that happened yet: it is drawn at the
@@ -1281,7 +1277,6 @@ impl Session {
             hunks_listed: None,
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
-            held: std::collections::VecDeque::new(),
             streaming: String::new(),
             thinking: String::new(),
             command_output: String::new(),
@@ -12349,6 +12344,28 @@ mod tests {
             Some("later"),
             "the prompt behind a lone prompt no longer reaches that turn"
         );
+        assert_eq!(s.interjections().take(), None);
+    }
+
+    /// The held copies are kept by the shared buffer, so the count of prompts held back from the turn
+    /// in flight is read from the one place and cannot drift from what the buffer will hand over.
+    /// Rejects a second container beside the buffer that counts held prompts apart from it.
+    #[test]
+    fn prompts_held_back_from_the_turn_are_counted_by_the_shared_buffer() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["one", "/clear", "two", "three"]);
+        assert_eq!(s.pending.held(), 0);
+        assert!(s.hurry());
+        stop(&mut s, "a");
+
+        assert_eq!(s.send_queued().as_deref(), Some("one"));
+        assert_eq!(s.pending.held(), 2, "`two` and `three` are held");
+        assert_eq!(s.where_it_goes(1), Bound::ItsOwnTurn);
+        assert_eq!(s.where_it_goes(2), Bound::IntoTheNextTurn);
+        assert!(s.unqueue());
+        assert_eq!(s.pending.held(), 0, "taking the prompts back left a copy");
         assert_eq!(s.interjections().take(), None);
     }
 

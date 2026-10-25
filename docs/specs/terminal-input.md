@@ -610,6 +610,11 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_agent::interjections::forget_last_drops_the_newest_and_says_whether_it_did`
 `verified-by: bravebot_agent::interjections::a_poisoned_lock_reads_as_empty_and_drops_additions`
 `verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
+`verified-by: bravebot_agent::interjections::a_held_line_is_not_taken_or_drained_and_keeps_its_place`
+`verified-by: bravebot_agent::interjections::a_line_pushed_behind_a_held_line_is_held`
+`verified-by: bravebot_agent::interjections::forget_last_drops_a_held_line_before_a_readable_one`
+`verified-by: bravebot_agent::interjections::beginning_a_turn_removes_the_oldest_lines_and_keeps_the_rest_in_order`
+`verified-by: bravebot_tui::state::prompts_held_back_from_the_turn_are_counted_by_the_shared_buffer`
 
 <a id="INPUT-42"></a>
 ### INPUT-42: a prompt waiting on a long command moves the command to the background
