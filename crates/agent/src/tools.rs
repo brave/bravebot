@@ -8157,6 +8157,9 @@ fn start_the_job<S: Sink, R: Reporter>(
             confinement.profile_offering(&job.plan.steps(), unconfined_is_offered(policy, tools))
         }),
     );
+    if let Some(after) = job.moved_after {
+        policy.record_handoff(&name, after);
+    }
     reporter.job(crate::report::JobEvent::Started {
         name: name.clone(),
         line: job.displayed.to_string(),
@@ -8937,7 +8940,6 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                     ..started
                 };
                 let (name, _stop) = start_the_job(policy, tools, reporter, moved.running, &started);
-                policy.record_handoff(&name, moved.after);
                 return Produced::new(
                     Labelled::new(String::new(), label),
                     format!("`{said}` moved to the background"),
