@@ -1320,6 +1320,57 @@ class Reading(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("nothing to compare", out)
 
+    def drafts_for(self, findings):
+        """Prepare, have the one reviewer give `findings`, and return the drafts and the table."""
+        with tree({"crates/a/src/lib.rs": unused(3)}) as root:
+            work = root / ".work"
+            manifest, _ = self.prepared(root, work)
+            (prompt,) = manifest["lanes"][0]["reviewer_prompts"]
+            asked = [{"id": i, "verdict": "cleanup"} for i in prompt["candidates"]]
+            Path(prompt["results_file"]).write_text(json.dumps({"candidates": asked, "findings": findings}))
+            _, out, _ = quiet(m.main, ["draft", "--work-dir", str(work), "--json"])
+            _, table, _ = quiet(m.main, ["draft", "--work-dir", str(work)])
+        return json.loads(out)["drafts"], table
+
+    def finding(self, summary, *evidence):
+        return {"candidates": ["U1"], "summary": summary, "fix": "Change it.", "evidence": list(evidence)}
+
+    def test_two_drafts_that_cite_one_function_or_nearby_lines_are_marked_and_two_in_one_file_are_not(self):
+        drafts, table = self.drafts_for([
+            self.finding("Share the loop", "crates/a/src/lib.rs:10-20 run_frame_loop, in the size lane"),
+            self.finding("Fold the loop", "crates/b/src/other.rs:90 the body of run_frame_loop()"),
+            self.finding("Another thing", "crates/a/src/lib.rs:30 write_settings"),
+            self.finding("Near the first", "crates/a/src/lib.rs:12 nothing named"),
+        ])
+        self.assertEqual(
+            [[o["draft"] for o in d["overlaps"]] for d in drafts],
+            [[2, 4], [1], [], [1]],
+        )
+        self.assertEqual(
+            drafts[0]["overlaps"], [{"draft": 2, "cites": "as many"}, {"draft": 4, "cites": "more"}]
+        )
+        self.assertEqual(drafts[3]["overlaps"], [{"draft": 1, "cites": "fewer"}])
+        self.assertIn("      overlaps 2\n", table)
+        self.assertIn("      overlaps 1, and cites fewer of its lines\n", table)
+        self.assertIn("      overlaps 4, and cites more of its lines\n", table)
+
+    def test_the_marked_draft_with_the_wider_citation_is_the_one_that_cites_more(self):
+        drafts, table = self.drafts_for([
+            self.finding("Wide", "crates/a/src/lib.rs:10-30 the loop"),
+            self.finding("Narrow", "crates/a/src/lib.rs:12-14 the loop"),
+        ])
+        self.assertEqual(drafts[0]["overlaps"], [{"draft": 2, "cites": "more"}])
+        self.assertEqual(drafts[1]["overlaps"], [{"draft": 1, "cites": "fewer"}])
+        self.assertIn("overlaps 2, and cites more of its lines", table)
+
+    def test_two_drafts_in_one_file_that_cite_different_functions_far_apart_are_not_marked(self):
+        drafts, table = self.drafts_for([
+            self.finding("One", "crates/a/src/lib.rs:5 first_writer"),
+            self.finding("Two", "crates/a/src/lib.rs:35 second_writer"),
+        ])
+        self.assertEqual([d["overlaps"] for d in drafts], [[], []])
+        self.assertNotIn("overlaps", table)
+
     def test_verify_says_every_line_stands_while_head_is_the_commit_the_reviewers_read(self):
         finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
                    "evidence": ["crates/a/src/lib.rs:3 the function"]}
