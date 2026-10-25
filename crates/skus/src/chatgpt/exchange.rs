@@ -35,8 +35,9 @@ pub(super) struct Tokens {
 }
 
 /// The error code that says a refresh token is no longer valid: RFC 6749 section 5.2's
-/// `invalid_grant`. Not observed in a refused refresh from this server, which the spec lists as
-/// unrecorded, so a refresh refused with any other code is a failure of the request and ends nothing.
+/// `invalid_grant`. The token endpoint sends it as a string, `{"error":"invalid_grant"}`, in a 400
+/// for a refresh token it does not know. A refresh refused with any other code is a failure of the
+/// request and ends nothing.
 const ENDED: &str = "invalid_grant";
 
 /// The statuses a refused refresh is read for its error code at. RFC 6749 gives 400, and a server

@@ -3394,23 +3394,24 @@ the frame ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). It adds no `content-enc
 The reply's events are read as they arrive. Words come from the text deltas of an output item. A call
 comes from a `function_call` item, whose arguments arrive in pieces as the model writes them, so the count
 of [BACKEND-45](#BACKEND-45) moves with them. The reply is assembled from the items the stream completes,
-and never from the `output` list of its final event, which is empty on the ChatGPT host. A call is handed to
-the caller only in a reply that finished, so a call is never run for a reply that is asked for again. The model's
-reasoning arrives as a summary and is handed to the caller as it arrives, for a screen to draw on request
-([VIEW-33](terminal-transcript.md#VIEW-33)) and for nothing else, as [BACKEND-59](#BACKEND-59) hands on a
-chat-completions model's. An event this does not know is ignored, and one it knows in a shape it cannot read
-is unreadable and not ignored. A stream ends in one of three events. `response.completed` is a reply.
-`response.incomplete` is a reply the service stopped for the ceiling, and is kept for what it said and never
-for what it asked ([BACKEND-42](#BACKEND-42)), not asked for again; one stopped for its content is a refusal,
-named as [BACKEND-57](#BACKEND-57) names one. A final event in a shape this cannot read is an unreadable
-reply and not one that stopped short. `response.failed`
-is a failure named from a list this build holds and never by what the service wrote, and asked for again
-only where a second attempt could get past it, as [BACKEND-57](#BACKEND-57) does for a failure reported
-part way through. The codes with which the ChatGPT account says it has reached its usage limit or may not be
-used this way ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)), in a `response.failed` event or an `error` event, are
-read on the stream as that account's refusal and not as a failure of this list, and end the turn in the sentence of that clause without being asked for again.
-From any other service they are a failure it did not name. A stream that stops before any of them is a reply that did not finish and is asked for
-again, as many times as the entry's retries allow ([BACKEND-55](#BACKEND-55)) and no more.
+and never from the `output` list of its final event, which is empty in `response.completed` on the ChatGPT
+host. A call is handed to the caller only in a reply that finished, so a call is never run for a reply that
+is asked for again. The model's reasoning arrives as a summary and is handed to the caller as it arrives,
+for a screen to draw on request ([VIEW-33](terminal-transcript.md#VIEW-33)) and for nothing else, as
+[BACKEND-59](#BACKEND-59) hands on a chat-completions model's. An event this does not know is ignored, and
+one it knows in a shape it cannot read is unreadable and not ignored. A stream ends in one of three events.
+`response.completed` is a reply. `response.incomplete` is a reply the service stopped for the ceiling, and
+is kept for what it said and never for what it asked ([BACKEND-42](#BACKEND-42)), not asked for again; one
+stopped for its content is a refusal, named as [BACKEND-57](#BACKEND-57) names one. A final event in a shape
+this cannot read is an unreadable reply and not one that stopped short. `response.failed` is a failure named
+from a list this build holds and never by what the service wrote, and asked for again only where a second
+attempt could get past it, as [BACKEND-57](#BACKEND-57) does for a failure reported part way through. The
+codes with which the ChatGPT account says it has reached its usage limit or may not be used this way
+([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)), in a `response.failed` event or an `error` event, are read on
+the stream as that account's refusal and not as a failure of this list, and end the turn in the sentence of
+that clause without being asked for again. From any other service they are a failure it did not name. A
+stream that stops before any of them is a reply that did not finish and is asked for again, as many times as
+the entry's retries allow ([BACKEND-55](#BACKEND-55)) and no more.
 
 A reasoning item a reply carried is not sent back. The conversation keeps a model's words and calls, so a
 later request carries none of its earlier reasoning, which the service accepts. The request does not ask
@@ -3422,17 +3423,19 @@ in `cache_write_tokens`, as [BACKEND-31](#BACKEND-31) asks of every service. `ou
 `output_tokens_details.reasoning_tokens` counted inside it. A figure the service did not state is zero.
 
 A refusal arrives as a status and a body, and the body's text, which the service wrote, reaches no person,
-no diagnostic and no record. On the ChatGPT host that body is an object with one field, `detail`. A model
-the account cannot use and a field the service does not take are refused with a 400, which is not asked for
-again. The retries an entry states and the wait a service asks for with a rate limit apply as
-[BACKEND-54](#BACKEND-54) and [BACKEND-55](#BACKEND-55) say.
+no diagnostic and no record. On the ChatGPT host that body holds a `detail` sentence, an `error` object with a
+`message`, a `type`, a `param` and a `code`, or both. A field the service does not take is refused with a 400,
+which is not asked for again, and a model the account does not offer ends the turn in the sentence of
+[CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8). The retries an entry states and the wait a service asks for with
+a rate limit apply as [BACKEND-54](#BACKEND-54) and [BACKEND-55](#BACKEND-55) say.
 
-**Not observed.** The ChatGPT host has been seen to take a text turn, a function call and its result, a
-reasoning turn with a summary, and the refusals above; what is stated about a picture, the model's own words
-as `output_text`, `response.incomplete`, `response.failed`, a refused access token, and the whole prompt
-counting its cached part inside `input_tokens` is the protocol's own shape and has not been seen there
-([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). Nothing has been
-observed of an entry that names `@ai-sdk/openai` on another service.
+**Observed.** The ChatGPT host has been seen to take a text turn, a function call and its result, a
+reasoning turn with a summary, a picture, the model's own words as `output_text`, a refused access token and
+the refusals above, to end a reply stopped at its ceiling with `response.incomplete`, and to count the
+cached part of a prompt inside `input_tokens`
+([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). A `response.failed`
+event and an `error` event have not been seen there. Nothing has been observed of an entry that names
+`@ai-sdk/openai` on another service.
 
 **Built:** the protocol for an entry that names `@ai-sdk/openai`, in `bravebot-aichat` beside the Anthropic
 and Gemini clients: the request, the events, calls and their results, usage, the level, the three endings
