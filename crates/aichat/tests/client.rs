@@ -315,6 +315,9 @@ enum Attempt {
     Json(String),
     /// Answer properly, with these SSE frames.
     Frames(Vec<String>),
+    /// Answer properly in a chunked body, as the serving host of the ChatGPT account does: with
+    /// no `Content-Type` header at all.
+    FramesWithNoType(Vec<String>),
     /// Complete SSE frames followed by an unfinished HTTP chunked body.
     BrokenFrames(Vec<String>),
     /// Headers for a chunked stream, then hang up before any of the body.
@@ -407,6 +410,17 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                         format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
                             .as_bytes(),
                     );
+                    let _ = stream.flush();
+                }
+                Attempt::FramesWithNoType(frames) => {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                    );
+                    for frame in frames {
+                        let _ = write!(stream, "{:x}\r\n{frame}\r\n", frame.len());
+                        let _ = stream.flush();
+                    }
+                    let _ = stream.write_all(b"0\r\n\r\n");
                     let _ = stream.flush();
                 }
                 Attempt::BrokenFrames(frames) => {
@@ -7646,6 +7660,28 @@ fn an_account_reply_is_read_from_its_events_and_its_cost_from_the_final_one() {
     assert_eq!(completion.context_tokens, 23);
 }
 
+/// CHATGPT-10: the serving host answers a stream in a chunked body with no `Content-Type` header, so
+/// the reply is read whatever type it states. A client that held a reply to `text/event-stream`
+/// would end every turn on the account as a reply of another kind.
+#[test]
+fn a_stream_the_host_sends_chunked_with_no_content_type_is_read() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::FramesWithNoType(text_reply(&[
+        "hello", " there",
+    ]))]);
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let proof = policy.authorise_display_release("the reply as the model writes it");
+    let mut sign_in = StoredSignIn::default();
+
+    let completion = account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &account_request("hi"))
+        .expect("a reply with no type is read");
+
+    assert_eq!(revealed(&proof, completion.content), "hello there");
+}
+
 /// CHATGPT-9: a body that is not an object holding `models` is a listing that cannot be read,
 /// whatever else it is: a gateway's envelope is not this service's, and nothing is guessed from it.
 /// A refusal is a failure too. An empty `models` is a listing, and offers nothing.
@@ -8148,17 +8184,27 @@ fn a_listed_code_is_not_repeated_at_whatever_status_it_comes_with() {
     }
 }
 
-/// CHATGPT-7: a refusal that does not name a listed code is handled as its status alone, as it was
-/// before the body was read. A 401 is replaced once and the request sent again, for each body here:
-/// a code that is not listed, the codes of conditions that pass, a listed code that is only part of
-/// the code or is written in another field, and a body that says nothing. A client that matched on
-/// a prefix, on the text of the body or on a listed code anywhere in it would end the turn for a
-/// token that a replacement would have fixed.
+/// CHATGPT-7: a refusal that does not name a listed code is handled as its status alone. A 401 is
+/// replaced once and the request sent again, for each body here:
+/// a code that is not listed, the codes the serving host gives a token it does not accept, the codes
+/// of conditions that pass, a listed code that is only part of the code or is written in another
+/// field, and a body that says nothing. A client that matched on a prefix, on the text of the body
+/// or on a listed code anywhere in it, or that took the host's own refusal of a token for one that
+/// names the account, would end the turn for a token that a replacement would have fixed.
 #[test]
 fn a_refusal_that_names_no_listed_code_is_replaced_and_sent_again_as_before() {
     let egress = Egress::new();
     let bodies = [
         refusal_naming("token_expired"),
+        // What the serving host answers a token it does not accept with: an `error` object whose
+        // `code` names the token, once with the status repeated beside it, and one with no code.
+        serde_json::json!({"error": {"message": REFUSAL_WORDS, "type": "invalid_request_error",
+            "param": null, "code": "invalid_jwt"}, "status": 401})
+        .to_string(),
+        refusal_naming("invalid_api_key"),
+        serde_json::json!({"error": {"message": REFUSAL_WORDS, "type": "invalid_request_error",
+            "param": null, "code": null}})
+        .to_string(),
         refusal_naming("subscription_sharing_usage_unavailable"),
         refusal_naming("subscription_sharing_user_unavailable"),
         refusal_naming(&format!("{NOT_ELIGIBLE}_and_more")),
@@ -8210,8 +8256,8 @@ fn a_refusal_that_names_no_listed_code_is_replaced_and_sent_again_as_before() {
     );
 }
 
-/// CHATGPT-8: a service that is rate limiting without a listed code is waited out and asked again,
-/// as before the body was read, so reading it did not make every 429 final.
+/// CHATGPT-8: a service that is rate limiting without a listed code is waited out and asked again, so
+/// reading the body does not make every 429 final.
 #[test]
 fn a_rate_limit_that_names_no_listed_code_is_asked_for_again() {
     let (endpoint, received) = serve_attempts(vec![

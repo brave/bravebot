@@ -464,10 +464,15 @@ mod tests {
     /// Only a 400 or 401 whose error code is `invalid_grant` ends the sign-in. The same code at
     /// another status, another code at those statuses, and a body that is not the shape are each a
     /// failure of the request, so a busy server or a proxy's page cannot delete a person's sign-in.
+    /// The token endpoint sends `error` as a string, with the other codes of RFC 6749 for the other
+    /// faults of a request. The serving host sends `error` as an object with a `code`, and a body of
+    /// that shape is not the token endpoint saying the sign-in is over. An implementation that read
+    /// `error.code`, or ended the sign-in for any 400, would delete a sign-in that a retry or a
+    /// corrected request would have kept.
     #[test]
     fn only_the_recorded_code_at_a_refusing_status_ends_the_sign_in() {
         use super::super::stand_in::{Reply, serve};
-        let cases: [(u16, &str, Refused); 8] = [
+        let cases: [(u16, &str, Refused); 11] = [
             (400, "{\"error\":\"invalid_grant\"}", Refused::Ended),
             (401, "{\"error\":\"invalid_grant\"}", Refused::Ended),
             (
@@ -491,6 +496,21 @@ mod tests {
                 429,
                 "{\"error\":\"invalid_grant\"}",
                 Refused::Failed(Class::RateLimited),
+            ),
+            (
+                400,
+                "{\"error\":{\"message\":\"m\",\"type\":\"t\",\"param\":null,\"code\":\"invalid_grant\"}}",
+                Refused::Failed(Class::Refused),
+            ),
+            (
+                405,
+                "{\"error\":{\"message\":\"m\",\"type\":\"t\",\"param\":null,\"code\":null}}",
+                Refused::Failed(Class::Refused),
+            ),
+            (
+                400,
+                "{\"detail\":\"invalid_grant\"}",
+                Refused::Failed(Class::Refused),
             ),
         ];
         for (status, body, expected) in cases {

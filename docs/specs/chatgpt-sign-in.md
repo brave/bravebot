@@ -1286,6 +1286,7 @@ sent would mislead a person about what the session costs.
 
 `verified-by: bravebot_aichat::client::an_account_request_carries_the_token_the_three_session_headers_and_the_zstd_encoding_and_nothing_a_gateway_would`
 `verified-by: bravebot_aichat::client::a_frame_past_the_largest_the_service_took_is_sent_and_decodes_to_the_bytes_built`
+`verified-by: bravebot_aichat::client::a_stream_the_host_sends_chunked_with_no_content_type_is_read`
 `verified-by: bravebot_aichat::client::an_account_body_is_encoded_whatever_its_size`
 `verified-by: bravebot_aichat::client::a_gateways_body_is_plain_json_with_no_content_encoding`
 `verified-by: bravebot_aichat::client::a_gateways_refused_key_is_not_reported_as_the_chatgpt_sign_in_failing`
