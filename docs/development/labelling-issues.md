@@ -242,6 +242,16 @@ gh label create BraveBot-Researcher --repo brave/bravebot --color c5def5 \
   --description "Filed from the BraveBot researcher's findings"
 ```
 
+Where an open issue already holds the work, the researcher files nothing. It adds its new sources
+to that issue as a comment and applies `BraveBot-Researcher-evidence`, which says the researcher
+added evidence to an issue it did not file. `is:issue label:BraveBot-Researcher,BraveBot-Researcher-evidence`
+lists everything it filed or added to. A person creates that label too:
+
+```bash
+gh label create BraveBot-Researcher-evidence --repo brave/bravebot --color e4ecf7 \
+  --description "The BraveBot researcher added evidence to this issue"
+```
+
 The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
 duplication, files or functions past a length, and the other smells its lanes list, applies the existing `refactor` label, or `bug`
 where a reviewer found a defect, an `area` or `infrastructure` where one is clear, and no axis.
