@@ -385,16 +385,17 @@ shape:
   into the driver is a token and a category, which is the class of a reply's status, as the failure
   categories of the backends spec are for the reply of any other service. A refused refresh adds one value,
   that the refresh token is no longer valid, chosen by comparing one field of the error body with `invalid_grant`
-  ([CHATGPT-7](#CHATGPT-7)). A refused model request adds two more, that the account has reached its usage limit
-  and that it may not be used this way, chosen by comparing the error code of the body with a closed list
-  of codes the exchange records ([CHATGPT-8](#CHATGPT-8)); that comparison is made in the client that sends the request, which is not the
-  driver, and the egress crate hands the client the whole body of the refusal under the label of its
-  request and reads none of it ([NET-12](network-egress.md#NET-12)). A turn already branches on the categories, and none is content anyone authored. Which of
-  these values a failure was is carried to the terminal and the desktop beside its category, where it
-  chooses a sentence ([CHATGPT-8](#CHATGPT-8)), and the driver adds no comparison of its own for it. The
-  rest of a reply's body, its error text and its claims stay in the crate. That is the ordinary case the
-  document's section on the inverse mistake describes, and the same footing as the fields of a model
-  listing the code already reads.
+  ([CHATGPT-7](#CHATGPT-7)). A refused model request adds three more, that the account has reached its usage
+  limit, that it may not be used this way and that it does not offer the model, chosen by comparing the error
+  code of the body with a closed list of codes the exchange records and with the one code of a model not
+  offered ([CHATGPT-8](#CHATGPT-8)); that comparison is made in the client that sends the request, which is
+  not the driver, and the egress crate hands the client the whole body of the refusal under the label of its
+  request and reads none of it ([NET-12](network-egress.md#NET-12)). A turn already branches on the
+  categories, and none is content anyone authored. Which of these values a failure was is carried to the
+  terminal and the desktop beside its category, where it chooses a sentence ([CHATGPT-8](#CHATGPT-8)), and
+  the driver adds no comparison of its own for it. The rest of a reply's body, its error text and its claims
+  stay in the crate. That is the ordinary case the document's section on the inverse mistake describes, and
+  the same footing as the fields of a model listing the code already reads.
 - **The same branch moved into the kernel.** None is moved. The flow's code is in a crate that depends on
   neither `bravebot-core` nor `bravebot-agent`, which [layering.md](layering.md) treats as one driver, so no
   decision about a reply's content is taken in the driver.
@@ -409,8 +410,10 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    [credential-protection.md](credential-protection.md) describes, a value from the closed set of
    [CHATGPT-8](#CHATGPT-8), and whether the file took a renewal, which is the result of a write on this
    machine. The value is chosen where the failure arises: by the step that failed, by the client
-   comparing a refusal's code with the closed list, or, for a renewal, by the sign-in crate classing the
-   authorization server's status (`class_of`, in `bravebot-skus`). The agent maps the value to a category by
+   comparing a refusal's code with the closed list, by the client comparing it with the one code of a model
+   the account does not offer, or, for a renewal, by the sign-in crate classing the authorization server's
+   status (`class_of`, in `bravebot-skus`). A refusal of the model is read from `error.code` apart from the
+   closed list, and it is not a refusal of the sign-in. The agent maps the value to a category by
    matching on it and reads no status for that. A refusal that names the account also carries the status of
    its reply and the wait it asked for, as numbers, the wait bounded as any other is. They are carried for
    a front end to display. The one comparison on the status is `AccountFailure::wait`, in `bravebot-aichat`,
@@ -563,9 +566,9 @@ of [CHATGPT-3](#CHATGPT-3), the reply is written to the file, and only then is t
 refresh reply that grants no refresh token keeps the one presented. No request is sent with a token past its
 expiry. A token the serving host refuses before its expiry,
 whether the clock here runs behind or the token was revoked early, is replaced in the same way once, and the
-request is sent once more, unless the refusal carries a code of [CHATGPT-8](#CHATGPT-8)'s closed list: those
-say the account has reached its usage limit or may not be used this way, and a new token does not change
-that. The code is the `error.code` of
+request is sent once more, unless the refusal carries a code of [CHATGPT-8](#CHATGPT-8)'s closed list or the
+code of a model the account does not offer: those say the account has reached its usage limit, may not be
+used this way or does not offer the model, and a new token does not change that. The code is the `error.code` of
 the refusal's body, compared as a whole with the list, and a body that holds none, holds another or cannot be
 read leaves the refusal as its status alone. A second refusal ends the
 turn with a sentence from [CHATGPT-8](#CHATGPT-8). Where the refresh fails other
@@ -626,7 +629,7 @@ they never had.
 A turn asks the renewal before every request (`Renewer::access_token`) and after a refusal of the token
 (`Renewer::replace_refused`), which gives a token other than the refused one and never the refused one back.
 Only a refusal with the status 401 is a refusal of the token, and one whose body names a code of the closed
-list ends the turn without a replacement.
+list, or the code of a model not offered, ends the turn without a replacement.
 
 `verified-by: bravebot_skus::chatgpt::renew::a_token_with_more_than_a_minute_left_is_used_and_nothing_is_asked`
 `verified-by: bravebot_skus::chatgpt::renew::a_token_within_a_minute_of_its_expiry_or_past_it_is_replaced`
@@ -669,7 +672,8 @@ list ends the turn without a replacement.
 
 Every refusal is one fixed sentence, chosen from the step that failed, the class of an HTTP status and,
 for a refused refresh, whether its error code is the one that ends the sign-in, and for a refused model
-request, whether its error code is one of a closed list. None holds text taken from a reply, a request, a
+request, whether its error code is one of a closed list or is the code of a model not offered. None holds
+text taken from a reply, a request, a
 callback or a settings file. A request to either host that did not succeed reports one
 of the backends spec's failure categories: refused, rate-limited, unavailable, incomplete or a transport
 failure. The rest are these, each saying which it is:
@@ -698,6 +702,19 @@ failure. The rest are these, each saying which it is:
   six do not say which, and does not name signing in again as the remedy. Both are a refusal among the
   categories, which no fallback model is used for: the account answers for every model it serves, so the
   fallback would be refused the same way.
+- **The model is not one the account offers.** A request is refused with the `error.code` `model_not_found`
+  in the body of the refusal. The service gave it as a 400 and no other status was seen, so the code is read
+  at any status, and a 401 that carried it would replace no token. The sentence says that OpenAI does not
+  offer that model to the account and that another can be chosen. It names no model and
+  quotes nothing of the body, which names the model in two fields, and it does not name signing in again as
+  the remedy, since the sign-in was not what was refused. The request is not repeated, no token is replaced
+  and the level is not dropped and the request sent again, since none of these changes what the code says.
+  It is a refusal among the categories, which no fallback model is used for, and carries no status or wait:
+  it is the sentence alone in each place a failure is worded. Only a body whose `error.code` is the whole of
+  that code says it, so a refusal that holds only a `detail`, or holds `error` as a string, is its status
+  alone. The code is read in a refusal's reply and not in a `response.failed` event or an `error` event,
+  where it has not been seen. A gateway's reply naming the code is that service's own refusal and keeps its
+  status.
 - **The command stopped,** and says so: the listener could not start, the browser returned no code or no
   usable client, the reply held no ID token or one that did not verify, the key set could not be fetched (in
   the category of that request), the time bound passed, the clock is set before 1970
@@ -818,7 +835,8 @@ itself and holds what its own writers produce from it:
   turns: one answered as text, one as `--json` and one as `--json-stream`; one in which the model calls `run`
   for a program that writes its environment to a file; one for a workspace that declares an MCP server that
   writes its environment to a file and to its standard error; three refused in a code of the closed list, as
-  text, as JSON and as a stream, at the status that otherwise has the token replaced; one whose refresh is
+  text, as JSON and as a stream, at the status that otherwise has the token replaced; three refused as a
+  model the account does not offer, as text, as JSON and as a stream; one whose refresh is
   refused as no longer valid; and two after the sign-in has ended, as JSON and as a stream. Every command is
   run with `--log-level debug` and each turn with `--trace`, which is an option of a task and of no other
   command. A hook of the home starts a program at each of the two moments of a turn, and the test requires
@@ -828,7 +846,8 @@ itself and holds what its own writers produce from it:
   newest ten, every file left in the home, which holds the environments of `run` and of the server, and the
   session record and trail of each answered turn. It requires one log for the sign-in and one for each turn
   and none for `auth status` and `doctor`, which ask the stand-in nothing, one record and one trail for each
-  answered turn, and that the refusals in a listed code asked for no new token. A print-mode turn that fails
+  answered turn, and that neither the refusals in a listed code nor the refusals of the model asked for a
+  new token. A print-mode turn that fails
   records nothing, so the record of a failed turn is held where one is written.
 - `bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_the_terminal_or_the_files_of_one_that_stops`
   runs the sign-in in a terminal three times, against a stand-in that refuses the code, issues an ID token
@@ -902,7 +921,10 @@ The command's tests run on Linux and macOS, where `script` gives the command a t
 to anything that saves the message, and a log of a refresh would hold a token for as long as the log.
 Choosing from a closed set also keeps [CHATGPT-5](#CHATGPT-5) true: what the agent branches on is a value
 this crate computed from a step and a status class, or one of the values the client chose by comparing a
-refusal's code with a closed list. The categories are the ones the other services' failures already use, so
+refusal's code with a closed list or with the code of a model not offered. A model the account does not
+offer is told apart from a token the host refused and from a body the service would not take, because each
+has a remedy of its own: signing in again does not change a model, and a shorter conversation does not
+either. The categories are the ones the other services' failures already use, so
 a rate limit by status here is waited out and reported as a rate limit is elsewhere, and a remedy that
 signing in again would not supply is not offered. A usage limit named by a code is not waited out, since
 nothing a second request or a wait of this program's does changes it.
@@ -994,6 +1016,15 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_aichat::responses::protocol::the_listed_codes_are_the_seven_the_clause_names_and_the_usage_limit_is_told_apart`
 `verified-by: bravebot_aichat::responses::protocol::only_a_refusals_error_code_that_is_a_listed_code_says_something_of_the_account`
 `verified-by: bravebot_aichat::responses::protocol::a_listed_code_reported_on_the_stream_is_a_refusal_and_no_other_failure`
+`verified-by: bravebot_aichat::client::a_model_the_account_does_not_offer_ends_the_turn_as_that_refusal_and_replaces_nothing`
+`verified-by: bravebot_aichat::client::a_refusal_that_does_not_name_the_model_code_in_error_code_keeps_its_status`
+`verified-by: bravebot_aichat::client::a_gateways_model_not_found_is_not_the_account_not_offering_a_model`
+`verified-by: bravebot_aichat::client::a_refusal_of_a_text_over_the_maximum_length_is_the_generic_refusal_of_its_status`
+`verified-by: bravebot_aichat::responses::protocol::the_code_of_a_model_the_account_does_not_offer_is_read_apart_from_the_accounts_refusals`
+`verified-by: bravebot_agent::chatgpt::a_model_the_account_does_not_offer_is_said_as_a_refusal_of_the_model_and_not_of_the_sign_in`
+`verified-by: bravebot_ui_bridge::account_words::a_model_the_account_does_not_offer_is_said_alike_in_the_window_and_the_terminal`
+`verified-by: bravebot_ui_bridge::chatgpt_secrets::a_model_the_account_does_not_offer_reaches_the_window_as_its_own_sentence_and_touches_no_sign_in`
+`verified-by: bravebot_cli::running::a_model_the_account_does_not_offer_is_reported_by_the_one_shot_run_as_one_sentence`
 
 <a id="CHATGPT-9"></a>
 ### CHATGPT-9: the account's models are offered under the identifier `chatgpt`
@@ -1798,8 +1829,8 @@ These are the places where another spec states something about this service, eac
 - Where the listing cannot be read the pickers list the compiled names ([CHATGPT-9](#CHATGPT-9)), and a
   person who wants another types `chatgpt/<name>`. The names are the seven one account's listing offered on
   one date, so another account may be offered others and one may name a model the account cannot reach. The
-  service refuses it at the first request, and the turn says that the service rejected the request, without
-  naming the model.
+  service refuses it at the first request with `model_not_found`, and the turn says that the account does not
+  offer that model and that another can be chosen, without naming the model ([CHATGPT-8](#CHATGPT-8)).
 - The names ending in `-fast`, which opencode offers as models, are not offered, since the service refuses
   them as models. The service accepts the `service_tier` `priority` and refuses `fast`, and this program sends
   no service tier. Whether the `-fast` names stand for the `priority` tier was not observed. Offering a tier
@@ -1878,7 +1909,7 @@ These are the places where another spec states something about this service, eac
   made in both, and no test holds the wording equal since the two differ in form. A test holds that the
   command each names is the one the other names, for every failure of the account including the failed
   renewals, and for each way the account's models could not be listed. The window keeps no table of its
-  own. The eleven names are listed in `ui/docs/phase-0-rpc-protocol.md`.
+  own. The twelve names are listed in `ui/docs/phase-0-rpc-protocol.md`.
 - The code that says a refresh token is no longer valid is RFC 6749's and has not been seen from this
   server. A server that ends a sign-in with another code leaves the file in place, and each later turn tries
   the dead refresh token and is told the refresh failed, until the person signs in again. OpenAI's

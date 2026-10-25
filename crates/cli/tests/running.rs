@@ -9382,6 +9382,89 @@ fn a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait
     }
 }
 
+/// CHATGPT-8: a turn on a model the account does not offer is reported by the one-shot run as one
+/// sentence, in text and in `--json`: that OpenAI does not offer that model to the account and that
+/// another can be chosen. The service answers with a 400 whose body names `model_not_found`. The
+/// report says no status, no command to sign in again and no model, and none of the words the
+/// service wrote. The request is sent once and the stored sign-in is as it was, so nothing was
+/// renewed or removed for it.
+///
+/// The regressions it rejects are the report that says only that the service returned HTTP 400, a
+/// sentence that sends the person to sign in again, the service's own words or the model's name in
+/// the report, a second request for the refusal, and a stored sign-in changed by it.
+#[test]
+fn a_model_the_account_does_not_offer_is_reported_by_the_one_shot_run_as_one_sentence() {
+    let sentence = "OpenAI does not offer that model to this ChatGPT account. Choose another model";
+    let refusal = serde_json::json!({
+        "detail": "WORDS-OF-THE-SERVICE about gpt-placeholder",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "model_not_found",
+            "message": "WORDS-OF-THE-SERVICE about gpt-placeholder",
+        },
+    })
+    .to_string();
+    for json in [false, true] {
+        let reply = format!(
+            "HTTP/1.1 400 \r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{refusal}",
+            refusal.len()
+        );
+        let service = a_gateway("[]", move |_| reply.clone());
+        let base = format!("http://127.0.0.1:{}", service.port);
+        let scratch = Scratch::new(&format!("cli-running-chatgpt-model-not-offered-{json}"))
+            .with_state("chatgpt-account.json", &a_chatgpt_sign_in(4_102_444_800));
+        let stored = scratch.path.join(".bravebot/chatgpt-account.json");
+        let before = std::fs::read(&stored).expect("the stored sign-in");
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.push((bravebot_skus::chatgpt::STAND_IN, base.as_str()));
+        let mut arguments = vec![
+            "-p",
+            "say something",
+            "--model",
+            "chatgpt/gpt-placeholder",
+            "--trust-workspace",
+        ];
+        if json {
+            arguments.push("--json");
+        }
+
+        let output = bravebot(&scratch.path, &environment, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(1), "{json}: {stdout}{stderr}");
+        assert!(
+            stderr
+                .lines()
+                .any(|found| found == format!("BB1001: {sentence}")),
+            "{json}: {stderr}"
+        );
+        if json {
+            assert!(stdout.contains(sentence), "{stdout}");
+        }
+        for said in [&stderr, &stdout] {
+            for left_out in [
+                "HTTP 400",
+                "auth login",
+                "WORDS-OF-THE-SERVICE",
+                "gpt-placeholder",
+                "returned HTTP",
+            ] {
+                assert!(!said.contains(left_out), "{json}: {said}");
+            }
+        }
+        assert_eq!(
+            service.asked.try_iter().count(),
+            1,
+            "{json}: the refusal was sent again"
+        );
+        assert_eq!(
+            std::fs::read(&stored).expect("the sign-in is still stored"),
+            before,
+            "{json}: the refusal changed the stored sign-in"
+        );
+    }
+}
+
 /// CHATGPT-9: a gateway of another id that lists a model named `chatgpt/gpt-5.5` does not take the
 /// name from the account. Naming it as the account's row is named goes to the account, which with
 /// no sign-in ends naming the command and sends nothing to the gateway. The gateway's model is

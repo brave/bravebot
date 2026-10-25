@@ -31,8 +31,8 @@ fn failed_with(error: impl Into<BackendError>) -> Value {
 
 /// CHATGPT-8: a failure of the account reaches the window as the fixed name of which one it was,
 /// beside its category, so the window can say it in that failure's words.
-/// The usage limit and the refusal that says the account may not be used are two names, and the
-/// counts of the call are as for any other failure.
+/// The usage limit, the refusal that says the account may not be used and the model the account does
+/// not offer are three names, and the counts of the call are as for any other failure.
 ///
 /// The faults this rejects: sending the category alone, which says every refusal the same way,
 /// and sending one name for the two refusals of the account.
@@ -59,6 +59,11 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
                 retry_after: None,
             },
             "not-permitted",
+            "refused",
+        ),
+        (
+            AccountFailure::ModelNotOffered,
+            "model-not-offered",
             "refused",
         ),
         (

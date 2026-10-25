@@ -383,6 +383,36 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         [REFRESH_ONE],
         "a refusal in a listed code asked for a new token"
     );
+    // A model the account does not offer is refused with a 400 whose body repeats every value the
+    // stand-in has seen. It is a refusal of the model and not of the sign-in, so it asks for no new
+    // token either.
+    for (name, format) in [
+        ("the turn that is refused as a model not offered", &[][..]),
+        (
+            "the turn that is refused as a model not offered, as JSON",
+            &["--json"][..],
+        ),
+        (
+            "the turn that is refused as a model not offered, as a JSON stream",
+            &["--json-stream"][..],
+        ),
+    ] {
+        stand_in.state().serving.push_back(Serving::RefusesTheModel);
+        let refused = runs.turn(name, format);
+        assert!(!refused.status.success(), "{}", said(&refused));
+        if format.is_empty() {
+            assert!(
+                said(&refused).contains("does not offer that model"),
+                "{name}: {}",
+                said(&refused)
+            );
+        }
+    }
+    assert_eq!(
+        stand_in.presented(),
+        [REFRESH_ONE],
+        "a refusal of the model asked for a new token"
+    );
     stand_in.state().refusing = true;
     let failed = runs.turn("the turn that fails", &[]);
     assert!(!failed.status.success(), "{}", said(&failed));

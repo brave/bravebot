@@ -544,18 +544,35 @@ pub(crate) fn refusal_named(code: &str) -> Option<Refusal> {
         .map(|(_, refusal)| *refusal)
 }
 
+/// The code the service gives a model the account does not offer, in the `error.code` of the
+/// refusal's body.
+pub(crate) const MODEL_NOT_OFFERED: &str = "model_not_found";
+
+/// The `error.code` of the body of a refusal: an object whose `error` holds a string `code`.
+///
+/// A body of another shape has none. The refusals that carry only a `detail` sentence, and the ones
+/// that hold `error` as a string, are such bodies, and what they say is left to their status.
+fn error_code_in(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<Value>(body)
+        .ok()?
+        .pointer("/error/code")?
+        .as_str()
+        .map(str::to_string)
+}
+
 /// What the body of a refusal says: the `error.code` of an object, where it is a string and is one of
 /// [`REFUSAL_CODES`].
 ///
-/// The one comparison made on a refusal's body. Nothing else in the body is read, and nothing of it
-/// is kept.
+/// A comparison made on a refusal's body, with [`model_not_offered_in`]. Nothing else in the body
+/// is read, and nothing of it is kept.
 pub(crate) fn refusal_in(body: &[u8]) -> Option<Refusal> {
-    serde_json::from_slice::<Value>(body)
-        .ok()
-        .as_ref()
-        .and_then(|body| body.pointer("/error/code"))
-        .and_then(Value::as_str)
-        .and_then(refusal_named)
+    error_code_in(body).as_deref().and_then(refusal_named)
+}
+
+/// Whether the body of a refusal says the model is one the account does not offer: its
+/// `error.code`, compared as a whole with [`MODEL_NOT_OFFERED`].
+pub(crate) fn model_not_offered_in(body: &[u8]) -> bool {
+    error_code_in(body).as_deref() == Some(MODEL_NOT_OFFERED)
 }
 
 /// What a failure event says, from the `code` the service wrote in it: the account's refusal where it
@@ -1025,6 +1042,37 @@ mod tests {
         ] {
             assert_eq!(refusal_in(body.as_bytes()), None, "{body:?}");
         }
+    }
+
+    /// CHATGPT-8: the code of a model the account does not offer is `model_not_found`, as the clause
+    /// writes it. It is read from `error.code` as a whole and says the model is refused, and it is not
+    /// one of the codes that say something of the account, so the two are not mistaken for each other
+    /// by a client that reads both. It is not read on a stream, where it has not been seen.
+    #[test]
+    fn the_code_of_a_model_the_account_does_not_offer_is_read_apart_from_the_accounts_refusals() {
+        let coded = |code: &str| json!({"error": {"code": code}}).to_string();
+        assert!(model_not_offered_in(coded("model_not_found").as_bytes()));
+        assert_eq!(refusal_in(coded("model_not_found").as_bytes()), None);
+        for (code, _) in REFUSAL_CODES {
+            assert!(!model_not_offered_in(coded(code).as_bytes()), "{code}");
+        }
+        for code in [
+            "model_not_found_",
+            "Model_Not_Found",
+            " model_not_found",
+            "",
+        ] {
+            assert!(!model_not_offered_in(coded(code).as_bytes()), "{code:?}");
+        }
+        assert!(!model_not_offered_in(
+            json!({"detail": "model_not_found"}).to_string().as_bytes()
+        ));
+        assert!(!model_not_offered_in(b"not json"));
+        assert_eq!(
+            event(json!({"type": "response.failed",
+                         "response": {"error": {"code": "model_not_found"}}})),
+            Decoded::Event(Event::Failed(Failure::Unknown))
+        );
     }
 
     /// CHATGPT-8: a listed code reported on the stream is the account's refusal and no other failure,

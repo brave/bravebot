@@ -4527,3 +4527,12 @@ chatgpt-start-chosen = Using { $name }. It is remembered for the next start, and
 # Said instead where what the start reads back is not the pick: the name is one that is not kept or the write
 # failed. The start is then refused as it is where nothing is picked.
 chatgpt-start-not-remembered = Could not remember { $name }, so no model is chosen.
+
+## A model the ChatGPT account does not offer
+
+# Said where the serving host refuses the model of a turn because the account does not offer it
+# (CHATGPT-8). The first is the terminal's and the one-shot run's, lower case with a second sentence for
+# the remedy, and the second is the window's, one sentence in sentence case. Neither names the model or
+# quotes the service, and neither sends the person to sign in again: the refusal is of the model.
+failure-account-model-not-offered = OpenAI does not offer that model to this ChatGPT account. Choose another model
+desktop-chatgpt-model-not-offered = OpenAI does not offer that model to this ChatGPT account, so choose another model.

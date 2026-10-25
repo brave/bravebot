@@ -485,6 +485,59 @@ fn what_the_bridge_sends_and_keeps_of_a_failed_turn_holds_none_of_the_values_of_
     hold_the_home(&scratch, &handled);
 }
 
+/// CHATGPT-8: a turn the window sends on a model the account does not offer fails as that refusal.
+/// The serving host answers it with a 400 whose body holds the code `model_not_found`, and the
+/// window is sent the fixed name `model-not-offered`, its own sentence that says the account does not
+/// offer the model and that another can be chosen, no command and no status, and none of the text
+/// the service wrote. The sign-in is not touched: one request is made to the serving host, no
+/// refresh token is presented and the file is still there.
+///
+/// The regressions it rejects are the 400 sent as the category alone, a sentence that sends the
+/// person to sign in again, a token replaced or a second request made for the refusal, the sign-in
+/// removed as if it had ended, and the service's sentence repeated to the window.
+#[test]
+fn a_model_the_account_does_not_offer_reaches_the_window_as_its_own_sentence_and_touches_no_sign_in()
+ {
+    let scratch = Scratch::new("bridge-chatgpt-model-not-offered");
+    let stand_in = StandIn::new(vec![]);
+    {
+        let mut state = stand_in.state();
+        state.url_file = Some(scratch.address());
+        // A turn on the account asks for the listing first, which the stand-in cannot answer, and
+        // the first token is the one it turns away unless the request is scripted.
+        state.listing.push_back(Serving::Refuses(404));
+        state.serving.push_back(Serving::RefusesTheModel);
+    }
+    sign_in_in_a_child(&scratch, &stand_in);
+
+    let mut window = Window::open(&scratch, &stand_in);
+    let ended = window.turn("a prompt that is not a secret");
+
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+    assert_eq!(ended["data"]["kind"], "chat", "{ended}");
+    assert_eq!(ended["data"]["category"], "refused", "{ended}");
+    assert_eq!(ended["data"]["account"], "model-not-offered", "{ended}");
+    assert_eq!(
+        ended["data"]["accountMessage"],
+        "OpenAI does not offer that model to this ChatGPT account, so choose another model.",
+        "{ended}"
+    );
+    assert_eq!(ended["data"]["accountCommand"], Value::Null, "{ended}");
+    assert_eq!(ended["data"]["status"], Value::Null, "{ended}");
+    let to_the_serving_host = stand_in
+        .asked()
+        .iter()
+        .filter(|asked| asked.path == "/v1/responses")
+        .count();
+    assert_eq!(to_the_serving_host, 1, "the refusal was sent again");
+    assert!(stand_in.presented().is_empty(), "a token was replaced");
+    assert!(scratch.account().is_file(), "the sign-in was removed");
+
+    let handled = stand_in.handled();
+    handled.assert_distinct();
+    handled.assert_none_in("the turn.error of the refused model", &ended.to_string());
+}
+
 /// An editor hosting a session over the Agent Client Protocol: `bravebot-acp` driven over its pipe,
 /// as `bravebot-rpc` is above. Closed when dropped.
 struct Editor {

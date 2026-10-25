@@ -31940,6 +31940,10 @@ mod tests {
                 },
                 "does not allow this ChatGPT account to be used this way",
             ),
+            (
+                AccountFailure::ModelNotOffered,
+                "OpenAI does not offer that model to this ChatGPT account. Choose another model",
+            ),
             // A usage limit that arrived as a 429 with a wait says the wait and the status, after
             // the sentence and before nothing: no count of the two tries follows.
             (

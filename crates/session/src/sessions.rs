@@ -3661,7 +3661,7 @@ mod tests {
     }
 
     /// CHATGPT-8: a failure of a ChatGPT account is said in the sentence of its own step, the one a
-    /// one-shot run reports for it, and in no sentence of another. Each of the eleven is a line of
+    /// one-shot run reports for it, and in no sentence of another. Each of the twelve is a line of
     /// its own, whatever category it belongs to, and none is given the status or the count of tries
     /// that end a line for any other failure.
     ///
@@ -3699,6 +3699,10 @@ mod tests {
             (
                 refused(Refusal::NotPermitted),
                 "OpenAI does not allow this ChatGPT account to be used this way",
+            ),
+            (
+                AccountFailure::ModelNotOffered,
+                "OpenAI does not offer that model to this ChatGPT account. Choose another model",
             ),
             (
                 AccountFailure::Renewal(RenewalFailure::Refused),

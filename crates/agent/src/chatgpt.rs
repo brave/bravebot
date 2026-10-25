@@ -435,6 +435,8 @@ pub fn said_of_failure(failure: AccountFailure) -> String {
         AccountFailure::Ended => t!(failure_account_ended).into(),
         AccountFailure::Refused => t!(failure_account_token_refused).into(),
         AccountFailure::Unusable => t!(failure_account_unusable).into(),
+        // The model is the one refused, so the sentence names no sign-in and no model.
+        AccountFailure::ModelNotOffered => t!(failure_account_model_not_offered).into(),
         // The same words whatever the code, so both refusals are told when to ask again.
         AccountFailure::Named { refusal, .. } => match failure.wait() {
             Some(wait) => t!(
@@ -486,14 +488,17 @@ impl Remedy {
 }
 
 /// The remedy for a failure of the account. A usage limit, a refusal that says the account may not
-/// be used this way and every failed renewal are not mended by signing in again.
+/// be used this way, a model the account does not offer and every failed renewal are not mended by
+/// signing in again.
 pub fn remedy_of_failure(failure: AccountFailure) -> Option<Remedy> {
     match failure {
         AccountFailure::NotSignedIn | AccountFailure::Ended | AccountFailure::Refused => {
             Some(Remedy::SignIn)
         }
         AccountFailure::Unusable => Some(Remedy::Status),
-        AccountFailure::Named { .. } | AccountFailure::Renewal(_) => None,
+        AccountFailure::Named { .. }
+        | AccountFailure::ModelNotOffered
+        | AccountFailure::Renewal(_) => None,
     }
 }
 
@@ -661,7 +666,7 @@ mod tests {
 
     /// Every failure of the account, with the command it names where signing in again, or looking
     /// at the stored sign-in, is the remedy.
-    fn every_failure() -> [(AccountFailure, Option<&'static str>); 11] {
+    fn every_failure() -> [(AccountFailure, Option<&'static str>); 12] {
         let login = Some("bravebot auth login chatgpt");
         [
             (AccountFailure::NotSignedIn, login),
@@ -673,6 +678,7 @@ mod tests {
             ),
             (refused(Refusal::UsageLimit), None),
             (refused(Refusal::NotPermitted), None),
+            (AccountFailure::ModelNotOffered, None),
             (AccountFailure::Renewal(RenewalFailure::Refused), None),
             (AccountFailure::Renewal(RenewalFailure::RateLimited), None),
             (AccountFailure::Renewal(RenewalFailure::Unavailable), None),
@@ -728,6 +734,42 @@ mod tests {
                 "a refusal is worded one way in the listing and in a turn"
             );
         }
+    }
+
+    /// CHATGPT-8: a model the account does not offer is said as a refusal of the model: that OpenAI
+    /// does not offer it to the account and that another can be chosen. It says nothing of signing in,
+    /// since the sign-in is fine, no command, no model and no status, and it is one sentence in every
+    /// place a failure is worded: the terminal's line, the one-shot run's error and the line for a
+    /// summary. The regressions it rejects are the sentence of a token the host refused, which sends
+    /// the person to sign in again, the usage limit's or the refusal that says the account may not be
+    /// used, which say it is the account that is wrong, and a status put after it.
+    #[test]
+    fn a_model_the_account_does_not_offer_is_said_as_a_refusal_of_the_model_and_not_of_the_sign_in()
+    {
+        let said = said_of_failure(AccountFailure::ModelNotOffered);
+
+        assert!(said.contains("does not offer that model"), "{said}");
+        assert!(said.contains("Choose another model"), "{said}");
+        for left_out in [
+            "sign in",
+            "sign-in",
+            "auth login",
+            "usage limit",
+            "this way",
+        ] {
+            assert!(!said.contains(left_out), "{left_out}: {said}");
+        }
+        assert!(!said.contains('{') && !said.contains('}'), "{said}");
+        assert_eq!(
+            told_of_failure(AccountFailure::ModelNotOffered),
+            said,
+            "a status was put after it"
+        );
+        assert_eq!(
+            remedy_of_failure(AccountFailure::ModelNotOffered),
+            None,
+            "a command was named for a refusal of the model"
+        );
     }
 
     /// CHATGPT-9: a picker's warning names signing in again where the listing could not be read, and

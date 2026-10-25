@@ -29,6 +29,7 @@ fn every_failure() -> Vec<AccountFailure> {
         AccountFailure::Unusable,
         refused(Refusal::UsageLimit),
         refused(Refusal::NotPermitted),
+        AccountFailure::ModelNotOffered,
         AccountFailure::Renewal(RenewalFailure::Refused),
         AccountFailure::Renewal(RenewalFailure::RateLimited),
         AccountFailure::Renewal(RenewalFailure::Unavailable),
@@ -82,8 +83,13 @@ fn each_failure_of_the_account_is_said_in_the_chosen_catalog_and_names_the_same_
         "a refusal is worded one way in the listing and in a turn"
     );
     assert!(
-        in_french[11].contains("une attente d'environ 11 minutes"),
+        in_french[6].contains("ne propose pas ce modèle"),
         "{}",
-        in_french[11]
+        in_french[6]
+    );
+    assert!(
+        in_french[12].contains("une attente d'environ 11 minutes"),
+        "{}",
+        in_french[12]
     );
 }

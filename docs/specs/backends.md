@@ -1839,12 +1839,14 @@ from a reply, and without it the report names a limit and no way to change it.
 
 A failure of a ChatGPT account reports which one it was beside its category
 ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)): the step of the sign-in that failed, the refusal that
-names the account, or the class of a failed renewal. It is one of a closed set, chosen by a step or
-by the client that sent the request comparing a code with a closed list, and no text from a reply is
-in it. A failure of any other kind reports none. A refusal that names the account also reports the
-status of the reply that refused and, at a 429, the wait its `Retry-After` asked for, as any other
-refusal does, and one reported in an event of a stream reports neither. The planner is told the category
-and the request count and no more, as for every failure.
+names the account, the refusal of a model the account does not offer, or the class of a failed renewal.
+It is one of a closed set, chosen by a step or by the client that sent the request comparing a code with
+a closed list or with the one code of a model not offered, and no text from a reply is in it. A refusal
+of the model is read apart from the closed list and is not a refusal of the sign-in. A failure of any
+other kind reports none. A refusal that names the account also reports the status of the reply that
+refused and, at a 429, the wait its `Retry-After` asked for, as any other refusal does, and one reported
+in an event of a stream reports neither. A refusal of the model reports neither. The planner is told the
+category and the request count and no more, as for every failure.
 
 `verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`

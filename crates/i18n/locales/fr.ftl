@@ -3988,3 +3988,13 @@ deep-link-started-in-home = Le lien désignait { $dir }, qui n'est pas un réper
 # Sous la zone de saisie tant que les mots qu'un lien extérieur y a mis s'y trouvent encore.
 deep-link-banner = Invite d'un lien externe, pas encore envoyée  ·  lisez-la, puis Entrée l'envoie
 deep-link-banner-long = Invite d'un lien externe, { $count } caractères, non envoyée  ·  faites défiler et relisez tout d'abord
+
+## Un modèle que le compte ChatGPT ne propose pas
+
+# Dit lorsque l'hôte de service refuse le modèle d'un tour parce que le compte ne le propose pas
+# (CHATGPT-8). La première phrase est celle du terminal et de l'exécution en une passe, en minuscules
+# avec une seconde phrase pour le remède, et la seconde est celle de la fenêtre, une phrase avec une
+# majuscule. Aucune ne nomme le modèle ni ne cite le service, et aucune n'envoie la personne se
+# reconnecter : le refus porte sur le modèle.
+failure-account-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT. Choisissez un autre modèle
+desktop-chatgpt-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT, donc choisissez un autre modèle.

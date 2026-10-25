@@ -79,6 +79,13 @@ request a model the account cannot reach. A listing that is read and is empty of
 account that reaches no model is still signed in. A listing OpenAI refuses in one of the codes that name
 the account, such as its usage limit, offers nothing and says why.
 
+A model the account does not offer is refused by OpenAI at the first request, whether you named it with
+`--model` or picked it from the built-in list. The turn ends with one sentence that says OpenAI does not
+offer that model to this ChatGPT account and to choose another model, without naming the model or quoting
+OpenAI, and the terminal, a one-shot run and the window say the same thing. Nothing else happens for it: the
+request is not sent again, the sign-in is not replaced or removed, and `/model` offers the models the account
+has.
+
 **To offer the models you name instead,** put a `provider` entry named `chatgpt` in your settings with no
 endpoint:
 
