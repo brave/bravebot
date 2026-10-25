@@ -6,6 +6,7 @@ governs:
   - crates/cli/src/deep_link.rs
   - crates/cli/src/main.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/opening.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/queue.rs

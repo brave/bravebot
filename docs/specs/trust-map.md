@@ -22,6 +22,7 @@ governs:
   - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/opening.rs
   - crates/tui/src/app/actions.rs
   - crates/ui-files/src/main.rs
   - crates/ui-files/src/names.rs
