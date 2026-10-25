@@ -3817,7 +3817,7 @@ where
         task,
         cancel,
         hooks,
-        prompt_notices,
+        prompt_notices: _,
         advisor: _,
         lent_wallet: _,
     } = inputs;
@@ -3828,8 +3828,6 @@ where
     let confirmer = &mut channels.confirmer;
     let Spawned { delegates, waits } = spawned;
     let (may_write, may_run, may_fall_back) = (plan.may_write, plan.may_run, plan.may_fall_back);
-    let wallet = plan.wallet;
-    let pinned_by = &plan.pinned_by;
     // What the turn began with, copied once a round brings a rule in, which is appended to it
     // (INSTR-16).
     let mut grown: Option<(crate::request_view::Prompt, String)> = None;
@@ -4176,117 +4174,22 @@ where
             policy.call_ended(&call.function.name);
             let took = ran_at.elapsed();
             let cancellation = output.cancelled;
-
-            // What the call did, taken from the call rather than from the name the planner
-            // gave it. Read at the end of the turn to say whether a change went out
-            // unbuilt, and the round is the one the first change landed on, since before
-            // that there was nothing to run.
-            state
-                .worked
-                .count(state.steps, output.changed_a_file, output.ran_a_program);
-            if (output.changed_a_file || output.started_a_program)
-                && let Some(checkout) = workspace.checkout()
-            {
-                checkout.mark_worked_in();
-            }
-            attached.extend(output.attached.take());
-
-            // The call is over, whatever came of it. Fired here rather than on a successful
-            // one because "the call finished" is what a person can point at: a write that was
-            // refused is still a moment their formatter was told about, and a hook deciding
-            // what to make of that is a hook reading nothing this turn produced.
-            //
-            // The name is the one dispatch just matched on, which selects the entries that
-            // fire and reaches no process: what a hook is told is the moment and nothing else.
-            state.hook_notices.extend(fire_hooks(
-                hooks,
-                bravebot_config::hooks::Moment::ToolFinished,
-                Some(&call.function.name),
-                workspace,
-                reporter,
-            ));
-            // What a hook on a question drawn during this call had to say, which is the person's to
-            // hear about as soon as there is somewhere to say it.
-            state
-                .hook_notices
-                .extend(say_prompt_notices(prompt_notices, reporter));
-
-            round_steps::start_delegates(
+            round_steps::after_a_call(
                 scope,
-                std::mem::take(&mut output.delegate),
+                inputs,
+                plan,
+                state,
+                reporter,
                 delegates,
-                state.servers.as_deref(),
                 confirming,
                 reporting,
                 recording,
-                config,
-                egress,
-                workspace,
-                task,
-                cancel,
-                wallet,
-                &state.turn_model,
-                state.effort,
+                &mut attached,
+                call,
+                took,
+                asking.waited(),
+                &mut output,
             );
-            let stalled = asking.waited();
-            state.spent.stalled += stalled;
-            // What the model waited for inside the call, which is not what the call spent working:
-            // a processor is a request, and its seconds belong with the other requests'.
-            let waited = match output.inference_interval {
-                Some(interval) => {
-                    reporter.inference_interval(interval);
-                    interval.duration()
-                }
-                None => std::time::Duration::ZERO,
-            };
-            state.spent.inference += waited;
-            // Both taken off, so the four figures partition the turn rather than double-count the
-            // parts of it that nest. Saturating because they are separate clocks: a measure of the
-            // inside cannot be allowed to make the outside negative.
-            state.spent.tools += took.saturating_sub(stalled).saturating_sub(waited);
-            // A processor is a model call of its own, so what it spent belongs in the turn's
-            // total. Left out, a turn that did most of its work in processors would report
-            // having cost almost nothing.
-            state.account.add_usage(output.usage);
-            reporter.spent(crate::outcome::Spent {
-                timing: state.spent.finish(),
-                ..state.account
-            });
-            // Kept as the turn goes rather than read off the last round, and overwritten by each
-            // call: a turn that says when to wake twice meant the second one, which is the answer
-            // it ended on.
-            if let Some(asked) = output.wakeup {
-                state.wakeup = Some(asked);
-            }
-            // Kept rather than overwritten, unlike a wakeup: two calls naming two paths are
-            // two watches, and a session that armed only the last of them would have told
-            // the planner about one that does not exist.
-            if let Some(armed) = output.watch.clone() {
-                state.watches.push(armed);
-            }
-            // A tool the planner loaded is offered from the next request on (SERVERS-16).
-            if let Some(wire) = output.tool_loaded.take()
-                && let Some((offer, _)) = &mut state.mcp
-            {
-                state.offered.extend(offer.load(&wire));
-            }
-            // What a loaded skill's file asks the rounds after it to run as (SKILL-15).
-            // Shown before the next round and kept in the turn's notices (SKILL-11),
-            // because the switch decides what that round costs.
-            if let Some((skill, runs_as)) = output.loaded.take() {
-                adopt_and_say(
-                    reporter,
-                    &mut state.notices,
-                    Running {
-                        model: &mut state.turn_model,
-                        effort: &mut state.effort,
-                        switched_by: &mut state.switched_by,
-                    },
-                    config,
-                    (&skill, &runs_as),
-                    pinned_by.as_deref(),
-                );
-            }
             // As with a context file: what the turn has seen belongs to the conversation the
             // moment it sees it, not once the turn happens to end well.
             conversation.observed(policy.context_label());

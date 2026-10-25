@@ -8,7 +8,7 @@
 //! This file holds a `t!` lookup for the person (`limit_the_tools`) beside text for the planner,
 //! so it stays off `PLANNER_FACING` in `tests/audience.rs`.
 
-use bravebot_aichat::protocol::{ChatRequest, Effort, Message, Tool};
+use bravebot_aichat::protocol::{ChatRequest, Effort, Message, Tool, ToolCall};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -19,8 +19,9 @@ use std::time::Instant;
 
 use super::{
     Inputs, LimitReached, Plan, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING,
-    ReadOutputIs, State, TOOL_BUDGET_SPENT, Task, TurnError, Worked, Working, collect_delegates,
-    collect_jobs, narrate_between_calls, note_rules_added, record_answer, rule_notices,
+    ReadOutputIs, Running, State, TOOL_BUDGET_SPENT, Task, TurnError, Worked, Working,
+    adopt_and_say, collect_delegates, collect_jobs, fire_hooks, narrate_between_calls,
+    note_rules_added, record_answer, rule_notices, say_prompt_notices,
     show_what_running_jobs_have_printed, stopped_at, take_interjections, take_session_messages,
     tell_of_kept_jobs, token_limit_reached,
 };
@@ -1389,6 +1390,158 @@ pub(super) fn tools_for_a_call<'a>(
         confine_runs: task.confine_runs,
         sandbox: task.sandbox,
         asks_about_unconfined: task.asks_about_unconfined,
+    }
+}
+
+/// What a round does once a call has returned: count what it changed, tell the hooks the call
+/// finished, start the delegates it asked for, take its time and spend into the turn's figures,
+/// and keep the wakeup, watch, loaded tool and loaded skill it carried back.
+///
+/// Decided from the counters and flags the tool set on `output`. The result's text is not read,
+/// and the pieces taken out of `output` are the ones the caller does not use again.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the turn's scope, inputs, plan and state, the three shared channels a started delegate borrows, and the call with its timings and output"
+)]
+pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    inputs: Inputs<'scope>,
+    plan: &Plan<'scope>,
+    state: &mut State<'_>,
+    reporter: &mut P,
+    delegates: &mut Vec<Working<'scope>>,
+    confirming: &'scope crate::shared::Lent<'_, C>,
+    reporting: &'scope crate::shared::Lent<'_, R>,
+    recording: &'scope crate::shared::Lent<'_, S>,
+    attached: &mut Vec<bravebot_core::vetting::Attached>,
+    call: &ToolCall,
+    took: std::time::Duration,
+    stalled: std::time::Duration,
+    output: &mut tools::Output,
+) where
+    S: Sink + ?Sized + Send,
+    C: Confirmer + ?Sized + Send,
+    R: Reporter + ?Sized + Send,
+    P: Reporter + ?Sized,
+{
+    let Inputs {
+        config,
+        egress,
+        workspace,
+        task,
+        cancel,
+        hooks,
+        prompt_notices,
+        ..
+    } = inputs;
+    // What the call did, taken from the call rather than from the name the planner
+    // gave it. Read at the end of the turn to say whether a change went out
+    // unbuilt, and the round is the one the first change landed on, since before
+    // that there was nothing to run.
+    state
+        .worked
+        .count(state.steps, output.changed_a_file, output.ran_a_program);
+    if (output.changed_a_file || output.started_a_program)
+        && let Some(checkout) = workspace.checkout()
+    {
+        checkout.mark_worked_in();
+    }
+    attached.extend(output.attached.take());
+
+    // The call is over, whatever came of it. Fired here rather than on a successful
+    // one because "the call finished" is what a person can point at: a write that was
+    // refused is still a moment their formatter was told about, and a hook deciding
+    // what to make of that is a hook reading nothing this turn produced.
+    //
+    // The name is the one dispatch just matched on, which selects the entries that
+    // fire and reaches no process: what a hook is told is the moment and nothing else.
+    state.hook_notices.extend(fire_hooks(
+        hooks,
+        bravebot_config::hooks::Moment::ToolFinished,
+        Some(&call.function.name),
+        workspace,
+        reporter,
+    ));
+    // What a hook on a question drawn during this call had to say, which is the person's to
+    // hear about as soon as there is somewhere to say it.
+    state
+        .hook_notices
+        .extend(say_prompt_notices(prompt_notices, reporter));
+
+    start_delegates(
+        scope,
+        std::mem::take(&mut output.delegate),
+        delegates,
+        state.servers.as_deref(),
+        confirming,
+        reporting,
+        recording,
+        config,
+        egress,
+        workspace,
+        task,
+        cancel,
+        plan.wallet,
+        &state.turn_model,
+        state.effort,
+    );
+    state.spent.stalled += stalled;
+    // What the model waited for inside the call, which is not what the call spent working:
+    // a processor is a request, and its seconds belong with the other requests'.
+    let waited = match output.inference_interval {
+        Some(interval) => {
+            reporter.inference_interval(interval);
+            interval.duration()
+        }
+        None => std::time::Duration::ZERO,
+    };
+    state.spent.inference += waited;
+    // Both taken off, so the four figures partition the turn rather than double-count the
+    // parts of it that nest. Saturating because they are separate clocks: a measure of the
+    // inside cannot be allowed to make the outside negative.
+    state.spent.tools += took.saturating_sub(stalled).saturating_sub(waited);
+    // A processor is a model call of its own, so what it spent belongs in the turn's
+    // total. Left out, a turn that did most of its work in processors would report
+    // having cost almost nothing.
+    state.account.add_usage(output.usage);
+    reporter.spent(crate::outcome::Spent {
+        timing: state.spent.finish(),
+        ..state.account
+    });
+    // Kept as the turn goes rather than read off the last round, and overwritten by each
+    // call: a turn that says when to wake twice meant the second one, which is the answer
+    // it ended on.
+    if let Some(asked) = output.wakeup {
+        state.wakeup = Some(asked);
+    }
+    // Kept rather than overwritten, unlike a wakeup: two calls naming two paths are
+    // two watches, and a session that armed only the last of them would have told
+    // the planner about one that does not exist.
+    if let Some(armed) = output.watch.clone() {
+        state.watches.push(armed);
+    }
+    // A tool the planner loaded is offered from the next request on (SERVERS-16).
+    if let Some(wire) = output.tool_loaded.take()
+        && let Some((offer, _)) = &mut state.mcp
+    {
+        state.offered.extend(offer.load(&wire));
+    }
+    // What a loaded skill's file asks the rounds after it to run as (SKILL-15).
+    // Shown before the next round and kept in the turn's notices (SKILL-11),
+    // because the switch decides what that round costs.
+    if let Some((skill, runs_as)) = output.loaded.take() {
+        adopt_and_say(
+            reporter,
+            &mut state.notices,
+            Running {
+                model: &mut state.turn_model,
+                effort: &mut state.effort,
+                switched_by: &mut state.switched_by,
+            },
+            config,
+            (&skill, &runs_as),
+            plan.pinned_by.as_deref(),
+        );
     }
 }
 
