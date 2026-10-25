@@ -2217,13 +2217,11 @@ def body_for(finding, manifest):
         lines += ["The change has to keep " + ", ".join(f"`{s}`" for s in governing) + " true.", ""]
     if guarded:
         lines += [
-            "It touches guarded symbols, whose uses the spec counts, so the count changes in the same commit: "
-            + ", ".join(f"`{g}`" for g in guarded) + ".",
+            "A spec counts the uses of these guarded symbols: " + ", ".join(f"`{g}`" for g in guarded)
+            + ". If the change moves a use, the count changes in the same commit, and `make check-spec` reports it.",
             "",
         ]
     lines += ["## The fix", "", drafting.sentence(finding.get("fix") or "") or "Not proposed.", ""]
-    if not finding.get("bug"):
-        lines += ["Behaviour does not change, so the existing tests pass unchanged.", ""]
     return "\n".join(lines)
 
 

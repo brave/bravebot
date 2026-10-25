@@ -630,8 +630,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([d["title_too_long"] for d in drafts], [False, False, False, True])
         self.assertIn("1 | pub fn unused_number_0() {}", bodies[0])
         self.assertIn("## The fix\n\nDelete it.", bodies[0])
-        self.assertIn("Behaviour does not change", bodies[0])
-        self.assertNotIn("Behaviour does not change", bodies[2])
+        self.assertFalse(any("existing tests pass unchanged" in body for body in bodies))
         self.assertFalse(any(EM_DASH in body for body in bodies))
         self.assertTrue(text.rstrip().endswith("Nothing has been posted."))
         self.assertIn("needs a shorter title", text)
@@ -1137,6 +1136,25 @@ class Prompts(unittest.TestCase):
             capped = m.scan(root, ("unreferenced", "complexity"), limit=4)
         self.assertEqual((len(result["unreferenced"]["candidates"]), len(result["complexity"]["candidates"])), (30, 15))
         self.assertEqual((len(capped["unreferenced"]["candidates"]), len(capped["complexity"]["candidates"])), (4, 4))
+
+
+class Bodies(unittest.TestCase):
+    def body(self, finding, guards=()):
+        candidate = {"path": "crates/a/src/lib.rs", "line": 1, "specs": ["docs/specs/labels.md"], "guards": list(guards)}
+        with tree({"crates/a/src/lib.rs": unused(1)}):
+            return m.body_for(finding, {"candidates": {"U1": candidate}})
+
+    def test_a_body_does_not_say_that_tests_are_unchanged_or_that_a_count_changes(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it and the tests that name it."}
+        body = self.body(finding, ["Labelled::new (docs/specs/labels.md)"])
+        self.assertNotIn("existing tests pass unchanged", body)
+        self.assertNotIn("so the count changes in the same commit", body)
+        self.assertIn("A spec counts the uses of these guarded symbols: `Labelled::new (docs/specs/labels.md)`.", body)
+        self.assertIn("If the change moves a use, the count changes in the same commit", body)
+
+    def test_a_body_names_no_guarded_symbol_where_the_candidate_has_none(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it."}
+        self.assertNotIn("guarded symbols", self.body(finding))
 
 
 class Reading(unittest.TestCase):
