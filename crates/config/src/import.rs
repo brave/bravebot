@@ -3505,4 +3505,75 @@ mod tests {
             [Source::Ollama, Source::LmStudio, Source::LlamaServer]
         );
     }
+
+    #[test]
+    fn local_port_refuses_another_machine_another_scheme_and_an_unreadable_url() {
+        for url in [
+            "http://example.invalid:11434/v1",
+            "https://gw.example.invalid:11434",
+            "http://localhost.example.com:11434",
+            "ftp://localhost:11434",
+            "http://localhost:99999",
+            "",
+        ] {
+            assert_eq!(local_port(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn local_port_reads_the_port_of_every_spelling_of_this_machine() {
+        for url in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:11434",
+            "https://[::1]:11434/v1",
+            "http://0.0.0.0:11434",
+        ] {
+            assert_eq!(local_port(url), Some(11434), "{url}");
+        }
+    }
+
+    #[test]
+    fn local_port_falls_back_to_the_default_port_of_the_scheme() {
+        assert_eq!(local_port("http://localhost/v1"), Some(80));
+        assert_eq!(local_port("https://localhost/v1"), Some(443));
+    }
+
+    fn destination_with(home: &Scratch, providers: &str) -> Destination {
+        let path = home.write("settings.json", &format!(r#"{{"provider": {providers}}}"#));
+        Destination::open(&path).expect("a document")
+    }
+
+    #[test]
+    fn serving_locally_ignores_a_remote_entry_on_the_same_port() {
+        let home = Scratch::new("serving-locally-remote");
+        let destination = destination_with(
+            &home,
+            r#"{"remote": {"options": {"baseURL": "http://example.invalid:11434/v1"}}}"#,
+        );
+        assert_eq!(destination.serving_locally("http://127.0.0.1:11434"), None);
+    }
+
+    #[test]
+    fn serving_locally_skips_an_entry_without_a_base_url() {
+        let home = Scratch::new("serving-locally-no-base");
+        let destination = destination_with(
+            &home,
+            r#"{"bare": {}, "keyed": {"options": {"apiKey": "k"}}}"#,
+        );
+        assert_eq!(destination.serving_locally("http://127.0.0.1:11434"), None);
+    }
+
+    #[test]
+    fn serving_locally_names_a_loopback_entry_by_its_own_id() {
+        let home = Scratch::new("serving-locally-loopback");
+        let destination = destination_with(
+            &home,
+            r#"{"remote": {"options": {"baseURL": "http://example.invalid:11434/v1"}},
+                "whatever": {"options": {"baseURL": "http://localhost:11434/v1"}}}"#,
+        );
+        assert_eq!(
+            destination.serving_locally("http://127.0.0.1:11434"),
+            Some("whatever")
+        );
+    }
 }
