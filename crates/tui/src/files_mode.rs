@@ -762,7 +762,6 @@ mod tests {
         )
     }
 
-    /// A press and a release of the left button on one cell.
     fn click(session: &mut Session, row: u16, column: u16) -> Action {
         mouse(
             session,
@@ -790,7 +789,6 @@ mod tests {
             .unwrap_or_else(|| panic!("the panel does not read {needle:?}"))
     }
 
-    /// One turn of the wheel with the pointer on one cell.
     fn wheel(session: &mut Session, back: bool, row: u16, column: u16) -> Action {
         let kind = if back {
             MouseEventKind::ScrollUp
