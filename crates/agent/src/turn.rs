@@ -12,7 +12,7 @@
 //! quarantine the references in it name, and the integrity that exchange has met. A new policy
 //! each turn, resuming a conversation that outlives it.
 
-use bravebot_aichat::protocol::{Cached, ChatRequest, Effort, ImageUrl, Message, Part, ToolCall};
+use bravebot_aichat::protocol::{Cached, Effort, ImageUrl, Message, Part, ToolCall};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -39,6 +39,9 @@ use crate::workspace::{Workspace, WorkspaceError};
 mod delegate_end;
 mod prompts;
 mod round_steps;
+use round_steps::{
+    after_a_ceiling_stop, answer_stopped_narration, ceiling_stop_narration, record_ceiling_stop,
+};
 mod sentences;
 mod setup;
 mod task;
@@ -140,127 +143,6 @@ impl ReadOutputIs {
 /// is left out where a record already stops the asking for that exact line (RUN-14).
 const STOP_BEING_ASKED: &str = "To stop being asked, a person vouching for every stage of the \
      exact command makes what it prints visible from then on.";
-
-/// What the person is told when a reply reached the output ceiling and the planner is asked again
-/// (TURN-7). A turn with no tools left is asked for a shorter answer rather than for the work.
-fn ceiling_stop_narration(cut_off: &bravebot_aichat::CutOff, may_call_tools: bool) -> String {
-    use bravebot_aichat::OpenCall;
-    let tokens = cut_off.ceiling;
-    if !may_call_tools {
-        return t!(ceiling_stop_answer_now, tokens = tokens);
-    }
-    match (&cut_off.call, cut_off.thought) {
-        (
-            Some(OpenCall {
-                tool: Some(tool), ..
-            }),
-            _,
-        ) => {
-            t!(ceiling_stop_in_call, tokens = tokens, tool = tool.as_str())
-        }
-        (Some(OpenCall { tool: None, .. }), _) => t!(ceiling_stop_in_a_call, tokens = tokens),
-        (None, true) => t!(ceiling_stop_thinking, tokens = tokens),
-        (None, false) => t!(ceiling_stop_silent, tokens = tokens),
-    }
-}
-
-/// What the person is told when a reply the output ceiling stopped is the turn's answer. A call it
-/// was writing is named, since the text reads as though the work it announces was done.
-fn answer_stopped_narration(cut_off: &bravebot_aichat::CutOff) -> String {
-    use bravebot_aichat::OpenCall;
-    let tokens = cut_off.ceiling;
-    match &cut_off.call {
-        Some(OpenCall {
-            tool: Some(tool), ..
-        }) => t!(
-            ceiling_stop_ends_in_call,
-            tokens = tokens,
-            tool = tool.as_str()
-        ),
-        Some(OpenCall { tool: None, .. }) => t!(ceiling_stop_ends_in_a_call, tokens = tokens),
-        None => "the model reached its output limit, so this answer stops where it did. \
-                 What it wrote is kept; raise BRAVEBOT_OUTPUT_BUDGET or ask for less in one turn"
-            .to_string(),
-    }
-}
-
-/// Put a reply the output ceiling stopped in the trail, with what the turn did about it (TURN-7).
-fn record_ceiling_stop<S: Sink>(
-    policy: &mut Policy<'_, S>,
-    round: usize,
-    cut_off: &bravebot_aichat::CutOff,
-    then: AfterCeilingStop,
-) {
-    policy.record_ceiling_stop(
-        round,
-        cut_off.ceiling,
-        cut_off
-            .call
-            .as_ref()
-            .map(|call| (call.tool.as_deref(), call.arguments)),
-        cut_off.thought,
-        then,
-    );
-}
-
-/// What the planner is told after a reply of its own reached the output ceiling (TURN-7).
-///
-/// Made from the stop's structure and the request's own spelling of a tool it offered, so nothing
-/// the reply wrote reaches the line. The remedy follows from what the reply was writing: a file
-/// too big for one reply is written in parts, with the write tools `request` offered, and a reply
-/// that spent the ceiling thinking is asked to act sooner.
-fn after_a_ceiling_stop(
-    cut_off: &bravebot_aichat::CutOff,
-    request: &ChatRequest,
-    may_call_tools: bool,
-) -> String {
-    use bravebot_aichat::OpenCall;
-    let ceiling = cut_off.ceiling;
-    let stopped = match (&cut_off.call, cut_off.thought) {
-        (
-            Some(OpenCall {
-                tool: Some(tool), ..
-            }),
-            _,
-        ) => {
-            format!("while writing a call to {tool}, so the call was not made")
-        }
-        (Some(OpenCall { tool: None, .. }), _) => {
-            "while writing a tool call, so the call was not made".to_string()
-        }
-        (None, true) => "while thinking, before it said or did anything".to_string(),
-        (None, false) => "before it said or did anything".to_string(),
-    };
-    let next = match &cut_off.call {
-        _ if !may_call_tools => "Answer now, in fewer words.",
-        Some(OpenCall {
-            tool: Some(tool), ..
-        }) if tools::writes_a_file(tool) => match (
-            request.offered("write_file").is_some(),
-            request.offered("edit_file").is_some(),
-        ) {
-            (true, true) => {
-                "Nothing was written. Make the same change in smaller calls, each well under the \
-                 limit: split it across several files, or write the first part and add the rest \
-                 with edit_file."
-            }
-            (true, false) => {
-                "Nothing was written. Make the same change in smaller calls, each well under the \
-                 limit: split it across several files."
-            }
-            _ => {
-                "Nothing was written. Make the same change in smaller calls, each well under the limit."
-            }
-        },
-        Some(_) => "Make it again with less in it, in smaller calls each well under the limit.",
-        None if cut_off.thought => "Think less before you act: make the next call now.",
-        None => "Make the next call now, or give a shorter answer.",
-    };
-    format!(
-        "{TOOL_BUDGET_SPENT} Your last reply reached the output limit of {ceiling} tokens \
-         {stopped}. {next}"
-    )
-}
 
 /// Which of the limits a person gave a run ended it, and what the run had done by then (TURN-14).
 ///
@@ -8322,7 +8204,7 @@ mod tests {
     /// tools left is asked for a shorter answer.
     #[test]
     fn the_line_after_a_ceiling_stop_says_what_to_do_about_it() {
-        use bravebot_aichat::protocol::Tool;
+        use bravebot_aichat::protocol::{ChatRequest, Tool};
         use bravebot_aichat::{CutOff, OpenCall};
         let stop = |tool: Option<Option<&str>>, thought: bool| CutOff {
             ceiling: 32_000,
