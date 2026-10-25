@@ -17,7 +17,7 @@ use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::todo::Row;
 use bravebot_core::trust::TrustStore;
 use bravebot_session::sessions::Handle;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -347,30 +347,8 @@ impl State {
 }
 
 /// What a person typed while a turn ran, for the turn to read at its next round boundary
-/// (INPUT-10).
-///
-/// The dispatch thread adds to the back and the worker takes from the front, so lines reach the
-/// planner in the order they were typed. Neither side waits: the worker polls it between rounds
-/// and a full lock is only ever held for a push or a pop. A poisoned lock reads as empty, since it
-/// is only poisoned by a panic elsewhere and the turn is ending either way.
-#[derive(Debug, Clone, Default)]
-pub struct Interjections(Arc<Mutex<VecDeque<String>>>);
-
-impl Interjections {
-    /// Add a line for the turn to take at its next boundary.
-    fn push(&self, said: String) -> bool {
-        let Ok(mut waiting) = self.0.lock() else {
-            return false;
-        };
-        waiting.push_back(said);
-        true
-    }
-
-    /// Take the oldest line, or `None`. Never waits.
-    pub fn take(&self) -> Option<String> {
-        self.0.lock().ok()?.pop_front()
-    }
-}
+/// (INPUT-10). The buffer is the one in `bravebot_agent`, which the terminal also uses.
+pub use bravebot_agent::interjections::Interjections;
 
 /// A turn in flight, from the dispatch thread's point of view.
 ///
@@ -462,12 +440,10 @@ impl Running {
     /// answers without another round ends with the line unread, and the `turn.interjected` event is
     /// what says it was.
     pub fn interject(&self, said: String) -> bool {
-        if self.is_finished() || self.cancel.is_cancelled() {
-            return false;
-        }
+        let reading = !self.is_finished() && !self.cancel.is_cancelled();
         self.interjections
             .as_ref()
-            .is_some_and(|waiting| waiting.push(said))
+            .is_some_and(|waiting| waiting.offer(reading, said).is_ok())
     }
 
     /// Answer the question that is waiting, if this is an answer to that question.

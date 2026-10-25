@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { idA, idB, installBridge, makeProfile } from './acceptance-fixture.mjs'
+import { BOT_OPEN_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-bot-history')
 mkdirSync(output, { recursive: true })
 const { profile, directory } = makeProfile({ conversations: [idA, '44444444-4444-4444-8444-444444444444'] })
@@ -40,7 +41,7 @@ try {
   const conversations=page.locator('[data-test="bot-conversations"] button.bot-history-row');
   const overview=async()=>{
     if(!(await page.locator('.bot-open').count())) await page.getByRole('button',{name:'Bots',exact:true}).click();
-    await page.locator('.bot').filter({hasText:'Review Bot'}).locator('.bot-open-button').click();
+    await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();
     await page.getByRole('heading',{name:'Recent conversations'}).waitFor()
   }
   const searchHistory=async(text)=>{
@@ -60,7 +61,7 @@ try {
   assert.equal(await conversations.count(),1);
   await snap('02-filtered-history');
   await conversations.click();
-  await page.getByRole('textbox',{name:'Message the agent'}).waitFor();
+  await page.getByRole('textbox',{name:COMPOSER_NAME}).waitFor();
   await overview();await conversations.filter({hasText:'Review the sample project'}).click();
   await page.getByText('Review the project and show a code example.',{exact:true}).waitFor();
   await snap('03-open-archived-conversation');
@@ -90,7 +91,7 @@ try {
   await overview();
   assert.equal((await page.locator('[data-test="project-trigger"]').textContent())?.trim(),'No project');
   const sent=(await app.evaluate(()=>globalThis.ux.sent.length));
-  await page.getByRole('textbox',{name:'Message the agent'}).fill('Start a newer conversation');
+  await page.getByRole('textbox',{name:COMPOSER_NAME}).fill('Start a newer conversation');
   await page.getByRole('button',{name:'Send',exact:true}).click();
   await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
   // The message waits in the queue for the trust question, then goes; polled, since it is sent on
@@ -101,13 +102,13 @@ try {
   assert.equal(delivered.at(-1)?.prompt,'Start a newer conversation');
   assert.equal(await page.locator('.app.no-context').count(),1,'a conversation with no project has no context column');
   assert.equal(await page.locator('.transcript-head .where').count(),0,'and no project chip');
-  await page.getByRole('textbox',{name:'Message the agent'}).fill('Keep this newer conversation draft');
+  await page.getByRole('textbox',{name:COMPOSER_NAME}).fill('Keep this newer conversation draft');
   await snap('04-history-after-new');
   await page.reload();
   await page.getByRole('button',{name:'Chats',exact:true}).click();
   await page.locator('.session').filter({hasText:'Keep this newer'}).click();
   await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
-  assert.equal(await page.getByRole('textbox',{name:'Message the agent'}).inputValue(),'Keep this newer conversation draft');
+  assert.equal(await page.getByRole('textbox',{name:COMPOSER_NAME}).inputValue(),'Keep this newer conversation draft');
   await snap('05-draft-restored-after-reload');
   await overview();await searchHistory('no-such-conversation');
   await page.getByText(/No conversation matches/).waitFor();await snap('06-no-results');

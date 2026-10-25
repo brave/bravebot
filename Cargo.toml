@@ -25,6 +25,9 @@ future_not_send = "deny"
 let_underscore_future = "deny"
 rc_mutex = "deny"
 mutex_atomic = "deny"
+# An `#[allow]` or `#[expect]` ends its list with `reason = "..."`. The lint reads only code the host
+# compiles, so `crates/cli/tests/allow_reasons.rs` holds every source file to the same rule.
+allow_attributes_without_reason = "deny"
 
 [workspace.dependencies]
 base64 = "0.22"

@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { agentInfo, oneModelList } from './acceptance-fixture.mjs'
 import { CASES } from './shown-cases.mjs'
+import { COMPOSER_NAME } from './drive-support.mjs'
 
 const output = process.env.SHOWN_OUTPUT || join(tmpdir(), 'bravebot-shown')
 mkdirSync(output, { recursive: true })
@@ -70,7 +71,7 @@ try {
   await page.setViewportSize(SMALL)
   await page.reload()
   await page.locator('.session').filter({ hasText: 'Write the release notes' }).first().click()
-  await page.getByRole('textbox', { name: 'Message the agent' }).waitFor()
+  await page.getByRole('textbox', { name: COMPOSER_NAME }).waitFor()
   await emit('turn.started', { turn: 2 })
 
   // The check in the page. It finds each token's text in the card and counts it once the whole of

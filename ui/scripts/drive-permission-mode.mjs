@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT } from './drive-support.mjs'
+import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND } from './drive-support.mjs'
 
 // A planner that makes the one call the last prompt names, and ends the turn once a tool answered.
 const { service, rounds } = await startModelService(({ messages }) => {
@@ -39,12 +39,12 @@ try {
 
   const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
-  const replies = page.locator('.bubble.assistant')
+  const replies = page.locator(ASSISTANT_BUBBLE)
   const mode = page.locator('[data-test="mode-trigger"]')
   const writeCards = page.locator('.confirm:not(.run):not(.ask)')
   const send = async (prompt) => {
     await composer.fill(prompt)
-    await page.locator('.composer .send').click()
+    await page.locator(COMPOSER_SEND).click()
   }
   // A turn the fixture answers at once can show and hide Stop between two polls, so a turn is
   // waited out by its reply.

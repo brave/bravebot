@@ -3364,13 +3364,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let current = self.observe_path(Capability::FileRead, &path)?;
         let label = crate::label::taint_all([promised, current]);
 
+        // The path's revision before the bytes are taken, so that a write landing while the file
+        // is read leaves the slot older than the file and not the other way round.
+        let revision = self.trust.stamp_of(&path);
         let text = read(&path).map_err(|detail| Denial {
             principle: Principle::Confinement,
             message: format!("{tool}: {slot} could not be read: {detail}"),
         })?;
 
         let measured = slots
-            .fill(slot, Labelled::new(text, label))
+            .fill(slot, Labelled::new(text, label), revision)
             .map_err(|e| Denial {
                 principle: Principle::Confinement,
                 message: format!("{tool}: {slot} could not be filled: {e}"),
@@ -5685,8 +5688,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Whether writing this slot to this path would change the file.
     ///
     /// `false` only where the kernel filled the slot from that very path and nothing has
-    /// rewritten it since. No byte of either side is read: what decides is which file the slot
-    /// was filled from, which is the kernel's own record, and the destination, which is routing.
+    /// rewritten it since, which also requires that no `run` line has started since. No byte of
+    /// either side is read: what decides is which file the slot was filled from, which is the
+    /// kernel's own record, the destination, which is routing, and two numbers.
     ///
     /// A write that changes nothing is worth recognising because the alternative is asking a
     /// person to approve a diff with nothing in it, once per file that turned out not to need
@@ -5698,7 +5702,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
     ) -> bool {
-        let unchanged = slots.verbatim_of(slot, &PathAuthority::mint()) == Some(path);
+        let unchanged = slots
+            .verbatim_of(slot, &PathAuthority::mint())
+            .is_some_and(|(read_from, at)| read_from == path && self.trust.stamp_of(path) == at);
         if unchanged {
             self.allow(
                 "write",
@@ -9202,6 +9208,197 @@ five
             .destination_from_reference("write_file", "path_ref", &SlotId::new("ref:9"), &slots)
             .expect_err("content is not an address");
         assert_eq!(err.principle, Principle::IntegrityGate);
+    }
+
+    /// Writing a slot back to the file the kernel filled it from is the one write that needs no
+    /// question. Every other spelling of that file, every other path and a slot that was never
+    /// read from a file change something as far as the kernel's record can tell, so each is put
+    /// to the person. A comparison that normalised the spelling, or that treated an answer from a
+    /// processor as the file it was about, would skip a question the person has to be asked.
+    #[test]
+    fn only_the_path_a_slot_was_read_from_is_a_write_that_changes_nothing() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let read = SlotId::new("ref:0");
+        policy
+            .defer(
+                "read_file",
+                read.clone(),
+                "vendor/x.txt",
+                &Labelled::trusted("vendor/x.txt".to_string()),
+                10,
+                &mut slots,
+            )
+            .expect("a file may be reserved");
+
+        // Reserved and not yet read: nothing was filled from the file, so nothing is the same.
+        assert!(
+            policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot still waiting on its file was taken for the file"
+        );
+
+        policy
+            .materialise("write_file", &read, &mut slots, |_| {
+                Ok("payload".to_string())
+            })
+            .expect("the file is readable");
+
+        // The answer a processor gave about that file: it names the file it was about as its
+        // origin, but nothing filled it from the file.
+        let answer = SlotId::new("ref:1");
+        slots
+            .writer_for(answer.clone(), Label::untrusted_private())
+            .unwrap()
+            .write("payload")
+            .unwrap();
+
+        let asked_about = |sink: &RecordingSink| {
+            sink.events()
+                .iter()
+                .filter(|event| format!("{event:?}").contains("already holds what"))
+                .count()
+        };
+
+        for (path, slot) in [
+            ("vendor/y.txt", &read),
+            ("./vendor/x.txt", &read),
+            ("/work/vendor/x.txt", &read),
+            ("vendor/x.txt", &answer),
+        ] {
+            assert!(
+                policy.write_would_change(path, slot, &slots),
+                "{slot} written to {path} was taken for a write that changes nothing"
+            );
+        }
+        drop(policy);
+        assert_eq!(
+            asked_about(&sink),
+            0,
+            "a write that changes something was recorded as one that changes nothing"
+        );
+
+        let mut policy = open_policy(&mut sink);
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot written back to the file it was read from was put to the person"
+        );
+        drop(policy);
+        assert_eq!(
+            asked_about(&sink),
+            1,
+            "the write that changes nothing left no line in the trail"
+        );
+    }
+
+    /// A slot is a copy of its file only until something writes the file. Writing the slot back
+    /// to its file changes nothing while the file's revision is the one it had when the slot was
+    /// read, changes the file once the revision has moved, and changes a different path always.
+    /// A comparison of paths alone would skip the question after the file was rewritten, and the
+    /// file would keep the rewrite.
+    #[test]
+    fn a_slot_is_not_a_copy_of_its_file_once_the_file_was_written() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let read = SlotId::new("ref:0");
+        policy
+            .defer(
+                "read_file",
+                read.clone(),
+                "vendor/x.txt",
+                &Labelled::trusted("vendor/x.txt".to_string()),
+                10,
+                &mut slots,
+            )
+            .expect("a file may be reserved");
+        policy
+            .materialise("write_file", &read, &mut slots, |_| {
+                Ok("payload".to_string())
+            })
+            .expect("the file is readable");
+
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot written back to an untouched file was put to the person"
+        );
+
+        // A write to some other file does not move this file's revision.
+        policy
+            .file_authority()
+            .publish("vendor/other.txt", Integrity::Untrusted);
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a write to another file made the slot stale"
+        );
+        assert!(
+            policy.write_would_change("vendor/other.txt", &read, &slots),
+            "the slot written to a path it was not read from was taken for no change"
+        );
+
+        policy
+            .file_authority()
+            .publish("vendor/x.txt", Integrity::Untrusted);
+        assert!(
+            policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot written back after its file was rewritten was taken for no change"
+        );
+    }
+
+    /// A program rewrites files the line never names, so the authority is told of no write to
+    /// them. A slot read before such a line started is no longer taken for a copy of its file
+    /// once one has, and one read after it is.
+    ///
+    /// Fails if a path alone, or the path's revision alone, decides, since a program's write
+    /// moves neither.
+    #[test]
+    fn a_slot_is_not_a_copy_of_its_file_once_a_program_started_after_it_was_read() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let read_a_file = |policy: &mut Policy<'_, RecordingSink>, slots: &mut SlotStore, id| {
+            let slot = SlotId::new(id);
+            policy
+                .defer(
+                    "read_file",
+                    slot.clone(),
+                    "vendor/x.txt",
+                    &Labelled::trusted("vendor/x.txt".to_string()),
+                    10,
+                    slots,
+                )
+                .expect("a file may be reserved");
+            policy
+                .materialise("write_file", &slot, slots, |_| Ok("payload".to_string()))
+                .expect("the file is readable");
+            slot
+        };
+        let before = read_a_file(&mut policy, &mut slots, "ref:0");
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &before, &slots),
+            "a slot written back to an untouched file was put to the person"
+        );
+
+        let authority = policy.file_authority();
+        authority.note_program_started();
+        assert!(
+            policy.write_would_change("vendor/x.txt", &before, &slots),
+            "a slot read before a program started was taken for a copy of the file"
+        );
+        assert_eq!(
+            authority.revision_of("vendor/x.txt"),
+            0,
+            "starting a program moved a path's revision, which would quarantine its neighbours"
+        );
+
+        let after = read_a_file(&mut policy, &mut slots, "ref:1");
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &after, &slots),
+            "a slot read after the last program started was put to the person"
+        );
     }
 
     /// A path that stopped being trusted between the promise and the reading is read as

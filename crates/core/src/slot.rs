@@ -151,7 +151,13 @@ enum Entry {
         /// document should not change. It is what lets a write that would put a file back exactly
         /// as it is be recognised as changing nothing, from bookkeeping rather than by comparing
         /// bytes: the driver never reads either side.
-        verbatim: Option<String>,
+        ///
+        /// With the file authority's [`Stamp`](crate::file_authority::Stamp) for that path as it
+        /// stood when the file was read: the path's revision and the number of `run` lines started.
+        /// The file is a copy of the slot only while both are still what they were: a write to the
+        /// file moves the revision, a program started since may have rewritten it without anybody
+        /// being told, and then the slot says nothing of what the file holds.
+        verbatim: Option<Box<(String, crate::file_authority::Stamp)>>,
         /// Where an answer produced by a processor may be written.
         home: Home,
         /// What produced this, where it was a program: the command as the user approved it.
@@ -209,9 +215,11 @@ impl Entry {
         }
     }
 
-    fn verbatim(&self) -> Option<&str> {
+    fn verbatim(&self) -> Option<(&str, crate::file_authority::Stamp)> {
         match self {
-            Self::Read { verbatim, .. } => verbatim.as_deref(),
+            Self::Read { verbatim, .. } => {
+                verbatim.as_deref().map(|(path, at)| (path.as_str(), *at))
+            }
             // Nothing has been read, so nothing is a copy of anything.
             Self::Unread(_) => None,
         }
@@ -298,8 +306,13 @@ impl SlotStore {
     ///
     /// Only the policy layer may ask, held by the witness [`SlotStore::path_of`] takes and for
     /// the same reason: what it is for is recognising a write that would put a file back exactly
-    /// as it is, and that is a decision.
-    pub(crate) fn verbatim_of(&self, id: &SlotId, _authority: &PathAuthority) -> Option<&str> {
+    /// as it is, and that is a decision. Returned with the revision of the path when the bytes
+    /// were read, which the caller compares with the path's revision now.
+    pub(crate) fn verbatim_of(
+        &self,
+        id: &SlotId,
+        _authority: &PathAuthority,
+    ) -> Option<(&str, crate::file_authority::Stamp)> {
         self.slots.get(id).and_then(Entry::verbatim)
     }
 
@@ -510,6 +523,7 @@ impl SlotStore {
         &mut self,
         id: &SlotId,
         content: Labelled<String>,
+        revision: crate::file_authority::Stamp,
     ) -> Result<Measured, SlotError> {
         let deferred = match self.slots.get(id) {
             Some(Entry::Unread(deferred)) => deferred.clone(),
@@ -537,7 +551,7 @@ impl SlotStore {
             id.clone(),
             Entry::Read {
                 value: taint(content, label),
-                verbatim: Some(deferred.path.clone()),
+                verbatim: Some(Box::new((deferred.path.clone(), revision))),
                 origin: Some(deferred.path.clone()),
                 path: Some(deferred.path),
                 home: Home::Anywhere,
@@ -732,6 +746,7 @@ mod tests {
             .fill(
                 &sid("ref:0"),
                 Labelled::new("one\ntwo".to_string(), Label::untrusted_private()),
+                Default::default(),
             )
             .expect("the first reading fills it");
         assert!(!store.is_unread(&sid("ref:0")));
@@ -751,7 +766,8 @@ mod tests {
         assert_eq!(
             store.fill(
                 &sid("ghost"),
-                Labelled::new("x".to_string(), Label::untrusted_private())
+                Labelled::new("x".to_string(), Label::untrusted_private()),
+                Default::default()
             ),
             Err(SlotError::NotWritten(sid("ghost")))
         );
@@ -769,6 +785,7 @@ mod tests {
             .fill(
                 &sid("ref:0"),
                 Labelled::new("one\ntwo".to_string(), Label::untrusted_private()),
+                Default::default(),
             )
             .expect("the first reading fills it");
         assert_eq!(measured.lines, 2);
@@ -776,7 +793,8 @@ mod tests {
         assert_eq!(
             store.fill(
                 &sid("ref:0"),
-                Labelled::new("something else".to_string(), Label::untrusted_private())
+                Labelled::new("something else".to_string(), Label::untrusted_private()),
+                Default::default()
             ),
             Err(SlotError::AlreadyWritten(sid("ref:0")))
         );
@@ -794,6 +812,7 @@ mod tests {
             .fill(
                 &sid("ref:0"),
                 Labelled::new("payload".to_string(), Label::trusted_public()),
+                Default::default(),
             )
             .unwrap();
 

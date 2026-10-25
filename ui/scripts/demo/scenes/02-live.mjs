@@ -22,7 +22,7 @@
 // checkout as it was, and is a better shot than an approval nobody meant to give.
 
 import { join } from 'node:path'
-import { COMPOSER_IDLE, COMPOSER_INPUT } from '../../drive-support.mjs'
+import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND, TRUST_APPROVE } from '../../drive-support.mjs'
 
 /** How each of the five reads on screen, in the order somebody meets them. */
 const QUESTIONS = {
@@ -214,7 +214,7 @@ export default {
     if (await page.locator('.trust').isVisible().catch(() => false)) {
       await s.say('Trust the directory', 'Asked once, per checkout, before anything happens in it.', 2.2)
       await s.shot('02-trust')
-      await s.click('[data-test="trust-approve"]')
+      await s.click(TRUST_APPROVE)
       await page.waitForTimeout(600 * s.speed)
     }
 
@@ -236,7 +236,7 @@ export default {
         'answer, make a SECOND ask_user call with one further question. Then just summarise my ' +
         'answers.',
     )
-    await s.click('.composer .send')
+    await s.click(COMPOSER_SEND)
     await s.say('Working', 'The turn runs until it needs something only you can give it.', 1.6)
 
     if ((await answerEverything(s, { shot: '02-ask' })) === 0) {
@@ -254,7 +254,7 @@ export default {
       COMPOSER_INPUT,
       'Run `wc -l src/lib/tides.ts` here and tell me how many lines it printed.',
     )
-    await s.click('.composer .send')
+    await s.click(COMPOSER_SEND)
     await s.beat(1.4)
 
     const answered = await answerEverything(s, { shot: '02-run' })

@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod anthropic;
+pub mod call;
 pub mod conversation;
 pub mod generate_content;
 pub mod llama_server;
@@ -38,6 +39,7 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_net::{Egress, EgressError, Request};
+use call::{Concession, Driven, Pace, Plan, Spent, drive};
 use protocol::{ChatChunk, ChatRequest, ChatResponse, STREAM_DONE, SseDecoder, StreamAccumulator};
 use std::fmt;
 use std::time::Duration;
@@ -415,37 +417,25 @@ impl fmt::Debug for SubscriptionCredential {
 }
 
 pub struct AichatClient<'a> {
-    attempts: u32,
-    completed_usage: Option<protocol::Usage>,
-    retried_usage: Option<protocol::Usage>,
+    spent: Spent,
     config: &'a Config,
     egress: &'a Egress,
     subscription: Option<&'a mut dyn Subscription>,
-    cancel: Option<Cancel>,
     gateway: Option<Gateway<'a>>,
-    /// Whether to ask the service to cache the prefix it will be sent again.
+    /// What this service has refused for the model of the call in progress.
     ///
-    /// On until a service says otherwise, because there is no field in this protocol's model
-    /// listings, or in Brave's, that answers whether a service reads a breakpoint. Asking costs one
-    /// extra round trip against a service that refuses, once per process; not asking costs the
-    /// whole prompt on every request against every service that would have cached it.
-    breakpoints: bool,
-    /// Whether to send the cache lifetime the settings chose, to a gateway.
+    /// Nothing is refused until a service says so, because there is no field in this protocol's model
+    /// listings, or in Brave's, that answers whether a service reads a breakpoint, a cache lifetime or
+    /// a level: a settings block names its models and never their parameters. Asking costs one extra
+    /// round trip against a service that refuses, once per process; not asking costs the whole prompt
+    /// on every request against every service that would have cached it.
     ///
-    /// On until a service refuses it, for the reason breakpoints are. Brave's own endpoint is never
-    /// sent one, a lifetime being a choice about a gateway's account.
-    cache_ttl: bool,
-    /// Whether to send the level somebody asked for, where they asked for one.
-    ///
-    /// On until a service refuses the field, for the same reason breakpoints are: a settings block
-    /// names its models and never their parameters, so nothing can be consulted before the level is
-    /// sent and it goes out to be judged. Leaving it out costs the level on a service that would
-    /// have read it; sending it to a service that refuses the field costs every turn.
-    effort: bool,
-    /// How long to wait before the first retry. Doubled for each retry after that.
-    ///
-    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
-    backoff: Duration,
+    /// Brave's own endpoint is never sent a lifetime, a lifetime being a choice about a gateway's
+    /// account. Loaded and settled by [`call::drive`].
+    refusals: Refusals,
+    /// The stop to watch for and how long to wait between attempts, which is [`BACKOFF`] unless
+    /// overridden by [`Self::with_backoff`].
+    pace: Pace,
 }
 
 /// Where a request goes when a configured gateway serves the model, rather than Brave's endpoint.
@@ -476,40 +466,29 @@ struct Gateway<'a> {
 impl<'a> AichatClient<'a> {
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.attempts
+        self.spent.attempts
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<protocol::Usage> {
-        match (self.retried_usage, self.completed_usage) {
-            (Some(mut earlier), Some(current)) => {
-                earlier.add(current);
-                Some(earlier)
-            }
-            (earlier, current) => earlier.or(current),
-        }
+        self.spent.total()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.completed_usage.map(|usage| usage.prompt_tokens)
+        self.spent.last_prompt_tokens()
     }
 
     pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
         Self {
-            attempts: 0,
-            completed_usage: None,
-            retried_usage: None,
+            spent: Spent::default(),
             config,
             egress,
             subscription: None,
-            cancel: None,
             gateway: None,
-            breakpoints: true,
-            cache_ttl: true,
-            effort: true,
-            backoff: BACKOFF,
+            refusals: Refusals::default(),
+            pace: Pace::new(BACKOFF),
         }
     }
 
@@ -566,7 +545,7 @@ impl<'a> AichatClient<'a> {
     /// watches the rest of the answer arrive first, which is the whole of what they asked to
     /// stop. A caller that offers no way to say so is never stopped.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.cancel = Some(cancel);
+        self.pace.cancel = Some(cancel);
         self
     }
 
@@ -583,7 +562,7 @@ impl<'a> AichatClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.backoff = backoff;
+        self.pace.backoff = backoff;
         self
     }
 
@@ -622,12 +601,12 @@ impl<'a> AichatClient<'a> {
     /// request only. The level is dropped from the encoded body for the same reason, the request the
     /// caller holds still being the level they asked for.
     fn body(&self, request: &ChatRequest) -> Result<serde_json::Value, ChatError> {
-        let mut body = match self.breakpoints {
-            true => request.marked_body(self.cache_ttl_asked()),
-            false => serde_json::to_value(request),
+        let mut body = match self.refusals.caching {
+            false => request.marked_body(self.cache_ttl_asked()),
+            true => serde_json::to_value(request),
         }
         .map_err(|e| ChatError::Encode(e.to_string()))?;
-        if !self.effort
+        if self.refusals.effort
             && let Some(fields) = body.as_object_mut()
         {
             fields.remove(protocol::EFFORT_FIELD);
@@ -650,76 +629,28 @@ impl<'a> AichatClient<'a> {
         }
     }
 
-    /// Ask this service for nothing it has already refused for this model.
-    fn recall(&mut self, key: &str) {
-        let refusals = remembered(key);
-        self.breakpoints = !refusals.caching;
-        self.cache_ttl = !refusals.cache_ttl;
-        self.effort = !refusals.effort;
-    }
-
     /// The cache lifetime a request asks for: the one the settings chose, for a gateway that has
     /// not refused it.
     fn cache_ttl_asked(&self) -> Option<CacheTtl> {
         self.gateway
             .as_ref()
             .and(self.config.prompt_cache_ttl)
-            .filter(|_| self.cache_ttl)
+            .filter(|_| !self.refusals.cache_ttl)
     }
 
-    /// Whether this failure is worth sending the request again without the lifetime.
+    /// The order a refusal of the body is answered in, in both loops.
     ///
-    /// First in both loops, ahead of the breakpoints that carry it: a service that reads a
-    /// breakpoint and refuses a lifetime on it keeps its caching at its own default. Only where the
-    /// request carried one.
-    fn worth_dropping_cache_ttl(&self, error: &ChatError) -> bool {
-        self.breakpoints && self.cache_ttl_asked().is_some() && refuses_the_body(error)
-    }
-
-    /// Whether this failure is worth sending the request again without the breakpoints.
-    ///
-    /// Only when there are breakpoints to drop, so a service that answers this status for its own
-    /// reasons cannot make a retry loop out of it.
-    fn worth_dropping_breakpoints(&self, error: &ChatError) -> bool {
-        self.breakpoints && refuses_the_body(error)
-    }
-
-    /// Whether this failure is worth sending the request again without the level.
-    ///
-    /// Only where the request carries a level to drop, so a service that answers this status for its
-    /// own reasons cannot make a retry loop out of it. Second in both loops rather than competing
-    /// with the breakpoints: either field is refused with the same status, so a request still
-    /// carrying breakpoints gives up those first, and reading a breakpoint refusal as a refusal of
-    /// the level would stop sending a level to a model that reads one.
-    fn worth_dropping_effort(&self, request: &ChatRequest, error: &ChatError) -> bool {
-        self.effort && request.effort.is_some() && refuses_the_body(error)
-    }
-
-    /// Record what dropping a field proved, once the request has finished either way.
-    ///
-    /// Only a probe that answered says anything: the service took the request without what it was
-    /// sent again without, having refused it with. A probe that failed too proves nothing, an
-    /// invalid-request status being also what a prompt too long for the model is answered with, and
-    /// concluding a refusal from one would stop asking a service that caches happily. Nothing is
-    /// remembered from one, so the next request marks its prefixes, carries its level, and asks
-    /// again.
-    ///
-    /// Both fields are recorded as the answering request found them, because the status names no
-    /// field: where the level went only after the breakpoints had already gone, a service that reads
-    /// a breakpoint and refuses a level gives up both for the life of the process.
-    fn probe_settled(&self, key: &str, probed: bool, failed: bool) {
-        if probed && !failed {
-            remember(
-                key,
-                Refusals {
-                    caching: !self.breakpoints,
-                    cache_ttl: !self.cache_ttl,
-                    effort: !self.effort,
-                    ..Refusals::default()
-                },
-            );
-        }
-    }
+    /// The lifetime first, ahead of the breakpoints that carry it: a service that reads a
+    /// breakpoint and refuses a lifetime on it keeps its caching at its own default. Then the
+    /// breakpoints. Then the level, the body having been refused without the breakpoints as well:
+    /// either field is refused with the same status, so a request still carrying breakpoints gives
+    /// up those first, and reading a breakpoint refusal as a refusal of the level would stop
+    /// sending a level to a model that reads one.
+    const CONCESSIONS: [Concession; 3] = [
+        Concession::CacheTtl,
+        Concession::Breakpoints,
+        Concession::Effort,
+    ];
 
     /// The request to send, addressed and authenticated for whichever service serves it.
     ///
@@ -808,49 +739,20 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
-        let refusal_key = self.refusal_key(request);
-        self.recall(&refusal_key);
-        let mut probed = false;
-        let mut attempt = 1;
-        loop {
-            match self.complete_once(policy, request) {
-                // No backoff and no count against the attempts: the service answered, and what it
-                // objected to may be a field the next request can simply leave out.
-                Err(error) if self.worth_dropping_cache_ttl(&error) => {
-                    self.cache_ttl = false;
-                    probed = true;
-                }
-                Err(error) if self.worth_dropping_breakpoints(&error) => {
-                    self.breakpoints = false;
-                    probed = true;
-                }
-                // Then the level, the body having been refused without the breakpoints as well.
-                Err(error) if self.worth_dropping_effort(request, &error) => {
-                    self.effort = false;
-                    probed = true;
-                }
-                Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
-                    let pause = pause_before_retry(self.backoff, attempt, &error);
-                    log_retry(attempt + 1, pause);
-                    if !self.wait(pause) {
-                        return Err(ChatError::Cancelled);
-                    }
-                    attempt += 1;
-                }
-                result => {
-                    self.probe_settled(&refusal_key, probed, result.is_err());
-                    return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
-                        completion
-                    });
-                }
-            }
-        }
+        self.spent.begin_call();
+        let key = self.refusal_key(request);
+        let plan = Plan {
+            key: &key,
+            order: &Self::CONCESSIONS,
+        };
+        drive(
+            self,
+            request,
+            plan,
+            policy,
+            |client, policy, _| client.complete_once(policy, request),
+            |_, _| {},
+        )
     }
 
     /// One attempt at [`AichatClient::complete`].
@@ -859,15 +761,9 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        // Move the last completed bill into the call total before clearing attempt state.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
-        if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
-            return Err(ChatError::Cancelled);
-        }
         let http = self.prepare(request)?;
 
-        self.attempts += 1;
+        self.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // Decoding the transport envelope needs the raw bytes, so the kernel releases them
@@ -882,7 +778,7 @@ impl<'a> AichatClient<'a> {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
             })?;
         // Usage belongs to the completed transport response, even if its tool calls are invalid.
-        self.completed_usage = reported_usage(&envelope);
+        self.spent.record(reported_usage(&envelope));
         let parsed: ChatResponse =
             serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
@@ -925,84 +821,33 @@ impl<'a> AichatClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
+        self.spent.begin_call();
         let request = request.clone().streamed();
-        let refusal_key = self.refusal_key(&request);
-        self.recall(&refusal_key);
-        let mut probed = false;
-        let mut attempt = 1;
-        loop {
-            match self.stream_once(policy, &request, attempt, &mut progress) {
-                // Nothing has been drawn yet: a service refuses the body before it sends a chunk,
-                // so this retry is invisible rather than a reply that starts over.
-                Err(error) if self.worth_dropping_cache_ttl(&error) => {
-                    self.cache_ttl = false;
-                    probed = true;
-                }
-                Err(error) if self.worth_dropping_breakpoints(&error) => {
-                    self.breakpoints = false;
-                    probed = true;
-                }
-                // Then the level, the body having been refused without the breakpoints as well.
-                Err(error) if self.worth_dropping_effort(&request, &error) => {
-                    self.effort = false;
-                    probed = true;
-                }
-                Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
-                    attempt += 1;
-                    let pause = pause_before_retry(self.backoff, attempt - 1, &error);
-                    log_retry(attempt, pause);
-                    // Announced before the wait rather than after it, so the pause is explained
-                    // while it is happening. Reply content and progress start again from nothing;
-                    // completed costs remain in the call total.
-                    progress(Progress {
-                        written: Labelled::new("", Label::untrusted_public()),
-                        output_tokens: 0,
-                        calling: None,
-                        thinking: Labelled::new("", Label::untrusted_public()),
-                        counted_by_server: false,
-                        attempt,
-                    });
-                    if !self.wait(pause) {
-                        return Err(ChatError::Cancelled);
-                    }
-                }
-                result => {
-                    self.probe_settled(&refusal_key, probed, result.is_err());
-                    return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
-                        completion
-                    });
-                }
-            }
-        }
-    }
-
-    /// Wait out a backoff, or give up on it when the caller says to stop.
-    ///
-    /// Slept in slices rather than in one go, because the pause between attempts is seconds long
-    /// and a stop landing in the middle of one would otherwise wait the rest of it out, having
-    /// nothing to stop but a sleep.
-    ///
-    /// Returns whether the wait finished, so a stop is answered rather than swallowed.
-    fn wait(&self, how_long: Duration) -> bool {
-        const SLICE: Duration = Duration::from_millis(50);
-
-        let until = std::time::Instant::now() + how_long;
-        loop {
-            if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
-                return false;
-            }
-            let left = until.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                return true;
-            }
-            std::thread::sleep(left.min(SLICE));
-        }
+        let key = self.refusal_key(&request);
+        let plan = Plan {
+            key: &key,
+            order: &Self::CONCESSIONS,
+        };
+        drive(
+            self,
+            &request,
+            plan,
+            &mut progress,
+            |client, progress, attempt| client.stream_once(policy, &request, attempt, progress),
+            |progress, attempt| {
+                // Announced before the wait rather than after it, so the pause is explained
+                // while it is happening. Reply content and progress start again from nothing;
+                // completed costs remain in the call total.
+                progress(Progress {
+                    written: Labelled::new("", Label::untrusted_public()),
+                    output_tokens: 0,
+                    calling: None,
+                    thinking: Labelled::new("", Label::untrusted_public()),
+                    counted_by_server: false,
+                    attempt,
+                });
+            },
+        )
     }
 
     /// One attempt at [`AichatClient::complete_streaming`].
@@ -1017,16 +862,6 @@ impl<'a> AichatClient<'a> {
         attempt: u32,
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        // Move the last completed bill into the call total before clearing attempt state.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
-        // Before the request is built, let alone sent. A stop that landed while the last attempt
-        // was failing is a stop, and spending a credential on a reply nobody wants is worse than
-        // slow.
-        if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
-            return Err(ChatError::Cancelled);
-        }
-
         // A model on this machine may send nothing at all for minutes while it writes a tool call,
         // Ollama not even its headers, and this wait can be stopped at any moment of it.
         let http = self
@@ -1034,45 +869,16 @@ impl<'a> AichatClient<'a> {
             .header("accept", "text/event-stream")
             .patient_on_this_machine();
 
-        self.attempts += 1;
+        self.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.cancel.as_ref(),
+            self.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
-        // Read on a thread this one can walk away from.
-        //
-        // A read blocks for as long as the other end is quiet and cannot be interrupted, and the
-        // longest quiet in a turn is the one before the model's first word: a model thinking is a
-        // socket with nothing on it. Checked between chunks and no closer, a stop pressed then
-        // could not be noticed until the model started writing, which is the moment somebody is
-        // most likely to have pressed it.
-        //
-        // Nothing on this thread holds a policy, a workspace or a tool: it reads bytes and sends
-        // them on. So a request walked away from leaves a socket to be dropped when the server
-        // finishes or the connection times out, and nothing else.
-        let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
-        std::thread::spawn(move || {
-            let mut stream = stream;
-            loop {
-                match stream.next_chunk() {
-                    // A send that fails means the receiver is gone, which means the caller
-                    // stopped: there is nobody left to read for.
-                    Ok(Some(piece)) => {
-                        if chunks.send(Ok(Some(piece))).is_err() {
-                            return;
-                        }
-                    }
-                    end => {
-                        let _ = chunks.send(end);
-                        return;
-                    }
-                }
-            }
-        });
+        let arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut accumulated = StreamAccumulator::new();
@@ -1097,7 +903,7 @@ impl<'a> AichatClient<'a> {
                 // Nothing has arrived yet, which is the whole point of waiting with a limit: it
                 // is the only chance to look at anything while a reply is still being waited for.
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+                    if self.pace.cancelled() {
                         return Err(ChatError::Cancelled);
                     }
                     continue;
@@ -1110,7 +916,7 @@ impl<'a> AichatClient<'a> {
 
             // A stream is read and nothing else, so there is nothing part written to leave behind
             // by stopping here, and the caller is throwing the reply away regardless.
-            if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+            if self.pace.cancelled() {
                 return Err(ChatError::Cancelled);
             }
 
@@ -1160,7 +966,7 @@ impl<'a> AichatClient<'a> {
 
             // Protocol completion establishes usage even if the server keeps the socket open.
             if accumulated.ended() {
-                self.completed_usage = reported;
+                self.spent.record(reported);
             }
 
             let thinking = accumulated.take_thinking();
@@ -1188,7 +994,7 @@ impl<'a> AichatClient<'a> {
 
         let (content, model, calls, usage) = accumulated.finish();
         let usage = reported.unwrap_or(usage);
-        self.completed_usage = reported;
+        self.spent.record(reported);
         if malformed {
             return Err(ChatError::Decode {
                 detail: "the completed stream contained a malformed response frame".to_string(),
@@ -1305,11 +1111,108 @@ pub fn reply_bound(ceiling: u64) -> Duration {
 /// a person cannot tell it from at once.
 const WAKE: Duration = Duration::from_millis(50);
 
-/// How many chunks may sit between the thread reading them and the one taking them apart.
+/// Read a streamed body on a thread of its own and hand each piece on as it arrives, unopened.
 ///
-/// Bounded, so a server faster than the decoder cannot pile a whole reply into a channel. Small,
-/// because the decoder has never been the slow end.
-const CHUNKS_AHEAD: usize = 16;
+/// A read blocks for as long as the other end is quiet and cannot be interrupted, and the longest
+/// quiet in a turn is the one before the model's first word: a model thinking is a socket with
+/// nothing on it. Checked between chunks and no closer, a stop pressed then could not be noticed
+/// until the model started writing, which is the moment somebody is most likely to have pressed
+/// it. So the read runs where the caller can walk away from it.
+///
+/// Nothing on the thread holds a policy, a workspace or a tool. It moves each result from
+/// [`bravebot_net::Streamed::next_chunk`] into the channel without opening a piece or touching its
+/// label, and the caller decodes what it receives. A request walked away from leaves a socket to be
+/// dropped when the server finishes or the connection times out, and nothing else.
+///
+/// The channel holds at most 16 pieces, so a server faster than the decoder cannot pile a whole
+/// reply into it. The decoder has never been the slow end, so the bound is small. The thread stops
+/// when the body ends, when a read fails, or when the receiver is dropped.
+pub fn read_in_background(
+    stream: bravebot_net::Streamed<'static>,
+) -> std::sync::mpsc::Receiver<Result<Option<Labelled<Vec<u8>>>, EgressError>> {
+    const CHUNKS_AHEAD: usize = 16;
+
+    let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
+    std::thread::spawn(move || {
+        let mut stream = stream;
+        loop {
+            match stream.next_chunk() {
+                // A send that fails means the receiver is gone, which means the caller
+                // stopped: there is nobody left to read for.
+                Ok(Some(piece)) => {
+                    if chunks.send(Ok(Some(piece))).is_err() {
+                        return;
+                    }
+                }
+                end => {
+                    let _ = chunks.send(end);
+                    return;
+                }
+            }
+        }
+    });
+    arriving
+}
+
+impl Driven for AichatClient<'_> {
+    type Error = ChatError;
+
+    fn cancelled() -> ChatError {
+        ChatError::Cancelled
+    }
+
+    fn spent_mut(&mut self) -> &mut Spent {
+        &mut self.spent
+    }
+
+    fn pace(&self) -> &Pace {
+        &self.pace
+    }
+
+    fn refusals(&self) -> &Refusals {
+        &self.refusals
+    }
+
+    fn refusals_mut(&mut self) -> &mut Refusals {
+        &mut self.refusals
+    }
+
+    fn recall(&self, key: &str) -> Refusals {
+        remembered(key)
+    }
+
+    fn remember(&self, key: &str, found: Refusals) {
+        remember(key, found);
+    }
+
+    /// Only a refusal of the body is answered by giving something up, and only where the request
+    /// carried what would be given up, so a service that answers this status for its own reasons
+    /// cannot make a retry loop out of it. The lifetime is only in question while breakpoints are
+    /// sent, the breakpoints being what carries it.
+    fn refused(&self, request: &ChatRequest, concession: Concession, error: &ChatError) -> bool {
+        refuses_the_body(error)
+            && match concession {
+                Concession::CacheTtl => !self.refusals.caching && self.cache_ttl_asked().is_some(),
+                Concession::Breakpoints => true,
+                Concession::Effort => request.effort.is_some(),
+                Concession::Ceiling
+                | Concession::ArgumentsAsWritten
+                | Concession::ThinkingShown => false,
+            }
+    }
+
+    fn asks_again(&self, attempt: u32, error: &ChatError) -> bool {
+        worth_another_attempt(self.attempts_allowed(), attempt, error)
+    }
+
+    fn pause(&self, failures: u32, error: &ChatError) -> Duration {
+        pause_before_retry(self.pace.backoff, failures, error)
+    }
+
+    fn log_retry(&self, attempt: u32, pause: Duration) {
+        log_retry(attempt, pause);
+    }
+}
 
 /// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
 ///
@@ -1391,8 +1294,9 @@ fn refuses_the_body(error: &ChatError) -> bool {
 
 /// What a service has refused to be asked for, for one of the models it serves.
 ///
-/// Nothing a service declares: what it answered a request with. Both fields are concessions nobody
-/// asked for, so a refusal costs the concession rather than the turn.
+/// Nothing a service declares: what it answered a request with. Every field is a concession nobody
+/// asked for, so a refusal costs the concession rather than the turn. One value is kept by every
+/// client that learns refusals, and [`call::drive`] loads, changes and settles it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Refusals {
     /// It will not take a request that marks a prefix to cache.
@@ -1410,6 +1314,11 @@ pub struct Refusals {
     ///
     /// Learned by the Messages client alone, the one service here whose every request states one.
     pub ceiling: bool,
+    /// It will not take a streamed request that asks to show thinking as it happens.
+    ///
+    /// Learned by the Bedrock client alone. A model wanting to be told whether to think refuses the
+    /// ask, since the ask says only how.
+    pub thinking_shown: bool,
 }
 
 /// What each service-and-model pair has refused.
@@ -2013,7 +1922,7 @@ mod tests {
 
         let mut refused =
             AichatClient::new(&chosen, &egress).for_gateway(&provider, "z-ai/glm-4.6", None);
-        refused.cache_ttl = false;
+        refused.refusals.cache_ttl = true;
         assert_eq!(
             cache_controls(&refused),
             [plain(), plain()],

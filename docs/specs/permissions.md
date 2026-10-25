@@ -13,6 +13,8 @@ governs:
   - crates/agent/src/workspace/reach.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
   - crates/tui/src/app/actions.rs
 guards:
   - symbol: Policy::with_permissions
