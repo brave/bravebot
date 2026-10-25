@@ -3309,7 +3309,6 @@ def check_answers_registered(specs, sources):
         )
         return
     index = mechanics.TestIndex()
-    crates = mechanics.crate_directories()
     for row in rows:
         cell = row[evidence_at] if evidence_at < len(row) else ""
         cited = CITED_TEST.findall(cell)
@@ -3329,7 +3328,7 @@ def check_answers_registered(specs, sources):
                 "`accepted` with a link to the Known costs entry that admits it",
             )
         for reference in cited:
-            status, detail = index.resolve(reference, crates)
+            status, detail = index.resolve(reference)
             if status != "ok":
                 yield finding(
                     ERROR,
@@ -3543,7 +3542,6 @@ def check_changes_under_a_yes(specs, sources):
             )
 
     index = mechanics.TestIndex()
-    crates = mechanics.crate_directories()
     cases = set()
     table_source = sources.get(CHANGES_TABLE_FILE)
     if table_source is not None:
@@ -3650,7 +3648,7 @@ def check_changes_under_a_yes(specs, sources):
                                 "for that row and change",
                                 "add the case, or cite the test that pins it",
                             )
-                    status, detail = index.resolve(reference, crates)
+                    status, detail = index.resolve(reference)
                     if status != "ok":
                         yield cell_finding(
                             "changes-test-missing",

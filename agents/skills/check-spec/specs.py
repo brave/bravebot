@@ -277,7 +277,8 @@ def crate_directories():
 class TestIndex:
     """Every `#[test]` function in the workspace, by name and by file."""
 
-    def __init__(self):
+    def __init__(self, crates=None):
+        self.crates = crate_directories() if crates is None else crates
         self.by_name = {}
         for source in sorted(Path("crates").rglob("*.rs")):
             lines = source.read_text(encoding="utf-8", errors="replace").split("\n")
@@ -307,7 +308,7 @@ class TestIndex:
             crate_dir / "tests" / f"{joined}.rs",
         ]
 
-    def resolve(self, reference, crates):
+    def resolve(self, reference):
         """Resolve one `verified-by` value.
 
         Returns (status, detail) where status is one of `ok`, `moved`, `missing`,
@@ -316,7 +317,7 @@ class TestIndex:
         parts = reference.split("::")
         if len(parts) < 2:
             return "malformed", "expected crate::module::test_name"
-        crate_dir = crates.get(parts[0])
+        crate_dir = self.crates.get(parts[0])
         if crate_dir is None:
             return "unknown-crate", parts[0]
         name = parts[-1]

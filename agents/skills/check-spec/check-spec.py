@@ -34,6 +34,7 @@ import re
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
+from collections import namedtuple
 from datetime import datetime, timezone
 from fnmatch import fnmatch
 from pathlib import Path
@@ -47,7 +48,6 @@ from specs import (  # noqa: E402
     SPEC_DIR,
     TestIndex,
     clause_headings,
-    crate_directories,
     load_specs,
 )
 
@@ -376,7 +376,7 @@ def check_renumbered_file(specs, declared):
         )
 
 
-def check_coverage(spec, index, crates):
+def check_coverage(spec, index):
     for clause in spec.clauses:
         if clause.withdrawn:
             continue
@@ -415,7 +415,7 @@ def check_coverage(spec, index, crates):
                         evidence=f"{spec.rel}:{clause.line}",
                     )
                 continue
-            status, detail = index.resolve(reference, crates)
+            status, detail = index.resolve(reference)
             if status == "ok":
                 continue
             if status == "moved":
@@ -457,7 +457,7 @@ def check_coverage(spec, index, crates):
                 )
 
 
-def unverified_clauses(specs, index, crates):
+def unverified_clauses(specs, index):
     """The clauses the coverage check calls uncovered, in the form the committed file lists.
 
     The set is `check_coverage`'s own rather than a second reading of `verified-by`, so the file
@@ -466,7 +466,7 @@ def unverified_clauses(specs, index, crates):
     uncovered = {
         (found["spec"], found["clause"])
         for spec in specs
-        for found in check_coverage(spec, index, crates)
+        for found in check_coverage(spec, index)
         if found["kind"] == "clause-uncovered"
     }
     return [
@@ -539,13 +539,13 @@ def check_documentation(spec, website_docs=Path("docs/website/docs")):
             )
 
 
-def check_unverified_file(specs, index, crates):
+def check_unverified_file(specs, index):
     """The committed list of uncovered clauses is the one a run generates.
 
     Nothing else reads that file. Without this a clause given `verified-by: none` lands as a
     warning in a log nobody keeps, and the tracked file stays as it was, so the number of
     clauses nothing pins goes up without appearing in any diff."""
-    generated = render_unverified(unverified_clauses(specs, index, crates))
+    generated = render_unverified(unverified_clauses(specs, index))
     committed = UNVERIFIED_FILE.read_text(encoding="utf-8") if UNVERIFIED_FILE.exists() else ""
     if committed == generated:
         return
@@ -1720,7 +1720,7 @@ def review_state(spec, uses):
     )
 
 
-def tests_of(spec, index, crates):
+def tests_of(spec, index):
     """The files holding the tests the spec's clauses name. A clause is judged to be pinned or not
     by reading them, so a test emptied or added there is a change the clause depends on."""
     files = set()
@@ -1728,7 +1728,7 @@ def tests_of(spec, index, crates):
         for reference in clause.verified_by:
             if reference == "none" or reference.startswith("by-construction"):
                 continue
-            status, detail = index.resolve(reference, crates)
+            status, detail = index.resolve(reference)
             if status in ("ok", "moved"):
                 files.update(site.rpartition(":")[0] for site in detail.split(", "))
     return sorted(files)
@@ -1749,12 +1749,12 @@ def clause_hashes(spec, clauses, sources, repo, patterns):
     return guards, {clause.id: reviewed.digest(spec, clause, state) for clause in clauses}
 
 
-def inputs(spec, index, crates):
+def inputs(spec, index):
     """The paths a change to which reopens a clause of `spec`: what `watched` names, and the tests."""
-    return list(dict.fromkeys(watched(spec) + tests_of(spec, index, crates)))
+    return list(dict.fromkeys(watched(spec) + tests_of(spec, index)))
 
 
-def scope_of(spec, clauses, crates, index):
+def scope_of(spec, clauses, index):
     """The two lists of a prompt, besides the guarded symbols, that point a reviewer at files: the
     governed paths and the tests the clauses name."""
     governed = "\n".join(
@@ -1768,7 +1768,7 @@ def scope_of(spec, clauses, crates, index):
             if reference == "none" or reference.startswith("by-construction"):
                 test_lines.append(f"- {clause.id}: `{reference}` (nothing to read)")
                 continue
-            status, detail = index.resolve(reference, crates)
+            status, detail = index.resolve(reference)
             location = detail if status in ("ok", "moved") else "unresolved"
             test_lines.append(f"- {clause.id}: `{reference}` at {location}")
     tests = "\n".join(test_lines) or "- (none)"
@@ -1779,26 +1779,31 @@ def clause_range(ids):
     return f"{ids[0]} to {ids[-1]}" if len(ids) > 1 else ids[0]
 
 
-def build_prompt(spec, clauses, guards, crates, index, results_file):
-    governed, tests = scope_of(spec, clauses, crates, index)
+def prompt_fields(spec, clauses, guards, index, results_file):
+    """The fields `PROMPT` and `DIFF_PROMPT` both fill."""
+    governed, tests = scope_of(spec, clauses, index)
     ids = [clause.id for clause in clauses]
-    return PROMPT.format(
-        spec_name=spec.name,
-        spec_path=spec.rel,
-        clause_range=clause_range(ids),
-        clause_ids=", ".join(f"`{i}`" for i in ids),
-        ground_rules=GROUND_RULES,
-        governed=governed,
-        guards=guards,
-        tests=tests,
-        spec_text=spec.path.read_text(encoding="utf-8"),
-        verdicts=VERDICTS,
-        violations=VIOLATIONS,
-        refutation=REFUTATION,
-        clause_fields=CLAUSE_FIELDS,
-        results_file=results_file,
-        example_clause=ids[0],
-    )
+    return {
+        "spec_name": spec.name,
+        "spec_path": spec.rel,
+        "clause_range": clause_range(ids),
+        "clause_ids": ", ".join(f"`{i}`" for i in ids),
+        "ground_rules": GROUND_RULES,
+        "governed": governed,
+        "guards": guards,
+        "tests": tests,
+        "spec_text": spec.path.read_text(encoding="utf-8"),
+        "verdicts": VERDICTS,
+        "violations": VIOLATIONS,
+        "refutation": REFUTATION,
+        "clause_fields": CLAUSE_FIELDS,
+        "results_file": results_file,
+        "example_clause": ids[0],
+    }
+
+
+def build_prompt(spec, clauses, guards, index, results_file):
+    return PROMPT.format(**prompt_fields(spec, clauses, guards, index, results_file))
 
 
 def share(fraction):
@@ -1813,38 +1818,31 @@ def earlier(clause, record):
     return f"- `{clause.id}`: {record['verdict']}, severity `{record['severity']}`: {record['summary']}"
 
 
-def build_diff_prompt(spec, clauses, records, change, diff_file, guards, crates, index, results_file):
-    governed, tests = scope_of(spec, clauses, crates, index)
-    ids = [clause.id for clause in clauses]
-    commit = records[ids[0]]["commit"]
+# The diff a group of clauses is reviewed on: the commit it starts at, what an earlier run decided
+# for each clause (by id), how much `change` it makes to what the spec watches, and the file holding it.
+Since = namedtuple("Since", "commit records change diff_file")
+
+# The two command-line knobs of a run: clauses per reviewer, and the percentage of a clause's lines
+# changed from which it is reviewed in full.
+Limits = namedtuple("Limits", "chunk_size threshold")
+
+
+def build_diff_prompt(spec, clauses, since, guards, index, results_file):
+    change = since.change
     measured = (
         f"It touches {len(change.files)} files and changes {change.lines} of the "
         f"{sum(change.sizes.values())} lines the spec watches ({share(change.fraction)})."
     )
     return DIFF_PROMPT.format(
-        spec_name=spec.name,
-        spec_path=spec.rel,
-        clause_range=clause_range(ids),
-        clause_ids=", ".join(f"`{i}`" for i in ids),
-        commit=commit,
-        ground_rules=GROUND_RULES,
-        previous="\n".join(earlier(clause, records[clause.id]) for clause in clauses),
-        diff_file=diff_file,
+        **prompt_fields(spec, clauses, guards, index, results_file),
+        commit=since.commit,
+        previous="\n".join(earlier(clause, since.records[clause.id]) for clause in clauses),
+        diff_file=since.diff_file,
         change=measured,
-        governed=governed,
-        guards=guards,
-        tests=tests,
-        spec_text=spec.path.read_text(encoding="utf-8"),
-        verdicts=VERDICTS,
-        violations=VIOLATIONS,
-        refutation=REFUTATION,
-        clause_fields=CLAUSE_FIELDS,
-        results_file=results_file,
-        example_clause=ids[0],
     )
 
 
-def prepare_review(chosen, work_dir, repo, record, sources, crates, index, chunk_size, threshold):
+def prepare_review(chosen, work_dir, repo, record, sources, index, limits):
     """The reviewers' prompts for `chosen`, written under `work_dir`, as manifest entries.
 
     Each clause is reviewed in full, on the diff since the commit the record holds, or not at all,
@@ -1860,7 +1858,7 @@ def prepare_review(chosen, work_dir, repo, record, sources, crates, index, chunk
             continue
         spec_dir = work_dir / (spec.id or spec.path.stem)
         spec_dir.mkdir(parents=True, exist_ok=True)
-        patterns = inputs(spec, index, crates)
+        patterns = inputs(spec, index)
         guards, hashes = clause_hashes(spec, reviewable, sources, repo, patterns)
         full, diffs, kept = [], {}, []
         for clause in reviewable:
@@ -1869,7 +1867,7 @@ def prepare_review(chosen, work_dir, repo, record, sources, crates, index, chunk
                 earlier_run,
                 hashes[clause.id],
                 lambda: repo.since(earlier_run["commit"], patterns),
-                threshold / 100,
+                limits.threshold / 100,
             )
             if mode == KEEP:
                 kept.append({"clause": clause.id, **{key: earlier_run[key] for key in CARRIED}})
@@ -1886,8 +1884,8 @@ def prepare_review(chosen, work_dir, repo, record, sources, crates, index, chunk
             if commit is not None:
                 diff_file = spec_dir / f"since-{commit}.diff"
                 diff_file.write_text(repo.diff(commit, patterns), encoding="utf-8")
-            for i in range(0, len(group), chunk_size):
-                clauses = group[i : i + chunk_size]
+            for i in range(0, len(group), limits.chunk_size):
+                clauses = group[i : i + limits.chunk_size]
                 number += 1
                 results_file = spec_dir / f"chunk{number}_results.json"
                 prompt_file = spec_dir / f"chunk{number}_prompt.md"
@@ -1899,13 +1897,11 @@ def prepare_review(chosen, work_dir, repo, record, sources, crates, index, chunk
                     "mode": FULL if commit is None else DIFF,
                 }
                 if commit is None:
-                    text = build_prompt(spec, clauses, guards, crates, index, results_file)
+                    text = build_prompt(spec, clauses, guards, index, results_file)
                 else:
                     records = {c.id: record[c.id] for c in clauses}
-                    change = repo.since(commit, patterns)
-                    text = build_diff_prompt(
-                        spec, clauses, records, change, diff_file, guards, crates, index, results_file
-                    )
+                    since = Since(commit, records, repo.since(commit, patterns), diff_file)
+                    text = build_diff_prompt(spec, clauses, since, guards, index, results_file)
                     prompt["previous"] = {
                         c.id: {key: records[c.id][key] for key in CARRIED} for c in clauses
                     }
@@ -1925,13 +1921,13 @@ def prepare_review(chosen, work_dir, repo, record, sources, crates, index, chunk
     return entries, reasons
 
 
-def review_paths(chosen, index, crates):
+def review_paths(chosen, index):
     """Where a file git does not track changes what a run read: the specs, every source the guarded
     uses are counted in, and what each chosen spec watches."""
     return list(
         dict.fromkeys(
             [f"{SPEC_DIR.as_posix()}/**", "crates/**/*.rs"]
-            + [pattern for spec in chosen for pattern in inputs(spec, index, crates)]
+            + [pattern for spec in chosen for pattern in inputs(spec, index)]
         )
     )
 
@@ -2029,7 +2025,7 @@ def main():
 
     specs = load_specs()
     if args.write_unverified:
-        lines = unverified_clauses(specs, TestIndex(), crate_directories())
+        lines = unverified_clauses(specs, TestIndex())
         UNVERIFIED_FILE.write_text(render_unverified(lines), encoding="utf-8")
         print(f"{UNVERIFIED_FILE}: {len(lines)} clauses")
         return 0
@@ -2043,7 +2039,6 @@ def main():
     findings.extend(malformed)
 
     sources = load_sources()
-    crates = crate_directories()
     index = TestIndex()
     prefixes = {spec.id for spec in specs if spec.id}
 
@@ -2051,7 +2046,7 @@ def main():
         findings.extend(check_front_matter(spec))
         findings.extend(check_clause_numbering(spec))
         findings.extend(check_clause_history(spec, declared))
-        findings.extend(check_coverage(spec, index, crates))
+        findings.extend(check_coverage(spec, index))
         findings.extend(check_anchors(spec))
         findings.extend(check_governs(spec))
         findings.extend(check_guards(spec, sources))
@@ -2064,7 +2059,7 @@ def main():
     # clauses, and a declaration naming a spec the filter left out would read as stale.
     if len(chosen) == len(specs):
         findings.extend(check_readme(specs))
-        findings.extend(check_unverified_file(specs, index, crates))
+        findings.extend(check_unverified_file(specs, index))
         findings.extend(check_renumbered_file(specs, declared))
 
     failed = any(f["severity"] == ERROR for f in findings) or (
@@ -2083,10 +2078,10 @@ def main():
     repo = Repo(root)
     record = read_record(args.full)
     entries, reasons = prepare_review(
-        chosen, work_dir, repo, record, sources, crates, index, args.chunk_size, args.threshold
+        chosen, work_dir, repo, record, sources, index, Limits(args.chunk_size, args.threshold)
     )
     # Whether what the reviewers read was main, which only `record-reviewed.py` has a use for.
-    dirty = repo.dirty(review_paths(chosen, index, crates))
+    dirty = repo.dirty(review_paths(chosen, index))
 
     reviewers = [p for e in entries for p in e["reviewer_prompts"]]
     on_diff = sum(1 for p in reviewers if p["mode"] == DIFF)
