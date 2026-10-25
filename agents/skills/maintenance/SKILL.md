@@ -187,16 +187,19 @@ output for step 6.
 
 The table names each draft's labels: `refactor`, or `bug` where the reviewer found a defect
 rather than a cleanup, and an `area/*` or `infrastructure` where one is clear. It marks any title
-over GitHub's 256-character cap as needing a shorter one, which is a person's job in step 6.
+over GitHub's 256-character cap as needing a shorter one, which is a person's job in step 6, and
+any draft that overlaps another.
 
 ### Step 6: the user decides what gets posted
 
 The table from step 5 is what the user chooses from. Ask which drafts to post, post those and no
 others, and never post one the backlog already has, open or closed.
 
-Several lanes can find the same code, so two drafts can propose one change. Before the user
-chooses, say which drafts name the same function or the same lines, so that the user is not asked to
-choose between a draft and its copy.
+Several lanes can find the same code, so two drafts can propose one change. The table marks a draft
+`overlaps N` where draft N cites the same file within a few lines of it, or names the same function
+in its evidence, and says which of the two cites more lines of the files both cite, which is the
+better one to post. `--json` carries the same as `overlaps` on each draft. Before the user chooses,
+say which drafts are marked, so that the user is not asked to choose between a draft and its copy.
 
 Hand each chosen draft to the [issue-poster](../../agents/issue-poster.md) definition, which
 searches the backlog for the symbol or path the title names, applies the labels and posts. Give

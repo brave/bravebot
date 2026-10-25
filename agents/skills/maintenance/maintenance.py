@@ -2246,6 +2246,59 @@ def slug_for(finding, taken):
     return slug
 
 
+NEAR = 3
+FUNCTION = re.compile(r"\b(?:fn|def)\s+(\w+)|\b([A-Za-z]\w*)\(|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b")
+
+
+def cited_ranges(items):
+    """The `(path, first line, last line)` each place in `items` cites."""
+    return [(path, int(first), int(last or first)) for path, first, last in CITE.findall(" ".join(items))]
+
+
+def named_functions(items):
+    """The function names the evidence text uses: `fn name`, `def name`, `name(` or a snake_case word.
+    The cited places are taken out first, so a file name is not read as a function."""
+    text = CITE.sub(" ", " ".join(items))
+    return {next(g for g in found if g) for found in FUNCTION.findall(text)}
+
+
+def lines_cited(ranges, files):
+    """How many distinct lines `ranges` cites in `files`."""
+    return len({(path, n) for path, first, last in ranges if path in files for n in range(first, last + 1)})
+
+
+def overlap_of(mine, theirs):
+    """Whether two drafts' evidence proposes one change: both cite one file within NEAR lines of each
+    other, or both name one function. Then whether `mine` cites `more`, `fewer` or `as many` of the
+    lines in the files both cite; None where they do not overlap."""
+    (places, names), (other_places, other_names) = mine, theirs
+    near = any(
+        path == other and first <= last_other + NEAR and first_other <= last + NEAR
+        for path, first, last in places
+        for other, first_other, last_other in other_places
+    )
+    if not near and not names & other_names:
+        return None
+    shared = {p for p, _, _ in places} & {p for p, _, _ in other_places}
+    ahead, behind = lines_cited(places, shared), lines_cited(other_places, shared)
+    return "more" if ahead > behind else "fewer" if ahead < behind else "as many"
+
+
+def mark_overlaps(drafts, findings):
+    """Add `overlaps` to each draft: the other drafts, by their number in the table, that propose
+    the same change. Reviewers work one lane at a time, so only this sees two lanes agree."""
+    evidence = []
+    for finding in findings:
+        items = drafting.evidence_items(finding.get("evidence"))
+        evidence.append((cited_ranges(items), named_functions(items)))
+    for number, entry in enumerate(drafts):
+        entry["overlaps"] = [
+            {"draft": other + 1, "cites": how}
+            for other, theirs in enumerate(evidence)
+            if other != number and (how := overlap_of(evidence[number], theirs))
+        ]
+
+
 def draft(manifest, findings, out):
     out.mkdir(parents=True, exist_ok=True)
     drafts, taken = [], set()
@@ -2266,6 +2319,7 @@ def draft(manifest, findings, out):
                 "body_file": str(body_file),
             }
         )
+    mark_overlaps(drafts, findings)
     return drafts
 
 
@@ -2274,6 +2328,9 @@ def render_drafts(drafts, out):
     for number, entry in enumerate(drafts, start=1):
         lines.append(f"  {number:>2}. {entry['title']}")
         lines.append(f"      {' '.join(entry['labels'])}, assignee {entry['assignee']}, body {entry['body_file']}")
+        for one in entry["overlaps"]:
+            says = "" if one["cites"] == "as many" else f", and cites {one['cites']} of its lines"
+            lines.append(f"      overlaps {one['draft']}{says}")
         if entry["title_too_long"]:
             lines.append(
                 f"      needs a shorter title: {len(entry['title'])} characters, and GitHub takes {TITLE_LIMIT}"
