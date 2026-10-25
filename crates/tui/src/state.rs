@@ -45,7 +45,8 @@ pub use accounts::Occupancy;
 pub use attachments::{Attached, AttachedImage, Commanded, PastedText, without_text_files};
 pub use completion::Offered;
 pub use entry::{
-    DELEGATE_SHOWN, Delegate, Entries, Entry, JobState, JobView, Kept, Output, Speaker, Watched,
+    DELEGATE_SHOWN, Delegate, Entries, Entry, JobState, JobView, Kept, Output, Speaker, Tone,
+    Watched,
 };
 pub use queue::{Bound, Queued};
 pub use scroller::{Laid, Scroller};
@@ -3798,6 +3799,18 @@ impl Session {
 
     pub fn note(&mut self, message: impl Into<String>) {
         self.transcript.push(Entry::system(message));
+    }
+
+    /// A note saying something a person asked for was done, drawn as finished and not in the ink
+    /// every other note shares (VIEW-8).
+    pub fn note_done(&mut self, message: impl Into<String>) {
+        self.transcript.push(Entry::done(message));
+    }
+
+    /// A note saying something a person asked for was not done, and why, drawn as failed and not in
+    /// the ink every other note shares (VIEW-8).
+    pub fn note_refused(&mut self, message: impl Into<String>) {
+        self.transcript.push(Entry::refused(message));
     }
 
     /// Carry out a command while a turn is working, keeping where in the transcript it said things.

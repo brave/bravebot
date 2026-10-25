@@ -34,6 +34,23 @@ pub enum Speaker {
     Delegate,
 }
 
+/// How a note from the session reads against the notes beside it.
+///
+/// Set by the code that writes the note, from what happened, and never read back out of the words
+/// of the note. Only the renderer reads it. An export, the failure the status area repeats and the
+/// reason a turn is recorded as failed all read [`Speaker`], so a tone changes none of them
+/// (VIEW-8).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Tone {
+    /// The session in its own voice, in the one ink every such note shares.
+    #[default]
+    Note,
+    /// Something a person asked for was done.
+    Done,
+    /// Something a person asked for was not done, and the note says why.
+    Refused,
+}
+
 /// One delegate's work, drawn where the call that started it would have been.
 ///
 /// A delegate is a second planner with a run of its own, and several are going at once, so its
@@ -277,6 +294,8 @@ impl Delegate {
 pub struct Entry {
     pub speaker: Speaker,
     pub text: String,
+    /// The ink a [`Speaker::System`] note is drawn in. [`Tone::Note`] for every other entry.
+    pub tone: Tone,
     /// The audit trail recorded while producing this entry, shown when the trail is visible.
     ///
     /// Already in the words it is drawn in, because an entry replayed from a stored session has
@@ -336,6 +355,7 @@ impl Entry {
         Self {
             speaker,
             text,
+            tone: Tone::Note,
             trail: Vec::new(),
             todos: Vec::new(),
             landing: None,
@@ -377,6 +397,25 @@ impl Entry {
 
     pub fn system(text: impl Into<String>) -> Self {
         Self::blank(Speaker::System, text.into())
+    }
+
+    /// A note saying something a person asked for was done.
+    pub fn done(text: impl Into<String>) -> Self {
+        Self {
+            tone: Tone::Done,
+            ..Self::system(text)
+        }
+    }
+
+    /// A note saying something a person asked for was not done, and why.
+    ///
+    /// Not a [`Speaker::Failure`]: that is the reason a turn failed, which an export writes under
+    /// "Failed" and the status area repeats, and a command that was refused is neither.
+    pub fn refused(text: impl Into<String>) -> Self {
+        Self {
+            tone: Tone::Refused,
+            ..Self::system(text)
+        }
     }
 
     /// The block a delegate's work is drawn under.

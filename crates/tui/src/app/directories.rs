@@ -72,7 +72,7 @@ pub(super) fn add_directory(
     directory: &str,
 ) {
     if directory.is_empty() {
-        session.note(t!(session_add_dir_needs_a_path));
+        session.note_refused(t!(session_add_dir_needs_a_path));
         return;
     }
 
@@ -84,7 +84,7 @@ pub(super) fn add_directory(
     match outcome {
         Ok(added) => {
             trust.trust(&bravebot_agent::workspace::key_of(&added));
-            session.note(t!(
+            session.note_done(t!(
                 session_directory_added,
                 directory = added.display().to_string()
             ));
@@ -95,7 +95,7 @@ pub(super) fn add_directory(
                 ));
             }
         }
-        Err(error) => session.note(t!(
+        Err(error) => session.note_refused(t!(
             session_directory_not_added,
             directory = directory,
             problem = error
@@ -116,7 +116,7 @@ pub(super) fn close_directory(
     directory: &str,
 ) -> bool {
     if directory.is_empty() {
-        session.note(t!(session_close_dir_needs_a_path));
+        session.note_refused(t!(session_close_dir_needs_a_path));
         return false;
     }
     let outcome = named_directory(workspace.root(), directory)
@@ -128,14 +128,14 @@ pub(super) fn close_directory(
             // Where no trusted rule went, the directory answers as it did before the close, so
             // saying trust was withdrawn would tell the person something that did not happen.
             if trust.withdraw_trust(&bravebot_agent::workspace::key_of(&closed)) {
-                session.note(t!(session_directory_withdrawn, directory = directory));
+                session.note_done(t!(session_directory_withdrawn, directory = directory));
             } else {
-                session.note(t!(session_directory_closed, directory = directory));
+                session.note_done(t!(session_directory_closed, directory = directory));
             }
             true
         }
         Err(error) => {
-            session.note(t!(
+            session.note_refused(t!(
                 session_directory_not_closed,
                 directory = directory,
                 problem = error
@@ -399,7 +399,7 @@ pub(super) fn named_to_open(
                     paths.push(shown);
                 }
             }
-            Err(problem) => session.note(t!(
+            Err(problem) => session.note_refused(t!(
                 session_directory_not_added,
                 directory = directory,
                 problem = problem

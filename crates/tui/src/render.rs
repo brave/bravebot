@@ -900,6 +900,7 @@ fn tail_of(path: &str, room: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::inks_on_row_containing;
     use bravebot_core::capability::Capability;
     use bravebot_core::event::Event;
     use bravebot_core::label::Label;
@@ -2360,34 +2361,6 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
-    }
-
-    /// Foreground inks of the non-space cells on every row that contains `needle`.
-    fn inks_on_row_containing(session: &Session, needle: &str) -> Vec<Color> {
-        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
-        terminal
-            .draw(|frame| {
-                draw(frame, session);
-            })
-            .expect("draw succeeds");
-        let buffer = terminal.backend().buffer();
-        let area = buffer.area();
-
-        let mut inks = Vec::new();
-        for row in 0..area.height {
-            let text: String = (0..area.width)
-                .map(|column| buffer.cell((column, row)).expect("cell").symbol())
-                .collect();
-            if !text.contains(needle) {
-                continue;
-            }
-            inks.extend((0..area.width).filter_map(|column| {
-                let cell = buffer.cell((column, row)).expect("cell");
-                (cell.symbol() != " ").then_some(cell.fg)
-            }));
-        }
-        assert!(!inks.is_empty(), "nothing containing {needle:?} was drawn");
-        inks
     }
 
     mod scroller {
@@ -8175,6 +8148,42 @@ mod tests {
             !inks.contains(&theme::running()),
             "the note is still yellow"
         );
+    }
+
+    /// VIEW-8: a note of something done is drawn in the ink for finished and a note of something
+    /// refused in the ink for failed, and an ordinary note keeps the ink every other note shares.
+    /// None of the three is the ink that marks untrusted content.
+    ///
+    /// The failures this rejects are a renderer that does not read the tone, which draws every
+    /// note in the one orange and so a success as an error, the two inks swapped, and a tone
+    /// drawn in yellow, which says the note is quarantined.
+    #[test]
+    fn a_note_of_something_done_or_refused_is_not_drawn_in_the_ink_every_note_shares() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let mut session = Session::new("none");
+        session.note("trusting /tmp/x");
+        session.note_done("added /tmp/y");
+        session.note_refused("could not add /tmp/z");
+
+        for (needle, ink) in [
+            ("trusting", theme::note()),
+            ("added", theme::ok()),
+            ("could not add", theme::fail()),
+        ] {
+            let inks = inks_on_row_containing(&session, needle);
+            assert!(
+                inks.iter().all(|drawn| *drawn == ink),
+                "{needle} was not drawn in {ink:?}: {inks:?}"
+            );
+            assert!(
+                !inks.contains(&theme::running()),
+                "{needle} is drawn in the ink that marks untrusted content"
+            );
+        }
+        assert_ne!(theme::ok(), theme::note(), "a success reads as the note");
+        assert_ne!(theme::fail(), theme::note(), "a refusal reads as the note");
+        assert_ne!(theme::ok(), theme::fail());
     }
 
     /// The word that names the mode carries meaning, so it is a shade this interface mixes rather

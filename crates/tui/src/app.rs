@@ -27171,6 +27171,303 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// VIEW-8: what `/add-dir` did and what it refused are drawn in different inks, so a directory
+    /// that was added is not read as one more error beside two refusals. The notes come from the
+    /// handler, so a call site left on the plain note fails here.
+    ///
+    /// The failure this rejects is every note of the command drawn in the one ink of the plain
+    /// notes, which drew the success in the colour of the refusals before it.
+    #[test]
+    fn add_dir_draws_the_directory_it_added_apart_from_the_names_it_refused() {
+        use crate::testutil::inks_on_row_containing;
+
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-inks-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let notes = root.join("notes");
+        for directory in [&project, &notes] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+        for named in ["../nowhere", "", &notes.display().to_string()] {
+            add_directory(&mut session, &mut workspace, &mut trust, named);
+        }
+
+        let added = inks_on_row_containing(&session, "added ");
+        let refused = inks_on_row_containing(&session, "could not add");
+        let needs_a_path = inks_on_row_containing(&session, "/add-dir needs a directory");
+
+        assert!(
+            added.iter().all(|ink| *ink == crate::theme::ok()),
+            "the directory added is not drawn as finished: {added:?}"
+        );
+        for refusal in [&refused, &needs_a_path] {
+            assert!(
+                refusal.iter().all(|ink| *ink == crate::theme::fail()),
+                "a refusal is not drawn as failed: {refusal:?}"
+            );
+        }
+        assert!(
+            !added.contains(&crate::theme::note()),
+            "the success is drawn in the ink every note shares"
+        );
+        for inks in [&added, &refused, &needs_a_path] {
+            assert!(
+                !inks.contains(&crate::theme::running()),
+                "a note is drawn in the ink that marks untrusted content: {inks:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// VIEW-8: `/add-dir close` draws a close that happened, with or without a rule withdrawn, in
+    /// the ink for finished, and a name it could not close and a close with no name in the ink for
+    /// failed. Each is drawn in a session of its own so that a note is found by the words it begins
+    /// with and not by a word the others share.
+    #[test]
+    fn add_dir_close_draws_what_it_closed_apart_from_what_it_refused() {
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-close-inks-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let notes = root.join("notes");
+        for directory in [&project, &notes] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let notes = notes.canonicalize().expect("canonical");
+        let opened = || {
+            let mut workspace = Workspace::new(&project).expect("workspace");
+            let mut trust = TrustStore::new(workspace.root());
+            add_directory(
+                &mut Session::new("none"),
+                &mut workspace,
+                &mut trust,
+                &notes.display().to_string(),
+            );
+            (workspace, trust)
+        };
+
+        let closing = |named: &str, distrusted: bool| {
+            let (mut workspace, mut trust) = opened();
+            if distrusted {
+                trust.distrust(&bravebot_agent::workspace::key_of(&notes));
+            }
+            let mut session = Session::new("none");
+            close_directory(&mut session, &mut workspace, &mut trust, named);
+            session
+        };
+        let notes = notes.display().to_string();
+        for (session, needle, ink) in [
+            (closing(&notes, false), "closed", crate::theme::ok()),
+            (closing(&notes, true), "closed", crate::theme::ok()),
+            (
+                closing("../project", false),
+                "could not close",
+                crate::theme::fail(),
+            ),
+            (
+                closing("", false),
+                "/add-dir close needs a directory",
+                crate::theme::fail(),
+            ),
+        ] {
+            let said = session.transcript.last().expect("a note").text.clone();
+            let inks = crate::testutil::inks_on_row_containing(&session, needle);
+            assert!(
+                inks.iter().all(|drawn| *drawn == ink),
+                "{said:?} was not drawn in {ink:?}: {inks:?}"
+            );
+            assert!(
+                !inks.contains(&crate::theme::running()),
+                "{said:?} is drawn in the ink that marks untrusted content"
+            );
+        }
+        let withdrawn = closing(&notes, false).transcript.remove(0).text;
+        let kept = closing(&notes, true).transcript.remove(0).text;
+        assert!(withdrawn.contains("no longer trusting it"), "{withdrawn}");
+        assert!(!kept.contains("no longer trusting it"), "{kept}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// VIEW-8: where the palette draws every ink as the terminal's own, which is what `NO_COLOR`
+    /// asks for, the notes of `/add-dir` are told apart by what they say, and nothing about how
+    /// they are drawn depends on a colour.
+    ///
+    /// The failure this rejects is a tone drawn in a colour of its own and not through the
+    /// palette, which would paint a person's terminal after they asked for no colour.
+    #[test]
+    fn under_a_palette_without_colour_the_wording_tells_what_add_dir_did_from_what_it_refused() {
+        use crate::testutil::inks_on_row_containing;
+        use ratatui::style::Color;
+
+        /// Puts `brave` back when the test ends, however it ends, so a failed assertion does not
+        /// leave the palette without colour in force for the tests that read a colour.
+        struct BraveWhenDropped;
+        impl Drop for BraveWhenDropped {
+            fn drop(&mut self) {
+                crate::theme::apply_brave();
+            }
+        }
+
+        let _held = crate::theme::exclusive();
+        let _restored = BraveWhenDropped;
+        crate::theme::apply(&crate::theme::Theme {
+            name: "no-colour".to_string(),
+            palette: crate::theme::plain_palette(),
+            adapts: false,
+            listed: false,
+        });
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-no-colour-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let notes = root.join("notes");
+        for directory in [&project, &notes] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+        add_directory(&mut session, &mut workspace, &mut trust, "../nowhere");
+        add_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            &notes.display().to_string(),
+        );
+
+        let refused = inks_on_row_containing(&session, "could not add");
+        let added = inks_on_row_containing(&session, "added ");
+
+        assert!(refused.iter().chain(&added).all(|ink| *ink == Color::Reset));
+        let said: Vec<&str> = session.transcript.iter().map(|n| n.text.as_str()).collect();
+        assert!(said[0].starts_with("could not add "), "{said:?}");
+        assert!(said[1].starts_with("added "), "{said:?}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// VIEW-8: the directories a settings file names are told in the tones `/add-dir` tells them
+    /// in. A name that does not open is refused through `named_to_open`, in the message
+    /// `/add-dir` refuses with, and a name that does open is opened through `open_named`, which
+    /// goes through the `/add-dir` handler, so the one is a refused note and the other a done note.
+    ///
+    /// The failures this rejects are the refusal left as a plain note, which would draw the same
+    /// message in another ink depending on which door the name came in by, and an opening that
+    /// does not go through the handler and writes its note some other way.
+    #[test]
+    fn the_directories_a_settings_file_names_are_told_in_the_tones_of_add_dir() {
+        use crate::state::Tone;
+
+        let root = crate::testutil::scratch_dir("bravebot-settings-names-tones-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let notes = root.join("notes");
+        for directory in [&project, &notes] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let mut workspace = Workspace::new(&project).expect("workspace");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+
+        let accepted = named_to_open(
+            &mut session,
+            &workspace,
+            &["../nowhere".to_string(), "../notes".to_string()],
+        );
+        open_named(&mut session, &mut workspace, &mut trust, &accepted);
+
+        let said: Vec<(Tone, &str)> = session
+            .transcript
+            .iter()
+            .map(|entry| (entry.tone, entry.text.as_str()))
+            .collect();
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(said[0].0, Tone::Refused, "{said:?}");
+        assert!(
+            said[0].1.starts_with("could not add ../nowhere: "),
+            "{said:?}"
+        );
+        assert_eq!(said[1].0, Tone::Done, "{said:?}");
+        assert!(said[1].1.starts_with("added "), "{said:?}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// VIEW-8: a refused command is not the failure of a turn. A note of a refusal written during a
+    /// turn that then fails, and another written after it, leave the reason the status area
+    /// repeats, the reason the turn is recorded under and the one failure an export holds as they
+    /// were.
+    ///
+    /// The failure this rejects is a refusal recorded as `Entry::failure`, which an export writes
+    /// under "Failed", the status area would repeat in place of the turn's reason, and a turn's
+    /// record would take as its reason when it came first.
+    #[test]
+    fn a_refused_command_is_not_taken_for_the_failure_of_the_turn_around_it() {
+        use bravebot_aichat::{AccountFailure, ChatError};
+        use bravebot_session::sessions::StoredOutcome;
+
+        let mut session = Session::new("none");
+        type_line(&mut session, "read a file");
+        session.submit().expect("the prompt is sent");
+        session.note_refused("could not add ../before: refused during the turn");
+        let error = bravebot_agent::backend::BackendError::Attempted {
+            usage: None,
+            context_tokens: None,
+            attempts: 2,
+            cause: Box::new(bravebot_agent::backend::BackendError::from(
+                ChatError::Account(AccountFailure::NotSignedIn),
+            )),
+        };
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::from(error)),
+            Trail::new(),
+            Carried {
+                asked: Default::default(),
+                exposed: Default::default(),
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+            },
+            Occupied {
+                budget: 1000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            Asked {
+                name: "chatgpt/gpt-test".into(),
+                comparable: true,
+            },
+            Line {
+                text: "read a file",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            &workspace_for_test(),
+        );
+        session.record_turn(0, &Conversation::new());
+        session.note_refused("could not close ../after: refused after the turn");
+        assert!(session.finished.expect("the turn ended").failed());
+
+        let said = session.failure_said().expect("the turn's reason");
+        assert!(said.contains("not signed in"), "{said}");
+        let recorded = session.turn_history().last().expect("the turn is recorded");
+        match &recorded.outcome {
+            Some(StoredOutcome::Failed { reason }) => {
+                assert!(reason.contains("not signed in"), "{reason}")
+            }
+            other => panic!("the turn was not recorded as failed: {other:?}"),
+        }
+        let exported = render::as_markdown(&session, "test");
+        assert_eq!(exported.matches("## Failed").count(), 1, "{exported}");
+    }
+
     /// REFER-6: the alias a person is offered after `@` follows what the workspace has open. The
     /// session is told again after `/add-dir close`, `/add-dir` and `/cd`, so an alias disappears
     /// when its directory is closed or left behind and returns when the directory is opened again.
