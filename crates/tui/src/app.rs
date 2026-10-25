@@ -62,15 +62,16 @@ use directories::*;
 
 mod models;
 use models::*;
+// Public for the CLI, which names them as `bravebot_tui::app::..`.
+pub use models::{adopt_listing_for_model, reads_structured_output};
 
 mod opening;
 use opening::*;
 
 mod records;
-pub(crate) use records::coverage_causes;
 use records::*;
-// Public for the CLI, which names them as `bravebot_tui::app::..`.
-pub use models::{adopt_listing_for_model, reads_structured_output};
+// Public to the crate for `hunks_command`, which names it as `crate::app::coverage_causes`.
+pub(crate) use records::coverage_causes;
 
 mod session_commands;
 use session_commands::*;
@@ -82,9 +83,11 @@ mod terminal;
 use terminal::*;
 
 mod turns;
-pub(crate) use turns::progress_of_a_turn;
-pub use turns::with_submitted_attachments;
 use turns::*;
+// Public for `tests/sessions.rs`, which names it as `bravebot_tui::app::with_submitted_attachments`.
+pub use turns::with_submitted_attachments;
+// Public to the crate for `from_worker`, which names it as `crate::app::progress_of_a_turn`.
+pub(crate) use turns::progress_of_a_turn;
 
 /// How long to wait for a key before redrawing. Short enough that a status change appears
 /// promptly, long enough not to spin.
