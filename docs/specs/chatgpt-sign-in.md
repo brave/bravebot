@@ -41,6 +41,8 @@ governs:
   - crates/agent/src/turn/task.rs
   - crates/agent/src/outcome.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/aichat/src/responses/protocol.rs
   - crates/tui/src/status.rs
   - crates/tui/src/panel.rs
