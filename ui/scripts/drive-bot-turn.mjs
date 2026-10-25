@@ -9,7 +9,7 @@
 // Run it the way `drive-turn.mjs` is run. Like the other drivers it perturbs `bravebot-ui.json`,
 // and it puts its own keys back.
 
-import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB } from './drive-support.mjs'
+import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB, ASSISTANT_BUBBLE, BOT_OPEN_BUTTON } from './drive-support.mjs'
 import { appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -71,7 +71,7 @@ console.log('  ..   sent; waiting for the turn…')
 const first = await settle(page)
 check(first === 'done', `the turn finished (${first})`)
 
-const reply = (await page.locator('.bubble.assistant').last().textContent()) ?? ''
+const reply = (await page.locator(ASSISTANT_BUBBLE).last().textContent()) ?? ''
 check(
   reply.toLowerCase().includes('harbour'),
   `the reply obeys the purpose nobody typed into the composer (${reply.slice(0, 60)})`,
@@ -116,13 +116,13 @@ await page2.waitForTimeout(2500)
 await page2
   .locator('.bot')
   .filter({ has: page2.locator('.bot-name', { hasText: /^Custodian$/ }) })
-  .locator('.bot-open-button')
+  .locator(BOT_OPEN_BUTTON)
   .click()
 await page2.locator('[data-test="bot-conversations"] .bot-history-row').first().click()
 await page2.waitForTimeout(2000)
 
 check(
-  (await page2.locator('.bubble.assistant').count()) >= 1,
+  (await page2.locator(ASSISTANT_BUBBLE).count()) >= 1,
   'reopening the bot brings back what it said before — the same session, resumed',
 )
 check(

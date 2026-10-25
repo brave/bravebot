@@ -21,7 +21,7 @@
 // rather than the only one.
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { SIDEBAR_TAB } from '../../drive-support.mjs'
+import { SIDEBAR_TAB, BOT_OPEN_BUTTON } from '../../drive-support.mjs'
 import { BOT_NAME, botRow } from '../bots.mjs'
 
 const NAME = BOT_NAME
@@ -152,7 +152,7 @@ export default {
     // --- what is in one -------------------------------------------------------------------
 
     await s.say('What a bot holds', 'Its page: its conversations, and beside them its purpose and its memory.')
-    await s.click(row.locator('.bot-open-button'))
+    await s.click(row.locator(BOT_OPEN_BUTTON))
     await page.locator('[data-test="bot-details"]').waitFor()
 
     const purpose = page.locator('[data-test="bot-details"]').getByRole('textbox', { name: 'Purpose', exact: true })
@@ -177,7 +177,7 @@ export default {
     // Bows out where the world has none: a `--real` run, or a build with nothing to drive turns.
     if (await spoken.count()) {
       await s.say('And one that remembers', 'Asked once to keep something. What it kept is in the file.', 2.6)
-      await s.click(spoken.locator('.bot-open-button'))
+      await s.click(spoken.locator(BOT_OPEN_BUTTON))
       await page.locator('[data-test="bot-details"]').waitFor()
       // Its memory is kept in the project it worked in, so that folder's memory is shown.
       const folder = page.locator('[data-test="memory-folder"]')

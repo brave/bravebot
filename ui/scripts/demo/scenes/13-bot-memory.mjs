@@ -1,4 +1,4 @@
-import { COMPOSER_INPUT, SIDEBAR_TAB } from '../../drive-support.mjs'
+import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, TRUST_APPROVE } from '../../drive-support.mjs'
 import { BOT_NAME, botRow, openBotsTab } from '../bots.mjs'
 // A bot, working — which is the only way to show the part that matters.
 //
@@ -42,7 +42,7 @@ export default {
     if (!(await row.count())) s.skip(`"${BOT_NAME}" is not in the list — 12-bots makes it`)
 
     await s.say('Open it', 'Its page lists its conversations and starts a new one from the composer.', 2.4)
-    await s.click(row.locator('.bot-open-button'))
+    await s.click(row.locator(BOT_OPEN_BUTTON))
     await page.locator('[data-test="bot-page"]').waitFor()
 
     // The project is picked per conversation, in the composer's footer. The stage answers the
@@ -56,12 +56,12 @@ export default {
 
     await s.say('Ask it something ordinary', 'Nothing in the prompt says what this bot is for.')
     await s.slowType(COMPOSER_INPUT, 'What should I know about this checkout?')
-    await s.click('.composer .send')
+    await s.click(COMPOSER_SEND)
     await page.waitForTimeout(1200)
 
     if (await page.locator('.trust').isVisible().catch(() => false)) {
       await s.say('Trust the directory', 'The same question any new chat asks, once per checkout.', 2.2)
-      await s.click('[data-test="trust-approve"]')
+      await s.click(TRUST_APPROVE)
       await page.waitForTimeout(800)
     }
 
@@ -115,7 +115,7 @@ export default {
       'Add two things to your memory file: the tide tables are regenerated every Thursday, ' +
         'and nothing under src/data should be edited by hand.',
     )
-    await s.click('.composer .send')
+    await s.click(COMPOSER_SEND)
 
     // A card only where one is due — a turn that has touched untrusted content is asked before it
     // may write to a trusted path. The ordinary case here has touched nothing untrusted, so there
@@ -161,7 +161,7 @@ export default {
     await page.waitForTimeout(600)
     await s.click(page.locator(SIDEBAR_TAB).nth(1))
     await page.waitForTimeout(500)
-    await s.click(row.locator('.bot-open-button'))
+    await s.click(row.locator(BOT_OPEN_BUTTON))
     await page.locator('[data-test="bot-conversations"] .bot-history-row').first().waitFor()
     await s.click(page.locator('[data-test="bot-conversations"] .bot-history-row').first())
     await page.waitForTimeout(2000)

@@ -1,4 +1,5 @@
 import { BOT_NAME, botRow, openBotsTab } from '../bots.mjs'
+import { BOT_OPEN_BUTTON } from '../../drive-support.mjs'
 // The half of a bot's memory nobody presses a key for.
 //
 // `13-bot-memory` films the memory being written because somebody asked for it in so many words,
@@ -38,7 +39,7 @@ export default {
     // --- what it has kept ---------------------------------------------------------------------
 
     await s.say('What a bot has kept', 'The memory is a file, and its details show it as it stands.', 2.6)
-    await s.click(row.locator('.bot-open-button'))
+    await s.click(row.locator(BOT_OPEN_BUTTON))
     await page.locator('[data-test="bot-details"]').waitFor()
     // A bot keeps one memory per folder; `13-bot-memory` worked in a project, so that one is shown.
     const folder = page.locator('[data-test="memory-folder"]')

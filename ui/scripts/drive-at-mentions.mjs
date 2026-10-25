@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, COMPOSER_NAME, TRUST_APPROVE } from './drive-support.mjs'
 
 // While set, the next reply waits until the test resolves it, so a turn stays running.
 let held = null
@@ -38,7 +39,7 @@ try {
   await openProject(page, app, project)
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
 
-  const field = page.getByRole('textbox', { name: 'Message the agent' })
+  const field = page.getByRole('textbox', { name: COMPOSER_NAME })
   const list = page.locator('[data-test="mention-list"]')
   const options = list.getByRole('option')
   const offered = async () => (await options.allInnerTexts()).map((text) => text.trim())
@@ -105,7 +106,7 @@ try {
   assert.equal(await value(), 'What colour is in @src/nested/deep.md')
   await list.waitFor()
   await page.keyboard.press('Enter')
-  await page.locator('.bubble.assistant').first().waitFor()
+  await page.locator(ASSISTANT_BUBBLE).first().waitFor()
   await page.locator('.composer .stop').waitFor({ state: 'hidden' })
   assert.equal(rounds.length, 1)
   const sent = JSON.stringify(JSON.parse(rounds[0]).messages)
@@ -167,7 +168,7 @@ try {
   await field.fill('Read @README.md')
   await field.press('Enter')
   await refusal.waitFor({ state: 'hidden' })
-  await page.locator('.bubble.assistant').nth(1).waitFor()
+  await page.locator(ASSISTANT_BUBBLE).nth(1).waitFor()
   assert.equal(rounds.length, 2, 'the corrected message went')
 
   // ---- a refused queued message goes back to the head of the queue, which pauses ---------------
@@ -205,16 +206,16 @@ try {
   writeFileSync(join(bot.home, 'notes.txt'), 'The bot word is lantern.\n')
   await page.reload()
   await page.locator('[data-test="sidebar-tabs"] [role="option"]').nth(1).click()
-  await page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: /^Scribe$/ }) }).locator('.bot-open-button').click()
+  await page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: /^Scribe$/ }) }).locator(BOT_OPEN_BUTTON).click()
   await page.locator('[data-test="bot-page"]').waitFor()
   await field.click()
   await page.keyboard.type('Read @notes.txt')
   await page.waitForTimeout(500)
   assert.equal(await list.count(), 0, 'a bot page with no conversation yet has no folder to list')
   await page.keyboard.press('Enter')
-  await trust.locator('[data-test="trust-approve"]').click()
+  await trust.locator(TRUST_APPROVE).click()
   await trust.waitFor({ state: 'hidden' })
-  await page.locator('.bubble.assistant').first().waitFor()
+  await page.locator(ASSISTANT_BUBBLE).first().waitFor()
   await page.locator('.composer .stop').waitFor({ state: 'hidden' })
   assert.equal(rounds.length, 4)
   const botSent = JSON.stringify(JSON.parse(rounds[3]).messages)

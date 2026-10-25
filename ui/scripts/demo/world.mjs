@@ -25,7 +25,7 @@ import { _electron as electron } from 'playwright-core'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { COMPOSER_INPUT, SIDEBAR_TAB } from '../drive-support.mjs'
+import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, TRUST_APPROVE } from '../drive-support.mjs'
 import { exactly } from './bots.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -244,7 +244,7 @@ async function ensureResidents(world) {
         }
         // The bot's page starts a conversation from its composer, in the project picked in its
         // footer. The picker is native, so it is answered with the bot's own fixture checkout.
-        await row.locator('.bot-open-button').click()
+        await row.locator(BOT_OPEN_BUTTON).click()
         await page.locator('[data-test="bot-page"]').waitFor()
         await app.evaluate(({ dialog }, where) => {
           dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [where] })
@@ -255,12 +255,12 @@ async function ensureResidents(world) {
         for (const [index, prompt] of bot.prompts.entries()) {
           console.log(`  ${bot.name}: ${prompt.slice(0, 62)}…`)
           await page.locator(COMPOSER_INPUT).fill(prompt)
-          await page.locator('.composer .send').click()
+          await page.locator(COMPOSER_SEND).click()
           // The first message starts the conversation, which asks the trust question first.
           if (index === 0) {
             await page.waitForTimeout(1600)
             if (await page.locator('.trust').isVisible().catch(() => false)) {
-              await page.locator('[data-test="trust-approve"]').click()
+              await page.locator(TRUST_APPROVE).click()
               await page.waitForTimeout(800)
             }
           }
@@ -365,14 +365,14 @@ async function build(world) {
       await page.locator('.new').first().click()
       await page.waitForTimeout(1500)
       if (await page.locator('.trust').isVisible().catch(() => false)) {
-        await page.locator('[data-test="trust-approve"]').click()
+        await page.locator(TRUST_APPROVE).click()
         await page.waitForTimeout(800)
       }
 
       for (const prompt of recipe.prompts) {
         console.log(`  ${recipe.project}: ${prompt.slice(0, 62)}…`)
         await page.locator(COMPOSER_INPUT).fill(prompt)
-        await page.locator('.composer .send').click()
+        await page.locator(COMPOSER_SEND).click()
         if (!(await settle(page))) {
           console.log('    the turn did not finish in time; keeping what it managed')
           break

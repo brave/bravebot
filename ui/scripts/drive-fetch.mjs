@@ -16,7 +16,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_IDLE, COMPOSER_INPUT } from './drive-support.mjs'
+import { COMPOSER_IDLE, COMPOSER_INPUT, COMPOSER_SEND } from './drive-support.mjs'
 
 /** A line of the page the website serves, which is to reach no planner and no unmarked row. */
 const SENTINEL = 'SENTINEL-FETCHED-BYTES'
@@ -63,7 +63,7 @@ try {
   const composer = page.locator(COMPOSER_INPUT)
   const ask = async (prompt) => {
     await composer.fill(prompt)
-    await page.locator('.composer .send').click()
+    await page.locator(COMPOSER_SEND).click()
   }
   const idle = () => page.locator(COMPOSER_IDLE).waitFor({ state: 'visible' })
 

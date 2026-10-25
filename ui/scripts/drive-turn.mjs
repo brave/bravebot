@@ -2,7 +2,7 @@
 // Launched from a shell with the credentials explicitly unset, to prove the binary
 // carries them rather than inheriting them.
 import { mkdirSync } from 'node:fs'
-import { launchLive, COMPOSER_INPUT } from './drive-support.mjs'
+import { launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -17,7 +17,7 @@ await page.locator('.send').click()
 console.log('sent; waiting for the turn…')
 
 // Either an answer, or the screen that says why there cannot be one.
-const answered = page.locator('.bubble.assistant').last()
+const answered = page.locator(ASSISTANT_BUBBLE).last()
 const blocked = page.locator('.unconfigured')
 for (let i = 0; i < 60; i++) {
   if (await blocked.isVisible().catch(() => false)) {
