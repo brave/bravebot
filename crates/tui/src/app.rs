@@ -6067,6 +6067,13 @@ fn run_turn_animated(
     };
 
     // Redraw until the turn finishes, answering approvals and watching for a cancel on the way.
+    //
+    // Written out rather than driven by [`drive_worker`], which the other worker loops use. This
+    // loop runs three more steps between the shared ones: `carry_out_held_pick` after the keys,
+    // [`drain_worker_until_stopped`] in place of the plain drain, and `give_way_to_the_queue` after
+    // each pass. The key closure holds `&mut beside` and the other two read `beside.config`, so
+    // sharing the frame would mean passing `beside` through the helper as state and adding a hook
+    // for each step, which is more code than the five lines of frame it would replace.
     loop {
         // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
         // turned off then, not at the next pass of the outer loop (CMD-12).
