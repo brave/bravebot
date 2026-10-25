@@ -462,6 +462,50 @@ pub fn said_of_failure(failure: AccountFailure) -> String {
     }
 }
 
+/// The command that is the remedy for a failure of the account or of its listing, where one is.
+/// Which conditions have one is decided here and nowhere else: the terminal's sentences name it, and
+/// the desktop bridge's sentences are passed it and send it beside the sentence
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Remedy {
+    /// Signing in again.
+    SignIn,
+    /// Asking why the stored sign-in cannot be read.
+    Status,
+}
+
+impl Remedy {
+    /// The command, which is run in a terminal and nowhere else
+    /// ([CHATGPT-1](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-1)).
+    pub fn command(self) -> &'static str {
+        match self {
+            Self::SignIn => "bravebot auth login chatgpt",
+            Self::Status => "bravebot auth status chatgpt",
+        }
+    }
+}
+
+/// The remedy for a failure of the account. A usage limit, a refusal that says the account may not
+/// be used this way and every failed renewal are not mended by signing in again.
+pub fn remedy_of_failure(failure: AccountFailure) -> Option<Remedy> {
+    match failure {
+        AccountFailure::NotSignedIn | AccountFailure::Ended | AccountFailure::Refused => {
+            Some(Remedy::SignIn)
+        }
+        AccountFailure::Unusable => Some(Remedy::Status),
+        AccountFailure::Named { .. } | AccountFailure::Renewal(_) => None,
+    }
+}
+
+/// The remedy for a listing of the account's models that could not be had, where a picker warns of
+/// one.
+pub fn remedy_of_listing(account: &AccountModels) -> Option<Remedy> {
+    match account {
+        AccountModels::Unreadable | AccountModels::Compiled(_) => Some(Remedy::SignIn),
+        AccountModels::Absent | AccountModels::Offered(_) | AccountModels::Refused(_) => None,
+    }
+}
+
 /// [`said_of_failure`] with the status of a refusal that came with one after it, as the terminal's
 /// line for a failed turn, the one-shot run's report and the record of a session say it
 /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). The lines for a summary that
@@ -654,6 +698,11 @@ mod tests {
                 !said.contains('{') && !said.contains('}'),
                 "{failure:?}: {said}"
             );
+            assert_eq!(
+                remedy_of_failure(failure).map(Remedy::command),
+                command,
+                "{failure:?}"
+            );
             match command {
                 Some(command) => assert!(said.contains(command), "{failure:?}: {said}"),
                 None => assert!(!said.contains("auth login"), "{failure:?}: {said}"),
@@ -678,6 +727,32 @@ mod tests {
                 said_of_failure(refused(refusal)),
                 "a refusal is worded one way in the listing and in a turn"
             );
+        }
+    }
+
+    /// CHATGPT-9: a picker's warning names signing in again where the listing could not be read, and
+    /// nowhere else, so a refusal that names the account and a listing that was read send nobody to
+    /// run a command.
+    #[test]
+    fn a_listing_names_the_sign_in_command_only_where_it_could_not_be_read() {
+        for account in [
+            AccountModels::Unreadable,
+            AccountModels::Compiled(Vec::new()),
+        ] {
+            let said = match &account {
+                AccountModels::Unreadable => t!(session_chatgpt_models_unreadable).to_string(),
+                _ => t!(session_chatgpt_models_compiled).to_string(),
+            };
+            let remedy = remedy_of_listing(&account).expect("a remedy");
+            assert!(said.contains(remedy.command()), "{account:?}: {said}");
+        }
+        for account in [
+            AccountModels::Absent,
+            AccountModels::Offered(Vec::new()),
+            AccountModels::Refused(Refusal::UsageLimit),
+            AccountModels::Refused(Refusal::NotPermitted),
+        ] {
+            assert_eq!(remedy_of_listing(&account), None, "{account:?}");
         }
     }
 

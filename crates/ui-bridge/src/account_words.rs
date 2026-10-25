@@ -7,22 +7,16 @@
 //! the status of a refusal after them and write the command between backticks, none of which a window
 //! can draw as it is, so the window has messages of its own in the catalog. They are chosen from the
 //! condition alone, as the terminal's are, and repeat nothing a service, a file or a settings file
-//! wrote.
+//! wrote. Which conditions name a command is the agent's to decide
+//! ([`bravebot_agent::chatgpt::Remedy`]), so this module keeps only the words.
 //!
 //! The command is passed into the message and sent beside the sentence, so the window can draw the
 //! words that are the command as code without reading the sentence to find them.
 
-use bravebot_agent::chatgpt::AccountModels;
+use bravebot_agent::chatgpt::{AccountModels, Remedy, remedy_of_failure, remedy_of_listing};
 use bravebot_aichat::responses::protocol::Refusal;
 use bravebot_aichat::{AccountFailure, RenewalFailure};
 use bravebot_i18n::t;
-
-/// The command that signs in, which is run in a terminal and nowhere else
-/// ([CHATGPT-1](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-1)).
-const SIGN_IN: &str = "bravebot auth login chatgpt";
-
-/// The command that says why a stored sign-in cannot be read.
-const STATUS: &str = "bravebot auth status chatgpt";
 
 /// A sentence for the window, and the command it names where one is the remedy. A failure's card and a
 /// picker's warning are both this.
@@ -44,6 +38,7 @@ impl Said {
     }
 
     /// A sentence that names the command that is its remedy.
+    #[cfg(test)]
     pub(crate) fn naming(command: &'static str, sentence: impl Into<String>) -> Self {
         Self {
             sentence: sentence.into(),
@@ -54,21 +49,14 @@ impl Said {
 
 /// The sentence for a failure of the account.
 pub(crate) fn of_failure(failure: AccountFailure) -> Said {
+    let command = remedy_of_failure(failure).map(Remedy::command);
+    let shown = command.unwrap_or_default();
+    let said = |sentence: String| Said { sentence, command };
     match failure {
-        AccountFailure::NotSignedIn => Said::naming(
-            SIGN_IN,
-            t!(desktop_chatgpt_not_signed_in, command = SIGN_IN),
-        ),
-        AccountFailure::Ended => {
-            Said::naming(SIGN_IN, t!(desktop_chatgpt_ended, command = SIGN_IN))
-        }
-        AccountFailure::Refused => Said::naming(
-            SIGN_IN,
-            t!(desktop_chatgpt_token_refused, command = SIGN_IN),
-        ),
-        AccountFailure::Unusable => {
-            Said::naming(STATUS, t!(desktop_chatgpt_unusable, command = STATUS))
-        }
+        AccountFailure::NotSignedIn => said(t!(desktop_chatgpt_not_signed_in, command = shown)),
+        AccountFailure::Ended => said(t!(desktop_chatgpt_ended, command = shown)),
+        AccountFailure::Refused => said(t!(desktop_chatgpt_token_refused, command = shown)),
+        AccountFailure::Unusable => said(t!(desktop_chatgpt_unusable, command = shown)),
         // The wait a refusal asked for at a 429 is said for either refusal, as the terminal says it.
         AccountFailure::Named {
             refusal: Refusal::UsageLimit,
@@ -136,16 +124,17 @@ pub(crate) fn of_fall_back(failure: AccountFailure, from: &str, to: &str) -> Sai
 /// The warning the model picker shows where the account's models could not be listed, or `None`
 /// where there is nothing to warn of: nobody signed in, or a listing that was read, empty or not.
 pub(crate) fn of_listing(account: &AccountModels) -> Option<Said> {
+    let command = remedy_of_listing(account).map(Remedy::command);
+    let shown = command.unwrap_or_default();
+    let said = |sentence: String| Said { sentence, command };
     match account {
         AccountModels::Absent | AccountModels::Offered(_) => None,
-        AccountModels::Unreadable => Some(Said::naming(
-            SIGN_IN,
-            t!(desktop_chatgpt_models_unreadable, command = SIGN_IN),
-        )),
-        AccountModels::Compiled(_) => Some(Said::naming(
-            SIGN_IN,
-            t!(desktop_chatgpt_models_compiled, command = SIGN_IN),
-        )),
+        AccountModels::Unreadable => {
+            Some(said(t!(desktop_chatgpt_models_unreadable, command = shown)))
+        }
+        AccountModels::Compiled(_) => {
+            Some(said(t!(desktop_chatgpt_models_compiled, command = shown)))
+        }
         AccountModels::Refused(Refusal::UsageLimit) => {
             Some(Said::plain(t!(desktop_chatgpt_models_usage_limit)))
         }
@@ -248,10 +237,22 @@ mod tests {
     #[test]
     fn the_command_is_named_where_it_is_the_remedy() {
         let command_of = |failure| of_failure(failure).command;
-        assert_eq!(command_of(AccountFailure::NotSignedIn), Some(SIGN_IN));
-        assert_eq!(command_of(AccountFailure::Ended), Some(SIGN_IN));
-        assert_eq!(command_of(AccountFailure::Refused), Some(SIGN_IN));
-        assert_eq!(command_of(AccountFailure::Unusable), Some(STATUS));
+        assert_eq!(
+            command_of(AccountFailure::NotSignedIn),
+            Some(Remedy::SignIn.command())
+        );
+        assert_eq!(
+            command_of(AccountFailure::Ended),
+            Some(Remedy::SignIn.command())
+        );
+        assert_eq!(
+            command_of(AccountFailure::Refused),
+            Some(Remedy::SignIn.command())
+        );
+        assert_eq!(
+            command_of(AccountFailure::Unusable),
+            Some(Remedy::Status.command())
+        );
         for failure in every_failure() {
             if matches!(
                 failure,
@@ -298,57 +299,6 @@ mod tests {
         // The two refusals stay told apart whatever the wait.
         assert!(refusal(Refusal::UsageLimit, Some(429), Some(600)).contains("usage limit"));
         assert!(!refusal(Refusal::NotPermitted, Some(429), Some(600)).contains("usage limit"));
-    }
-
-    /// The command the window names for a failure is the one the terminal's sentence for the same
-    /// failure names, for every failure of the account and every way its models could not be listed,
-    /// the failed renewals included, and neither names one the other does not. A command renamed in
-    /// one catalog and not the other, or named by the window where the terminal sends nobody to
-    /// run it, fails here.
-    #[test]
-    fn the_window_names_the_command_the_terminal_names_for_every_failure() {
-        let named_by = |sentence: &str| -> Option<&'static str> {
-            let named: Vec<&'static str> = [SIGN_IN, STATUS]
-                .into_iter()
-                .filter(|command| sentence.contains(command))
-                .collect();
-            assert!(named.len() <= 1, "{sentence}");
-            named.first().copied()
-        };
-        for failure in every_failure() {
-            let terminal = bravebot_agent::chatgpt::said_of_failure(failure);
-            assert_eq!(
-                of_failure(failure).command,
-                named_by(&terminal),
-                "{failure:?}: {terminal}"
-            );
-        }
-        let listings = [
-            AccountModels::Unreadable,
-            AccountModels::Compiled(Vec::new()),
-            AccountModels::Refused(Refusal::UsageLimit),
-            AccountModels::Refused(Refusal::NotPermitted),
-        ];
-        for listing in &listings {
-            let terminal = match listing {
-                AccountModels::Unreadable => {
-                    bravebot_i18n::t!(session_chatgpt_models_unreadable).to_string()
-                }
-                AccountModels::Compiled(_) => {
-                    bravebot_i18n::t!(session_chatgpt_models_compiled).to_string()
-                }
-                AccountModels::Refused(refusal) => bravebot_i18n::t!(
-                    session_chatgpt_models_refused,
-                    refusal = bravebot_agent::chatgpt::said_of_refusal(*refusal)
-                ),
-                _ => unreachable!("a listing with a warning"),
-            };
-            assert_eq!(
-                of_listing(listing).expect("a warning").command,
-                named_by(&terminal),
-                "{listing:?}: {terminal}"
-            );
-        }
     }
 
     /// What the window narrates where a summary could not be made and the account failed is two
