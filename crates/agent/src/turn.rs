@@ -17,7 +17,7 @@ use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::Sink;
-use bravebot_core::policy::{AfterCeilingStop, Policy, ReleasePlan, Routing, Vouched};
+use bravebot_core::policy::{Policy, ReleasePlan, Routing, Vouched};
 use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::reference::Presentation;
 use bravebot_core::trust::TrustStore;
@@ -39,9 +39,6 @@ use crate::workspace::{Workspace, WorkspaceError};
 mod delegate_end;
 mod prompts;
 mod round_steps;
-use round_steps::{
-    after_a_ceiling_stop, answer_stopped_narration, ceiling_stop_narration, record_ceiling_stop,
-};
 mod sentences;
 mod setup;
 mod task;
@@ -3978,157 +3975,21 @@ where
             round_steps::Recovery::Retry => continue,
             round_steps::Recovery::Proceed(completion) => completion,
         };
-        state.retries.asked_after_an_empty_reply = false;
-        // The backend carries no call out of a reply the ceiling stopped (BACKEND-42),
-        // and one that did would be a call nobody finished writing.
-        if completion.cut_off.is_some() {
-            completion.calls.clear();
-        }
-        state.account.add_usage(completion.usage);
-        state.account.context_tokens = completion.context_tokens;
-        conversation.measured(state.account.context_tokens);
-        reporter.spent(crate::outcome::Spent {
-            timing: state.spent.finish(),
-            ..state.account
-        });
-
-        // A reply the ceiling stopped part way through a call, after text. The text is
-        // the planner's and goes into the conversation as any answer does; the call was
-        // never made, and the planner is told so and asked for the work in parts.
-        if let Some(cut_off) = completion
-            .cut_off
-            .as_ref()
-            .filter(|cut_off| cut_off.call.is_some())
-            && state.may_call_tools
-            && !state.retries.asked_after_a_ceiling_stop
-        {
-            state.retries.asked_after_a_ceiling_stop = true;
-            record_ceiling_stop(policy, state.steps, cut_off, AfterCeilingStop::AskedAgain);
-            record_answer(policy, conversation, &completion.content)?;
-            narrate_between_calls(policy, reporter, &completion.content);
-            reporter.narration(ceiling_stop_narration(cut_off, state.may_call_tools));
-            conversation.push_composed_from(
-                Message::user(after_a_ceiling_stop(
-                    cut_off,
-                    &request,
-                    state.may_call_tools,
-                )),
-                Composed::Notice,
-                Provenance::Driver,
-            );
-            continue;
-        }
-        if completion.cut_off.is_none() {
-            state.retries.asked_after_a_ceiling_stop = false;
-        }
-        // A reply the ceiling stopped is kept for what it says, so the person has to be
-        // told that it stops short: the text arrives looking like an answer, and an answer
-        // that ends mid-sentence is worth nothing if it is read as a whole one. It carries
-        // no calls, so this round is the last.
-        if let Some(cut_off) = &completion.cut_off {
-            record_ceiling_stop(policy, state.steps, cut_off, AfterCeilingStop::KeptTheText);
-            reporter.narration(answer_stopped_narration(cut_off));
-        }
-
-        // The budget is spent, so this round is the answer whatever it holds. A planner that
-        // asked for a tool anyway does not get one: a request that offered none is not one a
-        // call can be answering, and running them would put the turn back in the loop the
-        // budget exists to end.
-        if !state.may_call_tools {
-            if !completion.calls.is_empty() {
-                reporter.narration(
-                    "the tool budget was spent, so the last calls were not run".to_string(),
-                );
-            }
-            // Waited for even here, where the planner will not read what they say. They are
-            // writing to a person's workspace, and a turn that reported itself finished while
-            // that was still going would be reporting something untrue.
-            collect_delegates(
-                delegates,
-                policy,
-                conversation,
-                reporter,
-                &mut state.account,
-                true,
-                waits,
-                &mut state.spent,
-                state.hook_notices,
-                &mut state.worked,
-                state.steps,
-            )?;
-            break completion;
-        }
-
-        if completion.calls.is_empty() {
-            // The planner has answered while something it started is still working. The turn
-            // asked for that work, so what the delegate says is part of what the turn was for:
-            // the answer so far goes into the conversation, the reports follow it, and the
-            // planner answers once more knowing what came back.
-            if !delegates.is_empty() {
-                // Between-calls text rather than the reply: the round is not the
-                // turn's last, and left as the reply in progress it would be cleared
-                // when the next round starts and never reach the transcript.
-                narrate_between_calls(policy, reporter, &completion.content);
-                record_answer(policy, conversation, &completion.content)?;
-                collect_delegates(
-                    delegates,
-                    policy,
-                    conversation,
-                    reporter,
-                    &mut state.account,
-                    true,
-                    waits,
-                    &mut state.spent,
-                    state.hook_notices,
-                    &mut state.worked,
-                    state.steps,
-                )?;
-                // A round the planner spent waiting is still a round, and the wait is when a
-                // person watching a turn go somewhere they did not ask for is most likely to
-                // say so. This is the boundary their line was aimed at. Reaching the next
-                // request without asking would put the delegate's report to the planner and
-                // none of what the person made of it, and the turn can end on that request.
-                //
-                // Guarded on the stop for the reason the boundary below is: Escape during the
-                // wait ends this turn, and a line typed after it belongs to the next one.
-                if !cancel.is_cancelled() {
-                    take_interjections(task, confirmer, policy, conversation, reporter);
-                }
-                continue;
-            }
-            // The planner has answered with tasks still open in the list the panel keeps. The
-            // answer goes into the conversation as it does above, and the planner is asked once
-            // for the list to be brought up to date, so the answer and the panel agree when the
-            // turn ends. A turn the person stopped as the answer arrived is not asked anything
-            // further, since the next request would end it as stopped and lose the answer. Nor is
-            // a reply the ceiling stopped, which is the turn's answer as it stands.
-            if completion.cut_off.is_none()
-                && !cancel.is_cancelled()
-                && let Some(open) =
-                    round_steps::open_tasks_to_ask_about(policy, conversation, &state.offered)
-            {
-                narrate_between_calls(policy, reporter, &completion.content);
-                record_answer(policy, conversation, &completion.content)?;
-                round_steps::ask_about_open_tasks(conversation, &mut state.reminded, open);
-                // The line a person typed as the answer arrived is meant for the turn they are
-                // watching, and the request this goes on to make is its next round.
-                take_interjections(task, confirmer, policy, conversation, reporter);
-                continue;
-            }
-            break completion;
-        }
-
-        // The planner asked for a round past the most the person allowed. Stopped before that
-        // round runs, so nothing it would have done has happened (TURN-14). A run that answered
-        // after its last allowed round never gets here, since it asked for no further round.
-        if let Some(most) = task.limits.rounds
-            && state.steps >= most
-        {
-            return Err(stopped_at(
-                policy,
-                state.steps,
-                LimitReached::Rounds { most },
-            ));
+        match round_steps::after_a_reply(
+            inputs,
+            state,
+            policy,
+            conversation,
+            reporter,
+            confirmer,
+            delegates,
+            waits,
+            &request,
+            &mut completion,
+        )? {
+            round_steps::AfterReply::Continue => continue,
+            round_steps::AfterReply::Answer => break completion,
+            round_steps::AfterReply::RunTheCalls => {}
         }
 
         state.steps += 1;
@@ -5096,6 +4957,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::round_steps::{after_a_ceiling_stop, ceiling_stop_narration};
     use super::*;
     use std::path::PathBuf;
     use std::sync::mpsc;

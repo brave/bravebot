@@ -18,10 +18,11 @@ use bravebot_net::Egress;
 use std::time::Instant;
 
 use super::{
-    Inputs, Plan, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING, ReadOutputIs, State,
-    TOOL_BUDGET_SPENT, Task, TurnError, Worked, Working, collect_delegates, collect_jobs,
-    note_rules_added, rule_notices, show_what_running_jobs_have_printed, stopped_at,
-    take_session_messages, tell_of_kept_jobs, token_limit_reached,
+    Inputs, LimitReached, Plan, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING,
+    ReadOutputIs, State, TOOL_BUDGET_SPENT, Task, TurnError, Worked, Working, collect_delegates,
+    collect_jobs, narrate_between_calls, note_rules_added, record_answer, rule_notices,
+    show_what_running_jobs_have_printed, stopped_at, take_interjections, take_session_messages,
+    tell_of_kept_jobs, token_limit_reached,
 };
 use crate::backend::BackendError;
 use crate::confirm::Confirmer;
@@ -166,6 +167,10 @@ pub(super) fn after_a_ceiling_stop(
 #[expect(
     clippy::too_many_arguments,
     reason = "the arguments are the turn's inputs and plan, its state, and each collaborator the steps before a request lend to an effect"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the steps before a request are taken in order from one state, and were one block of run_rounds"
 )]
 pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     inputs: Inputs<'_>,
@@ -345,6 +350,192 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         return Err(stopped_at(policy, state.steps, reached));
     }
     Ok(())
+}
+
+/// What `run_rounds` does next once a round's reply has been received and recovered.
+pub(super) enum AfterReply {
+    /// Ask again: the reply was dealt with and the round starts over.
+    Continue,
+    /// The reply is the turn's answer.
+    Answer,
+    /// The reply asks for a round of tool calls, which is within every limit.
+    RunTheCalls,
+}
+
+/// What a round does with a reply that came back: account for what it spent, deal with a reply the
+/// output ceiling stopped, finish the turn when the budget is spent or the planner answered, and
+/// refuse a round past the most the person allowed (TURN-14).
+///
+/// Decided from the turn's own counters and from whether the reply carries calls and was cut off.
+/// What the reply says is only recorded and handed to the effects that show it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments are the turn's inputs and state, each collaborator the steps lend to an effect, and the request and reply of the round"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the steps after a reply are taken in order from one state, and were one block of run_rounds"
+)]
+pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
+    inputs: Inputs<'_>,
+    state: &mut State<'_>,
+    policy: &mut Policy<'_, S>,
+    conversation: &mut Conversation,
+    reporter: &mut R,
+    confirmer: &mut C,
+    delegates: &mut Vec<Working<'_>>,
+    waits: &mut crate::timing::DelegateWait,
+    request: &ChatRequest,
+    completion: &mut Completion,
+) -> Result<AfterReply, TurnError> {
+    let Inputs { task, cancel, .. } = inputs;
+    state.retries.asked_after_an_empty_reply = false;
+    // The backend carries no call out of a reply the ceiling stopped (BACKEND-42),
+    // and one that did would be a call nobody finished writing.
+    if completion.cut_off.is_some() {
+        completion.calls.clear();
+    }
+    state.account.add_usage(completion.usage);
+    state.account.context_tokens = completion.context_tokens;
+    conversation.measured(state.account.context_tokens);
+    reporter.spent(crate::outcome::Spent {
+        timing: state.spent.finish(),
+        ..state.account
+    });
+
+    // A reply the ceiling stopped part way through a call, after text. The text is
+    // the planner's and goes into the conversation as any answer does; the call was
+    // never made, and the planner is told so and asked for the work in parts.
+    if let Some(cut_off) = completion
+        .cut_off
+        .as_ref()
+        .filter(|cut_off| cut_off.call.is_some())
+        && state.may_call_tools
+        && !state.retries.asked_after_a_ceiling_stop
+    {
+        state.retries.asked_after_a_ceiling_stop = true;
+        record_ceiling_stop(policy, state.steps, cut_off, AfterCeilingStop::AskedAgain);
+        record_answer(policy, conversation, &completion.content)?;
+        narrate_between_calls(policy, reporter, &completion.content);
+        reporter.narration(ceiling_stop_narration(cut_off, state.may_call_tools));
+        conversation.push_composed_from(
+            Message::user(after_a_ceiling_stop(cut_off, request, state.may_call_tools)),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+        return Ok(AfterReply::Continue);
+    }
+    if completion.cut_off.is_none() {
+        state.retries.asked_after_a_ceiling_stop = false;
+    }
+    // A reply the ceiling stopped is kept for what it says, so the person has to be
+    // told that it stops short: the text arrives looking like an answer, and an answer
+    // that ends mid-sentence is worth nothing if it is read as a whole one. It carries
+    // no calls, so this round is the last.
+    if let Some(cut_off) = &completion.cut_off {
+        record_ceiling_stop(policy, state.steps, cut_off, AfterCeilingStop::KeptTheText);
+        reporter.narration(answer_stopped_narration(cut_off));
+    }
+
+    // The budget is spent, so this round is the answer whatever it holds. A planner that
+    // asked for a tool anyway does not get one: a request that offered none is not one a
+    // call can be answering, and running them would put the turn back in the loop the
+    // budget exists to end.
+    if !state.may_call_tools {
+        if !completion.calls.is_empty() {
+            reporter
+                .narration("the tool budget was spent, so the last calls were not run".to_string());
+        }
+        // Waited for even here, where the planner will not read what they say. They are
+        // writing to a person's workspace, and a turn that reported itself finished while
+        // that was still going would be reporting something untrue.
+        collect_delegates(
+            delegates,
+            policy,
+            conversation,
+            reporter,
+            &mut state.account,
+            true,
+            waits,
+            &mut state.spent,
+            state.hook_notices,
+            &mut state.worked,
+            state.steps,
+        )?;
+        return Ok(AfterReply::Answer);
+    }
+
+    if completion.calls.is_empty() {
+        // The planner has answered while something it started is still working. The turn
+        // asked for that work, so what the delegate says is part of what the turn was for:
+        // the answer so far goes into the conversation, the reports follow it, and the
+        // planner answers once more knowing what came back.
+        if !delegates.is_empty() {
+            // Between-calls text rather than the reply: the round is not the
+            // turn's last, and left as the reply in progress it would be cleared
+            // when the next round starts and never reach the transcript.
+            narrate_between_calls(policy, reporter, &completion.content);
+            record_answer(policy, conversation, &completion.content)?;
+            collect_delegates(
+                delegates,
+                policy,
+                conversation,
+                reporter,
+                &mut state.account,
+                true,
+                waits,
+                &mut state.spent,
+                state.hook_notices,
+                &mut state.worked,
+                state.steps,
+            )?;
+            // A round the planner spent waiting is still a round, and the wait is when a
+            // person watching a turn go somewhere they did not ask for is most likely to
+            // say so. This is the boundary their line was aimed at. Reaching the next
+            // request without asking would put the delegate's report to the planner and
+            // none of what the person made of it, and the turn can end on that request.
+            //
+            // Guarded on the stop for the reason the boundary below is: Escape during the
+            // wait ends this turn, and a line typed after it belongs to the next one.
+            if !cancel.is_cancelled() {
+                take_interjections(task, confirmer, policy, conversation, reporter);
+            }
+            return Ok(AfterReply::Continue);
+        }
+        // The planner has answered with tasks still open in the list the panel keeps. The
+        // answer goes into the conversation as it does above, and the planner is asked once
+        // for the list to be brought up to date, so the answer and the panel agree when the
+        // turn ends. A turn the person stopped as the answer arrived is not asked anything
+        // further, since the next request would end it as stopped and lose the answer. Nor is
+        // a reply the ceiling stopped, which is the turn's answer as it stands.
+        if completion.cut_off.is_none()
+            && !cancel.is_cancelled()
+            && let Some(open) = open_tasks_to_ask_about(policy, conversation, &state.offered)
+        {
+            narrate_between_calls(policy, reporter, &completion.content);
+            record_answer(policy, conversation, &completion.content)?;
+            ask_about_open_tasks(conversation, &mut state.reminded, open);
+            // The line a person typed as the answer arrived is meant for the turn they are
+            // watching, and the request this goes on to make is its next round.
+            take_interjections(task, confirmer, policy, conversation, reporter);
+            return Ok(AfterReply::Continue);
+        }
+        return Ok(AfterReply::Answer);
+    }
+
+    // The planner asked for a round past the most the person allowed. Stopped before that
+    // round runs, so nothing it would have done has happened (TURN-14). A run that answered
+    // after its last allowed round never gets here, since it asked for no further round.
+    if let Some(most) = task.limits.rounds
+        && state.steps >= most
+    {
+        return Err(stopped_at(
+            policy,
+            state.steps,
+            LimitReached::Rounds { most },
+        ));
+    }
+    Ok(AfterReply::RunTheCalls)
 }
 
 /// Whether the endpoint answered with a different model from the one this turn asked for.
