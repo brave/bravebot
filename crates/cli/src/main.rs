@@ -2001,48 +2001,17 @@ fn prepare_the_run(
     let recorded = continued
         .as_ref()
         .and_then(|record| record.agent.as_deref());
-    let (agent, under) =
-        match bravebot_tui::app::settle_definition(agent.as_deref(), recorded, configured, |name| {
-            definition_for_a_run(&config, &workspace, &permissions, name, model.is_some())
-        }) {
-            Ok(bravebot_tui::app::Settled::Under {
-                name,
-                found,
-                by_setting,
-            }) => {
-                if by_setting {
-                    eprintln!("{}", t!(session_working_under_by_setting));
-                }
-                (Some(name), found)
-            }
-            Ok(bravebot_tui::app::Settled::SettingGone { name, why }) => {
-                eprintln!("{}", t!(cli_agent_setting_gone, definition = name.as_str()));
-                eprintln!("{why}");
-                (None, None)
-            }
-            Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
-                eprintln!(
-                    "{}",
-                    t!(session_recorded_definition_gone, definition = name.as_str())
-                );
-                eprintln!("{why}");
-                (None, None)
-            }
-            Ok(bravebot_tui::app::Settled::Nothing) => (None, None),
-            Err(refused) => {
-                return Err(stopped_before_the_turn(as_json, Ending::Argument, refused));
-            }
-        };
-    if asked_below
-        && let Some(how) = nothing_serves(
-            &config,
-            &under
-                .clone()
-                .unwrap_or_else(|| model_for_this_run(None, &config)),
-        )
-    {
-        return Err(stopped_before_the_turn(as_json, Ending::Configuration, how));
-    }
+    let (agent, under) = settle_the_definition(
+        agent.as_deref(),
+        recorded,
+        configured,
+        &config,
+        &workspace,
+        &permissions,
+        model.is_some(),
+        asked_below,
+        as_json,
+    )?;
 
     // A run is a session for this: it is given somewhere of its own to write what is not part of
     // the project, and the directory goes when the run does. Held in a binding for exactly that
@@ -2096,21 +2065,7 @@ fn prepare_the_run(
             bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
         ),
     };
-    match &pick {
-        bravebot_agent::backend::Pick::SetAside(model) => eprintln!(
-            "{}",
-            t!(session_model_pick_set_aside, model = model.as_str())
-        ),
-        bravebot_agent::backend::Pick::Refused { recorded, reason } => eprintln!(
-            "{}",
-            t!(
-                session_model_pick_refused,
-                model = recorded.as_str(),
-                reason = reason.as_str()
-            )
-        ),
-        bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => {}
-    }
+    say_the_model_pick(&pick);
     // Read before anything is sent, so an id that names nothing quotable is a refused argument and
     // not a run that quietly went without the session it was told to carry (NAME-10).
     let mut excerpts = Vec::new();
@@ -2160,30 +2115,8 @@ fn prepare_the_run(
     // Nobody is asked here, so a server no answer of the person's covers is absent and the reason
     // goes to stderr beside the rest of what this run says about itself (SERVERS-4). Held until the
     // run ends, since dropping one stops its server.
-    let reached = servers::for_this_session(
-        &settings,
-        workspace.root(),
-        match skip_permissions {
-            true => servers::Asking::Bypass,
-            false => servers::Asking::OneShot,
-        },
-        &mut servers::nobody(),
-        bravebot_sandbox::Stream::Inherited,
-    );
-    for note in &reached.notes {
-        eprintln!("{}", t!(cli_notice, notice = note));
-    }
+    let reached = reach_the_servers(&settings, workspace.root(), skip_permissions);
     task = task.with_mcp(reached.session());
-
-    // On stderr, beside the progress lines, so a pipe of the reply is unaffected. Said even here,
-    // where nobody may be reading: a run that wrote to the tree without asking should leave a record
-    // of having been told not to ask.
-    if skip_permissions {
-        eprintln!(
-            "{}",
-            t!(cli_notice, notice = t!(session_permissions_skipped))
-        );
-    }
 
     // Before the turn, so the sign-in's own output is not interleaved with progress lines and a
     // browser opening is accounted for. Nothing happens where no sign-in is wanted, which includes
@@ -2230,6 +2163,124 @@ fn prepare_the_run(
         input_lines,
         trust_input_lines,
     })
+}
+
+/// The definition the run works under and the model it names, settled before any server is
+/// reached, with what is said on stderr about a recorded or configured name that no longer
+/// matches. A name typed on this command line that matches nothing, and a model nothing serves
+/// where the run asked below the flag, end the run.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the match reads what the caller already holds, and a struct would only rename the arguments"
+)]
+fn settle_the_definition(
+    agent: Option<&str>,
+    recorded: Option<&str>,
+    configured: Option<&str>,
+    config: &Config,
+    workspace: &bravebot_agent::Workspace,
+    permissions: &bravebot_core::permissions::Permissions,
+    model_named: bool,
+    asked_below: bool,
+    as_json: bool,
+) -> Result<(Option<String>, Option<String>), ExitCode> {
+    let (agent, under) =
+        match bravebot_tui::app::settle_definition(agent, recorded, configured, |name| {
+            definition_for_a_run(config, workspace, permissions, name, model_named)
+        }) {
+            Ok(bravebot_tui::app::Settled::Under {
+                name,
+                found,
+                by_setting,
+            }) => {
+                if by_setting {
+                    eprintln!("{}", t!(session_working_under_by_setting));
+                }
+                (Some(name), found)
+            }
+            Ok(bravebot_tui::app::Settled::SettingGone { name, why }) => {
+                eprintln!("{}", t!(cli_agent_setting_gone, definition = name.as_str()));
+                eprintln!("{why}");
+                (None, None)
+            }
+            Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
+                eprintln!(
+                    "{}",
+                    t!(session_recorded_definition_gone, definition = name.as_str())
+                );
+                eprintln!("{why}");
+                (None, None)
+            }
+            Ok(bravebot_tui::app::Settled::Nothing) => (None, None),
+            Err(refused) => {
+                return Err(stopped_before_the_turn(as_json, Ending::Argument, refused));
+            }
+        };
+    if asked_below
+        && let Some(how) = nothing_serves(
+            config,
+            &under
+                .clone()
+                .unwrap_or_else(|| model_for_this_run(None, config)),
+        )
+    {
+        return Err(stopped_before_the_turn(as_json, Ending::Configuration, how));
+    }
+    Ok((agent, under))
+}
+
+/// Says on stderr that a recorded model was set aside or refused. The pick is only borrowed:
+/// the caller still turns it into the model.
+fn say_the_model_pick(pick: &bravebot_agent::backend::Pick) {
+    match pick {
+        bravebot_agent::backend::Pick::SetAside(model) => eprintln!(
+            "{}",
+            t!(session_model_pick_set_aside, model = model.as_str())
+        ),
+        bravebot_agent::backend::Pick::Refused { recorded, reason } => eprintln!(
+            "{}",
+            t!(
+                session_model_pick_refused,
+                model = recorded.as_str(),
+                reason = reason.as_str()
+            )
+        ),
+        bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => {}
+    }
+}
+
+/// Reaches the servers a one-shot run may use. Nobody is asked here, so a server no answer of the
+/// person's covers is absent and the reason goes to stderr beside the rest of what this run says
+/// about itself (SERVERS-4). The value is held until the run ends, since dropping one stops its
+/// server.
+fn reach_the_servers(
+    settings: &bravebot_config::Settings,
+    workspace: &Path,
+    skip_permissions: bool,
+) -> servers::Reached {
+    let reached = servers::for_this_session(
+        settings,
+        workspace,
+        match skip_permissions {
+            true => servers::Asking::Bypass,
+            false => servers::Asking::OneShot,
+        },
+        &mut servers::nobody(),
+        bravebot_sandbox::Stream::Inherited,
+    );
+    for note in &reached.notes {
+        eprintln!("{}", t!(cli_notice, notice = note));
+    }
+    // On stderr, beside the progress lines, so a pipe of the reply is unaffected. Said even here,
+    // where nobody may be reading: a run that wrote to the tree without asking should leave a record
+    // of having been told not to ask.
+    if skip_permissions {
+        eprintln!(
+            "{}",
+            t!(cli_notice, notice = t!(session_permissions_skipped))
+        );
+    }
+    reached
 }
 
 /// Which model the run asks for, and whether the endpoint can serve it as asked: its window, the
