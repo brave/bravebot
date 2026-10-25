@@ -16,6 +16,7 @@ governs:
   - crates/cli/src/main.rs
   - crates/cli/src/plain.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/agent/src/confirm.rs
   - crates/agent/src/permission_mode.rs
   - crates/ui-bridge/src/hooks.rs
