@@ -18,17 +18,18 @@ use bravebot_session::sessions::Handle;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use super::directories::{
+    Changed, add_directory, change_directory, close_directory, removal_trail, remove_checkout,
+};
 use super::opening::{Answers, Beginning, clear_session, opening_trust, switch_session};
 use super::side_requests::{
     compact_animated, goal_check_animated, handoff_answered, handoff_refusal,
 };
 use super::turns::{Continued, Wrote, next_after_a_turn, run_turn_animated};
 use super::{
-    BACKGROUND_LOSES, Changed, Ended, RunSettings, Suggesting, Switch, add_directory,
-    branch_session, carry_out_hunks, change_directory, close_directory, handed_to_the_background,
-    left_behind, list_rewind_points, opened_scratch, record_to_resume, removal_trail,
-    remove_checkout, rewind, rewind_point, run_command, save_compacted, status_report,
-    suggest_next, with_standing,
+    BACKGROUND_LOSES, Ended, RunSettings, Suggesting, Switch, branch_session, carry_out_hunks,
+    handed_to_the_background, left_behind, list_rewind_points, opened_scratch, record_to_resume,
+    rewind, rewind_point, run_command, save_compacted, status_report, suggest_next, with_standing,
 };
 use crate::state::{Attached, AttachedImage, Servers, Session};
 
