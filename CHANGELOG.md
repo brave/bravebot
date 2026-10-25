@@ -5,6 +5,7 @@
  - Added `output_of` to `read_file`: a notebook cell's saved outputs come back as a reference for a processor to read, with pictures replaced by their type and size, and never as text the agent is shown. ([#1570](https://github.com/brave/bravebot/issues/1570))
  - Added the tokens the model read and the tokens it wrote to `bravebot stats`, as Read and Written columns beside the total. A session recorded before the split was kept shows its tokens in an Unsplit column. ([#1497](https://github.com/brave/bravebot/issues/1497))
  - Added crash reports. When bravebot panics, the next launch sends Brave a report of the version, the operating system and the source file and line that failed, and nothing from your prompts, files or credentials. The terminal says so once on the startup screen. `BRAVEBOT_CRASH_REPORTS=0`, or `"crashReports": false` in `~/.bravebot/settings.json`, turns them off, and an incognito session sends none.
+ - Changed Ctrl-L to list delegates and asides only, and added `/outputs`, which opens what the commands a session ran printed, background jobs included, with the same keys, marks and read status. The row beneath the box counts what each opens. ([#3207](https://github.com/brave/bravebot/issues/3207))
 
 ## [0.18.0](https://github.com/brave/bravebot/releases/tag/v0.18.0)
 

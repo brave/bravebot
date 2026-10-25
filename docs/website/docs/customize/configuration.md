@@ -1359,7 +1359,7 @@ Thirteen actions can be moved and nothing else can (twelve on Windows, which has
 |---|---|---|
 | `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open the current prompt in your editor |
-| `watch` | `ctrl-l` | watch a background delegate, or inspect what is running |
+| `watch` | `ctrl-l` | open the list of delegates and asides |
 | `scroller` | `ctrl-o` | open the [transcript scroller](../using/transcript.md) |
 | `history` | `ctrl-r` | search your prompt history |
 | `stash` | `ctrl-s` | put the current line aside, or bring it back |

@@ -38,7 +38,7 @@ pub use entry::{
     DELEGATE_SHOWN, Delegate, Entries, Entry, JobState, JobView, Kept, Output, Speaker, Watched,
 };
 pub use scroller::{Laid, Scroller};
-pub use watching::Watching;
+pub use watching::{WatchScope, Watching};
 
 /// How many bytes of the model's thinking are kept for the screen, counted from the end.
 ///
@@ -5691,14 +5691,20 @@ mod tests {
             );
         }
 
-        /// The rows are grouped by kind, so a delegate starting arrives ahead of every command in
-        /// the list. A person reading what a command printed was moved onto that delegate by an
-        /// event they did not ask for.
+        /// A delegate is a row of the agents list and not of the outputs list, so one starting
+        /// while somebody reads what a command printed has no place in that list to move. A
+        /// position shifted for a row the list does not hold moved them onto another command.
         #[test]
         fn a_new_delegate_does_not_take_the_screen_from_a_command_being_read() {
             let mut session = Session::new("none");
             ran(&mut session, "cargo test", false);
-            assert!(session.watch(), "a command was not something to look at");
+            ran(&mut session, "cargo build", false);
+            assert!(
+                session.watch_outputs(),
+                "a command was not something to look at"
+            );
+            session.watch_previous();
+            session.open_watched();
 
             spawn(&mut session, "reader", "find the parser");
             assert_eq!(
@@ -5717,7 +5723,7 @@ mod tests {
             let mut session = Session::new("none");
             ran(&mut session, "cargo test", false);
             ran(&mut session, "cargo build", false);
-            session.watch();
+            session.watch_outputs();
             session.watch_previous();
 
             spawn(&mut session, "reader", "find the parser");
@@ -6310,10 +6316,17 @@ mod tests {
         #[test]
         fn a_command_this_session_ran_is_something_the_view_can_open() {
             let mut session = Session::new("none");
-            assert!(!session.watch(), "the key opened on nothing");
+            assert!(!session.watch_outputs(), "the entry opened on nothing");
 
             ran(&mut session, "cargo test", false);
-            assert!(session.watch(), "a command was not something to look at");
+            assert!(
+                !session.watch(),
+                "the watch key opened on a command, which is not an agent"
+            );
+            assert!(
+                session.watch_outputs(),
+                "a command was not something to look at"
+            );
             assert!(matches!(session.watched(), Some(Watched::Output(_))));
             assert_eq!(
                 session.watched_output().map(|o| o.command.as_str()),
@@ -6321,18 +6334,35 @@ mod tests {
             );
         }
 
-        /// One list rather than two. Which kind of work a row is is a property of the row, not a
-        /// reason for a second key to learn.
+        /// WATCH-7. The list the watch key opens holds agents and no command, so a session that
+        /// ran a command and a delegate lists the delegate alone. A list built from every kind of
+        /// row puts the build that passed beside the agent that did the work.
         #[test]
-        fn the_list_holds_delegates_and_commands_together() {
+        fn the_watch_list_holds_the_delegate_and_not_the_command() {
+            let mut session = Session::new("none");
+            ran(&mut session, "cargo test", true);
+            spawn(&mut session, "reader", "find the parser");
+
+            let rows = session.watchable();
+
+            assert_eq!(rows.len(), 1, "the list held a row besides the delegate");
+            assert!(matches!(rows[0], Watched::Delegate(_)));
+        }
+
+        /// Two lists rather than one: the delegates and asides are opened by the watch key and
+        /// the commands by their own entry, so neither list holds a row of the other kind.
+        #[test]
+        fn the_two_lists_hold_their_own_kinds_of_row() {
             let mut session = Session::new("none");
             spawn(&mut session, "reader", "find the parser");
             ran(&mut session, "cargo test", true);
 
-            let rows = session.watchable();
-            assert_eq!(rows.len(), 2);
-            assert!(matches!(rows[0], Watched::Delegate(_)));
-            assert!(matches!(rows[1], Watched::Output(_)));
+            let agents = session.watchable_in(WatchScope::Agents);
+            assert_eq!(agents.len(), 1);
+            assert!(matches!(agents[0], Watched::Delegate(_)));
+            let outputs = session.watchable_in(WatchScope::Outputs);
+            assert_eq!(outputs.len(), 1);
+            assert!(matches!(outputs[0], Watched::Output(_)));
         }
 
         /// Delegates first and commands after them, so a row's place does not move under somebody
@@ -6908,22 +6938,25 @@ mod tests {
             assert!(!dropped.is_requested());
         }
 
-        /// Stepping through the list reaches both kinds, since it is one list and the keys that
-        /// move in it do not ask what a row is.
+        /// Stepping through the outputs list reaches every command, since the keys that move in
+        /// it do not ask what a row is.
         #[test]
-        fn stepping_through_the_list_reaches_a_command_after_a_delegate() {
+        fn stepping_through_the_outputs_list_reaches_every_command() {
             let mut session = Session::new("none");
-            spawn(&mut session, "reader", "find the parser");
+            ran(&mut session, "cargo build", true);
             ran(&mut session, "cargo test", true);
 
-            session.watch();
+            session.watch_outputs();
             assert!(
                 session.listing_delegates(),
                 "two rows did not open the list"
             );
-            while !matches!(session.watched(), Some(Watched::Output(_))) {
+            while session
+                .watched_output()
+                .is_none_or(|output| output.command != "cargo build")
+            {
                 let before = session.list_highlight();
-                session.watch_next();
+                session.watch_previous();
                 assert_ne!(before, session.list_highlight(), "the list stopped moving");
             }
             session.open_watched();
@@ -7031,8 +7064,8 @@ mod tests {
         }
 
         /// Asides come first because they are the only rows that outlive the session that made
-        /// them: a resumed list is asides alone, and everything the session goes on to do appends
-        /// after them rather than under somebody reading one.
+        /// them: a resumed list is asides alone, and the delegates the session goes on to spawn
+        /// append after them rather than under somebody reading one.
         #[test]
         fn an_aside_keeps_its_place_when_a_delegate_is_spawned_after_it() {
             let mut session = Session::new("none");
@@ -7043,9 +7076,9 @@ mod tests {
             ran(&mut session, "cargo test", true);
 
             let rows = session.watchable();
+            assert_eq!(rows.len(), 2);
             assert!(matches!(rows[0], Watched::Aside(_)));
             assert!(matches!(rows[1], Watched::Delegate(_)));
-            assert!(matches!(rows[2], Watched::Output(_)));
             assert_eq!(
                 session.list_highlight(),
                 before,

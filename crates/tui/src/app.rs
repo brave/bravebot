@@ -705,6 +705,14 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if line.trim() == MEMORY_COMMAND {
         return Action::ListMemories;
     }
+    // Opens the view over what commands printed. Said when there is none, since a typed command
+    // that does nothing at all reads as one that was not understood.
+    if line.trim() == OUTPUTS_COMMAND {
+        if !session.watch_outputs() {
+            session.note(t!(outputs_none));
+        }
+        return Action::Redraw;
+    }
     if line.trim() == PANEL_COMMAND {
         session.toggle_panel();
         return Action::Redraw;
@@ -9014,6 +9022,7 @@ mod tests {
 
     mod watching {
         use super::*;
+        use crate::state::{WatchScope, Watched};
         use bravebot_agent::report::{DelegateId, Delegation};
 
         /// A delegate beginning, numbered the way the driver numbers them.
@@ -9058,6 +9067,88 @@ mod tests {
                 "the key answered with a mode"
             );
             assert!(session.watching().is_none());
+        }
+
+        fn ran_a_command(session: &mut Session, command: &str) {
+            session.command_printed(bravebot_agent::report::Printed {
+                command: command.to_string(),
+                lines: vec!["first".to_string()],
+                total: 1,
+                read_by_the_planner: true,
+                outcome: bravebot_agent::report::Outcome::Succeeded,
+                job: None,
+            });
+        }
+
+        /// WATCH-7. A session that ran a command and a delegate: the watch key opens the agents,
+        /// and the one row it holds is the delegate. A key that listed the command beside it would
+        /// put a build's output in the list of the agents that did the work.
+        #[test]
+        fn ctrl_l_lists_the_delegate_and_not_the_command() {
+            let mut session = Session::new("kernel-enforced");
+            ran_a_command(&mut session, "cargo test");
+            spawn(&mut session, "reader", "find the parser");
+            session.reporting_for(None);
+
+            handle_key(&mut session, ctrl('l'));
+
+            assert!(session.watching_a_delegate(), "the key did not open");
+            assert!(
+                session.watched_delegate().is_some(),
+                "the key did not land on the delegate"
+            );
+            assert!(
+                !session.listing_delegates(),
+                "a list of one row was shown as a list"
+            );
+            assert!(
+                session
+                    .watchable()
+                    .iter()
+                    .all(|row| !matches!(row, Watched::Output(_))),
+                "the watch key's list held a command"
+            );
+        }
+
+        /// WATCH-7. A session that ran only commands has nothing for the watch key to open, so it
+        /// answers with nothing, as it does where nothing has run at all.
+        #[test]
+        fn ctrl_l_does_nothing_where_only_commands_have_run() {
+            let mut session = Session::new("kernel-enforced");
+            ran_a_command(&mut session, "cargo test");
+
+            let action = handle_key(&mut session, ctrl('l'));
+
+            assert!(matches!(action, Action::None));
+            assert!(
+                session.watching().is_none(),
+                "the watch key opened on a command"
+            );
+        }
+
+        /// WATCH-7. What commands printed is opened by `/outputs`, on the row where there is one
+        /// and on the list where there are several, and the command says so where there is none.
+        #[test]
+        fn the_outputs_command_opens_what_commands_printed() {
+            let mut session = Session::new("kernel-enforced");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(OUTPUTS_COMMAND)),
+                Action::Redraw
+            );
+            assert!(session.watching().is_none(), "it opened on nothing");
+
+            ran_a_command(&mut session, "cargo test");
+            spawn(&mut session, "reader", "find the parser");
+            session.reporting_for(None);
+            dispatch_command(&mut session, commanded(OUTPUTS_COMMAND));
+
+            assert_eq!(
+                session
+                    .watched_output()
+                    .map(|output| output.command.as_str()),
+                Some("cargo test")
+            );
+            assert_eq!(session.watch_scope(), WatchScope::Outputs);
         }
 
         /// The chord that opened the view leaves it, wherever it has been moved to. Bound onto `j`
@@ -23491,6 +23582,7 @@ mod tests {
                 LOOP_COMMAND,
                 MODEL_COMMAND,
                 NOTE_COMMAND,
+                OUTPUTS_COMMAND,
                 PANEL_COMMAND,
                 PR_COMMAND,
                 RENAME_COMMAND,

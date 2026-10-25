@@ -3464,7 +3464,8 @@ watching-calls = { $count ->
     }
 # Dit sur la ligne du bas une fois que la vue a quelque chose a ouvrir, la seule ligne qui survit
 # au tour qui l'a dessinee. Le compte y est car une touche sans rien derriere ne vaut pas la
-# peine. Delegues et commandes sont comptes ensemble, une seule touche ouvrant la liste des deux.
+# peine. Le compte est celui des questions posees a cote et des delegues, que la touche ouvre. Ce
+# que les commandes ont affiche s'ouvre par /outputs et a son propre compte.
 watching-hint = { $chord } { $count } a ouvrir
 # Dit sur la ligne du bas tant qu'une commande attendue par le tour peut passer en arrière-plan,
 # et retiré dès qu'elle se termine ou y passe. Court, car il partage la ligne avec tout le reste.

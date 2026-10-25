@@ -2148,7 +2148,7 @@ suspend the session, twelve on one that cannot (INPUT-47), and nothing else can 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
 - `editor` (default: `ctrl-g`): open external editor for the current prompt.
-- `watch` (default: `ctrl-l`): watch background delegate or inspect running actions.
+- `watch` (default: `ctrl-l`): open the list of delegates and asides ([WATCH-7](watching.md#WATCH-7)).
 - `scroller` (default: `ctrl-o`): open the transcript scroller.
 - `history` (default: `ctrl-r`): open prompt history search.
 - `stash` (default: `ctrl-s`): stash the current input line or bring it back.

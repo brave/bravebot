@@ -193,9 +193,9 @@ pub(super) const JOB_ROW_LINES: usize = 2000;
 
 /// Something the delegate view can open.
 ///
-/// One list rather than two, because a person pressing the key is asking to see work that is not
-/// in the transcript, and which kind of work it was is a property of the row rather than a reason
-/// for a second key.
+/// One view and one set of keys serve two lists: the agents (asides and delegates), which Ctrl-L
+/// opens, and the commands that printed something, which `/outputs` opens. Which list a row
+/// belongs to is its variant.
 #[derive(Debug, Clone, Copy)]
 pub enum Watched<'a> {
     /// A question asked beside the work, and its answer.

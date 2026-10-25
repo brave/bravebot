@@ -527,6 +527,7 @@ impl Session {
         self.held_view = Some(self.scroll);
         self.scroll = 0;
         self.watching = Some(Watching {
+            scope: WatchScope::Agents,
             at: self.asides.len() + place,
             listing: false,
             on_session: false,

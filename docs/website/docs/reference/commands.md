@@ -46,6 +46,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
+| `/outputs` | | Open what the commands this session ran printed, background jobs included |
 | `/panel` | | Show or hide the info panel beside the transcript |
 | `/files` | | List the files the session wrote and show every edit to the highlighted one |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
@@ -740,8 +741,17 @@ left to stop. Between turns nothing reads the flag, so a stop kills the job at o
 told at the next turn's first round that you stopped it. A stop still waiting when a turn ends, as when
 the model's last reply made no tool call, is carried out as the turn finishes. If a row still reads
 `being stopped` with no turn running, typing `/jobs stop` for it again carries the stop out. A kept
-job you stopped between turns keeps its own row in the watching display, and does not appear a
+job you stopped between turns keeps its own row in the `/outputs` list, and does not appear a
 second time as a plain command row.
+
+## `/outputs`
+
+Opens what the commands this session ran printed, background jobs included, one row each in the order
+they ran. It is the same mode [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
+opens over delegates and asides, with the same keys. Each row opens on what the command printed, says
+how the run ended and whether the model read it, and a running job's row shows the lines it has
+printed since the model last looked. Where no command has run, it says so and opens nothing. Nothing
+it shows is sent to the model or written to the session's record.
 
 ## `/panel`
 
@@ -1113,7 +1123,7 @@ the answer, and no later turn reads either.
 
 The answer opens in the mode
 [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
-opens, as a row of its own before the delegates and the commands, which is the one screen it exists
+opens, as a row of its own before the delegates, which is the one screen it exists
 on. Nothing about it is drawn among the turn's own lines, because an exchange drawn in the transcript
 is one a reader takes the planner to have had.
 
@@ -1415,7 +1425,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/panel`, `/files`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/panel`, `/files`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so

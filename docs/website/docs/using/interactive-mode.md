@@ -143,7 +143,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 |---|---|---|
 | `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open your editor on the prompt |
-| `watch` | `ctrl-l` | open what a delegate did, a command printed, or an aside answered |
+| `watch` | `ctrl-l` | open what a delegate did or an aside answered |
 | `scroller` | `ctrl-o` | open the transcript scroller |
 | `history` | `ctrl-r` | search the prompts you have sent |
 | `stash` | `ctrl-s` | put the line away, or bring it back |
@@ -230,7 +230,8 @@ The row beneath the box carries what the session is doing (the mode in force whe
 asking, how full the context is and the share of the prompt read from the cache, the trail, a
 [`/loop`](../reference/commands.md#loop-interval-prompt) that is running and when its next tick is
 due, how many [background jobs](#moving-a-command-to-the-background) the turn has running, the key
-that opens the delegates and the commands once the session has anything to open, and the key that
+that opens the delegates once the session has any, the `/outputs` entry that opens the commands once
+the session has run one, and the key that
 moves the command the turn is waiting on to the background while there is one), then
 `? for shortcuts`, and then the key that opens the [info panel](sessions.md#telling-sessions-apart)
 while the panel is closed and the terminal is wide enough for it. While the panel is drawn, the
@@ -557,7 +558,7 @@ does not move it, since those wait for the turn to end anyway.
 **A job stays on the screen after its block scrolls away.** For as long as the turn has a job
 running, whether you moved it or the model started it in the background, the hint line says how many,
 as in `1 in the background`, in shell mode too. Each job is one row under
-[Ctrl-L](#watching-a-delegate-reading-a-command-and-asking-something-aside), made when the job
+[`/outputs`](#watching-a-delegate-reading-a-command-and-asking-something-aside), made when the job
 starts and before it has printed anything. The row says `background`, leads with the job's name, and
 says whether the job is still running and for how long, or how it ended. A delegate's `job:1` and the
 turn's `job:1` are separate rows.
@@ -614,18 +615,24 @@ Ctrl-O opens the scroller over the transcript, and Ctrl-T toggles the audit trai
 
 ## Watching a delegate, reading a command, and asking something aside
 
-**Ctrl-L opens the whole of what a delegate did, the whole of what a command printed, and the answer
-to anything you asked with [`/btw`](../reference/commands.md#btw-question).** Where there is more
+**Ctrl-L opens the whole of what a delegate did and the answer to anything you asked with
+[`/btw`](../reference/commands.md#btw-question).** Where there is more
 than one row, a list is the way in: a panel over the transcript, a row each. Where there is one, its
-own lines open directly. Where there is nothing the key does nothing. The row beneath the box names
-the key and how many rows there are, counting them all together, for as long as the session has any.
+own lines open directly. Where there is nothing the key does nothing, and a session that ran
+commands and no delegate has nothing for it. The row beneath the box names the key and how many rows
+it opens, for as long as the session has any.
+
+**`/outputs` opens what the commands the session ran printed**, background jobs included, in the
+same mode with the same keys. Where no command has run it says so and opens nothing. Once a command
+has run, the row beneath the box names `/outputs` and how many rows that opens, beside the key's own
+count.
 
 | Key | What it does |
 |---|---|
-| Ctrl-L | open the list, and close the mode from either level |
+| Ctrl-L | open the list of delegates and asides, and close the mode from either level |
 | Enter | open the row under the cursor |
 | Up / Down | move through the list |
-| n / p | in a delegate, step to the next or previous one without going back to the list |
+| n / p | in a delegate, step to the next or previous one without going back to the list; in a command, the next or previous command |
 | x | in a delegate that is working, stop that delegate and no other: it answers with what it has and the turn goes on |
 | q, Escape | back to the list from a delegate, then out |
 | Ctrl-C | close the mode, leaving the turn in flight running |
@@ -641,7 +648,7 @@ sentence alone. A report the planner was not allowed to read is drawn in the
 What a command printed gets the same treatment: the transcript has room for the first lines and a
 count.
 
-**Every command the turn ran is a row**, after the delegates and in the order they ran, so a row's
+**Every command the turn ran is a row of the `/outputs` list**, in the order they ran, so a row's
 place does not move under you while you are stepping through it. Opening one draws what the command
 printed, as far back as is kept, and says so rather than dropping quietly where more was printed than
 was kept. Where the planner was kept from the output, every row of it carries the margin every
@@ -663,7 +670,7 @@ keeps the working mark because that is what it was doing: a server told to serve
 goes and never exits, so a cross beside it would say something about the program that is not true.
 The verdict comes from the exit codes and the clock, never from a line the program printed.
 
-**A question asked with `/btw` is a row too**, before the delegates and the commands and in the order
+**A question asked with `/btw` is a row too**, before the delegates and in the order
 they were asked. Opening one draws the question above the answer, and the row says whether the record
 kept the answer. It comes first because it is the only row that survives a resume: put last, every
 delegate a later turn spawned would be inserted above it and move its place.
