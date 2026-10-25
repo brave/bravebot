@@ -299,12 +299,13 @@ nothing acts on what the layout drew under it:
 
 Nothing else is a target: not the rows that count the files left out or the edit rows out of view,
 the rest of the heading, the rule, the edits, the position in the bar, a control that is dim, the
-border column, or a row the height of the panel is too short to draw. As for [MOUSE-12](#MOUSE-12),
-the press and the release are on one cell and the press is a single click, so a drag, a double click
-and a triple click are selections and copy as before, and a press that began elsewhere and was let
-go on a target is not a click on it. A press on a row whose file has left the list since the frame
-was drawn is ignored. A press is mapped by the rows the layout drew and never by a file's name or an
-edit's text ([FILES-10](files-mode.md#FILES-10)). The keys stay the way to do it without a mouse.
+border column, a row the height of the panel is too short to draw, or the last row of the panel,
+which names the keys. As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and
+the press is a single click, so a drag, a double click and a triple click are selections and copy as
+before, and a press that began elsewhere and was let go on a target is not a click on it. A press on
+a row whose file has left the list since the frame was drawn is ignored. A press is mapped by the
+rows the layout drew and never by a file's name or an edit's text
+([FILES-10](files-mode.md#FILES-10)). The keys stay the way to do it without a mouse.
 
 `verified-by: bravebot_tui::files_mode::a_click_on_a_file_row_highlights_it_and_shows_its_edits_from_the_top`
 `verified-by: bravebot_tui::files_mode::a_drag_a_press_from_elsewhere_or_a_double_click_highlights_no_file`

@@ -2935,8 +2935,9 @@ files-edit-count = { $count ->
 files-nothing-written = no file has been written in this session yet
 # Left in the transcript by /diff on a terminal too narrow for the state.
 files-too-narrow = The files view needs a terminal at least { $columns } columns wide.
-# Said on the bottom line while the state is open, naming its keys.
-files-hint = ↑↓ file  ·  ←→ edit  ·  PgUp PgDn scroll  ·  q back
+# The last row of the panel while the state is open, naming its keys, and the hint line's where
+# the panel is not drawn.
+files-keys = ↑↓ file  ←→ edit  PgUp PgDn scroll  q back
 # The info panel's Files section: its heading, and how many files the session wrote.
 panel-files = Files
 panel-files-total = { $count ->

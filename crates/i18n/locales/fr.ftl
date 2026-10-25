@@ -3668,8 +3668,9 @@ files-edit-count = { $count ->
 files-nothing-written = aucun fichier n'a encore été écrit dans cette session
 # Laissé dans la transcription par /diff sur un terminal trop étroit pour cet état.
 files-too-narrow = La vue des fichiers demande un terminal d'au moins { $columns } colonnes de large.
-# Dit sur la dernière ligne tant que l'état est ouvert, avec ses touches.
-files-hint = ↑↓ fichier  ·  ←→ modification  ·  PgUp PgDn défiler  ·  q retour
+# La dernière ligne du panneau tant que l'état est ouvert, avec ses touches, et celle de la
+# ligne d'aide là où le panneau n'est pas dessiné.
+files-keys = ↑↓ fichier  ←→ modification  PgUp PgDn défiler  q retour
 # La section Fichiers du panneau d'informations : son titre, et combien de fichiers la session a écrits.
 panel-files = Fichiers
 panel-files-total = { $count ->

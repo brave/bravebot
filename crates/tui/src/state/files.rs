@@ -153,8 +153,10 @@ impl Session {
             files_mode::Geometry::new(usize::from(area.height), self.written_totals().0).rule();
         let rows = isize::try_from(self.wheel_rows()).unwrap_or(isize::MAX);
         let by = if back { -rows } else { rows };
-        // The heading and the list are above the rule, and the file's name and its edits below.
-        if usize::from(row - area.y) <= rule {
+        // The heading and the list are above the rule, and the file's name, the bar, the edits and
+        // the row of the keys, the last of the panel, are below it.
+        let at = usize::from(row - area.y);
+        if at <= rule && at + 1 < usize::from(area.height) {
             self.files_scroll_list(by);
         } else {
             self.files_scroll(by);

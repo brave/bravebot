@@ -149,12 +149,14 @@ border.
 <a id="PANEL-7"></a>
 ### PANEL-7: the panel ends with the key that hides it
 
-The panel's last row is `{chord} hide panel`, naming the chord in force. While the panel is closed
+The panel's last row is `{chord} hide panel`, naming the chord in force, and in the files state the
+keys of that state instead ([FILES-4](files-mode.md#FILES-4)). While the panel is closed
 on a terminal wide enough for it, the hint line has a `{chord} info` part, and that part is the
 first the line drops when the row is short ([INPUT-13](terminal-input.md#INPUT-13)). With the panel
 open, or on a terminal too narrow for it, the line has no such part.
 
 `verified-by: bravebot_tui::panel::the_last_row_names_the_chord_in_force`
+`verified-by: bravebot_tui::files_mode::the_last_row_of_the_panel_names_the_keys_of_the_state`
 `verified-by: bravebot_tui::panel::the_hint_line_offers_the_panel_only_while_it_is_closed_and_would_fit`
 `verified-by: bravebot_tui::panel::the_info_part_is_the_first_the_hint_line_gives_up`
 

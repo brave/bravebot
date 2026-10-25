@@ -108,11 +108,16 @@ edge a border as in [PANEL-6](info-panel.md#PANEL-6). Dragging the border does n
 was dragged to is kept for the ordinary state. It is drawn on a terminal of at least 100 columns,
 which leaves the transcript at least 40. None of the sections of [PANEL-9](info-panel.md#PANEL-9) is
 drawn while it is. Top to bottom it holds a heading row, the list (FILES-5), a rule, the highlighted
-file's name and edit count, the bar of FILES-6, and the edits (FILES-6) between the two rows that
-count the rows of them out of view. On a panel of 7 rows or fewer the edits have no row. The context
-reading and cache rate move to the hint line, as they do when the panel is not drawn
-([PANEL-8](info-panel.md#PANEL-8)). A terminal narrowed below 100 columns while the state is open
-stops drawing it and draws it again when widened.
+file's name and edit count, the bar of FILES-6, the edits (FILES-6) between the two rows that count
+the rows of them out of view, and a last row that names the state's keys, `↑↓ file`, `←→ edit`,
+`PgUp PgDn scroll` and `q back`, as [PANEL-7](info-panel.md#PANEL-7) names the chord that hides the
+panel. On a panel of 8 rows or fewer the edits have no row. The context reading and cache rate move
+to the hint line, as they do when the panel is not drawn ([PANEL-8](info-panel.md#PANEL-8)). The
+hint line names the state's keys as well while the panel is not drawn, since nothing else shows
+them, ahead of the reading and the cache rate. Where its row is short the line is cut at the row's
+width with an ellipsis, which is not how the hint line drops its parts elsewhere
+([INPUT-13](terminal-input.md#INPUT-13)). A terminal narrowed below 100 columns while the state is
+open stops drawing it and draws it again when widened.
 
 The heading row is `{n} files changed` with `+{added}` and `-{removed}` beside it, from the sums of
 FILES-2, and an `x` at its right end that ends the state (FILES-3).
@@ -124,7 +129,11 @@ FILES-2, and an `x` at its right end that ends the state (FILES-3).
 `verified-by: bravebot_tui::files_mode::no_ordinary_section_is_drawn_in_the_state`
 `verified-by: bravebot_tui::files_mode::the_close_control_ends_the_heading_row_beside_a_cut_note_about_earlier_edits`
 `verified-by: bravebot_tui::files_in_french::a_cut_note_leaves_the_close_control_at_the_end_of_the_heading_row_in_french`
-`verified-by: bravebot_tui::files_mode::the_hint_line_has_the_context_reading_while_the_state_is_open`
+`verified-by: bravebot_tui::files_mode::the_hint_line_keeps_the_reading_and_the_cache_rate_and_no_key_while_the_panel_is_drawn`
+`verified-by: bravebot_tui::files_mode::the_hint_line_names_the_keys_where_the_panel_is_not_drawn`
+`verified-by: bravebot_tui::files_mode::the_hint_line_of_the_state_is_cut_with_an_ellipsis_where_the_row_is_short`
+`verified-by: bravebot_tui::files_in_french::the_hint_line_of_the_state_is_cut_with_an_ellipsis_in_french_where_the_row_is_short`
+`verified-by: bravebot_tui::files_mode::the_last_row_of_the_panel_names_the_keys_of_the_state`
 
 <a id="FILES-5"></a>
 ### FILES-5: the list has one row for each file
@@ -140,7 +149,7 @@ each such character made visible, so it cannot read as another name.
 The state opens with the last file written highlighted. Up, Down, `k` and `j` move the highlight and
 stop at each end. Home and End, or `g` and `G`, go to the first and last. Where there are more files
 than rows, the rows drawn are the ones around the highlight, and the first and last rows say how many
-are left out above and below (`↑ 1 more above`, `↓ 8 more below`). On a panel of 14 rows or fewer
+are left out above and below (`↑ 1 more above`, `↓ 8 more below`). On a panel of 15 rows or fewer
 the list has room for fewer than three rows, and where there are more files than room it draws one
 row, the highlighted file or the one the wheel left first, and no count. Turning the wheel over the
 list moves the rows and not the highlight ([MOUSE-19](mouse.md#MOUSE-19)), and a click on a row
@@ -242,9 +251,12 @@ loop tick, a watch firing and a goal sending the work back leave the state open 
 While the state is open every key is answered by it, and a key it does not name does nothing. A
 character does not reach the box, Enter sends nothing, and a paste or a drop does not reach the line,
 as in [SCROLL-2](scroller.md#SCROLL-2). The line keeps its text and caret and comes back as it was
-when the state ends. The box is drawn without its caret, and the hint line names the state's keys
-(`↑↓ file`, `←→ edit`, `PgUp PgDn scroll`, `q back`) in the interface's own words. Ctrl-C ends the
-state and does nothing else, so a turn in flight goes on.
+when the state ends. The box is drawn without its caret, and the last row of the panel names the
+state's keys (FILES-4) in the interface's own words. The hint line keeps the context reading and the
+cache rate, and names the keys only while the panel is not drawn, ahead of them. Where its row is
+short the line is cut at the row's width with an ellipsis, which is not how the hint line drops its
+parts elsewhere ([INPUT-13](terminal-input.md#INPUT-13)). Ctrl-C ends the state and does nothing
+else, so a turn in flight goes on.
 
 A click on a list row highlights it ([MOUSE-18](mouse.md#MOUSE-18)), as the keys that move the
 highlight do. The wheel scrolls the edits as PageUp and PageDown do, and scrolls the list without
@@ -255,6 +267,11 @@ moving the highlight, which no key does ([MOUSE-19](mouse.md#MOUSE-19)).
 `verified-by: bravebot_tui::app::the_line_comes_back_untouched_when_the_state_ends`
 `verified-by: bravebot_tui::app::ctrl_c_ends_the_state_and_leaves_the_turn_running`
 `verified-by: bravebot_tui::render::the_box_is_drawn_without_its_caret_while_the_state_is_open`
+`verified-by: bravebot_tui::files_mode::the_last_row_of_the_panel_names_the_keys_of_the_state`
+`verified-by: bravebot_tui::files_mode::the_hint_line_keeps_the_reading_and_the_cache_rate_and_no_key_while_the_panel_is_drawn`
+`verified-by: bravebot_tui::files_mode::the_hint_line_names_the_keys_where_the_panel_is_not_drawn`
+`verified-by: bravebot_tui::files_mode::the_hint_line_of_the_state_is_cut_with_an_ellipsis_where_the_row_is_short`
+`verified-by: bravebot_tui::files_in_french::the_hint_line_of_the_state_is_cut_with_an_ellipsis_in_french_where_the_row_is_short`
 
 <a id="FILES-10"></a>
 ### FILES-10: nothing reaches a model, and the state shows what the session wrote
