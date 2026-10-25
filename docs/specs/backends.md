@@ -1014,6 +1014,9 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_cli::running::a_run_sends_a_level_the_roster_says_the_model_reads`
 `verified-by: bravebot_cli::running::a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read`
 `verified-by: bravebot_cli::running::a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none`
+`verified-by: bravebot_agent::backend::a_level_the_default_endpoint_refused_is_not_refused_at_a_gateway_offering_the_bare_slug`
+`verified-by: bravebot_agent::backend::a_model_bedrock_serves_is_asked_of_bedrock_and_not_of_a_gateway_with_the_same_name`
+`verified-by: bravebot_agent::backend::a_level_the_account_refused_is_reported_for_its_model_only`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
 `verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
 `verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`
