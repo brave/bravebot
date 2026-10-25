@@ -1815,19 +1815,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.permissions.denies_any_read()
     }
 
-    /// Refuse a write a `deny` rule covers, and one outside the files this run's definition lets it
-    /// write (DELEGATE-28).
+    /// Refuse a write a `deny` rule covers, for a caller that asks the rules about each spelling
+    /// of a file and the definition's limit ([`Policy::refuse_write_outside_limits`]) about the
+    /// one it lands on.
     ///
     /// Both families of rule are consulted: a path nothing may read is a path nothing may replace
     /// either, so a `Read` deny rule stops a write to it. Claude Code does the same, and the reason
     /// is that a file whose contents are off limits is not protected if it can be overwritten.
-    pub fn before_write(&mut self, path: &str) -> Gated<()> {
-        self.refuse_denied_write(path)?;
-        self.refuse_write_outside_limits(path)
-    }
-
-    /// The `deny` half of [`Policy::before_write`], for a caller that asks the rules about each
-    /// spelling of a file and the definition's limit about the one it lands on.
     pub fn refuse_denied_write(&mut self, path: &str) -> Gated<()> {
         for subject in [
             crate::permissions::Subject::Edit,
@@ -17040,6 +17034,13 @@ five
             Labelled::new(text.to_string(), Label::untrusted_public())
         }
 
+        /// A write the way a tool asks for one: refused where a `deny` rule covers the path, and
+        /// where the definition's limit on the files it may write (DELEGATE-28) does not.
+        fn before_write(policy: &mut Policy<'_, RecordingSink>, path: &str) -> Gated<()> {
+            policy.refuse_denied_write(path)?;
+            policy.refuse_write_outside_limits(path)
+        }
+
         /// A turn whose settings named `bound` as the most delegates it may have running at once.
         fn bounded_policy(sink: &mut RecordingSink, bound: u32) -> Policy<'_, RecordingSink> {
             open_policy(sink).with_delegate_bound(Some(bound))
@@ -18011,15 +18012,15 @@ five
 
             let mut sink = RecordingSink::new();
             let mut scribe = open_policy(&mut sink).within(&spec);
-            assert!(scribe.before_write("docs/guide/a.md").is_ok());
+            assert!(before_write(&mut scribe, "docs/guide/a.md").is_ok());
             for outside in ["src/main.rs", "docs-old/a.md", "docs/../src/main.rs"] {
                 assert!(
-                    scribe.before_write(outside).is_err(),
+                    before_write(&mut scribe, outside).is_err(),
                     "{outside} was written outside the limit"
                 );
             }
             assert!(
-                turn.before_write("src/main.rs").is_ok(),
+                before_write(&mut turn, "src/main.rs").is_ok(),
                 "the limit reached the turn that started the delegate"
             );
         }
@@ -18044,11 +18045,10 @@ five
             let mut scribe = open_policy(&mut sink)
                 .with_permissions(denying)
                 .within(&spec);
-            let err = scribe
-                .before_write("docs/private/key.md")
+            let err = before_write(&mut scribe, "docs/private/key.md")
                 .expect_err("a deny rule was lifted by the key");
             assert!(format!("{err}").contains("deny rule"), "{err}");
-            assert!(scribe.before_write("docs/public.md").is_ok());
+            assert!(before_write(&mut scribe, "docs/public.md").is_ok());
         }
 
         /// DELEGATE-28. A pattern nobody can read covers no file, and a line left with none leaves
@@ -18065,7 +18065,7 @@ five
             let mut scribe = open_policy(&mut sink).within(&spec);
             for path in ["docs/a.md", "src/main.rs", "a.md"] {
                 assert!(
-                    scribe.before_write(path).is_err(),
+                    before_write(&mut scribe, path).is_err(),
                     "{path} was written under a line with no readable pattern"
                 );
             }
@@ -18085,8 +18085,8 @@ five
                 .expect("a clean context may delegate");
             let mut sink = RecordingSink::new();
             let mut scribe = open_policy(&mut sink).within(&spec);
-            assert!(scribe.before_write("docs/a.md").is_ok());
-            assert!(scribe.before_write("src/main.rs").is_err());
+            assert!(before_write(&mut scribe, "docs/a.md").is_ok());
+            assert!(before_write(&mut scribe, "src/main.rs").is_err());
         }
 
         /// DELEGATE-28. A delegate that starts one of its own passes its limit down: the child's
@@ -18107,9 +18107,9 @@ five
 
             let mut child_sink = RecordingSink::new();
             let mut helper = open_policy(&mut child_sink).within(&child);
-            assert!(helper.before_write("docs/a.md").is_ok());
+            assert!(before_write(&mut helper, "docs/a.md").is_ok());
             assert!(
-                helper.before_write("src/main.rs").is_err(),
+                before_write(&mut helper, "src/main.rs").is_err(),
                 "a delegate's own delegate wrote where the delegate may not"
             );
         }
