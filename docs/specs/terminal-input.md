@@ -4,6 +4,7 @@ title: The input box
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
   - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/terminal.rs
   - crates/tui/src/app/keys.rs

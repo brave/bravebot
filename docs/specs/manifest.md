@@ -17,6 +17,7 @@ governs:
   - crates/tui/src/confirm/grants.rs
   - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/manifest_run.rs
   - crates/ui-bridge/src/manifest.rs

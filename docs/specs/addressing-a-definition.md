@@ -4,6 +4,7 @@ title: Addressing a definition
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/queue.rs
