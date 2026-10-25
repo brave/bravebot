@@ -54,7 +54,6 @@ guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
   - symbol: TrustStore::rebased
-  - symbol: Policy::reconcile_after_write
   - symbol: Policy::vouch_for_named_path
 documented-by: docs/website/docs/security/trust.md
 ---
@@ -318,10 +317,10 @@ has not entered its filesystem effect records no write.
 
 | data | destination | prompt? | effect on the map |
 |---|---|---|---|
-| trusted | trusted | no | unchanged |
+| trusted | trusted | no | a rule at that path, effective trust unchanged |
 | untrusted | trusted | **yes** | that path becomes untrusted |
 | trusted | untrusted | no | that path becomes trusted |
-| untrusted | untrusted | no | unchanged |
+| untrusted | untrusted | no | a rule at that path, effective trust unchanged |
 | either | never mentioned | **yes** | that path takes the data's trust |
 
 A prompt asks one question and only this one: **may this path stop being trusted?** That is the
@@ -394,10 +393,10 @@ untrusted: the first has no decision behind it, so the first write there is the 
 This is also what makes declining at startup meaningful, since with nothing vouched for every
 write is shown.
 
-`verified-by: bravebot_core::policy::trusted_data_into_a_trusted_path_is_silent_and_changes_nothing`
+`verified-by: bravebot_core::policy::trusted_data_into_a_trusted_path_is_silent_and_records_the_path_as_it_was`
 `verified-by: bravebot_core::policy::untrusted_data_into_a_trusted_path_prompts_and_distrusts_the_path`
 `verified-by: bravebot_core::policy::trusted_data_into_an_untrusted_path_is_silent_and_trusts_the_path`
-`verified-by: bravebot_core::policy::untrusted_data_into_an_untrusted_path_is_silent_and_changes_nothing`
+`verified-by: bravebot_core::policy::untrusted_data_into_an_untrusted_path_is_silent_and_records_the_path_as_it_was`
 `verified-by: bravebot_core::policy::an_unvouched_path_prompts_either_way`
 `verified-by: bravebot_core::policy::a_file_written_with_untrusted_data_reads_back_untrusted`
 `verified-by: bravebot_core::policy::a_file_read_back_under_another_spelling_is_still_untrusted`
@@ -405,8 +404,8 @@ write is shown.
 <a id="TRUST-5"></a>
 ### TRUST-5: reconciliation marks the exact path, never the parent
 
-Reconciliation records the file written, and no directory above it. This holds for both routes a
-write takes: the effect a live write completes, and the reconciliation a snapshot takes.
+Reconciliation records the file written, and no directory above it. A write takes one route: the
+effect it completes.
 
 **Why.** One untrusted file does not taint its siblings. Marking the parent would turn a single
 fetched page into a project nobody may edit.
