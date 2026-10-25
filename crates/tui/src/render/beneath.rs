@@ -400,7 +400,7 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The thirteen the file can move
+/// list names the key that answers rather than the key that used to. The fourteen the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
@@ -427,6 +427,7 @@ pub(super) fn shortcuts(
         ("ctrl-d".to_string(), "exit"),
         (bindings.editor_name(), "write prompt in $EDITOR"),
         (bindings.watch_name(), "watch a delegate work"),
+        (bindings.outputs_name(), "read what a command printed"),
         (bindings.scroller_name(), "open the scroller"),
         (bindings.history_name(), "search earlier prompts"),
         (bindings.stash_name(), "stash, bring it back, or search"),

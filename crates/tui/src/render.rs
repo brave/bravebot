@@ -2162,10 +2162,10 @@ mod tests {
             // Once and only once wherever the key has been moved to, since the count is what the
             // line is for and the chord is what makes it worth reading.
             let mut moved = std::collections::BTreeMap::new();
-            moved.insert("watch".to_string(), "alt-l".to_string());
+            moved.insert("watch".to_string(), "alt-y".to_string());
             session.adopt_keybindings(&moved);
             let screen = rendered(&session);
-            assert_eq!(screen.matches("alt-l").count(), 1, "{screen}");
+            assert_eq!(screen.matches("alt-y").count(), 1, "{screen}");
             assert!(
                 !screen.contains("ctrl-l"),
                 "the hint went on naming the key nothing answers: {screen}"
@@ -5682,7 +5682,7 @@ mod tests {
 
         let hint = hint_row_at(&session, 120, 24);
         assert!(
-            hint.contains("! ") && hint.contains("/outputs 1 to open"),
+            hint.contains("! ") && hint.contains("alt-l or /outputs 1 to open"),
             "the shell line does not say the view can be opened: {hint}"
         );
         assert!(
@@ -5740,7 +5740,7 @@ mod tests {
 
         let hint = hint_row_at(&session, 120, 24);
         assert!(
-            hint.contains("/outputs 1 to open"),
+            hint.contains("alt-l or /outputs 1 to open"),
             "a command this session ran was not counted under its entry: {hint}"
         );
         assert!(
@@ -5758,7 +5758,7 @@ mod tests {
 
         let hint = hint_row_at(&session, 120, 24);
         assert!(
-            hint.contains("ctrl-l 1 to open") && hint.contains("/outputs 1 to open"),
+            hint.contains("ctrl-l 1 to open") && hint.contains("alt-l or /outputs 1 to open"),
             "each way in was not counted by what it opens: {hint}"
         );
     }

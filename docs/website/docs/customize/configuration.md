@@ -1353,13 +1353,14 @@ only; a project or local file that sets it is ignored and reported by `bravebot 
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Thirteen actions can be moved and nothing else can (twelve on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
+Fourteen actions can be moved and nothing else can (thirteen on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 
 | Action | Default | What it does |
 |---|---|---|
 | `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open the current prompt in your editor |
 | `watch` | `ctrl-l` | open the list of delegates and asides |
+| `outputs` | `alt-l` | open what the commands this session ran printed, as [`/outputs`](../reference/commands.md#outputs) does |
 | `scroller` | `ctrl-o` | open the [transcript scroller](../using/transcript.md) |
 | `history` | `ctrl-r` | search your prompt history |
 | `stash` | `ctrl-s` | put the current line aside, or bring it back |
@@ -1381,9 +1382,11 @@ are not rebindable.
 answers, leaves that action on its default. So does one two actions both asked for: both fall back
 rather than one winning, since which won would come down to the order the file was read in. Two
 actions *trading* chords is not a conflict and both get what they asked for. `scope`, `undo`,
-`suspend` and `enhance` are the newest of the thirteen, so a file that already gave `ctrl-n`, `ctrl-_`, `ctrl-z` or `ctrl-p` to
+`suspend` and `enhance` are among the newest of the fourteen, so a file that already gave `ctrl-n`, `ctrl-_`, `ctrl-z` or `ctrl-p` to
 another action now asks for a chord the new action stands on, and that action is back on its default
-until the file moves `scope`, `undo`, `suspend` or `enhance` as well.
+until the file moves `scope`, `undo`, `suspend` or `enhance` as well. `outputs` is newer still and
+stands on `alt-l`, so a file that gave `alt-l` to another action has that action back on its default
+until the file moves `outputs` too.
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
 the others. See [Interactive mode](../using/interactive-mode.md) for what the keys do.

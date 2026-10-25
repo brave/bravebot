@@ -163,9 +163,10 @@ do.
 
 The agents are the delegates and the questions asked beside the work. A command's output is not an
 agent and is not in the list Ctrl-L opens, however many commands a session ran. What commands
-printed is a list of its own, opened by `/outputs` and by nothing else, over the same mode: the
-keys, the footer and the way out are the ones the agents have, and a row in it is opened by the
-clauses below as it was before.
+printed is a list of its own, opened by `/outputs` and by the `outputs` chord (Alt-L by default),
+over the same mode: the keys, the footer and the way out are the ones the agents have, and a row in
+it is opened by the clauses below as it was before. The chord and the command take one path, so
+they open the same list and say the same thing where there is nothing to open.
 
 The list is the way in where the list holds more than one row, and where it holds one that row's
 own lines are what opens. The view opens on the delegate that is working, and on the last row in
@@ -173,7 +174,14 @@ the list where none is.
 
 Where the agents list holds nothing the key does nothing at all, and a session that ran commands
 and no delegate is such a session. `/outputs` where no command has run opens nothing and says so in
-the transcript.
+the transcript, and so does the `outputs` chord. Ctrl-L does not fall back to the outputs: where only
+commands have run it does nothing.
+
+Inside the view the `outputs` chord is the view's own. Over the outputs list or a command's lines
+it closes the view, as the watch chord does. Over the agents list or a delegate's lines it switches
+to the outputs, or says there is no output and leaves the view where it was when no command has
+run. A chord that is moved onto another action's key, or another action's default, is refused, so
+Alt-L is never also the key of an action that opens the agents.
 
 A place in the list is a place in the list that is open. A delegate that starts moves a place in
 the agents list and no place in the outputs list, and a command that runs moves a place in the
@@ -185,8 +193,10 @@ delegates than the panel is tall, the rows drawn are the ones around the highlig
 
 **Why.** A delegate is work somebody handed on and a command's output is what a program printed.
 They are read for different reasons, and a list holding both put the build that passed beside the
-agent that did the work. `/outputs` is a command rather than a second chord so that no configurable
-binding is added for it.
+agent that did the work. Opening command output used to be one key, and a person who wants a
+build's output mid-turn should not have to type a command to read it. Every Ctrl letter is
+taken, so the chord is an Alt letter, and it is an action a settings file can move
+([INPUT-32](terminal-input.md#INPUT-32)) because a terminal may use Alt-L itself.
 
 Which row is the question a person has when several runs are going, and a mode that
 opened straight into one of them answers a question they did not ask. A list of one is a row to
@@ -205,6 +215,12 @@ lasts, and a panel is the wrong container for that.
 `verified-by: bravebot_tui::app::ctrl_l_lists_the_delegate_and_not_the_command`
 `verified-by: bravebot_tui::app::ctrl_l_does_nothing_where_only_commands_have_run`
 `verified-by: bravebot_tui::app::the_outputs_command_opens_what_commands_printed`
+`verified-by: bravebot_tui::app::alt_l_opens_the_outputs_and_not_the_agents`
+`verified-by: bravebot_tui::app::alt_l_says_what_the_outputs_command_says_where_no_command_has_run`
+`verified-by: bravebot_tui::app::ctrl_l_where_only_commands_ran_does_not_take_the_outputs_path`
+`verified-by: bravebot_tui::app::alt_l_inside_the_view_closes_the_outputs_and_switches_from_the_agents`
+`verified-by: bravebot_tui::app::alt_l_over_the_agents_with_no_command_says_so_and_stays`
+`verified-by: bravebot_tui::keybindings::the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord`
 `verified-by: bravebot_tui::state::the_watch_list_holds_the_delegate_and_not_the_command`
 `verified-by: bravebot_tui::state::the_two_lists_hold_their_own_kinds_of_row`
 `verified-by: bravebot_tui::app::enter_opens_the_delegate_the_list_is_on`
@@ -332,9 +348,10 @@ The list carries its own title and its own key row, and fills the row that would
 edge rather than marking it.
 
 Once the agents list has anything to open, the hint line names the key and says how many rows it
-holds. Once a command has run, it also names `/outputs` and says how many rows that opens. Each
-figure counts what its own way in opens and nothing else, so a session with one delegate and two
-commands reads `ctrl-l 1 to open` beside `/outputs 2 to open`, and a clause is absent while its list
+holds. Once a command has run, it also names the `outputs` chord and `/outputs` and says how many
+rows they open. Each figure counts what its own way in opens and nothing else, so a session with
+one delegate and two commands reads `ctrl-l 1 to open` beside `alt-l or /outputs 2 to open`, and a
+clause is absent while its list
 is empty. The key is in the shortcut list. No other row names it, including the one that reports
 what the turn is doing.
 
@@ -435,7 +452,8 @@ press of enter into an exit.
 ### WATCH-15: what a command printed is a row of the outputs list, which the view opens
 
 Every command a turn ran, background jobs included, is a row in the outputs list, in the order they
-ran. It is opened by `/outputs` ([WATCH-7](#WATCH-7)) and is in no list Ctrl-L opens. Opening one
+ran. It is opened by `/outputs` and the `outputs` chord ([WATCH-7](#WATCH-7)) and is in no list
+Ctrl-L opens. Opening one
 draws what it printed, as far back as is kept, in the shape a delegate's own lines are
 drawn in. Where the planner was kept from the output, every row of it carries the margin every
 quarantined block carries, and what is not kept is said rather than dropped silently.

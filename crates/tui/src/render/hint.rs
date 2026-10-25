@@ -269,7 +269,13 @@ fn hint_facts(session: &Session) -> HintFacts {
     };
     let outputs = match session.watchable_in(WatchScope::Outputs).len() {
         0 => String::new(),
-        count => t!(outputs_hint, command = OUTPUTS_COMMAND, count = count).to_string(),
+        count => t!(
+            outputs_hint,
+            chord = session.bindings().outputs_name(),
+            command = OUTPUTS_COMMAND,
+            count = count
+        )
+        .to_string(),
     };
     let watchable = [agents, outputs]
         .into_iter()

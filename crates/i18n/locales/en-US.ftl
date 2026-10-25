@@ -2805,7 +2805,7 @@ watching-keys-stop = x stops it
 watching-nothing-yet = nothing yet
 # The list of every delegate this turn has spawned, with the session above them.
 watching-list-title = delegates
-# The list of what commands printed, opened by /outputs and not by the watch key.
+# The list of what commands printed, opened by /outputs and its chord and not by the watch key.
 watching-outputs-title = command output
 watching-list-keys = up / down moves  ·  enter opens  ·  q closes
 # The first row of the list: the conversation the delegates were spawned from.
@@ -2820,9 +2820,9 @@ watching-calls = { $count ->
 # worth pressing. It counts the asides and the delegates, which the key opens, and nothing a
 # command printed: those have their own clause below.
 watching-hint = { $chord } { $count } to open
-# The same line's clause for what commands printed, said while there is any. The command is the
-# slash command that opens them, and the count is of what it opens.
-outputs-hint = { $command } { $count } to open
+# The same line's clause for what commands printed, said while there is any. The chord and the
+# slash command both open them, and the count is of what they open.
+outputs-hint = { $chord } or { $command } { $count } to open
 # Left in the transcript by /outputs when no command has run.
 outputs-none = no command has run in this session, so there is no output to open
 # Said on the bottom line for as long as a command the turn is waiting on can be moved, and gone

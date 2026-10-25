@@ -45,7 +45,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Thirteen of these chords can be [moved to keys of your own](#moving-a-key), twelve on Windows. Every chord named on this
+Fourteen of these chords can be [moved to keys of your own](#moving-a-key), thirteen on Windows. Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Undoing an edit
@@ -137,13 +137,14 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Thirteen actions can be moved, and nothing else can** (twelve on Windows, which has no `suspend`):
+**Fourteen actions can be moved, and nothing else can** (thirteen on Windows, which has no `suspend`):
 
 | Action | Default | What it does |
 |---|---|---|
 | `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open your editor on the prompt |
 | `watch` | `ctrl-l` | open what a delegate did or an aside answered |
+| `outputs` | `alt-l` | open what the commands the session ran printed |
 | `scroller` | `ctrl-o` | open the transcript scroller |
 | `history` | `ctrl-r` | search the prompts you have sent |
 | `stash` | `ctrl-s` | put the line away, or bring it back |
@@ -230,7 +231,7 @@ The row beneath the box carries what the session is doing (the mode in force whe
 asking, how full the context is and the share of the prompt read from the cache, the trail, a
 [`/loop`](../reference/commands.md#loop-interval-prompt) that is running and when its next tick is
 due, how many [background jobs](#moving-a-command-to-the-background) the turn has running, the key
-that opens the delegates once the session has any, the `/outputs` entry that opens the commands once
+that opens the delegates once the session has any, the key and `/outputs` entry that open the commands once
 the session has run one, and the key that
 moves the command the turn is waiting on to the background while there is one), then
 `? for shortcuts`, and then the key that opens the [info panel](sessions.md#telling-sessions-apart)
@@ -622,14 +623,17 @@ own lines open directly. Where there is nothing the key does nothing, and a sess
 commands and no delegate has nothing for it. The row beneath the box names the key and how many rows
 it opens, for as long as the session has any.
 
-**`/outputs` opens what the commands the session ran printed**, background jobs included, in the
-same mode with the same keys. Where no command has run it says so and opens nothing. Once a command
-has run, the row beneath the box names `/outputs` and how many rows that opens, beside the key's own
-count.
+**Alt-L, or `/outputs`, opens what the commands the session ran printed**, background jobs included, in the
+same mode with the same keys. Where no command has run it says so and opens nothing. Inside the mode
+Alt-L closes it over the commands, and moves to the commands from the delegates. Ctrl-L stays the key
+for delegates and asides, and does nothing where only commands have run. Once a command
+has run, the row beneath the box names Alt-L, `/outputs` and how many rows they open, beside the key's own
+count. `outputs` is one of the [chords you can move](#moving-a-key).
 
 | Key | What it does |
 |---|---|
 | Ctrl-L | open the list of delegates and asides, and close the mode from either level |
+| Alt-L | open the commands' output; over the commands, close the mode; over the delegates, switch to the commands |
 | Enter | open the row under the cursor |
 | Up / Down | move through the list |
 | n / p | in a delegate, step to the next or previous one without going back to the list; in a command, the next or previous command |

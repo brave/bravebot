@@ -46,7 +46,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
-| `/outputs` | | Open what the commands this session ran printed, background jobs included |
+| `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
 | `/files` | | List the files the session wrote and show every edit to the highlighted one |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
@@ -747,7 +747,7 @@ second time as a plain command row.
 ## `/outputs`
 
 Opens what the commands this session ran printed, background jobs included, one row each in the order
-they ran. It is the same mode [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
+they ran. Alt-L does the same and is one of the [chords you can move](../customize/configuration.md#keybindings). Over the commands, Alt-L closes the view, and over the delegates it switches to the commands. It is the same mode [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
 opens over delegates and asides, with the same keys. Each row opens on what the command printed, says
 how the run ended and whether the model read it, and a running job's row shows the lines it has
 printed since the model last looked. Where no command has run, it says so and opens nothing. Nothing

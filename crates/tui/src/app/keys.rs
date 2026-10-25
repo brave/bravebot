@@ -4,7 +4,7 @@
 use crate::command_table::{
     command_typed, runs_while_working, waits_behind_the_queue, why_it_waits,
 };
-use crate::state::{Session, Status, Unenhanceable};
+use crate::state::{Session, Status, Unenhanceable, WatchScope};
 use crate::{input, render};
 use bravebot_core::cancel::Cancel;
 use bravebot_i18n::t;
@@ -747,6 +747,20 @@ pub(super) fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
             session.stop_watching();
             Action::Redraw
         }
+        // The outputs chord, read off the bindings and before the arm that refuses chords. Over the
+        // command output it closes, as the watch chord does. Over the agents it moves to the
+        // command output, or says there is none and stays (WATCH-7).
+        _ if session.bindings().is_outputs(&key) => {
+            if session
+                .watching()
+                .is_some_and(|watching| watching.scope == WatchScope::Outputs)
+            {
+                session.stop_watching();
+                Action::Redraw
+            } else {
+                super::open_outputs(session)
+            }
+        }
 
         // Half a screen, and a whole one back, in the scroller's chords (SCROLL-3). They are the
         // view's own, so they are read before the arm that refuses every other chord.
@@ -1375,6 +1389,10 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
                 Action::None
             }
         }
+        // The same view over what commands printed, by the path `/outputs` takes, so an empty
+        // list is said rather than silent (WATCH-7). In the shared ladder for the watch chord's
+        // reason: it sends nothing.
+        _ if session.bindings().is_outputs(&key) => super::open_outputs(session),
         // Before the Tab arm below, since a terminal that has been asked to disambiguate reports
         // this as Tab with a modifier rather than as its own code, and it would otherwise be taken
         // for a completion. Both spellings, because which one arrives is the terminal's choice.

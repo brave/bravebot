@@ -1212,7 +1212,8 @@ one shell name and exits with status 2 for anything else.
 | Shift-Tab | Choose how much the session asks before it acts |
 | Ctrl-T | Toggle the audit trail |
 | Ctrl-O | Open the scroller over the transcript |
-| Ctrl-L | Watch what a delegate is doing, and read what an aside answered. `/outputs` reads what a command printed |
+| Ctrl-L | Watch what a delegate is doing, and read what an aside answered |
+| Alt-L | Read what a command printed, as `/outputs` does |
 | Up / Down | Walk back through sent prompts |
 | Ctrl-R | Search every prompt you have sent |
 | Wheel, PageUp / PageDown | Scroll the transcript |
