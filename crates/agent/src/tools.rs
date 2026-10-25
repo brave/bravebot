@@ -8112,6 +8112,60 @@ fn settle_the_confinement<S: Sink>(
     })
 }
 
+/// What a `run` line that stops being waited for is kept as: the plan and the words it is shown
+/// and told under, the label the kernel fixed before anything started, and the file authority's
+/// revision from the same moment.
+struct JobStart<'a> {
+    spends: &'a [bravebot_core::ambient::Spent],
+    plan: &'a bravebot_core::command::Plan,
+    displayed: &'a str,
+    said: &'a str,
+    label: Label,
+    authority: &'a bravebot_core::file_authority::FileAuthority,
+    started_revision: u64,
+    covered_by_record: bool,
+    confinement: Option<&'a crate::confine::Confinement>,
+    /// How long the line was waited for first, for a line that was moved to the background.
+    moved_after: Option<std::time::Duration>,
+}
+
+/// Everything `run` does at the point a line becomes a job, whether it was started in the
+/// background or moved there: spend what the line reaches, carry the directory over, keep the
+/// job under a name, record what it was confined to, and tell the reporter it started. Hands back
+/// the name and the token that stops it.
+fn start_the_job<S: Sink, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    reporter: &mut R,
+    running: crate::exec::Background,
+    job: &JobStart<'_>,
+) -> (String, bravebot_core::cancel::JobStop) {
+    policy.record_ambient(job.spends);
+    // The directory is carried over only once pre-flight checks and launch succeed.
+    *tools.run_directory = job.plan.directory.clone();
+    let (name, stop) = tools.jobs.keep(
+        running,
+        JobLines::new(job.displayed, job.said),
+        job.label,
+        job.authority.clone(),
+        job.started_revision,
+        job.covered_by_record,
+    );
+    tools.jobs.confined_as(
+        &name,
+        job.confinement.map(|confinement| {
+            confinement.profile_offering(&job.plan.steps(), unconfined_is_offered(policy, tools))
+        }),
+    );
+    reporter.job(crate::report::JobEvent::Started {
+        name: name.clone(),
+        line: job.displayed.to_string(),
+        moved_after: job.moved_after,
+        stop: stop.clone(),
+    });
+    (name, stop)
+}
+
 /// What a `run` call asks for beyond the command line, read from its arguments.
 struct RunCall {
     /// The deadline, clamped to the bounds the turn holds.
@@ -8759,6 +8813,18 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // cannot name different things, and recorded below at each point the line actually starts: a
     // grant is a sentence somebody answered and a use is a thing that happened.
     let spends = bravebot_core::ambient::spent_by(&plan);
+    let started = JobStart {
+        spends: &spends,
+        plan: &plan,
+        displayed: &displayed,
+        said: &said,
+        label,
+        authority: &authority,
+        started_revision,
+        covered_by_record,
+        confinement: confinement.as_ref(),
+        moved_after: None,
+    };
 
     // Recorded per line, before anything starts, so a line a stage of which was refused still says
     // what the network was for it. Nothing for an open network, which is what every line had.
@@ -8798,30 +8864,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
                 // it outlives this call, and nothing later in the turn knows what it reached.
-                policy.record_ambient(&spends);
-                // The directory is carried over only once pre-flight checks and launch succeed.
-                *tools.run_directory = plan.directory.clone();
-                let (name, stop) = tools.jobs.keep(
-                    running,
-                    JobLines::new(&displayed, &said),
-                    label,
-                    authority.clone(),
-                    started_revision,
-                    covered_by_record,
-                );
-                tools.jobs.confined_as(
-                    &name,
-                    confinement.as_ref().map(|confinement| {
-                        confinement
-                            .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
-                    }),
-                );
-                reporter.job(crate::report::JobEvent::Started {
-                    name: name.clone(),
-                    line: displayed.clone(),
-                    moved_after: None,
-                    stop,
-                });
+                let (name, _stop) = start_the_job(policy, tools, reporter, running, &started);
                 Produced::new(
                     // Nothing has been printed yet, and the label is the one the kernel fixed
                     // before anything started: leaving it running does not make it trustworthier.
@@ -8884,30 +8927,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 // Everything the background branch above does once its line has started, at the
                 // moment this one stopped being waited for. The label goes with it unchanged: a
                 // person pressing a key says nothing about what the line printed.
-                policy.record_ambient(&spends);
-                *tools.run_directory = plan.directory.clone();
-                let (name, stop) = tools.jobs.keep(
-                    moved.running,
-                    JobLines::new(&displayed, &said),
-                    label,
-                    authority.clone(),
-                    started_revision,
-                    covered_by_record,
-                );
-                tools.jobs.confined_as(
-                    &name,
-                    confinement.as_ref().map(|confinement| {
-                        confinement
-                            .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
-                    }),
-                );
-                policy.record_handoff(&name, moved.after);
-                reporter.job(crate::report::JobEvent::Started {
-                    name: name.clone(),
-                    line: displayed.clone(),
+                let started = JobStart {
                     moved_after: Some(moved.after),
-                    stop,
-                });
+                    ..started
+                };
+                let (name, _stop) = start_the_job(policy, tools, reporter, moved.running, &started);
+                policy.record_handoff(&name, moved.after);
                 return Produced::new(
                     Labelled::new(String::new(), label),
                     format!("`{said}` moved to the background"),
