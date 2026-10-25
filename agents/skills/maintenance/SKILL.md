@@ -49,7 +49,7 @@ refuses, and which has no tool.
 **It never edits source.** Every fix is an issue assigned to netzenbot, which a later session
 works on like any other issue. Fixing in the same run would let the pass that found a problem
 also decide the change, with nobody reading either. The one file it writes is
-`docs/maintenance-reviewed`, in step 7, and it leaves that uncommitted for a person.
+`docs/maintenance-reviewed`, in step 8, and it leaves that uncommitted for a person.
 
 **Nothing is posted until the user names which drafts to post.** A draft is a reviewer's claim
 that nobody has checked, and filing it is the user's decision. Drafting is free and reversible;
@@ -75,7 +75,10 @@ The heavy data goes through files, never through the main session's context:
    report, and names every candidate no reviewer answered for.
 4. **maintenance.py draft** (zero model tokens) writes one issue body per finding into the same
    work directory.
-5. **maintenance.py record** (zero model tokens) writes the verdicts to
+5. **Claim readers** (subagent tokens only) each read the drafts of one group at a checkout of
+   `HEAD`, and write a verdict on each draft's claim to a JSON file. **maintenance.py claims-collect**
+   (zero model tokens) merges them into the table, marking a rejected draft with the reason.
+6. **maintenance.py record** (zero model tokens) writes the verdicts to
    `docs/maintenance-reviewed`, after the user has decided which drafts to post.
 
 The main session orchestrates. It never reads a source file, a verdict, or an issue body. Every
@@ -187,17 +190,56 @@ python3 agents/skills/maintenance/maintenance.py verify --work-dir "$WORK_DIR"
 
 For each draft it lists the places it cites that moved, with where each is now, that are in code
 that has changed since, or whose file is gone. Exit code 1 means some are in changed code or gone,
-and a person has to look at them. It does not check a line number written without a path. Keep the
-output for step 6.
+and a person has to look at them. It does not check a line number written without a path: step 6 does. Keep the
+output for step 7.
 
 The table names each draft's labels: `refactor`, or `bug` where the reviewer found a defect
 rather than a cleanup, and an `area/*` or `infrastructure` where one is clear. It marks any title
-over GitHub's 256-character cap as needing a shorter one, which is a person's job in step 6, and
+over GitHub's 256-character cap as needing a shorter one, which is a person's job in step 7, and
 any draft that overlaps another.
 
-### Step 6: the user decides what gets posted
+### Step 6: check each draft's claim (one reader per group of drafts)
 
-The table from step 5 is what the user chooses from. Ask which drafts to post, post those and no
+`verify` checks that cited lines are where they were. Nothing so far checks that the claim is true:
+that the code at `HEAD` still has the defect, that no closed issue or spec decided against the
+change, that every count and caller the body states is right, and that the fix does not move, merge
+or hide code that reads, labels or declassifies content. The reviewers wrote the drafts and the main
+session reads none of them, so a wrong claim would otherwise reach the poster.
+
+```bash
+python3 agents/skills/maintenance/maintenance.py claims-prepare --work-dir "$WORK_DIR"
+```
+
+It checks `HEAD` out at `{work_dir}/head`, splits the drafts into groups of at most five in the order
+of the file each cites first, so the drafts about one file go to one reader, and writes a prompt for
+each. Stdout is the index: `readers`, each with a `prompt_file` and a `results_file`. The cost is one
+reader per group, which is about one for every four to six drafts. A run of twenty drafts launches
+four.
+
+Launch one subagent (subagent_type: `general-purpose`) per reader, all in one message, with the
+prompt of step 3 and that reader's `prompt_file`. A reader has the checkout and only its drafts, and
+writes a verdict for each: `holds`, `rejected` or `unclear`, with a reason and the lines it quotes,
+and the place each line number written without a path is at `HEAD`. A reader may run `gh issue list`
+and `gh issue view` to read issues, and each call asks first. The same rules as step 3 apply: a
+reader's result is the file it writes, and you write no verdict yourself.
+
+```bash
+python3 agents/skills/maintenance/maintenance.py claims-collect --work-dir "$WORK_DIR"
+```
+
+It prints the table of step 5 again, with `REJECTED by the claim check` and the reason under every
+draft a reader rejected, `claim check could not decide` under an `unclear` one, and the corrected
+line numbers under any draft that has them. Exit code 1 means some draft has no usable verdict: its
+reader wrote no result, or no verdict for it, or rejected or doubted it with no reason. Those drafts
+say `claim not checked`, and the user decides whether to launch the reader again. `draft` run again
+keeps the marks.
+
+A rejected draft stays in the table so the user sees why it is not recommended. Post it only if the
+user, having read the reason, still names it.
+
+### Step 7: the user decides what gets posted
+
+The table from step 6 is what the user chooses from. Ask which drafts to post, post those and no
 others, and never post one the backlog already has, open or closed.
 
 Several lanes can find the same code, so two drafts can propose one change. The table marks a draft
@@ -206,11 +248,15 @@ in its evidence, and says which of the two cites more lines of the files both ci
 better one to post. `--json` carries the same as `overlaps` on each draft. Before the user chooses,
 say which drafts are marked, so that the user is not asked to choose between a draft and its copy.
 
+Where a reader said a draft's claim does not hold or could not be decided, say so and give the reason
+before the user chooses it.
+
 Hand each chosen draft to the [issue-poster](../../agents/issue-poster.md) definition, which
 searches the backlog for the symbol or path the title names, applies the labels and posts. Give
 it the title, the body file, the labels the draft names, the assignee `netzenbot` (or the login
 the user names instead), and this brief, with `{commit}` and `{moved}` filled in from the manifest
-and from that draft's lines in the output of `verify`, or `none`:
+and from that draft's lines in the output of `verify`, or `none`, and `{written}` from the corrections
+the reader gave for that draft in `claims-collect`, or `none`:
 
 ```text
 Use the title as given. If you think it is inaccurate, post it as given and say so in your report.
@@ -223,6 +269,8 @@ The reviewers read commit {commit}. These places the body cites have moved since
 that changed: {moved}. Correct only those line numbers in the posted body, to the places named for
 the moved ones and by reading the code for the others, and list each correction in your report.
 Change nothing else in the body.
+These line numbers are written without a path, and a reader found where they are at the current
+commit: {written}. Replace each in the posted body and list each replacement in your report.
 Search open and closed issues for the symbol or path the title names before filing. If an issue
 already covers it, cite it and do not file.
 ```
@@ -242,7 +290,7 @@ under a different one. Do not create or use a `maintenance` label.
 `gh` is deliberately not in this skill's `allowed-tools`, so every call the poster makes asks
 first. Do not work around it.
 
-### Step 7: record what was read
+### Step 8: record what was read
 
 ```bash
 python3 agents/skills/maintenance/maintenance.py record --work-dir "$WORK_DIR"
@@ -254,13 +302,13 @@ candidate no reviewer answered for. A `cleanup` is recorded whether or not its d
 since a declined draft that came back every run would be asked about again each time. Delete a
 line to have a candidate read again. The file is left uncommitted.
 
-Then remove the checkout the reviewers read:
+Then remove the checkouts the reviewers and the claim readers read:
 
 ```bash
 python3 agents/skills/maintenance/maintenance.py clean --work-dir "$WORK_DIR"
 ```
 
-### Step 8: say what happened
+### Step 9: say what happened
 
 In two or three lines: how many candidates were reviewed, how many were carried from earlier
 runs, how many became findings, which one to look at first, and how many drafts are waiting.

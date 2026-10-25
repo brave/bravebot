@@ -63,7 +63,9 @@ never edits a spec. A repeat run reviews only the clauses whose code changed sin
 review. `/check-spec full` reads every clause again.
 
 **maintenance.** `make check-maintenance` prints the mechanical candidates with no model and no
-clippy lane. The skill reads each candidate and drafts issues only for the ones worth fixing. A
+clippy lane. The skill reads each candidate and drafts issues only for the ones worth fixing, then
+has a reader check each draft's claim against `HEAD` (one reader for every four to six drafts) and
+marks a rejected draft with the reason. A
 cleanup that would move a decision about labelled content is rejected, whatever it saves.
 
 **peer-features.** The default run reviews six units, specs first and then the least recently
