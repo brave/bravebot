@@ -816,6 +816,19 @@ fn sets_aside(pick: Serving, default: impl FnOnce() -> Serving) -> bool {
     gives_way && default() == Serving::Configured
 }
 
+/// The failure of a call to `client`, with the requests it took and what they cost.
+macro_rules! counted {
+    ($client:expr, $result:expr) => {
+        $result.map_err(|error| {
+            BackendError::from(error).counted(
+                $client.attempts(),
+                $client.completed_usage(),
+                $client.last_request_tokens(),
+            )
+        })
+    };
+}
+
 impl<'a> Backend<'a> {
     /// The backend that serves `model`.
     ///
@@ -1032,37 +1045,17 @@ impl<'a> Backend<'a> {
                 subscription,
                 cancel,
             } => {
-                let mut client = AichatClient::new(config, egress);
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
-                if let Some(subscription) = subscription.as_mut() {
-                    client = client.with_subscription(*subscription);
-                }
-                client.complete(policy, request).map_err(|error| {
-                    BackendError::from(error).counted(
-                        client.attempts(),
-                        client.completed_usage(),
-                        client.last_request_tokens(),
-                    )
-                })
+                let mut client =
+                    aichat_client(config, egress, subscription.as_mut(), cancel.as_ref());
+                counted!(client, client.complete(policy, request))
             }
             Self::Bedrock {
                 config,
                 egress,
                 cancel,
             } => {
-                let mut client = BedrockClient::new(config, egress);
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
-                client.complete(policy, request).map_err(|error| {
-                    BackendError::from(error).counted(
-                        client.attempts(),
-                        client.completed_usage(),
-                        client.last_request_tokens(),
-                    )
-                })
+                let mut client = bedrock_client(config, egress, cancel.as_ref());
+                counted!(client, client.complete(policy, request))
             }
             Self::Gateway {
                 config,
@@ -1111,41 +1104,17 @@ impl<'a> Backend<'a> {
                 subscription,
                 cancel,
             } => {
-                let mut client = AichatClient::new(config, egress);
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
-                if let Some(subscription) = subscription.as_mut() {
-                    client = client.with_subscription(*subscription);
-                }
-                client
-                    .complete_streaming(policy, request, progress)
-                    .map_err(|error| {
-                        BackendError::from(error).counted(
-                            client.attempts(),
-                            client.completed_usage(),
-                            client.last_request_tokens(),
-                        )
-                    })
+                let mut client =
+                    aichat_client(config, egress, subscription.as_mut(), cancel.as_ref());
+                counted!(client, client.complete_streaming(policy, request, progress))
             }
             Self::Bedrock {
                 config,
                 egress,
                 cancel,
             } => {
-                let mut client = BedrockClient::new(config, egress);
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
-                client
-                    .complete_streaming(policy, request, progress)
-                    .map_err(|error| {
-                        BackendError::from(error).counted(
-                            client.attempts(),
-                            client.completed_usage(),
-                            client.last_request_tokens(),
-                        )
-                    })
+                let mut client = bedrock_client(config, egress, cancel.as_ref());
+                counted!(client, client.complete_streaming(policy, request, progress))
             }
             Self::Gateway {
                 config,
@@ -1174,6 +1143,37 @@ impl<'a> Backend<'a> {
             }
         }
     }
+}
+
+/// A client for the aichat endpoint, stopped by `cancel` and spending `subscription` where either
+/// is given.
+fn aichat_client<'a>(
+    config: &'a Config,
+    egress: &'a Egress,
+    subscription: Option<&'a mut &mut dyn Subscription>,
+    cancel: Option<&Cancel>,
+) -> AichatClient<'a> {
+    let mut client = AichatClient::new(config, egress);
+    if let Some(cancel) = cancel {
+        client = client.with_cancel(cancel.clone());
+    }
+    if let Some(subscription) = subscription {
+        client = client.with_subscription(*subscription);
+    }
+    client
+}
+
+/// A client for an AWS Bedrock account, stopped by `cancel` where one is given.
+fn bedrock_client<'a>(
+    config: &'a bravebot_config::bedrock::Bedrock,
+    egress: &'a Egress,
+    cancel: Option<&Cancel>,
+) -> BedrockClient<'a> {
+    let mut client = BedrockClient::new(config, egress);
+    if let Some(cancel) = cancel {
+        client = client.with_cancel(cancel.clone());
+    }
+    client
 }
 
 /// A client for the ChatGPT account, asking `sign_in` for a token before each request.
@@ -1262,19 +1262,6 @@ enum GatewayClient<'a> {
     Messages(AnthropicClient<'a>),
     GenerateContent(GenerateContentClient<'a>),
     Responses(ResponsesClient<'a>),
-}
-
-/// The failure of a call to `client`, with the requests it took and what they cost.
-macro_rules! counted {
-    ($client:expr, $result:expr) => {
-        $result.map_err(|error| {
-            BackendError::from(error).counted(
-                $client.attempts(),
-                $client.completed_usage(),
-                $client.last_request_tokens(),
-            )
-        })
-    };
 }
 
 impl GatewayClient<'_> {
@@ -2681,6 +2668,79 @@ mod tests {
                         failure: Failure::Refusal
                     })
                 ),
+                "{said}"
+            );
+        }
+    }
+
+    /// A call to the aichat endpoint that came back with nothing in it fails, and the failure
+    /// carries the one request it took and the prompt size the endpoint reported, whether the reply
+    /// was read whole or as it arrived. The turn spends and records its usage from that, so an arm
+    /// that returned the bare error would charge nothing for a request that was sent.
+    #[test]
+    fn a_failed_aichat_call_keeps_its_attempts_and_what_the_service_counted() {
+        const WHOLE: &str = r#"{"model":"served","choices":[],
+            "usage":{"prompt_tokens":50,"completion_tokens":0}}"#;
+        const STREAM: &str = concat!(
+            "data: {\"model\":\"served\",\"choices\":[{\"delta\":{}}],",
+            "\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":0}}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        for (streamed, reply, content_type) in [
+            (false, WHOLE, "application/json"),
+            (true, STREAM, "text/event-stream"),
+        ] {
+            let (endpoint, _received) = answer_once(reply, content_type);
+            let config = Config::from_lookup(|key| match key {
+                env_var::ENDPOINT => Some(endpoint.clone()),
+                other => aichat_only(other),
+            })
+            .expect("configured");
+            let egress = Egress::new();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = bravebot_core::policy::Policy::begin(
+                {
+                    let mut routing = bravebot_core::policy::Routing::new();
+                    routing.insert_trusted("task", "say hello");
+                    routing
+                },
+                bravebot_core::policy::ReleasePlan::new(),
+                bravebot_core::capability::CapabilitySet::from_iter([
+                    bravebot_core::capability::Capability::WebFetch,
+                ]),
+                &mut sink,
+            )
+            .expect("policy");
+            let request = ChatRequest::new(
+                DEFAULT_MODEL,
+                vec![bravebot_aichat::protocol::Message::user("hi")],
+            );
+
+            let mut backend = Backend::select(&config, &egress, DEFAULT_MODEL);
+            assert!(matches!(backend, Backend::Aichat { .. }));
+            let outcome = if streamed {
+                backend.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                backend.complete(&mut policy, &request)
+            };
+
+            let error = outcome.expect_err("the reply had nothing in it");
+            let said = format!("streamed: {streamed}: {error:?}");
+            let BackendError::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                cause,
+            } = &error
+            else {
+                panic!("the failure carries no count: {said}");
+            };
+            assert_eq!(*attempts, 1, "{said}");
+            assert_eq!(usage.map(|usage| usage.prompt_tokens), Some(50), "{said}");
+            assert_eq!(*context_tokens, Some(50), "{said}");
+            assert!(
+                matches!(**cause, BackendError::Aichat(ChatError::NoContent)),
                 "{said}"
             );
         }
