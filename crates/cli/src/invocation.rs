@@ -3,7 +3,7 @@
 //! Everything here reads the person's own arguments, never content.
 
 use crate::continued;
-use crate::flags::*;
+use crate::flags::{flag_named, is_a_value};
 use bravebot_agent::Mode;
 use bravebot_agent::turn::{MAX_TOOL_ROUNDS, RunLimits, SystemPrompts};
 use bravebot_i18n::t;
