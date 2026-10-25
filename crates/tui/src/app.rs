@@ -541,8 +541,8 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         return Action::Hunks(number.to_string());
     }
     if let Some(directory) = argument_to(line, ADD_DIR_COMMAND) {
-        // No directory is opened by a relative name, so `close` and `close <path>` never name one
-        // that `/add-dir` alone could have opened.
+        // `close` and `close <path>` are the command and not a directory called `close`. Such a
+        // directory is named with a separator, as `../close` does.
         return match directory.split_once(char::is_whitespace) {
             Some((ADD_DIR_CLOSE, named)) => Action::CloseDirectory(named.trim().to_string()),
             None if directory == ADD_DIR_CLOSE => Action::CloseDirectory(String::new()),
@@ -14742,6 +14742,10 @@ mod tests {
                 "/add-dir /work/close",
                 Action::AddDirectory("/work/close".to_string()),
             ),
+            (
+                "/add-dir ../close",
+                Action::AddDirectory("../close".to_string()),
+            ),
         ] {
             let mut session = Session::new("none");
             for c in typed.chars() {
@@ -26632,6 +26636,541 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// A session whose working directory is `project`, after `/add-dir <named>`.
+    fn after_add_dir(project: &Path, named: &str) -> (Workspace, TrustStore, Session) {
+        let mut workspace = Workspace::new(project).expect("workspace");
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+        add_directory(&mut session, &mut workspace, &mut trust, named);
+        (workspace, trust, session)
+    }
+
+    /// TRUST-9: `/add-dir` takes a path relative to the working directory, and opens, trusts and
+    /// names the directory the absolute spelling of it opens, trusts and names.
+    ///
+    /// The failures this rejects are a name passed on for the workspace to refuse as not absolute,
+    /// and one resolved against the directory the program was started in, which is not what a
+    /// relative path means anywhere else in the session. The scratch directory is not the one the
+    /// tests run in, so the second reaches another directory than the one asked for.
+    #[test]
+    fn add_dir_opens_a_relative_name_as_it_opens_the_absolute_one() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-relative-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let notes = root.join("notes");
+        for directory in [&project, &notes] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let notes = notes.canonicalize().expect("canonical");
+        let todo = notes.join("todo.md").display().to_string();
+        let opened = |named: &str| {
+            let (workspace, trust, session) = after_add_dir(&project, named);
+            (
+                workspace.added_directories(),
+                trust.is_trusted(&todo),
+                last_note(&session).to_string(),
+            )
+        };
+
+        let by_absolute = opened(&notes.display().to_string());
+        assert_eq!(
+            by_absolute,
+            (
+                vec![notes.clone()],
+                true,
+                t!(
+                    session_directory_added,
+                    directory = notes.display().to_string()
+                )
+            ),
+            "the absolute spelling no longer opens, trusts and names the directory"
+        );
+        for named in ["../notes", "./../notes", "../notes/", "../project/../notes"] {
+            assert_eq!(
+                opened(named),
+                by_absolute,
+                "{named} did not open what the absolute spelling opens"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// TRUST-9: the rule `/add-dir` records is under the directory a relative name resolves to, and
+    /// not under the name typed, and a name that goes through a link inside the project opens and
+    /// trusts what the link points to, as the absolute spelling of the link does, with the note
+    /// naming the target. `./link` is a name inside the project that leads out of it: a rule keyed
+    /// under the link would be a rule about a path in the project, where a person's answer about
+    /// the project already decides.
+    #[cfg(unix)]
+    #[test]
+    fn add_dir_records_trust_under_the_directory_a_relative_name_resolves_to() {
+        use bravebot_core::label::Integrity;
+
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-relative-key-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let notes = root.join("elsewhere/notes");
+        for directory in [&project, &notes] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        std::os::unix::fs::symlink(&notes, project.join("link")).expect("a link");
+        let notes = notes.canonicalize().expect("canonical");
+        let project = project.canonicalize().expect("canonical");
+
+        for named in ["./link", &project.join("link").display().to_string()] {
+            let (workspace, trust, session) = after_add_dir(&project, named);
+
+            assert_eq!(
+                workspace.added_directories(),
+                std::slice::from_ref(&notes),
+                "{named}"
+            );
+            assert_eq!(
+                trust.keyed().collect::<Vec<_>>(),
+                [(
+                    bravebot_agent::workspace::key_of(&notes).as_str(),
+                    Some(Integrity::Trusted)
+                )],
+                "the rule for {named} was not recorded under the directory it resolves to"
+            );
+            assert!(trust.is_trusted(&notes.join("todo.md").display().to_string()));
+            assert_eq!(
+                last_note(&session),
+                t!(
+                    session_directory_added,
+                    directory = notes.display().to_string()
+                ),
+                "{named}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// TRUST-9: `/add-dir ../` opens the directory that holds the project and trusts it, naming that
+    /// directory and not the name typed. A directory holding the project is not refused.
+    #[test]
+    fn add_dir_of_the_parent_opens_and_trusts_the_directory_holding_the_project() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-parent-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let notes = root.join("notes");
+        for directory in [&project, &notes] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let held = root.canonicalize().expect("canonical");
+
+        let (workspace, trust, session) = after_add_dir(&project, "../");
+
+        assert_eq!(workspace.added_directories(), std::slice::from_ref(&held));
+        assert_eq!(
+            session.transcript[0].text,
+            t!(
+                session_directory_added,
+                directory = held.display().to_string()
+            )
+        );
+        for file in ["notes/todo.md", "project/main.rs"] {
+            assert!(
+                trust.is_trusted(&held.join(file).display().to_string()),
+                "the rule at the parent does not cover {file}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// TRUST-9: a relative name means the working directory the session is in now. After `/cd` it
+    /// is the new one, and the directory beside the old one is not what `../notes` reaches.
+    ///
+    /// The failure this rejects is a name resolved against the directory the session started in.
+    #[test]
+    fn a_relative_name_means_the_working_directory_after_a_cd() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-relative-cd-test");
+        let _ = std::fs::remove_dir_all(&root);
+        for directory in ["one/project", "one/notes", "two/project", "two/notes"] {
+            std::fs::create_dir_all(root.join(directory)).expect("scratch");
+        }
+        let mut workspace = Workspace::new(root.join("one/project")).expect("workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(
+            TrustStore::new(workspace.root()),
+            TrustedPrograms::new(),
+            rules,
+        );
+        let moved = change_directory(
+            &mut session,
+            &mut workspace,
+            &mut answers,
+            "a-session",
+            &root.join("two/project").display().to_string(),
+            |_, _| Some(true),
+        );
+        assert_eq!(moved, Changed::Moved);
+
+        add_directory(&mut session, &mut workspace, &mut answers.trust, "../notes");
+
+        assert_eq!(
+            workspace.added_directories(),
+            [root.join("two/notes").canonicalize().expect("canonical")]
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// TRUST-9: `/add-dir` refuses a relative name for the reasons it refuses the absolute spelling
+    /// of it, and nothing is opened or vouched for. The refusal begins with the name as it was typed
+    /// and then quotes the absolute path the name resolved to, so a person sees which directory was
+    /// refused. A name that is not a directory, one that is nowhere, and one inside the project each
+    /// keep the reason they have when spelled in full, and the last still says it can be named
+    /// relatively. No path at all says it needs one, and is not read as the working directory.
+    #[test]
+    fn add_dir_refuses_a_relative_name_as_it_refuses_the_absolute_one() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-relative-refused-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join("sub")).expect("scratch");
+        std::fs::write(root.join("file.txt"), "text").expect("a file");
+        let project = project.canonicalize().expect("canonical");
+        let root = root.canonicalize().expect("canonical");
+
+        for (relative, absolute, reason) in [
+            ("../nowhere", root.join("nowhere"), None),
+            (
+                "../file.txt",
+                root.join("file.txt"),
+                Some("must be a directory"),
+            ),
+            (
+                "./sub",
+                project.join("sub"),
+                Some("is already inside the workspace, so it can be named relatively"),
+            ),
+            (
+                "../project/sub",
+                project.join("sub"),
+                Some("is already inside the workspace, so it can be named relatively"),
+            ),
+            (
+                ".",
+                project.clone(),
+                Some("is already inside the workspace, so it can be named relatively"),
+            ),
+        ] {
+            let (workspace, trust, session) = after_add_dir(&project, relative);
+            let said = last_note(&session);
+            let absolute = absolute.display().to_string();
+            let (_, _, by_absolute) = after_add_dir(&project, &absolute);
+            let by_absolute = last_note(&by_absolute);
+
+            let after_the_path = by_absolute
+                .strip_prefix(&format!("could not add {absolute}: '{absolute}'"))
+                .unwrap_or_else(|| panic!("the absolute spelling was not refused: {by_absolute}"));
+            assert_eq!(
+                said,
+                format!("could not add {relative}: '{absolute}'{after_the_path}"),
+                "{relative} was not refused as {absolute} is, under the name typed"
+            );
+            if let Some(reason) = reason {
+                assert!(said.contains(reason), "{said}");
+            }
+            assert!(workspace.added_directories().is_empty(), "{relative}");
+            assert!(trust.is_empty(), "{relative} was vouched for");
+        }
+
+        let (workspace, trust, session) = after_add_dir(&project, "");
+        assert_eq!(last_note(&session), t!(session_add_dir_needs_a_path));
+        assert!(workspace.added_directories().is_empty());
+        assert!(trust.is_empty());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// TRUST-9 and SANDBOX-18: a relative name that lands in a credential location is refused as
+    /// the absolute spelling is, and one that lands in the home directory, which holds a location,
+    /// is not. The refusal is decided on the directory the name resolves to, so a name that climbs
+    /// to a location is not a way past.
+    ///
+    /// The home directory is a scratch one, so the test runs in a process of its own. Where this
+    /// process is not that one, `in_isolated_profile` runs the test there and fails this one if it
+    /// failed, so the assertions below are always run before the test passes.
+    #[test]
+    fn add_dir_refuses_a_relative_name_that_reaches_a_credential_location() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let home = bravebot_agent::home::profile()
+            .expect("a profile")
+            .canonicalize()
+            .expect("canonical");
+        let project = home.join("projects/project");
+        for directory in [".ssh", "notes"] {
+            std::fs::create_dir_all(home.join(directory)).expect("create");
+        }
+        std::fs::create_dir_all(&project).expect("create");
+
+        let (workspace, trust, session) = after_add_dir(&project, "../../.ssh");
+        assert!(
+            last_note(&session).contains("credential location"),
+            "{}",
+            last_note(&session)
+        );
+        assert!(workspace.added_directories().is_empty());
+        assert!(trust.is_empty());
+
+        for (named, opened) in [("../../notes", home.join("notes")), ("../..", home.clone())] {
+            let (workspace, ..) = after_add_dir(&project, named);
+            assert_eq!(
+                workspace.added_directories(),
+                [opened],
+                "{named} was refused"
+            );
+        }
+    }
+
+    /// TRUST-9: `/add-dir close` takes a relative name as it takes the absolute spelling, so a
+    /// directory opened under one spelling closes under the other, and both halves go. A
+    /// directory that has gone since closes under a relative name too, and a name that is not open
+    /// is refused under the spelling typed.
+    ///
+    /// The failure this rejects is a close that leaves the name for the workspace to refuse as
+    /// not absolute, which would leave a directory a person opened with a short name open.
+    #[test]
+    fn add_dir_close_takes_a_relative_name_as_it_takes_the_absolute_one() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-close-relative-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let notes = root.join("notes");
+        for directory in [&project, &notes, &root.join("shared")] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let notes = notes.canonicalize().expect("canonical");
+        let absolute = notes.display().to_string();
+        let todo = notes.join("todo.md");
+
+        for (opened_with, closed_with) in [
+            (absolute.as_str(), "../notes"),
+            ("../notes", absolute.as_str()),
+            ("../notes", "../shared/../notes"),
+            ("../notes", "./../notes/"),
+        ] {
+            let (mut workspace, mut trust, mut session) = after_add_dir(&project, opened_with);
+            assert!(workspace.confines(&todo).is_ok(), "{opened_with}");
+
+            assert!(
+                close_directory(&mut session, &mut workspace, &mut trust, closed_with),
+                "{closed_with} did not close what {opened_with} opened: {}",
+                last_note(&session)
+            );
+
+            assert!(workspace.added_directories().is_empty());
+            assert!(workspace.confines(&todo).is_err(), "{closed_with}");
+            assert!(trust.is_empty(), "{closed_with} left the rule");
+            assert_eq!(
+                last_note(&session),
+                t!(session_directory_withdrawn, directory = absolute.as_str()),
+                "{closed_with}"
+            );
+        }
+
+        let (mut workspace, mut trust, mut session) = after_add_dir(&project, "../notes");
+        std::fs::remove_dir_all(&notes).expect("the directory goes");
+        assert!(
+            close_directory(&mut session, &mut workspace, &mut trust, "../notes"),
+            "a directory that has gone did not close: {}",
+            last_note(&session)
+        );
+        assert!(workspace.added_directories().is_empty());
+
+        assert!(!close_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            "../shared"
+        ));
+        assert!(
+            last_note(&session).starts_with("could not close ../shared: '"),
+            "{}",
+            last_note(&session)
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// TRUST-9: a relative name closes the directory it names even when a link has been put where
+    /// that directory was. A relative name with no `..` after a name is made the absolute spelling
+    /// the directory was opened under before the workspace is asked, so the close matches it as
+    /// spelled, as it does the absolute name, and the link cannot send it to the link's target.
+    /// `notes` and `shared` are opened by absolute path and `notes` is then replaced by a link to
+    /// `shared`.
+    ///
+    /// The failure this rejects is a relative name joined as typed, which is never equal to an
+    /// opened directory's recorded spelling and so is only ever followed through the link, closing
+    /// `shared` and leaving `notes` open.
+    #[cfg(unix)]
+    #[test]
+    fn add_dir_close_by_a_relative_name_is_not_redirected_by_a_link_put_where_the_directory_was() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-close-link-test");
+        for by_absolute in [true, false] {
+            let _ = std::fs::remove_dir_all(&root);
+            let project = root.join("project");
+            let notes = root.join("notes");
+            let shared = root.join("shared");
+            for directory in [&project, &notes, &shared] {
+                std::fs::create_dir_all(directory).expect("scratch");
+            }
+            let notes = notes.canonicalize().expect("canonical");
+            let shared = shared.canonicalize().expect("canonical");
+            let closed_with = match by_absolute {
+                true => notes.display().to_string(),
+                false => "../notes".to_string(),
+            };
+            let (mut workspace, mut trust, mut session) =
+                after_add_dir(&project, &notes.display().to_string());
+            add_directory(
+                &mut session,
+                &mut workspace,
+                &mut trust,
+                &shared.display().to_string(),
+            );
+            std::fs::remove_dir_all(&notes).expect("the directory goes");
+            std::os::unix::fs::symlink(&shared, &notes).expect("a link");
+
+            assert!(
+                close_directory(&mut session, &mut workspace, &mut trust, &closed_with),
+                "{closed_with} closed nothing: {}",
+                last_note(&session)
+            );
+
+            assert_eq!(
+                workspace.added_directories(),
+                std::slice::from_ref(&shared),
+                "{closed_with} closed another directory than `notes`"
+            );
+            assert!(
+                trust.is_trusted(&shared.join("todo.md").display().to_string()),
+                "{closed_with} took back the rule of `shared`"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// TRUST-9: a name that climbs out of the working directory and back into the directory beside
+    /// it opens that directory and closes it, under each spelling of the climb. The three are the
+    /// ones a person types: `../notes`, `./../notes` and one that goes back through the project's
+    /// own name.
+    ///
+    /// The failure this rejects is a cleaning of the leading `..` that steps over a different
+    /// number of directories than it names, which opens or closes the wrong one.
+    #[test]
+    fn a_climbing_relative_name_opens_and_closes_the_directory_it_names() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-climb-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        let notes = root.join("notes");
+        for directory in [&project, &notes] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let notes = notes.canonicalize().expect("canonical");
+
+        for named in ["../notes", "./../notes", "../project/../notes"] {
+            let (mut workspace, mut trust, mut session) = after_add_dir(&project, named);
+            assert_eq!(
+                workspace.added_directories(),
+                std::slice::from_ref(&notes),
+                "{named} did not open `notes`"
+            );
+
+            assert!(
+                close_directory(&mut session, &mut workspace, &mut trust, named),
+                "{named} did not close what it opened: {}",
+                last_note(&session)
+            );
+
+            assert!(workspace.added_directories().is_empty(), "{named}");
+            assert!(trust.is_empty(), "{named} left the rule");
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// TRUST-9: a leading `~` is the home directory before it is a name under the working
+    /// directory, so `~/notes` opens and closes the home's `notes` and not the directory `notes`
+    /// inside a directory called `~` in the project, which is what the other order reads. Both
+    /// exist here, and the second is inside the project, which `/add-dir` refuses.
+    ///
+    /// The home is a scratch one, so the test runs in a process of its own. Where this process is
+    /// not that one, `in_isolated_profile` runs the test there and fails this one if it failed, so
+    /// the assertions below are always run before the test passes.
+    #[test]
+    fn add_dir_reads_a_leading_tilde_as_the_home_before_a_name_under_the_project() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let home = bravebot_agent::home::profile()
+            .expect("a profile")
+            .canonicalize()
+            .expect("canonical");
+        let project = home.join("projects/project");
+        std::fs::create_dir_all(home.join("notes")).expect("create");
+        std::fs::create_dir_all(project.join("~/notes")).expect("a directory called ~");
+
+        let (mut workspace, mut trust, mut session) = after_add_dir(&project, "~/notes");
+
+        assert_eq!(
+            workspace.added_directories(),
+            [home.join("notes")],
+            "`~/notes` did not open the home's notes: {}",
+            last_note(&session)
+        );
+        assert!(close_directory(
+            &mut session,
+            &mut workspace,
+            &mut trust,
+            "~/notes"
+        ));
+        assert!(
+            workspace.added_directories().is_empty(),
+            "`~/notes` did not close the home's notes: {}",
+            last_note(&session)
+        );
+    }
+
+    /// TRUST-9 and PERM-16: a relative name is refused where the settings keep the file tools
+    /// inside the workspace, with the key named, as the absolute spelling is. The refusal is the
+    /// first thing the workspace decides about a directory it is asked to open, before it asks
+    /// whether the name is absolute, so this passes without the relative-name handling too. It
+    /// holds the claim that a relative name goes through the same refusals, and rejects a handler
+    /// that opens a relative name by a route that does not go through them.
+    #[test]
+    fn add_dir_refuses_a_relative_name_where_reads_stay_in_the_workspace() {
+        let root = crate::testutil::scratch_dir("bravebot-add-dir-relative-confined-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).expect("scratch");
+        std::fs::create_dir_all(root.join("shared")).expect("scratch");
+        let mut workspace = Workspace::new(&project)
+            .expect("workspace")
+            .with_reads_kept_inside(true);
+        let mut trust = TrustStore::new(workspace.root());
+        let mut session = Session::new("none");
+
+        add_directory(&mut session, &mut workspace, &mut trust, "../shared");
+
+        assert!(workspace.added_directories().is_empty());
+        assert!(trust.is_empty());
+        assert!(
+            last_note(&session).contains("permissions.readsStayInWorkspace"),
+            "{}",
+            last_note(&session)
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// REFER-6: the alias a person is offered after `@` follows what the workspace has open. The
     /// session is told again after `/add-dir close`, `/add-dir` and `/cd`, so an alias disappears
     /// when its directory is closed or left behind and returns when the directory is opened again.
@@ -30459,9 +30998,86 @@ mod tests {
     #[test]
     fn an_absolute_directory_in_a_settings_file_is_not_joined_onto_the_workspace() {
         assert_eq!(
-            against_workspace(std::path::Path::new("/tmp/project"), "/opt/other"),
-            "/opt/other"
+            named_directory(std::path::Path::new("/tmp/project"), "/opt/other").ok(),
+            Some("/opt/other".to_string())
         );
+    }
+
+    /// TRUST-9: the leading `.` and `..` of a relative name are cleaned against the working
+    /// directory and nothing after a name is. The working directory is canonical, so a leading `..`
+    /// is exact, and `../notes` becomes the spelling an opened directory is recorded under. A `..`
+    /// after a name is left alone because the name may be a link, whose target the file system
+    /// takes the `..` from.
+    ///
+    /// The failure this rejects is a name joined as typed, which `/add-dir close` cannot match
+    /// against the directory it opened without asking where the name leads, and one cleaned
+    /// throughout, which reads `sub/../x` as `x` whether or not `sub` is a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name() {
+        let root = std::path::Path::new("/w/proj");
+        for (typed, resolved) in [
+            ("../notes", "/w/notes"),
+            ("./../notes", "/w/notes"),
+            ("../../x", "/x"),
+            ("../../../x", "/x"),
+            (".", "/w/proj"),
+            ("..", "/w"),
+            ("./sub/dir", "/w/proj/sub/dir"),
+            ("sub/../x", "/w/proj/sub/../x"),
+            ("../project/../notes", "/w/project/../notes"),
+            ("/opt/other", "/opt/other"),
+        ] {
+            assert_eq!(
+                named_directory(root, typed).ok(),
+                Some(resolved.to_string()),
+                "{typed}"
+            );
+        }
+    }
+
+    /// TRUST-9 and PATH-003: a relative name is refused against a working directory whose name is
+    /// not text, and is resolved against its lookalike, the name that spells the replacement
+    /// character. The string made here becomes a reach grant and a trust key, and a rendering of
+    /// the first that substitutes for the bytes it cannot show would name the second. An absolute
+    /// name needs no working directory and resolves against either.
+    ///
+    /// The names are built in memory, since the file system of a Mac cannot hold the first.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let not_text = std::path::Path::new(OsStr::from_bytes(b"/w/proj-\xff"));
+        let lookalike = std::path::Path::new("/w/proj-\u{FFFD}");
+
+        for relative in ["notes", "../notes", ".", "./sub"] {
+            match named_directory(not_text, relative) {
+                Err(bravebot_agent::WorkspaceError::Invalid { path, reason }) => {
+                    assert_eq!(path, relative);
+                    assert_eq!(reason, t!(session_directory_root_not_text));
+                }
+                other => {
+                    panic!("{relative} was resolved against a name that is not text: {other:?}")
+                }
+            }
+            assert!(
+                named_directory(lookalike, relative).is_ok(),
+                "{relative} was refused against a working directory that is text"
+            );
+        }
+        assert_eq!(
+            named_directory(lookalike, "../notes").ok(),
+            Some("/w/notes".to_string())
+        );
+        for root in [not_text, lookalike] {
+            assert_eq!(
+                named_directory(root, "/opt/other").ok(),
+                Some("/opt/other".to_string()),
+                "an absolute name was refused for {root:?}"
+            );
+        }
     }
 
     /// A workspace for the tests below, which need one only because a finished turn takes the

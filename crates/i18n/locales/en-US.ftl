@@ -3273,6 +3273,9 @@ session-permissions-skipped =
     --dangerously-skip-permissions: nothing will be asked before a write, a command, or reading a
     file nobody vouched for. shift-tab to change
 session-directory-not-added = could not add { $directory }: { $problem }
+# The reason given for a name relative to a working directory whose own name is not text. Nothing
+# written as text names that directory, so no path is made from it.
+session-directory-root-not-text = the working directory's name is not text, so a name relative to it cannot be resolved; give the path in full
 # Said when the session has nowhere of its own to write. Not a failure to start, but a person whose
 # turn is told there is nowhere to put an intermediate file has nothing else to read it off.
 session-scratch-unavailable = no scratch directory this session: { $problem }

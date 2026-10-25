@@ -703,7 +703,9 @@ altered a session nobody had configured would be a change to every session.
 
 A name in `additionalDirectories` is resolved before it is put to anybody, and the question shows
 what it resolved to. A name that cannot be opened whatever the answer is reported instead of asked
-about, and a directory two layers both named is one question.
+about, and a directory two layers both named is one question. A relative name is taken against the
+working directory as `/add-dir` takes one ([TRUST-9](trust-map.md#TRUST-9)), so it is reported where
+that directory's name is not text.
 
 **Why.** Opening a directory follows a name wherever it leads, so a question about the spelling
 collects an answer about a different tree: a link inside a checkout resolves somewhere else
@@ -714,6 +716,7 @@ train the habit of answering without reading, which is the whole of what asking 
 `verified-by: bravebot_tui::app::a_named_directory_is_resolved_before_it_is_asked_about`
 `verified-by: bravebot_tui::app::a_directory_two_layers_both_named_is_asked_about_once`
 `verified-by: bravebot_tui::app::a_name_that_cannot_be_opened_is_said_so_rather_than_asked_about`
+`verified-by: bravebot_tui::app::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
 
 ## Which file a rule may be written in
 
