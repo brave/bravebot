@@ -604,9 +604,7 @@ impl Session {
         self.settle_staged();
         // Not through [`Session::clear_input`], which keeps a line typed mid-turn: a command carried
         // out while a turn runs (CMD-8) leaves the box as one carried out at rest does.
-        self.history.leave();
-        self.set_input(String::new());
-        self.shell = false;
+        self.replace_the_box(String::new(), false);
         Commanded {
             line,
             pasted,
