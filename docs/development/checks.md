@@ -21,7 +21,8 @@ reads; a commit that stages anything else, or nothing, runs both.
 
 The workspace manifest holds a `[workspace.lints.clippy]` table of lints that code in this tree has no
 violation of: `unwrap_used`, `todo`, `unimplemented`, `dbg_macro`, `unused_async`, `large_futures`,
-`future_not_send`, `let_underscore_future`, `rc_mutex` and `mutex_atomic`. Each crate opts in with
+`future_not_send`, `let_underscore_future`, `rc_mutex`, `mutex_atomic` and
+`allow_attributes_without_reason`. Each crate opts in with
 `[lints]` and `workspace = true`, and `crates/cli/tests/workspace_lints.rs` fails a member that does
 not. A lint is added to the table once the tree has none of it. A test target that unwraps starts with
 `#![allow(clippy::unwrap_used, reason = "...")]` (`#![cfg_attr(test, allow(...))]` in a crate root whose
