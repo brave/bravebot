@@ -2884,6 +2884,8 @@ parsed number only how long.
 `verified-by: bravebot_aichat::client::a_retry_after_of_zero_still_takes_the_backoff`
 `verified-by: bravebot_aichat::client::a_retry_after_on_another_status_is_not_waited_for_or_refused`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_a_service_asked_for`
+`verified-by: bravebot_bedrock::lib::a_throttled_request_is_waited_out_for_as_long_as_the_service_asked`
+`verified-by: bravebot_bedrock::lib::a_throttle_asking_for_longer_than_the_ceiling_fails_at_once_with_the_figure`
 `verified-by: bravebot_agent::backend::a_rate_limit_keeps_the_wait_the_service_asked_for`
 `verified-by: bravebot_session::sessions::a_rate_limit_says_how_long_the_service_asked_for`
 
