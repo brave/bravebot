@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/tui/src/files_mode.rs
   - crates/tui/src/panel.rs
+  - crates/tui/src/state/files.rs
 documented-by: docs/website/docs/using/sessions.md
 ---
 
@@ -190,13 +191,14 @@ An edit that finishes while the state is open is added at the end of its file's 
 last row of the list for a file not yet listed. The highlight and the scroll offset stay where the
 reader put them, in the frame the edit arrives in. The totals update. The last row of a list longer
 than its room says how many files are below and how many of them arrived since the reader last
-pressed a key, as [SCROLL-8](scroller.md#SCROLL-8) does for the transcript. A turn starting, ending
-or being queued, a loop tick, a watch firing and a goal sending the work back leave the state open
-where it is ([WATCH-10](watching.md#WATCH-10)).
+pressed a key the state names or clicked a file, as [SCROLL-8](scroller.md#SCROLL-8) does for the
+transcript. A turn starting, ending or being queued, a loop tick, a watch firing and a goal sending
+the work back leave the state open where it is ([WATCH-10](watching.md#WATCH-10)).
 
 `verified-by: bravebot_tui::files_mode::an_edit_arriving_leaves_the_highlight_and_the_scroll_where_they_were`
 `verified-by: bravebot_tui::files_mode::the_list_says_a_file_has_arrived_below`
 `verified-by: bravebot_tui::files_mode::what_starts_without_a_press_leaves_the_files_state_where_its_reader_put_it`
+`verified-by: bravebot_tui::files_mode::the_list_stops_saying_files_arrived_once_the_reader_acts_over_the_panel`
 
 <a id="FILES-9"></a>
 ### FILES-9: the keys are the state's, and the box keeps its line
@@ -208,9 +210,9 @@ when the state ends. The box is drawn without its caret, and the hint line names
 (`↑↓ file`, `PgUp PgDn scroll`, `[ ] edit`, `q back`) in the interface's own words. Ctrl-C ends the
 state and does nothing else, so a turn in flight goes on.
 
-A press on a list row highlighting it, and the wheel over the edits scrolling them, are not built
-until [#2685](https://github.com/brave/bravebot/issues/2685) adds clicking to the terminal. The keys
-do the same work until then.
+A click on a list row highlights it ([MOUSE-18](mouse.md#MOUSE-18)), as the keys that move the
+highlight do. The wheel scrolling the edits is not built until
+[#2685](https://github.com/brave/bravebot/issues/2685) adds it to the terminal.
 
 `verified-by: bravebot_tui::app::a_typed_character_does_not_reach_the_box_while_the_files_state_is_open`
 `verified-by: bravebot_tui::app::a_key_the_state_does_not_name_does_nothing`

@@ -243,7 +243,7 @@ type Body = (
     Vec<(usize, Target)>,
 );
 
-/// What a click on a row of the panel asks for (MOUSE-11).
+/// What a click on a row of the panel acts on (MOUSE-11, MOUSE-18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     /// The model row: the same question `/model` asks.
@@ -254,6 +254,8 @@ pub enum Target {
     Context,
     /// A started MCP server's row: the same question a bare `/mcp` asks.
     Servers,
+    /// A file's row in the list of the files state: the highlight the keys move (MOUSE-18).
+    File(usize),
 }
 
 /// The target a press on screen row `row` of a panel drawn over `area` lands on, if any.
@@ -281,14 +283,14 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     // None of the ordinary sections is drawn beside the files state (FILES-4).
     if let Some(state) = session.files_state() {
         let files = session.written_files();
-        let rows = crate::files_mode::rows(
+        let (rows, targets) = crate::files_mode::rows(
             &files,
             state,
             session.has_earlier_calls(),
             width,
             height as u16,
         );
-        return (rows, Vec::new(), Vec::new(), Vec::new());
+        return (rows, Vec::new(), Vec::new(), targets);
     }
     let text = text_width(width);
     let (mut body, mut links, mut continued, mut targets) = head(session, text);

@@ -11,7 +11,7 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, the permission mode under the box, the rows of the `/effort` and `/config` pickers, and a place in the prompt box's text, is built. Clicking other things on the screen, a context menu, edge
+drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort, context and MCP server rows of the info panel, the permission mode under the box, the rows of the `/effort` and `/config` pickers, a place in the prompt box's text, and a file of the list in the files state of the info panel, is built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
@@ -278,3 +278,30 @@ pickers opened while a turn runs are not covered.
 `verified-by: bravebot_tui::theme_prompt::a_click_previews_the_row_and_a_second_click_takes_it`
 `verified-by: bravebot_tui::theme_prompt::two_presses_on_a_drawn_row_return_its_theme`
 `verified-by: bravebot_tui::theme_prompt::a_press_outside_the_list_leaves_the_theme_alone`
+
+<a id="MOUSE-18"></a>
+### MOUSE-18: a click on a file's row in the files state highlights it
+
+In the files state of the info panel ([FILES-4](files-mode.md#FILES-4)), a left click that sweeps
+nothing acts on what the layout drew under it:
+
+- On a file's row of the list it highlights that file, as Up and Down do
+  ([FILES-5](files-mode.md#FILES-5)): the edits of another file open at their top, and a click on
+  the file that is highlighted leaves its edits where they are scrolled to. The rows of the list
+  stay where they were drawn.
+
+Nothing else is a target: not the rows that count the files left out, the heading, the rule, the
+edits, the border column, or a row the height of the panel is too short to draw. As for
+[MOUSE-12](#MOUSE-12), the press and the release are on one cell and the press is a single click, so
+a drag, a double click and a triple click are selections and copy as before, and a press that began
+elsewhere and was let go on a target is not a click on it. A press on a row whose file has left the
+list since the frame was drawn is ignored. A press is mapped by the rows the layout drew and never
+by a file's name or an edit's text ([FILES-10](files-mode.md#FILES-10)). The keys stay the way to do
+it without a mouse.
+
+`verified-by: bravebot_tui::files_mode::a_click_on_a_file_row_highlights_it_and_shows_its_edits_from_the_top`
+`verified-by: bravebot_tui::files_mode::a_drag_a_press_from_elsewhere_or_a_double_click_highlights_no_file`
+`verified-by: bravebot_tui::files_mode::a_click_on_a_row_that_is_not_a_file_highlights_nothing`
+`verified-by: bravebot_tui::files_mode::a_click_on_a_file_that_has_left_the_list_selects_nothing`
+`verified-by: bravebot_tui::files_mode::only_the_drawn_file_rows_are_click_targets`
+`verified-by: bravebot_tui::files_mode::the_click_targets_of_every_frame_are_exactly_the_controls_it_drew`

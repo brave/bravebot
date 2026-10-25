@@ -101,6 +101,17 @@ impl Session {
         }
     }
 
+    /// Highlight the file at `index`, as the keys do when they land on it: its edits open at their
+    /// top. An index past the last file is ignored.
+    pub fn files_select(&mut self, index: usize) {
+        let count = self.written_totals().0;
+        if let Some(state) = &mut self.files
+            && index < count
+        {
+            Self::highlight(state, index, count);
+        }
+    }
+
     /// Highlight the first file, or the last. Moving to another file puts its edits back at the
     /// top, and either way every listed file counts as seen.
     pub fn files_to_end(&mut self, last: bool) {

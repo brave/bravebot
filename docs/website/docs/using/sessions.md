@@ -360,7 +360,8 @@ columns wide.
 | `[` `]` | scroll to the previous or next edit |
 | `q`, `Esc`, `/diff`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
 
-Every other key does nothing there, and the line in the box comes back as you left it. Edits that
+Clicking a file in the list highlights it and shows its edits from the top; a drag, a double click or
+a triple click still selects text. Every other key does nothing there, and the line in the box comes back as you left it. Edits that
 finish while the view is open are added without moving the highlight or the scroll. The view lists
 what the session's own `write_file` and `edit_file` calls and manifest write steps changed. A file a
 program changed, a file you edited, and a write a delegate made are not listed. The session record

@@ -5,6 +5,7 @@
 //! from disk, run or sent to a model, and nothing is kept in a second place, so a bound on those
 //! entries is a bound here.
 
+use crate::panel::Target;
 use crate::state::{Entry, Speaker};
 use crate::theme;
 use bravebot_agent::diff::{Change, Numbered};
@@ -142,8 +143,8 @@ pub struct State {
     pub selected: usize,
     /// The first row of the highlighted file's edits that is drawn.
     pub scroll: usize,
-    /// How many files the list held when the reader last pressed a key, so that a file arriving
-    /// after it is said to have arrived (FILES-8).
+    /// How many files the list held when the reader last pressed a key or clicked a file, so that a
+    /// file arriving after it is said to have arrived (FILES-8).
     pub known: usize,
 }
 
@@ -291,11 +292,11 @@ fn list_row(file: &File, highlighted: bool, width: usize) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The rows the state shows of the list, `room` of them.
-fn list_rows(files: &[File], state: &State, room: usize, width: usize) -> Vec<Line<'static>> {
-    window(files.len(), room, state.selected)
-        .into_iter()
-        .map(|row| match row {
+/// The rows the state shows of the list: one line for each of the `window`'s rows.
+fn list_rows(files: &[File], state: &State, window: &[Row], width: usize) -> Vec<Line<'static>> {
+    window
+        .iter()
+        .map(|row| match *row {
             Row::File(index) => list_row(&files[index], index == state.selected, width),
             Row::Above(count) => Line::from(Span::styled(
                 format!(" {}", t!(files_more_above, count = count)),
@@ -413,20 +414,31 @@ fn style_of(sign: &str) -> Style {
 }
 
 /// The state's rows: the heading, the list, a rule, the highlighted file's name and edit count, and
-/// its edits, `height` rows in all (FILES-4).
+/// its edits, `height` rows in all (FILES-4). With them go the rows a click acts on: each row of the
+/// list that holds a file, which the rows that count the files left out do not (MOUSE-18).
 pub fn rows(
     files: &[File],
     state: &State,
     earlier: bool,
     width: u16,
     height: u16,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<(usize, Target)>) {
     let height = usize::from(height);
     // The border takes a column.
     let width = usize::from(width).saturating_sub(1).max(1);
     let (list, room) = regions(height, files.len());
     let mut body = vec![heading(files, earlier, width)];
-    body.extend(list_rows(files, state, list, width));
+    let shown = window(files.len(), list, state.selected);
+    // The list begins under the heading row.
+    let mut targets: Vec<(usize, Target)> = shown
+        .iter()
+        .enumerate()
+        .filter_map(|(at, row)| match *row {
+            Row::File(index) => Some((1 + at, Target::File(index))),
+            Row::Above(_) | Row::Below(_) => None,
+        })
+        .collect();
+    body.extend(list_rows(files, state, &shown, width));
     body.push(Line::from(Span::styled("─".repeat(width), dim())));
     let selected = state.selected.min(files.len().saturating_sub(1));
     if let Some(file) = files.get(selected) {
@@ -448,9 +460,11 @@ pub fn rows(
         let first = state.scroll.min(edits.len().saturating_sub(room));
         body.extend(edits.into_iter().skip(first).take(room));
     }
+    // A row the panel is too short to draw is not a target.
+    targets.retain(|(row, _)| *row < height);
     body.truncate(height);
     body.resize(height, Line::raw(""));
-    body
+    (body, targets)
 }
 
 #[cfg(test)]
@@ -462,7 +476,9 @@ mod tests {
     use bravebot_agent::report::{Activity, Written};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
 
     /// A finished write call over `before` and `after`, with what the kernel makes of the diff.
     fn write(path: &str, before: &str, after: &str) -> Activity {
@@ -542,6 +558,73 @@ mod tests {
 
     fn press(session: &mut Session, code: KeyCode) -> Action {
         handle_key(session, KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn mouse(session: &mut Session, kind: MouseEventKind, row: u16, column: u16) -> Action {
+        crate::app::handle_mouse(
+            session,
+            MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            },
+        )
+    }
+
+    /// A press and a release of the left button on one cell.
+    fn click(session: &mut Session, row: u16, column: u16) -> Action {
+        mouse(
+            session,
+            MouseEventKind::Down(MouseButton::Left),
+            row,
+            column,
+        );
+        mouse(session, MouseEventKind::Up(MouseButton::Left), row, column)
+    }
+
+    /// The screen cell, as (row, column), where the panel of a frame `width` by `height` first
+    /// reads `needle`. The frame is drawn again, so the layout the click reads is the one on screen.
+    fn cell_of(session: &mut Session, width: u16, height: u16, needle: &str) -> (u16, u16) {
+        let start = usize::from(width - session.panel_columns(width)) + 1;
+        screen(session, width, height)
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| {
+                let panel: String = line.chars().skip(start).collect();
+                panel.find(needle).map(|at| {
+                    let column = start + panel[..at].chars().count();
+                    (row as u16, column as u16)
+                })
+            })
+            .unwrap_or_else(|| panic!("the panel does not read {needle:?}"))
+    }
+
+    /// The rectangle the last frame drew the panel in.
+    fn panel_rect(session: &Session) -> ratatui::layout::Rect {
+        session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .map(|(_, rect)| *rect)
+            .expect("the panel is recorded")
+    }
+
+    fn highlighted(session: &Session) -> Option<usize> {
+        session.files_state().map(|state| state.selected)
+    }
+
+    /// A session whose files are `names`, each written once with forty lines of its own, so the
+    /// edits drawn say whose edits they are and are longer than the room they have.
+    fn session_with_bodies(names: &[&str]) -> Session {
+        let mut session = Session::new("none");
+        prompt(&mut session, "change things");
+        for name in names {
+            let body: String = (0..40).map(|n| format!("{name} line {n}\n")).collect();
+            wrote(&mut session, write(name, "", &body));
+        }
+        session
     }
 
     fn text_of(lines: &[Line<'static>]) -> Vec<String> {
@@ -938,6 +1021,358 @@ mod tests {
         assert_eq!(at(&session), Some(0));
     }
 
+    /// MOUSE-18: a click on a file row highlights that file, and the edits below are its own from
+    /// their top, as the key that moves the highlight does. A click on the file that is highlighted
+    /// leaves its edits where they are scrolled to.
+    #[test]
+    fn a_click_on_a_file_row_highlights_it_and_shows_its_edits_from_the_top() {
+        let mut session = session_with_bodies(&["a.rs", "b.rs", "c.rs"]);
+        opened(&mut session);
+        for (name, index) in [("a.rs", 0), ("c.rs", 2), ("b.rs", 1)] {
+            press(&mut session, KeyCode::PageDown);
+            assert!(
+                session.files_state().is_some_and(|state| state.scroll > 0),
+                "the edits of the file under the highlight did not scroll"
+            );
+            let (row, column) = cell_of(&mut session, 120, 30, name);
+            assert_eq!(click(&mut session, row, column), Action::Redraw);
+            assert_eq!(highlighted(&session), Some(index), "a click on {name}");
+            assert_eq!(
+                session.files_state().map(|state| state.scroll),
+                Some(0),
+                "the edits of {name} did not open at their top"
+            );
+            let panel = panel_of(&mut session, 120, 30).join("\n");
+            assert!(panel.contains(&format!("{name} line 0")), "{panel}");
+            for other in ["a.rs", "b.rs", "c.rs"].into_iter().filter(|o| *o != name) {
+                assert!(
+                    !panel.contains(&format!("{other} line 0")),
+                    "the edits of {other} are drawn under {name}: {panel}"
+                );
+            }
+        }
+
+        press(&mut session, KeyCode::PageDown);
+        let scrolled = session.files_state().map(|state| state.scroll);
+        assert!(scrolled.is_some_and(|scroll| scroll > 0));
+        let (row, column) = cell_of(&mut session, 120, 30, "b.rs");
+        session.last_click = None;
+        click(&mut session, row, column);
+        assert_eq!(highlighted(&session), Some(1));
+        assert_eq!(
+            session.files_state().map(|state| state.scroll),
+            scrolled,
+            "a click on the highlighted file moved its edits"
+        );
+    }
+
+    /// MOUSE-18: a drag across rows, a press that began elsewhere and a double click are
+    /// selections. They copy as before and highlight nothing the click did not.
+    #[test]
+    fn a_drag_a_press_from_elsewhere_or_a_double_click_highlights_no_file() {
+        let mut session = session_with_bodies(&["a.rs", "b.rs", "c.rs"]);
+        opened(&mut session);
+        let (a_row, a_column) = cell_of(&mut session, 120, 30, "a.rs");
+        let (b_row, b_column) = cell_of(&mut session, 120, 30, "b.rs");
+        let last = Some(2);
+        assert_eq!(highlighted(&session), last);
+
+        // Pressed on one file's row and let go on another's.
+        mouse(
+            &mut session,
+            MouseEventKind::Down(MouseButton::Left),
+            a_row,
+            a_column,
+        );
+        mouse(
+            &mut session,
+            MouseEventKind::Drag(MouseButton::Left),
+            b_row,
+            b_column,
+        );
+        let up = mouse(
+            &mut session,
+            MouseEventKind::Up(MouseButton::Left),
+            b_row,
+            b_column,
+        );
+        assert_eq!(up, Action::Copy);
+        assert_eq!(
+            highlighted(&session),
+            last,
+            "a drag between rows highlighted one"
+        );
+
+        // Swept along the row it began on.
+        mouse(
+            &mut session,
+            MouseEventKind::Down(MouseButton::Left),
+            a_row,
+            a_column,
+        );
+        mouse(
+            &mut session,
+            MouseEventKind::Drag(MouseButton::Left),
+            a_row,
+            a_column + 3,
+        );
+        let up = mouse(
+            &mut session,
+            MouseEventKind::Up(MouseButton::Left),
+            a_row,
+            a_column + 3,
+        );
+        assert_eq!(up, Action::Copy);
+        assert_eq!(
+            highlighted(&session),
+            last,
+            "a sweep along a row highlighted it"
+        );
+
+        // Pressed in the transcript and let go on a row.
+        mouse(&mut session, MouseEventKind::Down(MouseButton::Left), 0, 0);
+        let up = mouse(
+            &mut session,
+            MouseEventKind::Up(MouseButton::Left),
+            a_row,
+            a_column,
+        );
+        assert_eq!(up, Action::Copy);
+        assert_eq!(
+            highlighted(&session),
+            last,
+            "a press from elsewhere highlighted a row"
+        );
+
+        // A click highlights, and the second press of a double click on the same cell does not.
+        session.last_click = None;
+        click(&mut session, a_row, a_column);
+        assert_eq!(highlighted(&session), Some(0));
+        press(&mut session, KeyCode::Down);
+        assert_eq!(highlighted(&session), Some(1));
+        let second = click(&mut session, a_row, a_column);
+        assert_eq!(second, Action::Copy);
+        assert_eq!(
+            highlighted(&session),
+            Some(1),
+            "a double click highlighted a row"
+        );
+    }
+
+    /// MOUSE-18: a press on a row of the list that counts files left out, on the heading, on the rule
+    /// and on the edits highlights nothing and does not move the list.
+    #[test]
+    fn a_click_on_a_row_that_is_not_a_file_highlights_nothing() {
+        let paths: Vec<String> = (1..=12).map(|n| format!("f{n:02}.rs")).collect();
+        let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let mut session = session_with_bodies(&names);
+        screen(&mut session, 120, 16);
+        session.toggle_files();
+        let held = session.files_state().cloned();
+        assert_eq!(highlighted(&session), Some(11));
+        for needle in [
+            "more above",
+            "files changed",
+            "────",
+            "f12.rs  ",
+            "edit 1 of 1",
+        ] {
+            let (row, column) = cell_of(&mut session, 120, 16, needle);
+            click(&mut session, row, column);
+            assert_eq!(
+                session.files_state().cloned(),
+                held,
+                "a click on {needle:?}"
+            );
+        }
+        press(&mut session, KeyCode::Home);
+        let held = session.files_state().cloned();
+        let (row, column) = cell_of(&mut session, 120, 16, "more below");
+        click(&mut session, row, column);
+        assert_eq!(
+            session.files_state().cloned(),
+            held,
+            "a click on the count below"
+        );
+    }
+
+    /// MOUSE-18: a press on a row whose file has since left the list, which is an index past the last
+    /// file, selects nothing.
+    #[test]
+    fn a_click_on_a_file_that_has_left_the_list_selects_nothing() {
+        let mut session = session_with(&["a.rs", "b.rs", "c.rs"]);
+        opened(&mut session);
+        let held = session.files_state().cloned();
+        session.files_select(3);
+        session.files_select(99);
+        assert_eq!(
+            session.files_state().cloned(),
+            held,
+            "an index past the list selected a file"
+        );
+        // The write of the last file goes, as a rewind takes it, so the index it had is past the list.
+        session.transcript.pop();
+        session.files_select(2);
+        assert_eq!(
+            session.files_state().cloned(),
+            held,
+            "a stale index selected a file"
+        );
+        session.files_select(1);
+        assert_eq!(highlighted(&session), Some(1));
+    }
+
+    /// MOUSE-18: the rows a click acts on are the rows of the list that draw a file, and each is the
+    /// file it draws, in a list that has scrolled as in one that has not.
+    #[test]
+    fn only_the_drawn_file_rows_are_click_targets() {
+        let paths: Vec<String> = (1..=12).map(|n| format!("f{n:02}.rs")).collect();
+        let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+        for (files, height) in [(&names[..3], 30), (&names[..], 16)] {
+            let mut session = session_with(files);
+            screen(&mut session, 120, height);
+            session.toggle_files();
+            let rows = panel_of(&mut session, 120, height);
+            let (_, area) = *session
+                .laid
+                .panes
+                .iter()
+                .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+                .expect("the panel is recorded");
+            let rule = rows
+                .iter()
+                .position(|row| row.starts_with('─'))
+                .expect("a rule under the list");
+            for (at, text) in rows.iter().enumerate() {
+                let drawn = text
+                    .trim_start_matches([' ', '▸'])
+                    .split_whitespace()
+                    .next()
+                    .and_then(|word| word.strip_prefix('f')?.strip_suffix(".rs")?.parse().ok())
+                    .filter(|_| at < rule);
+                let target =
+                    crate::panel::target_at(&session, area, area.y + at as u16, area.x + 4);
+                assert_eq!(
+                    target,
+                    drawn.map(|n: usize| Target::File(n - 1)),
+                    "row {at} reads {text:?}: {rows:#?}"
+                );
+            }
+            let border = crate::panel::target_at(&session, area, area.y + 1, area.x);
+            assert_eq!(border, None, "the border column is the resize handle");
+        }
+    }
+
+    /// MOUSE-18: the click targets of a frame are the controls it drew, each on the cells it drew
+    /// it in and on no others, at every height of the panel from one row to forty-five, with no
+    /// file and with up to forty, and at two widths. A row the panel is too short to draw has
+    /// none, nor does the row under it, so a press there changes nothing.
+    #[test]
+    fn the_click_targets_of_every_frame_are_exactly_the_controls_it_drew() {
+        let paths: Vec<String> = (1..=40).map(|n| format!("f{n:02}.rs")).collect();
+        // The file a row of the list draws, read from the row's text.
+        let file_of = |text: &str| -> Option<usize> {
+            let word = text
+                .trim_start_matches([' ', '▸'])
+                .split_whitespace()
+                .next()?;
+            word.strip_prefix('f')?
+                .strip_suffix(".rs")?
+                .parse::<usize>()
+                .ok()?
+                .checked_sub(1)
+        };
+        for columns in [100, 140] {
+            for files in [0, 1, 2, 3, 4, 5, 13, 40] {
+                // The wider panel is read with a few counts of files, since it has the same rows.
+                if columns > 100 && ![0, 1, 5, 13].contains(&files) {
+                    continue;
+                }
+                if files == 0 {
+                    let mut session = Session::new("none");
+                    screen(&mut session, columns, 30);
+                    session.toggle_files();
+                    assert!(
+                        !session.files_open(),
+                        "the state opened with no file written"
+                    );
+                    continue;
+                }
+                let names: Vec<&str> = paths[..files].iter().map(String::as_str).collect();
+                let mut session = session_with(&names);
+                screen(&mut session, columns, 50);
+                session.toggle_files();
+                screen(&mut session, columns, 50);
+                for rows_high in 1..=45u16 {
+                    let panel = panel_of(&mut session, columns, rows_high + 1);
+                    let area = panel_rect(&session);
+                    assert_eq!(area.height, rows_high);
+                    let at =
+                        format!("{columns} columns, {files} files, {rows_high} rows: {panel:#?}");
+                    // Where the frame drew its parts, read from the text of its rows: the list is under
+                    // the heading and above the rule, which is not there where the panel is too short.
+                    let rows = usize::from(rows_high);
+                    let keys: Option<usize> = None;
+                    let rule = (1..rows).find(|row| panel[*row].starts_with('─'));
+                    let list_end = rule.or(keys).unwrap_or(rows);
+                    let expected = |row: usize, column: u16| -> Option<Target> {
+                        if column == area.x || row >= rows || Some(row) == keys {
+                            return None;
+                        }
+                        if row == 0 {
+                            return None;
+                        }
+                        if row < list_end {
+                            return file_of(&panel[row]).map(Target::File);
+                        }
+                        None
+                    };
+                    // Every row of the frame, the row under the panel included, which the hint line
+                    // holds. Read at the border, the ends and the middle of a row and, where a row
+                    // holds a control of its own, at both ends of it and on either side of each.
+                    for row in 0..=rows {
+                        let mut read = vec![
+                            area.x,
+                            area.x + 1,
+                            area.x + area.width / 2,
+                            area.right() - 1,
+                        ];
+                        if row == 0 {
+                            read.extend(area.right() - 5..area.right() - 1);
+                        }
+                        for column in read {
+                            let target = crate::panel::target_at(
+                                &session,
+                                area,
+                                area.y + row as u16,
+                                column,
+                            );
+                            assert_eq!(
+                                target,
+                                expected(row, column),
+                                "row {row}, column {column}: {at}"
+                            );
+                        }
+                    }
+
+                    // A press at either end of the row under the panel changes nothing.
+                    let before = session.files_state().cloned();
+                    for row in area.height..area.height + 1 {
+                        for column in [area.x + 1, area.x + 2, area.right() - 3, area.right() - 1] {
+                            session.last_click = None;
+                            click(&mut session, area.y + row, column);
+                            assert_eq!(
+                                session.files_state().cloned(),
+                                before,
+                                "row {row}, column {column}: {at}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// FILES-5: with more files than rows the rows drawn are the ones around the highlight, and the
     /// first and last say how many are left out above and below.
     #[test]
@@ -992,6 +1427,44 @@ mod tests {
         assert!(panel.contains("↓ 10 more below, 1 new"), "{panel}");
         let held = session.files_state().cloned().expect("open");
         assert_eq!(held.selected, 0, "the highlight moved for the arrival");
+    }
+
+    /// FILES-8: a click on a file counts the listed files as seen, so the list stops saying how many
+    /// have arrived.
+    #[test]
+    fn the_list_stops_saying_files_arrived_once_the_reader_acts_over_the_panel() {
+        let paths: Vec<String> = (1..=12).map(|n| format!("f{n:02}.rs")).collect();
+        let names: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let mut session = session_with(&names);
+        screen(&mut session, 120, 20);
+        session.toggle_files();
+        press(&mut session, KeyCode::Home);
+        let says_new = |session: &mut Session| {
+            panel_of(session, 120, 20)
+                .join(
+                    "
+",
+                )
+                .contains(" new")
+        };
+        wrote(
+            &mut session,
+            write(
+                "late.rs", "x
+", "y
+",
+            ),
+        );
+        assert!(
+            says_new(&mut session),
+            "the list did not say a file had arrived"
+        );
+        let (row, column) = cell_of(&mut session, 120, 20, "f02.rs");
+        click(&mut session, row, column);
+        assert!(
+            !says_new(&mut session),
+            "a click on a file left files unseen"
+        );
     }
 
     /// FILES-6: the edits of the highlighted file are drawn oldest first, each under a header that

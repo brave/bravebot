@@ -1841,8 +1841,9 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             Action::Redraw
         }
         // A click on the panel's model, effort, context or MCP server row asks what `/model`,
-        // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13), and one on the
-        // permission mode under the box cycles it (MOUSE-14).
+        // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13), one on a file of the
+        // files state highlights it (MOUSE-18), and one on the permission mode under the box
+        // cycles it (MOUSE-14).
         MouseEventKind::Up(MouseButton::Left) if is_a_shortcut_click(session, mouse) => {
             click_shortcut(session, mouse)
         }
@@ -1893,6 +1894,10 @@ fn click_shortcut(session: &mut Session, mouse: MouseEvent) -> Action {
             Action::Redraw
         }
         Some(crate::panel::Target::Servers) => Action::Mcp(String::new()),
+        Some(crate::panel::Target::File(index)) => {
+            session.files_select(index);
+            Action::Redraw
+        }
         None => {
             session.cycle_permission_mode();
             Action::Redraw
