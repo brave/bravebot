@@ -17,7 +17,7 @@ import { conversationKey } from '../shared/experience'
 import { type Fork, forkOf } from '../shared/forks'
 import type { Entry } from './transcript'
 import type { Turns } from './turn-details'
-import type { Agent } from './agents'
+import type { AgentEntry } from '../shared/protocol'
 import { conversationPreferences, setConversation } from './experience'
 
 /** A message waiting for the turn to end, and the grants it was written with. */
@@ -66,10 +66,10 @@ export interface Live {
   checking: Checking | null
   hook: Hook | null
   /**
-   * Every agent this conversation has started, oldest first, with where each stands (VIEW-36).
-   * Only what the bridge sends for display: its number, kind and task, never a line it printed.
+   * Every agent this conversation has started, oldest first, with where each stands (VIEW-36),
+   * as the last `agents` event listed them. Never a line a delegate printed.
    */
-  agents: Agent[]
+  agents: AgentEntry[]
   /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
   composing: string | null
   /**
