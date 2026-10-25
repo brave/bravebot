@@ -431,7 +431,9 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    [What the exchange has to record](#what-the-exchange-has-to-record) records the key set as read. A zero
    byte in front of the exponent does not count toward it, and a key written with one in front of the
    exponent or of the modulus is refused by that check, as RFC 7518 has both in the fewest bytes.
-   A set that holds two keys under one `kid` has none that is the key.
+   A set that holds two keys under one `kid` has none that is the key. An entry is read for its `kid`,
+   `kty`, `use`, `alg`, `key_ops`, `n` and `e` and for no other field, so the `x5c` list that some entries of
+   the service's key set carry changes nothing.
    The key set is fetched from the host compiled in for it ([CHATGPT-2](#CHATGPT-2)) with no credential,
    following no redirect, and a reply over 64 KiB is refused. The signature is checked with RS256 against
    that key's modulus and exponent, and is as long as the modulus. The payload is read after that, is an
@@ -463,6 +465,7 @@ whether the token verified, and what leaves the crate is that answer and no clai
 `verified-by: bravebot_skus::chatgpt::a_key_set_that_cannot_be_had_stops_the_sign_in_and_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
 `verified-by: bravebot_skus::chatgpt::id_token::only_an_rsa_key_for_rs256_signatures_named_by_the_kid_is_used`
+`verified-by: bravebot_skus::chatgpt::id_token::a_key_set_of_several_keys_some_with_an_x5c_list_gives_the_key_the_kid_names_and_no_other`
 `verified-by: bravebot_skus::chatgpt::id_token::a_token_the_key_set_signs_for_this_sign_in_verifies_with_one_request`
 `verified-by: bravebot_skus::chatgpt::id_token::a_header_that_names_no_key_or_not_rs256_or_is_not_an_object_is_refused_before_the_key_set`
 `verified-by: bravebot_skus::chatgpt::id_token::a_key_the_header_names_or_carries_is_never_the_key_the_signature_is_checked_with`
