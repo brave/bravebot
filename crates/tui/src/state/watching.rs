@@ -8,13 +8,17 @@ use super::*;
 /// where there are several, and one delegate's own lines are what somebody came to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Watching {
-    /// Which row this is about, by its place in the list: the delegates in the order they were
-    /// spawned, then the commands in the order they ran.
+    /// Which list the view is over.
+    pub scope: WatchScope,
+    /// Which row this is about, by its place in the list of `scope`: for agents, the asides and
+    /// then the delegates in the order they were spawned; for outputs, the commands in the order
+    /// they ran.
     ///
     /// A position rather than a name, because it is also where the highlight sits in the list, and
     /// the two must not be able to disagree. What that costs is that a row arriving ahead of this
     /// one moves it, so whatever inserts the row moves this with it: a position left where it was
-    /// is a different row from the one somebody opened.
+    /// is a different row from the one somebody opened. A row that arrives in the other scope's
+    /// list is not in this one and moves nothing.
     pub at: usize,
     /// Whether the list is what is on the screen, rather than the row at `at`.
     pub listing: bool,
@@ -24,6 +28,19 @@ pub struct Watching {
     /// reading: coming back into the list puts the highlight where they left it, and the way out
     /// is a row rather than a position nothing else can name.
     pub on_session: bool,
+}
+
+/// Which of the two lists the view is over.
+///
+/// Kept apart because they are different things to look at: an agent is work somebody delegated
+/// or asked for, and an output is what a program printed. One mode implementation serves both, so
+/// the keys inside it are the same whichever list it was opened on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchScope {
+    /// The asides and the delegates, opened by the watch key.
+    Agents,
+    /// What commands printed, background jobs included, opened by `/outputs`.
+    Outputs,
 }
 
 impl Session {
@@ -102,17 +119,22 @@ impl Session {
 
     /// A delegate has begun, drawn where the call that started it happened.
     ///
-    /// Nothing about the view moves for it. Where the view is open, the row it is on is a place
-    /// in a list this inserts a row into, so a place at or after the new delegate's moves with
-    /// it: without that, a delegate starting takes the screen from somebody reading a command,
-    /// since the commands are listed after the delegates.
+    /// Nothing about the view moves for it. A delegate is a row of the agents list only, so a
+    /// view over the outputs list has no place to move. Where the agents list is open, a place at
+    /// or after the new delegate's moves with it, which keeps the row somebody is reading.
     pub fn delegate_started(&mut self, delegation: bravebot_agent::report::Delegation) {
         let inserted = self.asides.len() + self.delegates().len();
         if let Some(watching) = &mut self.watching
+            && watching.scope == WatchScope::Agents
             && watching.at >= inserted
         {
             watching.at += 1;
         }
+        self.roster.start(
+            delegation.id,
+            delegation.kind.clone(),
+            delegation.task.clone(),
+        );
         self.transcript.push(Entry::delegate(Delegate {
             id: delegation.id,
             kind: delegation.kind,
@@ -121,9 +143,30 @@ impl Session {
             calls: 0,
             note: None,
             reported: None,
-            failed: false,
+            state: bravebot_agent::roster::AgentState::Working,
             stop: delegation.stop,
         }));
+    }
+
+    /// Copy where each agent stands, as the roster has it, onto the delegate entries.
+    ///
+    /// The roster holds the rules and the entries are what is drawn, so this is the one place the
+    /// two meet. They are in the same order.
+    pub(super) fn sync_delegates(&mut self) {
+        let delegates = self
+            .transcript
+            .iter_mut()
+            .filter_map(|entry| entry.delegate.as_mut());
+        for (delegate, agent) in delegates.zip(self.roster.agents()) {
+            delegate.state = agent.state;
+        }
+    }
+
+    /// The roster follows the transcript when part of it is dropped: an agent started in a turn
+    /// that was rewound is gone with the turn.
+    pub(crate) fn drop_agents_beyond_transcript(&mut self) {
+        let kept = self.delegates().len();
+        self.roster.truncate(kept);
     }
 
     /// One delegate has finished, with what the turn was told about it and what it reported.
@@ -144,12 +187,18 @@ impl Session {
         if self.waiting_on == Some(id) {
             self.waiting_on = None;
         }
-        if let Some(at) = self.at(id)
-            && let Some(delegate) = self.transcript[at].delegate.as_mut()
-        {
-            delegate.note = Some(note);
-            delegate.reported = reported;
-            delegate.failed = failed;
+        // The roster says which delegate this ends: the latest with that number still working.
+        if let Some(place) = self.roster.finish(id, failed) {
+            self.sync_delegates();
+            if let Some(delegate) = self
+                .transcript
+                .iter_mut()
+                .filter_map(|entry| entry.delegate.as_mut())
+                .nth(place)
+            {
+                delegate.note = Some(note);
+                delegate.reported = reported;
+            }
         }
     }
 
@@ -283,6 +332,7 @@ impl Session {
         }
         self.scroll = 0;
         self.watching = Some(Watching {
+            scope: WatchScope::Agents,
             at,
             listing: false,
             on_session: false,
@@ -311,29 +361,57 @@ impl Session {
         }
     }
 
-    /// Everything the view can open, in the order the list draws it.
-    ///
-    /// Grouped by kind rather than ordered by when each happened, so a row's place does not move
-    /// when the next thing of a different kind arrives. The asides come first because they are
-    /// the only rows that survive a resume: a resumed session's list is asides alone, and every
-    /// delegate and command the session goes on to produce appends after them.
-    ///
-    /// All three are work that happened outside the transcript, which is what the view is for.
-    pub fn watchable(&self) -> Vec<Watched<'_>> {
-        self.asides
-            .iter()
-            .map(Watched::Aside)
-            .chain(self.delegates().into_iter().map(Watched::Delegate))
-            .chain(self.outputs.iter().map(Watched::Output))
-            .collect()
+    /// The list the view is over now: the one it is open on, or the agents where it is closed.
+    pub fn watch_scope(&self) -> WatchScope {
+        self.watching
+            .map_or(WatchScope::Agents, |watching| watching.scope)
     }
 
-    /// Open the view: on the list where there are several rows, and on the one where there is one.
+    /// Everything the view can open in the list it is over, in the order the list draws it.
+    ///
+    /// Every place that indexes the list asks this, so a position always means a row of the list
+    /// on the screen.
+    pub fn watchable(&self) -> Vec<Watched<'_>> {
+        self.watchable_in(self.watch_scope())
+    }
+
+    /// The rows of one list, in the order it draws them.
+    ///
+    /// The agents are the asides and then the delegates, grouped by kind rather than ordered by
+    /// when each happened, so a row's place does not move when the next thing of the other kind
+    /// arrives. The asides come first because they are the only rows that survive a resume. The
+    /// outputs are every command the session ran, background jobs included, oldest first. Which
+    /// list a row belongs to is decided by the kind of row the driver made, never by what it holds.
+    pub fn watchable_in(&self, scope: WatchScope) -> Vec<Watched<'_>> {
+        match scope {
+            WatchScope::Agents => self
+                .asides
+                .iter()
+                .map(Watched::Aside)
+                .chain(self.delegates().into_iter().map(Watched::Delegate))
+                .collect(),
+            WatchScope::Outputs => self.outputs.iter().map(Watched::Output).collect(),
+        }
+    }
+
+    /// Open the view over the agents: on the list where there are several rows, and on the one
+    /// where there is one.
     ///
     /// `false` where there is nothing to look at, which leaves the key doing nothing at all. A
-    /// mode that opened on an empty screen would be worse than a key that did not answer.
+    /// mode that opened on an empty screen would be worse than a key that did not answer. Commands
+    /// that printed something are not agents, so a session that ran only commands has nothing here.
     pub fn watch(&mut self) -> bool {
-        let rows = self.watchable();
+        self.open_watching(WatchScope::Agents)
+    }
+
+    /// Open the view over what commands printed, on the list where there are several and on the
+    /// row where there is one. `false` where no command has run.
+    pub fn watch_outputs(&mut self) -> bool {
+        self.open_watching(WatchScope::Outputs)
+    }
+
+    fn open_watching(&mut self, scope: WatchScope) -> bool {
+        let rows = self.watchable_in(scope);
         let Some(last) = rows.len().checked_sub(1) else {
             return false;
         };
@@ -345,9 +423,12 @@ impl Session {
             .rposition(|row| matches!(row, Watched::Delegate(delegate) if delegate.is_running()))
             .unwrap_or(last);
         let listing = last > 0;
-        self.held_view = Some(self.scroll);
+        if self.watching.is_none() {
+            self.held_view = Some(self.scroll);
+        }
         self.scroll = 0;
         self.watching = Some(Watching {
+            scope,
             at,
             listing,
             on_session: false,
@@ -510,9 +591,9 @@ impl Session {
             return &self.transcript;
         }
         // Through the list rather than into the delegates, because a position is a place in the
-        // list and the list holds three kinds of row. Indexing the delegates with it would draw
-        // one delegate's lines under another kind of row every time the rows before it were not
-        // delegates.
+        // list and the list holds asides as well as delegates, or only outputs. Indexing the
+        // delegates with it would draw one delegate's lines under another row every time the rows
+        // before it were not delegates.
         match self.watched() {
             Some(Watched::Delegate(delegate)) => &delegate.lines,
             _ => &self.transcript,

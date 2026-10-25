@@ -280,7 +280,7 @@ fn split_at_width(text: &str, width: usize) -> (String, String) {
 fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
     let head = if delegate.is_running() {
         Style::default().fg(theme::running())
-    } else if delegate.failed {
+    } else if delegate.failed() {
         Style::default().fg(theme::fail())
     } else {
         Style::default().fg(theme::ok())
@@ -301,7 +301,7 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
         Some(note) => {
             lines.push(Line::from(Span::styled(
                 format!("  {DETAIL_MARKER} {}", one_line(note)),
-                if delegate.failed {
+                if delegate.failed() {
                     Style::default().fg(theme::fail())
                 } else {
                     dim()
@@ -1156,7 +1156,7 @@ mod tests {
                 &["PECULIAR-FIRST-LINE", "PECULIAR-LAST-LINE"],
                 2,
             );
-            session.watch();
+            session.watch_outputs();
 
             let screen = rendered(&session);
             assert!(screen.contains("PECULIAR-FIRST-LINE"), "{screen}");
@@ -1167,14 +1167,14 @@ mod tests {
             );
         }
 
-        /// One list holds both kinds, so the view has to say which kind it just switched to.
-        /// Stepping from a delegate onto a command with nothing saying so would read as the same
-        /// view showing different lines.
+        /// The agents list and the outputs list share one view and one set of keys, so the view
+        /// says which kind of thing it is showing. Without that, a command's lines would read as
+        /// the same view showing different lines.
         #[test]
         fn the_view_says_which_kind_of_thing_it_is_showing() {
             let mut session = Session::new("kernel-enforced");
             ran(&mut session, "cargo test", true, &["ok"], 1);
-            session.watch();
+            session.watch_outputs();
             assert!(
                 rendered(&session).contains("what this command printed"),
                 "the view did not name what it was showing"
@@ -1187,7 +1187,7 @@ mod tests {
         fn the_view_says_whether_the_model_read_what_a_command_printed() {
             let mut session = Session::new("kernel-enforced");
             ran(&mut session, "cat notes", false, &["a line"], 1);
-            session.watch();
+            session.watch_outputs();
             assert!(
                 rendered(&session).contains("has not read this"),
                 "the view did not say the output was kept from the planner"
@@ -1195,22 +1195,60 @@ mod tests {
 
             let mut session = Session::new("kernel-enforced");
             ran(&mut session, "cargo test", true, &["a line"], 1);
-            session.watch();
+            session.watch_outputs();
             assert!(
                 rendered(&session).contains("has read this"),
                 "the view did not say the output reached the planner"
             );
         }
 
-        /// One list holds asides, a delegate and a command, and the keys that step through it do
-        /// not ask what a row is. What changes as they step is the header and the footer, each
-        /// naming its own kind: a delegate by kind and number, a command as a command beside the
-        /// line that ran, an aside as an aside with whether the record keeps its answer.
+        /// The outputs list holds commands alone, so its footer counts commands and names the
+        /// kind and whether the planner read the output; stepping moves between commands and
+        /// reaches no delegate or aside.
+        #[test]
+        fn a_commands_view_names_it_and_counts_the_outputs() {
+            let mut session = Session::new("kernel-enforced");
+            spawn(&mut session, "checker", "run the build");
+            asked(&mut session, "and the base case?", "it is a leaf", true);
+            ran(&mut session, "cat notes", false, &["a line"], 1);
+            ran(&mut session, "cargo test", true, &["a line"], 1);
+            session.watch_outputs();
+            session.open_watched();
+            let footer = |session: &Session| {
+                rows_at(session, 90, 24)
+                    .last()
+                    .expect("a footer")
+                    .trim_start()
+                    .to_string()
+            };
+
+            assert!(
+                footer(&session).starts_with("command  ·  the model has read this  ·  2 of 2"),
+                "{}",
+                footer(&session)
+            );
+            session.watch_previous();
+            assert!(
+                footer(&session).starts_with("command  ·  the model has not read this  ·  1 of 2"),
+                "{}",
+                footer(&session)
+            );
+            session.watch_previous();
+            assert!(
+                footer(&session).starts_with("command  ·  the model has not read this  ·  1 of 2"),
+                "stepping past the first command left the outputs list: {}",
+                footer(&session)
+            );
+        }
+
+        /// The agents list holds asides and a delegate, and the keys that step through it do not
+        /// ask what a row is. What changes as they step is the header and the footer, each naming
+        /// its own kind: a delegate by kind and number, an aside as an aside with whether the
+        /// record keeps its answer.
         #[test]
         fn stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer() {
             let mut session = Session::new("kernel-enforced");
             let id = spawn(&mut session, "checker", "run the build");
-            ran(&mut session, "cargo test --workspace", true, &["ok"], 1);
             asked(&mut session, "and the base case?", "it is a leaf", true);
             asked(&mut session, "why recursive?", "because of nesting", false);
             let delegate = format!("checker delegate {id}");
@@ -1227,7 +1265,7 @@ mod tests {
             );
             assert!(rows[1].contains("on your screen only"), "{rows:?}");
             assert!(
-                footer.starts_with("aside  ·  screen only  ·  2 of 4"),
+                footer.starts_with("aside  ·  screen only  ·  2 of 3"),
                 "{footer}"
             );
 
@@ -1241,7 +1279,7 @@ mod tests {
                 rows[1].contains("the answer, which the conversation has not read"),
                 "{rows:?}"
             );
-            assert!(footer.starts_with("aside  ·  kept  ·  1 of 4"), "{footer}");
+            assert!(footer.starts_with("aside  ·  kept  ·  1 of 3"), "{footer}");
 
             session.watch_next();
             session.watch_next();
@@ -1249,21 +1287,11 @@ mod tests {
             assert!(rows[0].contains(&delegate), "{rows:?}");
             assert!(rows[1].contains("run the build"), "{rows:?}");
             assert!(
-                footer.starts_with(&format!("{delegate}  ·  working  ·  3 of 4")),
+                footer.starts_with(&format!("{delegate}  ·  working  ·  3 of 3")),
                 "{footer}"
             );
 
-            session.watch_next();
-            let (rows, footer) = screen(&session);
-            assert!(rows[0].contains("what this command printed"), "{rows:?}");
-            assert!(rows[0].contains("the model has read this"), "{rows:?}");
-            assert!(rows[1].contains("cargo test --workspace"), "{rows:?}");
-            assert!(
-                footer.starts_with("command  ·  the model has read this  ·  4 of 4"),
-                "{footer}"
-            );
-
-            for _ in 0..3 {
+            for _ in 0..2 {
                 session.watch_previous();
             }
             let (rows, footer) = screen(&session);
@@ -1271,7 +1299,7 @@ mod tests {
                 rows[0].contains("a question asked beside the work"),
                 "{rows:?}"
             );
-            assert!(footer.starts_with("aside  ·  kept  ·  1 of 4"), "{footer}");
+            assert!(footer.starts_with("aside  ·  kept  ·  1 of 3"), "{footer}");
         }
 
         /// Marked the way every other block the planner was kept from is marked, and marked
@@ -1287,7 +1315,7 @@ mod tests {
                 &["PECULIAR-KEPT-ONE", "PECULIAR-KEPT-TWO"],
                 2,
             );
-            session.watch();
+            session.watch_outputs();
 
             let screen = rendered(&session);
             for line in ["PECULIAR-KEPT-ONE", "PECULIAR-KEPT-TWO"] {
@@ -1308,7 +1336,7 @@ mod tests {
         fn a_command_that_printed_more_than_is_kept_says_so() {
             let mut session = Session::new("kernel-enforced");
             ran(&mut session, "cargo build", true, &["one", "two"], 900);
-            session.watch();
+            session.watch_outputs();
             assert!(
                 rendered(&session).contains("more lines were printed"),
                 "the view did not say what it left out"
@@ -1341,7 +1369,7 @@ mod tests {
                     confinement: None,
                 },
             );
-            session.watch();
+            session.watch_outputs();
 
             let panel = listed(&session, 90, 24);
             let row = |command: &str| row_naming(&panel, command);
@@ -1362,7 +1390,7 @@ mod tests {
         #[test]
         fn a_command_stopped_at_the_limit_is_marked_as_work_still_going() {
             let mut session = Session::new("kernel-enforced");
-            spawn(&mut session, "reader", "find the parser");
+            ran(&mut session, "cargo build", true, &["ok"], 1);
             printed(
                 &mut session,
                 "serve the page",
@@ -1371,7 +1399,7 @@ mod tests {
                 1,
                 bravebot_agent::report::Outcome::Stopped(std::time::Duration::from_secs(60)),
             );
-            session.watch();
+            session.watch_outputs();
 
             let panel = listed(&session, 90, 24);
             let row = row_naming(&panel, "serve the page");
@@ -1393,7 +1421,7 @@ mod tests {
                 1,
                 bravebot_agent::report::Outcome::Stopped(std::time::Duration::from_secs(60)),
             );
-            session.watch();
+            session.watch_outputs();
             assert!(
                 rendered(&session).contains("so it was stopped"),
                 "the view did not say the run was stopped"
@@ -1416,7 +1444,7 @@ mod tests {
                     confinement: None,
                 },
             );
-            session.watch();
+            session.watch_outputs();
             assert!(
                 rendered(&session).contains("step 1 exited 101"),
                 "the view did not say how the run ended"
@@ -1430,7 +1458,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             ran(&mut session, "cargo build", true, &["ok"], 1);
             ran(&mut session, "cat notes", false, &["a line"], 1);
-            session.watch();
+            session.watch_outputs();
 
             let panel = listed(&session, 90, 24);
             let row = |command: &str| row_naming(&panel, command);
@@ -1446,23 +1474,28 @@ mod tests {
             );
         }
 
-        /// The list holds both kinds, so a row has to say which it is rather than leaving a
-        /// reader to tell a delegate from a command by its name.
+        /// The outputs list names a row as a command, and holds no delegate: the agents have
+        /// their own list.
         #[test]
         fn the_list_names_a_command_row_as_a_command() {
             let mut session = Session::new("kernel-enforced");
             spawn(&mut session, "reader", "find the parser");
+            ran(&mut session, "cargo build", true, &["ok"], 1);
             ran(&mut session, "cargo test", true, &["ok"], 1);
-            session.watch();
+            session.watch_outputs();
             assert!(
                 session.listing_delegates(),
                 "two rows did not open the list"
             );
 
-            let screen = rendered(&session);
+            let screen = listed(&session, 90, 24);
             assert!(screen.contains("command"), "{screen}");
             assert!(screen.contains("cargo test"), "{screen}");
-            assert!(screen.contains("reader"), "{screen}");
+            assert!(screen.contains("cargo build"), "{screen}");
+            assert!(
+                !screen.contains("reader"),
+                "the outputs list held a delegate: {screen}"
+            );
         }
 
         fn job_started(session: &mut Session, name: &str, line: &str) {
@@ -1481,7 +1514,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             job_started(&mut session, "job:1", "sleep 600");
             ran(&mut session, "cargo test", true, &["ok"], 1);
-            session.watch();
+            session.watch_outputs();
             assert!(
                 session.listing_delegates(),
                 "two rows did not open the list"
@@ -1499,7 +1532,7 @@ mod tests {
         fn a_jobs_view_names_the_job_and_whether_it_still_runs() {
             let mut session = Session::new("kernel-enforced");
             job_started(&mut session, "job:1", "sleep 600");
-            session.watch();
+            session.watch_outputs();
 
             let screen = rendered(&session);
             assert!(screen.contains("what background job:1 printed"), "{screen}");
@@ -1530,7 +1563,7 @@ mod tests {
             ] {
                 let mut session = Session::new("kernel-enforced");
                 job_started(&mut session, "job:1", "cargo build");
-                session.watch();
+                session.watch_outputs();
                 session.job(bravebot_agent::report::JobEvent::Ended {
                     name: "job:1".to_string(),
                     outcome,
@@ -1549,7 +1582,7 @@ mod tests {
         fn a_job_says_nothing_about_a_reading_until_it_has_printed() {
             let mut session = Session::new("kernel-enforced");
             job_started(&mut session, "job:1", "sleep 600");
-            session.watch();
+            session.watch_outputs();
             let screen = rendered(&session);
             assert!(!screen.contains("has read this"), "{screen}");
             assert!(!screen.contains("has not read this"), "{screen}");
@@ -1571,7 +1604,7 @@ mod tests {
             let mut session = Session::new("kernel-enforced");
             job_started(&mut session, "job:1", "sleep 600");
             ran(&mut session, "cargo test", true, &["ok"], 1);
-            session.watch();
+            session.watch_outputs();
             let row = row_naming(&listed(&session, 90, 24), "job:1");
             assert!(!row.contains("read"), "{row}");
         }
@@ -1587,7 +1620,7 @@ mod tests {
                 lines: vec!["LIVE-NEWEST".to_string()],
                 total: 4,
             });
-            session.watch();
+            session.watch_outputs();
             let screen = rendered(&session);
             assert!(screen.contains("the model has not read this"), "{screen}");
             let drawn = screen
@@ -1605,7 +1638,7 @@ mod tests {
                 lines: vec!["LIVE-NEWEST".to_string()],
                 total: 1,
             });
-            listing.watch();
+            listing.watch_outputs();
             let row = row_naming(&listed(&listing, 90, 24), "job:1");
             assert!(row.contains("not read"), "{row}");
 
@@ -1645,7 +1678,7 @@ mod tests {
             let id = spawn(&mut session, "reader", "find the parser");
             job_started(&mut session, "job:1", "cargo test");
             session.reporting_for(None);
-            session.watch();
+            session.watch_outputs();
             let theirs = format!("job:1 of delegate {id}");
 
             let rows = listed(&session, 90, 24);
@@ -1676,12 +1709,14 @@ mod tests {
             });
         }
 
-        /// The list holds three kinds now, so a row has to say which it is: an aside and a
-        /// command are both a line of text with a sentence beside it.
+        /// The agents list holds asides and delegates, so a row has to say which it is: an aside
+        /// and a delegate are both a line of text with a sentence beside it. A command that ran
+        /// is in neither.
         #[test]
         fn the_list_names_an_aside_row_as_an_aside() {
             let mut session = Session::new("kernel-enforced");
             asked(&mut session, "why recursive?", "because of nesting", true);
+            spawn(&mut session, "reader", "find the parser");
             ran(&mut session, "cargo test", true, &["ok"], 1);
             session.watch();
             assert!(
@@ -1692,7 +1727,11 @@ mod tests {
             let screen = rendered(&session);
             assert!(screen.contains("aside"), "{screen}");
             assert!(screen.contains("why recursive?"), "{screen}");
-            assert!(screen.contains("command"), "{screen}");
+            assert!(screen.contains("reader"), "{screen}");
+            assert!(
+                !screen.contains("cargo test"),
+                "the agents list held a command: {screen}"
+            );
         }
 
         /// Both halves, because a question with no answer under it is half of what a person came
@@ -2123,10 +2162,10 @@ mod tests {
             // Once and only once wherever the key has been moved to, since the count is what the
             // line is for and the chord is what makes it worth reading.
             let mut moved = std::collections::BTreeMap::new();
-            moved.insert("watch".to_string(), "alt-l".to_string());
+            moved.insert("watch".to_string(), "alt-y".to_string());
             session.adopt_keybindings(&moved);
             let screen = rendered(&session);
-            assert_eq!(screen.matches("alt-l").count(), 1, "{screen}");
+            assert_eq!(screen.matches("alt-y").count(), 1, "{screen}");
             assert!(
                 !screen.contains("ctrl-l"),
                 "the hint went on naming the key nothing answers: {screen}"
@@ -5621,15 +5660,15 @@ mod tests {
         );
     }
 
-    /// WATCH-11: shell mode has its own line, and it names the key and the count as the ordinary
-    /// line does, since the view holds the same things in either mode.
+    /// WATCH-11: shell mode has its own line, and it names the way into what a command printed and
+    /// counts it as the ordinary line does, since the view holds the same things in either mode.
     #[test]
     fn the_shell_hint_line_names_the_view_key_once_something_can_be_opened() {
         let mut session = Session::new("kernel-enforced");
         session.shell = true;
         assert!(
-            !hint_row_at(&session, 120, 24).contains("ctrl-l"),
-            "a shell line with nothing to open offered the key anyway"
+            !hint_row_at(&session, 120, 24).contains("/outputs"),
+            "a shell line with nothing to open offered the entry anyway"
         );
 
         session.command_printed(bravebot_agent::report::Printed {
@@ -5643,8 +5682,12 @@ mod tests {
 
         let hint = hint_row_at(&session, 120, 24);
         assert!(
-            hint.contains("! ") && hint.contains("ctrl-l") && hint.contains("1 to open"),
+            hint.contains("! ") && hint.contains("alt-l or /outputs 1 to open"),
             "the shell line does not say the view can be opened: {hint}"
+        );
+        assert!(
+            !hint.contains("ctrl-l"),
+            "the shell line offered the agents key for a command: {hint}"
         );
     }
 
@@ -5680,11 +5723,11 @@ mod tests {
         assert!(hint.contains("alt-b to background"), "{hint}");
     }
 
-    /// A session that ran commands and spawned no delegate has a key that opens something, and
-    /// counting delegates alone left it with no line saying so: the transcript shows a preview and
-    /// a count, and nothing on the screen says the rest is a key away.
+    /// WATCH-11. Each way into the view is named with the count of what it opens: the watch key
+    /// counts the agents and the outputs entry counts what commands printed. One figure for both
+    /// would name a key and count rows it does not open.
     #[test]
-    fn the_hint_line_counts_the_commands_as_well_as_the_delegates() {
+    fn the_hint_line_counts_what_each_way_into_the_view_opens() {
         let mut session = Session::new("kernel-enforced");
         session.command_printed(bravebot_agent::report::Printed {
             command: "cargo test".to_string(),
@@ -5697,8 +5740,12 @@ mod tests {
 
         let hint = hint_row_at(&session, 120, 24);
         assert!(
-            hint.contains("ctrl-l") && hint.contains("1 to open"),
-            "a command this session ran was not counted: {hint}"
+            hint.contains("alt-l or /outputs 1 to open"),
+            "a command this session ran was not counted under its entry: {hint}"
+        );
+        assert!(
+            !hint.contains("ctrl-l"),
+            "the agents key was offered with no agent to open: {hint}"
         );
 
         let id = bravebot_agent::report::DelegateId::nth(1);
@@ -5711,8 +5758,8 @@ mod tests {
 
         let hint = hint_row_at(&session, 120, 24);
         assert!(
-            hint.contains("2 to open"),
-            "the two kinds were not counted together: {hint}"
+            hint.contains("ctrl-l 1 to open") && hint.contains("alt-l or /outputs 1 to open"),
+            "each way in was not counted by what it opens: {hint}"
         );
     }
 

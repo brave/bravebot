@@ -21,6 +21,12 @@ delegate's number. A planner that has only delegates left ends its round with on
 outstanding, and that line stays in the transcript. The turn then waits and asks the planner again once
 the report arrives.
 
+**In the desktop window, the sidebar's Agents entry counts the agents the open conversation has
+started.** While any is working, the entry also says how many. Choosing it opens a list with one row
+for each agent: its kind, its number, what it was asked, and whether it is working, finished or did
+not finish. Nothing an agent printed is in the list, and Done returns to the conversation. An agent
+still working when its turn ends is listed as not finished.
+
 A resumed session redraws what the earlier turns did: each one keeps the prompt you sent and how it
 ended, failures and cancellations included, so reading a transcript back does not depend on
 remembering the session. A reply that opened with the model's working leaves that block off when it

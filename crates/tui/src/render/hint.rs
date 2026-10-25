@@ -7,7 +7,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::state::Session;
+use crate::command_table::OUTPUTS_COMMAND;
+use crate::state::{Session, WatchScope};
 use crate::theme;
 
 use super::dim;
@@ -244,25 +245,42 @@ fn hint_facts(session: &Session) -> HintFacts {
         String::new()
     };
 
-    // The way into the view, for as long as it holds anything. The row that reports what the turn
-    // is doing names the key too, but that row goes when the turn ends, and what the view holds is
-    // most worth opening afterwards: the transcript keeps one sentence about a delegate and a
-    // preview of what a command printed. The count is there because a key with nothing behind it
-    // does nothing at all, and this line is read at a glance.
+    // The ways into the view, for as long as either list holds anything. The row that reports what
+    // the turn is doing names the key too, but that row goes when the turn ends, and what the view
+    // holds is most worth opening afterwards: the transcript keeps one sentence about a delegate
+    // and a preview of what a command printed. The counts are there because a key with nothing
+    // behind it does nothing at all, and this line is read at a glance.
     //
-    // Everything the view opens, not the delegates alone. A session that ran commands and spawned
-    // no delegate has a key that works and, counted the other way, no line saying so.
+    // One clause per list, each counting only what its own key opens (WATCH-11). The agents and
+    // what commands printed are different lists with different ways in, so a single figure for both
+    // would name a key and count rows it does not open.
     //
     // Read before the shell line as well as the ordinary one (WATCH-11): the view holds the same
     // things whichever mode the box is in, and this is the line that is always drawn.
-    let watchable = match session.watchable().len() {
+    let agents = match session.watchable_in(WatchScope::Agents).len() {
         0 => String::new(),
         count => t!(
             watching_hint,
             chord = session.bindings().watch_name(),
             count = count
-        ),
+        )
+        .to_string(),
     };
+    let outputs = match session.watchable_in(WatchScope::Outputs).len() {
+        0 => String::new(),
+        count => t!(
+            outputs_hint,
+            chord = session.bindings().outputs_name(),
+            command = OUTPUTS_COMMAND,
+            count = count
+        )
+        .to_string(),
+    };
+    let watchable = [agents, outputs]
+        .into_iter()
+        .filter(|clause| !clause.is_empty())
+        .collect::<Vec<_>>()
+        .join("  ·  ");
     HintFacts {
         looping,
         trail,

@@ -705,6 +705,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if line.trim() == MEMORY_COMMAND {
         return Action::ListMemories;
     }
+    // Opens the view over what commands printed. Said when there is none, since a typed command
+    // that does nothing at all reads as one that was not understood.
+    if line.trim() == OUTPUTS_COMMAND {
+        return open_outputs(session);
+    }
     if line.trim() == PANEL_COMMAND {
         session.toggle_panel();
         return Action::Redraw;
@@ -733,6 +738,17 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         };
     }
     Action::None
+}
+
+/// Open the view over what commands printed, and say so where no command has run.
+///
+/// The one path `/outputs` and the outputs chord both take (WATCH-7), so the two cannot come to
+/// disagree about what an empty list does.
+fn open_outputs(session: &mut Session) -> Action {
+    if !session.watch_outputs() {
+        session.note(t!(outputs_none));
+    }
+    Action::Redraw
 }
 
 /// The next thing the queue is holding for the loop, if the session is free to take it.
@@ -1946,6 +1962,7 @@ fn rewind(
     *programs = snapshot.programs;
 
     session.transcript.truncate(snapshot.transcript_len);
+    session.drop_agents_beyond_transcript();
     session.end_files_if_nothing_written();
     session.rewind_history();
     stored.truncate_audit(session.turns + 1);
@@ -9004,6 +9021,7 @@ mod tests {
 
     mod watching {
         use super::*;
+        use crate::state::{WatchScope, Watched};
         use bravebot_agent::report::{DelegateId, Delegation};
 
         /// A delegate beginning, numbered the way the driver numbers them.
@@ -9048,6 +9066,230 @@ mod tests {
                 "the key answered with a mode"
             );
             assert!(session.watching().is_none());
+        }
+
+        fn ran_a_command(session: &mut Session, command: &str) {
+            session.command_printed(bravebot_agent::report::Printed {
+                command: command.to_string(),
+                lines: vec!["first".to_string()],
+                total: 1,
+                read_by_the_planner: true,
+                outcome: bravebot_agent::report::Outcome::Succeeded,
+                job: None,
+            });
+        }
+
+        /// WATCH-7. A session that ran a command and a delegate: the watch key opens the agents,
+        /// and the one row it holds is the delegate. A key that listed the command beside it would
+        /// put a build's output in the list of the agents that did the work.
+        #[test]
+        fn ctrl_l_lists_the_delegate_and_not_the_command() {
+            let mut session = Session::new("kernel-enforced");
+            ran_a_command(&mut session, "cargo test");
+            spawn(&mut session, "reader", "find the parser");
+            session.reporting_for(None);
+
+            handle_key(&mut session, ctrl('l'));
+
+            assert!(session.watching_a_delegate(), "the key did not open");
+            assert!(
+                session.watched_delegate().is_some(),
+                "the key did not land on the delegate"
+            );
+            assert!(
+                !session.listing_delegates(),
+                "a list of one row was shown as a list"
+            );
+            assert!(
+                session
+                    .watchable()
+                    .iter()
+                    .all(|row| !matches!(row, Watched::Output(_))),
+                "the watch key's list held a command"
+            );
+        }
+
+        /// WATCH-7. A session that ran only commands has nothing for the watch key to open, so it
+        /// answers with nothing, as it does where nothing has run at all.
+        #[test]
+        fn ctrl_l_does_nothing_where_only_commands_have_run() {
+            let mut session = Session::new("kernel-enforced");
+            ran_a_command(&mut session, "cargo test");
+
+            let action = handle_key(&mut session, ctrl('l'));
+
+            assert!(matches!(action, Action::None));
+            assert!(
+                session.watching().is_none(),
+                "the watch key opened on a command"
+            );
+        }
+
+        /// WATCH-7. What commands printed is opened by `/outputs`, on the row where there is one
+        /// and on the list where there are several, and the command says so where there is none.
+        #[test]
+        fn the_outputs_command_opens_what_commands_printed() {
+            let mut session = Session::new("kernel-enforced");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(OUTPUTS_COMMAND)),
+                Action::Redraw
+            );
+            assert!(session.watching().is_none(), "it opened on nothing");
+
+            ran_a_command(&mut session, "cargo test");
+            spawn(&mut session, "reader", "find the parser");
+            session.reporting_for(None);
+            dispatch_command(&mut session, commanded(OUTPUTS_COMMAND));
+
+            assert_eq!(
+                session
+                    .watched_output()
+                    .map(|output| output.command.as_str()),
+                Some("cargo test")
+            );
+            assert_eq!(session.watch_scope(), WatchScope::Outputs);
+        }
+
+        fn alt_l() -> KeyEvent {
+            KeyEvent::new(KeyCode::Char('l'), KeyModifiers::ALT)
+        }
+
+        /// WATCH-7. A session that ran two commands and a delegate: the outputs chord opens the
+        /// list of the commands and holds nothing else. An implementation that opened the agents
+        /// list, or put the delegate beside the commands, lands on the wrong scope or on a row
+        /// that is not a command.
+        #[test]
+        fn alt_l_opens_the_outputs_and_not_the_agents() {
+            let mut session = Session::new("kernel-enforced");
+            ran_a_command(&mut session, "cargo test");
+            ran_a_command(&mut session, "cargo build");
+            spawn(&mut session, "reader", "find the parser");
+            session.reporting_for(None);
+
+            let action = handle_key(&mut session, alt_l());
+
+            assert_eq!(action, Action::Redraw);
+            assert_eq!(session.watch_scope(), WatchScope::Outputs);
+            assert!(session.watching().is_some(), "the chord did not open");
+            assert!(session.listing_delegates(), "two commands were not a list");
+            let rows = session.watchable();
+            assert_eq!(rows.len(), 2, "the outputs list held another row");
+            assert!(
+                rows.iter().all(|row| matches!(row, Watched::Output(_))),
+                "the outputs list held something that is not a command"
+            );
+        }
+
+        /// WATCH-7. The chord and `/outputs` share one path, so where no command has run both
+        /// leave the same note and open nothing, even in a session that has a delegate. A silent
+        /// chord, or one with wording of its own, differs from the command here.
+        #[test]
+        fn alt_l_says_what_the_outputs_command_says_where_no_command_has_run() {
+            let mut typed = Session::new("kernel-enforced");
+            spawn(&mut typed, "reader", "find the parser");
+            typed.reporting_for(None);
+            dispatch_command(&mut typed, commanded(OUTPUTS_COMMAND));
+            let said = last_note(&typed).to_string();
+            assert_eq!(said, t!(outputs_none).to_string());
+
+            let mut pressed = Session::new("kernel-enforced");
+            spawn(&mut pressed, "reader", "find the parser");
+            pressed.reporting_for(None);
+            let before = pressed.transcript.len();
+
+            let action = handle_key(&mut pressed, alt_l());
+
+            assert_eq!(action, Action::Redraw);
+            assert!(pressed.watching().is_none(), "the chord opened on nothing");
+            assert_eq!(pressed.transcript.len(), before + 1, "no note was left");
+            assert_eq!(last_note(&pressed), said);
+        }
+
+        /// WATCH-7. Ctrl-L stays the key for the agents. Where only commands have run it does
+        /// nothing and leaves no note, so it did not fall back to the outputs path, which says
+        /// something where nothing opens.
+        #[test]
+        fn ctrl_l_where_only_commands_ran_does_not_take_the_outputs_path() {
+            let mut session = Session::new("kernel-enforced");
+            ran_a_command(&mut session, "cargo test");
+            let before = session.transcript.len();
+
+            let action = handle_key(&mut session, ctrl('l'));
+
+            assert_eq!(action, Action::None);
+            assert!(session.watching().is_none());
+            assert_eq!(session.transcript.len(), before, "Ctrl-L left a note");
+        }
+
+        /// WATCH-7. Inside the view the chord is the view's: over the outputs it closes, as the
+        /// watch chord does, and over the agents it switches to the outputs, whether the view is
+        /// on a list or inside a delegate. The arm that refuses every other chord swallowing it
+        /// leaves the view as it was.
+        #[test]
+        fn alt_l_inside_the_view_closes_the_outputs_and_switches_from_the_agents() {
+            let handlers: [fn(&mut Session, KeyEvent) -> Action; 2] =
+                [handle_key, handle_key_while_working];
+            for handler in handlers {
+                let ready = || {
+                    let mut session = Session::new("kernel-enforced");
+                    session.status = Status::Working;
+                    ran_a_command(&mut session, "cargo test");
+                    spawn(&mut session, "reader", "find the parser");
+                    spawn(&mut session, "checker", "run the build");
+                    session.reporting_for(None);
+                    session
+                };
+
+                let mut session = ready();
+                assert!(session.watch_outputs());
+                handler(&mut session, alt_l());
+                assert!(session.watching().is_none(), "the chord did not close");
+
+                let mut session = ready();
+                assert!(session.watch());
+                assert_eq!(session.watch_scope(), WatchScope::Agents);
+                handler(&mut session, alt_l());
+                assert_eq!(
+                    session.watch_scope(),
+                    WatchScope::Outputs,
+                    "the chord did not switch from the list of agents"
+                );
+                assert_eq!(
+                    session
+                        .watched_output()
+                        .map(|output| output.command.as_str()),
+                    Some("cargo test")
+                );
+
+                let mut session = ready();
+                assert!(session.watch());
+                session.open_watched();
+                assert!(session.watching_a_delegate());
+                handler(&mut session, alt_l());
+                assert_eq!(
+                    session.watch_scope(),
+                    WatchScope::Outputs,
+                    "the chord did not switch from inside a delegate"
+                );
+            }
+        }
+
+        /// WATCH-7. Over the agents with no command run, the chord says so as `/outputs` does and
+        /// the view stays where it was.
+        #[test]
+        fn alt_l_over_the_agents_with_no_command_says_so_and_stays() {
+            let mut session = Session::new("kernel-enforced");
+            session.status = Status::Working;
+            spawn(&mut session, "reader", "find the parser");
+            spawn(&mut session, "checker", "run the build");
+            session.reporting_for(None);
+            assert!(session.watch());
+            let before = session.watching();
+
+            handle_key_while_working(&mut session, alt_l());
+
+            assert_eq!(session.watching(), before, "the view moved");
+            assert_eq!(last_note(&session), t!(outputs_none).to_string());
         }
 
         /// The chord that opened the view leaves it, wherever it has been moved to. Bound onto `j`
@@ -9166,7 +9408,7 @@ mod tests {
         fn a_chord_moved_onto_a_key_the_view_reads_is_not_that_key() {
             let onto_letters = [
                 ("background", "alt-b"),
-                ("editor", "alt-l"),
+                ("editor", "alt-y"),
                 ("history", "alt-q"),
                 ("paste", "alt-j"),
                 ("scroller", "alt-k"),
@@ -23481,6 +23723,7 @@ mod tests {
                 LOOP_COMMAND,
                 MODEL_COMMAND,
                 NOTE_COMMAND,
+                OUTPUTS_COMMAND,
                 PANEL_COMMAND,
                 PR_COMMAND,
                 RENAME_COMMAND,

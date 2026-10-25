@@ -156,6 +156,12 @@ pub(crate) const WATCH_COMMAND: &str = "/watch";
 /// job while the turn goes on with everything else.
 pub(crate) const JOBS_COMMAND: &str = "/jobs";
 
+/// The line that opens the view over what commands printed, background jobs included.
+///
+/// The agents have a key of their own, and what a program printed is a different thing to look at,
+/// so it is opened from here rather than from that key (WATCH-7).
+pub(crate) const OUTPUTS_COMMAND: &str = "/outputs";
+
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
 
@@ -370,7 +376,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 56] {
+pub fn commands() -> [Command; 57] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -574,6 +580,12 @@ pub fn commands() -> [Command; 56] {
             name: JOBS_COMMAND,
             argument: "[stop <name> [<delegate>]]",
             description: t!(command_jobs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: OUTPUTS_COMMAND,
+            argument: "",
+            description: t!(command_outputs),
             mid_turn: MidTurn::Runs,
         },
         Command {

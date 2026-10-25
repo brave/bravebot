@@ -23,6 +23,8 @@ export type Waiting = Phase | 'starting-servers'
 /** A hook holding the turn open: the moment's word and the program as the person's file spells it. */
 export type Hook = { moment: string; program: string }
 export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
+/** One agent in the `agents` event. `id` is the driver's spelling of the delegate's number (VIEW-35). */
+export type AgentEntry = { id: string; kind: string; task: string; state: 'working' | 'finished' | 'failed' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
 export type TodoStatus = 'pending' | 'active' | 'done' | 'cancelled'
@@ -962,6 +964,13 @@ export interface EventMap {
   'check.finished': Record<string, never>
   'hook.started': Hook
   'hook.finished': Record<string, never>
+  /**
+   * Every agent the session has started, in the order started, sent whenever a delegate starts or
+   * ends and when a turn or run ends with one still working. `id` is the driver's spelling of the
+   * delegate's number and may repeat. `started` and `working` are the counts. Nothing the delegate
+   * printed, its note or its report is sent (VIEW-35).
+   */
+  agents: { agents: AgentEntry[]; started: number; working: number }
   landed: { landing: Landing }
   quarantined: Shown
   todos: { rows: TodoRow[] }

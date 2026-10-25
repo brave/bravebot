@@ -20,6 +20,7 @@ import type {
 } from '../shared/protocol'
 import { nextPermissionMode } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
+import { Agents } from './components/Agents'
 import { SessionInfo, firstChat } from './components/Sessions'
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
@@ -58,6 +59,8 @@ import { type Interjection, type Live, NEW_CHAT, cameFrom, liveKey, newLive, pre
 export function App(): React.JSX.Element {
   /** Settings take the place of the chat view while open; which page was last open is kept. */
   const [settings, setSettings] = useState(false)
+  /** The list of agents the open conversation has started, over the chat view. */
+  const [agentsOpen, setAgentsOpen] = useState(false)
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('general')
   /** A bot's own page, shown in place of a conversation. */
   const [botView, setBotView] = useState<string | null>(null)
@@ -1070,6 +1073,7 @@ export function App(): React.JSX.Element {
   const stableSwitchTab = useEvent(switchTab)
   const stableOpenBot = useEvent(openBot)
   const openSettings = useEvent(() => openSettingsPage())
+  const openAgents = useEvent(() => setAgentsOpen(true))
   const stableSwitchProject = useEvent((choice: ProjectChoice) => { void switchProject(choice) })
 
   // A bot's own page, while no conversation is open over it.
@@ -1146,6 +1150,9 @@ export function App(): React.JSX.Element {
         onRemoveBot={removeBot}
         build={build}
         onSettings={openSettings}
+        agentsStarted={live?.agentCounts.started ?? 0}
+        agentsWorking={live?.agentCounts.working ?? 0}
+        onAgents={openAgents}
       /></SessionInfo.Provider>
       <Gutter
         side="left"
@@ -1247,6 +1254,16 @@ export function App(): React.JSX.Element {
       <Context live={live} audit={auditPanel} details={details} />
       </div>
       </div>
+      {agentsOpen && (
+        <Agents
+          agents={live?.agents ?? []}
+          onClose={() => {
+            setAgentsOpen(false)
+            // Back to the entry that opened the list, once the chat view is no longer inert.
+            requestAnimationFrame(() => document.querySelector('.agents-open')?.shadowRoot?.querySelector<HTMLElement>('button')?.focus())
+          }}
+        />
+      )}
       {settings && (
         <SettingsView
           page={settingsPage}

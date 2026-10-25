@@ -191,6 +191,8 @@ pub struct Keybindings {
     pub history: KeyChord,
     pub trail: KeyChord,
     pub watch: KeyChord,
+    /// Opens the view over what commands printed, as `/outputs` does (WATCH-7).
+    pub outputs: KeyChord,
     pub paste: KeyChord,
     pub panel: KeyChord,
     pub scope: KeyChord,
@@ -211,6 +213,9 @@ impl Default for Keybindings {
             history: KeyChord::ctrl('r'),
             trail: KeyChord::ctrl('t'),
             watch: KeyChord::ctrl('l'),
+            // Alt and not Ctrl because every Ctrl letter is spoken for: the box, a control
+            // character (Ctrl-H, -I, -M, -J, -[), flow control (Ctrl-Q) or another action.
+            outputs: KeyChord::alt('l'),
             paste: KeyChord::ctrl('v'),
             panel: KeyChord::ctrl('x'),
             scope: KeyChord::ctrl('n'),
@@ -222,10 +227,10 @@ impl Default for Keybindings {
     }
 }
 
-/// How many actions a settings file can move. Thirteen where the session can be suspended, and
-/// twelve where it cannot, since an action that does nothing has no chord to be moved off of
+/// How many actions a settings file can move. Fourteen where the session can be suspended, and
+/// thirteen where it cannot, since an action that does nothing has no chord to be moved off of
 /// (INPUT-47).
-const MOVABLE: usize = if cfg!(unix) { 13 } else { 12 };
+const MOVABLE: usize = if cfg!(unix) { 14 } else { 13 };
 
 /// The spellings a terminal reports for the byte Ctrl-_ sends, which is 0x1f.
 ///
@@ -262,6 +267,7 @@ impl Keybindings {
             ("editor", &mut self.editor),
             ("enhance", &mut self.enhance),
             ("history", &mut self.history),
+            ("outputs", &mut self.outputs),
             ("panel", &mut self.panel),
             ("paste", &mut self.paste),
             ("scope", &mut self.scope),
@@ -349,6 +355,10 @@ impl Keybindings {
         self.watch.matches(key)
     }
 
+    pub fn is_outputs(&self, key: &KeyEvent) -> bool {
+        self.outputs.matches(key)
+    }
+
     pub fn is_paste(&self, key: &KeyEvent) -> bool {
         self.paste.matches(key)
     }
@@ -380,6 +390,7 @@ impl Keybindings {
             self.editor,
             self.enhance,
             self.history,
+            self.outputs,
             self.panel,
             self.paste,
             self.scope,
@@ -441,6 +452,10 @@ impl Keybindings {
         self.watch.display()
     }
 
+    pub fn outputs_name(&self) -> String {
+        self.outputs.display()
+    }
+
     pub fn paste_name(&self) -> String {
         self.paste.display()
     }
@@ -475,6 +490,7 @@ impl Keybindings {
             || self.is_history(key)
             || self.is_trail(key)
             || self.is_watch(key)
+            || self.is_outputs(key)
             || self.is_paste(key)
             || self.is_panel(key)
             || self.is_scope(key)
@@ -656,6 +672,35 @@ mod tests {
         let vacated = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
         assert!(bindings.is_background(&moved) && bindings.claims(&moved));
         assert!(!bindings.is_background(&vacated) && !bindings.claims(&vacated));
+    }
+
+    /// Opening what commands printed is an action of its own on Alt-L, because every Ctrl letter
+    /// is taken. It moves like the others and gives up the chord it left, and another action
+    /// asking for Alt-L loses to it, so Ctrl-L's asides and delegates stay on a key of their own.
+    #[test]
+    fn the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.outputs, KeyChord::alt('l'));
+        assert_eq!(defaults.outputs_name(), "alt-l");
+        assert_eq!(defaults.watch, KeyChord::ctrl('l'));
+
+        let mut map = BTreeMap::new();
+        map.insert("outputs".to_string(), "alt-y".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.outputs, KeyChord::alt('y'));
+        let moved = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT);
+        let vacated = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::ALT);
+        assert!(bindings.is_outputs(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_outputs(&vacated) && !bindings.claims(&vacated));
+
+        // Another action asking for the outputs default is turned away, and so is the outputs
+        // action asking for another action's default: both fall back to the defaults.
+        let mut map = BTreeMap::new();
+        map.insert("editor".to_string(), "alt-l".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        let mut map = BTreeMap::new();
+        map.insert("outputs".to_string(), "ctrl-l".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
     }
 
     /// The panel is opened and closed from the box, so a person whose terminal or multiplexer

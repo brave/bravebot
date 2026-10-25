@@ -33,8 +33,12 @@ governs:
   - ui/src/renderer/thinking.ts
   - ui/src/renderer/apply.ts
   - ui/src/renderer/live.ts
+  - ui/src/renderer/components/Agents.tsx
+  - ui/src/renderer/components/Sidebar.tsx
+  - ui/src/renderer/App.tsx
   - crates/ui-bridge/src/turn.rs
   - ui/scripts/ux-state.test.mjs
+  - ui/scripts/agents.test.mjs
   - ui/scripts/marking.test.mjs
 documented-by:
   - docs/website/docs/using/transcript.md
@@ -1088,6 +1092,62 @@ character gives up that character.
 
 `verified-by: bravebot_ui_bridge::reporting::the_models_thinking_is_reported_in_order_and_a_delegates_and_an_empty_one_are_not`
 `verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs drives the window's own event reducer with the bridge's events: the thinking is held apart from the transcript's entries, only its last 4,096 characters are kept and a cut through a character gives it up, a new round, a words event, a call, a new turn, a finished turn, a failed or stopped turn and a plan run starting, finishing or failing each clear it, the choice to show it outlives the round it was made in, and the button is offered from the first thinking sent and stays through every round's end; ui/scripts/marking.test.mjs renders the working row through react-dom and asserts that the last eight lines are drawn under one head, that markup in them is drawn as the characters it is and makes no element, attribute or request, that nothing is drawn with the toggle off or with nothing thought, and that the button is absent for a session sent no thinking and present for one that was, between rounds as well; make check-ui runs both)`
+
+<a id="VIEW-35"></a>
+### VIEW-35: the bridge tells the desktop window which agents a conversation has started and where each stands, and nothing they printed
+
+The bridge keeps the session's agents in the `Roster` the terminal uses ([WATCH-12](watching.md#WATCH-12)),
+and sends the whole list in an `agents` event each time a delegate starts, each time one ends, and
+when a turn or plan run ends with one still working. The event carries `agents`, one entry for each
+agent in the order started, and the counts `started` and `working`. An entry holds `id`, the
+driver's own spelling of the delegate's number (`d1`, `d2.1`), `kind`, `task`, the words the planner
+gave it, and `state`, which is `working`, `finished` or `failed`. A finish is applied to the latest
+agent with that number that is still working, so delegates ending in any order are each marked, and
+a number used again after its first agent ended is a second agent. The list is kept for the session,
+so it lasts across turns, and is not saved: a reopened session and a fork start with none.
+
+An agent still working when a turn or plan run ends did not finish, because a delegate does not
+outlive the turn that started it, so the bridge marks it `failed` and sends the list before
+`turn.done`, `turn.error`, `manifest.done` or `manifest.error`.
+
+The event carries no line a delegate printed, no thought, no tool call, no note the driver wrote
+about how it ended and nothing it reported back, and the stop token is not sent. What a delegate
+said reaches no screen of the window and is written to no record
+([WATCH-12](watching.md#WATCH-12)). A window that counts or lists agents does so from this event and
+from nothing a delegate wrote.
+
+**Why.** A person watching a window has no other way to know that work is going on beside the turn,
+or how much. The terminal draws it from the same type, so the two clients do not each keep their own
+copy of when an agent starts, ends or is counted. The `task` is the planner's own line, and the
+planner holds no untrusted content, so it is words the driver already carries to a screen. What a
+delegate that met untrusted content printed is not, and no event here can carry it because the
+payload is built from the agent's number, kind, task and state alone, and nothing branches on the
+task.
+
+`verified-by: bravebot_ui_bridge::reporting::a_delegate_crosses_in_the_agents_event_carrying_none_of_its_lines`
+`verified-by: bravebot_ui_bridge::reporting::a_delegate_finishing_before_an_earlier_one_marks_its_own_agent`
+`verified-by: bravebot_ui_bridge::reporting::a_delegate_number_used_again_is_a_second_agent`
+`verified-by: bravebot_ui_bridge::reporting::an_end_of_turn_or_run_leaves_no_agent_working`
+`verified-by: bravebot_ui_bridge::reporting::the_list_lasts_across_the_reporters_of_a_session`
+
+<a id="VIEW-36"></a>
+### VIEW-36: the desktop window counts the agents a conversation has started and lists them from the sidebar
+
+The sidebar's foot has an Agents entry beside Settings. It shows the number of agents the open
+conversation has started, and after it the number still working while any is. With none started it
+shows the label alone. Choosing it opens a list over the conversation, one row for each agent in the
+order started, holding the agent's kind, its number, what it was asked, and whether it is working,
+finished or did not finish. The list says so when there are none, and its Done control closes it and
+returns focus to the entry.
+
+The window draws the list and counts VIEW-35 sends and keeps no rule of its own for when an agent
+starts, ends or is counted, and counts none itself: its number, kind and task, and its state, are the bridge's. A new
+conversation starts with none. Nothing a delegate printed is kept
+or drawn here, as the watching spec says.
+
+The accelerator that focuses the composer is not changed by this entry.
+
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agents.test.mjs pins it: it folds the agents event through the window's own event reducer and asserts that the list it carries replaces the window's, that a number sent twice is two rows, that no turn.done, turn.error, manifest.done or manifest.error changes an agent, that the sidebar counts are the two the bridge sent, and that a new conversation starts with none; it renders the real Agents view and sidebar foot through react-dom and asserts the rows, the empty sentence, the Done control, the label alone for none started, the count, and the count of those working; make check-ui runs it)`
 
 ## Known costs
 

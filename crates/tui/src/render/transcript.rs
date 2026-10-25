@@ -501,7 +501,7 @@ fn push_tail(session: &Session, width: u16, opening: bool, lines: &mut Vec<Line<
                 lines.push(Line::raw(""));
                 lines.push(Line::from(Span::styled(
                     format!("{TURN_MARKER} {note}"),
-                    Style::default().fg(if delegate.failed {
+                    Style::default().fg(if delegate.failed() {
                         theme::fail()
                     } else {
                         theme::ok()

@@ -2805,6 +2805,8 @@ watching-keys-stop = x stops it
 watching-nothing-yet = nothing yet
 # The list of every delegate this turn has spawned, with the session above them.
 watching-list-title = delegates
+# The list of what commands printed, opened by /outputs and its chord and not by the watch key.
+watching-outputs-title = command output
 watching-list-keys = up / down moves  ·  enter opens  ·  q closes
 # The first row of the list: the conversation the delegates were spawned from.
 watching-list-session = session
@@ -2813,11 +2815,16 @@ watching-calls = { $count ->
     [one] { $count } call
    *[other] { $count } calls
     }
-# Said on the bottom line once the view has anything to open, which is the one row that outlasts
-# the turn that drew it. The count is there because a key with nothing behind it is not worth
-# pressing. Every kind of row is counted together, since one key opens the list holding all of
-# them and naming one kind here would undercount the rest.
+# Said on the bottom line once the agents list has anything to open, which is the one row that
+# outlasts the turn that drew it. The count is there because a key with nothing behind it is not
+# worth pressing. It counts the asides and the delegates, which the key opens, and nothing a
+# command printed: those have their own clause below.
 watching-hint = { $chord } { $count } to open
+# The same line's clause for what commands printed, said while there is any. The chord and the
+# slash command both open them, and the count is of what they open.
+outputs-hint = { $chord } or { $command } { $count } to open
+# Left in the transcript by /outputs when no command has run.
+outputs-none = no command has run in this session, so there is no output to open
 # Said on the bottom line for as long as a command the turn is waiting on can be moved, and gone
 # the moment it ends or is moved. Short, because it shares the line with everything else there.
 background-hint = { $chord } to background
@@ -2986,6 +2993,7 @@ command-after = Send a prompt once, after a delay
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-jobs = List this turn's background jobs, and stop one by its name
+command-outputs = Open what the commands this session ran printed, background jobs included
 command-panel = Show or hide the info panel beside the transcript
 command-files = List the files the session wrote and show every edit to the one highlighted
 command-caffeinate = Keep the computer awake while a turn or loop is pending

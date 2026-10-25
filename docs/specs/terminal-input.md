@@ -2137,18 +2137,21 @@ one carries to the other.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move thirteen chords, and nothing else
+### INPUT-32: a settings file can move fourteen chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
 action's key says nothing about the others. There is no second file and no other spelling of the
-block, so one place answers what a key does. Thirteen actions can be moved on a platform that can
-suspend the session, twelve on one that cannot (INPUT-47), and nothing else can be moved:
+block, so one place answers what a key does. Fourteen actions can be moved on a platform that can
+suspend the session, thirteen on one that cannot (INPUT-47), and nothing else can be moved:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
 - `editor` (default: `ctrl-g`): open external editor for the current prompt.
-- `watch` (default: `ctrl-l`): watch background delegate or inspect running actions.
+- `watch` (default: `ctrl-l`): open the list of delegates and asides ([WATCH-7](watching.md#WATCH-7)).
+- `outputs` (default: `alt-l`): open what commands printed, background jobs included, by the path
+  `/outputs` takes ([WATCH-7](watching.md#WATCH-7)). Alt and not Ctrl because every Ctrl letter is
+  taken.
 - `scroller` (default: `ctrl-o`): open the transcript scroller.
 - `history` (default: `ctrl-r`): open prompt history search.
 - `stash` (default: `ctrl-s`): stash the current input line or bring it back.
@@ -2188,7 +2191,8 @@ them in, which is nothing a person could predict from what they wrote, so neithe
 
 **A mode reads the chord that opened it.** Inside the search over prompts, the chord that puts a line
 away narrows the scope and the one that opened the search closes it (INPUT-19, INPUT-31); inside the
-view of what a delegate is doing, the chord that opened the view leaves it. Ctrl-C keeps its own
+view of what a delegate is doing, the chord that opened the view leaves it, and the `outputs` chord
+leaves the view over the commands and switches to them from the agents ([watching.md](watching.md)). Ctrl-C keeps its own
 meaning in both, and the chord an action was moved off of does nothing. In the view so does every
 other key held with a modifier but Shift, the chord an action was moved onto among them, save the
 scroller's Ctrl-U, Ctrl-D and Ctrl-B ([SCROLL-3](scroller.md#SCROLL-3)), which the view borrows.
@@ -2237,6 +2241,7 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::the_suspend_chord_is_ctrl_z_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::a_chord_contested_with_suspend_is_given_up_by_the_request`
 `verified-by: bravebot_tui::keybindings::the_enhance_chord_is_ctrl_p_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
