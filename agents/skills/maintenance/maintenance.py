@@ -4,6 +4,7 @@
     python3 agents/skills/maintenance/maintenance.py [lane ...] [path ...] [--mechanical-only]
     python3 agents/skills/maintenance/maintenance.py collect --work-dir DIR
     python3 agents/skills/maintenance/maintenance.py draft --work-dir DIR
+    python3 agents/skills/maintenance/maintenance.py clean --work-dir DIR
 
 The scan reads every tracked source file and lists candidates in fourteen lanes: public items
 nothing names, items only tests name, attributes that silence a lint, blocks of lines repeated in
@@ -16,6 +17,10 @@ the code and decide, and only what a reviewer calls `cleanup` becomes a draft.
 `record` writes the verdicts reviewers gave to docs/maintenance-reviewed, and a later scan leaves
 out each candidate recorded there while the files it names are unchanged, so a repeat run reaches
 the candidates past each lane's cap instead of reading the first ones again.
+
+Where the repository has a commit, `prepare` checks it out in the work directory and the reviewers
+read that checkout, so the lines they cite are lines of one commit while the working tree moves.
+`clean` removes it.
 
 Nothing here edits source or posts anything. `--mechanical-only` prints the candidates and exits,
 which is what `make check-maintenance` runs. Standard library only, like the other checks.
@@ -1700,11 +1705,12 @@ in a crate both callers may already depend on, or it does not go anywhere.
 so read the clauses it touches. `guards` names a symbol a spec pins: its uses are counted in the
 spec's front matter, and a fix that moves or removes one updates that count in the same change.
 
+{reading}
 ## The job
 
 For every candidate:
 
-1. Read the code. Grep the name or the text yourself, across the whole tree, including strings,
+1. Read the code. Search the name or the text yourself, across all of it, including strings,
    macros, build scripts, the Makefile, `.github/`, other languages, and docs. The scan counts
    identifiers, so it misses a use built from parts or reached by reflection, and it calls two
    unrelated items with one name a use of each other.
@@ -1758,6 +1764,37 @@ Write JSON to `{results_file}` and nothing else to stdout:
 ```
 
 One verdict for every candidate in your list. No prose outside the file. Do not edit any file.
+
+{finish}"""
+
+READING_PINNED = """\
+## Where to read
+
+The code is at `{tree}`, a checkout of commit `{commit}` made for this run. Read it there and cite
+`file:line` from it, so each line number refers to that one commit however far `main` moves while
+you work. It holds tracked files only, so `git grep -n NAME` searches all of it in a second and a
+plain `grep -r` is as fast. Do not search `{root}`: it holds `target/` and `node_modules/`, and a
+`grep -r` over them runs past the tool's time limit, which moves it to the background. History is in
+`{root}`: `git -C {root} log -- PATH`.
+"""
+
+READING_LIVE = """\
+## Where to read
+
+The code is in `{root}`, your working directory. Search it with `git grep -n NAME`, which reads
+tracked files only. A plain `grep -r .` also walks `target/` and `node_modules/`, runs past the
+tool's time limit, and is moved to the background.
+"""
+
+FINISH = """\
+## How to finish
+
+- Start no background command. If a command ran past its time limit and the shell moved it to the
+  background, stop it before you answer.
+- Do not run `gh`, file or comment on an issue, or start another agent. The person running this
+  skill reads your file and decides what is posted.
+- When the results file is written and parses, answer with one line saying so and stop. Nothing
+  reads your answer.
 """
 
 QUESTION = {
@@ -1924,7 +1961,7 @@ def render_candidate(candidate):
     return "\n".join(lines)
 
 
-def build_prompt(lane, chunk, results_file):
+def build_prompt(lane, chunk, results_file, reading):
     return PROMPT.format(
         lane=lane,
         first=chunk[0]["id"],
@@ -1934,21 +1971,83 @@ def build_prompt(lane, chunk, results_file):
         lane_notes=LANE_NOTES[lane],
         results_file=results_file,
         areas=", ".join(f"`{a}`" for a in (*AREAS, INFRASTRUCTURE)),
+        reading=reading,
+        finish=FINISH,
     )
+
+
+def git(root, *args):
+    # The program and arguments are fixed here or come from git itself; no shell reads them.
+    return subprocess.run(  # nosemgrep: gitlab.bandit.B603
+        ["git", "-C", str(root), *args], capture_output=True, text=True, check=False
+    )
+
+
+def read_commit(root):
+    """The commit `root` is on, or None where it has none."""
+    done = git(root, "rev-parse", "--verify", "-q", "HEAD")
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def has_uncommitted_changes(root):
+    """Whether a tracked file differs from the commit it is on."""
+    return bool(git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip())
+
+
+def make_snapshot(root, commit, tree):
+    """Check `commit` out at `tree`, detached, and say whether that worked. Reviewers read it in
+    place of the working tree, which other sessions move while a run is under way, so every line
+    they cite is a line of one commit. Hooks are off because this repository's post-checkout hook
+    copies `.envrc` and runs `direnv allow`, which a checkout made for reading has no use for."""
+    if tree.exists():
+        remove_snapshot(root, tree)
+    done = git(root, "-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", str(tree), commit)
+    return done.returncode == 0
+
+
+def remove_snapshot(root, tree):
+    """Remove the checkout `make_snapshot` made, and forget it in the repository."""
+    git(root, "worktree", "remove", "--force", str(tree))
+    git(root, "worktree", "prune")
+    return not Path(tree).exists()
+
+
+def reading_for(root, tree, commit):
+    if tree is None:
+        return READING_LIVE.format(root=root)
+    return READING_PINNED.format(root=root, tree=tree, commit=commit)
 
 
 def prepare(root, lanes, prefixes, work_dir, **options):
     """Scan, then write a prompt file for each group of candidates. `options` are the keywords
-    `scan` takes after the prefixes: `limit`, `size_limit`, `fresh` and `clippy`."""
+    `scan` takes after the prefixes: `limit`, `size_limit`, `fresh` and `clippy`.
+
+    Where the repository has a commit, the reviewers read a checkout of it in `work_dir/tree`, and
+    the manifest names the commit and the tree. Without one they read the working tree."""
+    commit = read_commit(root)
+    dirty = commit is not None and has_uncommitted_changes(root)
     result = scan(root, lanes, prefixes, **options)
     work_dir.mkdir(parents=True, exist_ok=True)
+    tree = work_dir / "tree" if commit is not None and make_snapshot(root, commit, work_dir / "tree") else None
+    reading = reading_for(root, tree, commit)
     manifest = {
         "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "root": str(root),
+        "commit": commit,
+        "tree": str(tree) if tree else None,
+        "dirty": dirty,
         "lanes": [],
         "candidates": {},
         "progress_lines": [],
     }
+    if tree:
+        manifest["progress_lines"].append(f"reviewers read commit {commit[:12]} at {tree}")
+        if dirty:
+            manifest["progress_lines"].append(
+                "tracked files have uncommitted changes: the candidates come from them, the reviewers read the commit"
+            )
+    else:
+        manifest["progress_lines"].append("no commit to check out: reviewers read the working tree")
     for lane, entry in result.items():
         candidates = entry["candidates"]
         size = CHUNK.get(lane, DEFAULT_CHUNK)
@@ -1958,7 +2057,7 @@ def prepare(root, lanes, prefixes, work_dir, **options):
             number = start // size + 1
             prompt_file = work_dir / f"{lane}-{number}_prompt.md"
             results_file = work_dir / f"{lane}-{number}_results.json"
-            prompt_file.write_text(build_prompt(lane, chunk, results_file), encoding="utf-8")
+            prompt_file.write_text(build_prompt(lane, chunk, results_file, reading), encoding="utf-8")
             prompts.append(
                 {
                     "prompt_file": str(prompt_file),
@@ -2192,9 +2291,23 @@ def record(manifest, verdicts, today=None):
     return write_ledger(root, entries), added
 
 
+def clean(manifest, work_dir):
+    """Remove the checkout the reviewers read. Returns whether none is left. Only `work_dir/tree`
+    is removed, whatever the manifest names."""
+    tree = manifest.get("tree")
+    if not tree:
+        return True
+    if Path(tree).resolve() != (Path(work_dir) / "tree").resolve():
+        return False
+    return remove_snapshot(manifest["root"], Path(tree))
+
+
+COMMANDS = ("prepare", "collect", "draft", "record", "clean")
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    command = argv.pop(0) if argv and argv[0] in ("prepare", "collect", "draft", "record") else "prepare"
+    command = argv.pop(0) if argv and argv[0] in COMMANDS else "prepare"
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     if command == "prepare":
         parser.add_argument("scope", nargs="*", help="lane names and path prefixes; default every lane, whole tree")
@@ -2232,6 +2345,10 @@ def main(argv=None):
     if manifest is None:
         return 2
     os.chdir(manifest["root"])
+    if command == "clean":
+        removed = clean(manifest, args.work_dir)
+        print("the reviewers' checkout is removed" if removed else f"did not remove {manifest['tree']}")
+        return 0 if removed else 1
     findings, verdicts, problems = load_reviews(manifest)
     if command == "collect":
         if args.json:

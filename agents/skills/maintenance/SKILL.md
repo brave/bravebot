@@ -62,10 +62,10 @@ Every reviewer prompt says so, and a reviewer calls such code `keep`.
 The heavy data goes through files, never through the main session's context:
 
 1. **maintenance.py prepare** (zero model tokens) scans the tracked tree, ranks and caps the
-   candidates in each lane, and writes one prompt file per group of them. Its stdout is a small
-   JSON pointer.
-2. **Reviewers** (subagent tokens only) each read one prompt file, read the code themselves, and
-   write verdicts and findings to a JSON file.
+   candidates in each lane, checks the current commit out in the work directory, and writes one
+   prompt file per group of candidates. Its stdout is a small JSON pointer.
+2. **Reviewers** (subagent tokens only) each read one prompt file, read the code in that checkout
+   themselves, and write verdicts and findings to a JSON file.
 3. **maintenance.py collect** (zero model tokens) merges the reviewers' results, renders the
    report, and names every candidate no reviewer answered for.
 4. **maintenance.py draft** (zero model tokens) writes one issue body per finding into the same
@@ -100,6 +100,14 @@ is otherwise 30, 12 for `size` and 15 for the lanes added after the first six.
 A full run with every lane full asks about 23 reviewers. Once an earlier run is recorded, the
 carried candidates are not asked about again, so scope a run to a lane or a path when that is too
 many.
+
+Where the repository has a commit, `prepare` checks it out at `{work_dir}/tree`, detached and with
+hooks off, and the reviewers read that checkout. Other sessions move the working tree while a run is
+under way, and a checkout makes every line a reviewer cites a line of one commit. It holds tracked
+files only, so a search of it does not walk `target/` or `node_modules/`. The manifest records the
+`commit` and the `tree`, and a progress line says when tracked files have uncommitted changes, which
+the candidates come from and the reviewers do not read. Without a commit the reviewers read the
+working tree.
 
 ### Step 2: read the manifest
 
@@ -188,6 +196,12 @@ leaves those candidates out until a file they name changes. It does not write `u
 candidate no reviewer answered for. A `cleanup` is recorded whether or not its draft was posted,
 since a declined draft that came back every run would be asked about again each time. Delete a
 line to have a candidate read again. The file is left uncommitted.
+
+Then remove the checkout the reviewers read:
+
+```bash
+python3 agents/skills/maintenance/maintenance.py clean --work-dir "$WORK_DIR"
+```
 
 ### Step 8: say what happened
 

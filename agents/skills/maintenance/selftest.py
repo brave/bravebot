@@ -52,6 +52,24 @@ def tree(files):
             os.chdir(before)
 
 
+def commit_all(root, message="change"):
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", message], check=True)
+
+
+def head(root):
+    done = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True)
+    return done.stdout.strip()
+
+
+@contextlib.contextmanager
+def committed(files):
+    """`tree`, with its files committed."""
+    with tree(files) as root:
+        commit_all(root, "fixture")
+        yield root
+
+
 def found(files, lane, **options):
     with tree(files) as root:
         return m.scan(root, (lane,), **options)[lane]["candidates"]
@@ -1082,6 +1100,110 @@ class Prompts(unittest.TestCase):
             capped = m.scan(root, ("unreferenced", "complexity"), limit=4)
         self.assertEqual((len(result["unreferenced"]["candidates"]), len(result["complexity"]["candidates"])), (30, 15))
         self.assertEqual((len(capped["unreferenced"]["candidates"]), len(capped["complexity"]["candidates"])), (4, 4))
+
+
+class Reading(unittest.TestCase):
+    """Where reviewers read, and what the prompt tells them to do while they do."""
+
+    def prepared(self, root, work=None):
+        _, path = m.prepare(root, ("unreferenced",), (), work or root / ".work")
+        manifest = json.loads(Path(path).read_text())
+        prompt = Path(manifest["lanes"][0]["reviewer_prompts"][0]["prompt_file"]).read_text()
+        return manifest, prompt
+
+    def test_reviewers_read_a_checkout_of_the_committed_files_and_not_the_working_tree(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            lib = root / "crates/a/src/lib.rs"
+            committed_text = lib.read_text()
+            lib.write_text(committed_text + "// edited after the commit\n")
+            (root / "target").mkdir()
+            (root / "target/build.log").write_text("not tracked\n")
+            manifest, prompt = self.prepared(root)
+            checkout = Path(manifest["tree"])
+            read = (checkout / "crates/a/src/lib.rs").read_text()
+            holds_untracked = (checkout / "target").exists()
+            expected = head(root)
+        self.assertEqual(manifest["commit"], expected)
+        self.assertEqual(read, committed_text)
+        self.assertFalse(holds_untracked)
+        self.assertIn(f"`{checkout}`", prompt)
+        self.assertIn(expected, prompt)
+        self.assertIn(f"Do not search `{root}`", prompt)
+        self.assertNotIn("your working directory", prompt)
+
+    def test_a_repository_without_a_commit_is_read_in_place(self):
+        with tree({"crates/a/src/lib.rs": unused(2)}) as root:
+            manifest, prompt = self.prepared(root)
+            checkout_made = (root / ".work/tree").exists()
+        self.assertIsNone(manifest["commit"])
+        self.assertIsNone(manifest["tree"])
+        self.assertFalse(checkout_made)
+        self.assertIn(f"The code is in `{root}`, your working directory", prompt)
+        self.assertIn("no commit to check out", "\n".join(manifest["progress_lines"]))
+
+    def test_uncommitted_changes_to_tracked_files_are_reported_and_a_clean_tree_is_not(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            clean, _ = self.prepared(root, root / ".clean")
+            (root / "crates/a/src/lib.rs").write_text(unused(3))
+            dirty, _ = self.prepared(root, root / ".dirty")
+        self.assertFalse(clean["dirty"])
+        self.assertTrue(dirty["dirty"])
+        self.assertNotIn("uncommitted", "\n".join(clean["progress_lines"]))
+        self.assertIn("uncommitted changes", "\n".join(dirty["progress_lines"]))
+
+    def test_the_prompt_tells_a_reviewer_how_to_finish(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            _, prompt = self.prepared(root)
+        for rule in (
+            "Start no background command",
+            "stop it before you answer",
+            "Do not run `gh`",
+            "answer with one line",
+        ):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, prompt)
+
+    def test_preparing_again_into_the_same_work_directory_makes_a_new_checkout(self):
+        with committed({"crates/a/src/lib.rs": unused(2), ".gitignore": ".work\n"}) as root:
+            self.prepared(root)
+            (root / "crates/a/src/lib.rs").write_text(unused(3))
+            commit_all(root, "second")
+            manifest, _ = self.prepared(root)
+            text = (Path(manifest["tree"]) / "crates/a/src/lib.rs").read_text()
+        self.assertEqual(text, unused(3))
+
+    def test_clean_removes_the_checkout_and_the_repository_forgets_it(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            manifest, _ = self.prepared(root)
+            checkout = Path(manifest["tree"])
+            existed = checkout.exists()
+            code, _, _ = quiet(m.main, ["clean", "--work-dir", str(root / ".work")])
+            again, _, _ = quiet(m.main, ["clean", "--work-dir", str(root / ".work")])
+            listed = subprocess.run(
+                ["git", "-C", str(root), "worktree", "list"], check=True, capture_output=True, text=True
+            ).stdout
+        self.assertTrue(existed)
+        self.assertEqual((code, again), (0, 0))
+        self.assertFalse(checkout.exists())
+        self.assertNotIn(str(checkout), listed)
+
+    def test_clean_removes_only_the_checkout_in_its_own_work_directory(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            work = root / ".work"
+            manifest, _ = self.prepared(root, work)
+            elsewhere = root / "other-checkout"
+            subprocess.run(
+                ["git", "-C", str(root), "worktree", "add", "-q", "--detach", str(elsewhere), "HEAD"], check=True
+            )
+            (elsewhere / "note.txt").write_text("keep\n")
+            manifest["tree"] = str(elsewhere)
+            workdir_manifest = work / "manifest.json"
+            workdir_manifest.write_text(json.dumps(manifest))
+            code, out, _ = quiet(m.main, ["clean", "--work-dir", str(work)])
+            kept = (elsewhere / "note.txt").exists()
+        self.assertEqual(code, 1)
+        self.assertIn("did not remove", out)
+        self.assertTrue(kept)
 
 
 if __name__ == "__main__":
