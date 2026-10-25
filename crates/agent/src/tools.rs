@@ -7985,6 +7985,133 @@ fn check_the_plan_before_asking<S: Sink>(
     Ok(reaches_anywhere)
 }
 
+/// What `run` decides about how a line is held before the person is asked: the confinement it
+/// starts under, whether it spends a request for no profile, the sandbox mode and unasked writes
+/// to record once it starts, whether a prompt is owed, and whether the remembered record is what
+/// stopped it.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate answer the run line's decision hands to a different effect"
+)]
+struct Settled {
+    /// None for a line run with no profile. Replaced by the network-closed one where the person's
+    /// trust of the directory is what let the line through.
+    confinement: Option<crate::confine::Confinement>,
+    spends_a_request: bool,
+    sandbox_mode: Option<&'static str>,
+    unasked_writes: bool,
+    asking: bool,
+    covered_by_record: bool,
+}
+
+/// Work out the confinement a `run` line starts under and whether the person is to be asked,
+/// refusing a request for a scope or for no profile that this session cannot honour.
+///
+/// Decided from the compiled plan, the exit codes of earlier lines and the session's settings,
+/// never from what a program printed. A refusal comes back as the result of the call.
+fn settle_the_confinement<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    plan: &bravebot_core::command::Plan,
+    requested: &[bravebot_sandbox::scope::Requested],
+    unconfined: bool,
+    recalled: Option<&bravebot_core::remembered::Remembered>,
+) -> Result<Settled, Box<Produced>> {
+    // No confinement at all for a line the planner asked to run with none: its stages start as
+    // they do under the mode `off`, for this line only, and the next line is built from the
+    // session's mode again.
+    let mut confinement = tools
+        .confinement(workspace_is_trusted(policy, tools.workspace))
+        .filter(|_| !unconfined)
+        .map(|confinement| {
+            confinement
+                .with_requested(requested)
+                .with_requests_offered(requests_accepted(policy, tools).is_ok())
+        });
+    if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
+        let cause = match confinement {
+            Some(_) => RunRequestCause::NoProfileDirectory,
+            None => RunRequestCause::NoPlatformSandbox,
+        };
+        policy.refuse_run_request("scopes", &[cause]);
+        return Err(Box::new(Produced::problem(NOT_ACCEPTING_REQUESTS)));
+    }
+    // Accepted after a line has failed with the sandbox on, or for a line whose own redirection
+    // the sandbox refuses before anything runs, which no run can fail at. Decided from exit codes
+    // and the compiled plan, never from what a program printed. The request is spent once the
+    // person has approved it and the policy has passed the plan, so a refusal on the way leaves it.
+    let mut spends_a_request = false;
+    if unconfined {
+        let leaves_the_workspace = plan
+            .writes
+            .iter()
+            .any(|path| tools.workspace.confines(path).is_err());
+        if !leaves_the_workspace && !tools.confined_failures.has_one() {
+            policy.refuse_run_request("unconfined", &[RunRequestCause::NoConfinedAttempt]);
+            return Err(Box::new(Produced::problem(UNCONFINED_BEFORE_A_FAILURE)));
+        }
+        spends_a_request = !leaves_the_workspace;
+    }
+    // Written once the line is about to start rather than here, so a line the person does not
+    // approve is not recorded as having run in a mode. The writes are read from the confinement as
+    // it stands now, before a directory's trust replaces it below.
+    let sandbox_mode = match (unconfined, tools.confine_runs) {
+        (true, _) => Some("unconfined"),
+        (false, true) => Some(tools.sandbox.name()),
+        (false, false) => None,
+    };
+    let unasked_writes = !unconfined
+        && tools.confine_runs
+        && confinement
+            .as_ref()
+            .is_some_and(|confinement| confinement.writes_without_a_request());
+
+    let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
+    // How the sandbox holds the line, said from the compiled steps and the session's own settings:
+    // the person's trust of the directory answers only for a line it holds (RUN-5).
+    //
+    // Under an open network no stage is held as the session stands, so the line is judged as it
+    // would run with the network closed for this line only. It runs that way only if the person's
+    // trust of the directory is what lets it through, below.
+    let closed_for_the_line = confinement
+        .as_ref()
+        .filter(|confinement| !confinement.network_is_closed())
+        .map(crate::confine::Confinement::closed_for_the_line);
+    let containment = closed_for_the_line
+        .as_ref()
+        .or(confinement.as_ref())
+        .map_or(Containment::Unknown, |confinement| {
+            confinement.holds(&plan.steps(), &plan.directory)
+        });
+    let asking = match unconfined {
+        true => policy.plan_needs_approval_unconfined(),
+        false => policy.plan_needs_approval_held(plan, &names, containment),
+    };
+    // A line the person's trust of the directory let through runs as it was judged: with the
+    // network closed for this line, where the session's is open. A line any other road answered
+    // keeps the network it was approved with.
+    if !asking
+        && !unconfined
+        && policy.answered_by_directory_trust()
+        && let Some(closed) = closed_for_the_line
+    {
+        confinement = Some(closed);
+    }
+    // Whether the record is what stopped the question. Read where the result is quarantined: the
+    // advice about vouching is advice about a prompt, and no prompt will return here for this line
+    // until somebody deletes the entry.
+    let covered_by_record = !asking && recalled.is_some_and(|lines| lines.covers(plan));
+
+    Ok(Settled {
+        confinement,
+        spends_a_request,
+        sandbox_mode,
+        unasked_writes,
+        asking,
+        covered_by_record,
+    })
+}
+
 /// What a `run` call asks for beyond the command line, read from its arguments.
 struct RunCall {
     /// The deadline, clamped to the bounds the turn holds.
@@ -8545,90 +8672,24 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.recall(lines.clone());
     }
 
-    // No confinement at all for a line the planner asked to run with none: its stages start as
-    // they do under the mode `off`, for this line only, and the next line is built from the
-    // session's mode again.
-    let mut confinement = tools
-        .confinement(workspace_is_trusted(policy, tools.workspace))
-        .filter(|_| !unconfined)
-        .map(|confinement| {
-            confinement
-                .with_requested(&requested)
-                .with_requests_offered(requests_accepted(policy, tools).is_ok())
-        });
-    if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
-        let cause = match confinement {
-            Some(_) => RunRequestCause::NoProfileDirectory,
-            None => RunRequestCause::NoPlatformSandbox,
-        };
-        policy.refuse_run_request("scopes", &[cause]);
-        return Produced::problem(NOT_ACCEPTING_REQUESTS);
-    }
-    // Accepted after a line has failed with the sandbox on, or for a line whose own redirection
-    // the sandbox refuses before anything runs, which no run can fail at. Decided from exit codes
-    // and the compiled plan, never from what a program printed. The request is spent once the
-    // person has approved it and the policy has passed the plan, so a refusal on the way leaves it.
-    let mut spends_a_request = false;
-    if unconfined {
-        let leaves_the_workspace = plan
-            .writes
-            .iter()
-            .any(|path| tools.workspace.confines(path).is_err());
-        if !leaves_the_workspace && !tools.confined_failures.has_one() {
-            policy.refuse_run_request("unconfined", &[RunRequestCause::NoConfinedAttempt]);
-            return Produced::problem(UNCONFINED_BEFORE_A_FAILURE);
-        }
-        spends_a_request = !leaves_the_workspace;
-    }
-    // Written once the line is about to start rather than here, so a line the person does not
-    // approve is not recorded as having run in a mode. The writes are read from the confinement as
-    // it stands now, before a directory's trust replaces it below.
-    let sandbox_mode = match (unconfined, tools.confine_runs) {
-        (true, _) => Some("unconfined"),
-        (false, true) => Some(tools.sandbox.name()),
-        (false, false) => None,
+    let Settled {
+        mut confinement,
+        spends_a_request,
+        sandbox_mode,
+        unasked_writes,
+        asking,
+        covered_by_record,
+    } = match settle_the_confinement(
+        policy,
+        tools,
+        &plan,
+        &requested,
+        unconfined,
+        recalled.as_ref(),
+    ) {
+        Ok(settled) => settled,
+        Err(produced) => return *produced,
     };
-    let unasked_writes = !unconfined
-        && tools.confine_runs
-        && confinement
-            .as_ref()
-            .is_some_and(|confinement| confinement.writes_without_a_request());
-
-    let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
-    // How the sandbox holds the line, said from the compiled steps and the session's own settings:
-    // the person's trust of the directory answers only for a line it holds (RUN-5).
-    //
-    // Under an open network no stage is held as the session stands, so the line is judged as it
-    // would run with the network closed for this line only. It runs that way only if the person's
-    // trust of the directory is what lets it through, below.
-    let closed_for_the_line = confinement
-        .as_ref()
-        .filter(|confinement| !confinement.network_is_closed())
-        .map(crate::confine::Confinement::closed_for_the_line);
-    let containment = closed_for_the_line
-        .as_ref()
-        .or(confinement.as_ref())
-        .map_or(Containment::Unknown, |confinement| {
-            confinement.holds(&plan.steps(), &plan.directory)
-        });
-    let asking = match unconfined {
-        true => policy.plan_needs_approval_unconfined(),
-        false => policy.plan_needs_approval_held(&plan, &names, containment),
-    };
-    // A line the person's trust of the directory let through runs as it was judged: with the
-    // network closed for this line, where the session's is open. A line any other road answered
-    // keeps the network it was approved with.
-    if !asking
-        && !unconfined
-        && policy.answered_by_directory_trust()
-        && let Some(closed) = closed_for_the_line
-    {
-        confinement = Some(closed);
-    }
-    // Whether the record is what stopped the question. Read where the result is quarantined: the
-    // advice about vouching is advice about a prompt, and no prompt will return here for this line
-    // until somebody deletes the entry.
-    let covered_by_record = !asking && recalled.as_ref().is_some_and(|lines| lines.covers(&plan));
 
     if asking
         && let Err(produced) = ask_about_the_run(
