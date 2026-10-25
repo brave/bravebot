@@ -14522,6 +14522,65 @@ fn a_slot_written_to_another_path_or_another_spelling_of_its_file_is_asked_about
     );
 }
 
+/// WRITE-4. A slot whose bytes were taken from X, and then X rewritten, is not a copy of X any
+/// more: writing the slot to X is put to the person and puts the bytes it holds back in the file.
+/// The slot is filled when something first needs its bytes, here the write to `copy.txt`, so the
+/// rewrite comes after the bytes were taken.
+///
+/// Fails if the write is dropped on the strength of where the slot was read from alone, which
+/// leaves the confirmer with one question fewer and the file holding the rewrite.
+#[test]
+fn a_slot_written_back_to_its_file_after_the_file_was_rewritten_is_asked_about_and_restores_it() {
+    let scratch = Scratch::new("write-back-after-rewrite");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    let original = "vendor bytes\n";
+    std::fs::write(scratch.path.join("vendor/x.txt"), original).unwrap();
+
+    let done = run_over_files_nobody_vouched_for(
+        &scratch,
+        "rewrite vendor/x.txt, then put back what it held",
+        vec![
+            tool_request_2("read_file", r#"{"path":"vendor/x.txt"}"#),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"copy.txt","contents_ref":"ref:1"}"#,
+            ),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"vendor/x.txt","contents":"rewritten\n"}"#,
+            ),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"vendor/x.txt","contents_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert_eq!(
+        done.confirmer.seen.len(),
+        3,
+        "the restoring write was not put to the person: {:?}",
+        done.confirmer
+            .seen
+            .iter()
+            .map(|r| &r.path)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("vendor/x.txt")).unwrap(),
+        original,
+        "the file does not hold the bytes the slot was read as"
+    );
+    assert!(
+        !done
+            .bodies
+            .iter()
+            .any(|body| body.contains("holds what ref:1 holds")),
+        "the planner was told a rewritten file held what the slot held"
+    );
+}
+
 /// WRITE-4. A processor's answer about X has no file it was read from, so writing it to X is a
 /// change like any other and is put to the person.
 ///

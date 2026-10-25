@@ -3364,13 +3364,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let current = self.observe_path(Capability::FileRead, &path)?;
         let label = crate::label::taint_all([promised, current]);
 
+        // The path's revision before the bytes are taken, so that a write landing while the file
+        // is read leaves the slot older than the file and not the other way round.
+        let revision = self.trust.revision_of(&path);
         let text = read(&path).map_err(|detail| Denial {
             principle: Principle::Confinement,
             message: format!("{tool}: {slot} could not be read: {detail}"),
         })?;
 
         let measured = slots
-            .fill(slot, Labelled::new(text, label))
+            .fill(slot, Labelled::new(text, label), revision)
             .map_err(|e| Denial {
                 principle: Principle::Confinement,
                 message: format!("{tool}: {slot} could not be filled: {e}"),
@@ -5698,7 +5701,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
     ) -> bool {
-        let unchanged = slots.verbatim_of(slot, &PathAuthority::mint()) == Some(path);
+        let unchanged = slots
+            .verbatim_of(slot, &PathAuthority::mint())
+            .is_some_and(|(read_from, at)| read_from == path && self.trust.revision_of(path) == at);
         if unchanged {
             self.allow(
                 "write",
@@ -9283,6 +9288,61 @@ five
             asked_about(&sink),
             1,
             "the write that changes nothing left no line in the trail"
+        );
+    }
+
+    /// A slot is a copy of its file only until something writes the file. Writing the slot back
+    /// to its file changes nothing while the file's revision is the one it had when the slot was
+    /// read, changes the file once the revision has moved, and changes a different path always.
+    /// A comparison of paths alone would skip the question after the file was rewritten, and the
+    /// file would keep the rewrite.
+    #[test]
+    fn a_slot_is_not_a_copy_of_its_file_once_the_file_was_written() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let read = SlotId::new("ref:0");
+        policy
+            .defer(
+                "read_file",
+                read.clone(),
+                "vendor/x.txt",
+                &Labelled::trusted("vendor/x.txt".to_string()),
+                10,
+                &mut slots,
+            )
+            .expect("a file may be reserved");
+        policy
+            .materialise("write_file", &read, &mut slots, |_| {
+                Ok("payload".to_string())
+            })
+            .expect("the file is readable");
+
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot written back to an untouched file was put to the person"
+        );
+
+        // A write to some other file does not move this file's revision.
+        policy
+            .file_authority()
+            .publish("vendor/other.txt", Integrity::Untrusted);
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a write to another file made the slot stale"
+        );
+        assert!(
+            policy.write_would_change("vendor/other.txt", &read, &slots),
+            "the slot written to a path it was not read from was taken for no change"
+        );
+
+        policy
+            .file_authority()
+            .publish("vendor/x.txt", Integrity::Untrusted);
+        assert!(
+            policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot written back after its file was rewritten was taken for no change"
         );
     }
 

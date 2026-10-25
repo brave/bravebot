@@ -76,7 +76,7 @@ guards:
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
       - crates/agent/tests/workspace.rs: 279
-      - crates/core/src/policy.rs: 26
+      - crates/core/src/policy.rs: 27
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
