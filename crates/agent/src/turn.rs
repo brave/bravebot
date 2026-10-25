@@ -3308,7 +3308,6 @@ where
     // it, so the answer can be compared with it at the end of the turn (SKILL-15).
     let mut switched_by: Option<(String, String)> = None;
 
-    let told_mode = started_in;
     let memory = |keeps: bool, name: &str| match keeps && workspace.checkout().is_none() {
         true => crate::memory::told(policy, workspace, name),
         false => String::new(),
@@ -3693,19 +3692,6 @@ where
         }
     }
 
-    let steps = 0;
-    // Which reminders the driver has already put to the planner this turn.
-    let reminded = round_steps::Reminded::default();
-    // The round a file on disk first became different from how this turn found it, where one
-    // did, and whether a program has been run since the turn began.
-    //
-    // Both from what dispatch did, here and in the delegates that share this workspace, rather
-    // than from what the planner asked for, which is the opposite of the write counted in `reminded` and
-    // for the opposite reason. These say what the workspace holds: a write the person declined
-    // and a write plan mode refused leave nothing to build, and a run the person declined builds
-    // nothing, so a turn counting either would tell the planner and then the person about a diff
-    // that was never made or a check that never happened.
-    let worked = Worked::default();
     // Whether a write tool is offered at all, which a run offered none cannot be nudged into.
     // Read once: a tool loaded while the turn runs is a server's, never one of these. The mode
     // can change while it runs, and is read where the nudge is decided.
@@ -3714,49 +3700,6 @@ where
     // The same question in the form the refusals read it in: a tool that will not answer may say
     // to use `run` only where this turn has one to use.
     let running = tools::Running::on(&offered);
-    // Whether the planner may ask for another round of tools. Cleared once, when the budget
-    // runs out, so the last request goes out with none offered and the turn ends with an answer
-    // rather than with the driver's apology.
-    let may_call_tools = true;
-    // What this turn's requests did, summed from zero: not what the session has done, which the
-    // session adds up itself. `output_tokens` is tracked apart from the total because it is what
-    // the live count reports, and adding a round's output to a running total that also holds
-    // prompt tokens would make the figure jump by the size of the re-sent history every round.
-    // `context_tokens` is seeded from the conversation rather than starting at zero. A session
-    // is many turns, and a figure that began again with each one would only notice a
-    // conversation growing inside a single long turn: fifty short turns would fill the context
-    // with nothing watching.
-    let mut account = crate::outcome::Spent {
-        context_tokens: conversation.last_request_tokens(),
-        ..Default::default()
-    };
-    // What the indicator last said the turn had written, which the next round counts on from.
-    let shown_before = 0u64;
-    // What checking the servers' lists spent is this turn's, since this turn is what asked.
-    if let Some((_, usage)) = &mcp {
-        account.add_usage(*usage);
-    }
-    // Cleared only by a failure. A summary that could not be made once will not be made on the
-    // next round either, and a turn should not spend a request per round finding that out.
-    let may_compact = true;
-    // What the turn has already done about a request that did not succeed.
-    let retries = round_steps::Retries::default();
-    // The calls the planner has made this turn, as far as the last one goes (TURN-9).
-    let repeats = crate::repeated_call::Repeats::default();
-    // A delegate and a turn on a definition's model do not move to the fallback model
-    // (BACKEND-53): that model is a boundary its file drew.
-    let may_fall_back = task.delegate.is_none() && pinned_by.is_none();
-    // When the planner asked for the next tick, where this turn is one and it asked at all.
-    let wakeup = None;
-    // Every watch the turn armed, in the order it asked for them, for whoever holds the session
-    // to arm. A list rather than one, because the bound is the session's and a turn may ask
-    // about several files.
-    let watches: Vec<crate::watch::Armed> = Vec::new();
-    let armed = 0usize;
-    // How many questions the planner has put to its advisor this turn, which the bound on them
-    // is read against.
-    let advice_asked = 0usize;
-    let messages_sent = crate::messages::Ledger::default();
     // The pipelines this turn leaves running. Held here so they end here: dropping this kills
     // whatever is still going, which is what keeps a background job from outliving the turn that
     // started it and becoming an effect nobody is watching.
@@ -3770,24 +3713,15 @@ where
         Some(held) => held,
         None => &mut owned,
     };
-    // Said to the planner on the first round only, and not at all where nothing is kept.
-    let told_of_kept_jobs = !jobs.is_kept();
-    // Where the next command line runs, absent one naming its own directory (CMDLINE-12).
-    //
-    // Per turn rather than per session, which is short of what the clause asks for: it says a line
-    // runs where the last one ran and that the first runs at the workspace root, and says nothing
-    // about a turn boundary, so a second message silently starts again at the root. Carrying it
-    // further means putting it in the session record and restoring it on `--resume`, the way the
-    // vouched list is (RUN-9), and the entry points that would carry it are the caller's. Left for
-    // the change that gives a session somewhere to keep one.
-    let run_directory = workspace.root().to_path_buf();
     let plan = Plan {
         system,
         system_text,
         may_write,
         may_run,
         running,
-        may_fall_back,
+        // A delegate and a turn on a definition's model do not move to the fallback model
+        // (BACKEND-53): that model is a boundary its file drew.
+        may_fall_back: task.delegate.is_none() && pinned_by.is_none(),
         pinned_by,
         scheduling,
         arming,
@@ -3797,26 +3731,79 @@ where
         offers_read_output,
     };
     let mut state = State {
-        steps,
-        reminded,
-        worked,
-        may_call_tools,
-        account,
-        shown_before,
-        may_compact,
-        retries,
-        repeats,
-        wakeup,
-        watches,
-        armed,
-        advice_asked,
-        messages_sent,
+        steps: 0,
+        // Which reminders the driver has already put to the planner this turn.
+        reminded: round_steps::Reminded::default(),
+        // The round a file on disk first became different from how this turn found it, where one
+        // did, and whether a program has been run since the turn began.
+        //
+        // Both from what dispatch did, here and in the delegates that share this workspace, rather
+        // than from what the planner asked for, which is the opposite of the write counted in `reminded` and
+        // for the opposite reason. These say what the workspace holds: a write the person declined
+        // and a write plan mode refused leave nothing to build, and a run the person declined builds
+        // nothing, so a turn counting either would tell the planner and then the person about a diff
+        // that was never made or a check that never happened.
+        worked: Worked::default(),
+        // Whether the planner may ask for another round of tools. Cleared once, when the budget
+        // runs out, so the last request goes out with none offered and the turn ends with an answer
+        // rather than with the driver's apology.
+        may_call_tools: true,
+        // What this turn's requests did, summed from zero: not what the session has done, which the
+        // session adds up itself. `output_tokens` is tracked apart from the total because it is what
+        // the live count reports, and adding a round's output to a running total that also holds
+        // prompt tokens would make the figure jump by the size of the re-sent history every round.
+        // `context_tokens` is seeded from the conversation rather than starting at zero. A session
+        // is many turns, and a figure that began again with each one would only notice a
+        // conversation growing inside a single long turn: fifty short turns would fill the context
+        // with nothing watching.
+        //
+        // What checking the servers' lists spent is this turn's, since this turn is what asked.
+        account: {
+            let mut account = crate::outcome::Spent {
+                context_tokens: conversation.last_request_tokens(),
+                ..Default::default()
+            };
+            if let Some((_, usage)) = &mcp {
+                account.add_usage(*usage);
+            }
+            account
+        },
+        // What the indicator last said the turn had written, which the next round counts on from.
+        shown_before: 0,
+        // Cleared only by a failure. A summary that could not be made once will not be made on the
+        // next round either, and a turn should not spend a request per round finding that out.
+        may_compact: true,
+        // What the turn has already done about a request that did not succeed.
+        retries: round_steps::Retries::default(),
+        // The calls the planner has made this turn, as far as the last one goes (TURN-9).
+        repeats: crate::repeated_call::Repeats::default(),
+        // When the planner asked for the next tick, where this turn is one and it asked at all.
+        wakeup: None,
+        // Every watch the turn armed, in the order it asked for them, for whoever holds the session
+        // to arm. A list rather than one, because the bound is the session's and a turn may ask
+        // about several files.
+        watches: Vec::new(),
+        armed: 0,
+        // How many questions the planner has put to its advisor this turn, which the bound on them
+        // is read against.
+        advice_asked: 0,
+        messages_sent: crate::messages::Ledger::default(),
+        // Said to the planner on the first round only, and not at all where nothing is kept. Read
+        // before `jobs` is moved into the literal.
+        told_of_kept_jobs: !jobs.is_kept(),
         jobs,
-        told_of_kept_jobs,
-        run_directory,
+        // Where the next command line runs, absent one naming its own directory (CMDLINE-12).
+        //
+        // Per turn rather than per session, which is short of what the clause asks for: it says a line
+        // runs where the last one ran and that the first runs at the workspace root, and says nothing
+        // about a turn boundary, so a second message silently starts again at the root. Carrying it
+        // further means putting it in the session record and restoring it on `--resume`, the way the
+        // vouched list is (RUN-9), and the entry points that would carry it are the caller's. Left for
+        // the change that gives a session somewhere to keep one.
+        run_directory: workspace.root().to_path_buf(),
         confined_failures: tools::ConfinedFailures::default(),
         spent: Elapsed::default(),
-        told_mode,
+        told_mode: started_in,
         turn_model,
         effort,
         switched_by,
