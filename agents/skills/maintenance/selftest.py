@@ -1592,9 +1592,11 @@ class ClaimCheck(unittest.TestCase):
             code, out, err = quiet(m.main, ["claims-collect", "--work-dir", str(work)])
             _, again, _ = quiet(m.main, ["draft", "--work-dir", str(work)])
         self.assertEqual(code, 0, err)
-        rows = out.split("\n")
-        rejected = next(i for i, line in enumerate(rows) if "Delete" in line and "REJECTED" in rows[i + 2])
-        self.assertIn("REJECTED by the claim check: issue #12 excluded this move", rows[rejected + 2])
+        rejected, held = (
+            next(row for row in re.split(r"\n(?= +\d+\. )", out) if f"{slug}.md" in row) for slug in slugs
+        )
+        self.assertIn("REJECTED by the claim check: issue #12 excluded this move", rejected)
+        self.assertNotIn("REJECTED", held)
         self.assertEqual(out.count("REJECTED"), 1)
         self.assertIn("line numbers: lines 8-9 is crates/a/src/lib.rs:11-12 at HEAD", out)
         self.assertEqual(again.count("REJECTED"), 1)
