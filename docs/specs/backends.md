@@ -2905,7 +2905,10 @@ The key is in no trace, no error text a refused request produces, and no session
 The conversation is restated as turns of blocks by the function a Bedrock request uses as well: the
 system prompt is a top-level list, a tool result is a block on a user turn, turns of one role are
 merged, arguments cross as an object, and a request that offers no tool carries its calls and results
-as text. Text with no word in it is no block, and a call's arguments are an object whatever the
+as text. A user message merged into a turn that already ends in text starts its first text block on a
+new paragraph (`\n\n`), so that the start of one message is never read as the end of the one before it:
+a line ending in a number followed by a note beginning with a number would otherwise read as one
+number. Text with no word in it is no block, and a call's arguments are an object whatever the
 model wrote, this API refusing a blank text block and anything but an object there. A call's id is
 spelled with the letters, digits, `_` and `-` this API accepts, a character outside them becoming
 `_`, on the call and on its result alike, so a pair stays a pair. A result a tool
@@ -3020,6 +3023,7 @@ turning prompt caching off for the rest of the session.
 `verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
 `verified-by: bravebot_agent::backend::a_failed_messages_call_keeps_its_attempts_and_what_the_service_counted`
 `verified-by: bravebot_agent::failure_categories::a_failure_anthropic_reports_keeps_its_actionable_category`
+`verified-by: bravebot_aichat::conversation::a_user_message_after_user_text_starts_a_new_paragraph`
 
 <a id="BACKEND-58"></a>
 ### BACKEND-58: a `google-vertex` entry naming no project is reached through the native `generateContent` API, with its key in `x-goog-api-key` and nowhere else
@@ -3047,8 +3051,9 @@ trace, no error text a refused request produces, and no session record.
 
 The conversation is restated as turns of parts by the function a Bedrock and an Anthropic request
 use as well: the system prompt is `systemInstruction`, a tool result is a part on a `user` turn,
-the assistant's turns are `model` turns, turns of one role are merged, arguments cross as an object,
-and a request that offers no tool carries its calls and results as text. Tools are one
+the assistant's turns are `model` turns, turns of one role are merged, a user message merged into a turn
+that already ends in text starts on a new paragraph as [BACKEND-57](#BACKEND-57) says, arguments cross
+as an object, and a request that offers no tool carries its calls and results as text. Tools are one
 `functionDeclarations` list with each schema in `parametersJsonSchema`. A call carries no id this
 agent can match a result by, so one is made up when a reply arrives, and a result is sent as a
 `functionResponse` named for the function of the call it follows. A result with no call before it in
@@ -3137,6 +3142,7 @@ value, while which models read a budget at all is learned from a refusal as BACK
 `verified-by: bravebot_aichat::generate_content::protocol::a_streamed_piece_is_a_response_an_error_or_nothing_this_reads`
 `verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
 `verified-by: bravebot_agent::backend::a_failed_generate_content_call_keeps_its_attempts_and_what_the_service_counted`
+`verified-by: bravebot_aichat::conversation::a_user_message_after_user_text_starts_a_new_paragraph`
 
 <a id="BACKEND-59"></a>
 ### BACKEND-59: a streamed chat-completions reply hands the thinking it sends in `reasoning_content` to the screen and to nothing else
