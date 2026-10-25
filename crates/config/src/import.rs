@@ -3505,4 +3505,89 @@ mod tests {
             [Source::Ollama, Source::LmStudio, Source::LlamaServer]
         );
     }
+
+    /// IMPORT-10: only an `http` or `https` address on this machine counts as the local server. A
+    /// remote gateway that happens to use port 11434, or a look-alike host, is taken for it otherwise,
+    /// and a real Ollama entry is left unwritten because "it is already there".
+    #[test]
+    fn local_port_refuses_another_machine_another_scheme_and_an_unreadable_url() {
+        for url in [
+            "http://example.invalid:11434/v1",
+            "https://gw.example.invalid:11434",
+            "http://localhost.example.com:11434",
+            "ftp://localhost:11434",
+            "http://localhost:99999",
+            "",
+        ] {
+            assert_eq!(local_port(url), None, "{url}");
+        }
+    }
+
+    /// IMPORT-10: `localhost`, `127.0.0.1`, `[::1]` and `0.0.0.0` are one server. A spelling missed
+    /// here gets a second entry for it, and every model is listed twice in the picker.
+    #[test]
+    fn local_port_reads_the_port_of_every_spelling_of_this_machine() {
+        for url in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:11434",
+            "https://[::1]:11434/v1",
+            "http://0.0.0.0:11434",
+        ] {
+            assert_eq!(local_port(url), Some(11434), "{url}");
+        }
+    }
+
+    /// IMPORT-10: an address with no port reaches the default port of its scheme, 80 or 443. Read as
+    /// no port, an entry for it is never matched; read as one scheme's port for both, it is matched
+    /// against a server it does not reach.
+    #[test]
+    fn local_port_falls_back_to_the_default_port_of_the_scheme() {
+        assert_eq!(local_port("http://localhost/v1"), Some(80));
+        assert_eq!(local_port("https://localhost/v1"), Some(443));
+    }
+
+    fn destination_with(home: &Scratch, providers: &str) -> Destination {
+        let path = home.write("settings.json", &format!(r#"{{"provider": {providers}}}"#));
+        Destination::open(&path).expect("a document")
+    }
+
+    /// IMPORT-10: an entry on another machine at the same port is not this server. Matching by port
+    /// alone takes it for the local one, and the Ollama entry the person needs is left unwritten.
+    #[test]
+    fn serving_locally_ignores_a_remote_entry_on_the_same_port() {
+        let home = Scratch::new("serving-locally-remote");
+        let destination = destination_with(
+            &home,
+            r#"{"remote": {"options": {"baseURL": "http://example.invalid:11434/v1"}}}"#,
+        );
+        assert_eq!(destination.serving_locally("http://127.0.0.1:11434"), None);
+    }
+
+    /// IMPORT-10: an entry with no `options.baseURL` says nothing about any server. Reading it as one
+    /// reaching this machine, or failing on it, hides the entries that do.
+    #[test]
+    fn serving_locally_skips_an_entry_without_a_base_url() {
+        let home = Scratch::new("serving-locally-no-base");
+        let destination = destination_with(
+            &home,
+            r#"{"bare": {}, "keyed": {"options": {"apiKey": "k"}}}"#,
+        );
+        assert_eq!(destination.serving_locally("http://127.0.0.1:11434"), None);
+    }
+
+    /// IMPORT-10: the entry is named by its own id, whatever it is called, and not by `ollama`. A
+    /// remote entry listed before it is passed over to find it.
+    #[test]
+    fn serving_locally_names_a_loopback_entry_by_its_own_id() {
+        let home = Scratch::new("serving-locally-loopback");
+        let destination = destination_with(
+            &home,
+            r#"{"remote": {"options": {"baseURL": "http://example.invalid:11434/v1"}},
+                "whatever": {"options": {"baseURL": "http://localhost:11434/v1"}}}"#,
+        );
+        assert_eq!(
+            destination.serving_locally("http://127.0.0.1:11434"),
+            Some("whatever")
+        );
+    }
 }
