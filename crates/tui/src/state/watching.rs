@@ -130,6 +130,11 @@ impl Session {
         {
             watching.at += 1;
         }
+        self.roster.start(
+            delegation.id,
+            delegation.kind.clone(),
+            delegation.task.clone(),
+        );
         self.transcript.push(Entry::delegate(Delegate {
             id: delegation.id,
             kind: delegation.kind,
@@ -138,9 +143,30 @@ impl Session {
             calls: 0,
             note: None,
             reported: None,
-            failed: false,
+            state: bravebot_agent::roster::AgentState::Working,
             stop: delegation.stop,
         }));
+    }
+
+    /// Copy where each agent stands, as the roster has it, onto the delegate entries.
+    ///
+    /// The roster holds the rules and the entries are what is drawn, so this is the one place the
+    /// two meet. They are in the same order.
+    pub(super) fn sync_delegates(&mut self) {
+        let delegates = self
+            .transcript
+            .iter_mut()
+            .filter_map(|entry| entry.delegate.as_mut());
+        for (delegate, agent) in delegates.zip(self.roster.agents()) {
+            delegate.state = agent.state;
+        }
+    }
+
+    /// The roster follows the transcript when part of it is dropped: an agent started in a turn
+    /// that was rewound is gone with the turn.
+    pub(crate) fn drop_agents_beyond_transcript(&mut self) {
+        let kept = self.delegates().len();
+        self.roster.truncate(kept);
     }
 
     /// One delegate has finished, with what the turn was told about it and what it reported.
@@ -161,12 +187,18 @@ impl Session {
         if self.waiting_on == Some(id) {
             self.waiting_on = None;
         }
-        if let Some(at) = self.at(id)
-            && let Some(delegate) = self.transcript[at].delegate.as_mut()
-        {
-            delegate.note = Some(note);
-            delegate.reported = reported;
-            delegate.failed = failed;
+        // The roster says which delegate this ends: the latest with that number still working.
+        if let Some(place) = self.roster.finish(id, failed) {
+            self.sync_delegates();
+            if let Some(delegate) = self
+                .transcript
+                .iter_mut()
+                .filter_map(|entry| entry.delegate.as_mut())
+                .nth(place)
+            {
+                delegate.note = Some(note);
+                delegate.reported = reported;
+            }
         }
     }
 

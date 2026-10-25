@@ -283,7 +283,7 @@ fn draw_delegate_head(frame: &mut Frame, area: Rect, session: &Session) {
 
     let head = if delegate.is_running() {
         Style::default().fg(theme::running())
-    } else if delegate.failed {
+    } else if delegate.failed() {
         Style::default().fg(theme::fail())
     } else {
         Style::default().fg(theme::ok())
@@ -331,7 +331,7 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
                 (t!(watching_stopping), theme::running())
             } else if delegate.is_running() {
                 (t!(watching_working), theme::running())
-            } else if delegate.failed {
+            } else if delegate.failed() {
                 (t!(watching_failed), theme::fail())
             } else {
                 (t!(watching_answered), theme::ok())
@@ -628,7 +628,7 @@ fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'s
     // does not have to spend a colour the highlight has already taken.
     let (mark, colour) = if delegate.is_running() {
         ("●", theme::running())
-    } else if delegate.failed {
+    } else if delegate.failed() {
         ("✗", theme::fail())
     } else {
         ("✓", theme::ok())

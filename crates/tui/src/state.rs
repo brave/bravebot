@@ -1083,6 +1083,11 @@ pub struct Session {
     /// ask the model until the report arrives, so without it the screen names nothing at all for
     /// the whole wait.
     waiting_on: Option<bravebot_agent::report::DelegateId>,
+    /// The agents this session has started and where each stands, one for each delegate entry of
+    /// the transcript and in the same order. The rules for it are
+    /// [`bravebot_agent::roster::Roster`]'s, which the desktop bridge uses as well, and
+    /// [`Session::sync_delegates`] copies the result onto the entries.
+    roster: bravebot_agent::roster::Roster,
     /// The points this session can be put back to.
     pub rewind: bravebot_session::rewind::RewindStack,
     /// What the last `/hunks` listed, so a number typed after it names the hunk it was read beside.
@@ -1538,6 +1543,7 @@ impl Session {
             checking: None,
             hook: None,
             waiting_on: None,
+            roster: bravebot_agent::roster::Roster::new(),
             running: None,
             movable: None,
             queued: Vec::new(),
@@ -1836,6 +1842,7 @@ impl Session {
         // A new conversation has sent nothing yet, so Up starts from nothing of its own.
         self.history.forget_session();
         self.transcript.clear();
+        self.roster.clear();
         // The edits it listed were in the transcript that is gone (FILES-10).
         self.files = None;
         self.expandable_lines = 0;
@@ -4792,6 +4799,10 @@ impl Session {
         self.streaming.clear();
         self.thinking.clear();
         self.composing = None;
+        // A delegate does not outlive its turn (DELEGATE-17), so one the driver did not report
+        // finished did not finish.
+        self.roster.turn_ended();
+        self.sync_delegates();
         // The driver says which jobs the turn stopped before it says the turn is over. A worker
         // that ended without saying so stopped them all the same, since none outlives its turn,
         // except where the session keeps them: those are still running (RUN-15).
@@ -7237,6 +7248,73 @@ mod tests {
                 held[0].note.as_deref(),
                 Some("a reader delegate answered after 2 rounds")
             );
+        }
+
+        fn spawn_numbered(session: &mut Session, number: u32, task: &str) -> DelegateId {
+            let id = DelegateId::nth(number);
+            session.delegate_started(bravebot_agent::report::Delegation {
+                stop: Default::default(),
+                id,
+                kind: "reader".to_string(),
+                task: task.to_string(),
+            });
+            id
+        }
+
+        /// Several delegates run at once and end in any order, so a finish marks the delegate it
+        /// names. A finish paired with the first one still working marks the wrong block.
+        #[test]
+        fn a_finish_marks_the_delegate_it_names_when_another_started_first_is_still_working() {
+            let mut session = Session::new("none");
+            let first = spawn_numbered(&mut session, 1, "first");
+            let second = spawn_numbered(&mut session, 2, "second");
+            session.delegate_finished(second, "second answered".to_string(), true, None);
+
+            let held = session.delegates();
+            assert!(
+                held[0].is_running(),
+                "the delegate that was not named ended"
+            );
+            assert!(held[1].failed());
+            assert_eq!(held[1].note.as_deref(), Some("second answered"));
+            session.delegate_finished(first, "first answered".to_string(), false, None);
+            let held = session.delegates();
+            assert!(!held[0].is_running() && !held[0].failed());
+        }
+
+        /// Numbers count from one in every turn, so a finish names the delegate that is still
+        /// working. One matched to the first delegate with the number rewrites an earlier turn's.
+        #[test]
+        fn a_number_used_again_finishes_the_delegate_still_working_and_leaves_the_earlier_one() {
+            let mut session = Session::new("none");
+            let earlier = spawn_numbered(&mut session, 1, "earlier turn");
+            session.delegate_finished(earlier, "earlier answered".to_string(), false, None);
+            let later = spawn_numbered(&mut session, 1, "later turn");
+            session.delegate_finished(later, "later failed".to_string(), true, None);
+
+            let held = session.delegates();
+            assert_eq!(held[0].note.as_deref(), Some("earlier answered"));
+            assert!(!held[0].failed(), "the earlier delegate was rewritten");
+            assert_eq!(held[1].note.as_deref(), Some("later failed"));
+            assert!(held[1].failed());
+        }
+
+        /// A delegate does not outlive its turn (DELEGATE-17), so one the driver never reported
+        /// finished did not finish, and one that did is left as it ended.
+        #[test]
+        fn a_turn_ending_marks_a_delegate_still_working_as_failed() {
+            let mut session = Session::new("none");
+            session.set_input("do the thing".to_string());
+            session.submit();
+            let ended = spawn_numbered(&mut session, 1, "ended");
+            spawn_numbered(&mut session, 2, "never reported");
+            session.delegate_finished(ended, "answered".to_string(), false, None);
+            session.complete("done", Vec::new(), 10);
+
+            let held = session.delegates();
+            assert!(!held[0].is_running() && !held[0].failed());
+            assert!(!held[1].is_running(), "a delegate outlived its turn");
+            assert!(held[1].failed());
         }
 
         /// The turn's own lines come back once the driver says the delegate is done, or every

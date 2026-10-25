@@ -1964,6 +1964,7 @@ fn rewind(
     *programs = snapshot.programs;
 
     session.transcript.truncate(snapshot.transcript_len);
+    session.drop_agents_beyond_transcript();
     session.end_files_if_nothing_written();
     session.rewind_history();
     stored.truncate_audit(session.turns + 1);

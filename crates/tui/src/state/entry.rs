@@ -55,8 +55,7 @@ pub struct Delegate {
     pub lines: Vec<Entry>,
     /// How many it has done in all, which is more than are kept once it has run long enough.
     pub calls: usize,
-    /// What the turn was told when it finished. `None` while it is still working, which is what
-    /// tells a delegate that is running from one that answered.
+    /// What the turn was told when it finished. `None` until the driver reports the finish.
     pub note: Option<String>,
     /// What it handed back, where it handed back anything. A delegate that could not finish
     /// reported nothing.
@@ -65,8 +64,9 @@ pub struct Delegate {
     /// driver's sentence about how the run ended, and this is the delegate's own about what it
     /// found. Which shape it takes was settled by the gate that decided what the planner got.
     pub reported: Option<Reported>,
-    /// Whether it ended by failing, so the line saying so can be coloured as such.
-    pub failed: bool,
+    /// Where it stands, as [`bravebot_agent::roster::Roster`] has it. The session sets it from
+    /// the roster after every change, so the rules for it are written there and nowhere else.
+    pub state: bravebot_agent::roster::AgentState,
     /// The token that asks this delegate to stop, and no other and not the turn (DELEGATE-25).
     pub stop: bravebot_core::cancel::DelegateStop,
 }
@@ -222,7 +222,13 @@ pub(super) const DELEGATE_KEPT: usize = 400;
 impl Delegate {
     /// Whether this one is still working.
     pub fn is_running(&self) -> bool {
-        self.note.is_none()
+        self.state == bravebot_agent::roster::AgentState::Working
+    }
+
+    /// Whether it ended by failing, or was still working when its turn ended, so the line saying
+    /// so can be coloured as such.
+    pub fn failed(&self) -> bool {
+        self.state == bravebot_agent::roster::AgentState::Failed
     }
 
     /// Whether the person has asked it to stop and it has not yet finished doing so.

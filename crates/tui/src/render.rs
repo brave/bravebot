@@ -280,7 +280,7 @@ fn split_at_width(text: &str, width: usize) -> (String, String) {
 fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
     let head = if delegate.is_running() {
         Style::default().fg(theme::running())
-    } else if delegate.failed {
+    } else if delegate.failed() {
         Style::default().fg(theme::fail())
     } else {
         Style::default().fg(theme::ok())
@@ -301,7 +301,7 @@ fn delegate_lines(delegate: &Delegate, width: usize) -> Vec<Line<'static>> {
         Some(note) => {
             lines.push(Line::from(Span::styled(
                 format!("  {DETAIL_MARKER} {}", one_line(note)),
-                if delegate.failed {
+                if delegate.failed() {
                     Style::default().fg(theme::fail())
                 } else {
                     dim()
