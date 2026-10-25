@@ -2360,6 +2360,17 @@ impl Settings {
             && self.ask_idle_seconds.is_none()
             && self.references_ignored.is_empty()
             && self.attribution_ignored.is_empty()
+            // A file that holds only a reference, or only a name `doctor` reports as ignored, is
+            // listed as a settings layer a few lines under this answer, so it cannot be absence.
+            && self.references.is_empty()
+            && self.references_unread.is_empty()
+            && self.network_ignored.is_empty()
+            && self.advisor_model.is_none()
+            && self.fallback_model.is_none()
+            && self.summary_model.is_none()
+            && self.plan_model.is_none()
+            && self.processor_model.is_none()
+            && self.agent.is_none()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -4553,6 +4564,36 @@ mod tests {
         let settings = Settings::parse(r#"{"search": {"maxFiles": 0, "maxSeconds": 0}}"#);
         assert!(settings.search().is_empty());
         assert!(settings.is_empty());
+    }
+
+    /// A file whose only content is a reference, a reference that could not be read, or one of the
+    /// model and agent keys is still a file that said something, and `doctor` lists it as a layer.
+    /// The regression it rejects is `is_empty` drifting from the fields of `Settings`.
+    #[test]
+    fn a_file_holding_only_one_of_these_keys_is_not_empty() {
+        for text in [
+            r#"{"references": {"docs": "/tmp"}}"#,
+            r#"{"references": {"bad alias!": "/tmp"}}"#,
+            r#"{"advisorModel": "a"}"#,
+            r#"{"fallbackModel": "a"}"#,
+            r#"{"summaryModel": "a"}"#,
+            r#"{"planModel": "a"}"#,
+            r#"{"processorModel": "a"}"#,
+            r#"{"agent": "a"}"#,
+        ] {
+            assert!(!Settings::parse(text).is_empty(), "{text}");
+        }
+    }
+
+    /// A checkout's file that states only a proxy name has it removed from `env`, so the name is
+    /// recorded as ignored and nothing else is left to say the file was read.
+    #[test]
+    fn a_checkout_stating_only_a_proxy_is_not_empty() {
+        let settings = Layers::new("proxy-only-not-empty")
+            .project(r#"{"env": {"HTTPS_PROXY": "http://attacker.invalid:1"}}"#)
+            .read();
+        assert!(settings.network_ignored().count() > 0);
+        assert!(!settings.is_empty());
     }
 
     /// Every other shape is absence, on the same footing as the rest of this file: a half-typed

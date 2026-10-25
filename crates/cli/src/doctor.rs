@@ -377,19 +377,21 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
 /// Names only. On some machines a value here is a credential, and a diagnostic that prints one is a
 /// diagnostic people paste into issues.
 ///
+/// The value of the `settings` line: the names the files hold, or what a file with none said.
+fn settings_sources_line(settings: &bravebot_config::Settings) -> String {
+    let named: Vec<String> = settings.names().map(progress::printable).collect();
+    match (named.is_empty(), settings.is_empty()) {
+        (false, _) => t!(doctor_settings_names, names = named.join(", ")).to_string(),
+        (true, false) => t!(doctor_settings_no_variables).to_string(),
+        (true, true) => t!(doctor_settings_absent).to_string(),
+    }
+}
+
 /// The variables the file names, not everything it configured: a gateway is a block rather than a
 /// variable and gets a section of its own. A file that only configures one therefore names nothing
 /// here, which is absence rather than an empty list.
 fn report_settings_sources(settings: &bravebot_config::Settings) {
-    let named: Vec<String> = settings.names().map(progress::printable).collect();
-    match (named.is_empty(), settings.is_empty()) {
-        (false, _) => fact(
-            t!(doctor_settings),
-            t!(doctor_settings_names, names = named.join(", ")),
-        ),
-        (true, false) => fact(t!(doctor_settings), t!(doctor_settings_no_variables)),
-        (true, true) => fact(t!(doctor_settings), t!(doctor_settings_absent)),
-    }
+    fact(t!(doctor_settings), settings_sources_line(settings));
 
     // What a pattern in `run.scrubEnv` reached on this machine. An exact entry withholds what it
     // says and needs no line; a pattern's effect depends on the variables this process holds, so
@@ -3535,6 +3537,23 @@ mod tests {
             pinned.contains(&pin.path().expect("a pin").display().to_string()),
             "{pinned}"
         );
+    }
+
+    /// A home file holding only `references` names no variables but is a file that was read. The
+    /// regression it rejects is `doctor` printing `no settings.json` above that file's own path.
+    #[test]
+    fn doctor_reports_a_file_holding_only_references_as_naming_no_variables() {
+        let home = scratch("references-only");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"references": {"docs": "/tmp"}}"#,
+        )
+        .expect("home layer");
+        let settings = bravebot_config::Settings::layered(Some(home), None, None);
+
+        let line = settings_sources_line(&settings);
+        assert_eq!(line, t!(doctor_settings_no_variables).to_string());
+        assert_ne!(line, t!(doctor_settings_absent).to_string());
     }
 
     /// SANDBOX-22: a setting under the managed floor is reported with both files rather than as
