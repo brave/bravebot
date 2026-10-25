@@ -62,10 +62,10 @@ Every reviewer prompt says so, and a reviewer calls such code `keep`.
 The heavy data goes through files, never through the main session's context:
 
 1. **maintenance.py prepare** (zero model tokens) scans the tracked tree, ranks and caps the
-   candidates in each lane, and writes one prompt file per group of them. Its stdout is a small
-   JSON pointer.
-2. **Reviewers** (subagent tokens only) each read one prompt file, read the code themselves, and
-   write verdicts and findings to a JSON file.
+   candidates in each lane, checks the current commit out in the work directory, and writes one
+   prompt file per group of candidates. Its stdout is a small JSON pointer.
+2. **Reviewers** (subagent tokens only) each read one prompt file, read the code in that checkout
+   themselves, and write verdicts and findings to a JSON file.
 3. **maintenance.py collect** (zero model tokens) merges the reviewers' results, renders the
    report, and names every candidate no reviewer answered for.
 4. **maintenance.py draft** (zero model tokens) writes one issue body per finding into the same
@@ -101,6 +101,14 @@ A full run with every lane full asks about 23 reviewers. Once an earlier run is 
 carried candidates are not asked about again, so scope a run to a lane or a path when that is too
 many.
 
+Where the repository has a commit, `prepare` checks it out at `{work_dir}/tree`, detached and with
+hooks off, and the reviewers read that checkout. Other sessions move the working tree while a run is
+under way, and a checkout makes every line a reviewer cites a line of one commit. It holds tracked
+files only, so a search of it does not walk `target/` or `node_modules/`. The manifest records the
+`commit` and the `tree`, and a progress line says when tracked files have uncommitted changes, which
+the candidates come from and the reviewers do not read. Without a commit the reviewers read the
+working tree.
+
 ### Step 2: read the manifest
 
 Read `{work_dir}/manifest.json`. It holds:
@@ -126,7 +134,20 @@ Write your results JSON to the results file the instructions specify. Do not edi
 a group with no reviewer becomes a `review-incomplete` gap, which is the correct outcome but a
 wasted run.
 
-Wait for all of them.
+**A reviewer's result is the file it writes.** Do not message, resume or wait on a reviewer, and do
+not go by the agent list. A reviewer that started a command which then ran in the background stays
+listed as running after it has finished, its notification can say the result may be interim, and a
+message sent to a finished reviewer starts a new turn it has no context for. Each time a reviewer
+reports, run:
+
+```bash
+python3 agents/skills/maintenance/maintenance.py status --work-dir "$WORK_DIR"
+```
+
+It says how many reviewers have written a result that parses and gives a verdict for every
+candidate they were asked about, and names the rest. Go to step 4 when it exits 0. If the others
+have finished and one has no result, say which, and let the user decide whether to launch it again;
+the collector records the gap either way.
 
 **Never write findings yourself.** You have not read the code; the reviewers have. Do not add,
 merge, reword, or drop a finding, and do not decide a reviewer was wrong. If a reviewer's result
@@ -151,6 +172,19 @@ Print its output. One body per finding is now on disk: what is wrong, the code a
 it names, every `file:line` the reviewer cited, the specs a change there has to keep true, and the
 fix. Read none of them.
 
+The code a body quotes is read from the reviewers' checkout, and its "Where it is" heading names
+that commit. `main` can move between the reading and the posting, so compare the cited lines with
+`HEAD`:
+
+```bash
+python3 agents/skills/maintenance/maintenance.py verify --work-dir "$WORK_DIR"
+```
+
+For each draft it lists the places it cites that moved, with where each is now, that are in code
+that has changed since, or whose file is gone. Exit code 1 means some are in changed code or gone,
+and a person has to look at them. It does not check a line number written without a path. Keep the
+output for step 6.
+
 The table names each draft's labels: `refactor`, or `bug` where the reviewer found a defect
 rather than a cleanup, and an `area/*` or `infrastructure` where one is clear. It marks any title
 over GitHub's 256-character cap as needing a shorter one, which is a person's job in step 6.
@@ -160,12 +194,35 @@ over GitHub's 256-character cap as needing a shorter one, which is a person's jo
 The table from step 5 is what the user chooses from. Ask which drafts to post, post those and no
 others, and never post one the backlog already has, open or closed.
 
+Several lanes can find the same code, so two drafts can propose one change. Before the user
+chooses, say which drafts name the same function or the same lines, so that the user is not asked to
+choose between a draft and its copy.
+
 Hand each chosen draft to the [issue-poster](../../agents/issue-poster.md) definition, which
 searches the backlog for the symbol or path the title names, applies the labels and posts. Give
 it the title, the body file, the labels the draft names, the assignee `netzenbot` (or the login
-the user names instead), and this instruction: the issue is a finding nobody has read, so apply no
-`importance`, `urgency` or `size`. Those are the [triage-issues skill](../triage-issues/SKILL.md)'s
-to judge.
+the user names instead), and this brief, with `{commit}` and `{moved}` filled in from the manifest
+and from that draft's lines in the output of `verify`, or `none`:
+
+```text
+Use the title as given. If you think it is inaccurate, post it as given and say so in your report.
+Apply no importance, urgency or size: the issue is a finding a reviewer wrote and nobody has read,
+and the triage-issues skill judges those.
+File exactly this one issue and no other. Where the body names a case it leaves undone, cite an
+existing issue for it where one exists. File none for a case that has no issue: list it in your
+report, because the user decides.
+The reviewers read commit {commit}. These places the body cites have moved since, or are in code
+that changed: {moved}. Correct only those line numbers in the posted body, to the places named for
+the moved ones and by reading the code for the others, and list each correction in your report.
+Change nothing else in the body.
+Search open and closed issues for the symbol or path the title names before filing. If an issue
+already covers it, cite it and do not file.
+```
+
+The poster's own procedure files an issue for each case a body leaves undone unless the task says
+to file none, and an issue it files was never a draft, so nobody has chosen it. The brief says to
+file none, and keeps the poster from retitling a draft or changing a line number it was not told
+about.
 
 Where the table said a title needs shortening, rewrite it before posting rather than posting a
 title GitHub will refuse.
@@ -188,6 +245,12 @@ leaves those candidates out until a file they name changes. It does not write `u
 candidate no reviewer answered for. A `cleanup` is recorded whether or not its draft was posted,
 since a declined draft that came back every run would be asked about again each time. Delete a
 line to have a candidate read again. The file is left uncommitted.
+
+Then remove the checkout the reviewers read:
+
+```bash
+python3 agents/skills/maintenance/maintenance.py clean --work-dir "$WORK_DIR"
+```
 
 ### Step 8: say what happened
 

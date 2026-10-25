@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import shutil
 # These tests run git with argument lists against temporary repositories.
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import tempfile
@@ -50,6 +51,24 @@ def tree(files):
             yield root
         finally:
             os.chdir(before)
+
+
+def commit_all(root, message="change"):
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", message], check=True)
+
+
+def head(root):
+    done = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True)
+    return done.stdout.strip()
+
+
+@contextlib.contextmanager
+def committed(files):
+    """`tree`, with its files committed."""
+    with tree(files) as root:
+        commit_all(root, "fixture")
+        yield root
 
 
 def found(files, lane, **options):
@@ -541,6 +560,43 @@ class Pipeline(unittest.TestCase):
         self.assertIn("0 findings", out)
         self.assertIn("U2 unclear", out)
 
+    def test_status_names_the_reviewers_that_are_not_done_and_exits_zero_once_every_one_is(self):
+        def verdicts(ids):
+            return {"candidates": [{"id": f"U{i}", "verdict": "keep"} for i in ids]}
+
+        with tree({"crates/a/src/lib.rs": unused(17)}) as root:
+            manifest, work = self.prepared(root)
+            first, second = manifest["lanes"][0]["reviewer_prompts"]
+            status = ["status", "--work-dir", str(work)]
+            self.write(first, verdicts(range(1, 16)))
+            absent = quiet(m.main, status)
+            self.write(second, "not json")
+            unreadable = quiet(m.main, status)
+            self.write(second, verdicts([16]))
+            partial = quiet(m.main, status)
+            self.write(second, verdicts([16, 17]))
+            done = quiet(m.main, status)
+        self.assertEqual(absent[0], 1)
+        self.assertIn("1 of 2 reviewers", absent[1])
+        self.assertIn("waiting: unreferenced-2 (no reviewer result", absent[1])
+        self.assertEqual(unreadable[0], 1)
+        self.assertIn("unreferenced-2 (reviewer result could not be read", unreadable[1])
+        self.assertEqual(partial[0], 1)
+        self.assertIn("unreferenced-2 (the reviewer returned no verdict", partial[1])
+        self.assertNotIn("unreferenced-1", partial[1])
+        self.assertEqual(done[0], 0)
+        self.assertIn("every reviewer has written a readable result (2 of 2)", done[1])
+
+    def test_status_counts_a_reviewer_as_done_when_its_findings_are_incomplete(self):
+        with tree({"crates/a/src/lib.rs": unused(2)}) as root:
+            manifest, work = self.prepared(root)
+            (prompt,) = manifest["lanes"][0]["reviewer_prompts"]
+            self.write(prompt, {"candidates": [{"id": "U1", "verdict": "cleanup"}, {"id": "U2", "verdict": "keep"}]})
+            status, _, _ = quiet(m.main, ["status", "--work-dir", str(work)])
+            collect, _, _ = quiet(m.main, ["collect", "--work-dir", str(work)])
+        self.assertEqual(status, 0)
+        self.assertEqual(collect, 1)
+
     def test_drafts_use_refactor_for_cleanup_bug_for_defects_and_keep_area_and_assignee(self):
         files = {"crates/a/src/lib.rs": unused(1), "contrib/tool.py": "def unused_tool():\n    pass\n"}
         with tree(files) as root:
@@ -575,8 +631,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([d["title_too_long"] for d in drafts], [False, False, False, True])
         self.assertIn("1 | pub fn unused_number_0() {}", bodies[0])
         self.assertIn("## The fix\n\nDelete it.", bodies[0])
-        self.assertIn("Behaviour does not change", bodies[0])
-        self.assertNotIn("Behaviour does not change", bodies[2])
+        self.assertFalse(any("existing tests pass unchanged" in body for body in bodies))
         self.assertFalse(any(EM_DASH in body for body in bodies))
         self.assertTrue(text.rstrip().endswith("Nothing has been posted."))
         self.assertIn("needs a shorter title", text)
@@ -1082,6 +1137,243 @@ class Prompts(unittest.TestCase):
             capped = m.scan(root, ("unreferenced", "complexity"), limit=4)
         self.assertEqual((len(result["unreferenced"]["candidates"]), len(result["complexity"]["candidates"])), (30, 15))
         self.assertEqual((len(capped["unreferenced"]["candidates"]), len(capped["complexity"]["candidates"])), (4, 4))
+
+
+class Bodies(unittest.TestCase):
+    def body(self, finding, guards=()):
+        candidate = {"path": "crates/a/src/lib.rs", "line": 1, "specs": ["docs/specs/labels.md"], "guards": list(guards)}
+        with tree({"crates/a/src/lib.rs": unused(1)}):
+            return m.body_for(finding, {"candidates": {"U1": candidate}})
+
+    def test_a_body_does_not_say_that_tests_are_unchanged_or_that_a_count_changes(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it and the tests that name it."}
+        body = self.body(finding, ["Labelled::new (docs/specs/labels.md)"])
+        self.assertNotIn("existing tests pass unchanged", body)
+        self.assertNotIn("so the count changes in the same commit", body)
+        self.assertIn("A spec counts the uses of these guarded symbols: `Labelled::new (docs/specs/labels.md)`.", body)
+        self.assertIn("If the change moves a use, the count changes in the same commit", body)
+
+    def test_a_body_names_no_guarded_symbol_where_the_candidate_has_none(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it."}
+        self.assertNotIn("guarded symbols", self.body(finding))
+
+
+class Reading(unittest.TestCase):
+    """Where reviewers read, and what the prompt tells them to do while they do."""
+
+    def prepared(self, root, work=None):
+        _, path = m.prepare(root, ("unreferenced",), (), work or root / ".work")
+        manifest = json.loads(Path(path).read_text())
+        prompt = Path(manifest["lanes"][0]["reviewer_prompts"][0]["prompt_file"]).read_text()
+        return manifest, prompt
+
+    def test_reviewers_read_a_checkout_of_the_committed_files_and_not_the_working_tree(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            lib = root / "crates/a/src/lib.rs"
+            committed_text = lib.read_text()
+            lib.write_text(committed_text + "// edited after the commit\n")
+            (root / "target").mkdir()
+            (root / "target/build.log").write_text("not tracked\n")
+            manifest, prompt = self.prepared(root)
+            checkout = Path(manifest["tree"])
+            read = (checkout / "crates/a/src/lib.rs").read_text()
+            holds_untracked = (checkout / "target").exists()
+            expected = head(root)
+        self.assertEqual(manifest["commit"], expected)
+        self.assertEqual(read, committed_text)
+        self.assertFalse(holds_untracked)
+        self.assertIn(f"`{checkout}`", prompt)
+        self.assertIn(expected, prompt)
+        self.assertIn(f"Do not search `{root}`", prompt)
+        self.assertNotIn("your working directory", prompt)
+
+    def test_a_repository_without_a_commit_is_read_in_place(self):
+        with tree({"crates/a/src/lib.rs": unused(2)}) as root:
+            manifest, prompt = self.prepared(root)
+            checkout_made = (root / ".work/tree").exists()
+        self.assertIsNone(manifest["commit"])
+        self.assertIsNone(manifest["tree"])
+        self.assertFalse(checkout_made)
+        self.assertIn(f"The code is in `{root}`, your working directory", prompt)
+        self.assertIn("no commit to check out", "\n".join(manifest["progress_lines"]))
+
+    def test_uncommitted_changes_to_tracked_files_are_reported_and_a_clean_tree_is_not(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            clean, _ = self.prepared(root, root / ".clean")
+            (root / "crates/a/src/lib.rs").write_text(unused(3))
+            dirty, _ = self.prepared(root, root / ".dirty")
+        self.assertFalse(clean["dirty"])
+        self.assertTrue(dirty["dirty"])
+        self.assertNotIn("uncommitted", "\n".join(clean["progress_lines"]))
+        self.assertIn("uncommitted changes", "\n".join(dirty["progress_lines"]))
+
+    def test_the_prompt_tells_a_reviewer_how_to_finish(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            _, prompt = self.prepared(root)
+        for rule in (
+            "Start no background command",
+            "stop it before you answer",
+            "Do not run `gh`",
+            "answer with one line",
+        ):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, prompt)
+
+    def test_preparing_again_into_the_same_work_directory_makes_a_new_checkout(self):
+        with committed({"crates/a/src/lib.rs": unused(2), ".gitignore": ".work\n"}) as root:
+            self.prepared(root)
+            (root / "crates/a/src/lib.rs").write_text(unused(3))
+            commit_all(root, "second")
+            manifest, _ = self.prepared(root)
+            text = (Path(manifest["tree"]) / "crates/a/src/lib.rs").read_text()
+        self.assertEqual(text, unused(3))
+
+    def test_a_checkout_deleted_by_hand_is_replaced_by_the_next_prepare(self):
+        with committed({"crates/a/src/lib.rs": unused(2), ".gitignore": ".work\n"}) as root:
+            first, _ = self.prepared(root)
+            shutil.rmtree(first["tree"])
+            second, _ = self.prepared(root)
+            remade = Path(second["tree"]).is_dir() if second["tree"] else False
+        self.assertTrue(remade)
+        self.assertNotIn("no commit to check out", "\n".join(second["progress_lines"]))
+
+    def test_a_checkout_that_cannot_be_made_says_why_and_not_that_there_is_no_commit(self):
+        with committed({"crates/a/src/lib.rs": unused(2), ".gitignore": ".work\n"}) as root:
+            work = root / ".work"
+            (work / "tree").mkdir(parents=True)
+            (work / "tree/keep.txt").write_text("not a checkout\n")
+            manifest, prompt = self.prepared(root, work)
+            kept = (work / "tree/keep.txt").exists()
+        lines = "\n".join(manifest["progress_lines"])
+        self.assertIsNone(manifest["tree"])
+        self.assertTrue(kept)
+        self.assertIn("could not check commit", lines)
+        self.assertIn("already exists", lines)
+        self.assertNotIn("no commit to check out", lines)
+        self.assertIn("your working directory", prompt)
+
+    def test_clean_removes_the_checkout_and_the_repository_forgets_it(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            manifest, _ = self.prepared(root)
+            checkout = Path(manifest["tree"])
+            existed = checkout.exists()
+            code, _, _ = quiet(m.main, ["clean", "--work-dir", str(root / ".work")])
+            again, _, _ = quiet(m.main, ["clean", "--work-dir", str(root / ".work")])
+            listed = subprocess.run(
+                ["git", "-C", str(root), "worktree", "list"], check=True, capture_output=True, text=True
+            ).stdout
+        self.assertTrue(existed)
+        self.assertEqual((code, again), (0, 0))
+        self.assertFalse(checkout.exists())
+        self.assertNotIn(str(checkout), listed)
+
+    def test_clean_removes_only_the_checkout_in_its_own_work_directory(self):
+        with committed({"crates/a/src/lib.rs": unused(2)}) as root:
+            work = root / ".work"
+            manifest, _ = self.prepared(root, work)
+            elsewhere = root / "other-checkout"
+            subprocess.run(
+                ["git", "-C", str(root), "worktree", "add", "-q", "--detach", str(elsewhere), "HEAD"], check=True
+            )
+            (elsewhere / "note.txt").write_text("keep\n")
+            manifest["tree"] = str(elsewhere)
+            workdir_manifest = work / "manifest.json"
+            workdir_manifest.write_text(json.dumps(manifest))
+            code, out, _ = quiet(m.main, ["clean", "--work-dir", str(work)])
+            kept = (elsewhere / "note.txt").exists()
+        self.assertEqual(code, 1)
+        self.assertIn("did not remove", out)
+        self.assertTrue(kept)
+
+    def drafted(self, root, finding):
+        """Prepare, have the one reviewer give `finding`, and draft it. Returns the work directory
+        and the body of the draft."""
+        work = root / ".work"
+        manifest, _ = self.prepared(root, work)
+        (prompt,) = manifest["lanes"][0]["reviewer_prompts"]
+        asked = [{"id": i, "verdict": "cleanup"} for i in prompt["candidates"]]
+        Path(prompt["results_file"]).write_text(json.dumps({"candidates": asked, "findings": [finding]}))
+        _, out, _ = quiet(m.main, ["draft", "--work-dir", str(work), "--json"])
+        return work, Path(json.loads(out)["drafts"][0]["body_file"]).read_text()
+
+    def test_a_draft_quotes_the_commit_the_reviewers_read_and_says_which_it_is(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+                   "evidence": ["crates/a/src/lib.rs:3 the function"]}
+        with committed({"crates/a/src/lib.rs": unused(4), ".gitignore": ".work\n"}) as root:
+            work, _ = self.drafted(root, finding)
+            (root / "crates/a/src/lib.rs").write_text("// shifted\n" * 3 + unused(4))
+            _, out, _ = quiet(m.main, ["draft", "--work-dir", str(work), "--json"])
+            body = Path(json.loads(out)["drafts"][0]["body_file"]).read_text()
+            expected = head(root)
+        self.assertIn("3 | pub fn unused_number_2() {}", body)
+        self.assertNotIn("// shifted", body)
+        self.assertIn(f"Where it is, in commit `{expected[:12]}`:", body)
+
+    def test_a_draft_from_a_repository_without_a_commit_names_no_commit(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+                   "evidence": ["crates/a/src/lib.rs:3 the function"]}
+        with tree({"crates/a/src/lib.rs": unused(4)}) as root:
+            work, body = self.drafted(root, finding)
+            code, out, _ = quiet(m.main, ["verify", "--work-dir", str(work)])
+        self.assertIn("Where it is:\n", body)
+        self.assertNotIn("in commit", body)
+        self.assertEqual(code, 0)
+        self.assertIn("nothing to compare", out)
+
+    def test_verify_says_every_line_stands_while_head_is_the_commit_the_reviewers_read(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+                   "evidence": ["crates/a/src/lib.rs:3 the function"]}
+        with committed({"crates/a/src/lib.rs": unused(4), ".gitignore": ".work\n"}) as root:
+            work, _ = self.drafted(root, finding)
+            code, out, _ = quiet(m.main, ["verify", "--work-dir", str(work)])
+        self.assertEqual(code, 0)
+        self.assertIn("every cited line stands", out)
+
+    def test_verify_reports_the_cited_lines_that_moved_changed_or_went(self):
+        a, b, c, d = (f"crates/{name}/src/lib.rs" for name in "abcd")
+        finding = {
+            "candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+            "evidence": [
+                f"{a}:5-6 shifted", f"{b}:3 edited", f"{b}:4 next to the edit", f"{c}:2 deleted", f"{d}:2 untouched file"
+            ],
+        }
+        def padded(name):
+            """Eight lines of which only the first is a candidate, so one reviewer reads the lot."""
+            return f"pub fn unused_{name}() {{}}\n" + "".join(f"fn {name}_{i}() {{}}\n" for i in range(1, 8))
+
+        files = {a: padded("first"), b: padded("second"), c: padded("third"), d: padded("fourth"), ".gitignore": ".work\n"}
+        with committed(files) as root:
+            work, _ = self.drafted(root, finding)
+            (root / a).write_text("// added\n" * 4 + (root / a).read_text())
+            lines = (root / b).read_text().split("\n")
+            lines[2] = "pub fn edited() {}"
+            (root / b).write_text("\n".join(lines))
+            (root / c).unlink()
+            commit_all(root, "move, edit and delete")
+            code, out, _ = quiet(m.main, ["verify", "--work-dir", str(work)])
+            _, data, _ = quiet(m.main, ["verify", "--work-dir", str(work), "--json"])
+        self.assertEqual(code, 1)
+        self.assertIn(f"{a}:5-6 moved to 9-10", out)
+        self.assertIn(f"{a}:5 moved to 9", out)
+        self.assertIn(f"{b}:3 is in changed code", out)
+        self.assertIn(f"{c}:2 is gone", out)
+        self.assertNotIn(f"{b}:4", out)
+        self.assertNotIn(d, out)
+        states = {cite["place"]: cite["state"] for cite in json.loads(data)[0]["cites"]}
+        self.assertEqual(states[f"{a}:5-6"], "moved")
+        self.assertEqual(states[f"{b}:3"], "changed")
+        self.assertEqual(states[f"{c}:2"], "gone")
+
+    def test_verify_exits_zero_when_every_cited_line_that_moved_has_a_known_new_place(self):
+        finding = {"candidates": ["U1"], "summary": "Delete it", "fix": "Delete it.",
+                   "evidence": ["crates/a/src/lib.rs:5 the function"]}
+        with committed({"crates/a/src/lib.rs": unused(8), ".gitignore": ".work\n"}) as root:
+            work, _ = self.drafted(root, finding)
+            (root / "crates/a/src/lib.rs").write_text("// added\n" * 4 + (root / "crates/a/src/lib.rs").read_text())
+            commit_all(root, "shift")
+            code, out, _ = quiet(m.main, ["verify", "--work-dir", str(work)])
+        self.assertEqual(code, 0)
+        self.assertIn("crates/a/src/lib.rs:5 moved to 9", out)
 
 
 if __name__ == "__main__":
