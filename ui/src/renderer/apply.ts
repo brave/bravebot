@@ -4,6 +4,7 @@ import { receiveTurn } from './turn-details'
 import type { Live } from './live'
 import { leftOver, taken } from './interjecting'
 import { keepEnd } from './thinking'
+import { finish, started, turnEnded } from './agents'
 
 /** Fold one event into the live session. */
 export function apply(
@@ -50,6 +51,11 @@ export function apply(
         return { ...old, hook: message.data }
       case 'hook.finished':
         return { ...old, hook: null }
+      // Matched by the delegate's number, which two agents ending out of order do not confuse.
+      case 'delegate.started':
+        return { ...old, agents: started(old.agents, message.data.delegate, message.data.kind, message.data.task) }
+      case 'delegate.finished':
+        return { ...old, agents: finish(old.agents, message.data.delegate, message.data.failed) }
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':
@@ -106,11 +112,11 @@ export function apply(
           sandboxMode: message.data.sandbox ?? old.sandboxMode }
       case 'manifest.done':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', outcome: 'complete',
+        return { ...old, agents: turnEnded(old.agents), running: false, phase: null, checking: null, hook: null, thinking: '', outcome: 'complete',
           entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
       case 'manifest.error':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', queuePaused: true,
+        return { ...old, agents: turnEnded(old.agents), running: false, phase: null, checking: null, hook: null, thinking: '', queuePaused: true,
           entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
@@ -132,6 +138,7 @@ export function apply(
           // A consolidating turn stays running, so a check whose end was never heard would stay drawn.
           checking: null,
           hook: null,
+          agents: turnEnded(old.agents),
           composing: null,
           thinking: '',
           entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
@@ -154,6 +161,7 @@ export function apply(
           phase: null,
           checking: null,
           hook: null,
+          agents: turnEnded(old.agents),
           composing: null,
           thinking: '',
           entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, accountMessage: message.data.accountMessage, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],

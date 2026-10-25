@@ -33,8 +33,13 @@ governs:
   - ui/src/renderer/thinking.ts
   - ui/src/renderer/apply.ts
   - ui/src/renderer/live.ts
+  - ui/src/renderer/agents.ts
+  - ui/src/renderer/components/Agents.tsx
+  - ui/src/renderer/components/Sidebar.tsx
+  - ui/src/renderer/App.tsx
   - crates/ui-bridge/src/turn.rs
   - ui/scripts/ux-state.test.mjs
+  - ui/scripts/agents.test.mjs
   - ui/scripts/marking.test.mjs
 documented-by:
   - docs/website/docs/using/transcript.md
@@ -1111,6 +1116,27 @@ a screen. What a delegate that met untrusted content printed is not, and no even
 because the payload is built from the delegation's number, kind, task and the failed flag alone.
 
 `verified-by: bravebot_ui_bridge::reporting::a_delegate_crosses_as_a_start_and_a_finish_carrying_none_of_its_lines`
+
+<a id="VIEW-36"></a>
+### VIEW-36: the desktop window counts the agents a conversation has started and lists them from the sidebar
+
+The sidebar's foot has an Agents entry beside Settings. It shows the number of agents the open
+conversation has started, and after it the number still working while any is. With none started it
+shows the label alone. Choosing it opens a list over the conversation, one row for each agent in the
+order started, holding the agent's kind, its number, what it was asked, and whether it is working,
+finished or did not finish. The list says so when there are none, and its Done control closes it and
+returns focus to the entry.
+
+The window keeps for each agent only what VIEW-35 sends: its number, kind and task, and its state.
+A finish is matched to the agent by its number among those still working, the latest first, because
+a number may be used again in a later turn and then names an earlier agent that has ended. An agent
+still working when its turn or plan run ends did not finish, because a delegate does not outlive
+the turn that started it. A new conversation starts with none. Nothing a delegate printed is kept
+or drawn here, as the watching spec says.
+
+The accelerator that focuses the composer is not changed by this entry.
+
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agents.test.mjs pins it: it folds delegate.started and delegate.finished through the window's own event reducer and asserts that two agents ending out of order are each marked by their number, that only the number, kind, task and state are kept and a note, report or line sent with a finish is not, that a number used again in a later turn is a second agent and the finish goes to the one still working, that turn.done and turn.error leave none working, and that a new conversation starts with none; it renders the real Agents view and sidebar foot through react-dom and asserts the rows, the empty sentence, the Done control, the label alone for none started, the count, and the count of those working; make check-ui runs it)`
 
 ## Known costs
 

@@ -17,6 +17,7 @@ import { conversationKey } from '../shared/experience'
 import { type Fork, forkOf } from '../shared/forks'
 import type { Entry } from './transcript'
 import type { Turns } from './turn-details'
+import type { Agent } from './agents'
 import { conversationPreferences, setConversation } from './experience'
 
 /** A message waiting for the turn to end, and the grants it was written with. */
@@ -64,6 +65,11 @@ export interface Live {
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
   hook: Hook | null
+  /**
+   * Every agent this conversation has started, oldest first, with where each stands (VIEW-36).
+   * Only what the bridge sends for display: its number, kind and task, never a line it printed.
+   */
+  agents: Agent[]
   /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
   composing: string | null
   /**
@@ -200,7 +206,7 @@ export function cameFrom(
 export const NEW_CHAT = 'New Chat'
 
 /** The fields every new `Live` starts with, whichever answer it is built from. */
-type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'composing' | 'thinking' | 'tokens' | 'running'
+type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'agents' | 'composing' | 'thinking' | 'tokens' | 'running'
 
 /**
  * A session as the window first holds it: what the bridge's answer says, and nothing yet said,
@@ -214,6 +220,7 @@ export function newLive(fields: Omit<Live, Starting>): Live {
     phase: null,
     checking: null,
     hook: null,
+    agents: [],
     composing: null,
     thinking: '',
     tokens: 0,

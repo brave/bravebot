@@ -367,7 +367,7 @@ function liveSession() {
   const { apply } = load('src/renderer/apply.ts')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
-    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
+    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null, agents: [] },
   }
   session.send = (event, data) => apply({ event, data }, (update) => { session.live = update(session.live) }, () => {}, () => {})
   session.word = () => workingWord(session.live.phase, session.live.checking, session.live.composing, session.live.hook)
