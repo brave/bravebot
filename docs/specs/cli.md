@@ -18,6 +18,7 @@ governs:
   - crates/cli/src/goal_run.rs
   - crates/cli/src/json.rs
   - crates/cli/src/lines.rs
+  - crates/agent/src/interjections.rs
   - crates/agent/src/output_schema.rs
   - crates/cli/src/permissions_check.rs
   - crates/cli/src/plain.rs
@@ -2137,6 +2138,8 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::lines::prompts_start_turns_in_the_order_they_arrived`
 `verified-by: bravebot_cli::lines::a_steer_reaches_the_running_turn_only_on_a_vouched_channel`
 `verified-by: bravebot_cli::lines::a_steer_the_turn_ended_without_taking_starts_a_turn_of_its_own`
+`verified-by: bravebot_agent::interjections::drain_returns_every_line_oldest_first_and_empties_the_buffer`
+`verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
 `verified-by: bravebot_cli::lines::a_steer_sent_while_no_turn_runs_starts_a_turn_of_its_own`
 `verified-by: bravebot_cli::lines::a_stop_or_a_steer_right_behind_a_prompt_reaches_the_turn_that_prompt_starts`
 `verified-by: bravebot_cli::lines::a_second_answer_to_a_question_does_not_replace_the_first`

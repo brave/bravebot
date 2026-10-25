@@ -27,6 +27,7 @@ governs:
   - crates/config/src/settings.rs
   - crates/tui/src/command_table.rs
   - crates/ui-bridge/src/running.rs
+  - crates/agent/src/interjections.rs
   - ui/src/renderer/interjecting.ts
 documented-by:
   - docs/website/docs/using/interactive-mode.md
@@ -603,6 +604,12 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::render::the_offer_to_send_now_is_kept_over_where_the_last_line_goes`
 `verified-by: bravebot_tui::app::a_stop_is_recorded_at_the_press_that_asks_for_it`
 `verified-by: bravebot_agent::turn::a_prompt_typed_before_a_stop_is_left_for_the_next_turn`
+`verified-by: bravebot_agent::interjections::lines_are_taken_in_the_order_they_were_pushed`
+`verified-by: bravebot_agent::interjections::a_clone_shares_the_buffer`
+`verified-by: bravebot_agent::interjections::drain_returns_every_line_oldest_first_and_empties_the_buffer`
+`verified-by: bravebot_agent::interjections::forget_last_drops_the_newest_and_says_whether_it_did`
+`verified-by: bravebot_agent::interjections::a_poisoned_lock_reads_as_empty_and_drops_additions`
+`verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
 
 <a id="INPUT-42"></a>
 ### INPUT-42: a prompt waiting on a long command moves the command to the background
@@ -2841,6 +2848,7 @@ this meaning.
 `verified-by: bravebot_filetype::markers::a_dropped_file_becomes_its_name_and_text_around_it_is_kept`
 `verified-by: bravebot_ui_bridge::interjection_tests::work_that_asks_nothing_between_rounds_takes_no_line`
 `verified-by: bravebot_ui_bridge::interjection_tests::lines_are_read_in_the_order_they_were_typed`
+`verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
 `verified-by: by-construction (the renderer and the main process are not crates this workspace compiles, so ui/scripts/interjecting.test.mjs drives the window's own event reducer with the bridge's events: a line is in the transcript only after turn.interjected and in the order it was sent, a line unread when the turn is done or stopped goes on past a paused queue, one left by a failed turn waits, a refused line returns to the head of the queue, the window names its markers and writes no words, a paperclip file or the memory update queues the line, and turn.interject forwards only its line and the names of its markers; make check-ui runs the test)`
 
 <a id="INPUT-47"></a>
