@@ -2395,6 +2395,160 @@ mod tests {
             .map(|(_, value)| value.as_str())
     }
 
+    /// A server that refuses any body carrying a level with a 400 and answers every other one, as
+    /// a service that does not read the field does. The address it listens on is what a refusal is
+    /// remembered against, so every call gets a service of its own.
+    fn a_service_that_refuses_the_level() -> String {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        const WHOLE: &str = r#"{"model":"served","choices":[{"message":{"content":"hi"},
+            "finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}"#;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0usize;
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.trim().eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; length];
+                if reader.read_exact(&mut body).is_err() {
+                    continue;
+                }
+                let (status, reply) =
+                    match String::from_utf8_lossy(&body).contains("reasoning_effort") {
+                        true => (
+                            "400 Bad Request",
+                            r#"{"error":{"message":"unknown field"}}"#,
+                        ),
+                        false => ("200 OK", WHOLE),
+                    };
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// One turn of `model` at `config`'s service with a level asked for, which the service answers
+    /// by refusing the field and then taking the request without it: the way a refusal is learned.
+    fn ask_with_a_level(config: &Config, model: &str) {
+        let egress = Egress::new();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = bravebot_core::policy::Policy::begin(
+            {
+                let mut routing = bravebot_core::policy::Routing::new();
+                routing.insert_trusted("task", "say hello");
+                routing
+            },
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        let request = ChatRequest::new(model, vec![bravebot_aichat::protocol::Message::user("hi")])
+            .with_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+        Backend::select(config, &egress, model)
+            .complete(&mut policy, &request)
+            .expect("the request without the level was answered");
+    }
+
+    /// Two gateways offering one slug, a Bedrock account, and Brave's endpoint at a server of its
+    /// own, so each of the services `refused_a_level` asks has a record of its own.
+    fn every_service_with_the_same_slug() -> (Config, [String; 3]) {
+        let [one, other, brave] = std::array::from_fn(|_| a_service_that_refuses_the_level());
+        let block = format!(
+            r#"{{"provider": {{
+                "gateway-a": {{"options": {{"baseURL": "{one}/v1", "apiKey": "a-key"}},
+                    "models": {{"shared-slug": {{}}}}}},
+                "gateway-b": {{"options": {{"baseURL": "{other}/v1", "apiKey": "a-key"}},
+                    "models": {{"shared-slug": {{}}}}}}
+            }}}}"#
+        );
+        let mut config = with_providers(&block);
+        config.endpoint = brave.clone();
+        (config, [one, other, brave])
+    }
+
+    /// BACKEND-22: no branch reports a refusal nobody has made, and a refusal is reported for the
+    /// service and model that made it. Nothing is asked of a service here.
+    #[test]
+    fn before_any_refusal_every_service_reads_the_level() {
+        let (config, _) = every_service_with_the_same_slug();
+        for model in [
+            "gateway-a/shared-slug",
+            "gateway-b/shared-slug",
+            "opus-arn",
+            "chatgpt/shared-slug",
+            DEFAULT_MODEL,
+        ] {
+            assert!(!refused_a_level(&config, model), "{model}");
+        }
+    }
+
+    /// A refusal is remembered against the service as well as the model, so one gateway refusing a
+    /// slug is not the other gateway's, the ChatGPT account's or Brave's endpoint's refusing it.
+    ///
+    /// The faults this rejects: asking by the model name alone, which reports every service that
+    /// offers the slug as refusing it, and asking the wrong service for a model.
+    #[test]
+    fn a_level_one_gateway_refused_is_not_refused_at_another_service_with_the_slug() {
+        let (config, _) = every_service_with_the_same_slug();
+        assert!(!refused_a_level(&config, "gateway-a/shared-slug"));
+
+        ask_with_a_level(&config, "gateway-a/shared-slug");
+
+        assert!(refused_a_level(&config, "gateway-a/shared-slug"));
+        for elsewhere in [
+            "gateway-b/shared-slug",
+            "chatgpt/shared-slug",
+            "shared-slug-on-brave",
+            "opus-arn",
+        ] {
+            assert!(!refused_a_level(&config, elsewhere), "{elsewhere}");
+        }
+        // The other gateway then refuses it too, and is told so for itself.
+        ask_with_a_level(&config, "gateway-b/shared-slug");
+        assert!(refused_a_level(&config, "gateway-b/shared-slug"));
+    }
+
+    /// The last branch: a model no gateway, Bedrock account or ChatGPT sign-in answers for is
+    /// Brave's endpoint's, and its record is the one the endpoint's own refusal wrote.
+    #[test]
+    fn a_level_the_default_endpoint_refused_is_reported_for_its_model_only() {
+        let (config, _) = every_service_with_the_same_slug();
+        let model = "a-model-on-the-default-endpoint";
+        assert!(!refused_a_level(&config, model));
+
+        ask_with_a_level(&config, model);
+
+        assert!(refused_a_level(&config, model));
+        assert!(!refused_a_level(
+            &config,
+            "another-model-on-the-default-endpoint"
+        ));
+        assert!(!refused_a_level(&config, "gateway-a/shared-slug"));
+        assert!(!refused_a_level(&config, "gateway-b/shared-slug"));
+    }
+
     const ANTHROPIC_WHOLE: &str = r#"{"model":"claude-test-20260101",
         "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
         "usage":{"input_tokens":3,"output_tokens":1}}"#;
