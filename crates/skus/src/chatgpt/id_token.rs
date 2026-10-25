@@ -499,8 +499,6 @@ mod tests {
                 "e": base64url(e),
             })
         };
-        // Four entries. The key tokens are signed with is the second. The first and the second carry an
-        // `x5c` list and the other two carry none.
         let mut keys = vec![
             entry("first-other-key", &other_n, &other_e),
             entry(KID, &n, &e),
