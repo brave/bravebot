@@ -950,7 +950,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_ui_bridge::account_words::the_windows_sentence_is_one_sentence_in_sentence_case_and_names_its_command_once`
 `verified-by: bravebot_ui_bridge::account_words::the_command_is_named_where_it_is_the_remedy`
 `verified-by: bravebot_ui_bridge::account_words::a_wait_asked_for_at_a_429_is_said_in_minutes_for_either_refusal`
-`verified-by: bravebot_ui_bridge::account_words::the_window_names_the_command_the_terminal_names_for_every_failure`
+`verified-by: bravebot_agent::chatgpt::a_listing_names_the_sign_in_command_only_where_it_could_not_be_read`
 `verified-by: bravebot_ui_bridge::account_words::the_notices_of_a_turn_that_goes_on_after_the_account_failed_are_sentences_of_the_window`
 `verified-by: bravebot_ui_bridge::history::a_summary_that_failed_on_the_account_reaches_the_window_in_the_windows_words`
 `verified-by: bravebot_ui_bridge::acp::a_summary_that_failed_on_the_chatgpt_account_is_told_to_the_editor_in_the_windows_words`
