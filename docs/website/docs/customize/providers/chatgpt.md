@@ -19,9 +19,10 @@ bravebot can tell you. bravebot stores a sign-in only when OpenAI's reply grants
 use the subscription's tokens and holds an ID token that verifies, and otherwise stops with a sentence
 saying which.
 
-Several values here, such as the address of the key set and the names in the built-in model list, are
-read from another program's source and have not been checked against OpenAI's service.
-[What has been observed](#what-has-been-observed) says which.
+Several values here, such as the names in the built-in model list, are read from another program's source
+and have not been checked against OpenAI's service.
+[What has been observed](#what-has-been-observed) and [What the documents state](#what-the-documents-state)
+say which.
 
 ## What the command does
 
@@ -188,10 +189,13 @@ account with bravebot's own build. That covers the authorization and token addre
 a client, the scopes and fields the requests carry, the replacement of the refresh token on every use, the
 listing's fields, and the events of a text turn, a tool call and a reasoning turn.
 
-These are read from another program's source, opencode's, and have not been observed against the service:
+These are read from another program's source, opencode's, and have not been observed against the service.
+[What the documents state](#what-the-documents-state) says what OpenAI's key set and discovery document add
+to some of them:
 
-- the address of the key set, the algorithm of the ID token and the issuer it is compared with. A real
-  token that names another issuer would make every sign-in fail;
+- the algorithm and the issuer of a real ID token. OpenAI's discovery document states both as bravebot
+  expects them, and this page records no ID token's header or claims. A real token that names another issuer
+  would make every sign-in fail;
 - that the authorization server accepts a redirect to any loopback port, where only a port the operating
   system chose has been tried;
 - the names in the built-in model list, and in particular the ones ending in `-fast`;
@@ -202,5 +206,14 @@ These are read from another program's source, opencode's, and have not been obse
 
 Whether an access token issued before a sign-out keeps working, and what a refused refresh or a refused
 access token returns, are in no source bravebot was written from.
+
+## What the documents state
+
+OpenAI's key set and its discovery document, which anyone can read, were read with no account on 2026-10-25.
+The key set is at the address bravebot uses and holds four RSA keys for RS256 signatures, each with a
+2048-bit modulus. The discovery document names the authorization, token and key set addresses bravebot uses,
+states the issuer bravebot compares an ID token with, says ID tokens are signed with RS256 and that `S256`
+is the only challenge method, lists a revocation endpoint, and advertises no way to bind a token to the
+program that holds it. Neither document shows what a real ID token holds.
 
 The design is [specs/chatgpt-sign-in.md](https://github.com/brave/bravebot/blob/main/docs/specs/chatgpt-sign-in.md).

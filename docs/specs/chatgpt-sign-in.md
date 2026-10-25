@@ -65,14 +65,16 @@ Reaching OpenAI with a pay-per-token API key is a different route, the `openai` 
 The command is built: `auth login chatgpt` signs in and stores the tokens, `auth logout chatgpt` forgets
 them, and `auth status` and the list of ways report them. [What is built](#what-is-built) says where the code
 is and that every clause is built whole. [What the exchange has to record](#what-the-exchange-has-to-record)
-lists what a sign-in made with a real account has observed and what it has not. The points where this spec
-changes another spec are named in [What this changes elsewhere](#what-this-changes-elsewhere), and each of
-those specs holds the change.
+lists what a sign-in made with a real account has observed, what the service's public documents state, and
+what has not been observed. The points where this spec changes another spec are named in
+[What this changes elsewhere](#what-this-changes-elsewhere), and each of those specs holds the change.
 
 The hosts, parameters, field names and headers the clauses state are read from opencode's source
 (`packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`), which is another program's code.
-Each is a value to confirm with a sign-in unless the list below marks it observed, and [What the exchange has to record](#what-the-exchange-has-to-record)
-lists them beside what no source states. Whether OpenAI's terms allow a program to use a subscription this
+Each is a value to confirm with a sign-in unless the observed list of
+[What the exchange has to record](#what-the-exchange-has-to-record) includes it. That section records what
+documents state. A statement of a document shows nothing about what the service did for this program. The
+section also lists what no source states. Whether OpenAI's terms allow a program to use a subscription this
 way, and whether OpenAI registers a client for this program, are
 [decisions left open](#decisions-left-open). The command is built on the values as stated, and a release
 that carries it waits on the first of those decisions. A request with the sign-in is sent in the Responses
@@ -425,21 +427,22 @@ Three conditions keep the argument true, and a change that breaks one is a chang
    the header's `kid`, and it is an RSA key a signature may be checked with: `kty` is `RSA`, `use`, `alg` and
    `key_ops`, where present, say `sig`, `RS256` and `verify`, the modulus is 2048 to 8192 bits, which are the
    limits of the signature check's own parameters, and the exponent is 65537 or more. That is the least
-   FIPS 186-5 allows and what a real key has (`AQAB`), and the check's parameters alone take an exponent as
-   small as 3. A zero byte in front of the exponent does not count toward it, and a key written with one in
-   front of the exponent or of the modulus is refused by that check, as RFC 7518 has both in the fewest bytes.
+   FIPS 186-5 allows, and the check's parameters alone take an exponent as small as 3.
+   [What the exchange has to record](#what-the-exchange-has-to-record) records the key set as read. A zero
+   byte in front of the exponent does not count toward it, and a key written with one in front of the
+   exponent or of the modulus is refused by that check, as RFC 7518 has both in the fewest bytes.
    A set that holds two keys under one `kid` has none that is the key.
    The key set is fetched from the host compiled in for it ([CHATGPT-2](#CHATGPT-2)) with no credential,
    following no redirect, and a reply over 64 KiB is refused. The signature is checked with RS256 against
    that key's modulus and exponent, and is as long as the modulus. The payload is read after that, is an
-   object, and its issuer (the constant `https://auth.openai.com`), audience (a string equal to the client of
-   the sign-in, or a list holding a string equal to it), expiry (a whole number of seconds later than the
-   clock), nonce (the one sent, compared in constant time) and subject (a string that is not
-   empty) are compared. No other claim is read. The decoded header and claims are cleared when they are
-   dropped. The access token's expiry is read from the `expires_in` field of the reply, not from the
-   token, and is compared with the clock. A clock set before 1970 reads as no time, and every expiry is
-   later than none, so the clock is read before the listener starts and again where the reply arrives, and
-   one that reads before 1970 at either ends the sign-in with nothing stored. Claims such as an
+   object, and its issuer (the constant `https://auth.openai.com`), audience (a string equal to the client
+   of the sign-in, or a list holding a string equal to it), expiry (a whole number of seconds later than the
+   clock), nonce (the one sent, compared in constant time) and subject (a string that is not empty) are
+   compared. No other claim is read. The decoded header and claims are
+   cleared when they are dropped. The access token's expiry is read from the `expires_in` field of the
+   reply, not from the token, and is compared with the clock. A clock set before 1970 reads as no time, and
+   every expiry is later than none, so the clock is read before the listener starts and again where the reply
+   arrives, and one that reads before 1970 at either ends the sign-in with nothing stored. Claims such as an
    organisation's name are text somebody else chose.
 
 No exception is added to [labels.md](labels.md). The counts it pins for `Labelled::new` and
@@ -506,7 +509,9 @@ Each token is a credential at a tier, in the terms of [credential-protection.md]
   not been observed, not that nothing survives.
 - **Neither is bound to its presenter.** Nothing asks the authorization server for a sender-constrained
   form, so the record says bearer, with the answer `NotAttempted`, until the exchange records whether one
-  is offered.
+  is offered. The discovery document advertises none
+  ([What the exchange has to record](#what-the-exchange-has-to-record)), which does not show that a request
+  for one is refused, so the answer stays `NotAttempted`.
 
 A token is held in the secret type that spec describes, so it is redacted wherever it is printed, and its
 buffers are cleared and kept out of crash artifacts. It reaches no program a turn starts, no prompt and no
@@ -1441,9 +1446,11 @@ while the first of them is open, although every clause is built.
 ## What the exchange has to record
 
 A sign-in made with a real ChatGPT Plus or Pro account, with the requests it makes observed, has to
-establish each of the following before a clause states it as observed. What is recorded is a name, a shape,
-a status, a duration or a host. A token, code, state, nonce, challenge, verifier, client or host identifier
-or claim value is never recorded, in this repository or in the tracker.
+establish each of the following before a clause states it as observed. The key set and the discovery
+document, which the service publishes to anyone, were read with no account, and what they state is recorded
+in a separate list. A clause that cites it states what the documents say and no more. What is recorded is a
+name, a shape, a status, a duration or a host. A token, code, state, nonce, challenge, verifier, client or
+host identifier or claim value is never recorded, in this repository or in the tracker.
 
 **Observed against the real service**, as a name, a shape, a status or a size taken from a sign-in made with a
 real ChatGPT account on this program's own build:
@@ -1491,16 +1498,57 @@ real ChatGPT account on this program's own build:
   holding a sentence.
 - A request without `session-id`, `thread-id` or `x-client-request-id` is accepted.
 
+**Stated by the service's public documents, read with no account on 2026-10-25**, as a name, a shape, a
+status or a size taken from one anonymous `GET` of each address, with no credential and no redirect followed.
+A document states what the service advertises. This read made no sign-in and shows nothing about a token, a
+code or a reply to a request that carried one:
+
+- The key set, at the address of [CHATGPT-2](#CHATGPT-2), is answered 200 as `application/json`, 4080 bytes.
+  The body is an object with one key, `keys`, holding a list of four entries. Every entry has `kty` `RSA`,
+  `use` `sig`, `alg` `RS256`, the exponent `e` `AQAB` and a modulus of 2048 bits, and a string `kid` that is
+  unique in the set. No entry has `key_ops`. Two entries also have an `x5c` list of strings and two do not.
+  This shows that the set is at the address compiled in, has the shape the verifier reads, is under the
+  64 KiB reply limit and holds only keys the verifier accepts. It does not show which key signs an ID token,
+  that the `kid` a real token names is in the set, or that the set stays as read.
+- The discovery document, at `/.well-known/openid-configuration` on `auth.openai.com`, is answered 200 as
+  `application/json`, 1471 bytes. Its `issuer` is `https://auth.openai.com`, which is the constant the
+  sign-in compares an ID token's issuer with. Its `authorization_endpoint`, `token_endpoint` and `jwks_uri`
+  are the authorization page, the token endpoint and the key set of [CHATGPT-2](#CHATGPT-2). This shows the
+  issuer the service states and the addresses it names. It does not show what an ID token's issuer is.
+- It states `RS256` as the only signing algorithm for an ID token, `S256` as the only code challenge method,
+  `code` as the only response type, `authorization_code` and `refresh_token` as the grant types, and
+  `client_secret_basic`, `client_secret_post` and `none` as the token endpoint authentication methods.
+  RS256 is the algorithm the verifier accepts, `S256` is the method the sign-in sends, and the two grant
+  types are the two requests the sign-in makes. The document advertises `none` as a method. The method the
+  client registered for this program uses is not observed.
+- Its `scopes_supported` is `openid`, `profile`, `email` and `offline_access`. It does not list
+  `resource.invoke` or `chatgpt.tokens.use.direct`, which the sign-in asks for, so it neither supports nor
+  contradicts them. What the service accepted of them is in the list above.
+- Its `claims_supported` is `sub` and sixteen profile and email claims. It lists none of `iss`, `aud`, `exp`
+  and `nonce`, which with `sub` are the five claims the sign-in compares. A list of the claims a service can
+  supply does not say which claims every token carries, so it says nothing about whether a real ID token
+  carries any of those four.
+- It lists a `revocation_endpoint` on `auth.openai.com`, and has no field that names a sender-constrained
+  token form: no DPoP field and no mutual-TLS field. Its discovery document therefore advertises a way to
+  revoke and advertises no sender-constrained form. The revocation endpoint shows nothing of what revoking
+  does to an access token already issued. An absent advertisement does not show that a request for a
+  sender-constrained form is refused, and none was made.
+- The address `/.well-known/oauth-authorization-server` on `auth.openai.com`, where RFC 8414 puts the
+  metadata of an authorization server, is answered 200 as `text/html`, about 57 KB, with a page that holds
+  no metadata.
+
 **Stated by the clauses from opencode's source, to confirm:**
 
-- The key set on `auth.openai.com`, with its path in [CHATGPT-2](#CHATGPT-2).
 - That the authorization server accepts a redirect to `http://127.0.0.1:<port>/auth/callback` for any port.
   A port the operating system chose is accepted and no other is confirmed.
 - The `id_token` field of the code exchange's reply, which the sign-in requires and verifies.
-- The ID token's algorithm, audience, required claims and the nonce match, and the `kid` and key types of the
-  key set.
-- The ID token's issuer. The sign-in compares it with the constant `https://auth.openai.com`, which is not
-  observed from the service: a real token that names another refuses every sign-in.
+- The ID token's algorithm, audience, required claims and the nonce match, as a real token holds them, and
+  that the `kid` a real token names is in the key set. The service advertises RS256 for an ID token and
+  publishes RSA keys for RS256 signatures, which are the algorithm and key types the verifier accepts. No ID
+  token's header or claims are recorded in this spec.
+- The ID token's issuer, as a real token holds it. The sign-in compares it with the constant
+  `https://auth.openai.com`, which equals the `issuer` the discovery document states and has not been seen
+  in a token: a real token that names another refuses every sign-in.
 - That each name of the compiled list ([CHATGPT-9](#CHATGPT-9)) is a model the service takes, and in
   particular the names ending in `-fast`, which are names of the program the list is read from.
 - What the three session headers do for prompt-cache affinity, and that there is no native compaction and no
@@ -1522,8 +1570,10 @@ real ChatGPT account on this program's own build:
   `invalid_grant` at a 400 or 401 as ending the sign-in, from RFC 6749 and not from this server.
 - Whether a request to the token endpoint is ever answered with a redirect.
 - What an account with no subscription reaches.
-- Whether an access token minted before a revocation survives it, and whether a sender-constrained form is
-  offered.
+- Whether an access token minted before a revocation survives it, and whether the service issues a
+  sender-constrained form to a request for one. The discovery document lists a revocation endpoint, which
+  says nothing of a token already issued, and advertises no sender-constrained form, which does not show
+  that a request for one is refused.
 - What the serving host does with a picture, with a model's own words sent back as `output_text`, with a
   `response.incomplete` or `response.failed` event, and with a refused access token on `/responses`.
 - Whether `cached_tokens` is counted inside `input_tokens`: every figure seen was zero.

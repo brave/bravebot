@@ -16,7 +16,8 @@ use crate::secret::Document;
 use ring::signature::{RSA_PKCS1_2048_8192_SHA256, RsaPublicKeyComponents};
 
 /// The issuer an ID token of this server names. A constant of the source, read from the program the
-/// spec was written from, and not observed from the service.
+/// spec was written from. It equals the `issuer` of the service's discovery document, and no ID
+/// token's `iss` is recorded.
 const ISSUER: &str = "https://auth.openai.com";
 
 /// The one algorithm accepted.
