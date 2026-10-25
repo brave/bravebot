@@ -1158,6 +1158,72 @@ class Bodies(unittest.TestCase):
         self.assertNotIn("guarded symbols", self.body(finding))
 
 
+class KeptInPlace(unittest.TestCase):
+    """What an earlier split said stays, put in front of the reviewer of that file."""
+
+    ENTRY = "## crates/a/src/lib.rs\n\nIssue #1. `keep_me` stays: it writes the trust map.\n"
+    LONG = "".join(f"const C{i}: u32 = {i};\n" for i in range(m.FILE_LINES + 1))
+
+    def prompts(self, files, lanes=("size",)):
+        with committed(files) as root:
+            _, path = m.prepare(root, lanes, (), root / ".work")
+            manifest = json.loads(Path(path).read_text())
+            return "\n".join(
+                Path(p["prompt_file"]).read_text() for e in manifest["lanes"] for p in e["reviewer_prompts"]
+            )
+
+    def files(self):
+        return {
+            "crates/a/src/lib.rs": self.LONG,
+            "crates/b/src/lib.rs": self.LONG,
+            ".gitignore": ".work\n",
+            str(m.KEPT_IN_PLACE): self.ENTRY,
+        }
+
+    def test_a_candidate_in_a_file_with_an_entry_has_it_in_its_lines_and_another_file_does_not(self):
+        prompt = self.prompts(self.files())
+        lines = {l.split("`")[1].split(":")[0]: l for l in prompt.splitlines() if l.startswith("- **")}
+        entry_lines = [l for l in prompt.splitlines() if "kept in place:" in l]
+        self.assertEqual(len(entry_lines), 1)
+        self.assertIn("`keep_me` stays: it writes the trust map", entry_lines[0])
+        after = prompt.splitlines()
+        a = after.index(lines["crates/a/src/lib.rs"])
+        b = after.index(lines["crates/b/src/lib.rs"])
+        self.assertIn("kept in place:", after[a + 1] + after[a + 2])
+        self.assertNotIn("kept in place:", after[b + 1])
+
+    def test_the_reviewer_is_told_to_keep_what_an_entry_covers_only_where_the_prompt_has_one(self):
+        with_entry = self.prompts(self.files())
+        files = self.files()
+        del files[str(m.KEPT_IN_PLACE)]
+        without = self.prompts(files)
+        self.assertIn("Call `keep` anything an entry covers", with_entry)
+        self.assertNotIn("Call `keep` anything an entry covers", without)
+
+    def test_the_three_lanes_that_propose_moving_code_carry_an_entry_and_the_others_do_not(self):
+        candidate = {"id": "U1", "path": "crates/a/src/lib.rs", "line": 1, "detail": "d"}
+        kept = {"crates/a/src/lib.rs": ["Issue #1."]}
+        for lane in m.KEPT_LANES:
+            with self.subTest(lane=lane):
+                self.assertIn("kept in place: Issue #1.", m.build_prompt(lane, [candidate], "r.json", "", kept))
+        self.assertEqual(m.build_prompt("unreferenced", [candidate], "r.json", "", kept).count("kept in place:"), 0)
+
+    def test_a_file_with_two_entries_gives_both_and_a_missing_file_gives_none(self):
+        with tree({str(m.KEPT_IN_PLACE): "## x.rs\n\nIssue #1.\n\n## x.rs\n\nIssue #2.\n\n## y.rs\n\nIssue #3.\n"}) as root:
+            self.assertEqual(m.read_kept(root), {"x.rs": ["Issue #1.", "Issue #2."], "y.rs": ["Issue #3."]})
+        with tree({"crates/a/src/lib.rs": "\n"}) as root:
+            self.assertEqual(m.read_kept(root), {})
+
+    def test_every_entry_names_an_issue_and_a_file_that_exists(self):
+        entries = m.read_kept(HERE.parents[2])
+        self.assertTrue(entries)
+        for path, texts in entries.items():
+            with self.subTest(path=path):
+                self.assertTrue((HERE.parents[2] / path).is_file())
+                for text in texts:
+                    self.assertRegex(text, r"Issue #\d+")
+
+
 class Reading(unittest.TestCase):
     """Where reviewers read, and what the prompt tells them to do while they do."""
 
