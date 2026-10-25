@@ -10,6 +10,7 @@ governs:
   - crates/cli/src/session_search.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/hunks_command.rs
+  - crates/tui/src/app/records.rs
   - crates/tui/src/app/side_requests.rs
   - crates/agent/src/hunks.rs
   - crates/tui/src/state.rs
