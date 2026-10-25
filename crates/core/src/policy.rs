@@ -4252,20 +4252,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// A delegate that reached its bound answers like one that did not, so the bound is what tells
     /// the two apart: a run at its bound was told it had no rounds left.
-    pub fn record_delegate_end(
-        &mut self,
-        id: crate::delegate::DelegateId,
-        bound: usize,
-        finish: crate::delegate::Finish,
-    ) {
-        self.record_delegate_end_within(id, bound, None, finish);
-    }
-
-    /// [`Policy::record_delegate_end`] for a delegate that also carried a token budget.
     ///
-    /// `spent` is that budget and the tokens the run reported, both counts the driver holds. A
-    /// run that reached it says so, beside the round limit where it reached that too, so the
-    /// trail names which bound ended the run (DELEGATE-29).
+    /// `spent` is the delegate's token budget and the tokens the run reported, both counts the
+    /// driver holds, or `None` for a delegate that carried no budget. A run that reached the budget
+    /// says so, beside the round limit where it reached that too, so the trail names which bound
+    /// ended the run (DELEGATE-29).
     pub fn record_delegate_end_within(
         &mut self,
         id: crate::delegate::DelegateId,
@@ -18576,19 +18567,20 @@ five
             let mut sink = RecordingSink::new();
             let mut turn = open_policy(&mut sink);
             let id = DelegateId::nth(1);
-            turn.record_delegate_end(id, 120, Finish::Answered { took, rounds: 7 });
-            turn.record_delegate_end(id, 120, Finish::Answered { took, rounds: 120 });
-            turn.record_delegate_end(id, 120, Finish::Stopped { took, rounds: 12 });
-            turn.record_delegate_end(
+            turn.record_delegate_end_within(id, 120, None, Finish::Answered { took, rounds: 7 });
+            turn.record_delegate_end_within(id, 120, None, Finish::Answered { took, rounds: 120 });
+            turn.record_delegate_end_within(id, 120, None, Finish::Stopped { took, rounds: 12 });
+            turn.record_delegate_end_within(
                 id,
                 120,
+                None,
                 Finish::Failed {
                     took,
                     rounds: 37,
                     why: "unavailable",
                 },
             );
-            turn.record_delegate_end(id, 120, Finish::Lost);
+            turn.record_delegate_end_within(id, 120, None, Finish::Lost);
             drop(turn);
             let recorded: Vec<&str> = sink
                 .events()
