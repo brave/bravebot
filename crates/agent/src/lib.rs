@@ -37,6 +37,7 @@ pub mod home;
 pub mod hooks;
 pub mod host_proxy;
 pub mod hunks;
+pub mod interjections;
 #[cfg(test)]
 mod kept_answers;
 pub mod lsp;
