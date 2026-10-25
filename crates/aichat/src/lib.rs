@@ -1237,6 +1237,17 @@ fn backoff(base: Duration, failures: u32) -> Duration {
     base * 2u32.pow(failures - 1)
 }
 
+/// Whether a failed attempt should be repeated, for a client that also reads a failure the service
+/// reports part way through a reply.
+///
+/// What [`worth_another_attempt`] asks, and a reported failure that a second attempt could get
+/// past.
+fn worth_another_attempt_or_report(allowed: u32, attempt: u32, error: &ChatError) -> bool {
+    worth_another_attempt(allowed, attempt, error)
+        || (attempt < allowed
+            && matches!(error, ChatError::Reported { failure } if failure.is_transient()))
+}
+
 /// The wait a service asked for with a 429, or none. Another status keeps the doubling whatever
 /// header it carried: the header is read as a rate limit's only.
 pub fn asked_wait(error: &EgressError) -> Duration {

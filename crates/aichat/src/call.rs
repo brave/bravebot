@@ -5,7 +5,7 @@
 //! for each, so they are written once.
 
 use crate::protocol::{ChatRequest, Usage};
-use crate::{ChatError, Completion, Refusals, refuses_the_body, remember, remembered};
+use crate::{Completion, Refusals};
 use bravebot_core::cancel::Cancel;
 use std::time::Duration;
 
@@ -205,6 +205,15 @@ pub trait Driven {
 
     /// Write the decision to send again to the diagnostic log.
     fn log_retry(&self, attempt: u32, pause: Duration);
+
+    /// Repair what made `error` happen, where the client can, and say whether it did.
+    ///
+    /// True sends the request again at once, counting against no limit and announcing nothing, as
+    /// a concession does. A client that repairs nothing keeps this default. An error returned here
+    /// ends the call.
+    fn mend(&mut self, _error: &Self::Error) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
 }
 
 /// What differs between one call of the driver and another, other than the client.
@@ -226,8 +235,9 @@ pub struct Plan<'a> {
 /// follow a pause, before the wait, so that a caller showing a reply can say why it went quiet.
 ///
 /// A refusal of the request's contents is answered with the next concession in `plan.order` and
-/// sent again at once, and counts against no limit. Anything else the client says is worth another
-/// attempt waits `pause` and counts. What answered after a concession is remembered, and a probe
+/// sent again at once, and counts against no limit. A failure the client mends ([`Driven::mend`])
+/// is sent again at once the same way. Anything else the client says is worth another attempt
+/// waits `pause` and counts. What answered after a concession is remembered, and a probe
 /// that failed as well remembers nothing and puts back what was known before the request.
 pub fn drive<C, X, Send, Announce>(
     client: &mut C,
@@ -261,6 +271,9 @@ where
             Ok(completion) => return Ok(settled(client, plan.key, probed, completion)),
             Err(error) => error,
         };
+        if client.mend(&error)? {
+            continue;
+        }
         let mut conceded = None;
         for &concession in plan.order {
             if !client.refusals().has_given_up(concession)
@@ -308,75 +321,11 @@ fn settled<C: Driven>(
     completion
 }
 
-/// Whether an effort-only client still sends the level a turn asks for, and what its model was
-/// known to refuse before the request.
-///
-/// The Google and Responses clients give up one thing on a refusal, the thinking level, so they
-/// share this. The clients that give up several things keep their own state.
-#[derive(Debug, Clone)]
-pub struct EffortRefused {
-    /// True until a model refuses the level, which is the only way to find out that it reads none:
-    /// nothing in a roster says which models do.
-    pub effort: bool,
-    /// What that model was known to refuse before this request, which a probe that settled
-    /// nothing puts back.
-    pub recalled: Refusals,
-}
-
-impl Default for EffortRefused {
-    fn default() -> Self {
-        Self {
-            effort: true,
-            recalled: Refusals::default(),
-        }
-    }
-}
-
-impl EffortRefused {
-    /// Start a request from what the model under `key` has already been found to refuse.
-    pub fn recall(&mut self, key: &str) {
-        let refusals = remembered(key);
-        self.effort = !refusals.effort;
-        self.recalled = refusals;
-    }
-
-    /// Settle what a probe found, once the request it was part of has finished one way or the other.
-    ///
-    /// A probe that answered leaves what it gave up dropped, which is the model saying it does not
-    /// read it. A probe that failed as well says the level was not what the service refused, so it
-    /// goes back to what was known before the request: a request can be refused on its contents
-    /// for reasons that have nothing to do with it.
-    pub fn probe_settled(&mut self, key: &str, probed: bool, failed: bool) {
-        if !probed {
-            return;
-        }
-        if failed {
-            self.effort = !self.recalled.effort;
-            return;
-        }
-        remember(
-            key,
-            Refusals {
-                effort: !self.effort,
-                ..Refusals::default()
-            },
-        );
-    }
-
-    /// Whether this failure is worth sending the same request again without its level.
-    ///
-    /// Only where the request carried one: a request without a level was not refused for it, and
-    /// giving it up there would record a refusal nobody saw.
-    pub fn worth_dropping(&self, request: &ChatRequest, error: &ChatError) -> bool {
-        self.effort && request.effort.is_some() && refuses_the_body(error)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::protocol::Effort;
-    use bravebot_net::EgressError;
+    use crate::{remember, remembered};
 
     fn usage(prompt: u64, completion: u64) -> Usage {
         Usage {
@@ -465,106 +414,6 @@ mod tests {
         ChatRequest::new("model", Vec::new()).with_effort(effort)
     }
 
-    fn status(code: u16) -> ChatError {
-        ChatError::Egress(EgressError::Status {
-            url: "https://example.invalid/".to_string(),
-            status: code,
-            retry_after: None,
-            body: None,
-        })
-    }
-
-    #[test]
-    fn the_level_is_dropped_only_for_a_refusal_of_a_request_that_carried_one() {
-        let refused = EffortRefused::default();
-        let with_level = request_with(Some(Effort::High));
-        assert!(refused.worth_dropping(&with_level, &status(400)));
-        assert!(refused.worth_dropping(&with_level, &status(422)));
-        // Not a refusal of the contents.
-        assert!(!refused.worth_dropping(&with_level, &status(500)));
-        assert!(!refused.worth_dropping(&with_level, &status(401)));
-        // Nothing was sent, so nothing was refused.
-        assert!(!refused.worth_dropping(&request_with(None), &status(400)));
-        // Already given up.
-        let given_up = EffortRefused {
-            effort: false,
-            ..EffortRefused::default()
-        };
-        assert!(!given_up.worth_dropping(&with_level, &status(400)));
-    }
-
-    #[test]
-    fn a_request_starts_from_what_the_model_was_known_to_refuse() {
-        let key = "call-test\nrecall-known";
-        remember(
-            key,
-            Refusals {
-                effort: true,
-                ..Refusals::default()
-            },
-        );
-        let mut refused = EffortRefused::default();
-        refused.recall(key);
-        assert!(!refused.effort);
-        assert!(refused.recalled.effort);
-
-        let mut fresh = EffortRefused {
-            effort: false,
-            ..EffortRefused::default()
-        };
-        fresh.recall("call-test\nrecall-unknown");
-        assert!(fresh.effort, "an unknown model is asked with the level");
-        assert_eq!(fresh.recalled, Refusals::default());
-    }
-
-    #[test]
-    fn a_probe_that_answered_remembers_the_refusal() {
-        let key = "call-test\nprobe-answered";
-        let mut refused = EffortRefused::default();
-        refused.recall(key);
-        refused.effort = false;
-        refused.probe_settled(key, true, false);
-        assert!(remembered(key).effort);
-    }
-
-    #[test]
-    fn a_probe_that_failed_as_well_remembers_nothing_and_goes_back() {
-        let key = "call-test\nprobe-failed";
-        let mut refused = EffortRefused::default();
-        refused.recall(key);
-        refused.effort = false;
-        refused.probe_settled(key, true, true);
-        assert!(refused.effort, "the level goes back to what was known");
-        assert_eq!(remembered(key), Refusals::default());
-
-        // Known to be refused before the request: a failed probe puts that back.
-        let known = "call-test\nprobe-failed-known";
-        remember(
-            known,
-            Refusals {
-                effort: true,
-                ..Refusals::default()
-            },
-        );
-        let mut again = EffortRefused::default();
-        again.recall(known);
-        again.probe_settled(known, true, true);
-        assert!(!again.effort);
-        assert!(remembered(known).effort);
-    }
-
-    #[test]
-    fn a_request_that_probed_nothing_settles_nothing() {
-        let key = "call-test\nnot-probed";
-        let mut refused = EffortRefused::default();
-        refused.recall(key);
-        refused.effort = false;
-        refused.probe_settled(key, false, false);
-        refused.probe_settled(key, false, true);
-        assert!(!refused.effort);
-        assert_eq!(remembered(key), Refusals::default());
-    }
-
     #[test]
     fn beginning_a_call_clears_the_count_and_both_usages() {
         let mut spent = Spent {
@@ -647,6 +496,8 @@ mod tests {
         Throttled(Duration),
         /// A failure nobody can do anything about.
         Failed,
+        /// A failure the client repairs once and sends the request again after.
+        Rejected,
         Stopped,
     }
 
@@ -661,6 +512,8 @@ mod tests {
         allowed: u32,
         /// The pause the driver asked this client for, per wait.
         paused: std::cell::RefCell<Vec<Duration>>,
+        /// How many failures have been repaired.
+        mended: u32,
     }
 
     impl Fake {
@@ -672,6 +525,7 @@ mod tests {
                 script: script.into(),
                 allowed: 3,
                 paused: std::cell::RefCell::new(Vec::new()),
+                mended: 0,
             }
         }
 
@@ -747,6 +601,15 @@ mod tests {
         }
 
         fn log_retry(&self, _: u32, _: Duration) {}
+
+        /// Repairs the first rejection only, as a token is replaced once.
+        fn mend(&mut self, error: &Ended) -> Result<bool, Ended> {
+            if *error == Ended::Rejected && self.mended == 0 {
+                self.mended += 1;
+                return Ok(true);
+            }
+            Ok(false)
+        }
     }
 
     /// One attempt of the fake: note what the request carried, count it, and end as scripted.
@@ -880,6 +743,35 @@ mod tests {
         );
         assert_eq!(client.refusals, effort_only());
         assert_eq!(remembered(known), effort_only());
+    }
+
+    /// Rejects a driver that ignores a repair, one that waits or announces before sending again
+    /// after it, one that counts it against the attempts, and one that repairs without end.
+    #[test]
+    fn a_mended_failure_is_sent_again_at_once_and_counts_against_nothing() {
+        // Three throttled attempts after the repair still fit the three allowed: the repair is not
+        // one of them.
+        let mut client = Fake::ending(vec![
+            Ended::Rejected,
+            Ended::Throttled(Duration::ZERO),
+            Ended::Throttled(Duration::ZERO),
+            Ended::Answered,
+        ]);
+        let mut seen = Seen::new();
+        run_fake(&mut client, "driver-test\nmended", &[], &mut seen)
+            .expect("the repair was counted against the attempts");
+        assert_eq!(seen.sent_with.len(), 4);
+        assert_eq!(client.mended, 1);
+        // Only the two rate limits were waited out and announced; the repair was neither.
+        assert_eq!(*client.paused.borrow(), [Duration::ZERO; 2]);
+        assert_eq!(seen.announced.len(), 2);
+
+        // A failure the client does not repair a second time ends the call.
+        let mut client = Fake::ending(vec![Ended::Rejected, Ended::Rejected, Ended::Answered]);
+        let mut seen = Seen::new();
+        let result = run_fake(&mut client, "driver-test\nmended-once", &[], &mut seen);
+        assert_eq!(result.unwrap_err(), Ended::Rejected);
+        assert_eq!(seen.sent_with.len(), 2);
     }
 
     /// Rejects a driver that sends again without looking at the stop. The stop lands while a
