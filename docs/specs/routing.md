@@ -117,12 +117,19 @@ redirected to another value, or reused for a different pipeline.
 A write that would make a trusted path untrusted is the case that must be shown. Where nobody can
 be asked, effects are refused rather than applied unseen.
 
+A connector act's content is released only to the place the plan fixed for it.
+
+A connector act's endorsement is not minted by this driver: the driver records no grant for the
+act, and the person approves it in the authority's popup.
+
 `verified-by: bravebot_core::policy::a_granted_action_needs_a_matching_endorsement`
 `verified-by: bravebot_core::policy::an_endorsement_cannot_be_replayed`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_transfer_to_another_value`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_a_different_line`
 `verified-by: bravebot_core::policy::ungranted_capabilities_are_refused`
 `verified-by: bravebot_core::policy::a_run_needs_the_capability_as_well_as_the_endorsement`
+`verified-by: bravebot_core::policy::a_connector_release_is_refused_unless_precommitted_to_that_place`
+`verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
 
 <a id="ROUTE-6"></a>
 ### ROUTE-6: a reference is not a destination unless it names a file
