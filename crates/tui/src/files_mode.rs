@@ -1216,10 +1216,10 @@ mod tests {
         assert!(panel.contains("+1 -1"), "no net 0/0 row was drawn: {panel}");
     }
 
-    /// FILES-10: the state holds only indexes into the transcript and `/files` is a command of the
+    /// FILES-10: the state holds only indexes into the transcript and `/diff` is a command of the
     /// interface's own. This does not capture a request or the record; the clause is by construction.
     #[test]
-    fn the_state_holds_only_indexes_and_files_is_an_interface_command() {
+    fn the_state_holds_only_indexes_and_diff_is_an_interface_command() {
         let mut session = session_with(&["a.rs"]);
         opened(&mut session);
         let held = format!("{:?}", session.files_state());
@@ -1228,7 +1228,7 @@ mod tests {
         assert!(
             crate::command_table::commands()
                 .iter()
-                .any(|command| command.name == crate::command_table::FILES_COMMAND)
+                .any(|command| command.name == crate::command_table::DIFF_COMMAND)
         );
     }
 

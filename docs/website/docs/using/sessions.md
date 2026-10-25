@@ -345,7 +345,7 @@ session's own counters, the servers you approved and where the session runs, and
 
 ### The files the session wrote
 
-Type `/files` and the panel lists every file the session's write calls changed, in the order each was
+Type `/diff` and the panel lists every file the session's write calls changed, in the order each was
 first written, with the lines added and removed at the right edge. Under the list are all the edits to
 the highlighted file, oldest first, each under a header with its place, its turn and its counts, with
 line numbers in a gutter and every change drawn, where the transcript draws the first twelve of each
@@ -358,7 +358,7 @@ columns wide.
 | `Home` `End`, `g` `G` | highlight the first or last file |
 | `PgUp` `PgDn` | scroll the edits |
 | `[` `]` | scroll to the previous or next edit |
-| `q`, `Esc`, `/files`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
+| `q`, `Esc`, `/diff`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
 
 Every other key does nothing there, and the line in the box comes back as you left it. Edits that
 finish while the view is open are added without moving the highlight or the scroll. The view lists

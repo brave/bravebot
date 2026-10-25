@@ -32,7 +32,7 @@ impl Session {
         files_mode::has_earlier_calls(&self.transcript)
     }
 
-    /// Carry out `/files`: open the state, or end it where it is open.
+    /// Carry out `/diff`: open the state, or end it where it is open.
     ///
     /// With nothing written, or on a terminal too narrow, a note says so and nothing changes. Neither
     /// opening nor ending it touches the choice the panel key keeps (FILES-3).

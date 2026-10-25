@@ -76,24 +76,25 @@ kernel.
 `verified-by: bravebot_tui::files_mode::the_totals_are_sums_of_the_counts_the_edits_carry`
 
 <a id="FILES-3"></a>
-### FILES-3: `/files` enters the state and leaves it
+### FILES-3: `/diff` enters the state and leaves it
 
-`/files` draws the panel in its files state and opens the panel if it was closed. While the state is
-open, `/files`, `q` and Escape end it. Ending it returns the panel to what it was before: closed if
+`/diff` draws the panel in its files state and opens the panel if it was closed. While the state is
+open, `/diff`, `q` and Escape end it. Ending it returns the panel to what it was before: closed if
 it was closed, in its ordinary state if it was open. Entering and leaving write nothing to
 `~/.bravebot/panel` ([PANEL-5](info-panel.md#PANEL-5)). The `panel` chord hides the panel from either
 state and ends the state with it. The state is not kept across a start or a resume.
 
-With no file written, `/files` answers with a note and changes nothing. On a terminal too narrow for
+With no file written, `/diff` answers with a note and changes nothing. On a terminal too narrow for
 the state (FILES-4) it answers with a note saying how wide the terminal has to be, as
 [PANEL-6](info-panel.md#PANEL-6) does. It runs at once while a turn works, as `/panel` does
-([CMD-8](commands.md#CMD-8)).
+([CMD-8](commands.md#CMD-8)). `/files` is not a command ([CMD-2](commands.md#CMD-2)).
 
-`verified-by: bravebot_tui::app::files_opens_the_panel_in_its_files_state_and_q_puts_it_back`
+`verified-by: bravebot_tui::app::diff_opens_the_panel_in_its_files_state_and_q_puts_it_back`
 `verified-by: bravebot_tui::app::leaving_the_state_closes_a_panel_it_opened`
 `verified-by: bravebot_tui::app::entering_and_leaving_the_state_writes_no_panel_choice`
 `verified-by: bravebot_tui::app::the_panel_chord_ends_the_state_with_the_panel`
-`verified-by: bravebot_tui::app::files_with_nothing_written_answers_with_a_note`
+`verified-by: bravebot_tui::app::diff_with_nothing_written_answers_with_a_note`
+`verified-by: bravebot_tui::app::diff_is_the_command_and_files_is_not_one`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 
 <a id="FILES-4"></a>
@@ -222,7 +223,7 @@ do the same work until then.
 
 The state reads the activity entries the transcript already holds and keeps no second copy, so a
 bound on those entries is a bound here. It is held only by the interface: no edit, count or row is
-sent to a model or written to the session record, and `/files` is not sent to the planner
+sent to a model or written to the session record, and `/diff` is not sent to the planner
 ([CMD-2](commands.md#CMD-2)).
 
 The session record holds no write's changes ([SESSION-2](sessions.md#SESSION-2)), so a resumed
@@ -233,7 +234,7 @@ later program change nothing in the state, since it draws what the session wrote
 
 Every word the state says is in the catalogue ([localization.md](localization.md)).
 
-`verified-by: by-construction (the state holds only indexes into the transcript's entries and draws from them, and nothing in it is passed to a request or the record; bravebot_tui::files_mode::the_state_holds_only_indexes_and_files_is_an_interface_command asserts that the held state names no file and that /files is in the interface's command table, and does not capture a request or the record)`
+`verified-by: by-construction (the state holds only indexes into the transcript's entries and draws from them, and nothing in it is passed to a request or the record; bravebot_tui::files_mode::the_state_holds_only_indexes_and_diff_is_an_interface_command asserts that the held state names no file and that /diff is in the interface's command table, and does not capture a request or the record)`
 `verified-by: bravebot_tui::files_mode::a_resumed_session_lists_only_the_edits_made_since`
 `verified-by: bravebot_tui::files_mode::clearing_ends_the_files_state_and_forgets_its_edits`
 `verified-by: bravebot_tui::app::undoing_a_turn_removes_its_edits_from_the_list`

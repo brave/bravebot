@@ -221,7 +221,7 @@ narrow for it.
 6. **Language servers.** PANEL-13.
 7. **MCP servers.** PANEL-14.
 8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote,
-   and a row naming `/files`, the command that opens the files state ([FILES-3](files-mode.md#FILES-3)).
+   and a row naming `/diff`, the command that opens the files state ([FILES-3](files-mode.md#FILES-3)).
    It is left out until a file has been written. The Plan takes the rows it leaves, as PANEL-13
    says of the server sections.
 9. **Plan.** PANEL-10.

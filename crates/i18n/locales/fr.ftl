@@ -2556,7 +2556,7 @@ command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fix
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
-command-files = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
+command-diff = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
 command-thinking = Afficher ou masquer la réflexion du modèle à mesure qu'elle arrive
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
@@ -3627,7 +3627,7 @@ panel-more = +{ $count } de plus
 panel-earlier = +{ $count } avant
 panel-earlier-and-more = +{ $earlier } avant, +{ $later } de plus
 
-# L'état « fichiers » du panneau d'informations, qui liste ce que la session a écrit (`/files`).
+# L'état « fichiers » du panneau d'informations, qui liste ce que la session a écrit (`/diff`).
 # Son titre, au-dessus de la liste : combien de fichiers les appels d'écriture de la session ont modifiés.
 files-heading = { $count ->
     [one] { $count } fichier modifié
@@ -3647,9 +3647,9 @@ files-edit-count = { $count ->
     [one] { $count } modification
    *[other] { $count } modifications
     }
-# Laissé dans la transcription par /files avant que la session n'ait écrit un fichier.
+# Laissé dans la transcription par /diff avant que la session n'ait écrit un fichier.
 files-nothing-written = aucun fichier n'a encore été écrit dans cette session
-# Laissé dans la transcription par /files sur un terminal trop étroit pour cet état.
+# Laissé dans la transcription par /diff sur un terminal trop étroit pour cet état.
 files-too-narrow = La vue des fichiers demande un terminal d'au moins { $columns } colonnes de large.
 # Dit sur la dernière ligne tant que l'état est ouvert, avec ses touches.
 files-hint = ↑↓ fichier  ·  PgUp PgDn défiler  ·  [ ] modification  ·  q retour

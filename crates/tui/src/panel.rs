@@ -337,7 +337,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
         }
         let rows = vec![
             Line::from(total),
-            row(crate::command_table::FILES_COMMAND.to_string(), dim()),
+            row(crate::command_table::DIFF_COMMAND.to_string(), dim()),
         ];
         section(&mut body, t!(panel_files).to_string(), rows);
     }
@@ -2083,7 +2083,7 @@ mod tests {
             .position(|row| *row == *t!(panel_files))
             .unwrap_or_else(|| panic!("no Files heading: {with:#?}"));
         assert_eq!(with[heading + 1].trim(), "2 files +2 -1", "{with:#?}");
-        assert_eq!(with[heading + 2].trim(), "/files", "{with:#?}");
+        assert_eq!(with[heading + 2].trim(), "/diff", "{with:#?}");
         let plan_heading = with
             .iter()
             .position(|row| *row == *t!(panel_plan))

@@ -743,7 +743,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.toggle_panel();
         return Action::Redraw;
     }
-    if line.trim() == FILES_COMMAND {
+    if line.trim() == DIFF_COMMAND {
         session.toggle_files();
         return Action::Redraw;
     }
@@ -20159,9 +20159,9 @@ mod tests {
                 CONTEXT_COMMAND,
                 COPY_COMMAND,
                 COST_COMMAND,
+                DIFF_COMMAND,
                 EFFORT_COMMAND,
                 EXPORT_COMMAND,
-                FILES_COMMAND,
                 FORGET_TRUST_COMMAND,
                 GOAL_COMMAND,
                 ISSUE_COMMAND,
@@ -32667,18 +32667,18 @@ mod tests {
         session
     }
 
-    /// FILES-3: `/files` draws the panel in its files state, opening it where it was closed, and `q`
+    /// FILES-3: `/diff` draws the panel in its files state, opening it where it was closed, and `q`
     /// puts it back as it was: a panel that was open is open and ordinary again.
     #[test]
-    fn files_opens_the_panel_in_its_files_state_and_q_puts_it_back() {
+    fn diff_opens_the_panel_in_its_files_state_and_q_puts_it_back() {
         let mut session = session_that_wrote();
         session.toggle_panel();
         assert!(session.panel_open() && !session.files_open());
         assert_eq!(
-            dispatch_command(&mut session, commanded(FILES_COMMAND)),
+            dispatch_command(&mut session, commanded(DIFF_COMMAND)),
             Action::Redraw
         );
-        assert!(session.files_open(), "/files did not open the state");
+        assert!(session.files_open(), "/diff did not open the state");
         assert_eq!(
             handle_key(&mut session, key(KeyCode::Char('q'))),
             Action::Redraw
@@ -32687,20 +32687,20 @@ mod tests {
         assert!(session.panel_open(), "the panel that was open was closed");
     }
 
-    /// FILES-3: a panel `/files` opened is closed again when the state ends, whichever key ends it,
-    /// and `/files` again ends it too.
+    /// FILES-3: a panel `/diff` opened is closed again when the state ends, whichever key ends it,
+    /// and `/diff` again ends it too.
     #[test]
     fn leaving_the_state_closes_a_panel_it_opened() {
         for ending in [KeyCode::Char('q'), KeyCode::Esc] {
             let mut session = session_that_wrote();
-            dispatch_command(&mut session, commanded(FILES_COMMAND));
+            dispatch_command(&mut session, commanded(DIFF_COMMAND));
             assert!(session.panel_open());
             handle_key(&mut session, key(ending));
             assert!(!session.panel_open(), "{ending:?} left the panel open");
         }
         let mut session = session_that_wrote();
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
         assert!(!session.files_open() && !session.panel_open());
     }
 
@@ -32709,22 +32709,22 @@ mod tests {
     fn the_panel_chord_ends_the_state_with_the_panel() {
         let mut session = session_that_wrote();
         session.toggle_panel();
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
         handle_key(&mut session, ctrl('x'));
         assert!(!session.files_open(), "the chord left the state open");
         assert!(!session.panel_open(), "the chord left the panel open");
     }
 
-    /// FILES-3: with no file written `/files` answers with a note and changes nothing, and on a
+    /// FILES-3: with no file written `/diff` answers with a note and changes nothing, and on a
     /// terminal too narrow it says how wide the terminal has to be.
     #[test]
-    fn files_with_nothing_written_answers_with_a_note() {
+    fn diff_with_nothing_written_answers_with_a_note() {
         let mut session = Session::new("none");
         session.note_layout(crate::state::Laid {
             columns: 120,
             ..crate::state::Laid::default()
         });
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
         assert!(!session.files_open() && !session.panel_open());
         let said = session.transcript.last().map(|entry| entry.text.clone());
         assert_eq!(said, Some(t!(files_nothing_written).to_string()));
@@ -32734,7 +32734,7 @@ mod tests {
             columns: 80,
             ..crate::state::Laid::default()
         });
-        dispatch_command(&mut narrow, commanded(FILES_COMMAND));
+        dispatch_command(&mut narrow, commanded(DIFF_COMMAND));
         assert!(!narrow.files_open());
         let said = narrow.transcript.last().map(|entry| entry.text.clone());
         assert_eq!(
@@ -32743,12 +32743,37 @@ mod tests {
         );
     }
 
+    /// FILES-3, CMD-2: typed in full `/diff` opens the state, and no command claims `/files`, so
+    /// that line completes to nothing, is not carried out mid-turn and is sent as a prompt like any
+    /// other line that starts with a word nobody claims.
+    #[test]
+    fn diff_is_the_command_and_files_is_not_one() {
+        assert_eq!(DIFF_COMMAND, "/diff");
+        assert!(commands().iter().any(|command| command.name == "/diff"));
+        assert!(!commands().iter().any(|command| command.name == "/files"));
+        assert_eq!(command_typed("/diff"), Some("/diff"));
+        assert_eq!(command_typed("/files"), None);
+        assert!(completions("/files").is_empty());
+        assert!(!runs_while_working("/files"));
+
+        let mut session = session_that_wrote();
+        type_line(&mut session, "/diff");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(session.files_open(), "typing /diff did not open the state");
+        handle_key(&mut session, key(KeyCode::Char('q')));
+
+        type_line(&mut session, "/files");
+        let action = handle_key(&mut session, key(KeyCode::Enter));
+        assert!(!session.files_open(), "typing /files opened the state");
+        assert_eq!(action, Action::Submit("/files".to_string()));
+    }
+
     /// FILES-9: a character does not reach the box, Enter sends nothing and a paste does not reach
     /// the line.
     #[test]
     fn a_typed_character_does_not_reach_the_box_while_the_files_state_is_open() {
         let mut session = session_that_wrote();
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
         for c in ['x', 'a', 'z', ' '] {
             handle_key(&mut session, key(KeyCode::Char(c)));
         }
@@ -32763,7 +32788,7 @@ mod tests {
     #[test]
     fn a_key_the_state_does_not_name_does_nothing() {
         let mut session = session_that_wrote();
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
         let before = session.files_state().cloned();
         for code in [
             KeyCode::Tab,
@@ -32792,7 +32817,7 @@ mod tests {
         }
         handle_key(&mut session, key(KeyCode::Left));
         let caret = session.caret();
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
         handle_key(&mut session, key(KeyCode::Char('x')));
         handle_key(&mut session, key(KeyCode::Down));
         handle_key(&mut session, key(KeyCode::Char('q')));
@@ -32805,7 +32830,7 @@ mod tests {
     fn ctrl_c_ends_the_state_and_leaves_the_turn_running() {
         let mut session = session_that_wrote();
         session.status = Status::Working;
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
         assert!(
             !stops_the_turn(&session, ctrl('c')),
             "Ctrl-C reaches the turn while the state is open"
@@ -32826,11 +32851,11 @@ mod tests {
             return;
         }
         let mut session = session_that_wrote().with_stored_history();
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
         handle_key(&mut session, key(KeyCode::Char('q')));
         assert_eq!(bravebot_session::store::load_panel(), None);
         bravebot_session::store::save_panel(true);
-        dispatch_command(&mut session, commanded(FILES_COMMAND));
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
         handle_key(&mut session, key(KeyCode::Esc));
         assert_eq!(bravebot_session::store::load_panel(), Some(true));
     }

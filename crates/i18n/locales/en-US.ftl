@@ -2894,7 +2894,7 @@ panel-earlier = +{ $count } earlier
 # The same, with rows left out below as well.
 panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
 
-# The files state of the info panel, which lists what the session wrote (`/files`).
+# The files state of the info panel, which lists what the session wrote (`/diff`).
 # Its heading, above the list: how many files the session's write calls changed.
 files-heading = { $count ->
     [one] { $count } file changed
@@ -2914,9 +2914,9 @@ files-edit-count = { $count ->
     [one] { $count } edit
    *[other] { $count } edits
     }
-# Left in the transcript by /files before the session has written a file.
+# Left in the transcript by /diff before the session has written a file.
 files-nothing-written = no file has been written in this session yet
-# Left in the transcript by /files on a terminal too narrow for the state.
+# Left in the transcript by /diff on a terminal too narrow for the state.
 files-too-narrow = The files view needs a terminal at least { $columns } columns wide.
 # Said on the bottom line while the state is open, naming its keys.
 files-hint = ↑↓ file  ·  PgUp PgDn scroll  ·  [ ] edit  ·  q back
@@ -3009,7 +3009,7 @@ command-watch = List the files this session is watching, and stop one by its num
 command-jobs = List this turn's background jobs, and stop one by its name
 command-outputs = Open what the commands this session ran printed, background jobs included
 command-panel = Show or hide the info panel beside the transcript
-command-files = List the files the session wrote and show every edit to the one highlighted
+command-diff = List the files the session wrote and show every edit to the one highlighted
 command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one

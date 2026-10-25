@@ -166,7 +166,7 @@ pub(crate) const OUTPUTS_COMMAND: &str = "/outputs";
 pub(crate) const PANEL_COMMAND: &str = "/panel";
 
 /// The line that puts the info panel in its files state, or ends it.
-pub(crate) const FILES_COMMAND: &str = "/files";
+pub(crate) const DIFF_COMMAND: &str = "/diff";
 
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
@@ -595,9 +595,9 @@ pub fn commands() -> [Command; 57] {
             mid_turn: MidTurn::Runs,
         },
         Command {
-            name: FILES_COMMAND,
+            name: DIFF_COMMAND,
             argument: "",
-            description: t!(command_files),
+            description: t!(command_diff),
             mid_turn: MidTurn::Runs,
         },
         Command {
