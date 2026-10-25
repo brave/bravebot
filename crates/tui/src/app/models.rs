@@ -735,3 +735,106 @@ pub(super) mod scripted_account {
         })
     }
 }
+
+/// Ask the Brave endpoint what it offers.
+pub(super) fn fetch_models(config: &Config) -> Result<Vec<bravebot_aichat::models::Model>, String> {
+    let egress = Egress::new();
+
+    // Routing is the listing itself: this is not a turn, nothing is read from the workspace, and no
+    // model is involved, so there is no prompt to anchor it to.
+    let mut routing = bravebot_core::policy::Routing::new();
+    routing.insert_trusted("models", config.models_url());
+
+    with_listing_policy(
+        routing,
+        |denial| denial,
+        |policy| {
+            bravebot_aichat::models::list(policy, config, &egress)
+                .map_err(|error| error.to_string())
+        },
+    )
+}
+
+/// Ask one gateway what it offers, for a block that named no models.
+///
+/// What comes back names the gateway the same way a configured model from it does, so one service
+/// does not appear twice under two names in the same list.
+///
+/// A gateway whose block named a credential nothing holds is not asked. The listing would come back
+/// refused, and the useful thing to say about that gateway is what `doctor` already says: no
+/// credential found. A service with a compiled list is the exception: offering that list asks
+/// nothing, so it is offered with the key missing, and the missing key is said when a turn is sent,
+/// as it is for a model a block names.
+///
+/// A block naming no credential at all is asked, unauthenticated. That is somebody saying the gateway
+/// wants none, and it is the block a local Ollama is configured with. That block lists no models
+/// either, so not asking leaves it offering nothing.
+///
+/// Why there is no roster is not told in the words of the error that says so, which belong to the
+/// service and to this process and are not for a picker's note: a listing that could not be read is
+/// said to the person, and a credential that is missing is not, since `doctor` says it.
+pub(super) fn fetch_gateway_models(
+    provider: &bravebot_config::provider::Provider,
+) -> Result<Vec<bravebot_aichat::models::Model>, Unlisted> {
+    let token = match provider.credential(|name| std::env::var(name).ok()) {
+        bravebot_config::provider::Credential::Token(token) => Some(token),
+        bravebot_config::provider::Credential::NotNeeded => None,
+        bravebot_config::provider::Credential::Absent if provider.compiled_roster().is_some() => {
+            None
+        }
+        bravebot_config::provider::Credential::Absent => return Err(Unlisted::NoCredential),
+    };
+
+    let egress = Egress::new();
+    // Resolved beside the token, from the same environment, for the same reason: a value may name a
+    // variable, and one read at startup is stale once somebody exports another.
+    let headers = provider.request_headers(|name| std::env::var(name).ok());
+
+    // Both destinations are the gateway's own endpoint, which came from configuration. Nothing
+    // fetched decides either, which is what makes asking a service for a list of names safe at all.
+    let mut routing = bravebot_core::policy::Routing::new();
+    routing.insert_trusted("models", provider.models_url());
+    routing.insert_trusted("account-models", provider.account_models_url());
+
+    with_listing_policy(
+        routing,
+        |_| Unlisted::Unreadable,
+        |policy| {
+            let token = token.as_ref().map(bravebot_config::Secret::expose);
+            bravebot_aichat::models::list_from_gateway(policy, provider, token, &headers, &egress)
+                .map_err(|_| Unlisted::Unreadable)
+        },
+    )
+}
+
+/// Why a gateway that names no models has none among the rows.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Unlisted {
+    /// The block names a credential nothing holds, so the gateway was not asked.
+    NoCredential,
+    /// The gateway was asked and its listing could not be read: the request failed, or what answered
+    /// was not a listing.
+    Unreadable,
+}
+
+/// Run `ask` under a policy that can only fetch, for the routing a listing names.
+///
+/// A policy exists because `bravebot-net` is the only way out to the network and its gate takes one.
+/// `denied` says what a refusal to begin one becomes, since the two listings report it differently.
+fn with_listing_policy<T, E>(
+    routing: bravebot_core::policy::Routing,
+    denied: impl FnOnce(String) -> E,
+    ask: impl FnOnce(&mut bravebot_core::policy::Policy<'_, Trail>) -> Result<T, E>,
+) -> Result<T, E> {
+    let mut sink = Trail::new();
+    bravebot_core::policy::Policy::begin(
+        routing,
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([
+            bravebot_core::capability::Capability::WebFetch,
+        ]),
+        &mut sink,
+    )
+    .map_err(|denial| denied(denial.to_string()))
+    .and_then(|mut policy| ask(&mut policy))
+}
