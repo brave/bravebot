@@ -767,6 +767,49 @@ pub(super) fn close_the_rounds<S: Sink, R: Reporter>(
     }
 }
 
+/// Say so, to the person and in the turn's notices, when the endpoint answered with a different
+/// model from the one a definition named or a loaded skill moved the turn onto.
+///
+/// Compared by name from the turn's own record of what it asked for. The answering model's name is
+/// only compared, as in [`model_was_substituted`]; the reply is not read.
+pub(super) fn note_substituted_models<R: Reporter>(
+    config: &Config,
+    reporter: &mut R,
+    state: &mut State<'_>,
+    addressed: Option<&bravebot_core::delegate::Addressed>,
+    definition_model: Option<&(String, String)>,
+    answered: &str,
+) {
+    // Compared the way a delegate's model is, because the endpoint substitutes rather than refuses
+    // a name it will not serve. The sentence names the definition and the model it named, and
+    // never the one that answered (ADDRESS-11).
+    if let (Some(addressed), Some((written, resolved))) = (addressed, definition_model)
+        && model_was_substituted(config, resolved, answered)
+    {
+        let said = t!(
+            delegate_model_substituted,
+            definition = addressed.name(),
+            model = written
+        );
+        reporter.notice(said.clone());
+        state
+            .notices
+            .push(crate::skills::Notice::from_message(said));
+    }
+    // The same comparison for a model a loaded skill moved the turn onto, naming the skill and
+    // the model as its file wrote it (SKILL-15). A delegate's turn is covered here too.
+    if let Some((skill, written)) = &state.switched_by {
+        let resolved = state.turn_model.as_deref().unwrap_or(&config.default_model);
+        if model_was_substituted(config, resolved, answered) {
+            let said = t!(skill_model_substituted, skill = skill, model = written);
+            reporter.notice(said.clone());
+            state
+                .notices
+                .push(crate::skills::Notice::from_message(said));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

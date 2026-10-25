@@ -3820,34 +3820,14 @@ where
 
     let completion = completion?;
 
-    // Compared the way a delegate's model is, because the endpoint substitutes rather than refuses
-    // a name it will not serve. The sentence names the definition and the model it named, and
-    // never the one that answered (ADDRESS-11).
-    if let (Some(addressed), Some((written, resolved))) = (&plan.addressed, &definition_model)
-        && round_steps::model_was_substituted(config, resolved, &completion.model)
-    {
-        let said = t!(
-            delegate_model_substituted,
-            definition = addressed.name(),
-            model = written
-        );
-        reporter.notice(said.clone());
-        state
-            .notices
-            .push(crate::skills::Notice::from_message(said));
-    }
-    // The same comparison for a model a loaded skill moved the turn onto, naming the skill and
-    // the model as its file wrote it (SKILL-15). A delegate's turn is covered here too.
-    if let Some((skill, written)) = &state.switched_by {
-        let resolved = state.turn_model.as_deref().unwrap_or(&config.default_model);
-        if round_steps::model_was_substituted(config, resolved, &completion.model) {
-            let said = t!(skill_model_substituted, skill = skill, model = written);
-            reporter.notice(said.clone());
-            state
-                .notices
-                .push(crate::skills::Notice::from_message(said));
-        }
-    }
+    round_steps::note_substituted_models(
+        config,
+        reporter,
+        &mut state,
+        plan.addressed.as_ref(),
+        definition_model.as_ref(),
+        &completion.model,
+    );
 
     // Released while the policy is open, so the audit trail records that the reply was
     // shown rather than leaving the release invisible.
