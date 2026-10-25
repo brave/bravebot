@@ -271,49 +271,36 @@ fn ask_one_from<B: Backend>(
             return Answer::Decline;
         }
 
-        match read() {
-            // A paste answers nothing, and neither do words another program typed: both arrive as
-            // one event whatever they carry, and nothing in either is a key somebody pressed.
-            Ok((taken, arrived_alone)) => {
-                if withdraws_the_offer(&taken) {
-                    offered_to_leave = false;
-                }
-                match input::key_of(&taken) {
-                    // Presses only: the interface asks for disambiguated keys, so a release arrives
-                    // too, and answering twice grants standing permission on one keystroke.
-                    Some(key) if key.kind != event::KeyEventKind::Press => continue,
-                    Some(key) => {
-                        match answer_for(key, offered_to_leave, arrived_alone, drawn.answerable) {
-                            Response::Answer(answer) => return answer,
-                            Response::Scroll(by) => {
-                                scroll = drawn.moved(scroll, by);
-                                continue;
-                            }
-                            Response::Page(by) => {
-                                scroll =
-                                    drawn.moved(scroll, by.saturating_mul(i32::from(drawn.page)));
-                                continue;
-                            }
-                            // Kept rather than dropped. What this refused to answer on was a run of keys
-                            // another program wrote, and words that vanish leave a person with no account
-                            // of what just happened: the question stayed up and their virtualenv
-                            // activated, with nothing on the screen joining the two. Carried to the box,
-                            // where they can read it and decide (#403).
-                            Response::Nothing if !arrived_alone => {
-                                carried.extend(input::text_of(&key));
-                                continue;
-                            }
-                            Response::Offer => {
-                                offered_to_leave = true;
-                                continue;
-                            }
-                            Response::Nothing => continue,
-                        }
-                    }
-                    None => continue,
-                }
+        // A paste answers nothing, and neither do words another program typed: both arrive as one
+        // event whatever they carry, and nothing in either is a key somebody pressed.
+        let Ok((taken, arrived_alone)) = read() else {
+            return Answer::Decline;
+        };
+        if withdraws_the_offer(&taken) {
+            offered_to_leave = false;
+        }
+        let Some(key) = input::key_of(&taken) else {
+            continue;
+        };
+        // Presses only: the interface asks for disambiguated keys, so a release arrives too, and
+        // answering twice grants standing permission on one keystroke.
+        if key.kind != event::KeyEventKind::Press {
+            continue;
+        }
+        match answer_for(key, offered_to_leave, arrived_alone, drawn.answerable) {
+            Response::Answer(answer) => return answer,
+            Response::Scroll(by) => scroll = drawn.moved(scroll, by),
+            Response::Page(by) => {
+                scroll = drawn.moved(scroll, by.saturating_mul(i32::from(drawn.page)));
             }
-            Err(_) => return Answer::Decline,
+            // Kept rather than dropped. What this refused to answer on was a run of keys
+            // another program wrote, and words that vanish leave a person with no account
+            // of what just happened: the question stayed up and their virtualenv
+            // activated, with nothing on the screen joining the two. Carried to the box,
+            // where they can read it and decide (#403).
+            Response::Nothing if !arrived_alone => carried.extend(input::text_of(&key)),
+            Response::Offer => offered_to_leave = true,
+            Response::Nothing => {}
         }
     }
 }
