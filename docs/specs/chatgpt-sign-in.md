@@ -1059,12 +1059,14 @@ Where the roster comes from, in order:
 The window comes from the entry or the listing as it does for a gateway's, and the assumed low window applies
 where neither states one. An output ceiling is not read from the entry, for the reason above, and no model is
 left out for what it can call, since neither source says. The compiled list is a constant of the source that
-names models only and takes nothing from a reply. Its names are those of the fallback set in opencode's source
-(`fallbackModels` in `packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`). Each row takes
-the assumed window, which a turn on one of the account's models compacts against where the listing cannot
-be read, and no label of its own, and whether it reads an effort level is what a request has already
-learned from the service, as for the model an entry names. None of the names is observed against the
-service.
+names models only and takes nothing from a reply. It holds the seven models the serving host's listing offered
+an account that signed in with this program, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`,
+`gpt-6-luna`, `gpt-6-sol` and `gpt-6.1-sol`, each of which answered a request. It holds no name ending in
+`-fast`: the service refuses those as models ([Known costs](#known-costs)). Each row takes the assumed
+window, which a turn on one of the account's models compacts against where the listing cannot be read, and no
+label of its own, and whether it reads an effort level is what a request has already learned from the
+service, as for the model an entry names. The list is one account's listing on one date, so another account
+or a later date may differ.
 
 An account whose listing is empty, where the entry names no model, is signed in. The command completes,
 says the account reaches no model, and the picker has no row for it. Nothing is invented for a tier nobody named.
@@ -1102,7 +1104,7 @@ and naming the entry is a message, where taking the id over would send a working
 OpenAI's service with a person's subscription. A model a gateway lists under a name that begins with the
 identifier is not a reason to send a signed-in person's turn, and the gateway's key with it, to the
 gateway when the account's row of that name was picked. The gateway's own row has a name of its own, which
-leaves two rows for two services as the `openai` gateway's `gpt-5.5` and the account's `chatgpt/gpt-5.5` are. The listing is asked first because the right list is a fact
+leaves two rows for two services as the `openai` gateway's `<name>` and the account's `chatgpt/<name>` are. The listing is asked first because the right list is a fact
 about an account and a date, and a list that waited for a release would offer a model the account cannot
 reach for weeks. It is the one source that says what an account may use, as [BACKEND-19](backends.md#BACKEND-19)
 asks of a gateway. A compiled list stands in only where the listing cannot be read, because whether the
@@ -1131,6 +1133,7 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_agent::chatgpt::a_machine_nobody_signed_in_on_offers_nothing_and_asks_the_service_nothing`
 `verified-by: bravebot_agent::chatgpt::an_account_whose_token_cannot_be_had_is_offered_the_compiled_list_and_asks_the_service_nothing`
 `verified-by: bravebot_aichat::models::the_compiled_list_is_rows_under_the_accounts_identifier_one_to_a_name`
+`verified-by: bravebot_aichat::models::the_compiled_list_is_the_seven_models_the_service_offered`
 `verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
 `verified-by: bravebot_agent::chatgpt::an_unreadable_listing_is_told_apart_from_an_empty_one`
 `verified-by: bravebot_agent::chatgpt::a_listing_refused_for_its_token_is_asked_again_once_with_a_replacement`
@@ -1457,9 +1460,8 @@ while the first of them is open, although every clause is built.
   subscription this way, and whether OpenAI's registration accepts this program, has to be decided before
   this ships. If it does not, this should not land as written.
 - **The compiled list.** [CHATGPT-9](#CHATGPT-9) offers one where the listing cannot be read. Its contents
-  are the fallback set of opencode's source, a constant a release changes, and none of its names is observed
-  against the service. The alternative is to offer nothing in that case and say to name the models in the
-  `chatgpt` entry.
+  are the seven models one account's listing offered, a constant a release changes. The alternative is to
+  offer nothing in that case and say to name the models in the `chatgpt` entry.
 
 ## What the exchange has to record
 
@@ -1512,9 +1514,17 @@ real ChatGPT account on this program's own build:
   `cache_write_tokens`, and `output_tokens_details` with `reasoning_tokens`.
 - `instructions` is optional, and `max_output_tokens`, `tool_choice`, a strict function schema and
   `reasoning` with an `effort` and a `summary` are accepted.
-- A request that is not streamed is refused with 400, a request carrying `temperature` is refused with 400,
-  and a model the account cannot use is refused with 400. Each body is an object with one field, `detail`,
-  holding a sentence.
+- A request that is not streamed and a request carrying `temperature` are each refused with 400, in a body that
+  is an object with one field, `detail`, holding a sentence.
+- Of the 16 names opencode offers for this sign-in, exactly seven were accepted as the `model` of a streamed
+  request with 200: `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`
+  and `gpt-6.1-sol`, which are the seven rows of the listing with `visibility` `list`. `gpt-5.5`,
+  `gpt-5.5-fast`, the seven other `-fast` names and a made-up name were refused with 400. The two rows of the
+  listing with `visibility` `hide` were accepted as well. The body of the refusal holds a `detail` and an
+  `error` object, and `error` has `type` `invalid_request_error`, `code` `model_not_found` and a `message`,
+  both sentences naming the model and saying it is not supported with a ChatGPT account.
+- `service_tier` `priority` was accepted and `fast` was refused with 400 and a `detail` sentence. The rows of
+  the listing carry `service_tiers` and `additional_speed_tiers` fields. This program sends no service tier.
 - A request without `session-id`, `thread-id` or `x-client-request-id` is accepted.
 
 **Stated by the service's public documents, read with no account on 2026-10-25**, as a name, a shape, a
@@ -1667,8 +1677,6 @@ differs from a statement, the item or an entry of [Known costs](#known-costs) sa
   `https://auth.openai.com`, which equals the `issuer` the discovery document states and the issuer
   OpenAI's documentation gives, and is recorded from no token: a real token that names another refuses every
   sign-in.
-- That each name of the compiled list ([CHATGPT-9](#CHATGPT-9)) is a model the service takes, and in
-  particular the names ending in `-fast`, which are names of the program the list is read from.
 - What the three session headers do for prompt-cache affinity, and that there is no native compaction and no
   change of effort in a session.
 - That the service decodes a zstd body, which the program this is read from sends for every request to it.
@@ -1788,9 +1796,14 @@ These are the places where another spec states something about this service, eac
 - A person on a machine with no browser forwards the listener's port, which changes at every sign-in, and
   no device-code route is available to this program.
 - Where the listing cannot be read the pickers list the compiled names ([CHATGPT-9](#CHATGPT-9)), and a
-  person who wants another types `chatgpt/<name>`. The names are another program's and none has been
-  observed against the service, so one may name a model the account cannot reach. The service refuses it
-  at the first request, and the turn says that the service rejected the request, without naming the model.
+  person who wants another types `chatgpt/<name>`. The names are the seven one account's listing offered on
+  one date, so another account may be offered others and one may name a model the account cannot reach. The
+  service refuses it at the first request, and the turn says that the service rejected the request, without
+  naming the model.
+- The names ending in `-fast`, which opencode offers as models, are not offered, since the service refuses
+  them as models. The service accepts the `service_tier` `priority` and refuses `fast`, and this program sends
+  no service tier. Whether the `-fast` names stand for the `priority` tier was not observed. Offering a tier
+  takes a request field and a way for a person to choose it, and neither is built.
 - The egress layer reads at most 2 MiB of a reply, and the listing is about half a megabyte for nine rows,
   so an account whose listing passes 2 MiB is read as one that cannot be read and is offered the compiled
   names.

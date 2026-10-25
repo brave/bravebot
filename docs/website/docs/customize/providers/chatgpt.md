@@ -19,9 +19,8 @@ bravebot can tell you. bravebot stores a sign-in only when OpenAI's reply grants
 use the subscription's tokens and holds an ID token that verifies, and otherwise stops with a sentence
 saying which.
 
-Several values here, such as the names in the built-in model list, are read from another program's source
-and have not been checked against OpenAI's service. Others are stated in OpenAI's documentation, and have
-not been checked against the service either.
+Several values here are read from another program's source and have not been checked against OpenAI's
+service. Others are stated in OpenAI's documentation, and have not been checked against the service either.
 [What has been observed](#what-has-been-observed) and [What the documents state](#what-the-documents-state)
 say which.
 
@@ -74,8 +73,8 @@ available through its API. Each row has the window the listing states and whethe
 listed for it, and a row that lists none takes no effort level. None is offered without a sign-in.
 
 Where the listing cannot be read, `/model` says so, offers a list of model names built into bravebot, and
-says that a row may name a model the account cannot reach. That list is read from another program's
-source and none of its names has been checked against the service, so the service refuses at the first
+says that a row may name a model the account cannot reach. That list is the seven models OpenAI's listing
+offered one account, so another account or a later date may differ, and the service refuses at the first
 request a model the account cannot reach. A listing that is read and is empty offers nothing, and an
 account that reaches no model is still signed in. A listing OpenAI refuses in one of the codes that name
 the account, such as its usage limit, offers nothing and says why.
@@ -201,7 +200,6 @@ These are read from another program's source, opencode's, and have not been obse
   claims. A real token that names another issuer would make every sign-in fail;
 - that the authorization server accepts a redirect to any loopback port, where only a port the operating
   system chose has been tried. OpenAI's documentation says only the port may vary at later sign-ins;
-- the names in the built-in model list, and in particular the ones ending in `-fast`;
 - what the three identifiers do for the service's prompt cache;
 - that the service accepts the zstd frames bravebot writes and the size at which it refuses a body, and
   whether that size is of the frame or of what it decodes to;

@@ -223,8 +223,8 @@ service answers it, in terms that cannot collide with a name a service chose for
 roster carries nothing, being the one every build has. What a person reads is drawn from that,
 under [VIEW-15](terminal-transcript.md#VIEW-15), and the note left when a model is chosen says it
 too, since the row that carried it is gone by the time that note is read. The rows of the ChatGPT account
-are keyed `chatgpt/<name>` and say ChatGPT, so the `openai` gateway's `gpt-5.5` and the account's
-`chatgpt/gpt-5.5` are two rows ([CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9)).
+are keyed `chatgpt/<name>` and say ChatGPT, so the `openai` gateway's `<name>` and the account's
+`chatgpt/<name>` are two rows where both offer the name ([CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9)).
 
 **Why.** The two are billed differently and authenticate differently, so which one answers is the
 whole of what is being chosen between. Naming the service is not enough: Brave serves part of its own

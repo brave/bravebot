@@ -4732,7 +4732,7 @@ mod tests {
     /// The listing the account's tests script: one model with a window a budget can be told apart
     /// from the default by.
     fn the_accounts_listing() -> Vec<bravebot_aichat::models::Model> {
-        vec![listed("chatgpt/gpt-5.5", Some(65_536))]
+        vec![listed("chatgpt/gpt-6-sol", Some(65_536))]
     }
 
     /// CHATGPT-9: a session or a turn on a model that is not the account's sends the stored token
@@ -4779,31 +4779,31 @@ mod tests {
 
         let mut config = a_config_with_a_named_roster();
         let mut session = Session::new("none");
-        session.choose_model("chatgpt/gpt-5.5".to_string(), &config);
+        session.choose_model("chatgpt/gpt-6-sol".to_string(), &config);
         adopt_budget_for_current_model(&mut session, &mut config);
         assert_eq!(asked(), 1, "the lookup at session start did not ask");
         assert_eq!(config.context_budget, 65_536);
 
         offer(the_accounts_listing());
         let mut config = a_config_with_a_named_roster();
-        adopt_listing_for_model(&mut config, "chatgpt/gpt-5.5");
+        adopt_listing_for_model(&mut config, "chatgpt/gpt-6-sol");
         assert_eq!(asked(), 1, "a run's lookup did not ask");
         assert_eq!(config.context_budget, 65_536);
 
         offer(the_accounts_listing());
         let config = a_config_with_a_named_roster();
-        let turn = config_for_turn(&config, Some("chatgpt/gpt-5.5"));
+        let turn = config_for_turn(&config, Some("chatgpt/gpt-6-sol"));
         assert_eq!(asked(), 1, "a turn addressed to a definition did not ask");
         assert_eq!(turn.context_budget, 65_536);
 
         offer(the_accounts_listing());
-        assert!(reads_structured_output(&config, "chatgpt/gpt-5.5"));
+        assert!(reads_structured_output(&config, "chatgpt/gpt-6-sol"));
         assert_eq!(asked(), 1, "the structured-output check did not ask");
 
         // The listing could not be had, so the compiled name stands in and its window is the assumed one.
         fail_to_list();
         let mut config = a_config_with_a_named_roster();
-        adopt_listing_for_model(&mut config, "chatgpt/gpt-5.5");
+        adopt_listing_for_model(&mut config, "chatgpt/gpt-6-sol");
         assert_eq!(asked(), 1, "a run's lookup did not ask");
         assert_eq!(
             config.context_budget,
@@ -4829,7 +4829,7 @@ mod tests {
             panic!("no model picker is open");
         };
         let keys: Vec<&str> = picker.matching().iter().map(|m| m.key.as_str()).collect();
-        assert!(keys.contains(&"chatgpt/gpt-5.5"), "{keys:?}");
+        assert!(keys.contains(&"chatgpt/gpt-6-sol"), "{keys:?}");
         assert!(
             keys.contains(&"opus-arn"),
             "a row already there was taken away: {keys:?}"
