@@ -1997,14 +1997,18 @@ def has_uncommitted_changes(root):
 
 
 def make_snapshot(root, commit, tree):
-    """Check `commit` out at `tree`, detached, and say whether that worked. Reviewers read it in
-    place of the working tree, which other sessions move while a run is under way, so every line
-    they cite is a line of one commit. Hooks are off because this repository's post-checkout hook
-    copies `.envrc` and runs `direnv allow`, which a checkout made for reading has no use for."""
+    """Check `commit` out at `tree`, detached. Returns None when that worked, else what git said.
+    Reviewers read it in place of the working tree, which other sessions move while a run is under
+    way, so every line they cite is a line of one commit. Hooks are off because this repository's
+    post-checkout hook copies `.envrc` and runs `direnv allow`, which a checkout made for reading
+    has no use for. A checkout deleted by hand is still registered in the repository, and git
+    refuses to add one at a path it holds, so registrations whose directory is gone are pruned
+    first, whether or not `tree` exists."""
+    git(root, "worktree", "prune")
     if tree.exists():
         remove_snapshot(root, tree)
     done = git(root, "-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", str(tree), commit)
-    return done.returncode == 0
+    return None if done.returncode == 0 else done.stderr.strip() or f"git exited {done.returncode}"
 
 
 def remove_snapshot(root, tree):
@@ -2030,7 +2034,8 @@ def prepare(root, lanes, prefixes, work_dir, **options):
     dirty = commit is not None and has_uncommitted_changes(root)
     result = scan(root, lanes, prefixes, **options)
     work_dir.mkdir(parents=True, exist_ok=True)
-    tree = work_dir / "tree" if commit is not None and make_snapshot(root, commit, work_dir / "tree") else None
+    problem = make_snapshot(root, commit, work_dir / "tree") if commit is not None else None
+    tree = work_dir / "tree" if commit is not None and problem is None else None
     reading = reading_for(root, tree, commit)
     manifest = {
         "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -2048,8 +2053,13 @@ def prepare(root, lanes, prefixes, work_dir, **options):
             manifest["progress_lines"].append(
                 "tracked files have uncommitted changes: the candidates come from them, the reviewers read the commit"
             )
-    else:
+    elif commit is None:
         manifest["progress_lines"].append("no commit to check out: reviewers read the working tree")
+    else:
+        manifest["progress_lines"].append(
+            f"could not check commit {commit[:12]} out, so the reviewers read the working tree: "
+            + " ".join(problem.split())
+        )
     for lane, entry in result.items():
         candidates = entry["candidates"]
         size = CHUNK.get(lane, DEFAULT_CHUNK)

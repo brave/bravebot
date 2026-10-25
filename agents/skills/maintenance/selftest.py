@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import shutil
 # These tests run git with argument lists against temporary repositories.
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import tempfile
@@ -1226,6 +1227,30 @@ class Reading(unittest.TestCase):
             manifest, _ = self.prepared(root)
             text = (Path(manifest["tree"]) / "crates/a/src/lib.rs").read_text()
         self.assertEqual(text, unused(3))
+
+    def test_a_checkout_deleted_by_hand_is_replaced_by_the_next_prepare(self):
+        with committed({"crates/a/src/lib.rs": unused(2), ".gitignore": ".work\n"}) as root:
+            first, _ = self.prepared(root)
+            shutil.rmtree(first["tree"])
+            second, _ = self.prepared(root)
+            remade = Path(second["tree"]).is_dir() if second["tree"] else False
+        self.assertTrue(remade)
+        self.assertNotIn("no commit to check out", "\n".join(second["progress_lines"]))
+
+    def test_a_checkout_that_cannot_be_made_says_why_and_not_that_there_is_no_commit(self):
+        with committed({"crates/a/src/lib.rs": unused(2), ".gitignore": ".work\n"}) as root:
+            work = root / ".work"
+            (work / "tree").mkdir(parents=True)
+            (work / "tree/keep.txt").write_text("not a checkout\n")
+            manifest, prompt = self.prepared(root, work)
+            kept = (work / "tree/keep.txt").exists()
+        lines = "\n".join(manifest["progress_lines"])
+        self.assertIsNone(manifest["tree"])
+        self.assertTrue(kept)
+        self.assertIn("could not check commit", lines)
+        self.assertIn("already exists", lines)
+        self.assertNotIn("no commit to check out", lines)
+        self.assertIn("your working directory", prompt)
 
     def test_clean_removes_the_checkout_and_the_repository_forgets_it(self):
         with committed({"crates/a/src/lib.rs": unused(2)}) as root:
